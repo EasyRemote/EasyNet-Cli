@@ -1,0 +1,19 @@
+// pipeline.eal — linear data flow chain: A → B → C.
+// Each step depends on the previous step's output.
+// Compiles to 3 phases (fully sequential).
+
+mission "etl-pipeline" {
+  let raw = call "data.extract" on "source-db" with {
+    query = "SELECT * FROM events WHERE ts > now() - interval '1 hour'"
+  } timeout 60
+
+  let cleaned = call "data.transform" on "compute-node" with {
+    input = raw.output,
+    rules = "deduplicate,normalize"
+  } timeout 120
+
+  let report = call "data.load" on "warehouse" with {
+    input = cleaned.output,
+    table = "events_cleaned"
+  } timeout 60
+}

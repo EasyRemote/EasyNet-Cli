@@ -1,0 +1,9 @@
+// parallel.eal — independent steps dispatched in a single phase.
+// No data dependencies ⟹ all run in parallel.
+
+mission "parallel-health-check" {
+  let web    = call "health.check" on "web-server"     with { port = 8080 }
+  let db     = call "health.check" on "db-server"      with { port = 5432 }
+  let cache  = call "health.check" on "cache-server"   with { port = 6379 }
+  call "metrics.ping" on "monitor" with { event = "health_check_started" } optional
+}

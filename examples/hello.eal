@@ -1,0 +1,7 @@
+// hello.eal — simplest possible EAL program: one step, one node.
+
+mission "hello" {
+  let greeting = call "echo" on "my-device" with {
+    message = "Hello from EAL!"
+  }
+}

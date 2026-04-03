@@ -1,0 +1,43 @@
+// daily-report.eal — full showcase from the EasyNet vision.
+//
+// Demonstrates:
+//   - Multi-node orchestration across edge devices
+//   - Data flow with variable references
+//   - Parallel execution (photo + config in phase 0)
+//   - Sequential dependency chains
+//   - Fire-and-forget optional steps
+//   - Per-step failure policies
+
+mission "daily-report" {
+  // Phase 0: independent steps (parallel)
+  let photo = call "photo.capture" on "edge-cam-01" with {
+    resolution = "4k"
+  } timeout 30
+
+  let config = call "config.fetch" on "coordinator" with {
+    profile = "daily-report"
+  }
+
+  // Phase 0 also: fire-and-forget metrics ping
+  call "metrics.ping" on "monitor" with {
+    event = "pipeline_started"
+  } optional
+
+  // Phase 1: depends on photo + config
+  let result = call "model.inference" on "gpu-rig" with {
+    input = photo.output,
+    model_config = config.output
+  } timeout 120 retries 2 on_failure retry
+
+  // Phase 2: depends on result
+  let report = call "data.collect" on "home-server" with {
+    data = result.output,
+    template = "daily-report"
+  }
+
+  // Phase 2 also (no dependency on report): notification
+  call "notify.send" on "coordinator" with {
+    channel = "slack",
+    message = "Daily report pipeline completed"
+  } optional
+}

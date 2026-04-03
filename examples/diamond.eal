@@ -1,0 +1,27 @@
+// diamond.eal — diamond dependency pattern: A → B, A → C, B+C → D.
+// Compiles to 3 phases:
+//   Phase 0: A (root)
+//   Phase 1: B, C (parallel, both depend on A)
+//   Phase 2: D (depends on both B and C)
+
+mission "diamond-inference" {
+  let image = call "camera.capture" on "edge-cam" with {
+    resolution = "1080p"
+  }
+
+  let objects = call "vision.detect" on "gpu-node-1" with {
+    frame = image.output,
+    model = "yolov8"
+  } timeout 30
+
+  let faces = call "vision.recognize" on "gpu-node-2" with {
+    frame = image.output,
+    model = "arcface"
+  } timeout 30
+
+  let summary = call "report.generate" on "coordinator" with {
+    detections = objects.output,
+    identities = faces.output,
+    template = "surveillance-report"
+  }
+}
