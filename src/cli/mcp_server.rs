@@ -14,6 +14,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use anyhow::Context;
 use clap::Args;
 
 use crate::shared::config;
@@ -42,5 +43,5 @@ pub fn run(args: McpServerArgs) -> anyhow::Result<()> {
 
     server
         .run(std::io::stdin().lock(), &mut std::io::stdout())
-        .map_err(|e| anyhow::anyhow!("mcp server: {e}"))
+        .context("mcp server")
 }
