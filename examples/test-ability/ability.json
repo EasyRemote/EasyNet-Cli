@@ -1,0 +1,7 @@
+{
+  "name": "hello-world",
+  "version": "1.0.0",
+  "tool_name": "hello-world",
+  "description": "A simple test ability that returns system info",
+  "command": "echo '{\"message\": \"hello from easynet-cli\", \"hostname\": \"'$(hostname)'\", \"time\": \"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'\"}'"
+}

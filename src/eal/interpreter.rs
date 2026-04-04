@@ -113,7 +113,6 @@ pub struct ExecutionReport {
 
 struct CapturedResult {
     value: Vec<u8>,
-    sha256: String,
 }
 
 // ── Dispatch backend trait (enables test injection) ──
@@ -125,6 +124,7 @@ pub trait StepDispatcher {
         function_name: &str,
         target_node_id: &str,
         arguments: &Value,
+        timeout_seconds: Option<u64>,
     ) -> Result<Value, String>;
 
     /// Create an independent clone for parallel dispatch.
@@ -154,11 +154,12 @@ impl StepDispatcher for BridgeDispatcher {
         function_name: &str,
         target_node_id: &str,
         arguments: &Value,
+        timeout_seconds: Option<u64>,
     ) -> Result<Value, String> {
         let bridge = DendriteBridge::connect(&self.endpoint, self.timeout_ms)
             .map_err(|e| format!("bridge connect: {e}"))?;
         bridge
-            .call_mcp_tool_with_args(tenant, function_name, target_node_id, arguments)
+            .call_mcp_tool_with_timeout(tenant, function_name, target_node_id, arguments, timeout_seconds)
             .map_err(|e| format!("{e}"))
     }
 
@@ -192,9 +193,10 @@ impl StepDispatcher for BorrowedBridgeDispatcher<'_> {
         function_name: &str,
         target_node_id: &str,
         arguments: &Value,
+        timeout_seconds: Option<u64>,
     ) -> Result<Value, String> {
         self.bridge
-            .call_mcp_tool_with_args(tenant, function_name, target_node_id, arguments)
+            .call_mcp_tool_with_timeout(tenant, function_name, target_node_id, arguments, timeout_seconds)
             .map_err(|e| format!("{e}"))
     }
 
@@ -353,7 +355,6 @@ pub fn execute_with_dispatcher(
                                 binding.clone(),
                                 CapturedResult {
                                     value: bytes,
-                                    sha256: trace.result_sha256.clone().unwrap_or_default(),
                                 },
                             );
                         }
@@ -451,11 +452,17 @@ fn execute_step_with_retry(
         }
 
         let attempt_start = Instant::now();
+        let step_timeout = if step.timeout_seconds > 0 {
+            Some(step.timeout_seconds as u64)
+        } else {
+            None
+        };
         let res = dispatcher.dispatch(
             tenant,
             &step.function_name,
             &step.target_node_id,
             arguments,
+            step_timeout,
         );
 
         match res {
@@ -724,6 +731,7 @@ mod tests {
             function_name: &str,
             _target_node_id: &str,
             _arguments: &Value,
+            _timeout_seconds: Option<u64>,
         ) -> Result<Value, String> {
             let call_num = self.call_count.fetch_add(1, Ordering::SeqCst);
             self.calls
@@ -1050,7 +1058,7 @@ mod tests {
         // Non-cloneable dispatcher simulates BorrowedBridgeDispatcher
         struct SeqOnlyDispatcher(Arc<AtomicU32>);
         impl StepDispatcher for SeqOnlyDispatcher {
-            fn dispatch(&self, _: &str, f: &str, _: &str, _: &Value) -> Result<Value, String> {
+            fn dispatch(&self, _: &str, f: &str, _: &str, _: &Value, _: Option<u64>) -> Result<Value, String> {
                 self.0.fetch_add(1, Ordering::SeqCst);
                 Ok(serde_json::json!({"ok": true, "function": f}))
             }
