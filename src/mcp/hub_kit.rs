@@ -4,10 +4,11 @@
 // File: src/mcp/hub_kit.rs
 // Description: McpToolProvider implementation for Hub-level device management.
 //
-// Design (mirrors RemoteControlCaseKit from easynet-axon SDK):
+// Design:
 // - Caches a single DendriteBridge connection via RefCell (single-threaded stdio model).
 // - Reconnects lazily on first tool call.
 // - Dispatches tool name → handler function via match.
+// - Converts handler Result<Value, String> → ToolResult at the boundary.
 //
 // Thread Safety: intentionally !Send/!Sync (RefCell). Appropriate for MCP stdio protocol.
 //
@@ -28,23 +29,43 @@ pub struct HubCaseKit {
 
 impl HubCaseKit {
     pub fn new(endpoint: String, tenant: String) -> Self {
-        Self { endpoint, tenant, cached: RefCell::new(None) }
+        Self {
+            endpoint,
+            tenant,
+            cached: RefCell::new(None),
+        }
     }
 
-    fn with_bridge<F>(&self, f: F) -> ToolResult where F: FnOnce(&DendriteBridge, &str) -> ToolResult {
+    fn with_bridge<F>(&self, f: F) -> ToolResult
+    where
+        F: FnOnce(&DendriteBridge, &str) -> Result<Value, String>,
+    {
         let mut slot = self.cached.borrow_mut();
         if slot.is_none() {
             match DendriteBridge::connect(&self.endpoint, 5000) {
                 Ok(b) => *slot = Some(b),
-                Err(e) => return ToolResult { payload: json!({"ok": false, "error": format!("connect: {e}")}), is_error: true },
+                Err(e) => {
+                    return ToolResult {
+                        payload: json!({"ok": false, "error": format!("connect: {e}")}),
+                        is_error: true,
+                    };
+                }
             }
         }
-        f(slot.as_ref().unwrap(), &self.tenant)
+        match f(slot.as_ref().unwrap(), &self.tenant) {
+            Ok(v) => ToolResult { payload: v, is_error: false },
+            Err(msg) => ToolResult {
+                payload: json!({"ok": false, "error": msg}),
+                is_error: true,
+            },
+        }
     }
 }
 
 impl McpToolProvider for HubCaseKit {
-    fn tool_specs(&self) -> Vec<Value> { specs::tool_specs() }
+    fn tool_specs(&self) -> Vec<Value> {
+        specs::tool_specs()
+    }
 
     fn handle_tool_call(&self, name: &str, args: &Map<String, Value>) -> ToolResult {
         self.with_bridge(|br, tenant| match name {
@@ -59,7 +80,7 @@ impl McpToolProvider for HubCaseKit {
             "run_mission" => handlers::run_mission(br, tenant, args),
             "manage_device" => handlers::manage_device(br, tenant, args),
             "uninstall_ability" => handlers::uninstall_ability(br, tenant, args),
-            _ => ToolResult { payload: json!({"ok": false, "error": format!("unknown tool: {name}")}), is_error: true },
+            _ => Err(format!("unknown tool: {name}")),
         })
     }
 }

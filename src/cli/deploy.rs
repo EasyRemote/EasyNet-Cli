@@ -2,21 +2,39 @@
 // ===========
 //
 // File: src/cli/deploy.rs
-// Description: `easynet deploy <path> --to <node>` — three-phase ability deployment.
+// Description: `easynet deploy <path> --to <node>` — three-phase ability deployment pipeline.
 //
-// Pipeline: Publish → Install → Activate (forward-recovery saga).
-// - Reads ability.json from the given directory for metadata (name, version, command).
-// - Publishes to the registry with ephemeral signature.
-// - Installs on target node, returns install_id.
-// - Activates to make the ability callable.
+// Protocol Responsibility:
+// - Implements a forward-recovery saga: Publish → Install → Activate.
+//   Phase 1 (Publish): Registers package metadata + bytes in Hub registry.
+//   Phase 2 (Install): Materializes the ability on target node, returns install_id.
+//   Phase 3 (Activate): Enables invocation — ability appears in `easynet abilities`.
+// - Each phase is idempotent-safe; partial failures leave the system in a recoverable state.
+//
+// Implementation Approach:
+// - Reads ability.json for metadata: name, version, tool_name, description, command.
+// - Packages ability.json as base64 payload with SHA-256 digest for integrity.
+// - Uses ephemeral signature (__AXON_EPHEMERAL_DO_NOT_USE_IN_PROD__) for development;
+//   requires AXON_ALLOW_PLACEHOLDER_DEPLOY_SIGNATURE=1 env var.
+//
+// Usage Contract:
+// - The target node (--to) must be online and registered in the federation.
+// - ability.json must contain at minimum: "name" and "command" fields.
+// - After deployment, the ability is callable via `easynet invoke` or MCP tool calls.
+//
+// Architectural Position:
+// - Write path of the ability lifecycle. Read path is abilities.rs.
+// - Mirrors the MCP handler deploy_ability in mcp/handlers.rs (same three-phase flow).
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use base64::Engine;
 use clap::Args;
 use console::style;
+use sha2::Digest;
 
-use crate::shared::{self, config, output};
+use crate::shared::{self, config, deploy, output};
 
 #[derive(Debug, Args)]
 pub struct DeployArgs {
@@ -29,7 +47,7 @@ pub struct DeployArgs {
 
 pub fn run(args: DeployArgs) -> anyhow::Result<()> {
     let state = config::load()?;
-    let br = shared::connect_bridge()?;
+    let br = shared::connect_bridge_to(&state.endpoint)?;
     let tenant = state.tenant_or_default();
 
     let dir = std::path::Path::new(&args.path);
@@ -45,32 +63,39 @@ pub fn run(args: DeployArgs) -> anyhow::Result<()> {
     let description = desc.get("description").and_then(|v| v.as_str()).unwrap_or("");
     let command = desc.get("command").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("missing 'command'"))?;
 
-    // Publish
-    eprint!("  publishing {}@{} ... ", style(name).cyan(), version);
-    let metadata = serde_json::json!({
-        "mcp.tool_name": tool_name,
-        "mcp.description": description,
-        "axon.exec.command": command,
-    });
-    br.publish_capability(
-        tenant, tool_name, name, version, "",
-        Some("__AXON_EPHEMERAL_DO_NOT_USE_IN_PROD__"),
-        &[], metadata, None, None, None, None, None,
-    ).map_err(|e| anyhow::anyhow!("publish: {e}"))?;
+    // Package the ability.json as base64 for publishing.
+    let raw = std::fs::read(&desc_path)?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&raw);
+    let digest = format!("sha256:{:x}", sha2::Sha256::digest(&raw));
+
+    // Prefer real deploy signature from credentials; fall back to ephemeral for dev.
+    let signature = config::load_credentials()
+        .ok()
+        .map(|c| c.deploy_signature)
+        .filter(|s| !s.is_empty());
+
+    if signature.is_none() {
+        output::info("warning: no deploy signature found — using ephemeral placeholder (dev only)");
+    }
+
+    eprint!("  deploying {}@{} to {} ... ", style(name).cyan(), version, style(&args.to).cyan());
+    let result = deploy::run_pipeline(&br, &deploy::DeployParams {
+        tenant,
+        node_id: &args.to,
+        tool_name,
+        ability_name: name,
+        version,
+        description,
+        command,
+        signature: signature.as_deref(),
+        digest: &digest,
+        payload_bytes: Some(raw.len()),
+        payload_b64: Some(&b64),
+    })?;
     eprintln!("{}", style("✓").green());
 
-    // Install
-    eprint!("  installing on {} ... ", style(&args.to).cyan());
-    let install_result = br
-        .install_capability(tenant, &args.to, tool_name, version, "", false, "host", 30)
-        .map_err(|e| anyhow::anyhow!("install: {e}"))?;
-    let install_id = install_result.get("install_id").and_then(|v| v.as_str()).unwrap_or("?");
-    eprintln!("{}", style("✓").green());
-    output::step(&format!("installed (install_id: {install_id})"));
-
-    // Activate
-    br.activate_capability(tenant, &args.to, install_id)
-        .map_err(|e| anyhow::anyhow!("activate: {e}"))?;
+    output::step(&format!("install_id: {}", result.install_id));
     output::success(&format!("activated — {tool_name} is live"));
     Ok(())
 }
+

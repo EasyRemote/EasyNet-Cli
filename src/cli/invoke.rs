@@ -10,6 +10,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use anyhow::Context;
 use clap::Args;
 
 use crate::shared::{self, config, output};
@@ -23,11 +24,14 @@ pub struct InvokeArgs {
     /// JSON arguments
     #[arg(long)]
     pub args: Option<String>,
+    /// Timeout in seconds (0 = runtime default)
+    #[arg(long, default_value_t = 0)]
+    pub timeout: u64,
 }
 
 pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
     let state = config::load()?;
-    let br = shared::connect_bridge()?;
+    let br = shared::connect_bridge_to(&state.endpoint)?;
     let tenant = state.tenant_or_default();
 
     let arguments: serde_json::Value = match invoke_args.args.as_deref() {
@@ -35,9 +39,10 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
         None => serde_json::json!({}),
     };
 
+    let timeout = if invoke_args.timeout == 0 { None } else { Some(invoke_args.timeout) };
     let result = br
-        .call_mcp_tool_with_args(tenant, &invoke_args.ability, &invoke_args.node, &arguments)
-        .map_err(|e| anyhow::anyhow!("invoke: {e}"))?;
+        .call_mcp_tool_with_timeout(tenant, &invoke_args.ability, &invoke_args.node, &arguments, timeout)
+        .context("invoke")?;
 
     println!("{}", serde_json::to_string_pretty(&result)?);
     output::success(&format!("{} on {}", invoke_args.ability, invoke_args.node));
