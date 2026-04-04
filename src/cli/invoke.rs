@@ -39,9 +39,9 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
         None => serde_json::json!({}),
     };
 
-    let timeout = if invoke_args.timeout == 0 { None } else { Some(invoke_args.timeout) };
+    let timeout_ms = if invoke_args.timeout == 0 { None } else { Some(invoke_args.timeout * 1000) };
     let result = br
-        .call_mcp_tool_with_timeout(tenant, &invoke_args.ability, &invoke_args.node, &arguments, timeout)
+        .call_mcp_tool_with_timeout(tenant, &invoke_args.ability, &invoke_args.node, &arguments, timeout_ms)
         .context("invoke")?;
 
     println!("{}", serde_json::to_string_pretty(&result)?);

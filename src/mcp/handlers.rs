@@ -101,7 +101,7 @@ pub fn execute_command(br: &DendriteBridge, tenant: &str, args: &Map<String, Val
         "session_bridge",
         node_id,
         &json!({"action": "exec", "command": command}),
-        Some(60),
+        Some(60_000),
     )
     .map_err(|e| e.to_string())
 }
@@ -110,7 +110,7 @@ pub fn invoke_ability(br: &DendriteBridge, tenant: &str, args: &Map<String, Valu
     let node_id = req(args, "node_id")?;
     let ability = req(args, "ability")?;
     let arguments = args.get("arguments").cloned().unwrap_or(json!({}));
-    br.call_mcp_tool_with_timeout(tenant, ability, node_id, &arguments, Some(60))
+    br.call_mcp_tool_with_timeout(tenant, ability, node_id, &arguments, Some(60_000))
         .map_err(|e| e.to_string())
 }
 

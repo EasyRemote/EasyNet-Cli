@@ -67,9 +67,9 @@ pub fn run(args: ExecArgs) -> anyhow::Result<()> {
         "command": cmd_str,
     });
 
-    let timeout = if timeout_secs == 0 { None } else { Some(timeout_secs) };
+    let timeout_ms = if timeout_secs == 0 { None } else { Some(timeout_secs * 1000) };
     let result = br
-        .call_mcp_tool_with_timeout(tenant, "session_bridge", node, &call_args, timeout)
+        .call_mcp_tool_with_timeout(tenant, "session_bridge", node, &call_args, timeout_ms)
         .context("exec")?;
 
     // Result may be at top level or nested in result_json.

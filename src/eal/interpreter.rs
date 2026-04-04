@@ -124,7 +124,7 @@ pub trait StepDispatcher {
         function_name: &str,
         target_node_id: &str,
         arguments: &Value,
-        timeout_seconds: Option<u64>,
+        timeout_ms: Option<u64>,
     ) -> Result<Value, String>;
 
     /// Create an independent clone for parallel dispatch.
@@ -154,12 +154,12 @@ impl StepDispatcher for BridgeDispatcher {
         function_name: &str,
         target_node_id: &str,
         arguments: &Value,
-        timeout_seconds: Option<u64>,
+        timeout_ms: Option<u64>,
     ) -> Result<Value, String> {
         let bridge = DendriteBridge::connect(&self.endpoint, self.timeout_ms)
             .map_err(|e| format!("bridge connect: {e}"))?;
         bridge
-            .call_mcp_tool_with_timeout(tenant, function_name, target_node_id, arguments, timeout_seconds)
+            .call_mcp_tool_with_timeout(tenant, function_name, target_node_id, arguments, timeout_ms)
             .map_err(|e| format!("{e}"))
     }
 
@@ -193,10 +193,10 @@ impl StepDispatcher for BorrowedBridgeDispatcher<'_> {
         function_name: &str,
         target_node_id: &str,
         arguments: &Value,
-        timeout_seconds: Option<u64>,
+        timeout_ms: Option<u64>,
     ) -> Result<Value, String> {
         self.bridge
-            .call_mcp_tool_with_timeout(tenant, function_name, target_node_id, arguments, timeout_seconds)
+            .call_mcp_tool_with_timeout(tenant, function_name, target_node_id, arguments, timeout_ms)
             .map_err(|e| format!("{e}"))
     }
 
@@ -452,8 +452,8 @@ fn execute_step_with_retry(
         }
 
         let attempt_start = Instant::now();
-        let step_timeout = if step.timeout_seconds > 0 {
-            Some(step.timeout_seconds as u64)
+        let step_timeout_ms = if step.timeout_seconds > 0 {
+            Some(step.timeout_seconds as u64 * 1000)
         } else {
             None
         };
@@ -462,7 +462,7 @@ fn execute_step_with_retry(
             &step.function_name,
             &step.target_node_id,
             arguments,
-            step_timeout,
+            step_timeout_ms,
         );
 
         match res {
@@ -731,7 +731,7 @@ mod tests {
             function_name: &str,
             _target_node_id: &str,
             _arguments: &Value,
-            _timeout_seconds: Option<u64>,
+            _timeout_ms: Option<u64>,
         ) -> Result<Value, String> {
             let call_num = self.call_count.fetch_add(1, Ordering::SeqCst);
             self.calls
