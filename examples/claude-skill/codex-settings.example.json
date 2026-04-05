@@ -1,0 +1,9 @@
+{
+  "easynet": {
+    "command": "easynet",
+    "args": [
+      "mcp-server",
+      "--tenant", "default"
+    ]
+  }
+}

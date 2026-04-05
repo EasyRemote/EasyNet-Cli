@@ -1,0 +1,7 @@
+{
+  "name": "disk-usage",
+  "version": "1.0.0",
+  "tool_name": "disk-usage",
+  "description": "Report disk usage for the root filesystem",
+  "command": "df -h / | tail -1 | awk '{print \"{\\\"filesystem\\\": \\\"\" $1 \"\\\", \\\"size\\\": \\\"\" $2 \"\\\", \\\"used\\\": \\\"\" $3 \"\\\", \\\"available\\\": \\\"\" $4 \"\\\", \\\"use_percent\\\": \\\"\" $5 \"\\\"}\"}'"
+}
