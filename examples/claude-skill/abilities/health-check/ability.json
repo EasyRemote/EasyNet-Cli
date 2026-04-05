@@ -1,0 +1,7 @@
+{
+  "name": "health-check",
+  "version": "1.0.0",
+  "tool_name": "health-check",
+  "description": "Quick health check: load average, memory, and connectivity",
+  "command": "echo '{\"load\": \"'$(uptime | awk -F'load average:' '{print $2}' | xargs)'\", \"memory_free_mb\": '$(vm_stat 2>/dev/null | awk '/Pages free/{gsub(/\\./,\"\",$3); print int($3*4096/1048576)}' || free -m 2>/dev/null | awk '/Mem:/{print $4}' || echo 0)', \"timestamp\": \"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'\"}'"
+}

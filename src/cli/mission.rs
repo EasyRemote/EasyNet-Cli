@@ -11,15 +11,17 @@
 //   --emit-ir   Output Mission IR v2 JSON without executing (compilation verification).
 //   --trace     Output full ExecutionTrace JSON after execution (audit log).
 //
-// The interpreter uses BridgeDispatcher for true parallel dispatch within phases.
+// The interpreter uses AgentAwareDispatcher for true parallel dispatch within phases.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use clap::{Args, Subcommand};
 
+use console::style;
+
 use crate::eal;
-use crate::shared::{config, output};
+use crate::shared::config;
 
 #[derive(Debug, Args)]
 pub struct MissionArgs {
@@ -51,6 +53,7 @@ pub fn run(args: MissionArgs) -> anyhow::Result<()> {
     }
 }
 
+#[allow(clippy::cast_precision_loss)] // display-only elapsed time
 fn run_mission(args: RunArgs) -> anyhow::Result<()> {
     let source = std::fs::read_to_string(&args.file)?;
 
@@ -74,18 +77,21 @@ fn run_mission(args: RunArgs) -> anyhow::Result<()> {
         .collect::<std::collections::HashSet<_>>()
         .len();
 
-    output::info(&format!(
-        "mission: {} ({total_steps} steps, {node_count} nodes, {total_phases} phases)",
-        ir.name
-    ));
+    eprintln!();
+    eprintln!(
+        "  {} {}",
+        style(&ir.name).white().bold(),
+        style(format!("{total_steps} steps, {node_count} targets, {total_phases} phases")).dim(),
+    );
 
     let report = eal::interpreter::execute_with_endpoint(&state.endpoint, tenant, &ir)?;
 
-    output::info("");
-    output::success(&format!(
-        "Mission completed — {:.1}s across {node_count} nodes ({total_phases} phases)",
+    eprintln!();
+    eprintln!(
+        "  {} {:.1}s, {node_count} targets, {total_phases} phases",
+        style("done").green().bold(),
         report.total_elapsed_ms as f64 / 1000.0,
-    ));
+    );
 
     if args.trace {
         eprintln!();

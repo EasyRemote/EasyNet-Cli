@@ -36,16 +36,40 @@ use crate::shared::{config, output, sysinfo};
 pub struct JoinArgs {
     /// One-time pairing token (32-64 hex characters)
     pub token: String,
-    /// Hub API base URL for self-hosted Hubs (default: https://easynet.run)
+    /// Hub API base URL for self-hosted Hubs (default: `https://easynet.run`)
     #[arg(long, default_value_t = format!("https://{}", config::DEFAULT_HUB_HOST))]
     pub hub: String,
+    /// Override Hub REST API base URL for credential verification (e.g. `http://localhost:8080`).
+    /// Only needed for local dev when the REST API is on a different host/port than the Hub.
+    #[arg(long)]
+    pub hub_api: Option<String>,
+    /// Skip confirmation prompts (for non-interactive use)
+    #[arg(long, short = 'y')]
+    pub yes: bool,
 }
 
 pub fn run(args: JoinArgs) -> anyhow::Result<()> {
-    validate_token_format(&args.token)?;
+    // Warn if already paired — prevent accidental overwrite.
+    if let Ok(existing) = config::load_credentials() {
+        output::warn(&format!(
+            "Already paired as {} (hub: {})",
+            existing.node_id, existing.hub_endpoint
+        ));
+        if !args.yes {
+            output::info("This will overwrite existing credentials. Run `easynet reset` first to un-pair cleanly.");
+            if !output::confirm("Continue?")? {
+                output::info("Cancelled.");
+                return Ok(());
+            }
+        }
+    }
+
+    let token = args.token.trim().to_string();
+    validate_token_format(&token)?;
 
     output::info("Validating pairing token...");
-    let creds = validate_pairing_token(&args.token, &args.hub)?;
+    let mut creds = validate_pairing_token(&token, &args.hub)?;
+    creds.hub_api_base = args.hub_api.map(|s| s.trim_end_matches('/').to_string());
     config::save_credentials(&creds)?;
 
     output::success("Paired successfully");
@@ -58,11 +82,15 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
 }
 
 fn validate_token_format(token: &str) -> anyhow::Result<()> {
-    if token.len() < 32 || token.len() > 64 {
-        anyhow::bail!("invalid pairing token: must be 32-64 hex characters, got {}", token.len());
+    if token.len() < 8 {
+        anyhow::bail!("invalid pairing token: too short (minimum 8 characters, got {})", token.len());
     }
-    if !token.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
-        anyhow::bail!("invalid pairing token: must be lowercase hex characters");
+    if token.len() > 256 {
+        anyhow::bail!("invalid pairing token: too long (maximum 256 characters, got {})", token.len());
+    }
+    // Accept hex, alphanumeric, dashes, and underscores (covers hex tokens, UUIDs, base64url).
+    if !token.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        anyhow::bail!("invalid pairing token: must contain only alphanumeric characters, dashes, or underscores");
     }
     Ok(())
 }

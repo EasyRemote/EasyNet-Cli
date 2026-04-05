@@ -13,10 +13,13 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use anyhow::Context;
 use clap::Args;
 
 use crate::shared::{self, config, node, output};
+
+/// Maximum number of online nodes to query for ability counts.
+/// Prevents O(N) gRPC calls in large federations.
+const MAX_NODES_TO_QUERY_ABILITIES: usize = 50;
 
 #[derive(Debug, Args)]
 pub struct StatusArgs {}
@@ -58,22 +61,25 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
     };
     let tenant = state.tenant.as_deref().unwrap_or("default");
 
-    let nodes = br
-        .list_nodes(tenant, None)
-        .context("list nodes")?;
+    let nodes = match br.list_nodes(tenant, None) {
+        Ok(n) => n,
+        Err(e) => {
+            output::info(&format!("Federation: cannot query nodes ({e})"));
+            return Ok(());
+        }
+    };
 
     let online = nodes.iter().filter(|n| node::is_online(n)).count();
     let offline = nodes.len() - online;
 
     // Count abilities across online nodes only (avoid O(N) calls for large federations).
-    let max_nodes_to_query = 50;
     let mut ability_count = 0usize;
     let mut nodes_queried = 0usize;
     for n in &nodes {
         if !node::is_online(n) {
             continue;
         }
-        if nodes_queried >= max_nodes_to_query {
+        if nodes_queried >= MAX_NODES_TO_QUERY_ABILITIES {
             break;
         }
         if let Some(node_id) = n.get("node_id").and_then(|v| v.as_str()) {
@@ -83,8 +89,8 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
             nodes_queried += 1;
         }
     }
-    let ability_suffix = if nodes_queried >= max_nodes_to_query {
-        format!(" (sampled from first {max_nodes_to_query} of {online} online nodes)")
+    let ability_suffix = if nodes_queried >= MAX_NODES_TO_QUERY_ABILITIES {
+        format!(" (sampled from first {MAX_NODES_TO_QUERY_ABILITIES} of {online} online nodes)")
     } else {
         format!(" (across {nodes_queried} online nodes)")
     };
