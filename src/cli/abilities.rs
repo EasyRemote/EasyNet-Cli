@@ -13,7 +13,7 @@
 use anyhow::Context;
 use clap::Args;
 
-use crate::shared::{self, config, output::{self, OutputFormat}};
+use crate::shared::{self, output::{self, OutputFormat}};
 
 #[derive(Debug, Args)]
 pub struct AbilitiesArgs {
@@ -25,19 +25,29 @@ pub struct AbilitiesArgs {
     pub format: OutputFormat,
 }
 
+/// Maximum number of nodes to query for abilities when no --node filter is given.
+const MAX_NODES_TO_QUERY: usize = 50;
+
 pub fn run(args: AbilitiesArgs) -> anyhow::Result<()> {
-    let state = config::load()?;
-    let br = shared::connect_bridge_to(&state.endpoint)?;
-    let tenant = state.tenant_or_default();
+    let (br, rt) = shared::connect_bridge()?;
+    let tenant = rt.tenant_or_default();
 
     let target_nodes: Vec<String> = if let Some(ref n) = args.node {
         vec![n.clone()]
     } else {
         let nodes = br.list_nodes(tenant, None).context("list nodes")?;
-        nodes
+        let node_ids: Vec<String> = nodes
             .iter()
             .filter_map(|n| n.get("node_id").and_then(|v| v.as_str()).map(String::from))
-            .collect()
+            .collect();
+        if node_ids.len() > MAX_NODES_TO_QUERY {
+            output::warn(&format!(
+                "querying first {} of {} nodes (use --node to target a specific device)",
+                MAX_NODES_TO_QUERY,
+                node_ids.len()
+            ));
+        }
+        node_ids.into_iter().take(MAX_NODES_TO_QUERY).collect()
     };
 
     let mut all: Vec<serde_json::Value> = Vec::new();

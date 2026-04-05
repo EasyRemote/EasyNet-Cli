@@ -32,7 +32,7 @@ use anyhow::Context;
 use clap::Args;
 use console::style;
 
-use crate::shared::{self, config, output};
+use crate::shared::{self, output};
 
 #[derive(Debug, Args)]
 pub struct ExecArgs {
@@ -46,13 +46,24 @@ pub struct ExecArgs {
     pub command: Vec<String>,
 }
 
+/// Join command arguments into a shell-safe string.
+/// Arguments containing spaces or shell metacharacters are single-quoted.
+fn join_command(parts: &[String]) -> String {
+    parts.iter().map(|p| {
+        if p.contains(|c: char| c.is_ascii_whitespace() || "\"'\\$`|&;(){}[]<>?*#!~".contains(c)) {
+            format!("'{}'", p.replace('\'', "'\"'\"'"))
+        } else {
+            p.clone()
+        }
+    }).collect::<Vec<_>>().join(" ")
+}
+
 pub fn run(args: ExecArgs) -> anyhow::Result<()> {
     anyhow::ensure!(!args.command.is_empty(), "no command specified (use -- to separate)");
 
-    let state = config::load()?;
-    let br = shared::connect_bridge_to(&state.endpoint)?;
+    let (br, state) = shared::connect_bridge()?;
     let tenant = state.tenant_or_default();
-    let cmd_str = args.command.join(" ");
+    let cmd_str = join_command(&args.command);
 
     eprintln!(
         "{} tunnel via {}",
@@ -77,9 +88,11 @@ pub fn run(args: ExecArgs) -> anyhow::Result<()> {
 
     // Check for session_bridge error response first (e.g., exec disabled).
     if payload.get("ok") == Some(&serde_json::json!(false)) {
-        if let Some(err) = payload.get("error").and_then(|v| v.as_str()) {
-            anyhow::bail!("exec: {err}");
-        }
+        let err = payload
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error (no error field in response)");
+        anyhow::bail!("exec: {err}");
     }
     if let Some(stdout) = payload.get("stdout").and_then(|v| v.as_str()) {
         print!("{stdout}");

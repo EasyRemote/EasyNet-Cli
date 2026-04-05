@@ -17,6 +17,9 @@ use console::style;
 
 use crate::shared::{self, config, node, output::{self, OutputFormat}};
 
+/// Display length for short node IDs: "en-" prefix (3) + 8 hex chars = 11.
+const SHORT_NODE_ID_LEN: usize = 11;
+
 #[derive(Debug, Args)]
 pub struct DevicesArgs {
     /// Filter by state (online, offline, all). Defaults to online.
@@ -28,9 +31,8 @@ pub struct DevicesArgs {
 }
 
 pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
-    let state = config::load()?;
-    let br = shared::connect_bridge_to(&state.endpoint)?;
-    let tenant = state.tenant_or_default();
+    let (br, rt) = shared::connect_bridge()?;
+    let tenant = rt.tenant_or_default();
     let current_node_id = config::load_credentials()
         .map(|c| c.node_id)
         .unwrap_or_default();
@@ -58,17 +60,24 @@ pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
     }
 
     if filtered.is_empty() {
-        output::info("No devices found.");
+        if args.state == "all" {
+            output::info("No devices found.");
+        } else {
+            output::info(&format!(
+                "No {} devices found. Use `--state all` to include all states.",
+                args.state
+            ));
+        }
         return Ok(());
     }
 
     // Header
-    eprintln!(
+    println!(
         "  {} {}",
         style(format!("{}", filtered.len())).bold(),
         if filtered.len() == 1 { "device" } else { "devices" }
     );
-    eprintln!();
+    println!();
 
     for n in &filtered {
         print_device(n, &current_node_id);
@@ -101,7 +110,7 @@ fn print_device(n: &serde_json::Value, current_node_id: &str) {
     } else {
         String::new()
     };
-    eprintln!("  {} {}  {}{}", indicator, style(name).bold(), state_styled, current_tag);
+    println!("  {} {}  {}{}", indicator, style(name).bold(), state_styled, current_tag);
 
     // Line 2: details
     let mut details: Vec<String> = Vec::new();
@@ -112,11 +121,11 @@ fn print_device(n: &serde_json::Value, current_node_id: &str) {
         details.push(os_detail);
     }
     details.push(format!("Active {last_active}"));
-    eprintln!("    {}", style(details.join("  ·  ")).dim());
+    println!("    {}", style(details.join("  ·  ")).dim());
 
     // Line 3: node ID (dimmed)
-    eprintln!("    {}", style(node_id).dim());
-    eprintln!();
+    println!("    {}", style(node_id).dim());
+    println!();
 }
 
 fn device_display_name<'a>(n: &'a serde_json::Value, node_id: &'a str) -> &'a str {
@@ -124,8 +133,9 @@ fn device_display_name<'a>(n: &'a serde_json::Value, node_id: &'a str) -> &'a st
         .get("display_name")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty());
-    let short_id = if node_id.starts_with("en-") && node_id.len() > 11 {
-        &node_id[..11]
+    let short_id = if node_id.starts_with("en-") && node_id.len() > SHORT_NODE_ID_LEN {
+        // Safe: "en-" prefix guarantees first bytes are ASCII.
+        node_id.get(..SHORT_NODE_ID_LEN).unwrap_or(node_id)
     } else {
         node_id
     };
@@ -154,7 +164,7 @@ fn device_platform_info(n: &serde_json::Value) -> (String, String, String) {
         .or_else(|| n.get("arch").and_then(|v| v.as_str()))
         .unwrap_or("");
 
-    let os_label = friendly_os(os);
+    let os_label = node::friendly_os(os);
     let platform = if !hardware_model.is_empty() {
         hardware_model.to_string()
     } else if !arch.is_empty() {
@@ -198,21 +208,4 @@ fn style_state(state: &str) -> String {
     }
 }
 
-fn friendly_os(os: &str) -> &str {
-    if os.eq_ignore_ascii_case("darwin") || os.eq_ignore_ascii_case("macos") {
-        "macOS"
-    } else if os.eq_ignore_ascii_case("linux") {
-        "Linux"
-    } else if os.eq_ignore_ascii_case("windows") {
-        "Windows"
-    } else if os.eq_ignore_ascii_case("android") {
-        "Android"
-    } else if os.eq_ignore_ascii_case("ios") {
-        "iOS"
-    } else if os.is_empty() {
-        ""
-    } else {
-        os
-    }
-}
 

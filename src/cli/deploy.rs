@@ -29,12 +29,12 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use base64::Engine;
+use anyhow::Context;
 use clap::Args;
 use console::style;
-use sha2::Digest;
+use serde_json::Map;
 
-use crate::shared::{self, config, deploy, output};
+use crate::shared::{self, config, output};
 
 #[derive(Debug, Args)]
 pub struct DeployArgs {
@@ -46,8 +46,7 @@ pub struct DeployArgs {
 }
 
 pub fn run(args: DeployArgs) -> anyhow::Result<()> {
-    let state = config::load()?;
-    let br = shared::connect_bridge_to(&state.endpoint)?;
+    let (br, state) = shared::connect_bridge()?;
     let tenant = state.tenant_or_default();
 
     let dir = std::path::Path::new(&args.path);
@@ -63,35 +62,33 @@ pub fn run(args: DeployArgs) -> anyhow::Result<()> {
     let description = desc.get("description").and_then(|v| v.as_str()).unwrap_or("");
     let command = desc.get("command").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("missing 'command'"))?;
 
-    // Package the ability.json as base64 for publishing.
-    let raw = std::fs::read(&desc_path)?;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&raw);
-    let digest = format!("sha256:{:x}", sha2::Sha256::digest(&raw));
-
     // Prefer real deploy signature from credentials; fall back to ephemeral for dev.
     let signature = config::load_credentials()
         .ok()
         .map(|c| c.deploy_signature)
-        .filter(|s| !s.is_empty());
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| {
+            output::warn("no deploy signature found — using ephemeral placeholder (dev only)");
+            easynet_axon::EPHEMERAL_SIGNATURE.to_string()
+        });
 
-    if signature.is_none() {
-        output::info("warning: no deploy signature found — using ephemeral placeholder (dev only)");
-    }
+    // Build deploy package via SDK.
+    // Note: unlike the MCP handler (which wraps ad-hoc commands in a Python subprocess
+    // template for structured JSON output), CLI deploy passes the command as-is —
+    // ability authors are responsible for their own output format.
+    let mut pkg_args = Map::new();
+    pkg_args.insert("ability_name".into(), serde_json::json!(name));
+    pkg_args.insert("tool_name".into(), serde_json::json!(tool_name));
+    pkg_args.insert("description".into(), serde_json::json!(description));
+    pkg_args.insert("command_template".into(), serde_json::json!(command));
+    pkg_args.insert("version".into(), serde_json::json!(version));
+
+    let descriptor = easynet_axon::ability::build_deploy_package(&pkg_args, &signature)
+        .context("build deploy package")?;
 
     eprint!("  deploying {}@{} to {} ... ", style(name).cyan(), version, style(&args.to).cyan());
-    let result = deploy::run_pipeline(&br, &deploy::DeployParams {
-        tenant,
-        node_id: &args.to,
-        tool_name,
-        ability_name: name,
-        version,
-        description,
-        command,
-        signature: signature.as_deref(),
-        digest: &digest,
-        payload_bytes: Some(raw.len()),
-        payload_b64: Some(&b64),
-    })?;
+    let result = easynet_axon::ability::deploy_package(&br, tenant, &args.to, &descriptor, true)
+        .context("deploy")?;
     eprintln!("{}", style("✓").green());
 
     output::step(&format!("install_id: {}", result.install_id));

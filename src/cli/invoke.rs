@@ -13,7 +13,7 @@
 use anyhow::Context;
 use clap::Args;
 
-use crate::shared::{self, config, output};
+use crate::shared::{self, output};
 
 #[derive(Debug, Args)]
 pub struct InvokeArgs {
@@ -30,9 +30,8 @@ pub struct InvokeArgs {
 }
 
 pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
-    let state = config::load()?;
-    let br = shared::connect_bridge_to(&state.endpoint)?;
-    let tenant = state.tenant_or_default();
+    let (br, rt) = shared::connect_bridge()?;
+    let tenant = rt.tenant_or_default();
 
     let arguments: serde_json::Value = match invoke_args.args.as_deref() {
         Some(s) => serde_json::from_str(s)?,

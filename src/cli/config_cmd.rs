@@ -34,6 +34,9 @@ use crate::shared::{config, output};
 pub struct ConfigArgs {
     #[command(subcommand)]
     pub action: Option<ConfigAction>,
+    /// Skip confirmation prompts (for non-interactive use)
+    #[arg(long, short = 'y')]
+    pub yes: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -48,6 +51,7 @@ pub enum ConfigAction {
 }
 
 pub fn run(args: ConfigArgs) -> anyhow::Result<()> {
+    let auto_confirm = args.yes;
     match args.action.unwrap_or(ConfigAction::Show) {
         ConfigAction::Show => {
             let settings = config::load_device_settings();
@@ -60,12 +64,12 @@ pub fn run(args: ConfigArgs) -> anyhow::Result<()> {
             let mut settings = config::load_device_settings();
             match value.as_str() {
                 "on" | "true" | "1" | "enable" | "enabled" => {
-                    if !settings.session_bridge_exec_enabled {
-                        eprintln!("WARNING: This allows remote command execution on this device.");
-                        eprint!("Are you sure? [y/N] ");
-                        let mut answer = String::new();
-                        std::io::stdin().read_line(&mut answer)?;
-                        if !matches!(answer.trim(), "y" | "Y" | "yes" | "YES") {
+                    if !settings.session_bridge_exec_enabled && !auto_confirm {
+                        output::warn(
+                            "This enables remote command execution on this device. \
+                             Users in the same tenant with Hub access can run commands on it."
+                        );
+                        if !output::confirm("Are you sure?")? {
                             output::info("Cancelled.");
                             return Ok(());
                         }
@@ -82,7 +86,7 @@ pub fn run(args: ConfigArgs) -> anyhow::Result<()> {
                 "session_bridge_exec_enabled set to {}",
                 settings.session_bridge_exec_enabled
             ));
-            output::info("Note: reconnect required (restart `easynet connect`) to apply.");
+            output::info("Note: reconnect required to apply. Run `easynet stop && easynet start` or restart `easynet connect`.");
         }
     }
     Ok(())
