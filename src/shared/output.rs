@@ -30,6 +30,10 @@ pub fn success(msg: &str) {
     eprintln!("{} {msg}", style("✓").green().bold());
 }
 
+pub fn warn(msg: &str) {
+    eprintln!("{} {msg}", style("⚠").yellow());
+}
+
 pub fn info(msg: &str) {
     eprintln!("{msg}");
 }
@@ -50,33 +54,40 @@ pub fn table(headers: &[&str]) -> Table {
     t
 }
 
+/// Prompt the user for a yes/no confirmation on stderr.
+/// Returns `Ok(true)` if the user answered yes, `Ok(false)` if no.
+/// Errors if stdin is not a terminal and `--yes` was not passed.
+pub fn confirm(prompt: &str) -> anyhow::Result<bool> {
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        anyhow::bail!(
+            "confirmation required but stdin is not a terminal. \
+             Use --yes (-y) to skip the prompt."
+        );
+    }
+    eprint!("{prompt} [y/N] ");
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    Ok(matches!(answer.trim(), "y" | "Y" | "yes" | "YES"))
+}
+
 /// Format a Unix-millisecond timestamp as a human-friendly relative string (e.g., "3m ago").
 pub fn relative_time(unix_ms: i64) -> String {
     let now_ms = chrono::Utc::now().timestamp_millis();
     let diff_secs = (now_ms - unix_ms) / 1000;
 
-    if diff_secs < 0 {
-        return "just now".to_string();
+    match diff_secs {
+        neg if neg < 0 => "in the future".into(),
+        0..60 => "just now".into(),
+        60..3600 => format!("{}m ago", diff_secs / 60),
+        3600..86400 => format!("{}h ago", diff_secs / 3600),
+        _ => {
+            let days = diff_secs / 86400;
+            match days {
+                1 => "yesterday".into(),
+                2..30 => format!("{days}d ago"),
+                _ => format!("{}mo ago", days / 30),
+            }
+        }
     }
-    if diff_secs < 60 {
-        return "just now".to_string();
-    }
-    if diff_secs < 3600 {
-        let mins = diff_secs / 60;
-        return format!("{mins}m ago");
-    }
-    if diff_secs < 86400 {
-        let hours = diff_secs / 3600;
-        return format!("{hours}h ago");
-    }
-    let days = diff_secs / 86400;
-    if days == 1 {
-        return "yesterday".to_string();
-    }
-    if days < 30 {
-        return format!("{days}d ago");
-    }
-    let months = days / 30;
-    format!("{months}mo ago")
 }
 

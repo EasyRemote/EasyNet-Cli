@@ -17,6 +17,12 @@ pub struct ShutdownSignal {
     inner: Arc<(Mutex<bool>, Condvar)>,
 }
 
+impl Default for ShutdownSignal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ShutdownSignal {
     pub fn new() -> Self {
         Self {
@@ -27,7 +33,7 @@ impl ShutdownSignal {
     /// Signal shutdown — wakes all waiting threads.
     pub fn trigger(&self) {
         let (lock, cvar) = &*self.inner;
-        let mut fired = lock.lock().unwrap();
+        let mut fired = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         *fired = true;
         cvar.notify_all();
     }
@@ -35,31 +41,33 @@ impl ShutdownSignal {
     /// Returns true if shutdown has been signaled.
     pub fn is_triggered(&self) -> bool {
         let (lock, _) = &*self.inner;
-        *lock.lock().unwrap()
+        *lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Block until shutdown is signaled or `duration` elapses.
-    /// Returns `true` if the timeout elapsed (shutdown was NOT signaled).
-    pub fn wait_timeout(&self, duration: Duration) -> bool {
+    /// Sleep for `duration` unless shutdown is signaled first.
+    /// Returns `true` if the caller should continue (timeout elapsed, no shutdown).
+    /// Returns `false` if shutdown was signaled (caller should stop).
+    pub fn sleep_unless_triggered(&self, duration: Duration) -> bool {
         let (lock, cvar) = &*self.inner;
-        let fired = lock.lock().unwrap();
+        let fired = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if *fired {
             return false;
         }
-        let (fired, timeout_result) = cvar.wait_timeout(fired, duration).unwrap();
-        // Returns true if we timed out (i.e., shutdown was NOT signaled)
+        let result = cvar.wait_timeout(fired, duration);
+        let (fired, timeout_result) = result.unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Continue if we timed out normally (no shutdown signal).
         timeout_result.timed_out() && !*fired
     }
 
     /// Block until shutdown is signaled (no timeout).
     pub fn wait(&self) {
         let (lock, cvar) = &*self.inner;
-        let fired = lock.lock().unwrap();
+        let fired = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if *fired {
             return;
         }
         let _guard = cvar
             .wait_while(fired, |fired| !*fired)
-            .unwrap();
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
     }
 }
