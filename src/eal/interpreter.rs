@@ -16,8 +16,8 @@
 //   4. Cross-phase data flow — results captured in HashMap, substituted into downstream input_refs.
 //
 // Dispatch Abstraction:
-//   `trait StepDispatcher` decouples execution from transport. Production uses BridgeDispatcher
-//   (new DendriteBridge per call); tests inject MockDispatcher for deterministic verification.
+//   `trait StepDispatcher` decouples execution from transport. Production uses
+//   BorrowedBridgeDispatcher or AgentAwareDispatcher; tests inject MockDispatcher.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -30,6 +30,12 @@ use console::style;
 use easynet_axon::dendrite_bridge::DendriteBridge;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+/// Convert `Duration::as_millis()` (u128) to u64, saturating at u64::MAX.
+#[inline]
+fn millis_u64(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
+}
 use sha2::{Digest, Sha256};
 
 use super::ir::{IrFailurePolicy, IrStep, MissionIr};
@@ -107,6 +113,9 @@ pub struct ExecutionReport {
     pub steps_completed: usize,
     pub steps_failed: usize,
     pub trace: ExecutionTrace,
+    /// Captured outputs from steps with `output_binding`.
+    /// Key = binding name, Value = JSON string of the step's result.
+    pub outputs: HashMap<String, String>,
 }
 
 // ── Internal captured result ──
@@ -130,45 +139,6 @@ pub trait StepDispatcher {
     /// Create an independent clone for parallel dispatch.
     /// Each thread in a phase needs its own dispatcher.
     fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, String>;
-}
-
-/// Production dispatcher using DendriteBridge.
-pub struct BridgeDispatcher {
-    endpoint: String,
-    timeout_ms: u64,
-}
-
-impl BridgeDispatcher {
-    pub fn new(endpoint: &str, timeout_ms: u64) -> Self {
-        Self {
-            endpoint: endpoint.to_string(),
-            timeout_ms,
-        }
-    }
-}
-
-impl StepDispatcher for BridgeDispatcher {
-    fn dispatch(
-        &self,
-        tenant: &str,
-        function_name: &str,
-        target_node_id: &str,
-        arguments: &Value,
-        timeout_ms: Option<u64>,
-    ) -> Result<Value, String> {
-        let bridge = DendriteBridge::connect(&self.endpoint, self.timeout_ms)
-            .map_err(|e| format!("bridge connect: {e}"))?;
-        bridge
-            .call_mcp_tool_with_timeout(tenant, function_name, target_node_id, arguments, timeout_ms)
-            .map_err(|e| format!("{e}"))
-    }
-
-    fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, String> {
-        Ok(Box::new(BridgeDispatcher {
-            endpoint: self.endpoint.clone(),
-            timeout_ms: self.timeout_ms,
-        }))
-    }
 }
 
 /// Dispatcher that borrows a `DendriteBridge`.
@@ -205,6 +175,113 @@ impl StepDispatcher for BorrowedBridgeDispatcher<'_> {
     }
 }
 
+// ── Agent-Aware Dispatcher ──
+//
+// Wraps bridge dispatch but intercepts calls where `target_node_id`
+// matches a registered agent name. Agent targets are routed to
+// `dispatch::send_to_agent()` instead of the Axon Hub.
+//
+// This means EAL programs can use `call "tool" on "claude"` or
+// `call "tool" on "codex"` without any syntax change — the dispatcher
+// transparently routes based on whether the target is a device or an agent.
+
+pub struct AgentAwareDispatcher {
+    endpoint: String,
+    timeout_ms: u64,
+    registry: crate::shared::agents::AgentRegistry,
+    agent_names: std::collections::HashSet<String>,
+}
+
+impl AgentAwareDispatcher {
+    pub fn new(endpoint: &str, timeout_ms: u64) -> Self {
+        let registry = crate::shared::agents::load_agents()
+            .unwrap_or_default();
+        let agent_names = registry.agents.keys().cloned().collect();
+        Self {
+            endpoint: endpoint.to_string(),
+            timeout_ms,
+            registry,
+            agent_names,
+        }
+    }
+
+    fn is_agent(&self, target: &str) -> bool {
+        self.agent_names.contains(target)
+    }
+}
+
+impl StepDispatcher for AgentAwareDispatcher {
+    fn dispatch(
+        &self,
+        tenant: &str,
+        function_name: &str,
+        target_node_id: &str,
+        arguments: &Value,
+        timeout_ms: Option<u64>,
+    ) -> Result<Value, String> {
+        if self.is_agent(target_node_id) {
+            let entry = self.registry.agents.get(target_node_id)
+                .ok_or_else(|| format!("agent '{target_node_id}' not found"))?;
+
+            let prompt = build_agent_prompt(function_name, arguments);
+
+            let response = crate::agent::dispatch::send_to_agent(
+                target_node_id,
+                entry,
+                &prompt,
+                None,
+                None,
+            ).map_err(|e| format!("agent dispatch: {e}"))?;
+
+            Ok(serde_json::json!({
+                "ok": true,
+                "agent": response.agent,
+                "output": response.content,
+                "model": response.model,
+                "duration_ms": response.duration_ms,
+            }))
+        } else {
+            let bridge = DendriteBridge::connect(&self.endpoint, self.timeout_ms)
+                .map_err(|e| format!("bridge connect: {e}"))?;
+            bridge
+                .call_mcp_tool_with_timeout(tenant, function_name, target_node_id, arguments, timeout_ms)
+                .map_err(|e| format!("{e}"))
+        }
+    }
+
+    fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, String> {
+        Ok(Box::new(AgentAwareDispatcher {
+            endpoint: self.endpoint.clone(),
+            timeout_ms: self.timeout_ms,
+            registry: self.registry.clone(),
+            agent_names: self.agent_names.clone(),
+        }))
+    }
+}
+
+/// Build a prompt for an agent from an EAL step's `function_name` and arguments.
+///
+/// The convention is: `function_name` becomes the task description,
+/// arguments become context. The `prompt` argument, if present, is used directly.
+fn build_agent_prompt(function_name: &str, arguments: &Value) -> String {
+    // If there's a "prompt" key, use it directly.
+    if let Some(prompt) = arguments.get("prompt").and_then(|v| v.as_str()) {
+        return prompt.to_string();
+    }
+
+    // Otherwise, build from function name + all argument key-values.
+    let mut parts = vec![format!("Task: {function_name}")];
+    if let Some(obj) = arguments.as_object() {
+        for (key, val) in obj {
+            match val {
+                Value::String(s) => parts.push(format!("{key}: {s}")),
+                other => parts.push(format!("{key}: {other}")),
+            }
+        }
+    }
+    parts.join("\n\n")
+}
+
 // ── Execute with DendriteBridge (convenience) ──
 
 pub fn execute(
@@ -219,18 +296,20 @@ pub fn execute(
 /// Execute using a dispatcher that connects to `endpoint` for each step.
 ///
 /// This enables true parallel dispatch within phases (each thread uses its own
-/// dispatcher instance).
+/// dispatcher instance). **Agent-aware**: if a step's `target_node_id` matches
+/// a registered agent, it is dispatched to the agent CLI instead of the Hub.
 pub fn execute_with_endpoint(
     endpoint: &str,
     tenant: &str,
     ir: &MissionIr,
 ) -> anyhow::Result<ExecutionReport> {
-    let dispatcher = BridgeDispatcher::new(endpoint, 5000);
+    let dispatcher = AgentAwareDispatcher::new(endpoint, crate::shared::BRIDGE_CONNECT_TIMEOUT_MS);
     execute_with_dispatcher(&dispatcher, tenant, ir)
 }
 
 // ── Core execution engine ──
 
+#[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
 pub fn execute_with_dispatcher(
     dispatcher: &dyn StepDispatcher,
     tenant: &str,
@@ -260,119 +339,63 @@ pub fn execute_with_dispatcher(
         }
         let wants_parallel = steps.len() > 1;
         let can_parallel = wants_parallel && dispatcher.clone_for_thread().is_ok();
-        output::info(&format!(
-            "\nphase {phase_idx}{}:",
-            if can_parallel { " (parallel)" } else { "" }
-        ));
-
-        // Collect results from this phase: Vec<(local_idx, StepExecResult)>
-        let phase_exec_results: Vec<(usize, StepExecResult)> = if can_parallel {
-            // ── True parallel dispatch via std::thread::scope ──
-            let collector: Mutex<Vec<(usize, StepExecResult)>> = Mutex::new(Vec::new());
-
-            std::thread::scope(|scope| {
-                for (local_idx, step) in steps.iter().enumerate() {
-                    let collector_ref = &collector;
-
-                    // Resolve arguments before spawning (read from prior phases)
-                    let merged_args = resolve_arguments(step, &captured);
-                    let merged_args = match merged_args {
-                        Ok(args) => args,
-                        Err(e) => {
-                            collector_ref.lock().unwrap().push((local_idx, StepExecResult::Error {
-                                message: e, elapsed_ms: 0, started_at: now_unix_ms(),
-                                retry_count: 0, retry_history: Vec::new(),
-                            }));
-                            continue;
-                        }
-                    };
-
-                    let thread_dispatcher = match dispatcher.clone_for_thread() {
-                        Ok(d) => d,
-                        Err(e) => {
-                            collector_ref.lock().unwrap().push((local_idx, StepExecResult::Error {
-                                message: e, elapsed_ms: 0, started_at: now_unix_ms(),
-                                retry_count: 0, retry_history: Vec::new(),
-                            }));
-                            continue;
-                        }
-                    };
-
-                    scope.spawn(move || {
-                        let result = execute_step_with_retry(
-                            thread_dispatcher.as_ref(), tenant, step, &merged_args,
-                        );
-                        collector_ref.lock().unwrap().push((local_idx, result));
-                    });
-                }
-            });
-
-            let mut results = collector.into_inner().unwrap();
-            results.sort_by_key(|(idx, _)| *idx);
-            results
+        let phase_label = if can_parallel {
+            format!("phase {phase_idx}  parallel")
         } else {
-            // ── Sequential dispatch (fallback when the dispatcher can't be cloned for threads) ──
-            let mut results: Vec<(usize, StepExecResult)> = Vec::new();
-            for (local_idx, step) in steps.iter().enumerate() {
-                let merged_args = resolve_arguments(step, &captured);
-                let merged_args = match merged_args {
-                    Ok(args) => args,
-                    Err(e) => {
-                        results.push((
-                            local_idx,
-                            StepExecResult::Error {
-                                message: e,
-                                elapsed_ms: 0,
-                                started_at: now_unix_ms(),
-                                retry_count: 0,
-                                retry_history: Vec::new(),
-                            },
-                        ));
-                        continue;
-                    }
-                };
-                let result = execute_step_with_retry(dispatcher, tenant, step, &merged_args);
-                results.push((local_idx, result));
-            }
-            results
+            format!("phase {phase_idx}")
         };
+        eprintln!("\n  {}", style(phase_label).cyan());
 
-        // Process results: update counters, capture outputs, build traces
-        for (local_idx, exec_result) in phase_exec_results {
-            global_step += 1;
-            let step = &steps[local_idx];
+        // ── Scheduling: required steps first, then optional ──────────────
+        //
+        // Within a phase, steps have no mutual data dependencies and can run
+        // in parallel.  However, required steps have higher scheduling
+        // priority than optional ones: they execute first so that they get
+        // first access to shared resources (API quotas, failure budgets, etc.)
+        // and their failures are observed before optional work begins.
+        //
+        // Execution order within a phase:
+        //   1. Dispatch all REQUIRED steps (parallel or sequential).
+        //   2. Barrier — process results, detect abort.
+        //   3. Dispatch all OPTIONAL steps (parallel or sequential).
+        //   4. Process results.
+        //
+        // This ensures "optional = low priority" is encoded in scheduling,
+        // not just in post-hoc failure handling.
 
-            let (outcome, trace, result_bytes) =
-                process_step_result(step, exec_result, global_step, total, phase_idx);
+        let required_indices: Vec<usize> = steps.iter().enumerate()
+            .filter(|(_, s)| !s.optional)
+            .map(|(i, _)| i)
+            .collect();
+        let optional_indices: Vec<usize> = steps.iter().enumerate()
+            .filter(|(_, s)| s.optional)
+            .map(|(i, _)| i)
+            .collect();
 
-            match outcome {
-                StepOutcome::Completed => {
-                    completed += 1;
-                    // Capture output for data flow to subsequent phases
-                    if let Some(ref binding) = step.output_binding {
-                        if let Some(bytes) = result_bytes {
-                            captured.insert(
-                                binding.clone(),
-                                CapturedResult {
-                                    value: bytes,
-                                },
-                            );
-                        }
-                    }
-                }
-                StepOutcome::Failed => {
-                    failed += 1;
-                    if !step.optional && matches!(step.on_failure, IrFailurePolicy::Abort) {
-                        aborted = true;
-                    }
-                }
-                StepOutcome::Skipped => skipped += 1,
-            }
-            all_traces.push(trace);
+        // Batch 1: required steps
+        let required_results = dispatch_batch(
+            dispatcher, tenant, steps, &required_indices, &captured, can_parallel,
+        );
+        process_batch(
+            steps, required_results, phase_idx, &mut global_step, total,
+            &mut captured, &mut completed, &mut failed, &mut skipped,
+            &mut aborted, &mut all_traces,
+        );
+
+        // Batch 2: optional steps (skip if mission already aborted)
+        if !aborted && !optional_indices.is_empty() {
+            let optional_results = dispatch_batch(
+                dispatcher, tenant, steps, &optional_indices, &captured, can_parallel,
+            );
+            process_batch(
+                steps, optional_results, phase_idx, &mut global_step, total,
+                &mut captured, &mut completed, &mut failed, &mut skipped,
+                &mut aborted, &mut all_traces,
+            );
         }
     }
 
-    let total_elapsed = mission_start.elapsed().as_millis() as u64;
+    let total_elapsed = millis_u64(mission_start.elapsed());
     let completed_at = now_unix_ms();
     let outcome = if aborted {
         MissionOutcome::Aborted
@@ -396,11 +419,17 @@ pub fn execute_with_dispatcher(
         step_traces: all_traces,
     };
 
+    // Convert captured results to readable strings for the report.
+    let outputs: HashMap<String, String> = captured.into_iter()
+        .map(|(k, v)| (k, String::from_utf8_lossy(&v.value).to_string()))
+        .collect();
+
     Ok(ExecutionReport {
         total_elapsed_ms: total_elapsed,
         steps_completed: completed,
         steps_failed: failed,
         trace,
+        outputs,
     })
 }
 
@@ -425,6 +454,124 @@ enum StepExecResult {
     },
 }
 
+/// Dispatch a batch of steps (identified by `indices` into `steps`) in parallel or sequentially.
+/// Returns `Vec<(local_idx, StepExecResult)>` sorted by `local_idx`.
+fn dispatch_batch(
+    dispatcher: &dyn StepDispatcher,
+    tenant: &str,
+    steps: &[IrStep],
+    indices: &[usize],
+    captured: &HashMap<String, CapturedResult>,
+    parallel: bool,
+) -> Vec<(usize, StepExecResult)> {
+    if indices.is_empty() {
+        return Vec::new();
+    }
+    if parallel && indices.len() > 1 {
+        let collector: Mutex<Vec<(usize, StepExecResult)>> = Mutex::new(Vec::new());
+        std::thread::scope(|scope| {
+            for &local_idx in indices {
+                let step = &steps[local_idx];
+                let collector_ref = &collector;
+                let merged_args = resolve_arguments(step, captured);
+                let merged_args = match merged_args {
+                    Ok(args) => args,
+                    Err(e) => {
+                        collector_ref.lock().unwrap().push((local_idx, StepExecResult::Error {
+                            message: e, elapsed_ms: 0, started_at: now_unix_ms(),
+                            retry_count: 0, retry_history: Vec::new(),
+                        }));
+                        continue;
+                    }
+                };
+                let thread_dispatcher = match dispatcher.clone_for_thread() {
+                    Ok(d) => d,
+                    Err(e) => {
+                        collector_ref.lock().unwrap().push((local_idx, StepExecResult::Error {
+                            message: e, elapsed_ms: 0, started_at: now_unix_ms(),
+                            retry_count: 0, retry_history: Vec::new(),
+                        }));
+                        continue;
+                    }
+                };
+                scope.spawn(move || {
+                    let result = execute_step_with_retry(
+                        thread_dispatcher.as_ref(), tenant, step, &merged_args,
+                    );
+                    collector_ref.lock().unwrap().push((local_idx, result));
+                });
+            }
+        });
+        let mut results = collector.into_inner().unwrap();
+        results.sort_by_key(|(idx, _)| *idx);
+        results
+    } else {
+        let mut results = Vec::new();
+        for &local_idx in indices {
+            let step = &steps[local_idx];
+            let merged_args = match resolve_arguments(step, captured) {
+                Ok(args) => args,
+                Err(e) => {
+                    results.push((local_idx, StepExecResult::Error {
+                        message: e, elapsed_ms: 0, started_at: now_unix_ms(),
+                        retry_count: 0, retry_history: Vec::new(),
+                    }));
+                    continue;
+                }
+            };
+            let result = execute_step_with_retry(dispatcher, tenant, step, &merged_args);
+            results.push((local_idx, result));
+        }
+        results
+    }
+}
+
+/// Process a batch of dispatch results: update counters, capture outputs, build traces.
+#[allow(clippy::too_many_arguments)]
+fn process_batch(
+    steps: &[IrStep],
+    results: Vec<(usize, StepExecResult)>,
+    phase_idx: usize,
+    global_step: &mut usize,
+    total: usize,
+    captured: &mut HashMap<String, CapturedResult>,
+    completed: &mut usize,
+    failed: &mut usize,
+    skipped: &mut usize,
+    aborted: &mut bool,
+    all_traces: &mut Vec<StepTrace>,
+) {
+    for (local_idx, exec_result) in results {
+        *global_step += 1;
+        let step = &steps[local_idx];
+
+        let (outcome, trace, result_bytes) =
+            process_step_result(step, exec_result, *global_step, total, phase_idx);
+
+        match outcome {
+            StepOutcome::Completed => {
+                *completed += 1;
+                if let Some(ref binding) = step.output_binding {
+                    if let Some(bytes) = result_bytes {
+                        captured.insert(
+                            binding.clone(),
+                            CapturedResult { value: bytes },
+                        );
+                    }
+                }
+            }
+            StepOutcome::Failed => {
+                *failed += 1;
+                if !step.optional && matches!(step.on_failure, IrFailurePolicy::Abort) {
+                    *aborted = true;
+                }
+            }
+            StepOutcome::Skipped => *skipped += 1,
+        }
+        all_traces.push(trace);
+    }
+}
+
 fn execute_step_with_retry(
     dispatcher: &dyn StepDispatcher,
     tenant: &str,
@@ -433,6 +580,7 @@ fn execute_step_with_retry(
 ) -> StepExecResult {
     // MissionControl semantics: `max_retries` is the number of retries AFTER the
     // first attempt, so total attempts = 1 + max_retries.
+    #[allow(clippy::cast_sign_loss)] // max_retries is checked > 0 above
     let max_attempts = if matches!(step.on_failure, IrFailurePolicy::Retry) && step.max_retries > 0
     {
         1 + step.max_retries as u32
@@ -452,6 +600,7 @@ fn execute_step_with_retry(
         }
 
         let attempt_start = Instant::now();
+        #[allow(clippy::cast_sign_loss)] // timeout_seconds is checked > 0 above
         let step_timeout_ms = if step.timeout_seconds > 0 {
             Some(step.timeout_seconds as u64 * 1000)
         } else {
@@ -470,7 +619,7 @@ fn execute_step_with_retry(
                 let result_bytes = serde_json::to_vec(&result).unwrap_or_default();
                 let result_sha256 = sha256_hex(&result_bytes);
                 let completed_at = now_unix_ms();
-                let elapsed_ms = t0.elapsed().as_millis() as u64;
+                let elapsed_ms = millis_u64(t0.elapsed());
                 return StepExecResult::Ok {
                     result_bytes,
                     result_sha256,
@@ -482,7 +631,7 @@ fn execute_step_with_retry(
                 };
             }
             Err(e) => {
-                let attempt_elapsed = attempt_start.elapsed().as_millis() as u64;
+                let attempt_elapsed = millis_u64(attempt_start.elapsed());
                 let backoff = if attempt + 1 < max_attempts {
                     compute_backoff(attempt + 1, &step.step_id)
                 } else {
@@ -496,7 +645,7 @@ fn execute_step_with_retry(
                 });
                 // Last attempt: return error with retry info
                 if attempt + 1 >= max_attempts {
-                    let elapsed_ms = t0.elapsed().as_millis() as u64;
+                    let elapsed_ms = millis_u64(t0.elapsed());
                     return StepExecResult::Error {
                         message: e,
                         elapsed_ms,
@@ -509,7 +658,7 @@ fn execute_step_with_retry(
         }
     }
 
-    let elapsed_ms = t0.elapsed().as_millis() as u64;
+    let elapsed_ms = millis_u64(t0.elapsed());
     StepExecResult::Error {
         message: "exhausted all retry attempts".into(),
         elapsed_ms,
@@ -539,8 +688,9 @@ fn resolve_arguments(
     Ok(Value::Object(args))
 }
 
-/// Returns (outcome, trace, Option<result_bytes>).
-/// result_bytes is Some only on success — used for data flow capture.
+/// Returns (outcome, trace, `Option<result_bytes>`).
+/// `result_bytes` is Some only on success — used for data flow capture.
+#[allow(clippy::cast_precision_loss)] // elapsed_ms display — sub-ms precision not needed
 fn process_step_result(
     step: &IrStep,
     result: StepExecResult,
@@ -675,14 +825,21 @@ fn sha256_hex(data: &[u8]) -> String {
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    use std::fmt::Write;
+    bytes.iter().fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    })
 }
 
 fn now_unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX)
 }
 
 // ── Tests ──
@@ -690,7 +847,7 @@ fn now_unix_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eal::{ir::*, parser, planner};
+    use crate::eal::{parser, planner};
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
     use std::time::Instant;
@@ -704,6 +861,8 @@ mod tests {
         call_count: Arc<AtomicU32>,
         /// If set, fail the first N calls (for retry testing)
         fail_first_n: Arc<AtomicU32>,
+        /// If set, fail calls whose function name is in this set
+        fail_functions: Arc<std::collections::HashSet<String>>,
         /// Record of function names called (for ordering verification)
         calls: Arc<Mutex<Vec<(String, Instant)>>>,
     }
@@ -714,12 +873,18 @@ mod tests {
                 delay_ms,
                 call_count: Arc::new(AtomicU32::new(0)),
                 fail_first_n: Arc::new(AtomicU32::new(0)),
+                fail_functions: Arc::new(std::collections::HashSet::new()),
                 calls: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
         fn with_fail_first_n(mut self, n: u32) -> Self {
             self.fail_first_n = Arc::new(AtomicU32::new(n));
+            self
+        }
+
+        fn with_fail_functions(mut self, names: &[&str]) -> Self {
+            self.fail_functions = Arc::new(names.iter().map(|s| (*s).to_string()).collect());
             self
         }
     }
@@ -744,7 +909,12 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(self.delay_ms));
             }
 
-            // Fail first N calls
+            // Fail by function name (deterministic — safe for parallel tests)
+            if self.fail_functions.contains(function_name) {
+                return Err(format!("simulated failure for {function_name}"));
+            }
+
+            // Fail first N calls (order-dependent — use only in sequential phases)
             let fail_n = self.fail_first_n.load(Ordering::SeqCst);
             if call_num < fail_n {
                 return Err(format!("simulated failure #{call_num}"));
@@ -762,6 +932,7 @@ mod tests {
                 delay_ms: self.delay_ms,
                 call_count: Arc::clone(&self.call_count),
                 fail_first_n: Arc::clone(&self.fail_first_n),
+                fail_functions: Arc::clone(&self.fail_functions),
                 calls: Arc::clone(&self.calls),
             }))
         }
@@ -984,13 +1155,26 @@ mod tests {
         let prog = parser::parse(src).unwrap();
         let ir = planner::compile(&prog).unwrap();
 
-        // Fail first call (the optional one)
-        let dispatcher = MockDispatcher::new(0).with_fail_first_n(1);
+        // Both steps land in the same phase (no data dependency).
+        // Scheduling priority: required ("must-run") executes first → call #0.
+        // Optional ("maybe") executes second → call #1.
+        // fail_first_n(1) fails call #0 ("must-run"), which is not optional → Failed.
+        //
+        // But the test expects the *optional* step to fail and be skipped.
+        // We need fail_first_n(2) so both fail, then:
+        //   must-run (required, call #0) → Failed → abort? No: default on_failure is Continue.
+        //   maybe (optional, call #1) → Skipped.
+        //
+        // Actually: the correct test is to fail only the optional step.
+        // With priority scheduling, optional runs second (call #1).
+        // fail_first_n only fails call #0, which hits must-run.
+        // To fail only the optional step, use with_fail_functions.
+        let dispatcher = MockDispatcher::new(0).with_fail_functions(&["maybe"]);
         let report =
             execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
 
-        assert_eq!(report.steps_completed, 1);
-        assert_eq!(report.trace.steps_skipped, 1);
+        assert_eq!(report.steps_completed, 1, "must-run should succeed");
+        assert_eq!(report.trace.steps_skipped, 1, "optional failure should be skipped");
         assert_eq!(report.trace.outcome, MissionOutcome::Completed);
     }
 
