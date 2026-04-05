@@ -30,7 +30,7 @@
 
 use clap::Args;
 
-use crate::shared::{config, net, output};
+use crate::shared::{self, config, net, output};
 
 #[derive(Debug, Args)]
 pub struct ResetArgs {
@@ -41,15 +41,31 @@ pub struct ResetArgs {
 
 pub fn run(args: ResetArgs) -> anyhow::Result<()> {
     // Guard: refuse if runtime is active (heartbeat would break).
+    // Also capture the runtime state for best-effort deregister before cleanup.
+    let runtime_state = config::load().ok();
     if !args.force {
-        if let Ok(state) = config::load() {
-            let alive = state.pid.is_some_and(net::is_pid_alive);
-            if alive {
+        if let Some(ref state) = runtime_state {
+            if state.pid.is_some_and(net::is_pid_alive) {
                 anyhow::bail!(
                     "runtime is currently running — run `easynet stop` first, or use `easynet reset --force`"
                 );
             }
-            // Stale runtime.json (process dead) — clean it up silently.
+        }
+    }
+
+    // Best-effort: notify Hub before deleting local credentials.
+    if let Ok(creds) = config::load_credentials() {
+        if let Some(ref state) = runtime_state {
+            if let Ok(bridge) = shared::connect_bridge_to(&state.endpoint) {
+                let _ = bridge.deregister_node(&creds.tenant_id, &creds.node_id, "device reset");
+                output::info("Node deregistered from Hub");
+            }
+        }
+    }
+
+    // Clean up stale runtime.json (process dead) after deregister attempt.
+    if let Some(ref state) = runtime_state {
+        if !state.pid.is_some_and(net::is_pid_alive) {
             config::remove().ok();
         }
     }

@@ -10,7 +10,7 @@
 // - No business logic lives here; this is purely the shell entry point.
 //
 // Module Map:
-//   cli/     — 14 subcommands (device lifecycle, federation, remote ops, orchestration)
+//   cli/     — subcommands (device lifecycle, federation, remote ops, orchestration, AI agents)
 //   shared/  — config persistence, bridge factory, terminal output, sysinfo
 //   mcp/     — Hub-level MCP tool provider (11 tools for Claude Code / Codex)
 //   eal/     — EasyNet Ability Language compiler (lexer → parser → analyzer → IR → interpreter)
@@ -22,6 +22,19 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+// Crate-level lint policy:
+// - needless_pass_by_value: clap Args structs are consumed by value at dispatch boundaries.
+// - struct_excessive_bools: CLI flag structs naturally have many bool fields.
+// - doc_markdown: product names (EasyNet, EAL, etc.) don't need backticks.
+// - module_name_repetitions: e.g. config::ConfigArgs — acceptable for clarity.
+#![allow(
+    clippy::needless_pass_by_value,
+    clippy::struct_excessive_bools,
+    clippy::doc_markdown,
+    clippy::module_name_repetitions
+)]
+
+mod agent;
 mod cli;
 mod eal;
 mod mcp;
@@ -37,11 +50,6 @@ struct App {
 }
 
 fn main() -> anyhow::Result<()> {
-    // Internal daemon entry point — intercept before clap to keep it out of the public API.
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("_heartbeat-daemon")) {
-        return cli::start::run_heartbeat_daemon();
-    }
-
     let app = App::parse();
     cli::run(app.command)
 }

@@ -15,18 +15,33 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::mem::ManuallyDrop;
+use std::sync::OnceLock;
+
 use anyhow::Context;
 use clap::Args;
 use easynet_axon::server::ServerConfig;
 
+use super::heartbeat::{self, HeartbeatOutcome};
 use crate::shared::{self, config, net, output, shutdown::ShutdownSignal};
 
-const DEFAULT_HEARTBEAT_MS: u64 = 30_000;
-const MAX_HEARTBEAT_FAILURES: u32 = 5;
+/// Register a Ctrl-C handler that triggers `shutdown`. Safe to call multiple times —
+/// only the first call installs the handler; subsequent calls are no-ops.
+fn install_ctrlc_handler(shutdown: &ShutdownSignal) {
+    static INSTALLED: OnceLock<()> = OnceLock::new();
+    let s = shutdown.clone();
+    INSTALLED.get_or_init(|| {
+        ctrlc::set_handler(move || {
+            eprintln!("\nShutting down...");
+            s.trigger();
+        })
+        .ok();
+    });
+}
 
 #[derive(Debug, Args)]
 pub struct StartArgs {
-    /// Hub endpoint (e.g. axon://easynet.run:50051)
+    /// Hub endpoint (e.g. `axon://easynet.run:50051`)
     #[arg(long, default_value = config::DEFAULT_HUB)]
     pub hub: String,
     /// Tenant ID
@@ -50,11 +65,14 @@ pub struct StartArgs {
     /// Disable Hub-level MCP server on stdio (foreground only)
     #[arg(long)]
     pub no_mcp: bool,
+    /// Allow insecure (plaintext) connections to the Hub
+    #[arg(long)]
+    pub insecure: bool,
 }
 
 impl StartArgs {
     /// Construct args suitable for `easynet connect` (foreground, minimal flags).
-    /// Note: hub/tenant are placeholders — run_device_mode() overrides them from credentials.
+    /// Note: hub/tenant are placeholders — `run_device_mode()` overrides them from credentials.
     pub fn for_connect(no_mcp: bool) -> Self {
         Self {
             hub: config::DEFAULT_HUB.into(),
@@ -65,11 +83,12 @@ impl StartArgs {
             bind: config::DEFAULT_BIND.into(),
             foreground: true,
             no_mcp,
+            insecure: false,
         }
     }
 }
 
-/// Result of verify_credential — tracks whether the Hub was reachable.
+/// Result of `verify_credential` — tracks whether the Hub was reachable.
 enum CredentialCheck {
     Valid,
     NetworkUnavailable,
@@ -107,10 +126,16 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     // Credentials take precedence over CLI args for hub/tenant.
     let hub = creds.hub_endpoint.clone();
     let tenant = creds.tenant_id.clone();
+    if args.hub != config::DEFAULT_HUB && args.hub != hub {
+        output::warn(&format!(
+            "--hub {} ignored; using {} from credentials. Run `easynet reset` to un-pair first.",
+            args.hub, hub
+        ));
+    }
     let hostname = gethostname::gethostname().to_string_lossy().into_owned();
     let label = args.label.clone().unwrap_or_else(|| creds.node_id.clone());
 
-    let srv = start_runtime_for_device(&hub, &tenant, &label, &creds.node_id, args.token.as_deref())?;
+    let srv = start_runtime_for_device(&hub, &tenant, &label, &creds.node_id, args.token.as_deref(), args.insecure)?;
     let endpoint = srv.url().to_string();
     let pid = net::discover_pid_from_endpoint(&endpoint);
 
@@ -132,14 +157,14 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
         output::detail("pid", &pid.to_string());
     }
     if !credential_verified {
-        output::info("  warning: credential not verified (Hub unreachable during startup)");
+        output::warn("credential not verified (Hub unreachable during startup)");
     }
 
     // Try connecting the bridge for node registration.
     let bridge = match shared::connect_bridge_to(&endpoint) {
         Ok(b) => b,
         Err(e) => {
-            output::info(&format!("warning: bridge connect failed: {e}"));
+            output::warn(&format!("bridge connect failed: {e}"));
             output::info("Node registration skipped — runtime is still running.");
             output::info("Hint: set EASYNET_DENDRITE_BRIDGE_LIB to the dendrite bridge library path.");
             return run_foreground_or_detach(srv, args.foreground);
@@ -154,7 +179,7 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
         .get("heartbeat_interval_ms")
         .and_then(serde_json::Value::as_u64)
         .filter(|&v| v > 0)
-        .unwrap_or(DEFAULT_HEARTBEAT_MS);
+        .unwrap_or(heartbeat::DEFAULT_HEARTBEAT_MS);
 
     output::success(&format!(
         "Node registered: {} (heartbeat every {}ms)",
@@ -164,7 +189,7 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     if args.foreground {
         run_foreground_with_heartbeat(srv, &bridge, &creds, &endpoint, heartbeat_ms, args.no_mcp)
     } else {
-        run_background_with_heartbeat(srv, &creds, &endpoint, heartbeat_ms)
+        run_background_with_heartbeat(srv, &endpoint, heartbeat_ms)
     }
 }
 
@@ -174,6 +199,7 @@ fn load_and_verify_credentials() -> anyhow::Result<(config::Credentials, bool)> 
         output::info("No credentials found.");
         output::info("Visit https://easynet.run or your Hub to create a pairing token,");
         output::info("then run `easynet join <token>` to pair this device.");
+        output::info("If you're running a Hub, use `easynet start --as-hub` instead.");
         anyhow::bail!("no credentials — cannot start device agent");
     };
 
@@ -202,13 +228,14 @@ fn start_runtime_for_device(
     label: &str,
     runtime_id: &str,
     join_token: Option<&str>,
+    insecure: bool,
 ) -> anyhow::Result<easynet_axon::server::ServerHandle> {
     let mut cfg = ServerConfig::default()
         .hub(hub)
         .hub_tenant(tenant)
         .hub_label(label)
         .hub_runtime_id(runtime_id)
-        .insecure(true);
+        .insecure(insecure);
     if let Some(t) = join_token {
         cfg = cfg.hub_join_token(t);
     }
@@ -240,22 +267,12 @@ fn run_foreground_with_heartbeat(
     }
 
     let shutdown = ShutdownSignal::new();
-    let s = shutdown.clone();
-    ctrlc::set_handler(move || {
-        eprintln!("\nShutting down...");
-        s.trigger();
-    })?;
+    install_ctrlc_handler(&shutdown);
 
     let outcome =
-        heartbeat_loop(bridge, &creds.tenant_id, &creds.node_id, heartbeat_ms, &shutdown);
+        heartbeat::heartbeat_loop(bridge, &creds.tenant_id, &creds.node_id, heartbeat_ms, &shutdown);
 
-    let reason = match outcome {
-        HeartbeatOutcome::FailuresExhausted => "heartbeat lost",
-        HeartbeatOutcome::HubRejected => "hub rejected",
-        HeartbeatOutcome::NodeRejected => "node rejected",
-        HeartbeatOutcome::Shutdown => "device shutdown",
-    };
-    let _ = bridge.deregister_node(&creds.tenant_id, &creds.node_id, reason);
+    let _ = bridge.deregister_node(&creds.tenant_id, &creds.node_id, outcome.reason());
     drop(srv);
     config::remove()?;
     match outcome {
@@ -270,8 +287,8 @@ fn run_foreground_with_heartbeat(
             // so the user cannot reconnect with a revoked identity.
             config::delete_credentials().ok();
             output::success("Axon runtime stopped (device removed by admin)");
-            output::info("  Local credentials have been removed.");
-            output::info("  To reconnect, create a new pairing token and run `easynet join <token>`.");
+            output::step("Local credentials have been removed.");
+            output::step("To reconnect, create a new pairing token and run `easynet join <token>`.");
         }
         HeartbeatOutcome::Shutdown => {
             output::success("Axon runtime stopped");
@@ -283,13 +300,12 @@ fn run_foreground_with_heartbeat(
 /// Detach runtime to background and spawn heartbeat daemon.
 fn run_background_with_heartbeat(
     srv: easynet_axon::server::ServerHandle,
-    creds: &config::Credentials,
     endpoint: &str,
     heartbeat_ms: u64,
 ) -> anyhow::Result<()> {
-    spawn_heartbeat_daemon(endpoint, &creds.tenant_id, &creds.node_id, heartbeat_ms)?;
+    heartbeat::spawn_daemon(endpoint, heartbeat_ms)?;
     // Intentionally leak the handle so the runtime keeps running after this process exits.
-    std::mem::forget(srv);
+    let _ = ManuallyDrop::new(srv);
     output::info("Runtime running in background. Use `easynet stop` to stop.");
     Ok(())
 }
@@ -302,15 +318,14 @@ fn run_foreground_or_detach(
 ) -> anyhow::Result<()> {
     if foreground {
         let shutdown = ShutdownSignal::new();
-        let s = shutdown.clone();
-        ctrlc::set_handler(move || s.trigger())?;
+        install_ctrlc_handler(&shutdown);
         output::info("Running in foreground (Ctrl-C to stop)...");
         shutdown.wait();
         drop(srv);
         config::remove()?;
         output::success("Axon runtime stopped");
     } else {
-        std::mem::forget(srv);
+        let _ = ManuallyDrop::new(srv);
         output::info("Runtime running in background. Use `easynet stop` to stop.");
     }
     Ok(())
@@ -326,7 +341,7 @@ fn run_as_hub(args: &StartArgs) -> anyhow::Result<()> {
 
     let mut cfg = ServerConfig::default()
         .endpoint(&args.bind)
-        .insecure(true);
+        .insecure(args.insecure);
     if let Some(ref t) = args.token {
         cfg = cfg.hub_join_token(t);
     }
@@ -357,18 +372,14 @@ fn run_as_hub(args: &StartArgs) -> anyhow::Result<()> {
 
     if args.foreground {
         let shutdown = ShutdownSignal::new();
-        let s = shutdown.clone();
-        ctrlc::set_handler(move || {
-            eprintln!("\nShutting down...");
-            s.trigger();
-        })?;
+        install_ctrlc_handler(&shutdown);
         output::info("Running in foreground (Ctrl-C to stop)...");
         shutdown.wait();
         drop(srv);
         config::remove()?;
         output::success("Hub stopped");
     } else {
-        std::mem::forget(srv);
+        let _ = ManuallyDrop::new(srv);
         output::info("Hub running in background. Use `easynet stop` to stop.");
     }
     Ok(())
@@ -386,9 +397,10 @@ struct EnvPatch {
 ///
 /// # Safety
 /// Must be called on the main thread before any `std::thread::spawn` or `ServerConfig::start`.
-/// Caller is responsible for ensuring single-threaded context.
+/// `assert_single_threaded()` guards against accidental misuse.
 fn apply_env_patch(patch: &EnvPatch) {
-    // SAFETY: guaranteed single-threaded by caller (main thread, before runtime start).
+    assert_single_threaded();
+    // SAFETY: assert_single_threaded() verified no other threads exist.
     unsafe {
         for (k, v) in &patch.sets {
             std::env::set_var(k, v);
@@ -399,9 +411,75 @@ fn apply_env_patch(patch: &EnvPatch) {
     }
 }
 
+/// Panic if other threads are running. Guards `apply_env_patch` against UB.
+///
+/// On Linux, counts `/proc/self/task` entries.
+/// On macOS, uses `pthread_num_threads_np()` from libc.
+/// On other platforms, this is a no-op — call-site discipline required.
+fn assert_single_threaded() {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(entries) = std::fs::read_dir("/proc/self/task") {
+            let count = entries.count();
+            assert!(
+                count <= 1,
+                "apply_env_patch called with {count} threads running — must be single-threaded"
+            );
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::mem::MaybeUninit;
+        extern "C" {
+            fn task_threads(
+                target_task: libc::c_uint,
+                act_list: *mut *mut libc::c_uint,
+                act_list_cnt: *mut libc::c_uint,
+            ) -> libc::c_int;
+            fn mach_task_self() -> libc::c_uint;
+            fn vm_deallocate(
+                target_task: libc::c_uint,
+                address: usize,
+                size: usize,
+            ) -> libc::c_int;
+        }
+        let mut thread_list = MaybeUninit::<*mut libc::c_uint>::uninit();
+        let mut thread_count = MaybeUninit::<libc::c_uint>::uninit();
+        // SAFETY: Mach kernel call to enumerate threads in the current task.
+        let kr = unsafe {
+            task_threads(
+                mach_task_self(),
+                thread_list.as_mut_ptr(),
+                thread_count.as_mut_ptr(),
+            )
+        };
+        if kr == 0 {
+            let count = unsafe { thread_count.assume_init() };
+            let list = unsafe { thread_list.assume_init() };
+            // Free the Mach-allocated thread list.
+            unsafe {
+                vm_deallocate(
+                    mach_task_self(),
+                    list as usize,
+                    count as usize * std::mem::size_of::<libc::c_uint>(),
+                );
+            }
+            assert!(
+                count <= 1,
+                "apply_env_patch called with {count} threads running — must be single-threaded"
+            );
+        }
+    }
+}
+
 fn env_patch_for_device(creds: &config::Credentials, settings: &config::DeviceSettings) -> EnvPatch {
     let mut sets = Vec::new();
-    if !creds.deploy_signature.is_empty() {
+    if creds.deploy_signature.is_empty() {
+        // Allow ephemeral/placeholder deploy signatures in dev mode when no real
+        // signature is available. Must be set here (single-threaded init) because
+        // env mutation from handler threads is UB.
+        sets.push(("AXON_ALLOW_PLACEHOLDER_DEPLOY_SIGNATURE", "1".into()));
+    } else {
         sets.push(("AXON_DEPLOY_SIGNATURE_BASE64", creds.deploy_signature.clone()));
     }
     let exec_enabled = std::env::var("EASYNET_SESSION_BRIDGE_EXEC_ENABLED")
@@ -423,159 +501,12 @@ fn env_patch_for_hub() -> EnvPatch {
     }
 }
 
-// ── Heartbeat ───────────────────────────────────────────────────────────────
-
-/// Outcome of the heartbeat loop — signals why it exited.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HeartbeatOutcome {
-    /// User requested shutdown (Ctrl-C / SIGTERM).
-    Shutdown,
-    /// Too many consecutive heartbeat failures.
-    FailuresExhausted,
-    /// Hub sent a permanent rejection (evicted).
-    HubRejected,
-    /// This node was administratively removed by the Hub.
-    NodeRejected,
-}
-
-/// Blocking heartbeat loop — runs until shutdown is signaled, failures exhaust,
-/// or the Hub rejects this member/node.
-fn heartbeat_loop(
-    bridge: &easynet_axon::dendrite_bridge::DendriteBridge,
-    tenant: &str,
-    node_id: &str,
-    interval_ms: u64,
-    shutdown: &ShutdownSignal,
-) -> HeartbeatOutcome {
-    let interval = std::time::Duration::from_millis(interval_ms);
-    let mut failures = 0u32;
-    while !shutdown.is_triggered() {
-        // Sleep for the heartbeat interval, waking immediately if shutdown is signaled.
-        let timed_out = shutdown.wait_timeout(interval);
-        if !timed_out {
-            break; // Shutdown was signaled during wait.
-        }
-        match bridge.node_heartbeat(tenant, node_id) {
-            Ok(resp) => {
-                if failures > 0 {
-                    eprintln!("heartbeat recovered after {failures} failures");
-                    failures = 0;
-                }
-                // Check for permanent rejection — Hub has evicted this member.
-                if resp.get("permanent").and_then(serde_json::Value::as_bool).unwrap_or(false) {
-                    let status = resp.get("status").and_then(serde_json::Value::as_str).unwrap_or("unknown");
-                    eprintln!("heartbeat permanently rejected by hub (status: {status}), disconnecting");
-                    return HeartbeatOutcome::HubRejected;
-                }
-                // Check if this device's node was administratively removed.
-                let self_rejected = resp
-                    .get("rejected_nodes")
-                    .and_then(|v| v.as_array())
-                    .is_some_and(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.get("node_id").and_then(|n| n.as_str()))
-                            .any(|id| id == node_id)
-                    });
-                if self_rejected {
-                    eprintln!("this node ({node_id}) was rejected by hub, disconnecting");
-                    return HeartbeatOutcome::NodeRejected;
-                }
-            }
-            Err(e) => {
-                failures += 1;
-                eprintln!("heartbeat failed ({failures}/{MAX_HEARTBEAT_FAILURES}): {e}");
-                if failures >= MAX_HEARTBEAT_FAILURES {
-                    eprintln!("heartbeat lost — initiating graceful shutdown");
-                    return HeartbeatOutcome::FailuresExhausted;
-                }
-            }
-        }
-    }
-    HeartbeatOutcome::Shutdown
-}
-
-/// Fork a background daemon that handles heartbeat + deregister on SIGTERM.
-fn spawn_heartbeat_daemon(
-    endpoint: &str,
-    tenant: &str,
-    node_id: &str,
-    heartbeat_ms: u64,
-) -> anyhow::Result<()> {
-    let exe = std::env::current_exe()
-        .context("resolve exe path")?;
-
-    let log_dir = config::home_dir().join(".easynet").join("logs");
-    std::fs::create_dir_all(&log_dir)?;
-    let log_path = log_dir.join("heartbeat.log");
-    let log_fh = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)?;
-    let log_err = log_fh.try_clone()?;
-
-    let child = std::process::Command::new(exe)
-        .arg("_heartbeat-daemon")
-        .env("_EASYNET_HB_ENDPOINT", endpoint)
-        .env("_EASYNET_HB_TENANT", tenant)
-        .env("_EASYNET_HB_NODE_ID", node_id)
-        .env("_EASYNET_HB_INTERVAL_MS", heartbeat_ms.to_string())
-        .stdout(log_fh)
-        .stderr(log_err)
-        .spawn()
-        .context("spawn heartbeat daemon")?;
-
-    let hb_pid_path = config::home_dir().join(".easynet").join("heartbeat.pid");
-    std::fs::write(&hb_pid_path, child.id().to_string())?;
-
-    output::detail("heartbeat daemon", &format!("pid {} (log: {})", child.id(), log_path.display()));
-
-    Ok(())
-}
-
-/// Entry point for the heartbeat daemon subprocess (hidden subcommand).
-pub fn run_heartbeat_daemon() -> anyhow::Result<()> {
-    let endpoint = std::env::var("_EASYNET_HB_ENDPOINT")
-        .map_err(|_| anyhow::anyhow!("missing _EASYNET_HB_ENDPOINT"))?;
-    let tenant = std::env::var("_EASYNET_HB_TENANT")
-        .map_err(|_| anyhow::anyhow!("missing _EASYNET_HB_TENANT"))?;
-    let node_id = std::env::var("_EASYNET_HB_NODE_ID")
-        .map_err(|_| anyhow::anyhow!("missing _EASYNET_HB_NODE_ID"))?;
-    let interval_ms: u64 = std::env::var("_EASYNET_HB_INTERVAL_MS")
-        .unwrap_or_else(|_| DEFAULT_HEARTBEAT_MS.to_string())
-        .parse()?;
-
-    let bridge = shared::connect_bridge_to(&endpoint)?;
-
-    let shutdown = ShutdownSignal::new();
-    let s = shutdown.clone();
-    ctrlc::set_handler(move || {
-        s.trigger();
-    })?;
-
-    let outcome = heartbeat_loop(&bridge, &tenant, &node_id, interval_ms, &shutdown);
-
-    let reason = match outcome {
-        HeartbeatOutcome::FailuresExhausted => "heartbeat lost",
-        HeartbeatOutcome::HubRejected => "hub rejected",
-        HeartbeatOutcome::NodeRejected => "node rejected",
-        HeartbeatOutcome::Shutdown => "device shutdown",
-    };
-    let _ = bridge.deregister_node(&tenant, &node_id, reason);
-    if outcome == HeartbeatOutcome::NodeRejected {
-        config::delete_credentials().ok();
-        eprintln!("heartbeat daemon: device removed by admin — credentials cleaned up");
-    }
-    eprintln!("heartbeat daemon: deregistered {node_id} ({reason}), exiting");
-    Ok(())
-}
-
 // ── Credential verification ─────────────────────────────────────────────────
 
 /// Verify device credentials with the backend API.
-/// Extracts the HTTPS host from the hub endpoint (supports axon://, http://, https://).
 fn verify_credential(creds: &config::Credentials) -> CredentialCheck {
-    let host = extract_host(&creds.hub_endpoint);
-    let url = format!("https://{host}/api/v1/devices/verify-credential");
+    let base = creds.api_base();
+    let url = format!("{base}/api/v1/devices/verify-credential");
 
     let resp = ureq::post(&url)
         .timeout(std::time::Duration::from_secs(5))
@@ -590,37 +521,34 @@ fn verify_credential(creds: &config::Credentials) -> CredentialCheck {
             let body = r.into_string().unwrap_or_default();
             CredentialCheck::Revoked(format!("credential rejected: {body}"))
         }
-        Err(ureq::Error::Status(code @ (401 | 403), _)) => {
-            CredentialCheck::Revoked(format!("credential revoked or device removed (HTTP {code})"))
+        Err(ureq::Error::Status(code, _)) if (400..500).contains(&code) => {
+            match code {
+                // 404 = endpoint not found (Hub version mismatch), 429 = rate limited — transient.
+                404 | 429 => {
+                    output::warn(&format!("Hub returned HTTP {code}, continuing anyway"));
+                    CredentialCheck::NetworkUnavailable
+                }
+                // 401/403 = credential explicitly rejected.
+                // Other 4xx (400, 422, etc.) = client-side error, likely a bad credential.
+                _ => CredentialCheck::Revoked(format!(
+                    "credential rejected by Hub (HTTP {code})"
+                )),
+            }
         }
-        Err(ureq::Error::Status(code, resp)) => {
-            let body = resp.into_string().unwrap_or_default();
-            CredentialCheck::Revoked(format!("Hub rejected credential (HTTP {code}): {body}"))
+        Err(ureq::Error::Status(code, _)) if code >= 500 => {
+            output::warn(&format!("Hub returned server error (HTTP {code}), continuing anyway"));
+            CredentialCheck::NetworkUnavailable
+        }
+        Err(ureq::Error::Status(code, _)) => {
+            output::warn(&format!(
+                "unexpected Hub response (HTTP {code}) during credential check, continuing anyway"
+            ));
+            CredentialCheck::NetworkUnavailable
         }
         Err(e) => {
-            eprintln!("  warning: could not verify credential ({e}), continuing anyway");
+            output::warn(&format!("could not verify credential ({e}), continuing anyway"));
             CredentialCheck::NetworkUnavailable
         }
     }
 }
 
-/// Extract the hostname from an endpoint URL.
-/// Handles axon://host:port, http://host:port, https://host:port, and bare host:port.
-fn extract_host(endpoint: &str) -> &str {
-    let endpoint = endpoint.trim();
-    let without_scheme = endpoint
-        .strip_prefix("axon://")
-        .or_else(|| endpoint.strip_prefix("https://"))
-        .or_else(|| endpoint.strip_prefix("http://"))
-        .unwrap_or(endpoint);
-    // Take everything before the first ':' or '/' (whichever comes first).
-    let end = without_scheme
-        .find([':', '/'])
-        .unwrap_or(without_scheme.len());
-    let host = &without_scheme[..end];
-    if host.is_empty() {
-        config::DEFAULT_HUB_HOST
-    } else {
-        host
-    }
-}

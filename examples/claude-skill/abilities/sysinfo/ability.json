@@ -1,0 +1,7 @@
+{
+  "name": "sysinfo",
+  "version": "1.0.0",
+  "tool_name": "sysinfo",
+  "description": "Collect system information: hostname, OS, architecture, uptime",
+  "command": "echo '{\"hostname\": \"'$(hostname)'\", \"os\": \"'$(uname -s)'\", \"arch\": \"'$(uname -m)'\", \"uptime\": \"'$(uptime | sed 's/.*up //' | sed 's/,.*//')'\"}'"
+}

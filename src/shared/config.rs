@@ -35,7 +35,22 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Atomic write: write to a temp file in the same directory, then rename.
+/// Prevents corruption if the process crashes mid-write.
+fn atomic_write(path: &Path, data: &[u8]) -> anyhow::Result<()> {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let tmp = dir.join(format!(
+        ".{}.tmp",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("config")
+    ));
+    fs::write(&tmp, data)?;
+    fs::rename(&tmp, path)?;
+    Ok(())
+}
 
 // ─── Platform-wide defaults ────────────────────────────────────────────────
 // Single source of truth for default Hub/tenant/bind values.
@@ -60,14 +75,24 @@ pub struct RuntimeState {
     pub credential_verified: Option<bool>,
 }
 
-/// Resolve the user's home directory. Falls back to "." if neither HOME nor USERPROFILE is set.
+/// Resolve the user's home directory.
+/// Returns the first available of `$HOME`, `$USERPROFILE`, or the OS-provided home.
 pub fn home_dir() -> PathBuf {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map_or_else(|_| PathBuf::from("."), PathBuf::from)
+    if let Ok(h) = std::env::var("HOME") {
+        return PathBuf::from(h);
+    }
+    if let Ok(h) = std::env::var("USERPROFILE") {
+        return PathBuf::from(h);
+    }
+    // Last resort: platform home_dir (works on most systems).
+    #[allow(deprecated)]
+    std::env::home_dir().unwrap_or_else(|| {
+        eprintln!("warning: cannot determine home directory; using current directory");
+        PathBuf::from(".")
+    })
 }
 
-fn state_dir() -> PathBuf {
+pub fn state_dir() -> PathBuf {
     home_dir().join(".easynet")
 }
 
@@ -79,7 +104,7 @@ pub fn save(state: &RuntimeState) -> anyhow::Result<()> {
     let dir = state_dir();
     fs::create_dir_all(&dir)?;
     let json = serde_json::to_string_pretty(state)?;
-    fs::write(state_path(), json)?;
+    atomic_write(&state_path(), json.as_bytes())?;
     Ok(())
 }
 
@@ -101,7 +126,7 @@ pub fn remove() -> anyhow::Result<()> {
 
 impl RuntimeState {
     pub fn tenant_or_default(&self) -> &str {
-        self.tenant.as_deref().unwrap_or("default")
+        self.tenant.as_deref().unwrap_or(DEFAULT_TENANT)
     }
 }
 
@@ -115,10 +140,75 @@ pub struct Credentials {
     pub tenant_id: String,
     #[serde(default)]
     pub deploy_signature: String,
+    /// Optional Hub REST API base URL (e.g. "http://localhost:8080") for local dev.
+    /// When absent, derived from `hub_endpoint` by stripping scheme/port and using HTTPS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hub_api_base: Option<String>,
+}
+
+impl Credentials {
+    /// Resolve the Hub REST API base URL.
+    /// Uses `hub_api_base` if set, otherwise derives from `hub_endpoint`.
+    pub fn api_base(&self) -> String {
+        if let Some(ref base) = self.hub_api_base {
+            return base.trim_end_matches('/').to_string();
+        }
+        let host = extract_api_host(&self.hub_endpoint);
+        format!("https://{host}")
+    }
+}
+
+/// Extract the hostname from an endpoint URL for REST API calls.
+///
+/// For `axon://` endpoints, strips the gRPC port since the REST API uses HTTPS/443.
+/// For `http://`/`https://` endpoints, preserves the authority (host:port) as-is.
+fn extract_api_host(endpoint: &str) -> String {
+    let endpoint = endpoint.trim();
+    let (is_axon, without_scheme) = if let Some(rest) = endpoint.strip_prefix("axon://") {
+        (true, rest)
+    } else if let Some(rest) = endpoint.strip_prefix("https://") {
+        (false, rest)
+    } else if let Some(rest) = endpoint.strip_prefix("http://") {
+        (false, rest)
+    } else {
+        (false, endpoint)
+    };
+    let authority = without_scheme.split('/').next().unwrap_or(without_scheme);
+    if authority.is_empty() {
+        return DEFAULT_HUB_HOST.to_string();
+    }
+    // IPv6 bracketed address: [::1]:port or [::1]
+    if authority.starts_with('[') {
+        if let Some(bracket_end) = authority.find(']') {
+            let host_part = &authority[..=bracket_end]; // includes brackets
+            if is_axon {
+                // Strip port for axon:// — REST API uses HTTPS/443.
+                return host_part.to_string();
+            }
+            // http/https — preserve port if present.
+            return authority.to_string();
+        }
+    }
+    if is_axon {
+        // axon:// uses gRPC port — strip it, REST API is on HTTPS/443.
+        authority
+            .rsplit_once(':')
+            .map_or(authority, |(host, _)| host)
+            .to_string()
+    } else {
+        // http/https — preserve port for non-standard setups.
+        authority.to_string()
+    }
 }
 
 fn credentials_path() -> PathBuf {
     state_dir().join("credentials.json")
+}
+
+/// Path to the heartbeat daemon PID file.
+/// Used by start.rs (write) and stop.rs (read + cleanup).
+pub fn heartbeat_pid_path() -> PathBuf {
+    state_dir().join("heartbeat.pid")
 }
 
 pub fn save_credentials(creds: &Credentials) -> anyhow::Result<()> {
@@ -126,7 +216,7 @@ pub fn save_credentials(creds: &Credentials) -> anyhow::Result<()> {
     fs::create_dir_all(&dir)?;
     let json = serde_json::to_string_pretty(creds)? + "\n";
     let path = credentials_path();
-    fs::write(&path, json)?;
+    atomic_write(&path, json.as_bytes())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -140,7 +230,9 @@ pub fn load_credentials() -> anyhow::Result<Credentials> {
     let data = fs::read_to_string(&path)
         .map_err(|_| anyhow::anyhow!("no credentials found — run `easynet join <token>` first"))?;
     let creds: Credentials = serde_json::from_str(&data)?;
-    if creds.node_id.is_empty() || creds.hub_endpoint.is_empty() || creds.tenant_id.is_empty() {
+    if creds.node_id.is_empty() || creds.credential_token.is_empty()
+        || creds.hub_endpoint.is_empty() || creds.tenant_id.is_empty()
+    {
         anyhow::bail!("credentials file is incomplete — run `easynet join <token>` to re-pair");
     }
     Ok(creds)
@@ -178,6 +270,9 @@ pub fn save_device_settings(settings: &DeviceSettings) -> anyhow::Result<()> {
     let dir = state_dir();
     fs::create_dir_all(&dir)?;
     let json = serde_json::to_string_pretty(settings)? + "\n";
-    fs::write(device_settings_path(), json)?;
+    atomic_write(&device_settings_path(), json.as_bytes())?;
     Ok(())
 }
+
+// Agent registry types moved to shared/agents.rs to preserve this file's
+// three-domain contract (runtime state / credentials / device settings).

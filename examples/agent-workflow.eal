@@ -1,0 +1,31 @@
+// agent-workflow.eal — Multi-agent collaborative article writing via EAL.
+//
+// Demonstrates EAL's agent-native dispatch: `on "claude"` and `on "codex"`
+// target registered agents instead of device nodes. The compiler infers
+// the DAG automatically:
+//
+//   Phase 0: claude_perspective, codex_perspective (parallel — no dependencies)
+//   Phase 1: synthesis (depends on both)
+//
+// Prerequisites:
+//   easynet agent add claude --type claude-code --model sonnet
+//   easynet agent add codex  --type codex --model gpt-5.2
+//
+// Run:
+//   easynet mission run examples/agent-workflow.eal
+
+mission "agent-alive-discussion" {
+  let claude_perspective = call "discuss" on "claude" with {
+    prompt = "You are an AI systems architect. In 2-3 paragraphs, argue why agent-native networking (like EasyNet's Axon protocol) is the missing infrastructure layer for autonomous AI agents. Focus on: persistent identity, federated ability discovery, and trust topology. Be bold and technically specific."
+  } timeout 120
+
+  let codex_perspective = call "discuss" on "codex" with {
+    prompt = "You are a distributed systems engineer. In 2-3 paragraphs, argue from a systems perspective why current cloud-API approaches are insufficient for real-time agent collaboration, and what a purpose-built agent network substrate must provide. Be concrete about protocol-level requirements."
+  } timeout 120
+
+  let synthesis = call "synthesize" on "claude" with {
+    prompt = "Synthesize the following two perspectives into one cohesive, compelling article titled 'The Case for Agent-Native Networking'. Write with bold vision and concrete technical arguments. The article should convince both AI researchers and infrastructure engineers.",
+    perspective_a = claude_perspective.output,
+    perspective_b = codex_perspective.output
+  } timeout 180
+}

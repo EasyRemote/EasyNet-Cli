@@ -27,11 +27,24 @@ use super::start;
 
 #[derive(Debug, Args)]
 pub struct ConnectArgs {
+    /// Human-readable label for this device
+    #[arg(long)]
+    pub label: Option<String>,
+    /// Pre-shared join token
+    #[arg(long)]
+    pub token: Option<String>,
     /// Disable Hub-level MCP server on stdio
     #[arg(long)]
     pub no_mcp: bool,
+    /// Allow insecure (plaintext) connections to the Hub
+    #[arg(long)]
+    pub insecure: bool,
 }
 
 pub fn run(args: ConnectArgs) -> anyhow::Result<()> {
-    start::run(start::StartArgs::for_connect(args.no_mcp))
+    let mut start_args = start::StartArgs::for_connect(args.no_mcp);
+    start_args.label = args.label;
+    start_args.token = args.token;
+    start_args.insecure = args.insecure;
+    start::run(start_args)
 }

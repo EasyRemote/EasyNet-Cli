@@ -5,9 +5,8 @@
 // Description: Cross-cutting infrastructure shared by all CLI subcommands.
 //
 // Protocol Responsibility:
-// - Provides the DendriteBridge factory (connect_bridge / connect_bridge_to) that every
-//   command needing Hub interaction calls. This is the single bottleneck between CLI
-//   commands and the native FFI layer — all gRPC traffic flows through here.
+// - Provides the DendriteBridge factory (connect_bridge_to) that every command needing
+//   Hub interaction calls. Single bottleneck between CLI and the native FFI layer.
 //
 // Provides:
 //   config.rs    — ~/.easynet/ persistence (runtime state, credentials, device settings, constants)
@@ -24,8 +23,8 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+pub mod agents;
 pub mod config;
-pub mod deploy;
 pub mod net;
 pub mod node;
 pub mod output;
@@ -34,10 +33,21 @@ pub mod sysinfo;
 
 use anyhow::Context;
 
+/// Default timeout (ms) for DendriteBridge connections.
+pub const BRIDGE_CONNECT_TIMEOUT_MS: u64 = 5000;
+
+/// Load runtime state and connect a `DendriteBridge` in one call.
+/// Returns `(bridge, runtime_state)` so callers can access tenant, endpoint, etc.
+pub fn connect_bridge() -> anyhow::Result<(easynet_axon::dendrite_bridge::DendriteBridge, config::RuntimeState)> {
+    let state = config::load()?;
+    let br = connect_bridge_to(&state.endpoint)?;
+    Ok((br, state))
+}
+
 /// Connect a `DendriteBridge` to a specific endpoint.
 pub fn connect_bridge_to(
     endpoint: &str,
 ) -> anyhow::Result<easynet_axon::dendrite_bridge::DendriteBridge> {
-    easynet_axon::dendrite_bridge::DendriteBridge::connect(endpoint, 5000)
+    easynet_axon::dendrite_bridge::DendriteBridge::connect(endpoint, BRIDGE_CONNECT_TIMEOUT_MS)
         .with_context(|| format!("bridge connect to {endpoint}"))
 }

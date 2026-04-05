@@ -214,6 +214,19 @@ EAL describes **distributed ability execution**. AAL (future) will describe **ag
 }
 ```
 
+### Install for Claude / Codex
+
+Instead of editing config by hand, use:
+
+```bash
+# Claude Code: updates ~/.claude/settings.json
+easynet mcp-install claude --name easynet --tenant myteam
+
+# Bind a server to a single device (node_id); run twice for two devices/agents
+easynet mcp-install claude --name easynet-edge-a --tenant myteam --bound-node edge-a --agent agent-a
+easynet mcp-install claude --name easynet-edge-b --tenant myteam --bound-node edge-b --agent agent-b
+```
+
 ### Available tools
 
 | Tool | Description |
@@ -223,6 +236,9 @@ EAL describes **distributed ability execution**. AAL (future) will describe **ag
 | `get_device_detail` | Device info + installed abilities |
 | `list_all_abilities` | Abilities across all nodes |
 | `search_abilities` | Find by name pattern |
+| `list_a2a_agents` | List A2A agents in tenant |
+| `get_a2a_agent_card` | Fetch A2A agent card |
+| `send_a2a_task` | Send an A2A skill task to an agent |
 | `deploy_ability` | Publish → install → activate pipeline |
 | `execute_command` | One-shot command on remote device |
 | `invoke_ability` | Invoke ability on any federated node |
@@ -242,7 +258,8 @@ easynet exec     <node> -- <command...>
 easynet deploy   <path> --to <node>
 easynet invoke   <node> <ability> [--args JSON]
 easynet mission  run <file.eal> [--emit-ir] [--trace]
-easynet mcp-server [--endpoint URL] [--tenant T]
+easynet mcp-server [--endpoint URL] [--tenant T] [--bound-node N] [--agent A]
+easynet mcp-install <claude|codex> [--name NAME] [--tenant T] [--bound-node N] [--agent A]
 ```
 
 ## Examples
