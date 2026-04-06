@@ -134,7 +134,7 @@ fn resolve_easynet_binary() -> String {
         .unwrap_or_else(|| "easynet".to_string())
 }
 
-fn build_mcp_entry() -> (String, Vec<String>, serde_json::Value) {
+pub(super) fn build_mcp_entry() -> (String, Vec<String>, serde_json::Value) {
     let cmd = resolve_easynet_binary();
     let mut args = vec!["mcp-server".to_string()];
     let mut env = serde_json::Map::new();

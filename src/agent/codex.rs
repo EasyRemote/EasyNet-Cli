@@ -3,16 +3,55 @@
 //
 // File: src/agent/codex.rs
 // Description: Invokes Codex in two modes:
-//   1. `codex exec` — simple non-interactive mode (like claude -p)
-//   2. `codex app-server` — advanced JSON-RPC 2.0 mode with threads and streaming
+//   1. `codex exec --json` — streaming JSONL mode, used for `agent send`.
+//      Matches the Claude Code wrapper's UX: live timeline, run directory,
+//      trace file, run stats.
+//   2. `codex app-server` — JSON-RPC 2.0 protocol (used by higher-level
+//      conversation flows). Unchanged apart from option plumbing.
+//
+// Codex JSONL event types we care about (observed from `codex exec --json`):
+//   - thread.started           : session init with thread_id
+//   - turn.started             : turn begins
+//   - item.started             : tool/command starting (e.g. command_execution)
+//   - item.completed           : tool/command/reasoning/agent_message finished
+//       * type=command_execution : shell command + output
+//       * type=reasoning         : model thinking text
+//       * type=agent_message     : final assistant message to the user
+//       * type=file_change       : write/edit result (if emitted)
+//   - turn.completed           : turn done, includes `usage`
+//
+// Usage field shape (Codex):
+//   {"input_tokens": N, "cached_input_tokens": N, "output_tokens": N}
+// There is no separate cache_creation field — we map cached_input_tokens to
+// our `cache_read_tokens` slot and leave cache_creation at zero.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use serde_json::Value;
+
 use super::process_runner::{self, ChildOptions};
+use super::run_store::RunDir;
+use super::stream_ui::{self, Usage};
+use super::workspace;
+
+/// Stats collected from a Codex run. Mirrors the Claude Code shape so the
+/// dispatch layer can treat both agents uniformly.
+#[derive(Default, Clone)]
+pub struct RunStats {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub num_turns: u64,
+    pub total_cost_usd: f64,
+    pub duration_ms: u64,
+}
 
 pub struct CodexOptions {
     pub model: Option<String>,
@@ -22,7 +61,10 @@ pub struct CodexOptions {
     #[allow(dead_code)] // Reserved for future --write / --full-auto mode toggle.
     pub write_mode: bool,
     /// Workspace directory (with .codex/ config). If set, codex runs in this cwd.
-    pub cwd: Option<std::path::PathBuf>,
+    pub cwd: Option<PathBuf>,
+    /// Persistent run directory. All stream events are mirrored into
+    /// `<run>/trace.jsonl` when provided.
+    pub run_dir: Option<Arc<RunDir>>,
 }
 
 impl Default for CodexOptions {
@@ -34,23 +76,89 @@ impl Default for CodexOptions {
             env: BTreeMap::new(),
             write_mode: false,
             cwd: None,
+            run_dir: None,
         }
     }
 }
 
-/// Invoke Codex in exec mode (simple, non-interactive).
+/// Invoke `codex exec --json` in streaming mode.
 ///
-/// Spawns: `codex exec [--model <m>]`
-/// Prompt is piped via stdin.
-pub fn invoke_exec(prompt: &str, opts: CodexOptions) -> anyhow::Result<String> {
-    let mut args: Vec<String> = vec!["exec".to_string()];
+/// Prints a live timeline of tool calls/reasoning/messages to stderr, writes
+/// the raw event stream to `<run>/trace.jsonl` when a run directory is
+/// provided, and returns the final agent message plus run statistics.
+pub fn invoke_exec(prompt: &str, opts: CodexOptions) -> anyhow::Result<(String, RunStats)> {
+    let mut args: Vec<String> = vec![
+        "exec".to_string(),
+        "--json".to_string(),
+        // Skip the git-repo guard; our workspace may not be a repo.
+        "--skip-git-repo-check".to_string(),
+        // No colour control on the JSONL channel — turn it off explicitly
+        // so any stray prints don't carry ANSI escape bytes.
+        "--color".to_string(),
+        "never".to_string(),
+    ];
+
+    // Sandbox + approvals. We mirror the app-server wrapper here: read-only
+    // sandbox, auto-approve everything, fully non-interactive.
+    args.push("--dangerously-bypass-approvals-and-sandbox".to_string());
+
+    // Inject the EasyNet MCP server via `-c` overrides so the agent can call
+    // back into our Hub. Codex only reads MCP config from ~/.codex/config.toml
+    // by default; these overrides let us add an ephemeral entry without
+    // mutating the user's global config file. Each `-c` value is parsed as
+    // a TOML literal, hence the quoted strings and JSON-style array.
+    let (mcp_cmd, mcp_args, mcp_env) = workspace::build_mcp_entry();
+    args.push("-c".to_string());
+    args.push(format!("mcp_servers.easynet.command=\"{}\"", mcp_cmd.replace('"', "\\\"")));
+    let args_toml = mcp_args
+        .iter()
+        .map(|a| format!("\"{}\"", a.replace('"', "\\\"")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    args.push("-c".to_string());
+    args.push(format!("mcp_servers.easynet.args=[{args_toml}]"));
+    if let serde_json::Value::Object(map) = &mcp_env {
+        for (k, v) in map {
+            if let Some(s) = v.as_str() {
+                args.push("-c".to_string());
+                args.push(format!(
+                    "mcp_servers.easynet.env.{k}=\"{}\"",
+                    s.replace('"', "\\\"")
+                ));
+            }
+        }
+    }
 
     if let Some(m) = &opts.model {
-        args.push("-c".to_string());
-        args.push(format!("model=\"{m}\""));
+        args.push("-m".to_string());
+        args.push(m.clone());
+    }
+
+    // Run in the isolated workspace so the agent picks up `.codex/config.toml`
+    // and has a writable scratch area without touching the user's home dir.
+    // `-C` makes codex treat that directory as its working root.
+    if let Some(cwd) = &opts.cwd {
+        args.push("-C".to_string());
+        args.push(cwd.to_string_lossy().to_string());
     }
 
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+
+    stream_ui::print_header(opts.timeout.as_secs(), opts.model.as_deref());
+    let run_start = std::time::Instant::now();
+
+    let final_text = Arc::new(Mutex::new(String::new()));
+    let stats = Arc::new(Mutex::new(RunStats::default()));
+    let final_text_cb = Arc::clone(&final_text);
+    let stats_cb = Arc::clone(&stats);
+    let run_dir_cb = opts.run_dir.clone();
+
+    let callback = Arc::new(move |line: &str| {
+        if let Some(dir) = &run_dir_cb {
+            dir.append_trace_line(line);
+        }
+        handle_stream_line(line, &final_text_cb, &stats_cb, run_start);
+    });
 
     let result = process_runner::run_child("codex", &arg_refs, ChildOptions {
         timeout: opts.timeout,
@@ -59,6 +167,7 @@ pub fn invoke_exec(prompt: &str, opts: CodexOptions) -> anyhow::Result<String> {
         stdin_data: Some(prompt.to_string()),
         env: opts.env,
         cwd: opts.cwd,
+        stdout_line_callback: Some(callback),
     })?;
 
     if result.exit_code != 0 {
@@ -70,10 +179,160 @@ pub fn invoke_exec(prompt: &str, opts: CodexOptions) -> anyhow::Result<String> {
         anyhow::bail!(err_msg);
     }
 
-    Ok(result.stdout)
+    let text = final_text.lock().unwrap().clone();
+    let mut final_stats = stats.lock().unwrap().clone();
+    if final_stats.duration_ms == 0 {
+        final_stats.duration_ms = run_start.elapsed().as_millis() as u64;
+    }
+
+    if text.is_empty() {
+        Ok((result.stdout, final_stats))
+    } else {
+        Ok((text, final_stats))
+    }
 }
 
-/// Invoke Codex via app-server JSON-RPC protocol (advanced mode).
+/// Parse one `codex exec --json` event line and emit a timeline entry.
+fn handle_stream_line(
+    line: &str,
+    final_text: &Arc<Mutex<String>>,
+    stats: &Arc<Mutex<RunStats>>,
+    run_start: std::time::Instant,
+) {
+    let v: Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let kind = v.get("type").and_then(Value::as_str).unwrap_or("");
+
+    match kind {
+        "thread.started" | "turn.started" => {
+            // No output — handled by the header banner.
+        }
+        "item.started" => {
+            // A tool is starting; print the `→` line now so the user sees
+            // activity before the command finishes.
+            let item_type = v
+                .pointer("/item/type")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            match item_type {
+                "command_execution" => {
+                    let cmd = v
+                        .pointer("/item/command")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    stream_ui::print_tool_use(run_start, "Bash", &compact_command(cmd));
+                }
+                "file_change" => {
+                    let path = v
+                        .pointer("/item/path")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    stream_ui::print_tool_use(run_start, "Write", path);
+                }
+                _ => {}
+            }
+        }
+        "item.completed" => {
+            let item = match v.get("item") {
+                Some(i) => i,
+                None => return,
+            };
+            let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
+            match item_type {
+                "agent_message" => {
+                    if let Some(text) = item.get("text").and_then(Value::as_str) {
+                        // Codex collapses the entire reply into a single
+                        // agent_message item at the end of the turn; keep
+                        // that as the final response value.
+                        *final_text.lock().unwrap() = text.to_string();
+                    }
+                }
+                "reasoning" => {
+                    if let Some(text) = item.get("text").and_then(Value::as_str) {
+                        stream_ui::print_assistant_text(run_start, text);
+                    }
+                }
+                "command_execution" => {
+                    let out = item
+                        .get("aggregated_output")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let exit = item.get("exit_code").and_then(Value::as_i64).unwrap_or(0);
+                    let is_err = exit != 0;
+                    let snippet = if out.is_empty() {
+                        if is_err {
+                            format!("exit {exit}")
+                        } else {
+                            "ok".to_string()
+                        }
+                    } else {
+                        out.to_string()
+                    };
+                    stream_ui::print_tool_result(run_start, &snippet, is_err);
+                }
+                "file_change" => {
+                    let status = item
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .unwrap_or("done");
+                    stream_ui::print_tool_result(run_start, status, false);
+                }
+                _ => {}
+            }
+        }
+        "turn.completed" => {
+            if let Some(usage) = v.get("usage") {
+                let mut s = stats.lock().unwrap();
+                s.input_tokens = usage
+                    .get("input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(s.input_tokens);
+                s.output_tokens = usage
+                    .get("output_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(s.output_tokens);
+                // Codex reports cached_input_tokens only; no cache_creation
+                // counterpart. Map it to our cache_read slot.
+                s.cache_read_tokens = usage
+                    .get("cached_input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(s.cache_read_tokens);
+                s.num_turns = s.num_turns.saturating_add(1);
+                stream_ui::print_usage(run_start, &Usage {
+                    input_tokens: s.input_tokens,
+                    output_tokens: s.output_tokens,
+                    cache_read_tokens: s.cache_read_tokens,
+                    cache_creation_tokens: s.cache_creation_tokens,
+                });
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Shorten a `/bin/zsh -lc <cmd>` wrapper down to just `<cmd>` so the
+/// timeline shows the user-relevant command, not the shell wrapper.
+fn compact_command(cmd: &str) -> String {
+    let trimmed = cmd.trim();
+    for prefix in [
+        "/bin/zsh -lc ",
+        "/bin/bash -lc ",
+        "/bin/sh -c ",
+        "zsh -lc ",
+        "bash -lc ",
+        "sh -c ",
+    ] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            return rest.trim_matches('"').trim_matches('\'').to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
+/// Invoke Codex via app-server JSON-RPC protocol (advanced mode, unchanged).
 ///
 /// Protocol flow:
 ///   1. Spawn `codex app-server` as child process

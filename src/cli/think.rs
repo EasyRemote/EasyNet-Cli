@@ -59,7 +59,7 @@ pub fn run(args: ThinkArgs) -> anyhow::Result<()> {
         let spinner = make_spinner("thinking");
         let think_prompt = build_think_prompt(&args.goal, &history);
         let think_response = dispatch::send_to_agent(
-            &args.agent, &entry, &think_prompt, None, None,
+            &args.agent, &entry, &think_prompt, None, None, None,
         )?;
         spinner.finish_and_clear();
         eprintln!(

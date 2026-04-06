@@ -231,6 +231,7 @@ impl StepDispatcher for AgentAwareDispatcher {
                 &prompt,
                 None,
                 None,
+                None,
             ).map_err(|e| format!("agent dispatch: {e}"))?;
 
             Ok(serde_json::json!({

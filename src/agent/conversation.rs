@@ -119,6 +119,7 @@ pub fn run_conversation(
                 &prompt,
                 if context.is_empty() { None } else { Some(&context) },
                 None,
+                None,
             )?;
 
             eprintln!(

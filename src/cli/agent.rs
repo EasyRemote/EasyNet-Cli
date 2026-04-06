@@ -71,9 +71,13 @@ pub struct SendArgs {
     /// Optional context to include
     #[arg(long)]
     pub context: Option<String>,
-    /// Timeout in seconds
-    #[arg(long, default_value_t = 300)]
+    /// Timeout in seconds (default: 900 = 15 min)
+    #[arg(long, default_value_t = 900)]
     pub timeout: u64,
+    /// Write the raw stream-json trace (one event per line) to this file.
+    /// The prompt is saved alongside it as `<file>.prompt.txt`.
+    #[arg(long)]
+    pub trace: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -178,14 +182,15 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
     let mut entry = entry.clone();
     entry.timeout_secs = args.timeout;
 
-    let spinner = indicatif::ProgressBar::new_spinner();
-    spinner.set_style(
-        indicatif::ProgressStyle::with_template("  {spinner:.dim} {msg:.dim}")
-            .unwrap()
-            .tick_strings(&["   ", ".  ", ".. ", "...", " ..", "  .", "   "]),
+    // Live trace events from the agent stream to stderr, so we can't use a
+    // spinner here (it would fight with the scrolling output). Just print a
+    // header and let the dispatch layer stream progress itself.
+    eprintln!(
+        "  {} {} {}",
+        style("→").cyan(),
+        style("sending to").dim(),
+        style(&args.name).white().bold(),
     );
-    spinner.set_message(format!("sending to {}", args.name));
-    spinner.enable_steady_tick(std::time::Duration::from_millis(120));
 
     let response = dispatch::send_to_agent(
         &args.name,
@@ -193,17 +198,134 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
         &args.prompt,
         args.context.as_deref(),
         None,
+        args.trace.as_deref(),
     )?;
 
-    spinner.finish_and_clear();
-    eprintln!(
-        "  {} {:.1}s",
-        style(&args.name).white().bold(),
-        response.duration_ms as f64 / 1000.0,
-    );
     eprintln!();
-    println!("{}", response.content);
+    eprintln!(
+        "  {} {} {}",
+        style(&args.name).white().bold(),
+        style("done in").dim(),
+        style(format!("{:.1}s", response.duration_ms as f64 / 1000.0)).cyan(),
+    );
+    if let Some(u) = &response.usage {
+        let total_in = u.input_tokens + u.cache_read_tokens + u.cache_creation_tokens;
+        eprintln!(
+            "  {} in={} out={} cache_read={} cache_write={} turns={} cost=${:.4}",
+            style("tokens").dim(),
+            style(total_in).cyan(),
+            style(u.output_tokens).cyan(),
+            style(u.cache_read_tokens).dim(),
+            style(u.cache_creation_tokens).dim(),
+            style(u.num_turns).dim(),
+            u.total_cost_usd,
+        );
+    }
+    if let Some(dir) = &response.run_dir {
+        eprintln!(
+            "  {} {}",
+            style("saved").dim(),
+            style(dir.display().to_string()).cyan(),
+        );
+    }
+    eprintln!();
+
+    // Render the agent's final reply as markdown when stdout is a TTY;
+    // otherwise print raw text so piping into other tools stays clean.
+    if console::Term::stdout().is_term() {
+        let skin = build_markdown_skin();
+        let compact = compact_markdown(&response.content);
+        skin.print_text(&compact);
+    } else {
+        println!("{}", response.content);
+    }
     Ok(())
+}
+
+/// Build a custom termimad skin: compact spacing, colourful header levels,
+/// high-contrast bold, bright code highlighting.
+fn build_markdown_skin() -> termimad::MadSkin {
+    use termimad::crossterm::style::{Attribute, Color};
+    use termimad::{CompoundStyle, LineStyle, MadSkin, StyledChar};
+
+    let mut skin = MadSkin::default();
+
+    // Headers — each level gets a distinct bright colour. No underline, no
+    // centring, no background — just bold colour so the hierarchy pops
+    // without wasting vertical space.
+    let header_colours = [
+        Color::Cyan,       // H1
+        Color::Magenta,    // H2
+        Color::Yellow,     // H3
+        Color::Blue,       // H4
+        Color::Green,      // H5
+        Color::DarkCyan,   // H6
+        Color::DarkMagenta,
+        Color::DarkYellow,
+    ];
+    for (i, h) in skin.headers.iter_mut().enumerate() {
+        *h = LineStyle::default();
+        h.compound_style = CompoundStyle::with_fg(
+            *header_colours.get(i).unwrap_or(&Color::White),
+        );
+        h.compound_style.add_attr(Attribute::Bold);
+    }
+
+    // Bold / italic / inline code: bright colours for contrast.
+    skin.bold = CompoundStyle::with_fg(Color::White);
+    skin.bold.add_attr(Attribute::Bold);
+
+    skin.italic = CompoundStyle::with_fg(Color::Cyan);
+    skin.italic.add_attr(Attribute::Italic);
+
+    skin.inline_code = CompoundStyle::with_fgbg(Color::Yellow, Color::Reset);
+    skin.inline_code.add_attr(Attribute::Bold);
+
+    // Code block: subtle grey background + bright foreground.
+    skin.code_block.compound_style = CompoundStyle::with_fgbg(
+        Color::Rgb { r: 220, g: 220, b: 220 },
+        Color::Rgb { r: 30, g: 30, b: 40 },
+    );
+
+    // Bullets and other decorations.
+    skin.bullet = StyledChar::from_fg_char(Color::Cyan, '▸');
+    skin.quote_mark = StyledChar::from_fg_char(Color::Blue, '▌');
+    skin.horizontal_rule =
+        StyledChar::from_fg_char(Color::DarkGrey, '─');
+
+    // Table borders — termimad's default `STANDARD_TABLE_BORDER_CHARS`
+    // already uses the same Unicode box-drawing characters as
+    // `comfy_table::presets::UTF8_FULL_CONDENSED` (│ ─ ┌┐└┘ ┬┴├┤┼), which
+    // is the style used by every other `easynet` table (`output::table`).
+    // We can't match the `╞═╪╡` header separator or `┆` dashed inside
+    // rulers because `TableBorderChars` is uniform, but the overall look
+    // is consistent. We only need to colour the border to match the dim
+    // grey the EasyNet CLI uses for table chrome.
+    skin.table.compound_style.set_fg(Color::DarkGrey);
+
+    skin
+}
+
+/// Collapse consecutive blank lines down to a single blank line and strip
+/// leading/trailing blanks, so the rendered output stays compact without
+/// fighting termimad's layout engine.
+fn compact_markdown(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut prev_blank = true; // treat start-of-doc as already-blank
+    for line in src.lines() {
+        let is_blank = line.trim().is_empty();
+        if is_blank && prev_blank {
+            continue; // skip duplicate blank lines
+        }
+        out.push_str(line);
+        out.push('\n');
+        prev_blank = is_blank;
+    }
+    // Trim trailing blank line.
+    while out.ends_with("\n\n") {
+        out.pop();
+    }
+    out
 }
 
 fn run_doctor(args: DoctorArgs) -> anyhow::Result<()> {
