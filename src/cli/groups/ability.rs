@@ -2,18 +2,40 @@
 // ===========================
 //
 // File: src/cli/groups/ability.rs
-// Description: `easynet ability …` — full lifecycle for federation abilities
-//              (the MCP tools materialised on remote devices).
+// Description: `easynet ability …` — manage *public ability endpoints* on
+//              EasyNet. Abilities are the only thing that flows on the
+//              network (see ARCHITECTURE.md §4 — OOP visibility rules:
+//              `ability` is `public`, `skill` is `private`).
 //
 // Verbs:
-//   list                       List abilities across the federation         (-> cli::abilities)
-//   show <node> <name>         Show one ability's metadata + schema         (NEW)
-//   deploy <path> --to <node>  Publish + install + activate                 (-> cli::deploy)
-//   update <path> --to <node>  Re-deploy a new version                      (NEW: alias of deploy)
-//   uninstall <node> <id>      Remove a previously deployed ability         (NEW)
-//   invoke <node> <name>       Call an ability                              (-> cli::invoke)
-//   exec <node> -- <cmd>       One-shot remote shell                        (-> cli::exec)
-//   logs <node> <name>         Tail the ability's runtime logs              (NEW, best-effort)
+//   list                       List published abilities                    (-> cli::abilities)
+//   show <node> <name>         Display one endpoint's contract surface     (NEW)
+//   deploy <path> --to <node>  Publish a new ability version               (-> cli::deploy)
+//   uninstall <node> <id>      Remove a deployed ability                   (NEW)
+//   invoke <node> <name>       Call a public ability                       (-> cli::invoke)
+//   exec <node> -- <cmd>       One-shot remote shell (ad-hoc ability)      (-> cli::exec)
+//
+// Verbs DELIBERATELY ABSENT:
+//
+//   update    — would conflate three time scales:
+//                 (1) signature/SLA bump   (discrete, version event)
+//                 (2) graph evolution      (low-frequency, internal)
+//                 (3) per-call execution   (realtime)
+//               See ARCHITECTURE.md §11 (Three time scales) for why
+//               compressing them is a mental-model corruption. Use
+//               `ability deploy` to publish a new version.
+//
+//   logs      — the real artefact for "what happened inside one call" is
+//               the ability graph trace, which lives at a layer this PR
+//               does not yet model. A naive stdout tail would teach the
+//               wrong thing.
+//
+// Routing note (transitional misalignment):
+//   `deploy --to <node>` currently takes a *device node id*, not an agent
+//   logical id. Under interpretation C this is a known leak — the public
+//   API should resolve `<tenant>/<agent-name>` to its hosting device. The
+//   migration is tracked as a deferred item; the CLI shape stays as-is
+//   until the SDK exposes agent-id-routed deploy.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -21,7 +43,6 @@
 use anyhow::Context;
 use clap::{Args, Subcommand};
 use console::style;
-use serde_json::json;
 
 use crate::cli::{abilities, deploy, exec, invoke};
 use crate::shared::{self, output};
@@ -34,35 +55,35 @@ pub struct AbilityArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum AbilityAction {
-    /// List abilities across federated devices.
+    /// List published abilities across the federation.
     List(abilities::AbilitiesArgs),
-    /// Show one ability's full metadata and JSON schema.
+    /// Show one ability's contract surface (schema, version, description).
     Show(ShowArgs),
-    /// Deploy an ability package to a device.
+    /// Publish an ability version to a hosting device.
     Deploy(deploy::DeployArgs),
-    /// Re-deploy an ability (publish + install + activate a new version).
-    Update(deploy::DeployArgs),
     /// Uninstall a previously deployed ability.
     Uninstall(UninstallArgs),
-    /// Invoke an ability on a device.
+    /// Invoke a public ability on its hosting device.
     Invoke(invoke::InvokeArgs),
-    /// Run a one-shot shell command on a device.
+    /// Run a one-shot ad-hoc command on a device (ephemeral ability).
     Exec(exec::ExecArgs),
-    /// Show recent invocation logs for an ability (best-effort).
-    Logs(LogsArgs),
 }
 
 #[derive(Debug, Args)]
 pub struct ShowArgs {
-    /// Target device node id.
+    /// Hosting device node id.
     pub node_id: String,
     /// Ability tool name.
     pub name: String,
+    /// Emit raw JSON (the underlying registry record) instead of the
+    /// human-readable contract view.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct UninstallArgs {
-    /// Target device node id.
+    /// Hosting device node id.
     pub node_id: String,
     /// Install id (from `ability list` or the deploy receipt).
     pub install_id: String,
@@ -71,26 +92,14 @@ pub struct UninstallArgs {
     pub yes: bool,
 }
 
-#[derive(Debug, Args)]
-pub struct LogsArgs {
-    /// Target device node id.
-    pub node_id: String,
-    /// Ability tool name.
-    pub name: String,
-    /// Maximum number of recent log lines to fetch.
-    #[arg(long, default_value_t = 100)]
-    pub tail: usize,
-}
-
 pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
     match args.action {
         AbilityAction::List(a) => abilities::run(a),
         AbilityAction::Show(a) => run_show(a),
-        AbilityAction::Deploy(a) | AbilityAction::Update(a) => deploy::run(a),
+        AbilityAction::Deploy(a) => deploy::run(a),
         AbilityAction::Uninstall(a) => run_uninstall(a),
         AbilityAction::Invoke(a) => invoke::run(a),
         AbilityAction::Exec(a) => exec::run(a),
-        AbilityAction::Logs(a) => run_logs(a),
     }
 }
 
@@ -111,14 +120,67 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         .ok_or_else(|| {
             anyhow::anyhow!("ability '{}' not found on '{}'", args.name, args.node_id)
         })?;
-    println!("{}", serde_json::to_string_pretty(tool)?);
+
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(tool)?);
+        return Ok(());
+    }
+
+    // Human-readable contract surface. We deliberately speak the OOP /
+    // "published service endpoint" vocabulary here so the CLI itself
+    // teaches the ontology.
+    let name = tool
+        .get("tool_name")
+        .or_else(|| tool.get("ability_name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or(&args.name);
+    let version = tool
+        .get("ability_version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
+    let description = tool
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let state = tool.get("state").and_then(|v| v.as_str()).unwrap_or("ACTIVE");
+
+    eprintln!();
+    eprintln!(
+        "  {} {}  {}  {}",
+        style("●").cyan(),
+        style(name).bold(),
+        style(version).dim(),
+        style(format!("[{state}]")).dim(),
+    );
+    output::detail("hosted on", &args.node_id);
+    if !description.is_empty() {
+        output::detail("description", description);
+    }
+    if let Some(schema) = tool.get("input_schema") {
+        eprintln!();
+        eprintln!("  {}", style("input schema").dim());
+        println!("{}", serde_json::to_string_pretty(schema)?);
+    }
+    eprintln!();
+    eprintln!(
+        "  {}",
+        style(
+            "This is a public method on a network actor. Its internal \
+             implementation is a self-evolving graph (memory + workflow) \
+             that you cannot inspect from outside — by design. To see what \
+             happened during a specific call, look at the corresponding \
+             mission run's ability_graph_traces."
+        )
+        .dim()
+    );
+    eprintln!();
     Ok(())
 }
 
 fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
     if !args.yes {
         let prompt = format!(
-            "Uninstall ability '{}' from device '{}'?",
+            "Uninstall ability install '{}' from device '{}'?",
             args.install_id, args.node_id
         );
         if !output::confirm(&prompt)? {
@@ -145,59 +207,4 @@ fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
         println!("{}", serde_json::to_string_pretty(&result)?);
     }
     Ok(())
-}
-
-fn run_logs(args: LogsArgs) -> anyhow::Result<()> {
-    // Logs aren't a first-class SDK concept yet — fall through to the
-    // device's session_bridge to tail any local log file the ability author
-    // chose to write. We try a couple of conventional locations and surface
-    // the first non-empty result.
-    let (br, rt) = shared::connect_bridge()?;
-    let tenant = rt.tenant_or_default();
-
-    let candidates = [
-        format!("~/.easynet/logs/{}.log", args.name),
-        format!("/var/log/easynet/{}.log", args.name),
-    ];
-
-    for path in &candidates {
-        let cmd = format!("tail -n {} {} 2>/dev/null || true", args.tail, shell_escape(path));
-        let payload = br.call_mcp_tool_with_timeout(
-            tenant,
-            "session_bridge",
-            &args.node_id,
-            &json!({"action": "exec", "command": cmd}),
-            Some(15_000),
-        );
-        if let Ok(v) = payload {
-            let p = v.get("result_json").unwrap_or(&v);
-            let stdout = p.get("stdout").and_then(|s| s.as_str()).unwrap_or("");
-            if !stdout.trim().is_empty() {
-                eprintln!(
-                    "  {} {}",
-                    style("logs").dim(),
-                    style(path).cyan(),
-                );
-                print!("{stdout}");
-                return Ok(());
-            }
-        }
-    }
-
-    anyhow::bail!(
-        "no logs found for ability '{}' on '{}'. Tried: {}",
-        args.name,
-        args.node_id,
-        candidates.join(", ")
-    );
-}
-
-fn shell_escape(s: &str) -> String {
-    if s.chars()
-        .all(|c| c.is_ascii_alphanumeric() || "/_.~-".contains(c))
-    {
-        s.to_string()
-    } else {
-        format!("'{}'", s.replace('\'', "'\"'\"'"))
-    }
 }

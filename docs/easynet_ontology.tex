@@ -1,0 +1,888 @@
+\documentclass[11pt,a4paper]{article}
+
+% ──────────────────────────────────────────────────────────────────────────
+% EasyNet Ontology & CLI Layering — Consensus Specification
+% Status: Draft for review before implementation
+% Author: Silan Hu
+% Build:   xelatex easynet_ontology.tex   (CJK + Unicode required)
+% ──────────────────────────────────────────────────────────────────────────
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{xltabular}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{tcolorbox}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{parskip}
+\usepackage{xspace}
+
+% ── Unicode + CJK support (xelatex) ───────────────────────────────────────
+\usepackage{fontspec}
+\usepackage{xeCJK}
+% Pick a CJK font that ships with macOS by default.
+\setCJKmainfont{PingFang SC}[
+    BoldFont={PingFang SC Semibold},
+    ItalicFont={PingFang SC Light}
+]
+
+% ── Page style ────────────────────────────────────────────────────────────
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small EasyNet Ontology \& CLI Layering}
+\fancyhead[R]{\small Consensus Specification}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% ── Section styling ───────────────────────────────────────────────────────
+\titleformat{\section}{\Large\bfseries\color{black!85}}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\large\bfseries\color{black!75}}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{black!70}}{\thesubsubsection}{0.5em}{}
+
+% ── Tag colors ────────────────────────────────────────────────────────────
+\definecolor{axiomcolor}{RGB}{180,30,30}
+\definecolor{derivedcolor}{RGB}{30,90,180}
+\definecolor{deferredcolor}{RGB}{120,90,30}
+\definecolor{codebg}{RGB}{245,245,248}
+\definecolor{codeborder}{RGB}{210,210,220}
+
+% ── Tag macros ────────────────────────────────────────────────────────────
+\newcommand{\axiom}{\textcolor{axiomcolor}{\textbf{[axiom]}}\xspace}
+\newcommand{\derived}{\textcolor{derivedcolor}{\textbf{[derived]}}\xspace}
+\newcommand{\deferred}{\textcolor{deferredcolor}{\textbf{[deferred]}}\xspace}
+
+% ── Code listing style ────────────────────────────────────────────────────
+\lstdefinestyle{eal}{
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small,
+    frame=single,
+    rulecolor=\color{codeborder},
+    breaklines=true,
+    showstringspaces=false,
+    keywordstyle=\color{blue!70!black}\bfseries,
+    commentstyle=\color{green!40!black}\itshape,
+    stringstyle=\color{red!60!black},
+    morekeywords={class,public,private,ability,skill,let,print,return,use},
+    columns=fullflexible,
+    keepspaces=true,
+    aboveskip=0.6em,
+    belowskip=0.6em,
+}
+\lstset{style=eal}
+
+% ── Theorem-like environments ─────────────────────────────────────────────
+\newtcolorbox{invariant}[1][]{
+    colback=red!4!white,
+    colframe=red!50!black,
+    fonttitle=\bfseries,
+    title={Invariant},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+\newtcolorbox{notebox}[1][]{
+    colback=blue!4!white,
+    colframe=blue!50!black,
+    fonttitle=\bfseries,
+    title={Note},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+\newtcolorbox{warningbox}[1][]{
+    colback=orange!6!white,
+    colframe=orange!70!black,
+    fonttitle=\bfseries,
+    title={Transitional misalignment},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+
+% ── Title ─────────────────────────────────────────────────────────────────
+\title{
+    \vspace{-2em}
+    \textbf{\Large EasyNet Ontology and CLI Layering}\\[0.3em]
+    \large Consensus Specification (pre-implementation draft)
+}
+\author{
+    Silan Hu \\ \small National University of Singapore
+}
+\date{Draft, \today}
+
+% ──────────────────────────────────────────────────────────────────────────
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+This document records the consensus reached between the EasyNet authors and a
+rapporteur during a multi-round design alignment session, regarding the
+ontology that underpins EasyNet---an agent-native distributed system---and
+the layering of its command-line interface. The central claim aligned upon is
+that an \emph{ability} is not a function and not a static contract, but rather
+the triple ``\emph{skill plus self-evolution plus network-wide invocation},''
+implemented internally as a graph composed of memory and workflow components.
+We further pin down the object-oriented view of agents (public abilities,
+private skills), the two-language two-runtime split (AAL/BCC for production;
+EAL/EasyNet for consumption), the demotion of \emph{device} from a
+network-first-class object to a hosting substrate, and the desugaring of
+\texttt{agent send} into a single-line External EAL mission invoking the
+target's default \texttt{chat} ability. Each statement in the document is
+explicitly tagged as an axiom (directly stated by the principals), a
+derivation (logically deduced from one or more axioms), or a deferred item
+(known gap, deliberately postponed). The intent of this artifact is to lock
+the model before any implementation work begins, so that the upcoming
+refactor and all future epics share the same vocabulary.
+\end{abstract}
+
+\tableofcontents
+\vspace{1em}
+\hrule
+\vspace{1em}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Reading guide}
+\label{sec:reading-guide}
+
+Every substantive statement in this document carries one of three tags:
+
+\begin{itemize}[leftmargin=2.4em,itemsep=0.3em]
+    \item[\axiom] Directly stated by Silan, Sean, or in the alignment session
+    transcript. Not negotiable in this document. If you wish to revise an axiom,
+    a separate alignment round is required.
+
+    \item[\derived] Logically derived from one or more axioms. Negotiable: if
+    you disagree with a derivation, the disagreement should be raised
+    \emph{before} implementation begins, and either the derivation is revised
+    or the axioms it depends on are clarified.
+
+    \item[\deferred] A known gap, deliberately left for a future epic. The
+    document explicitly identifies these so that downstream design work does
+    not silently fill them with the wrong assumption.
+\end{itemize}
+
+The tagging discipline is the most important property of this document. It
+makes the difference between ``what we agreed'' and ``what I inferred''
+auditable.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{The two core technical theses}
+\label{sec:two-theses}
+
+\subsection{Thesis A: Agent Ability}
+
+\axiom{}
+\begin{quote}
+\textbf{$\text{ability} = \text{skill} + \text{self-evolution} + \text{network-wide invocation}$}
+
+\medskip
+\noindent
+Compared with the static-template execution of a Skill, an Ability can
+continuously evolve through user long-context and network compounding, and
+through EasyNet can remotely invoke abilities across the whole network for
+its own use, achieving maximum capability execution.
+\end{quote}
+
+The three components of an ability are non-optional. Each contributes a
+property that the other two cannot supply on their own:
+
+\begin{itemize}[leftmargin=2em,itemsep=0.3em]
+    \item \textbf{$+\,\text{skill}$} --- the seed. The ability begins as
+    wrapped skill knowledge.
+    \item \textbf{$+\,\text{self-evolution}$} --- the ability's
+    \emph{implementation} grows over time, while its public surface remains
+    stable.
+    \item \textbf{$+\,\text{network-wide invocation}$} --- the ability is
+    addressable from anywhere on EasyNet via gRPC.
+\end{itemize}
+
+\derived{} Removing any one component degenerates the object back to something
+strictly simpler:
+\begin{itemize}[leftmargin=2em,itemsep=0.2em]
+    \item without graph $\Rightarrow$ degenerates to a skill,
+    \item without self-evolution $\Rightarrow$ degenerates to a frozen function,
+    \item without network invocation $\Rightarrow$ degenerates to a local tool.
+\end{itemize}
+
+\subsection{Thesis B: EasyNet, the network of vocational abilities}
+
+\axiom{}
+\begin{quote}
+\textbf{EasyNet is the communication-and-collaboration network for
+network-wide vocational abilities.}
+\end{quote}
+
+Two interaction modalities live on EasyNet:
+
+\begin{itemize}[leftmargin=2em,itemsep=0.3em]
+    \item \textbf{Communication} (light interaction): post, feed, chat,
+    connection.
+    \item \textbf{Collaboration} (deep interaction): functional execution, the
+    actual cross-agent ability calls.
+\end{itemize}
+
+\derived{} The CLI under design here is concerned almost exclusively with the
+\emph{collaboration} modality. The communication modality is a separate
+surface (most likely UI / social), and is intentionally out of scope for this
+document.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Self-evolution as graph}
+\label{sec:graph}
+
+\subsection{Internal structure of an evolving ability}
+
+\axiom{} The core of self-evolution is a \emph{graph}, which is split into
+\emph{memory} and \emph{workflow}:
+
+\begin{center}
+\begin{tabular}{l}
+\texttt{Ability implementation = graph} \\
+\quad\texttt{|-- memory graph}\quad (knowledge / long context / accumulated state) \\
+\quad\texttt{|-- workflow graph}\quad (execution structure / decision flow / call topology) \\
+\end{tabular}
+\end{center}
+
+\subsection{What ``self-evolution'' actually means}
+
+\derived{}
+\begin{itemize}[leftmargin=2em,itemsep=0.3em]
+    \item The \emph{public surface} of an ability (its signature) does not
+    evolve freely; that would break callers.
+    \item The \emph{graph} behind the surface evolves continuously as new
+    memory accrues (from long context, traces, and user feedback) and as new
+    workflow paths are discovered (better orderings, new sub-ability calls).
+    \item An ability is therefore \emph{the same ability} even as its internal
+    graph grows. Distillation operates on the \emph{graph}, not on the surface
+    signature.
+\end{itemize}
+
+\subsection{What distillation operates on}
+
+\derived{}
+\begin{quote}
+Distillation only ever distills \textbf{abilities}, never skills.
+\end{quote}
+
+The reason is observability: skills are private to a single agent and have no
+network trace; abilities are public and have invocation traces from across
+the network. Trace data feeds back into the graph (memory growth and workflow
+refinement). It does not feed back into skills.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{The OOP view (load-bearing)}
+\label{sec:oop}
+
+\subsection{Agent as object, ability as public method, skill as private field}
+
+\axiom{} An agent class in AAL takes the following shape:
+
+\begin{lstlisting}
+class Agent {
+    public:
+        ability chat(context) -> reply
+        ability review(code) -> review
+        ability decompose(goal) -> [subgoals]
+
+    private:
+        skill thinking_style
+        skill code_review_prior
+        skill memory_compression_strategy
+        skill ...
+}
+\end{lstlisting}
+
+\axiom{} \texttt{chat} and \texttt{review} are typical \emph{default abilities}
+every agent exposes, analogous to \texttt{Object.toString()} in Java.
+
+\subsection{Visibility rules}
+
+\axiom{}
+\begin{itemize}[leftmargin=2em,itemsep=0.3em]
+    \item \textbf{Ability is public.} It has a frozen signature, is
+    discoverable network-wide, and is callable from External EAL.
+    \item \textbf{Skill is private.} It has no signature on the network, is
+    not discoverable from outside the agent, and is \emph{never} callable
+    from External EAL.
+    \item \textbf{EAL (external) can only write \texttt{agent.ability(...)}}.
+    It cannot reach into skills.
+    \item \textbf{Public calls go over gRPC.} That is what makes
+    ``network-wide invocation'' real.
+\end{itemize}
+
+\subsection{Five questions collapsed into one axiom}
+\label{sec:five-into-one}
+
+The visibility rule simultaneously answers five design questions that, before
+the alignment session, appeared independent:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\linewidth}{L{0.45\linewidth} X}
+\toprule
+\textbf{Question} & \textbf{Answer (because of visibility rule)} \\
+\midrule
+Why does ability need a graph? &
+Because it must self-evolve; static structure cannot grow. \\
+Why is skill private? &
+Because it is single-agent internal knowledge; sharing makes no sense across
+agent boundaries. \\
+Why gRPC? &
+Because ability is a network service. \\
+Why does the EAL compiler only see ability? &
+Because it operates in \texttt{public} scope. \\
+Why does distillation only distill abilities? &
+Because only public calls produce observable network traces. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\derived{} These five answers are now consequences of one rule, not five
+independent design decisions. This collapse is the central simplification of
+the alignment session.
+
+\subsection{Encapsulation invariant}
+
+\begin{invariant}
+No CLI command, no SDK call, and no EAL construct may reach across an agent
+boundary into a skill. If a future need arises (``I want my agent to learn
+from another agent's skill''), the only valid answer is: \emph{the other agent
+must wrap that skill as an ability.}
+\end{invariant}
+
+\derived{} This invariant is the load-bearing wall of the system. Violating it
+collapses the OOP model and, with it, the ability/skill distinction. Every
+proposed CLI verb in this document is required to pass an encapsulation
+check before being added.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Two languages, two runtimes}
+\label{sec:two-languages}
+
+\subsection{The pairing}
+
+\axiom{} EasyNet has two distinct language/runtime pairs:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabularx}{\linewidth}{L{0.27\linewidth} L{0.22\linewidth} X}
+\toprule
+\textbf{Language} & \textbf{Interpreter} & \textbf{Expresses} \\
+\midrule
+AAL (Agent Abstraction Language) & BCC (Brain Cell Coding) & how an agent
+class is defined \\
+EAL (EasyNet Ability Language) & EasyNet & how abilities compose to
+accomplish a task \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+BCC interprets AAL. EasyNet interprets EAL. \textbf{They are two independent
+language/runtime pairs}, not a single compilation pipeline.
+
+\subsection{Producer side versus consumer side}
+
+\derived{}
+\begin{itemize}[leftmargin=2em,itemsep=0.3em]
+    \item AAL/BCC is the \emph{producer side}: who builds an agent, what
+    abilities it exposes.
+    \item EAL/EasyNet is the \emph{consumer side}: who orchestrates agents to
+    accomplish a task.
+    \item The bridge between them is the \emph{gRPC ability endpoint}: BCC
+    exposes abilities as gRPC services; EasyNet calls them via gRPC.
+\end{itemize}
+
+\derived{} This separation means: \textbf{writing a new agent does not
+require knowing EAL; writing a new mission does not require knowing AAL.}
+This is clean separation of concerns and is one of the strongest properties
+of the design.
+
+\subsection{Two layers of EAL}
+\label{sec:two-eal-layers}
+
+EAL appears in two distinct scopes:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\linewidth}{L{0.16\linewidth} X X}
+\toprule
+ & \textbf{External EAL} & \textbf{Internal EAL} \\
+\midrule
+Who writes & Humans, in \texttt{*.eal} files & Generated by the ability graph
+at call time \\
+Scope & \texttt{public} --- only sees abilities & \texttt{private} --- sees
+the agent's own skills, memory, abilities \\
+Enforced by & EasyNet's EAL parser at compile time & The agent's own runtime \\
+Persisted as & Mission runs & Per-call execution traces inside an ability
+invocation \\
+OOP analogue & Application code calling public methods & The body of a
+method, which can touch private fields \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\derived{} The two layers use the same surface language but operate under
+different access scopes, exactly as Java syntax compiles differently inside
+versus outside a class definition.
+
+\subsection{Where the current \texttt{easynet} binary fits}
+
+\derived{} The current \texttt{easynet} binary is the \emph{local CLI surface
+for the EAL runtime} (i.e.\ EasyNet itself). It does not yet contain BCC or
+any AAL machinery. Anywhere this document refers to ``the EasyNet runtime,''
+the local artifact in question is the \texttt{easynet} binary plus its
+embedded \texttt{axon} runtime process.
+
+\deferred{} BCC will arrive as a separate concern. When it does, the
+\texttt{easynet} binary may grow a sibling (\texttt{bcc}) or absorb BCC as a
+subcommand. That decision is future work.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Device is a hosting substrate (interpretation C)}
+\label{sec:device-c}
+
+\subsection{Device is not a network-first-class entity}
+
+\axiom{}
+\begin{quote}
+Device is \textbf{not} a first-class network object. It is the physical
+substrate on which abilities are deployed --- like an OS to a process.
+\end{quote}
+
+Three interpretations of ``device'' were considered during the alignment
+session:
+
+\begin{itemize}[leftmargin=2em,itemsep=0.3em]
+    \item[(A)] Device $=$ degenerate Agent (an agent without any skill).
+    \emph{Rejected}: pulls device back into network identity.
+    \item[(B)] Device $=$ a parallel specialization of Process, peer to
+    Agent. \emph{Rejected}: same problem.
+    \item[(C)] Device $=$ hosting substrate, not first-class on the network.
+    \textbf{Chosen.}
+\end{itemize}
+
+\subsection{What this means concretely}
+
+\derived{} The set of network-first-class objects collapses to two:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\linewidth}{X X}
+\toprule
+\textbf{Network first-class} & \textbf{Host-local, not first-class} \\
+\midrule
+Agent (the only addressable actor) & Device (physical substrate, hardware,
+credentials) \\
+Ability (public method endpoint) & Axon runtime (the OS-level hosting
+process) \\
+                                 & MCP server (local stdio process for AI
+clients) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\derived{} The network only sees \textbf{agents talking to agents via
+abilities}. Devices exist, but only as deployment metadata. They never appear
+as the ``to'' of an ability call from outside.
+
+\subsection{Logical identity versus physical placement}
+
+\derived{}
+\begin{itemize}[leftmargin=2em,itemsep=0.4em]
+    \item \textbf{Logical identity} (network-visible): an agent is identified
+    by \texttt{<tenant>/<agent-name>}, e.g.\ \texttt{silan/reviewer}. This is
+    what appears in \texttt{agent.ability(...)} calls.
+    \item \textbf{Physical placement} (hidden): which device currently hosts
+    that agent is metadata, accessible only through \texttt{device} CLI
+    commands and only for diagnostic purposes.
+\end{itemize}
+
+The current PR uses \texttt{<tenant>/<agent-name>} as the minimum viable form.
+A future extension to \texttt{<tenant>/<agent-name>\#<instance-id>} is planned
+for when multiple instances of the same agent class need to coexist.
+
+\subsection{Cardinality}
+
+\derived{} Because device is not first-class:
+\begin{itemize}[leftmargin=2em,itemsep=0.3em]
+    \item One device can host multiple agent instances.
+    \item One agent instance can in principle span multiple devices (if its
+    memory graph and workflow runtime live on different machines), and the
+    network still sees a single agent.
+\end{itemize}
+
+\derived{} This is the affordance interpretation C buys us that A and B do
+not. It \emph{leaves room for distributed agents}, even though the current
+implementation does not yet exercise it.
+
+\subsection{Known transitional misalignment}
+
+\begin{warningbox}
+The current Axon SDK exposes \texttt{deploy\_package(node\_id, ...)} ---
+ability deployment is currently routed by \emph{device node id}, not by agent
+logical id. Under the new ontology this is a leak: the public API should be
+\texttt{deploy\_package(agent\_id, ...)}, with the runtime resolving which
+device hosts that agent.
+
+\smallskip
+\deferred{} This is \textbf{not fixed in the current PR.} The CLI command
+\texttt{easynet ability deploy <path> --to <node>} retains its current shape.
+Its long-help text explicitly notes this is a transitional form.
+\end{warningbox}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Default abilities and call sugar}
+\label{sec:default-call}
+
+\subsection{\texttt{chat} as the default callable}
+
+\axiom{} Every agent class typically exposes a \texttt{chat(prompt) -> reply}
+method as a ``default callable.'' This is analogous to:
+
+\begin{itemize}[leftmargin=2em,itemsep=0.2em]
+    \item \texttt{Object.toString()} in Java,
+    \item \texttt{\_\_call\_\_} in Python,
+    \item \texttt{operator()} in C\texttt{++},
+    \item the \texttt{()} of a Functor in Haskell.
+\end{itemize}
+
+\subsection{\texttt{agent send} is sugar for the default ability}
+
+\axiom{}
+\begin{quote}
+``实际上 \texttt{send} 是默认交给 \texttt{agent.chat()} ability,只是默认语法糖。''
+(``In fact, \texttt{send} dispatches to the \texttt{agent.chat()} ability by
+default; it is merely default syntactic sugar.'')
+\end{quote}
+
+Two layers of sugar are at play:
+
+\begin{lstlisting}
+# Layer 1 (CLI sugar):
+easynet agent send claude "hello"
+  desugars to a single-line External EAL mission:
+let r = claude.chat(prompt: "hello")
+print(r)
+
+# Layer 2 (EAL sugar, future):
+let r = claude.chat(prompt: "hello")
+  may be writable as:
+let r = claude("hello")
+  because chat is the agent's default callable
+\end{lstlisting}
+
+\derived{} Three consequences follow:
+
+\begin{enumerate}[leftmargin=2em,itemsep=0.3em]
+    \item \textbf{\texttt{agent send} is not a special command.} It is the
+    shortest possible mission. This unifies ``send to one agent'' and ``run a
+    mission'' under one execution model.
+    \item \textbf{Agents are callable objects.} The default \texttt{chat}
+    ability gives every agent a built-in call operator. Custom agents can
+    override or supplement it.
+    \item \textbf{Mission is the universal execution model.} Once
+    \texttt{agent send} is sugar for a one-line mission, every cross-agent
+    interaction in the system goes through the mission runtime. There is no
+    ``second path.''
+\end{enumerate}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Six locked-in design decisions}
+\label{sec:six-decisions}
+
+These were resolved during the alignment session and are not reopened by this
+document. They represent the minimum set of decisions required to begin
+implementation.
+
+\renewcommand{\arraystretch}{1.35}
+\begin{xltabular}{\linewidth}{c L{0.24\linewidth} X X}
+\toprule
+\textbf{\#} & \textbf{Question} & \textbf{Decision} & \textbf{Rationale} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{\#} & \textbf{Question} & \textbf{Decision} & \textbf{Rationale} \\
+\midrule
+\endhead
+
+1 & Agent instance ID format &
+\texttt{<tenant>/<agent-name>}, with \texttt{\#<instance-id>} reserved for the
+future &
+Logical, network-visible, decoupled from device. \\
+
+2 & Agent instantiation in current PR &
+Not done. Agents remain implicit, provisioned by runtime plus deploy. &
+AAL/BCC do not exist yet; premature commands would lock in wrong semantics. \\
+
+3 & \texttt{device join} semantics &
+Registers a hosting substrate (physical device plus credentials). &
+Matches the Docker-daemon-register / Kubernetes-node-join pattern under
+interpretation C. \\
+
+4 & \texttt{agent send} semantics &
+Sugar for a single-line External EAL mission invoking the target's default
+\texttt{chat} ability. &
+Unifies all cross-agent interaction under the mission execution model. \\
+
+5 & \texttt{discuss} / \texttt{think} placement &
+Primary location is \texttt{mission} (\texttt{mission discuss},
+\texttt{mission think}). Deprecated alias retained under \texttt{agent} for
+backwards compatibility. &
+Both are mission patterns (multi-agent orchestration; iterative planning
+loop), not agent-instance methods. \\
+
+6 & \texttt{device config} versus \texttt{runtime config} &
+Semantically \texttt{runtime config}; physically remains \texttt{device
+config} for now. Long-help explicitly notes the migration. &
+Settings (exec enable, MCP behavior) control the runtime, not the physical
+device. Code migration deferred to avoid CLI churn. \\
+
+\bottomrule
+\end{xltabular}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{CLI surface (consensus shape)}
+\label{sec:cli-surface}
+
+\subsection{Top-level groups}
+
+\begin{lstlisting}
+easynet
+|
+|-- agent       Manage agent instances (network actors)
+|     |-- add / list / remove / doctor       (instance lifecycle)
+|     |-- send                                (sugar for chat)
+|     |-- session new/list/show/append/end    (memory dimension)
+|     |-- discuss          DEPRECATED -> use `mission discuss`
+|     `-- think            DEPRECATED -> use `mission think`
+|
+|-- device      Manage hosting substrates (physical machines)
+|     |-- join / reset / config               (this host's lifecycle)
+|     `-- list / show / remove                (substrates on the network)
+|         (no rename / tag: would require an admin ability that doesn't exist)
+|
+|-- ability     Manage public ability endpoints
+|     |-- list / show                          (discovery)
+|     |-- deploy / uninstall                   (lifecycle; deploy is host-routed)
+|     |-- invoke                               (direct call)
+|     `-- exec                                 (one-shot ad-hoc command)
+|         (no `update`: conflates three time scales)
+|         (no `logs`: wrong artefact)
+|
+|-- mission     Run External EAL programs and patterns
+|     |-- compile / run / list / show / cancel
+|     |-- discuss                              (multi-agent orchestration)
+|     `-- think                                (iterative planning loop)
+|
+|-- runtime     Local Axon process lifecycle
+|     `-- start / stop / status / connect / logs
+|
+|-- mcp         Local MCP server process
+|     `-- serve / status
+|
+|-- doctor      Aggregated health check                          (NEW top-level)
+`-- completion  Shell completion generator                       (NEW top-level)
+\end{lstlisting}
+
+\subsection{Backwards compatibility}
+
+All current top-level commands (\texttt{start}, \texttt{stop}, \texttt{status},
+\texttt{connect}, \texttt{devices}, \texttt{abilities}, \texttt{deploy},
+\texttt{invoke}, \texttt{exec}, \texttt{mission}, \texttt{join}, \texttt{reset},
+\texttt{config}, \texttt{mcp-server}, \texttt{mcp-install}, \texttt{agent},
+\texttt{discuss}, \texttt{skill-install}, \texttt{think}) remain available as
+\textbf{deprecated aliases} that:
+
+\begin{itemize}[leftmargin=2em,itemsep=0.2em]
+    \item continue to function identically,
+    \item emit a one-line stderr deprecation notice pointing at the new
+    layered command,
+    \item will be removed in a future release (no date set).
+\end{itemize}
+
+This makes the current PR a \textbf{purely additive, zero-breakage} change.
+
+\subsection{Deliberately absent commands}
+
+The following commands are missing \emph{on purpose}. Adding them would
+violate the ontology:
+
+\begin{itemize}[leftmargin=2em,itemsep=0.35em]
+    \item \texttt{easynet skill <anything>} --- skills are private; exposing
+    them breaks the encapsulation invariant of \S\ref{sec:oop}.
+
+    \item \texttt{easynet capability <anything>} --- capability is the
+    cross-process invocation abstraction; introducing it half-baked would
+    lock in premature semantics.
+
+    \item \texttt{easynet ability update} --- conflates three distinct time
+    scales (signature bump, graph evolution, policy retraining). See
+    \S\ref{sec:time-scales}.
+
+    \item \texttt{easynet ability logs} --- the real artefact is the ability
+    graph trace, which lives at a layer the current PR does not yet model.
+
+    \item \texttt{easynet agent spawn} --- agent instantiation is an AAL/BCC
+    concern; nothing in the current PR can honestly spawn an agent class
+    instance.
+\end{itemize}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Non-CLI artifacts shipped in this PR}
+\label{sec:non-cli}
+
+\subsection{The \texttt{ability\_graph\_traces} field on mission run metadata}
+
+A new optional field is added to \texttt{MissionRunMeta}:
+
+\begin{lstlisting}
+/// Per-cross-agent-ability-call execution summaries. Each entry
+/// captures what the target agent's ability graph did to satisfy
+/// one call. Empty for runs that only invoked device abilities
+/// (which have no graph).
+///
+/// Schema is intentionally Value here: this is a landing slot for
+/// the upcoming ability-graph trace format, not the format itself.
+#[serde(default, skip_serializing_if = "Option::is_none")]
+pub ability_graph_traces: Option<Vec<serde_json::Value>>,
+\end{lstlisting}
+
+\derived{} Section~\ref{sec:graph} states that ability implementations are
+graphs. The mission run metadata is the natural landing spot for traces of
+those graphs, even before the trace format is fully specified. Naming the
+field \texttt{ability\_graph\_traces} (instead of, e.g.,
+\texttt{internal\_eal\_summaries} or \texttt{dispatch\_traces}) \emph{teaches
+the next reader} that an ability has a graph, by the field name alone.
+
+\subsection{Retention of \texttt{agent\_sessions.rs}}
+
+The previously-considered deletion of this file is reversed. Sessions are the
+simplest form of the \emph{memory} dimension of an agent (per-caller
+conversation history). They live on the agent side of the OOP wall, are
+private by default, and are properly modeled as ``the calling client's view
+of one slice of an agent's memory.''
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Three time scales}
+\label{sec:time-scales}
+
+When evaluating any future CLI command, ask which time scale it operates on:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabularx}{\linewidth}{L{0.20\linewidth} L{0.20\linewidth} X L{0.20\linewidth}}
+\toprule
+\textbf{Time scale} & \textbf{Frequency} & \textbf{Example operation} &
+\textbf{Allowed verb} \\
+\midrule
+Schema/SLA bump & discrete, human-in-loop & publishing v2 of an ability with a
+new input field & \texttt{ability deploy} (new version) \\
+Graph evolution & low-frequency, semi-automatic & a new memory pattern
+accrues; a workflow path is shortened & none yet (internal) \\
+Per-call execution & realtime & one ability call picks a route through the
+graph and executes & \texttt{ability invoke}, \texttt{mission run} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\derived{} Verbs that try to compress two scales into one (for example
+\texttt{ability update} covering both v-bump and graph tweak) \textbf{must be
+rejected}. They look convenient but corrupt the user's mental model.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Higher-level judgment and next deliverables}
+\label{sec:next}
+
+\axiom{} (Silan): the next deliverable beyond this document should be a
+paper-level \textbf{System Model: Definition + Invariants + Diagram},
+suitable for a whitepaper or top-tier venue framing. This is the system's
+true moat.
+
+The current PR explicitly \emph{does not} attempt to be that paper. It
+implements the operational consequences of the consensus reached above. The
+paper-level model is tracked as the next epic. A short pointer to that
+deliverable will appear at the end of \texttt{docs/ARCHITECTURE.md}:
+
+\begin{notebox}
+\textbf{Next:} \texttt{docs/SYSTEM\_MODEL.md} (paper-level formalization).
+Until that exists, this document and \texttt{ARCHITECTURE.md} are the source
+of truth for ontological questions about EasyNet.
+\end{notebox}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Open recursion points}
+\label{sec:gaps}
+
+These are honestly identified gaps. They are not blockers for the current PR,
+but they are blockers for the next epic.
+
+\begin{enumerate}[leftmargin=2em,itemsep=0.35em]
+    \item \textbf{Capability abstraction.} ``Capability'' as the unifying
+    invocation interface across agent and device is mentioned but not
+    specified. This is the next ontological extension.
+
+    \item \textbf{Internal EAL trace format.} \S\ref{sec:two-eal-layers}
+    states that internal EAL is persisted as per-call execution traces, but
+    the schema is not specified. The \texttt{ability\_graph\_traces} field
+    lands the slot but defers the format.
+
+    \item \textbf{Default ability set.} \S\ref{sec:default-call} says
+    \texttt{chat} is a typical default. Whether \texttt{chat} is \emph{the}
+    default, whether \texttt{review} is also default, and whether agents
+    must declare a default --- all unspecified.
+
+    \item \textbf{Agent class system.} AAL is named, but its grammar, type
+    system, and inheritance model (if any) are entirely unspecified.
+
+    \item \textbf{Tenant model.} \texttt{<tenant>/<agent-name>} is chosen as
+    the ID format but tenant lifecycle, sharing, and authorization are
+    unspecified.
+
+    \item \textbf{Status of \texttt{mcp-install} and \texttt{skill-install}.}
+    Whether these legacy top-level commands should remain, move under
+    \texttt{agent install}, or be removed entirely depends on whether
+    skill-install should exist at all under interpretation C. They are kept
+    as legacy aliases in the current PR with the question explicitly
+    flagged.
+\end{enumerate}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Conclusion}
+
+This document closes a multi-round alignment session by recording, with
+auditable provenance, what the principals agreed and what the rapporteur
+inferred. The single most consequential agreement is the OOP visibility
+rule of \S\ref{sec:oop}, which by itself collapses five previously-open
+design questions (\S\ref{sec:five-into-one}) into a single axiom. Around it,
+the two-language two-runtime split (\S\ref{sec:two-languages}) and the
+demotion of device to a hosting substrate (\S\ref{sec:device-c}) provide the
+remaining structure required to begin implementation without anticipating
+the next ontological extension.
+
+The implementation that follows this document is, by design, the smallest
+change that can reflect the new ontology in the CLI surface. Anything that
+would require the next epic --- capability abstraction, AAL/BCC, the formal
+system model --- is deliberately deferred and explicitly enumerated in
+\S\ref{sec:gaps}, so that no future contributor will be forced to guess
+which concepts are settled and which are still open.
+
+\vfill
+\hrule
+\vspace{0.4em}
+\noindent\small
+\textit{This document is the consensus output of the alignment session and
+should be reviewed in full before any code is written. If you disagree with
+a \textbf{[derived]} statement, raise it before implementation begins. If
+you disagree with an \textbf{[axiom]}, a separate alignment round is
+required.}
+
+\end{document}

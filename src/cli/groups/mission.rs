@@ -19,6 +19,7 @@ use clap::{Args, Subcommand};
 use console::style;
 
 use crate::cli::mission_runs::{self, CancelOutcome, MissionRunDir, MissionRunMeta};
+use crate::cli::{discuss as discuss_cmd, think as think_cmd};
 use crate::eal;
 use crate::shared::{config, output};
 
@@ -40,6 +41,10 @@ pub enum MissionAction {
     Show(ShowArgs),
     /// Mark an in-flight mission run as cancelled.
     Cancel(CancelArgs),
+    /// Multi-agent orchestration pattern (round-robin discussion).
+    Discuss(discuss_cmd::DiscussArgs),
+    /// Iterative planning loop pattern (think → act → observe → repeat).
+    Think(think_cmd::ThinkArgs),
 }
 
 #[derive(Debug, Args)]
@@ -92,6 +97,13 @@ pub fn run(args: MissionArgs) -> anyhow::Result<()> {
         MissionAction::List(a) => run_list(a),
         MissionAction::Show(a) => run_show(a),
         MissionAction::Cancel(a) => run_cancel(a),
+        // Mission patterns: both `discuss` and `think` are special-shaped
+        // External EAL missions (multi-agent orchestration; iterative
+        // planning loop). They are *not* agent-instance methods, so this
+        // is their canonical home — the `agent` group only keeps them as
+        // deprecated aliases. See ARCHITECTURE.md §8 #5.
+        MissionAction::Discuss(a) => discuss_cmd::run(a),
+        MissionAction::Think(a) => think_cmd::run(a),
     }
 }
 
@@ -164,6 +176,7 @@ fn run_run(args: RunArgs) -> anyhow::Result<()> {
         steps_total: total_steps,
         steps_completed: 0,
         steps_failed: 0,
+        ability_graph_traces: None,
     };
 
     match &exec {

@@ -1,20 +1,19 @@
-// EasyNet CLI — Doctor
-// ====================
+// EasyNet CLI — Aggregated Health Check
+// =====================================
 //
 // File: src/cli/doctor.rs
-// Description: `easynet doctor` — aggregated health check across every
-//              EasyNet subsystem on this host.
+// Description: `easynet doctor` — single-shot health check covering every
+//              layer the CLI touches:
 //
-// Checks:
-//   1. Local config + credentials presence
-//   2. Local Axon runtime reachability
-//   3. Hub bridge connectivity (`list_nodes`)
-//   4. Registered AI agents and their CLI availability
-//   5. MCP integration files (Claude Code / Codex / Cursor)
+//                1. Local device pairing      (credentials present?)
+//                2. Local Axon runtime        (process up? endpoint reachable?)
+//                3. Federation reachability   (can the runtime list nodes?)
+//                4. Registered AI agent CLIs  (claude / codex actually installed?)
+//                5. MCP server entries        (any AI client wired up?)
 //
-// Exit code: non-zero if any *critical* check fails (runtime + bridge).
-// Agent / MCP failures are reported but do not fail the command, since they
-// are optional integrations.
+// The output is one section per check, with `ok` / `warn` / `fail`
+// indicators and an actionable hint when something is broken. Exit code
+// is 0 if every section is `ok` or `warn`, 1 if any section is `fail`.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -23,169 +22,219 @@ use clap::Args;
 use console::style;
 
 use crate::agent::{claude_code, codex};
-use crate::shared::{self, agents, config, output};
+use crate::shared::{self, agents, config};
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
-    /// Emit machine-readable JSON instead of the human report.
+    /// Emit JSON instead of the human-readable report.
     #[arg(long)]
     pub json: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CheckStatus {
+    Ok,
+    Warn,
+    Fail,
+}
+
+struct Check {
+    name: String,
+    status: CheckStatus,
+    detail: String,
+    hint: Option<&'static str>,
+}
+
 pub fn run(args: DoctorArgs) -> anyhow::Result<()> {
-    let mut report = serde_json::Map::new();
-    let mut critical_fail = false;
+    let mut checks: Vec<Check> = Vec::new();
 
-    // 1. Credentials.
-    let creds = config::load_credentials();
-    let creds_ok = creds.is_ok();
-    report.insert("credentials".into(), serde_json::json!(creds_ok));
-
-    // 2. Runtime.
-    let state = config::load();
-    let runtime_ok = state.is_ok();
-    report.insert("runtime".into(), serde_json::json!(runtime_ok));
-
-    // 3. Bridge.
-    let mut bridge_ok = false;
-    let mut node_count: Option<usize> = None;
-    if let Ok(state) = &state {
-        if let Ok(br) = shared::connect_bridge_to(&state.endpoint) {
-            let tenant = state.tenant_or_default();
-            if let Ok(nodes) = br.list_nodes(tenant, None) {
-                bridge_ok = true;
-                node_count = Some(nodes.len());
-            }
-        }
-    }
-    report.insert("bridge".into(), serde_json::json!(bridge_ok));
-    if !runtime_ok || !bridge_ok {
-        critical_fail = true;
-    }
-
-    // 4. Agents.
-    let registry = agents::load_agents().unwrap_or_default();
-    let mut agent_results: Vec<serde_json::Value> = Vec::new();
-    for (name, entry) in &registry.agents {
-        let res = match entry.agent_type {
-            agents::AgentType::ClaudeCode => claude_code::doctor(),
-            agents::AgentType::Codex | agents::AgentType::CodexAppServer => codex::doctor(),
-        };
-        agent_results.push(serde_json::json!({
-            "name": name,
-            "type": entry.agent_type.to_string(),
-            "ok": res.is_ok(),
-            "info": res.as_ref().ok().cloned().unwrap_or_default(),
-            "error": res.as_ref().err().map(ToString::to_string),
-        }));
-    }
-    report.insert("agents".into(), serde_json::Value::Array(agent_results.clone()));
-
-    // 5. MCP integration files (existence only).
-    let home = config::home_dir();
-    let mcp_paths = [
-        ("claude_project", std::env::current_dir().ok().map(|p| p.join(".mcp.json"))),
-        ("claude_user", Some(home.join(".claude/mcp.json"))),
-        ("claude_desktop_macos", Some(home.join("Library/Application Support/Claude/claude_desktop_config.json"))),
-        ("codex", Some(home.join(".codex/config.toml"))),
-        ("cursor", Some(home.join(".cursor/mcp.json"))),
-    ];
-    let mcp_results: Vec<serde_json::Value> = mcp_paths
-        .iter()
-        .map(|(k, p)| {
-            let exists = p.as_ref().is_some_and(|pp| pp.exists());
-            let has_easynet = p
-                .as_ref()
-                .filter(|pp| pp.exists())
-                .and_then(|pp| std::fs::read_to_string(pp).ok())
-                .map(|c| c.contains("easynet"))
-                .unwrap_or(false);
-            serde_json::json!({
-                "client": k,
-                "exists": exists,
-                "easynet_entry": has_easynet,
-                "path": p.as_ref().map(|p| p.display().to_string()),
-            })
-        })
-        .collect();
-    report.insert("mcp".into(), serde_json::Value::Array(mcp_results));
+    checks.push(check_pairing());
+    checks.push(check_runtime());
+    checks.push(check_federation());
+    checks.extend(check_agents());
+    checks.push(check_mcp_clients());
 
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-        return if critical_fail {
-            std::process::exit(1)
-        } else {
-            Ok(())
-        };
-    }
-
-    // Human report.
-    eprintln!();
-    eprintln!("  {} {}", style("EasyNet").bold(), style("doctor").dim());
-    eprintln!();
-    print_check(
-        "credentials",
-        creds_ok,
-        if creds_ok { "device paired" } else { "device not paired" },
-    );
-    print_check("runtime", runtime_ok, "local axon runtime running");
-    let bridge_msg = match node_count {
-        Some(n) => format!("hub reachable, {n} nodes"),
-        None => "hub bridge unreachable".into(),
-    };
-    print_check("bridge", bridge_ok, &bridge_msg);
-
-    eprintln!();
-    eprintln!("  {}", style("agents").dim());
-    if registry.agents.is_empty() {
-        eprintln!("    {}", style("(none registered)").dim());
+        let payload: Vec<_> = checks
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "name": c.name,
+                    "status": match c.status {
+                        CheckStatus::Ok => "ok",
+                        CheckStatus::Warn => "warn",
+                        CheckStatus::Fail => "fail",
+                    },
+                    "detail": c.detail,
+                    "hint": c.hint,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&payload)?);
     } else {
-        for a in &agent_results {
-            let name = a.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-            let ok = a.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
-            let info = a.get("info").and_then(|v| v.as_str()).unwrap_or("");
-            let err = a.get("error").and_then(|v| v.as_str()).unwrap_or("");
-            let mark = if ok { style("●").green() } else { style("○").red() };
-            let msg = if ok { info.to_string() } else { format!("unavailable: {err}") };
-            eprintln!("    {} {:<14} {}", mark, style(name).bold(), style(msg).dim());
+        eprintln!();
+        eprintln!("  {}", style("EasyNet doctor").cyan().bold());
+        eprintln!();
+        for c in &checks {
+            let mark = match c.status {
+                CheckStatus::Ok => style("●").green(),
+                CheckStatus::Warn => style("●").yellow(),
+                CheckStatus::Fail => style("●").red(),
+            };
+            eprintln!(
+                "  {} {:<22} {}",
+                mark,
+                style(&c.name).bold(),
+                style(&c.detail).dim()
+            );
+            if let Some(h) = c.hint {
+                if c.status != CheckStatus::Ok {
+                    eprintln!("      {}", style(h).dim());
+                }
+            }
         }
+        eprintln!();
     }
 
-    eprintln!();
-    eprintln!("  {}", style("mcp clients").dim());
-    if let Some(serde_json::Value::Array(arr)) = report.get("mcp") {
-        for c in arr {
-            let client = c.get("client").and_then(|v| v.as_str()).unwrap_or("?");
-            let exists = c.get("exists").and_then(|v| v.as_bool()).unwrap_or(false);
-            let has = c.get("easynet_entry").and_then(|v| v.as_bool()).unwrap_or(false);
-            let mark = if has {
-                style("●").green()
-            } else if exists {
-                style("○").yellow()
-            } else {
-                style("·").dim()
-            };
-            let state = if has {
-                "easynet entry"
-            } else if exists {
-                "config exists"
-            } else {
-                "not installed"
-            };
-            eprintln!("    {} {:<22} {}", mark, style(client).bold(), style(state).dim());
-        }
-    }
-    eprintln!();
-    if critical_fail {
-        output::warn("doctor: one or more critical checks failed");
-        std::process::exit(1);
-    } else {
-        output::success("doctor: all critical checks passed");
+    let any_fail = checks.iter().any(|c| c.status == CheckStatus::Fail);
+    if any_fail {
+        anyhow::bail!("doctor: one or more checks failed");
     }
     Ok(())
 }
 
-fn print_check(label: &str, ok: bool, msg: &str) {
-    let mark = if ok { style("●").green() } else { style("○").red() };
-    eprintln!("  {} {:<14} {}", mark, style(label).bold(), style(msg).dim());
+fn check_pairing() -> Check {
+    match config::load_credentials() {
+        Ok(creds) => Check {
+            name: "device pairing".to_string(),
+            status: CheckStatus::Ok,
+            detail: format!("paired as {}", creds.node_id),
+            hint: None,
+        },
+        Err(_) => Check {
+            name: "device pairing".to_string(),
+            status: CheckStatus::Warn,
+            detail: "not paired".to_string(),
+            hint: Some("Run `easynet device join <token>` to pair this host."),
+        },
+    }
+}
+
+fn check_runtime() -> Check {
+    match config::load() {
+        Ok(state) => Check {
+            name: "local runtime".to_string(),
+            status: CheckStatus::Ok,
+            detail: format!("up at {}", state.endpoint),
+            hint: None,
+        },
+        Err(_) => Check {
+            name: "local runtime".to_string(),
+            status: CheckStatus::Warn,
+            detail: "not running".to_string(),
+            hint: Some("Run `easynet runtime start` to spawn a local runtime."),
+        },
+    }
+}
+
+fn check_federation() -> Check {
+    let (br, rt) = match shared::connect_bridge() {
+        Ok(t) => t,
+        Err(_) => {
+            return Check {
+                name: "federation".to_string(),
+                status: CheckStatus::Warn,
+                detail: "skipped (no runtime)".to_string(),
+                hint: None,
+            };
+        }
+    };
+    let tenant = rt.tenant_or_default();
+    match br.list_nodes(tenant, None) {
+        Ok(nodes) => Check {
+            name: "federation".to_string(),
+            status: CheckStatus::Ok,
+            detail: format!("{} substrate(s) reachable", nodes.len()),
+            hint: None,
+        },
+        Err(e) => Check {
+            name: "federation".to_string(),
+            status: CheckStatus::Fail,
+            detail: format!("list_nodes failed: {e}"),
+            hint: Some("Check Hub connectivity and credentials."),
+        },
+    }
+}
+
+fn check_agents() -> Vec<Check> {
+    let registry = agents::load_agents().unwrap_or_default();
+    let mut out = Vec::new();
+    let to_check: Vec<(String, agents::AgentType)> = if registry.agents.is_empty() {
+        vec![
+            ("claude-code".to_string(), agents::AgentType::ClaudeCode),
+            ("codex".to_string(), agents::AgentType::Codex),
+        ]
+    } else {
+        registry
+            .agents
+            .iter()
+            .map(|(n, e)| (n.clone(), e.agent_type))
+            .collect()
+    };
+
+    for (name, ty) in to_check {
+        let probe = match ty {
+            agents::AgentType::ClaudeCode => claude_code::doctor(),
+            agents::AgentType::Codex | agents::AgentType::CodexAppServer => codex::doctor(),
+        };
+        out.push(match probe {
+            Ok(version) => Check {
+                name: format!("agent:{name}"),
+                status: CheckStatus::Ok,
+                detail: version,
+                hint: None,
+            },
+            Err(e) => Check {
+                name: format!("agent:{name}"),
+                status: CheckStatus::Fail,
+                detail: format!("{e}"),
+                hint: Some("Install or repair the underlying CLI."),
+            },
+        });
+    }
+    out
+}
+
+fn check_mcp_clients() -> Check {
+    let home = config::home_dir();
+    let candidates: Vec<std::path::PathBuf> = vec![
+        home.join(".claude").join("mcp.json"),
+        home.join("Library/Application Support/Claude/claude_desktop_config.json"),
+        home.join(".codex").join("config.toml"),
+        home.join(".cursor").join("mcp.json"),
+    ];
+    let installed: Vec<&std::path::PathBuf> = candidates
+        .iter()
+        .filter(|p| {
+            p.exists()
+                && std::fs::read_to_string(p)
+                    .map(|c| c.contains("easynet"))
+                    .unwrap_or(false)
+        })
+        .collect();
+    if installed.is_empty() {
+        Check {
+            name: "mcp clients".to_string(),
+            status: CheckStatus::Warn,
+            detail: "no AI client wired up".to_string(),
+            hint: Some("Run `easynet mcp-install` to register EasyNet with Claude Code/Codex."),
+        }
+    } else {
+        Check {
+            name: "mcp clients".to_string(),
+            status: CheckStatus::Ok,
+            detail: format!("{} client(s) configured", installed.len()),
+            hint: None,
+        }
+    }
 }

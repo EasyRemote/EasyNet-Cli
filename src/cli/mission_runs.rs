@@ -78,11 +78,27 @@ pub struct MissionRunMeta {
     pub source_file: Option<String>,
     pub started_at: String,
     pub duration_ms: u64,
-    pub status: String, // "ok" | "error" | "running" | "cancelled"
+    pub status: String, // "ok" | "error" | "partial" | "running" | "cancelled"
     pub error: Option<String>,
     pub steps_total: usize,
     pub steps_completed: usize,
     pub steps_failed: usize,
+
+    /// Per-cross-agent-ability-call execution summaries. Each entry
+    /// captures what the target agent's ability graph did to satisfy one
+    /// call (which sub-abilities it invoked, which memory it touched,
+    /// which workflow path it took). Empty for runs that only invoked
+    /// device abilities (which have no graph).
+    ///
+    /// The schema is intentionally `Value` here: this is a landing slot
+    /// for the upcoming ability-graph trace format, not the format
+    /// itself. Naming the field `ability_graph_traces` (rather than e.g.
+    /// `internal_eal_summaries`) is the deliberate teaching point —
+    /// it tells the next reader that an ability has a graph, by the
+    /// field name alone. See ARCHITECTURE.md §3 (self-evolution = graph)
+    /// and §10 (non-CLI artefacts).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ability_graph_traces: Option<Vec<serde_json::Value>>,
 }
 
 /// One row in the mission history listing.

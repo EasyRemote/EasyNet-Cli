@@ -2,22 +2,43 @@
 // =========================
 //
 // File: src/cli/groups/agent.rs
-// Description: `easynet agent …` — registration, single-shot dispatch,
-//              multi-turn sessions, run-trace inspection, autonomous
-//              think loops, and multi-agent discussions, all rooted on the
-//              same noun.
+// Description: `easynet agent …` — manage *agent instances*. Agents are
+//              the only network first-class actors in EasyNet
+//              (ARCHITECTURE.md §6, interpretation C). This group is the
+//              CLI surface for working with them.
 //
 // Verbs:
-//   add / list / remove / doctor / send   (passthrough to cli::agent)
-//   session new <id> --agent <a> [--initial <prompt>]    (NEW)
-//   session resume <id> <prompt>                          (NEW)
-//   session list                                          (NEW)
-//   session show <id>                                     (NEW)
-//   session end <id>                                      (NEW)
-//   trace list [--agent <a>]                              (NEW)
-//   trace show <run-dir>                                  (NEW)
-//   think <goal>                                          (-> cli::think)
-//   discuss [...]                                         (-> cli::discuss)
+//   add / list / remove / doctor   instance lifecycle      (-> cli::agent)
+//   send <name> <prompt>           sugar for `agent.chat`  (-> cli::agent)
+//   session new/list/show/append/end   memory dimension    (NEW)
+//   discuss                        DEPRECATED → mission discuss
+//   think                          DEPRECATED → mission think
+//
+// Why `agent send` is sugar:
+//   `easynet agent send claude "hello"` desugars to a single-line
+//   External EAL mission:
+//
+//       let r = claude.chat(prompt: "hello")
+//       print(r)
+//
+//   `chat` is the agent's default callable (analogous to
+//   `Object.toString()` in Java). See ARCHITECTURE.md §7.
+//
+// Why `session` lives here, not under `mission`:
+//   Sessions are the simplest form of an agent's memory dimension
+//   (per-caller conversation history). They are *private state* of an
+//   agent instance from the network's point of view. The CLI exposes
+//   them here because the calling client owns its own slice of that
+//   memory and uses it across multiple `agent send` calls. See
+//   ARCHITECTURE.md §10 (retention of agent_sessions.rs).
+//
+// Why `discuss` / `think` are deprecated aliases:
+//   Both are *mission patterns*, not agent-instance methods:
+//     - discuss = a multi-agent orchestration loop (calls many agents)
+//     - think   = an iterative planning loop (calls one agent + executes)
+//   Their primary location is now `easynet mission discuss` /
+//   `easynet mission think`. The aliases here keep existing scripts
+//   working but emit a deprecation notice.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -25,11 +46,8 @@
 use clap::{Args, Subcommand};
 use console::style;
 
-use crate::agent::dispatch;
-use crate::cli::agent as legacy_agent;
-use crate::cli::agent_sessions::{self, Session};
-use crate::cli::{discuss, think};
-use crate::shared::{agents, config, output};
+use crate::cli::{agent as agent_cmd, agent_sessions, discuss as discuss_cmd, think as think_cmd};
+use crate::shared::output;
 
 #[derive(Debug, Args)]
 pub struct AgentArgs {
@@ -39,24 +57,22 @@ pub struct AgentArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum AgentAction {
-    /// Register a new agent.
-    Add(legacy_agent::AddArgs),
-    /// List registered agents.
+    /// Register a new agent instance.
+    Add(agent_cmd::AddArgs),
+    /// List registered agent instances.
     List,
-    /// Remove a registered agent.
-    Remove(legacy_agent::RemoveArgs),
-    /// Send a one-shot prompt to an agent.
-    Send(legacy_agent::SendArgs),
-    /// Check whether the agent CLIs are installed and authenticated.
-    Doctor(legacy_agent::DoctorArgs),
-    /// Multi-turn agent sessions.
+    /// Remove a registered agent instance.
+    Remove(agent_cmd::RemoveArgs),
+    /// Check whether an agent's underlying CLI is reachable.
+    Doctor(agent_cmd::DoctorArgs),
+    /// Send a prompt to an agent (sugar for `agent.chat(prompt)`).
+    Send(agent_cmd::SendArgs),
+    /// Manage per-caller conversation sessions (memory dimension).
     Session(SessionArgs),
-    /// Inspect persisted run traces.
-    Trace(TraceArgs),
-    /// Autonomous goal-directed agent loop.
-    Think(think::ThinkArgs),
-    /// Orchestrate a multi-agent discussion.
-    Discuss(discuss::DiscussArgs),
+    /// DEPRECATED: use `easynet mission discuss`.
+    Discuss(discuss_cmd::DiscussArgs),
+    /// DEPRECATED: use `easynet mission think`.
+    Think(think_cmd::ThinkArgs),
 }
 
 #[derive(Debug, Args)]
@@ -67,427 +83,138 @@ pub struct SessionArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum SessionAction {
-    /// Start a new session.
+    /// Create a new session bound to an agent.
     New(SessionNewArgs),
-    /// Continue an existing session with another prompt.
-    Resume(SessionResumeArgs),
-    /// List existing sessions.
+    /// List sessions on this host.
     List,
-    /// Show one session's full transcript.
-    Show(SessionShowArgs),
+    /// Show a session's full transcript.
+    Show(SessionIdArgs),
+    /// Append a turn to a session.
+    Append(SessionAppendArgs),
     /// Delete a session.
-    End(SessionEndArgs),
+    End(SessionIdArgs),
 }
 
 #[derive(Debug, Args)]
 pub struct SessionNewArgs {
-    /// Session id (any short label, must be unique).
+    /// Session id (a short user-chosen label).
     pub id: String,
-    /// Registered agent name to bind to the session.
+    /// Target agent instance name.
     #[arg(long)]
     pub agent: String,
-    /// Optional first prompt to send immediately.
-    #[arg(long)]
-    pub initial: Option<String>,
-    /// Per-call timeout in seconds (default: 900).
-    #[arg(long, default_value_t = 900)]
-    pub timeout: u64,
 }
 
 #[derive(Debug, Args)]
-pub struct SessionResumeArgs {
-    /// Session id.
-    pub id: String,
-    /// Next prompt to send.
-    pub prompt: String,
-    /// Override per-call timeout.
-    #[arg(long, default_value_t = 900)]
-    pub timeout: u64,
-}
-
-#[derive(Debug, Args)]
-pub struct SessionShowArgs {
+pub struct SessionIdArgs {
     /// Session id.
     pub id: String,
 }
 
 #[derive(Debug, Args)]
-pub struct SessionEndArgs {
-    /// Session id to delete.
+pub struct SessionAppendArgs {
+    /// Session id.
     pub id: String,
-}
-
-#[derive(Debug, Args)]
-pub struct TraceArgs {
-    #[command(subcommand)]
-    pub action: TraceAction,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum TraceAction {
-    /// List persisted run directories.
-    List(TraceListArgs),
-    /// Show a single run's metadata, prompt, and response.
-    Show(TraceShowArgs),
-}
-
-#[derive(Debug, Args)]
-pub struct TraceListArgs {
-    /// Filter by registered agent name.
-    #[arg(long)]
-    pub agent: Option<String>,
-    /// Maximum number of runs to list.
-    #[arg(long, default_value_t = 20)]
-    pub limit: usize,
-}
-
-#[derive(Debug, Args)]
-pub struct TraceShowArgs {
-    /// Run directory id (timestamp), or unique prefix. May be qualified
-    /// as `<agent>/<id>` if the same id exists across multiple agents.
-    pub id: String,
-    /// Print the raw trace.jsonl instead of the meta + response summary.
-    #[arg(long)]
-    pub raw: bool,
+    /// Role of the turn ("user" or "assistant").
+    #[arg(long, default_value = "user")]
+    pub role: String,
+    /// Turn content (free text).
+    pub content: String,
 }
 
 pub fn run(args: AgentArgs) -> anyhow::Result<()> {
     match args.action {
-        AgentAction::Add(a) => legacy_agent::run(legacy_agent::AgentArgs {
-            action: legacy_agent::AgentAction::Add(a),
+        AgentAction::Add(a) => agent_cmd::run(agent_cmd::AgentArgs {
+            action: agent_cmd::AgentAction::Add(a),
         }),
-        AgentAction::List => legacy_agent::run(legacy_agent::AgentArgs {
-            action: legacy_agent::AgentAction::List,
+        AgentAction::List => agent_cmd::run(agent_cmd::AgentArgs {
+            action: agent_cmd::AgentAction::List,
         }),
-        AgentAction::Remove(a) => legacy_agent::run(legacy_agent::AgentArgs {
-            action: legacy_agent::AgentAction::Remove(a),
+        AgentAction::Remove(a) => agent_cmd::run(agent_cmd::AgentArgs {
+            action: agent_cmd::AgentAction::Remove(a),
         }),
-        AgentAction::Send(a) => legacy_agent::run(legacy_agent::AgentArgs {
-            action: legacy_agent::AgentAction::Send(a),
+        AgentAction::Doctor(a) => agent_cmd::run(agent_cmd::AgentArgs {
+            action: agent_cmd::AgentAction::Doctor(a),
         }),
-        AgentAction::Doctor(a) => legacy_agent::run(legacy_agent::AgentArgs {
-            action: legacy_agent::AgentAction::Doctor(a),
+        AgentAction::Send(a) => agent_cmd::run(agent_cmd::AgentArgs {
+            action: agent_cmd::AgentAction::Send(a),
         }),
-        AgentAction::Session(a) => run_session(a),
-        AgentAction::Trace(a) => run_trace(a),
-        AgentAction::Think(a) => think::run(a),
-        AgentAction::Discuss(a) => discuss::run(a),
+        AgentAction::Session(s) => run_session(s),
+        AgentAction::Discuss(a) => {
+            eprintln!(
+                "  {} {}",
+                style("deprecated:").yellow(),
+                style("`easynet agent discuss` → use `easynet mission discuss`").dim()
+            );
+            discuss_cmd::run(a)
+        }
+        AgentAction::Think(a) => {
+            eprintln!(
+                "  {} {}",
+                style("deprecated:").yellow(),
+                style("`easynet agent think` → use `easynet mission think`").dim()
+            );
+            think_cmd::run(a)
+        }
     }
 }
-
-// ── sessions ────────────────────────────────────────────────────────────────
 
 fn run_session(args: SessionArgs) -> anyhow::Result<()> {
     match args.action {
-        SessionAction::New(a) => session_new(a),
-        SessionAction::Resume(a) => session_resume(a),
-        SessionAction::List => session_list(),
-        SessionAction::Show(a) => session_show(a),
-        SessionAction::End(a) => session_end(a),
-    }
-}
-
-fn session_new(args: SessionNewArgs) -> anyhow::Result<()> {
-    let registry = agents::load_agents()?;
-    if !registry.agents.contains_key(&args.agent) {
-        anyhow::bail!(
-            "agent '{}' not found. Run `easynet agent list`.",
-            args.agent
-        );
-    }
-    // Validate id and check for an existing file in one shot. If
-    // session_path returns Err the id is malformed; otherwise existence
-    // means a duplicate.
-    let path = agent_sessions::session_path(&args.id)?;
-    if path.exists() {
-        anyhow::bail!("session '{}' already exists", args.id);
-    }
-
-    let mut session = Session::new(args.id.clone(), args.agent.clone())?;
-    session.save()?;
-    output::success(&format!("created session '{}' (agent: {})", args.id, args.agent));
-
-    if let Some(prompt) = args.initial {
-        send_in_session(&mut session, &prompt, args.timeout)?;
-    }
-    Ok(())
-}
-
-fn session_resume(args: SessionResumeArgs) -> anyhow::Result<()> {
-    let mut session = Session::load(&args.id)?;
-    send_in_session(&mut session, &args.prompt, args.timeout)
-}
-
-fn session_list() -> anyhow::Result<()> {
-    let sessions = agent_sessions::list_sessions()?;
-    if sessions.is_empty() {
-        output::info("No agent sessions yet. Start one with `easynet agent session new`.");
-        return Ok(());
-    }
-    let mut table = output::table(&["ID", "Agent", "Turns", "Updated"]);
-    for s in &sessions {
-        let turns = s.turns.len().to_string();
-        table.add_row(vec![&s.id, &s.agent, &turns, &s.updated_at]);
-    }
-    println!("{table}");
-    Ok(())
-}
-
-fn session_show(args: SessionShowArgs) -> anyhow::Result<()> {
-    let session = Session::load(&args.id)?;
-    eprintln!();
-    eprintln!(
-        "  {} {}  {}",
-        style("session").dim(),
-        style(&session.id).bold(),
-        style(format!("({} turns)", session.turns.len())).dim()
-    );
-    output::detail("agent", &session.agent);
-    output::detail("created", &session.created_at);
-    output::detail("updated", &session.updated_at);
-    eprintln!();
-    for (i, t) in session.turns.iter().enumerate() {
-        let role = if t.role == "user" {
-            style("user").cyan()
-        } else {
-            style("assistant").magenta()
-        };
-        eprintln!("  {} {}", style(format!("#{:02}", i + 1)).dim(), role);
-        for line in t.content.lines() {
-            eprintln!("    {line}");
+        SessionAction::New(a) => {
+            let session = agent_sessions::Session::new(a.id.clone(), a.agent.clone())?;
+            session.save()?;
+            output::success(&format!(
+                "created session '{}' for agent '{}'",
+                a.id, a.agent
+            ));
+            Ok(())
         }
-        eprintln!();
-    }
-    Ok(())
-}
-
-fn session_end(args: SessionEndArgs) -> anyhow::Result<()> {
-    agent_sessions::delete_session(&args.id)?;
-    output::success(&format!("ended session '{}'", args.id));
-    Ok(())
-}
-
-fn send_in_session(session: &mut Session, prompt: &str, timeout: u64) -> anyhow::Result<()> {
-    let registry = agents::load_agents()?;
-    let entry = registry
-        .agents
-        .get(&session.agent)
-        .ok_or_else(|| anyhow::anyhow!("agent '{}' not registered", session.agent))?;
-    let mut entry = entry.clone();
-    entry.timeout_secs = timeout;
-
-    // Render prior turns into the context window.
-    let context = if session.turns.is_empty() {
-        None
-    } else {
-        Some(session.transcript())
-    };
-
-    eprintln!(
-        "  {} {} {} {}",
-        style("→").cyan(),
-        style("session").dim(),
-        style(&session.id).bold(),
-        style(format!("(turn {})", session.turns.len() / 2 + 1)).dim(),
-    );
-
-    let response = dispatch::send_to_agent(
-        &session.agent,
-        &entry,
-        prompt,
-        context.as_deref(),
-        None,
-        None,
-    )?;
-
-    session.append("user", prompt);
-    session.append("assistant", &response.content);
-    session.save()?;
-
-    eprintln!();
-    eprintln!(
-        "  {} {:.1}s",
-        style(&session.agent).white().bold(),
-        response.duration_ms as f64 / 1000.0
-    );
-    if let Some(dir) = &response.run_dir {
-        eprintln!("  {} {}", style("saved").dim(), style(dir.display().to_string()).cyan());
-    }
-    eprintln!();
-    println!("{}", response.content);
-    Ok(())
-}
-
-// ── traces ──────────────────────────────────────────────────────────────────
-
-fn run_trace(args: TraceArgs) -> anyhow::Result<()> {
-    match args.action {
-        TraceAction::List(a) => trace_list(a),
-        TraceAction::Show(a) => trace_show(a),
-    }
-}
-
-#[derive(Debug, Clone)]
-struct TraceEntry {
-    agent: String,
-    id: String,
-    path: std::path::PathBuf,
-    meta: serde_json::Value,
-}
-
-fn collect_traces(filter_agent: Option<&str>) -> anyhow::Result<Vec<TraceEntry>> {
-    let workspaces = config::state_dir().join("workspaces");
-    if !workspaces.exists() {
-        return Ok(Vec::new());
-    }
-    let mut out = Vec::new();
-    for entry in std::fs::read_dir(&workspaces)? {
-        let entry = entry?;
-        let agent_name = entry.file_name().to_string_lossy().to_string();
-        if let Some(f) = filter_agent {
-            if f != agent_name {
-                continue;
+        SessionAction::List => {
+            let sessions = agent_sessions::list_sessions()?;
+            if sessions.is_empty() {
+                output::info("No sessions on this host.");
+                return Ok(());
             }
-        }
-        let runs_dir = entry.path().join("runs");
-        if !runs_dir.exists() {
-            continue;
-        }
-        for run in std::fs::read_dir(&runs_dir)? {
-            let run = run?;
-            let path = run.path();
-            if !path.is_dir() {
-                continue;
+            let mut table = output::table(&["ID", "Agent", "Turns", "Updated"]);
+            for s in &sessions {
+                let turns = s.turns.len().to_string();
+                table.add_row(vec![
+                    s.id.as_str(),
+                    s.agent.as_str(),
+                    turns.as_str(),
+                    s.updated_at.as_str(),
+                ]);
             }
-            let id = run.file_name().to_string_lossy().to_string();
-            let meta_path = path.join("meta.json");
-            let meta: serde_json::Value = std::fs::read_to_string(&meta_path)
-                .ok()
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or(serde_json::json!({}));
-            out.push(TraceEntry {
-                agent: agent_name.clone(),
-                id,
-                path,
-                meta,
-            });
+            println!("{table}");
+            Ok(())
+        }
+        SessionAction::Show(a) => {
+            let session = agent_sessions::Session::load(&a.id)?;
+            eprintln!();
+            eprintln!(
+                "  {} {}  {}",
+                style("session").dim(),
+                style(&session.id).bold(),
+                style(format!("→ {}", session.agent)).dim()
+            );
+            output::detail("created", &session.created_at);
+            output::detail("updated", &session.updated_at);
+            output::detail("turns", &session.turns.len().to_string());
+            eprintln!();
+            print!("{}", session.transcript());
+            Ok(())
+        }
+        SessionAction::Append(a) => {
+            let mut session = agent_sessions::Session::load(&a.id)?;
+            session.append(&a.role, &a.content);
+            session.save()?;
+            output::success(&format!("appended turn to '{}'", a.id));
+            Ok(())
+        }
+        SessionAction::End(a) => {
+            agent_sessions::delete_session(&a.id)?;
+            output::success(&format!("ended session '{}'", a.id));
+            Ok(())
         }
     }
-    out.sort_by(|a, b| b.id.cmp(&a.id));
-    Ok(out)
-}
-
-fn trace_list(args: TraceListArgs) -> anyhow::Result<()> {
-    let traces = collect_traces(args.agent.as_deref())?;
-    if traces.is_empty() {
-        output::info("No agent run traces yet. Run `easynet agent send …` first.");
-        return Ok(());
-    }
-    let mut table = output::table(&["ID", "Agent", "Status", "Tokens", "Duration"]);
-    for t in traces.iter().take(args.limit) {
-        let status = t
-            .meta
-            .get("exit_status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("-");
-        let in_t = t.meta.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-        let out_t = t.meta.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-        let tokens = format!("{in_t}/{out_t}");
-        let dur_ms = t.meta.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
-        let dur = format!("{:.1}s", dur_ms as f64 / 1000.0);
-        table.add_row(vec![&t.id, &t.agent, status, &tokens, &dur]);
-    }
-    println!("{table}");
-    Ok(())
-}
-
-fn trace_show(args: TraceShowArgs) -> anyhow::Result<()> {
-    let traces = collect_traces(None)?;
-    let (agent_filter, id_part) = match args.id.split_once('/') {
-        Some((a, i)) => (Some(a.to_string()), i.trim().to_string()),
-        None => (None, args.id.trim().to_string()),
-    };
-    if id_part.is_empty() {
-        anyhow::bail!("trace id is empty");
-    }
-
-    let agent_match = |t: &&TraceEntry| agent_filter.as_deref().is_none_or(|a| a == t.agent);
-
-    // Exact match wins, even if multiple ids share the prefix.
-    let exact: Vec<&TraceEntry> = traces
-        .iter()
-        .filter(agent_match)
-        .filter(|t| t.id == id_part)
-        .collect();
-    let entry: &TraceEntry = if exact.len() == 1 {
-        exact[0]
-    } else if exact.len() > 1 {
-        // Same id under multiple agents — caller must qualify with `<agent>/`.
-        let names: Vec<String> =
-            exact.iter().map(|t| format!("{}/{}", t.agent, t.id)).collect();
-        anyhow::bail!("ambiguous '{}' — matches: {}", args.id, names.join(", "));
-    } else {
-        // No exact hit — try prefix matching.
-        let prefix: Vec<&TraceEntry> = traces
-            .iter()
-            .filter(agent_match)
-            .filter(|t| t.id.starts_with(&id_part))
-            .collect();
-        if prefix.is_empty() {
-            anyhow::bail!("no trace matching '{}'", args.id);
-        }
-        if prefix.len() > 1 {
-            let names: Vec<String> =
-                prefix.iter().map(|t| format!("{}/{}", t.agent, t.id)).collect();
-            anyhow::bail!("ambiguous '{}' — matches: {}", args.id, names.join(", "));
-        }
-        prefix[0]
-    };
-
-    eprintln!();
-    eprintln!(
-        "  {} {}  {}",
-        style("trace").dim(),
-        style(&entry.id).bold(),
-        style(format!("({})", entry.agent)).dim()
-    );
-    output::detail("path", &entry.path.display().to_string());
-    if let Some(model) = entry.meta.get("model").and_then(|v| v.as_str()) {
-        output::detail("model", model);
-    }
-    if let Some(status) = entry.meta.get("exit_status").and_then(|v| v.as_str()) {
-        output::detail("status", status);
-    }
-    if let Some(dur) = entry.meta.get("duration_ms").and_then(|v| v.as_u64()) {
-        output::detail("duration", &format!("{:.1}s", dur as f64 / 1000.0));
-    }
-    eprintln!();
-
-    if args.raw {
-        let trace_path = entry.path.join("trace.jsonl");
-        if trace_path.exists() {
-            let raw = std::fs::read_to_string(trace_path)?;
-            print!("{raw}");
-        } else {
-            output::info("no trace.jsonl recorded");
-        }
-        return Ok(());
-    }
-
-    let prompt_path = entry.path.join("prompt.txt");
-    if prompt_path.exists() {
-        eprintln!("  {}", style("prompt").dim());
-        let prompt = std::fs::read_to_string(prompt_path)?;
-        for line in prompt.lines() {
-            eprintln!("    {line}");
-        }
-        eprintln!();
-    }
-    let resp_path = entry.path.join("response.md");
-    if resp_path.exists() {
-        eprintln!("  {}", style("response").dim());
-        let resp = std::fs::read_to_string(resp_path)?;
-        println!("{resp}");
-    }
-    Ok(())
 }

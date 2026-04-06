@@ -2,24 +2,32 @@
 // =======================
 //
 // File: src/cli/groups/mcp.rs
-// Description: `easynet mcp …` — Hub-side MCP server lifecycle plus the
-//              integration glue for AI clients (Claude Code / Codex) and
-//              skill templates.
+// Description: `easynet mcp …` — the local MCP server *process*. Nothing
+//              else lives here.
 //
-// Verbs:
-//   serve            Run the Hub MCP server on stdio        (-> cli::mcp_server)
-//   install          Install MCP config for AI clients       (-> cli::mcp_install)
-//   skill-install    Install EasyNet skill templates         (-> cli::skill_install)
-//   list             Show which AI clients are wired up      (NEW)
-//   status           Show whether the runtime can serve MCP  (NEW)
+// Why so small?
+//   The MCP server is host-local infrastructure: it is the stdio bridge
+//   that lets a co-located AI client (Claude Code, Codex) make EAL-runtime
+//   calls. It is NOT a network first-class object (see ARCHITECTURE.md
+//   §6 — interpretation C: device is a hosting substrate, and the MCP
+//   server is one of those substrate-local processes).
+//
+//   Therefore the only verbs that belong here are the ones that touch the
+//   local server process itself:
+//
+//     serve   — run the stdio MCP server
+//     status  — report whether the local runtime can answer MCP requests
+//
+//   Skill / client config installation (`mcp-install`, `skill-install`)
+//   stays at the legacy top level for now; their final home depends on
+//   open question §13.6 in the consensus spec.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use clap::{Args, Subcommand};
-use console::style;
 
-use crate::cli::{mcp_install, mcp_server, skill_install};
+use crate::cli::mcp_server;
 use crate::shared::{config, output};
 
 #[derive(Debug, Args)]
@@ -30,81 +38,17 @@ pub struct McpArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum McpAction {
-    /// Run the Hub-level MCP server on stdio.
+    /// Run the local Hub-level MCP server on stdio.
     Serve(mcp_server::McpServerArgs),
-    /// Install MCP server config into Claude Code / Codex / Cursor.
-    Install(mcp_install::McpInstallArgs),
-    /// Install EasyNet skill templates into AI client skill directories.
-    SkillInstall(skill_install::SkillInstallArgs),
-    /// List AI clients that have an EasyNet MCP entry installed.
-    List,
-    /// Report whether the local runtime can answer MCP requests.
+    /// Report whether the local runtime can serve MCP requests.
     Status,
 }
 
 pub fn run(args: McpArgs) -> anyhow::Result<()> {
     match args.action {
         McpAction::Serve(a) => mcp_server::run(a),
-        McpAction::Install(a) => mcp_install::run(a),
-        McpAction::SkillInstall(a) => skill_install::run(a),
-        McpAction::List => run_list(),
         McpAction::Status => run_status(),
     }
-}
-
-fn run_list() -> anyhow::Result<()> {
-    let home = config::home_dir();
-
-    let candidates: Vec<(&str, std::path::PathBuf)> = vec![
-        ("Claude Code (project)", std::env::current_dir()?.join(".mcp.json")),
-        ("Claude Code (user)", home.join(".claude").join("mcp.json")),
-        ("Claude Desktop (macOS)", home
-            .join("Library/Application Support/Claude/claude_desktop_config.json")),
-        ("Codex", home.join(".codex").join("config.toml")),
-        ("Cursor", home.join(".cursor").join("mcp.json")),
-    ];
-
-    eprintln!();
-    eprintln!("  {} clients", style("MCP").bold());
-    eprintln!();
-    let mut any = false;
-    for (name, path) in &candidates {
-        let exists = path.exists();
-        let has_easynet = exists
-            && std::fs::read_to_string(path)
-                .map(|c| c.contains("easynet"))
-                .unwrap_or(false);
-        let mark = if has_easynet {
-            style("●").green()
-        } else if exists {
-            style("○").yellow()
-        } else {
-            style("·").dim()
-        };
-        let state = if has_easynet {
-            "easynet entry present"
-        } else if exists {
-            "config exists, no easynet entry"
-        } else {
-            "not installed"
-        };
-        if has_easynet || exists {
-            any = true;
-        }
-        eprintln!(
-            "  {} {:<26} {}",
-            mark,
-            style(name).bold(),
-            style(state).dim(),
-        );
-        eprintln!("      {}", style(path.display().to_string()).dim());
-    }
-    if !any {
-        eprintln!();
-        output::info("No AI client configs detected. Run `easynet mcp install` to set one up.");
-    }
-    eprintln!();
-    Ok(())
 }
 
 fn run_status() -> anyhow::Result<()> {

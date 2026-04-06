@@ -2,27 +2,34 @@
 // ==========================
 //
 // File: src/cli/groups/device.rs
-// Description: `easynet device …` — every operation that takes a *device*
-//              (federation node) as its primary noun.
+// Description: `easynet device …` — manage *hosting substrates*.
+//
+// Ontology note (interpretation C, see ARCHITECTURE.md §6):
+//
+//   A device is NOT a network first-class entity. The only network
+//   first-class objects are Agents (network actors) and Abilities (their
+//   public methods). A device is the *physical substrate* on which agents
+//   are hosted — analogous to an OS to a process. Devices are visible to
+//   the CLI for diagnostic and lifecycle reasons (pairing, hardware
+//   inventory, capacity), but they are NOT addressable as the "to" of an
+//   ability call from outside.
 //
 // Verbs:
-//   list                List federated devices                (-> cli::devices)
-//   show <id>           Inspect one device + its abilities    (NEW)
-//   rename <id> <name>  Set the device's display name         (NEW, best-effort)
-//   tag <id> ...        Attach metadata tags                  (NEW, best-effort)
-//   remove <id>         Drain + deregister a remote device    (NEW)
-//   join <token>        Pair *this* host to the federation    (-> cli::join)
-//   reset               Un-pair this host                     (-> cli::reset)
-//   config [...]        Per-device runtime settings           (-> cli::config_cmd)
+//   join <token>      Pair THIS host as a substrate                       (-> cli::join)
+//   reset             Un-pair this host                                   (-> cli::reset)
+//   config            Per-host runtime settings                           (-> cli::config_cmd)
+//                     (semantically belongs to `runtime config`; physical
+//                      command stays here for now — see ARCHITECTURE.md §8 #6)
+//   list              List substrates known to the federation             (-> cli::devices)
+//   show <id>         Inspect one substrate (hardware, hosted abilities)  (NEW)
+//   remove <id>       Drain + deregister a remote substrate               (NEW)
 //
-// Notes on rename/tag:
-//   The Axon SDK currently has no first-class rename/tag RPC. Rather than
-//   fail loudly, we attempt the operation through a generic
-//   `easynet_admin` MCP tool on the target node and surface a clear error
-//   if that ability is not deployed there. Users who wire a custom admin
-//   ability get the feature for free; everyone else gets a precise
-//   "ability not available on this device" message instead of a missing
-//   command.
+// Verbs DELIBERATELY ABSENT:
+//
+//   rename / tag — would require an `easynet_admin` ability deployed on
+//                  the target substrate. That ability does not exist in
+//                  this PR, so the verbs would either silently fail or
+//                  succeed half-way. Skipping them is the honest choice.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -43,27 +50,23 @@ pub struct DeviceArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum DeviceAction {
-    /// List all federated devices.
-    List(devices::DevicesArgs),
-    /// Show one device's full detail (status, OS, abilities).
-    Show(ShowArgs),
-    /// Set a device's display name.
-    Rename(RenameArgs),
-    /// Attach a metadata tag (`key=value`) to a device.
-    Tag(TagArgs),
-    /// Drain and deregister a remote device from the federation.
-    Remove(RemoveArgs),
     /// Pair this host with EasyNet using a join token.
     Join(join::JoinArgs),
-    /// Un-pair this host (delete local credentials + state).
+    /// Un-pair this host (delete local credentials and state).
     Reset(reset::ResetArgs),
-    /// Show or update local device runtime settings.
+    /// Show or update local runtime settings on this host.
     Config(config_cmd::ConfigArgs),
+    /// List hosting substrates known to the federation.
+    List(devices::DevicesArgs),
+    /// Show one substrate's hardware and hosted abilities.
+    Show(ShowArgs),
+    /// Drain and deregister a remote substrate from the federation.
+    Remove(RemoveArgs),
 }
 
 #[derive(Debug, Args)]
 pub struct ShowArgs {
-    /// Target device node id.
+    /// Target substrate node id.
     pub node_id: String,
     /// Emit raw JSON instead of the human-readable view.
     #[arg(long)]
@@ -71,25 +74,8 @@ pub struct ShowArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct RenameArgs {
-    /// Target device node id.
-    pub node_id: String,
-    /// New display name.
-    pub name: String,
-}
-
-#[derive(Debug, Args)]
-pub struct TagArgs {
-    /// Target device node id.
-    pub node_id: String,
-    /// Tag, in `key=value` form. Repeat the flag to set multiple tags.
-    #[arg(long = "set", value_name = "KEY=VALUE")]
-    pub set: Vec<String>,
-}
-
-#[derive(Debug, Args)]
 pub struct RemoveArgs {
-    /// Target device node id.
+    /// Target substrate node id.
     pub node_id: String,
     /// Skip the interactive confirmation.
     #[arg(long, short = 'y')]
@@ -101,14 +87,12 @@ pub struct RemoveArgs {
 
 pub fn run(args: DeviceArgs) -> anyhow::Result<()> {
     match args.action {
-        DeviceAction::List(a) => devices::run(a),
-        DeviceAction::Show(a) => run_show(a),
-        DeviceAction::Rename(a) => run_rename(a),
-        DeviceAction::Tag(a) => run_tag(a),
-        DeviceAction::Remove(a) => run_remove(a),
         DeviceAction::Join(a) => join::run(a),
         DeviceAction::Reset(a) => reset::run(a),
         DeviceAction::Config(a) => config_cmd::run(a),
+        DeviceAction::List(a) => devices::run(a),
+        DeviceAction::Show(a) => run_show(a),
+        DeviceAction::Remove(a) => run_remove(a),
     }
 }
 
@@ -120,7 +104,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     let node = nodes
         .iter()
         .find(|n| n.get("node_id").and_then(|v| v.as_str()) == Some(args.node_id.as_str()))
-        .ok_or_else(|| anyhow::anyhow!("device '{}' not found", args.node_id))?;
+        .ok_or_else(|| anyhow::anyhow!("substrate '{}' not found", args.node_id))?;
 
     let abilities = br.list_mcp_tools(tenant, "", &args.node_id).unwrap_or_default();
 
@@ -167,7 +151,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         "  {} {} {}",
         style(format!("{}", abilities.len())).bold(),
         if abilities.len() == 1 { "ability" } else { "abilities" },
-        style("on this device").dim(),
+        style("hosted on this substrate").dim(),
     );
     for a in &abilities {
         let name = a
@@ -187,35 +171,23 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         );
     }
     eprintln!();
+    eprintln!(
+        "  {}",
+        style(
+            "Reminder: this substrate is not network-addressable on its own. \
+             Network calls always target an agent's published ability; the \
+             substrate is the place where that ability happens to run."
+        )
+        .dim()
+    );
+    eprintln!();
     Ok(())
-}
-
-fn run_rename(args: RenameArgs) -> anyhow::Result<()> {
-    invoke_admin(&args.node_id, "rename", json!({"display_name": args.name}))
-}
-
-fn run_tag(args: TagArgs) -> anyhow::Result<()> {
-    if args.set.is_empty() {
-        anyhow::bail!("no --set KEY=VALUE provided");
-    }
-    let mut tags = serde_json::Map::new();
-    for entry in &args.set {
-        let (k, v) = entry
-            .split_once('=')
-            .ok_or_else(|| anyhow::anyhow!("tag '{entry}' must be KEY=VALUE"))?;
-        tags.insert(k.to_string(), json!(v));
-    }
-    invoke_admin(
-        &args.node_id,
-        "set_tags",
-        json!({"tags": serde_json::Value::Object(tags)}),
-    )
 }
 
 fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
     if !args.yes {
         let prompt = format!(
-            "Drain + deregister device '{}' from the federation?",
+            "Drain and deregister substrate '{}' from the federation?",
             args.node_id
         );
         if !output::confirm(&prompt)? {
@@ -234,43 +206,4 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
 
     output::success(&format!("removed {}", args.node_id));
     Ok(())
-}
-
-/// Best-effort call into a custom `easynet_admin` ability on the target
-/// device. Returns a clear error if the ability isn't deployed there, so
-/// users understand the operation requires opt-in tooling on the device side.
-fn invoke_admin(node_id: &str, action: &str, payload: serde_json::Value) -> anyhow::Result<()> {
-    let (br, rt) = shared::connect_bridge()?;
-    let tenant = rt.tenant_or_default();
-    let mut args = serde_json::Map::new();
-    args.insert("action".into(), json!(action));
-    if let serde_json::Value::Object(map) = payload {
-        for (k, v) in map {
-            args.insert(k, v);
-        }
-    }
-    let arguments = serde_json::Value::Object(args);
-
-    match br.call_mcp_tool_with_timeout(
-        tenant,
-        "easynet_admin",
-        node_id,
-        &arguments,
-        Some(15_000),
-    ) {
-        Ok(v) => {
-            output::success(&format!("{action} on {node_id}"));
-            if !v.is_null() {
-                println!("{}", serde_json::to_string_pretty(&v)?);
-            }
-            Ok(())
-        }
-        Err(e) => {
-            anyhow::bail!(
-                "device '{node_id}' does not expose 'easynet_admin' (or call failed): {e}\n\
-                 Deploy an admin ability with `easynet ability deploy <path> --to {node_id}` \
-                 to enable rename/tag operations."
-            );
-        }
-    }
 }
