@@ -95,8 +95,8 @@ pub struct MissionRunMeta {
     /// itself. Naming the field `ability_graph_traces` (rather than e.g.
     /// `internal_eal_summaries`) is the deliberate teaching point —
     /// it tells the next reader that an ability has a graph, by the
-    /// field name alone. See ARCHITECTURE.md §3 (self-evolution = graph)
-    /// and §10 (non-CLI artefacts).
+    /// field name alone. See docs/easynet_ontology.pdf §3
+    /// (self-evolution = graph) and §10 (non-CLI artefacts).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ability_graph_traces: Option<Vec<serde_json::Value>>,
 }

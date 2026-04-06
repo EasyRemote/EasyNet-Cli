@@ -50,11 +50,11 @@ pub struct DeviceArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum DeviceAction {
-    /// Pair this host with EasyNet using a join token.
+    /// Pair this host as a hosting substrate (registers credentials).
     Join(join::JoinArgs),
     /// Un-pair this host (delete local credentials and state).
     Reset(reset::ResetArgs),
-    /// Show or update local runtime settings on this host.
+    /// Show or update local runtime settings (will move to `runtime config` in a future release).
     Config(config_cmd::ConfigArgs),
     /// List hosting substrates known to the federation.
     List(devices::DevicesArgs),

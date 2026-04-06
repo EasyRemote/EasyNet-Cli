@@ -65,7 +65,7 @@ pub enum AgentAction {
     Remove(agent_cmd::RemoveArgs),
     /// Check whether an agent's underlying CLI is reachable.
     Doctor(agent_cmd::DoctorArgs),
-    /// Send a prompt to an agent (sugar for `agent.chat(prompt)`).
+    /// Sugar for a single-line EAL mission `agent.chat(prompt)`.
     Send(agent_cmd::SendArgs),
     /// Manage per-caller conversation sessions (memory dimension).
     Session(SessionArgs),

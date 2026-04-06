@@ -59,11 +59,11 @@ pub enum AbilityAction {
     List(abilities::AbilitiesArgs),
     /// Show one ability's contract surface (schema, version, description).
     Show(ShowArgs),
-    /// Publish an ability version to a hosting device.
+    /// Publish an ability version (currently routed by device node id; will become agent-id-routed).
     Deploy(deploy::DeployArgs),
     /// Uninstall a previously deployed ability.
     Uninstall(UninstallArgs),
-    /// Invoke a public ability on its hosting device.
+    /// Invoke a public ability (currently routed by device node id; will become agent-id-routed).
     Invoke(invoke::InvokeArgs),
     /// Run a one-shot ad-hoc command on a device (ephemeral ability).
     Exec(exec::ExecArgs),

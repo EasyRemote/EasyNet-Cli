@@ -24,6 +24,31 @@
 //   runtime   → local Axon process lifecycle
 //   mcp       → local MCP server process
 //
+// Two languages, two runtimes (see ontology spec §5)
+// ---------------------------------------------------
+//
+// EasyNet has two independent language/runtime pairs, NOT a single
+// compilation pipeline:
+//
+//   AAL  ──interpreted by──>  BCC      (producer side: define an agent class)
+//   EAL  ──interpreted by──>  EasyNet  (consumer side: orchestrate abilities)
+//
+// This `easynet` binary IS the local CLI surface for the EAL runtime
+// (= EasyNet itself). It does not yet contain BCC or any AAL machinery —
+// BCC will arrive as a separate concern (likely a sibling binary). The
+// bridge between the two runtimes is the gRPC ability endpoint: BCC
+// exposes abilities, EasyNet calls them.
+//
+// Encapsulation invariant (load-bearing, see ontology spec §4)
+// ------------------------------------------------------------
+//
+// No CLI command, no SDK call, and no EAL construct may reach across an
+// agent boundary into a private skill. If a future need arises ("I want
+// my agent to learn from another agent's skill"), the only valid answer
+// is: the other agent must wrap that skill as an ability. Every CLI
+// verb in this module is required to pass this encapsulation check
+// before being added.
+//
 // Two top-level commands are deliberately ABSENT and must stay absent:
 //
 //   skill     → skills are private; exposing them breaks encapsulation.
