@@ -170,6 +170,12 @@ fn run_run(args: RunArgs) -> anyhow::Result<()> {
         Ok(report) => {
             meta.steps_completed = report.steps_completed;
             meta.steps_failed = report.steps_failed;
+            // The interpreter returns Ok even when individual steps fail —
+            // surface that as "partial" so the listing doesn't lie about
+            // a run with broken steps.
+            if report.steps_failed > 0 {
+                meta.status = "partial".into();
+            }
             if let Ok(trace_json) = serde_json::to_string_pretty(&report.trace) {
                 run_dir.write_trace(&trace_json);
             }

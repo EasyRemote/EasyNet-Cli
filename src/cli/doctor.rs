@@ -123,7 +123,11 @@ pub fn run(args: DoctorArgs) -> anyhow::Result<()> {
     eprintln!();
     eprintln!("  {} {}", style("EasyNet").bold(), style("doctor").dim());
     eprintln!();
-    print_check("credentials", creds_ok, "device paired");
+    print_check(
+        "credentials",
+        creds_ok,
+        if creds_ok { "device paired" } else { "device not paired" },
+    );
     print_check("runtime", runtime_ok, "local axon runtime running");
     let bridge_msg = match node_count {
         Some(n) => format!("hub reachable, {n} nodes"),
