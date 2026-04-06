@@ -18,7 +18,7 @@ use chrono::Local;
 use clap::{Args, Subcommand};
 use console::style;
 
-use crate::cli::mission_runs::{self, MissionRunDir, MissionRunMeta};
+use crate::cli::mission_runs::{self, CancelOutcome, MissionRunDir, MissionRunMeta};
 use crate::eal;
 use crate::shared::{config, output};
 
@@ -285,7 +285,16 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
 }
 
 fn run_cancel(args: CancelArgs) -> anyhow::Result<()> {
-    let run = mission_runs::cancel_run(&args.id)?;
-    output::success(&format!("cancelled {}", run.id));
+    match mission_runs::cancel_run(&args.id)? {
+        CancelOutcome::Cancelled(run) => {
+            output::success(&format!("cancelled {}", run.id));
+        }
+        CancelOutcome::AlreadyTerminal(run) => {
+            output::info(&format!(
+                "{} is already terminal (status: {}); nothing to cancel",
+                run.id, run.meta.status
+            ));
+        }
+    }
     Ok(())
 }

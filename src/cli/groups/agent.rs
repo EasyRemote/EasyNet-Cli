@@ -195,11 +195,15 @@ fn session_new(args: SessionNewArgs) -> anyhow::Result<()> {
             args.agent
         );
     }
-    if agent_sessions::session_path(&args.id).exists() {
+    // Validate id and check for an existing file in one shot. If
+    // session_path returns Err the id is malformed; otherwise existence
+    // means a duplicate.
+    let path = agent_sessions::session_path(&args.id)?;
+    if path.exists() {
         anyhow::bail!("session '{}' already exists", args.id);
     }
 
-    let mut session = Session::new(args.id.clone(), args.agent.clone());
+    let mut session = Session::new(args.id.clone(), args.agent.clone())?;
     session.save()?;
     output::success(&format!("created session '{}' (agent: {})", args.id, args.agent));
 
@@ -400,24 +404,45 @@ fn trace_list(args: TraceListArgs) -> anyhow::Result<()> {
 fn trace_show(args: TraceShowArgs) -> anyhow::Result<()> {
     let traces = collect_traces(None)?;
     let (agent_filter, id_part) = match args.id.split_once('/') {
-        Some((a, i)) => (Some(a.to_string()), i.to_string()),
-        None => (None, args.id.clone()),
+        Some((a, i)) => (Some(a.to_string()), i.trim().to_string()),
+        None => (None, args.id.trim().to_string()),
     };
-    let matches: Vec<&TraceEntry> = traces
+    if id_part.is_empty() {
+        anyhow::bail!("trace id is empty");
+    }
+
+    let agent_match = |t: &&TraceEntry| agent_filter.as_deref().is_none_or(|a| a == t.agent);
+
+    // Exact match wins, even if multiple ids share the prefix.
+    let exact: Vec<&TraceEntry> = traces
         .iter()
-        .filter(|t| {
-            agent_filter.as_deref().is_none_or(|a| a == t.agent)
-                && (t.id == id_part || t.id.starts_with(&id_part))
-        })
+        .filter(agent_match)
+        .filter(|t| t.id == id_part)
         .collect();
-    if matches.is_empty() {
-        anyhow::bail!("no trace matching '{}'", args.id);
-    }
-    if matches.len() > 1 {
-        let names: Vec<String> = matches.iter().map(|t| format!("{}/{}", t.agent, t.id)).collect();
+    let entry: &TraceEntry = if exact.len() == 1 {
+        exact[0]
+    } else if exact.len() > 1 {
+        // Same id under multiple agents — caller must qualify with `<agent>/`.
+        let names: Vec<String> =
+            exact.iter().map(|t| format!("{}/{}", t.agent, t.id)).collect();
         anyhow::bail!("ambiguous '{}' — matches: {}", args.id, names.join(", "));
-    }
-    let entry = matches[0];
+    } else {
+        // No exact hit — try prefix matching.
+        let prefix: Vec<&TraceEntry> = traces
+            .iter()
+            .filter(agent_match)
+            .filter(|t| t.id.starts_with(&id_part))
+            .collect();
+        if prefix.is_empty() {
+            anyhow::bail!("no trace matching '{}'", args.id);
+        }
+        if prefix.len() > 1 {
+            let names: Vec<String> =
+                prefix.iter().map(|t| format!("{}/{}", t.agent, t.id)).collect();
+            anyhow::bail!("ambiguous '{}' — matches: {}", args.id, names.join(", "));
+        }
+        prefix[0]
+    };
 
     eprintln!();
     eprintln!(

@@ -127,9 +127,19 @@ pub fn list_runs() -> anyhow::Result<Vec<MissionRunSummary>> {
 }
 
 pub fn find_run(id: &str) -> anyhow::Result<MissionRunSummary> {
+    // Reject blank ids — otherwise `starts_with("")` would match every run
+    // and silently return the first one (or bail "ambiguous"), neither of
+    // which is helpful.
+    let id = id.trim();
+    if id.is_empty() {
+        anyhow::bail!("mission run id is empty");
+    }
+
     let runs = list_runs()?;
-    let exact = runs.iter().find(|r| r.id == id);
-    if let Some(r) = exact {
+    // Exact match short-circuits the prefix search so an id that happens
+    // to also be a prefix of a longer id ("a" vs "ab") still resolves
+    // unambiguously.
+    if let Some(r) = runs.iter().find(|r| r.id == id) {
         return Ok(MissionRunSummary {
             id: r.id.clone(),
             path: r.path.clone(),
@@ -161,27 +171,205 @@ pub fn find_run(id: &str) -> anyhow::Result<MissionRunSummary> {
     anyhow::bail!("no mission run found for id '{id}'")
 }
 
-/// Mark a run cancelled. Best-effort: only updates meta.json + removes pid.
-pub fn cancel_run(id: &str) -> anyhow::Result<MissionRunSummary> {
+/// Outcome of a `cancel_run` call. Lets callers report accurately whether
+/// they actually changed anything.
+pub enum CancelOutcome {
+    Cancelled(MissionRunSummary),
+    AlreadyTerminal(MissionRunSummary),
+}
+
+/// Mark a run cancelled if (and only if) it is currently in-flight.
+/// Best-effort: only updates meta.json + removes pid.
+pub fn cancel_run(id: &str) -> anyhow::Result<CancelOutcome> {
     let mut run = find_run(id)?;
-    if !run.running && run.meta.status != "ok" && run.meta.status != "error" {
-        // already terminal — leave as-is
-    } else if run.running {
-        run.meta.status = "cancelled".to_string();
-        let _ = fs::remove_file(run.path.join("pid"));
-        if let Ok(s) = serde_json::to_string_pretty(&run.meta) {
-            let _ = fs::write(run.path.join("meta.json"), s + "\n");
-        }
-        run.running = false;
+    if !run.running {
+        return Ok(CancelOutcome::AlreadyTerminal(run));
     }
-    Ok(run)
+    run.meta.status = "cancelled".to_string();
+    let _ = fs::remove_file(run.path.join("pid"));
+    if let Ok(s) = serde_json::to_string_pretty(&run.meta) {
+        let _ = fs::write(run.path.join("meta.json"), s + "\n");
+    }
+    run.running = false;
+    Ok(CancelOutcome::Cancelled(run))
 }
 
 fn sanitize_for_path(name: &str) -> String {
-    name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+    let s: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .trim_matches('-')
-        .to_string()
+        .to_string();
+    if s.is_empty() {
+        "mission".into()
+    } else {
+        s
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::test_support::HomeGuard;
+
+    // ── sanitize_for_path: pure, parallel-safe ─────────────────────────────
+
+    #[test]
+    fn sanitize_handles_normal_names() {
+        assert_eq!(sanitize_for_path("smoke-fail"), "smoke-fail");
+        assert_eq!(sanitize_for_path("hello_world_42"), "hello_world_42");
+    }
+
+    #[test]
+    fn sanitize_replaces_unsafe_chars() {
+        assert_eq!(sanitize_for_path("a b/c"), "a-b-c");
+        assert_eq!(sanitize_for_path("名字"), "mission"); // all replaced+trimmed
+    }
+
+    #[test]
+    fn sanitize_falls_back_when_empty() {
+        assert_eq!(sanitize_for_path(""), "mission");
+        assert_eq!(sanitize_for_path("---"), "mission");
+        assert_eq!(sanitize_for_path("///"), "mission");
+    }
+
+    fn make_meta(name: &str) -> MissionRunMeta {
+        MissionRunMeta {
+            name: name.into(),
+            source_file: Some(format!("/tmp/{name}.eal")),
+            started_at: "2026-04-06T12:00:00+00:00".into(),
+            duration_ms: 42,
+            status: "ok".into(),
+            error: None,
+            steps_total: 3,
+            steps_completed: 3,
+            steps_failed: 0,
+        }
+    }
+
+    #[test]
+    fn create_writes_pid_and_finish_removes_it() {
+        let _g = HomeGuard::new();
+        let dir = MissionRunDir::create("smoke").expect("create");
+        assert!(dir.path.join("pid").exists(), "pid file should exist after create");
+        dir.finish();
+        assert!(!dir.path.join("pid").exists(), "pid file should be gone after finish");
+    }
+
+    #[test]
+    fn create_collision_appends_suffix() {
+        let _g = HomeGuard::new();
+        // Two runs with the same timestamp (same name, no real time gap).
+        // The second one must land on a `-1` suffix instead of clobbering.
+        let a = MissionRunDir::create("clash").expect("a");
+        let b = MissionRunDir::create("clash").expect("b");
+        assert_ne!(a.path, b.path);
+        assert!(b.path.to_string_lossy().contains("-1"));
+    }
+
+    #[test]
+    fn list_runs_is_empty_when_root_missing() {
+        let _g = HomeGuard::new();
+        // No mission runs created in this clean HOME.
+        let runs = list_runs().expect("list");
+        assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn list_runs_skips_dirs_without_meta() {
+        let _g = HomeGuard::new();
+        let dir = MissionRunDir::create("noisy").expect("create");
+        // No write_meta call → list_runs must skip this directory.
+        let runs = list_runs().expect("list");
+        assert!(runs.is_empty(), "found {:?}", runs.iter().map(|r| &r.id).collect::<Vec<_>>());
+        // Sanity: the directory itself does exist.
+        assert!(dir.path.exists());
+    }
+
+    #[test]
+    fn list_runs_returns_recorded_meta_sorted_desc() {
+        let _g = HomeGuard::new();
+        for n in ["alpha", "beta", "gamma"] {
+            let d = MissionRunDir::create(n).expect("create");
+            d.write_meta(&make_meta(n));
+            d.finish();
+        }
+        let runs = list_runs().expect("list");
+        assert_eq!(runs.len(), 3);
+        // ID prefix is the same timestamp; ordering then comes from the
+        // collision suffix appended by `create`. Whichever ordering, the
+        // contract is "sorted descending by id".
+        for w in runs.windows(2) {
+            assert!(w[0].id >= w[1].id, "not sorted desc: {} vs {}", w[0].id, w[1].id);
+        }
+    }
+
+    #[test]
+    fn find_run_rejects_empty_id() {
+        let _g = HomeGuard::new();
+        assert!(find_run("").is_err());
+        assert!(find_run("   ").is_err());
+    }
+
+    #[test]
+    fn find_run_finds_exact_then_prefix() {
+        let _g = HomeGuard::new();
+        let d = MissionRunDir::create("solo").expect("create");
+        d.write_meta(&make_meta("solo"));
+        d.finish();
+
+        let id = d.path.file_name().unwrap().to_string_lossy().to_string();
+        // exact
+        let r = find_run(&id).expect("exact");
+        assert_eq!(r.id, id);
+
+        // prefix
+        let prefix = &id[..id.len() - 4];
+        let r = find_run(prefix).expect("prefix");
+        assert_eq!(r.id, id);
+
+        // missing
+        assert!(find_run("does-not-exist").is_err());
+    }
+
+    #[test]
+    fn cancel_run_flips_in_flight_to_cancelled() {
+        let _g = HomeGuard::new();
+        let d = MissionRunDir::create("running").expect("create");
+        d.write_meta(&make_meta("running"));
+        // intentionally do NOT call finish — pid file stays in place.
+        let id = d.path.file_name().unwrap().to_string_lossy().to_string();
+
+        match cancel_run(&id).expect("cancel") {
+            CancelOutcome::Cancelled(r) => {
+                assert_eq!(r.meta.status, "cancelled");
+                assert!(!r.running);
+            }
+            CancelOutcome::AlreadyTerminal(_) => panic!("expected Cancelled"),
+        }
+        // pid file is gone now.
+        assert!(!d.path.join("pid").exists());
+    }
+
+    #[test]
+    fn cancel_run_noop_on_terminal() {
+        let _g = HomeGuard::new();
+        let d = MissionRunDir::create("done").expect("create");
+        d.write_meta(&make_meta("done"));
+        d.finish(); // remove pid → terminal
+        let id = d.path.file_name().unwrap().to_string_lossy().to_string();
+
+        match cancel_run(&id).expect("cancel") {
+            CancelOutcome::AlreadyTerminal(r) => assert_eq!(r.meta.status, "ok"),
+            CancelOutcome::Cancelled(_) => panic!("expected AlreadyTerminal"),
+        }
+    }
 }
 
