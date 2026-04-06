@@ -2,147 +2,238 @@
 // ===========
 //
 // File: src/cli/mod.rs
-// Description: Command routing hub — defines all subcommands and dispatches to handlers.
+// Description: Command routing hub. As of the layered-CLI refactor, this
+//              module exposes a *noun-first* set of top-level subcommands
+//              (`device`, `ability`, `runtime`, `mcp`, `mission`, `agent`)
+//              alongside a small set of cross-cutting tools (`doctor`,
+//              `logs`, `completion`).
 //
-// Protocol Responsibility:
-// - Owns the `Command` enum which is the exhaustive contract between CLI argument parsing
-//   and business logic. Adding a subcommand means adding a variant here.
-// - Dispatch is a pure match with no cross-command logic — each module is self-contained.
+// Layout:
+//   groups/         — aggregated noun-first subcommand modules
+//   doctor.rs       — `easynet doctor`
+//   logs.rs         — `easynet logs`
+//   completion.rs   — `easynet completion <shell>`
+//   mission_runs.rs — on-disk EAL mission run history (used by groups::mission)
+//   agent_sessions.rs — on-disk multi-turn agent session store (used by
+//                       groups::agent)
 //
-// Subcommand Groups:
-//   Device lifecycle:   join, connect, config, reset
-//   Runtime lifecycle:  start, stop, status
-//   Federation queries: devices, abilities
-//   Remote operations:  exec, deploy, invoke
-//   Orchestration:      mission (EAL compiler + executor)
-//   AI integration:     mcp-server (stdio MCP for Claude Code / Codex)
-//
-// Architectural Position:
-// - Single fan-out point from main.rs. No business logic lives here.
-// - Each subcommand module exports an `Args` struct (clap derive) and a `run()` function.
+// Backwards compatibility:
+//   Every old top-level verb (`devices`, `abilities`, `start`, `stop`,
+//   `connect`, `status`, `join`, `reset`, `config`, `deploy`, `invoke`,
+//   `exec`, `mcp-server`, `mcp-install`, `skill-install`, `think`,
+//   `discuss`) is preserved as a *deprecated alias* — running it still
+//   works, but a one-line stderr notice points the user at the new
+//   layered command. The aliases will be removed in a future release.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub mod abilities;
 pub mod agent;
+pub mod agent_sessions;
+pub mod completion;
 pub mod config_cmd;
 pub mod connect;
 pub mod deploy;
 pub mod devices;
 pub mod discuss;
+pub mod doctor;
 pub mod exec;
+pub mod groups;
 pub mod heartbeat;
 pub mod invoke;
 pub mod join;
+pub mod logs;
+pub mod mcp_install;
 pub mod mcp_server;
-pub mod mission;
+pub mod mission_runs;
 pub mod reset;
+pub mod skill_install;
 pub mod start;
 pub mod status;
 pub mod stop;
-pub mod mcp_install;
-pub mod skill_install;
 pub mod think;
 
 use clap::Subcommand;
+use console::style;
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    // ── Runtime lifecycle (most common) ────────────────────────────────────
-    /// Start a local Axon runtime and (optionally) join a Hub.
+    // ── Layered, noun-first commands (the new public surface) ─────────────
+    /// Manage federated devices (list/show/rename/tag/remove/join/reset/config).
     #[command(display_order = 1)]
-    Start(start::StartArgs),
-    /// Stop the locally started runtime (best-effort).
+    Device(groups::device::DeviceArgs),
+
+    /// Manage abilities (list/show/deploy/update/uninstall/invoke/exec/logs).
     #[command(display_order = 2)]
-    Stop(stop::StopArgs),
-    /// Show runtime / hub status and node summary.
+    Ability(groups::ability::AbilityArgs),
+
+    /// Manage the local Axon runtime (start/stop/status/connect/logs).
     #[command(display_order = 3)]
-    Status(status::StatusArgs),
-    /// Connect to Hub as a paired device and optionally start MCP server.
+    Runtime(groups::runtime::RuntimeArgs),
+
+    /// Compile, run, and inspect EAL missions.
     #[command(display_order = 4)]
+    Mission(groups::mission::MissionArgs),
+
+    /// Register and dispatch AI agents (Claude Code / Codex).
+    #[command(display_order = 5)]
+    Agent(groups::agent::AgentArgs),
+
+    /// MCP server lifecycle and AI-client integration.
+    #[command(display_order = 6)]
+    Mcp(groups::mcp::McpArgs),
+
+    // ── Cross-cutting tools ───────────────────────────────────────────────
+    /// Aggregated health check across runtime / bridge / agents / MCP.
+    #[command(display_order = 7)]
+    Doctor(doctor::DoctorArgs),
+
+    /// View logs across runtime / agent / mission subjects.
+    #[command(display_order = 8)]
+    Logs(logs::LogsArgs),
+
+    /// Generate a shell completion script (bash/zsh/fish/powershell/elvish).
+    #[command(display_order = 9)]
+    Completion(completion::CompletionArgs),
+
+    // ── Deprecated flat aliases (kept until next release) ─────────────────
+    #[command(hide = true)]
+    Start(start::StartArgs),
+    #[command(hide = true)]
+    Stop(stop::StopArgs),
+    #[command(hide = true)]
+    Status(status::StatusArgs),
+    #[command(hide = true)]
     Connect(connect::ConnectArgs),
-
-    // ── Federation queries ─────────────────────────────────────────────────
-    /// List devices (nodes) known to the runtime / hub.
-    #[command(display_order = 10)]
+    #[command(hide = true)]
     Devices(devices::DevicesArgs),
-    /// List abilities (MCP tools) across nodes.
-    #[command(display_order = 11)]
+    #[command(hide = true)]
     Abilities(abilities::AbilitiesArgs),
-
-    // ── Remote operations ──────────────────────────────────────────────────
-    /// One-shot remote command execution (ephemeral ability).
-    #[command(display_order = 20)]
+    #[command(hide = true)]
     Exec(exec::ExecArgs),
-    /// Deploy an ability package/descriptor to a node.
-    #[command(display_order = 21)]
+    #[command(hide = true)]
     Deploy(deploy::DeployArgs),
-    /// Invoke an ability on a node.
-    #[command(display_order = 22)]
+    #[command(hide = true)]
     Invoke(invoke::InvokeArgs),
-    /// Compile and run EAL missions.
-    #[command(display_order = 23)]
-    Mission(mission::MissionArgs),
-
-    // ── Device lifecycle (one-time setup) ──────────────────────────────────
-    /// Pair this device with EasyNet using a pairing token.
-    #[command(display_order = 30)]
+    #[command(hide = true)]
     Join(join::JoinArgs),
-    /// Show or set device settings (session_bridge exec enable).
-    #[command(display_order = 31)]
+    #[command(hide = true, name = "config")]
     Config(config_cmd::ConfigArgs),
-    /// Remove device credentials and un-pair.
-    #[command(display_order = 32)]
+    #[command(hide = true)]
     Reset(reset::ResetArgs),
-
-    // ── AI integration ─────────────────────────────────────────────────────
-    /// Run a Hub-level MCP server on stdio.
-    #[command(display_order = 40)]
+    #[command(hide = true, name = "mcp-server")]
     McpServer(mcp_server::McpServerArgs),
-    /// Install MCP server config for Claude Code / Codex.
-    #[command(display_order = 41)]
+    #[command(hide = true, name = "mcp-install")]
     McpInstall(mcp_install::McpInstallArgs),
-    /// Register, manage, and invoke AI agents (Claude Code, Codex).
-    #[command(display_order = 42)]
-    Agent(agent::AgentArgs),
-    /// Orchestrate multi-agent discussions.
-    #[command(display_order = 43)]
-    Discuss(discuss::DiscussArgs),
-    /// Install EasyNet skill templates for Claude Code / Codex.
-    #[command(display_order = 44)]
+    #[command(hide = true, name = "skill-install")]
     SkillInstall(skill_install::SkillInstallArgs),
-    /// Autonomous agent loop: goal → generate EAL → execute → observe → repeat.
-    #[command(display_order = 45)]
+    #[command(hide = true)]
     Think(think::ThinkArgs),
+    #[command(hide = true)]
+    Discuss(discuss::DiscussArgs),
 
-    // ── Internal ───────────────────────────────────────────────────────────
+    // ── Internal ──────────────────────────────────────────────────────────
     /// Internal heartbeat daemon process (not for direct use).
     #[command(name = "_heartbeat-daemon", hide = true)]
     HeartbeatDaemon,
 }
 
+/// Print a one-line deprecation hint when an old flat alias is invoked.
+fn deprecated(old: &str, new: &str) {
+    eprintln!(
+        "  {} `easynet {}` is deprecated — use `easynet {}` instead.",
+        style("warning:").yellow().bold(),
+        old,
+        new,
+    );
+}
+
 pub fn run(cmd: Command) -> anyhow::Result<()> {
     match cmd {
-        Command::Join(args) => join::run(args),
-        Command::Connect(args) => connect::run(args),
-        Command::Config(args) => config_cmd::run(args),
-        Command::Reset(args) => reset::run(args),
-        Command::Start(args) => start::run(args),
-        Command::Stop(args) => stop::run(args),
-        Command::Status(args) => status::run(args),
-        Command::Devices(args) => devices::run(args),
-        Command::Abilities(args) => abilities::run(args),
-        Command::Exec(args) => exec::run(args),
-        Command::Deploy(args) => deploy::run(args),
-        Command::Invoke(args) => invoke::run(args),
-        Command::Mission(args) => mission::run(args),
-        Command::McpServer(args) => mcp_server::run(args),
-        Command::McpInstall(args) => mcp_install::run(args),
-        Command::Agent(args) => agent::run(args),
-        Command::Discuss(args) => discuss::run(args),
-        Command::SkillInstall(args) => skill_install::run(args),
-        Command::Think(args) => think::run(args),
+        // Layered groups
+        Command::Device(args) => groups::device::run(args),
+        Command::Ability(args) => groups::ability::run(args),
+        Command::Runtime(args) => groups::runtime::run(args),
+        Command::Mission(args) => groups::mission::run(args),
+        Command::Agent(args) => groups::agent::run(args),
+        Command::Mcp(args) => groups::mcp::run(args),
+
+        // Cross-cutting
+        Command::Doctor(args) => doctor::run(args),
+        Command::Logs(args) => logs::run(args),
+        Command::Completion(args) => completion::run(args),
+
+        // Deprecated flat aliases — print hint and forward.
+        Command::Start(args) => {
+            deprecated("start", "runtime start");
+            start::run(args)
+        }
+        Command::Stop(args) => {
+            deprecated("stop", "runtime stop");
+            stop::run(args)
+        }
+        Command::Status(args) => {
+            deprecated("status", "runtime status");
+            status::run(args)
+        }
+        Command::Connect(args) => {
+            deprecated("connect", "runtime connect");
+            connect::run(args)
+        }
+        Command::Devices(args) => {
+            deprecated("devices", "device list");
+            devices::run(args)
+        }
+        Command::Abilities(args) => {
+            deprecated("abilities", "ability list");
+            abilities::run(args)
+        }
+        Command::Exec(args) => {
+            deprecated("exec", "ability exec");
+            exec::run(args)
+        }
+        Command::Deploy(args) => {
+            deprecated("deploy", "ability deploy");
+            deploy::run(args)
+        }
+        Command::Invoke(args) => {
+            deprecated("invoke", "ability invoke");
+            invoke::run(args)
+        }
+        Command::Join(args) => {
+            deprecated("join", "device join");
+            join::run(args)
+        }
+        Command::Config(args) => {
+            deprecated("config", "device config");
+            config_cmd::run(args)
+        }
+        Command::Reset(args) => {
+            deprecated("reset", "device reset");
+            reset::run(args)
+        }
+        Command::McpServer(args) => {
+            deprecated("mcp-server", "mcp serve");
+            mcp_server::run(args)
+        }
+        Command::McpInstall(args) => {
+            deprecated("mcp-install", "mcp install");
+            mcp_install::run(args)
+        }
+        Command::SkillInstall(args) => {
+            deprecated("skill-install", "mcp skill-install");
+            skill_install::run(args)
+        }
+        Command::Think(args) => {
+            deprecated("think", "agent think");
+            think::run(args)
+        }
+        Command::Discuss(args) => {
+            deprecated("discuss", "agent discuss");
+            discuss::run(args)
+        }
+
         Command::HeartbeatDaemon => heartbeat::run_daemon(),
     }
 }
