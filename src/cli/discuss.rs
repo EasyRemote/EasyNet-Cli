@@ -14,6 +14,7 @@ use clap::Args;
 use console::style;
 
 use crate::agent::conversation::{self, ConversationConfig};
+use crate::cli::mission_runs::LegacyMissionContext;
 use crate::shared::agents;
 
 #[derive(Debug, Args)]
@@ -47,6 +48,13 @@ pub fn run(args: DiscussArgs) -> anyhow::Result<()> {
 
     anyhow::ensure!(!agent_names.is_empty(), "no agents specified");
     anyhow::ensure!(args.rounds > 0, "rounds must be >= 1");
+
+    // Mission context for the legacy `discuss` command. See the
+    // matching note in `cli::think::run`.
+    //
+    // TODO(legacy-migration): rewrite `discuss` as a real mission so
+    // this guard becomes unnecessary.
+    let _legacy_ctx = LegacyMissionContext::new("legacy-discuss")?;
 
     let registry = agents::load_agents()?;
 

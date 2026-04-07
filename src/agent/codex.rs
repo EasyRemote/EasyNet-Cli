@@ -107,7 +107,19 @@ pub fn invoke_exec(prompt: &str, opts: CodexOptions) -> anyhow::Result<(String, 
     // by default; these overrides let us add an ephemeral entry without
     // mutating the user's global config file. Each `-c` value is parsed as
     // a TOML literal, hence the quoted strings and JSON-style array.
-    let (mcp_cmd, mcp_args, mcp_env) = workspace::build_mcp_entry();
+    //
+    // We derive the launching agent name from the cwd path
+    // (`~/.easynet/workspaces/<agent>`). If the cwd is not set or doesn't
+    // follow that shape, fall back to "codex" as a generic label — the
+    // audit line will still be useful even with a non-specific name.
+    let agent_name = opts
+        .cwd
+        .as_ref()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("codex")
+        .to_string();
+    let (mcp_cmd, mcp_args, mcp_env) = workspace::build_mcp_entry(&agent_name);
     args.push("-c".to_string());
     args.push(format!("mcp_servers.easynet.command=\"{}\"", mcp_cmd.replace('"', "\\\"")));
     let args_toml = mcp_args

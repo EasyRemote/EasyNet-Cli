@@ -58,6 +58,10 @@ pub struct AgentResponse {
 
 /// Send a prompt to a registered agent and return the response.
 ///
+/// Production entry point — reads `EASYNET_AGENT_DEPTH` from the env.
+/// Tests should use `send_to_agent_with_depth(.., Some(depth))` to inject
+/// a depth without mutating the process-global env var.
+///
 /// - Routes to the appropriate agent wrapper based on `entry.agent_type`.
 /// - Sets `EASYNET_AGENT_DEPTH` in the child environment for recursion prevention.
 /// - Creates a per-run directory under the agent workspace and writes
@@ -67,14 +71,98 @@ pub fn send_to_agent(
     entry: &AgentEntry,
     prompt: &str,
     context: Option<&str>,
-    _mcp_config: Option<&Path>,
+    mcp_config: Option<&Path>,
     extra_trace_path: Option<&Path>,
 ) -> anyhow::Result<AgentResponse> {
+    send_to_agent_with_depth(
+        agent_name,
+        entry,
+        prompt,
+        context,
+        mcp_config,
+        extra_trace_path,
+        None,
+    )
+}
+
+/// Same as `send_to_agent` but accepts an explicit `depth_override`. When
+/// `depth_override` is `Some(d)`, that value is used as the current
+/// recursion depth instead of reading `EASYNET_AGENT_DEPTH` from the env.
+/// This exists so the dispatch tests can exercise the depth guard without
+/// mutating process-global state — see the `recursion_guard_*` tests at
+/// the bottom of this file.
+///
+/// Mission context invariant
+/// -------------------------
+/// Every cross-agent dispatch in EasyNet is required to originate from
+/// a mission runtime context (ontology §6.2 derivation 3, "there is no
+/// second path"). This function enforces that invariant in a 2-stage
+/// check at the top:
+///
+///   Stage 1 (presence): EASYNET_MISSION_ID env var must be set.
+///   Stage 2 (anti-forgery): the value of that env var must correspond
+///   to an existing mission run dir on disk under
+///   ~/.easynet/missions/runs/. This catches the trivial-forgery case
+///   ("user types `EASYNET_MISSION_ID=fake`") without claiming to be a
+///   cryptographic guarantee.
+///
+/// Both checks are skipped when `depth_override` is `Some(_)`. The
+/// override is the test escape hatch — it explicitly turns this
+/// function into a unit-testable code path that exercises the recursion
+/// guard without requiring the full mission runtime stack to be present.
+///
+/// FUTURE FORM (not implemented in this PR): the env-var approach is
+/// process-global and breaks the moment EasyNet runs multiple missions
+/// concurrently in the same process. The correct long-term shape is an
+/// explicit context parameter:
+///
+/// ```ignore
+/// pub struct DispatchContext {
+///     pub mission_id: String,
+///     pub mission_run_dir: PathBuf,
+///     pub depth: u32,
+///     pub origin_agent: Option<String>,
+///     pub tenant: String,
+/// }
+///
+/// pub fn send_to_agent_with_context(
+///     ctx: &DispatchContext,
+///     agent_name: &str,
+///     entry: &AgentEntry,
+///     prompt: &str,
+///     ..,
+/// ) -> anyhow::Result<AgentResponse>;
+/// ```
+///
+/// TODO(thread-local-context): replace EASYNET_MISSION_ID env var with
+/// the DispatchContext struct sketched above. The env var works for the
+/// current single-threaded CLI use case but breaks the moment we run
+/// multiple missions concurrently in the same process. When this
+/// migration happens, audit every caller of this function to thread the
+/// context through, and remove the env var read here.
+pub fn send_to_agent_with_depth(
+    agent_name: &str,
+    entry: &AgentEntry,
+    prompt: &str,
+    context: Option<&str>,
+    _mcp_config: Option<&Path>,
+    extra_trace_path: Option<&Path>,
+    depth_override: Option<u32>,
+) -> anyhow::Result<AgentResponse> {
+    // Mission context invariant — only enforced in production, skipped
+    // when a test passes `depth_override` to exercise the recursion
+    // guard in isolation.
+    if depth_override.is_none() {
+        check_mission_context_invariant()?;
+    }
+
     // Recursion guard.
-    let current_depth: u32 = std::env::var("EASYNET_AGENT_DEPTH")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+    let current_depth: u32 = depth_override.unwrap_or_else(|| {
+        std::env::var("EASYNET_AGENT_DEPTH")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    });
 
     if current_depth >= MAX_AGENT_DEPTH {
         anyhow::bail!(
@@ -218,5 +306,321 @@ fn compose_prompt(prompt: &str, context: Option<&str>) -> String {
     match context.map(str::trim).filter(|s| !s.is_empty()) {
         Some(ctx) => format!("{prompt}\n\n## Context (previous discussion)\n\n{ctx}\n"),
         None => prompt.to_string(),
+    }
+}
+
+/// Two-stage mission context check. See `send_to_agent_with_depth`'s
+/// rustdoc for the load-bearing reasoning.
+///
+/// Stage 1 — presence: `EASYNET_MISSION_ID` must be set.
+/// Stage 2 — anti-forgery: the env var's value must correspond to an
+/// existing mission run directory under `~/.easynet/missions/runs/`.
+///
+/// In **debug** builds the function panics on failure, making the
+/// invariant impossible to silently violate during development. In
+/// **release** builds it logs a warning and (for stage 2) returns an
+/// error so the dispatch fails loudly without taking the process down.
+fn check_mission_context_invariant() -> anyhow::Result<()> {
+    let mission_id = match std::env::var("EASYNET_MISSION_ID").ok() {
+        Some(id) if !id.is_empty() => id,
+        _ => {
+            // Stage 1 failure: env var missing.
+            #[cfg(debug_assertions)]
+            panic!(
+                "dispatch::send_to_agent called without EASYNET_MISSION_ID. \
+                 All agent dispatches must originate from a mission context. \
+                 See docs/easynet_ontology.tex §6.2."
+            );
+            #[cfg(not(debug_assertions))]
+            {
+                eprintln!(
+                    "[easynet warn] dispatch::send_to_agent called without \
+                     mission context — this is an ontology violation, see \
+                     docs/easynet_ontology.tex §6.2"
+                );
+                // Continue execution in release mode for backwards compat
+                // with any caller that hasn't been migrated yet.
+                return Ok(());
+            }
+        }
+    };
+
+    // Stage 2: anti-forgery. The mission ID must be the directory name
+    // of a real mission run dir under ~/.easynet/missions/runs/. If not,
+    // either the env var was forged ("EASYNET_MISSION_ID=fake easynet
+    // ...") or the mission has already been cleaned up. Both cases are
+    // pathological — refuse to dispatch.
+    //
+    // This check is local-fs only and cheap (one stat). It is not a
+    // cryptographic guarantee — a determined attacker can `mkdir` a
+    // fake dir — but it eliminates the trivial-forgery case and
+    // catches the common bug pattern of "user set the env var by
+    // mistake".
+    let mission_run_dir = crate::cli::mission_runs::root_dir().join(&mission_id);
+    if !mission_run_dir.exists() {
+        #[cfg(debug_assertions)]
+        panic!(
+            "EASYNET_MISSION_ID={} does not correspond to an existing \
+             mission run dir at {}. Either the env var was forged or \
+             the run dir has been cleaned up mid-execution. Refusing \
+             to dispatch.",
+            mission_id,
+            mission_run_dir.display()
+        );
+        #[cfg(not(debug_assertions))]
+        {
+            eprintln!(
+                "[easynet warn] EASYNET_MISSION_ID={} does not match \
+                 an existing mission run dir; possible env var forgery",
+                mission_id
+            );
+            anyhow::bail!("invalid mission context: run dir not found");
+        }
+    }
+
+    Ok(())
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shared::agents::AgentEntry;
+
+    /// Construct a dummy `AgentEntry` for tests that exercise the
+    /// dispatch guard logic in isolation. The command path is
+    /// intentionally bogus — these tests must fail before reaching
+    /// `process::Command::spawn`, so the binary path doesn't matter.
+    fn dummy_entry() -> AgentEntry {
+        AgentEntry::new(AgentType::ClaudeCode, None)
+    }
+
+    /// Recursion guard: depth_override=Some(2) must trip the limit
+    /// before any subprocess is spawned. The error message must
+    /// mention "depth limit reached" so operators can grep for it.
+    #[test]
+    fn recursion_guard_blocks_at_depth_2() {
+        let entry = dummy_entry();
+        let res = send_to_agent_with_depth(
+            "claude",
+            &entry,
+            "any prompt",
+            None,
+            None,
+            None,
+            Some(2),
+        );
+        let err = res.expect_err("depth=2 must error");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("depth limit reached"),
+            "expected 'depth limit reached' in error, got: {msg}"
+        );
+    }
+
+    /// Recursion guard at depth=1 must not fire. The function will
+    /// still error eventually (no real claude binary in the test env)
+    /// but the error must NOT be the depth-limit error — it should be
+    /// a downstream failure (workspace creation, command exec, etc.).
+    /// This test proves the guard isn't over-triggering.
+    #[test]
+    fn recursion_guard_allows_depth_1() {
+        let entry = dummy_entry();
+        // Use a HomeGuard so workspace creation lands in a temp dir
+        // and doesn't pollute the developer's real ~/.easynet/.
+        let _g = crate::cli::test_support::HomeGuard::new();
+        let res = send_to_agent_with_depth(
+            "claude",
+            &entry,
+            "any prompt",
+            None,
+            None,
+            None,
+            Some(1),
+        );
+        // We expect an error (no real claude binary), but it must
+        // NOT be the depth-limit error. Anything else is acceptable.
+        match res {
+            Ok(_) => panic!("expected an error from missing claude binary"),
+            Err(e) => {
+                let msg = format!("{e}");
+                assert!(
+                    !msg.contains("depth limit"),
+                    "depth=1 must not trigger depth-limit error, got: {msg}"
+                );
+            }
+        }
+    }
+
+    /// `send_to_agent_with_depth` with a real `depth_override` must
+    /// also bypass the mission-context invariant. This is the test
+    /// escape hatch — without it, the unit tests above would have to
+    /// set up a real mission run dir, which defeats the purpose of
+    /// testing the dispatch path in isolation.
+    #[test]
+    fn depth_override_bypasses_mission_context_check() {
+        // Even with no EASYNET_MISSION_ID set, depth_override=Some(2)
+        // should still cleanly hit the depth-limit check (not panic on
+        // a missing mission context).
+        std::env::remove_var("EASYNET_MISSION_ID");
+        let entry = dummy_entry();
+        let res = send_to_agent_with_depth(
+            "claude",
+            &entry,
+            "any prompt",
+            None,
+            None,
+            None,
+            Some(2),
+        );
+        assert!(res.is_err());
+        let msg = format!("{}", res.unwrap_err());
+        assert!(msg.contains("depth limit reached"));
+    }
+
+    // The next two tests are end-to-end and require external binaries
+    // (claude CLI with auth, MCP server child, etc.). They are gated
+    // by `#[ignore]` so they only run under
+    // `cargo test -- --ignored`. They exist to validate the full
+    // production path that the unit tests above only exercise in
+    // pieces.
+
+    /// End-to-end recursion guard via the MCP server. Spawns
+    /// `easynet mcp serve --enable-agent-dispatch --agent claude` as
+    /// a child with `EASYNET_AGENT_DEPTH=2` pre-set, then sends a
+    /// `tools/call` for `send_to_agent`. The response must contain
+    /// the depth-limit error.
+    ///
+    /// Inline JSON-RPC over stdio — no dev-dep added. ~30 lines.
+    #[test]
+    #[ignore]
+    fn recursion_guard_e2e() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::process::{Command, Stdio};
+        use std::time::Duration;
+
+        // Locate the binary the test was built against. Falls back to
+        // `easynet` on PATH if neither path exists, but in practice
+        // `cargo test` ensures `target/debug/easynet` is fresh.
+        let bin = if std::path::Path::new("./target/release/easynet").exists() {
+            "./target/release/easynet"
+        } else if std::path::Path::new("./target/debug/easynet").exists() {
+            "./target/debug/easynet"
+        } else {
+            "easynet"
+        };
+
+        let mut child = Command::new(bin)
+            .args([
+                "mcp",
+                "serve",
+                "--enable-agent-dispatch",
+                "--agent",
+                "claude",
+            ])
+            .env("EASYNET_AGENT_DEPTH", "2")
+            // Set a fake mission id pointing at a tmp dir we control
+            // so the anti-forgery check passes.
+            .env("EASYNET_MISSION_ID", "test-recursion-guard-e2e")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn easynet mcp serve");
+
+        // Create the fake mission run dir so the anti-forgery check
+        // doesn't fire before the depth check does.
+        let _g = crate::cli::test_support::HomeGuard::new();
+        let runs_root = crate::shared::config::state_dir()
+            .join("missions")
+            .join("runs");
+        let _ = std::fs::create_dir_all(runs_root.join("test-recursion-guard-e2e"));
+
+        let stdin = child.stdin.as_mut().expect("child stdin");
+        let init = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "1"},
+            },
+        });
+        writeln!(stdin, "{init}").unwrap();
+
+        let call = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "send_to_agent",
+                "arguments": {
+                    "agent": "claude",
+                    "prompt": "hi",
+                },
+            },
+        });
+        writeln!(stdin, "{call}").unwrap();
+
+        // Read responses until we see the call result or timeout.
+        let stdout = child.stdout.take().expect("child stdout");
+        let mut reader = BufReader::new(stdout);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut found_depth_error = false;
+        let mut line = String::new();
+        while std::time::Instant::now() < deadline {
+            line.clear();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                break;
+            }
+            if line.contains("depth limit") {
+                found_depth_error = true;
+                break;
+            }
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            found_depth_error,
+            "expected 'depth limit' in MCP server response stream"
+        );
+    }
+
+    /// End-to-end success path: `easynet agent send claude "say only
+    /// OK"` desugars to a mission and produces a real reply. Requires
+    /// local claude CLI + auth.
+    #[test]
+    #[ignore]
+    fn agent_send_desugar_e2e() {
+        use std::process::Command;
+
+        let bin = if std::path::Path::new("./target/release/easynet").exists() {
+            "./target/release/easynet"
+        } else if std::path::Path::new("./target/debug/easynet").exists() {
+            "./target/debug/easynet"
+        } else {
+            "easynet"
+        };
+
+        let out = Command::new(bin)
+            .args(["agent", "send", "claude", "say only the word OK"])
+            .output()
+            .expect("run easynet agent send");
+
+        assert!(out.status.success(), "non-zero exit: {:?}", out);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.to_uppercase().contains("OK"),
+            "expected 'OK' in stdout, got: {stdout}"
+        );
+
+        // The dispatching banner must appear on stderr.
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("dispatching via mission runtime"),
+            "expected mission-runtime banner on stderr, got: {stderr}"
+        );
     }
 }

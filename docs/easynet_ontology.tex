@@ -510,6 +510,14 @@ The current PR uses \texttt{<tenant>/<agent-name>} as the minimum viable form.
 A future extension to \texttt{<tenant>/<agent-name>\#<instance-id>} is planned
 for when multiple instances of the same agent class need to coexist.
 
+\paragraph{Implementation Note.}
+The current implementation of the agent identity layer is specified in
+\texttt{docs/AGENT\_IDENTITY.md}. This document is a derived engineering
+artifact (L2 identity layer) and is not part of the ontology consensus.
+It may evolve independently as long as it does not contradict the logical
+identity model described in this section and the deferred tenant semantics
+in \S\ref{sec:gaps}.
+
 \subsection{Cardinality}
 
 \derived{} Because device is not first-class:

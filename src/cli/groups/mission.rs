@@ -14,14 +14,13 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use chrono::Local;
 use clap::{Args, Subcommand};
 use console::style;
 
-use crate::cli::mission_runs::{self, CancelOutcome, MissionRunDir, MissionRunMeta};
+use crate::cli::mission_runs::{self, CancelOutcome, MissionRunOpts};
 use crate::cli::{discuss as discuss_cmd, think as think_cmd};
 use crate::eal;
-use crate::shared::{config, output};
+use crate::shared::output;
 
 #[derive(Debug, Args)]
 pub struct MissionArgs {
@@ -129,18 +128,19 @@ fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
 fn run_run(args: RunArgs) -> anyhow::Result<()> {
     let source = std::fs::read_to_string(&args.file)?;
 
+    // Show a quick pre-run summary based on a parse-only pass. We compile
+    // here purely to get the IR shape for the banner; the real execution
+    // happens inside `run_mission_inproc`, which compiles again. The
+    // double-compile is cheap (parser + planner are pure) and keeps the
+    // banner / single-entry contract orthogonal.
     let program = eal::parser::parse(&source)?;
     let ir = eal::planner::compile(&program)?;
-
-    let state = config::load()?;
-    let tenant = state.tenant_or_default();
-
     let total_steps = ir.steps.len();
     let total_phases = ir.phases.len();
     let node_count = ir
         .steps
         .iter()
-        .map(|s| s.target_node_id.as_str())
+        .map(|s| s.target.display_string())
         .collect::<std::collections::HashSet<_>>()
         .len();
 
@@ -154,72 +154,39 @@ fn run_run(args: RunArgs) -> anyhow::Result<()> {
         .dim(),
     );
 
-    // Persist the run.
-    let run_dir = MissionRunDir::create(&ir.name)?;
-    run_dir.write_source(&source);
-    if let Ok(ir_json) = serde_json::to_string_pretty(&ir) {
-        run_dir.write_ir(&ir_json);
-    }
-    let started = std::time::Instant::now();
-    let started_at = Local::now().to_rfc3339();
+    // Single in-process entry — see `mission_runs::run_mission_inproc`
+    // module-level comment for the load-bearing invariant.
+    let result = mission_runs::run_mission_inproc(
+        &source,
+        MissionRunOpts {
+            source_label: Some(args.file.clone()),
+            trace_path: None,
+        },
+    )?;
 
-    let exec = eal::interpreter::execute_with_endpoint(&state.endpoint, tenant, &ir);
-
-    let duration_ms = started.elapsed().as_millis() as u64;
-    let mut meta = MissionRunMeta {
-        name: ir.name.clone(),
-        source_file: Some(args.file.clone()),
-        started_at,
-        duration_ms,
-        status: "ok".into(),
-        error: None,
-        steps_total: total_steps,
-        steps_completed: 0,
-        steps_failed: 0,
-        ability_graph_traces: None,
-    };
-
-    match &exec {
-        Ok(report) => {
-            meta.steps_completed = report.steps_completed;
-            meta.steps_failed = report.steps_failed;
-            // The interpreter returns Ok even when individual steps fail —
-            // surface that as "partial" so the listing doesn't lie about
-            // a run with broken steps.
-            if report.steps_failed > 0 {
-                meta.status = "partial".into();
-            }
-            if let Ok(trace_json) = serde_json::to_string_pretty(&report.trace) {
-                run_dir.write_trace(&trace_json);
-            }
-            run_dir.write_meta(&meta);
-            run_dir.finish();
-
+    eprintln!();
+    eprintln!(
+        "  {} {:.1}s, {node_count} targets, {total_phases} phases",
+        style("done").green().bold(),
+        result.meta.duration_ms as f64 / 1000.0,
+    );
+    eprintln!(
+        "  {} {}",
+        style("saved").dim(),
+        style(result.run_dir.display().to_string()).cyan()
+    );
+    if args.trace {
+        // Print the persisted trace.json (the runner has already written
+        // it). This avoids re-serializing in-memory state and keeps the
+        // CLI handler dependency-free of `ExecutionReport`.
+        let trace_path = result.run_dir.join("trace.json");
+        if let Ok(trace) = std::fs::read_to_string(&trace_path) {
             eprintln!();
-            eprintln!(
-                "  {} {:.1}s, {node_count} targets, {total_phases} phases",
-                style("done").green().bold(),
-                report.total_elapsed_ms as f64 / 1000.0,
-            );
-            eprintln!(
-                "  {} {}",
-                style("saved").dim(),
-                style(run_dir.path.display().to_string()).cyan()
-            );
-            if args.trace {
-                eprintln!();
-                println!("{}", serde_json::to_string_pretty(&report.trace)?);
-            }
-            Ok(())
-        }
-        Err(e) => {
-            meta.status = "error".into();
-            meta.error = Some(e.to_string());
-            run_dir.write_meta(&meta);
-            run_dir.finish();
-            Err(anyhow::anyhow!("mission run failed: {e}"))
+            println!("{trace}");
         }
     }
+
+    Ok(())
 }
 
 fn run_list(args: ListArgs) -> anyhow::Result<()> {

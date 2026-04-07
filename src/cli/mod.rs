@@ -102,6 +102,8 @@ pub mod skill_install;
 pub mod start;
 pub mod status;
 pub mod stop;
+#[cfg(test)]
+pub mod test_support;
 pub mod think;
 
 use clap::Subcommand;

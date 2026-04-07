@@ -14,6 +14,7 @@ use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::agent::dispatch;
+use crate::cli::mission_runs::LegacyMissionContext;
 use crate::shared::agents;
 
 #[derive(Debug, Args)]
@@ -36,6 +37,20 @@ pub fn run(args: ThinkArgs) -> anyhow::Result<()> {
     let entry = registry.agents.get(&args.agent)
         .ok_or_else(|| anyhow::anyhow!("agent '{}' not found", args.agent))?
         .clone();
+
+    // Mission context for the legacy `think` command. The dispatch
+    // invariant (see agent::dispatch::check_mission_context_invariant)
+    // requires every agent dispatch to originate from a real mission
+    // run dir. `think` is a deprecated alias that hasn't been migrated
+    // to a real mission yet, so we create a "legacy-think" mission run
+    // dir and set the env var to its id. The anti-forgery check passes
+    // because the dir really exists.
+    //
+    // TODO(legacy-migration): when `think` is migrated to a real
+    // mission (using `run_mission_inproc` over a generated EAL source),
+    // delete this guard and let the mission runner set the env var
+    // itself.
+    let _legacy_ctx = LegacyMissionContext::new("legacy-think")?;
 
     // Header
     eprintln!();
