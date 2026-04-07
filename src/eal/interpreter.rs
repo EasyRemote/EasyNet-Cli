@@ -66,8 +66,14 @@ pub struct ExecutionTrace {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepTrace {
     pub step_id: String,
-    pub function_name: String,
-    pub target_node_id: String,
+    /// Ability invoked. Mirrors `IrStep.ability`. See
+    /// `docs/AGENT_IDENTITY.md` §10 — this is a method name, not an
+    /// identity.
+    pub ability: crate::shared::agent_id::AbilityName,
+    /// Resolved dispatch target. Mirrors `IrStep.target`. The trace
+    /// records the *resolved* target (Agent vs Device) so audit
+    /// readers don't have to re-classify.
+    pub target: crate::eal::ir::IrTarget,
     pub phase_index: usize,
     pub started_at_unix_ms: u64,
     pub completed_at_unix_ms: u64,
@@ -126,12 +132,19 @@ struct CapturedResult {
 
 // ── Dispatch backend trait (enables test injection) ──
 
+use crate::eal::ir::IrTarget;
+use crate::shared::agent_id::AbilityName;
+
 pub trait StepDispatcher {
+    /// Dispatch one step. The runtime sees only the resolved
+    /// `IrTarget` enum and the typed `AbilityName` — there is no
+    /// string-based `is_agent` check here, by design (see
+    /// `docs/AGENT_IDENTITY.md` invariant 2).
     fn dispatch(
         &self,
         tenant: &str,
-        function_name: &str,
-        target_node_id: &str,
+        target: &IrTarget,
+        ability: &AbilityName,
         arguments: &Value,
         timeout_ms: Option<u64>,
     ) -> Result<Value, String>;
@@ -143,8 +156,14 @@ pub trait StepDispatcher {
 
 /// Dispatcher that borrows a `DendriteBridge`.
 ///
-/// This cannot be used for true parallel dispatch because `DendriteBridge` is `!Send`/`!Sync`.
-/// The engine will automatically fall back to sequential dispatch for phases when
+/// **Device-only**: this dispatcher does not load the agent registry
+/// and cannot dispatch to agent targets. It is used by `mcp::handlers::run_mission`
+/// and tests where only device dispatch is in scope. Agent targets
+/// produce a hard error so the wrong dispatcher is never silently used.
+///
+/// This cannot be used for true parallel dispatch because
+/// `DendriteBridge` is `!Send`/`!Sync`. The engine will automatically
+/// fall back to sequential dispatch for phases when
 /// `clone_for_thread()` returns an error.
 pub struct BorrowedBridgeDispatcher<'a> {
     bridge: &'a DendriteBridge,
@@ -160,14 +179,22 @@ impl StepDispatcher for BorrowedBridgeDispatcher<'_> {
     fn dispatch(
         &self,
         tenant: &str,
-        function_name: &str,
-        target_node_id: &str,
+        target: &IrTarget,
+        ability: &AbilityName,
         arguments: &Value,
         timeout_ms: Option<u64>,
     ) -> Result<Value, String> {
-        self.bridge
-            .call_mcp_tool_with_timeout(tenant, function_name, target_node_id, arguments, timeout_ms)
-            .map_err(|e| format!("{e}"))
+        match target {
+            IrTarget::Device { node_id } => self
+                .bridge
+                .call_mcp_tool_with_timeout(tenant, ability.as_str(), node_id, arguments, timeout_ms)
+                .map_err(|e| format!("{e}")),
+            IrTarget::Agent(_) => Err(
+                "BorrowedBridgeDispatcher cannot dispatch to agent targets; \
+                 use AgentAwareDispatcher (e.g. via run_mission_inproc)"
+                    .to_string(),
+            ),
+        }
     }
 
     fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, String> {
@@ -177,36 +204,27 @@ impl StepDispatcher for BorrowedBridgeDispatcher<'_> {
 
 // ── Agent-Aware Dispatcher ──
 //
-// Wraps bridge dispatch but intercepts calls where `target_node_id`
-// matches a registered agent name. Agent targets are routed to
-// `dispatch::send_to_agent()` instead of the Axon Hub.
-//
-// This means EAL programs can use `call "tool" on "claude"` or
-// `call "tool" on "codex"` without any syntax change — the dispatcher
-// transparently routes based on whether the target is a device or an agent.
+// Matches on `IrTarget` to choose between agent CLI dispatch (via
+// `agent::dispatch::send_to_agent`) and bridge dispatch. There is no
+// `is_agent` string check anywhere — the surface form already chose
+// the variant at parse time, and the planner baked it into the IR.
+// See `docs/AGENT_IDENTITY.md` invariants 1 and 2.
 
 pub struct AgentAwareDispatcher {
     endpoint: String,
     timeout_ms: u64,
     registry: crate::shared::agents::AgentRegistry,
-    agent_names: std::collections::HashSet<String>,
 }
 
 impl AgentAwareDispatcher {
     pub fn new(endpoint: &str, timeout_ms: u64) -> Self {
         let registry = crate::shared::agents::load_agents()
             .unwrap_or_default();
-        let agent_names = registry.agents.keys().cloned().collect();
         Self {
             endpoint: endpoint.to_string(),
             timeout_ms,
             registry,
-            agent_names,
         }
-    }
-
-    fn is_agent(&self, target: &str) -> bool {
-        self.agent_names.contains(target)
     }
 }
 
@@ -214,38 +232,68 @@ impl StepDispatcher for AgentAwareDispatcher {
     fn dispatch(
         &self,
         tenant: &str,
-        function_name: &str,
-        target_node_id: &str,
+        target: &IrTarget,
+        ability: &AbilityName,
         arguments: &Value,
         timeout_ms: Option<u64>,
     ) -> Result<Value, String> {
-        if self.is_agent(target_node_id) {
-            let entry = self.registry.agents.get(target_node_id)
-                .ok_or_else(|| format!("agent '{target_node_id}' not found"))?;
+        match target {
+            IrTarget::Agent(agent_id) => {
+                // Registry is keyed by string today (see Step 4
+                // follow-up: registry will be keyed by AgentId itself).
+                // For now, look up by the canonical Display form.
+                let key = agent_id.to_string();
+                let entry = self
+                    .registry
+                    .agents
+                    .get(&key)
+                    .or_else(|| {
+                        // Backwards-compat: registry files written
+                        // before the migration may use the bare name
+                        // form (`"claude"` instead of `"default/claude"`).
+                        // Fall back to the bare name when the agent
+                        // is in the default tenant.
+                        if agent_id.tenant == crate::shared::agent_id::DEFAULT_TENANT {
+                            self.registry.agents.get(&agent_id.name)
+                        } else {
+                            None
+                        }
+                    })
+                    .ok_or_else(|| format!("agent '{key}' not found in registry"))?;
 
-            let prompt = build_agent_prompt(function_name, arguments);
+                let prompt = build_agent_prompt(ability.as_str(), arguments);
 
-            let response = crate::agent::dispatch::send_to_agent(
-                target_node_id,
-                entry,
-                &prompt,
-                None,
-                None,
-            ).map_err(|e| format!("agent dispatch: {e}"))?;
+                let response = crate::agent::dispatch::send_to_agent(
+                    &key,
+                    entry,
+                    &prompt,
+                    None,
+                    None,
+                    None,
+                )
+                .map_err(|e| format!("agent dispatch: {e}"))?;
 
-            Ok(serde_json::json!({
-                "ok": true,
-                "agent": response.agent,
-                "output": response.content,
-                "model": response.model,
-                "duration_ms": response.duration_ms,
-            }))
-        } else {
-            let bridge = DendriteBridge::connect(&self.endpoint, self.timeout_ms)
-                .map_err(|e| format!("bridge connect: {e}"))?;
-            bridge
-                .call_mcp_tool_with_timeout(tenant, function_name, target_node_id, arguments, timeout_ms)
-                .map_err(|e| format!("{e}"))
+                Ok(serde_json::json!({
+                    "ok": true,
+                    "agent": response.agent,
+                    "output": response.content,
+                    "model": response.model,
+                    "duration_ms": response.duration_ms,
+                }))
+            }
+            IrTarget::Device { node_id } => {
+                let bridge = DendriteBridge::connect(&self.endpoint, self.timeout_ms)
+                    .map_err(|e| format!("bridge connect: {e}"))?;
+                bridge
+                    .call_mcp_tool_with_timeout(
+                        tenant,
+                        ability.as_str(),
+                        node_id,
+                        arguments,
+                        timeout_ms,
+                    )
+                    .map_err(|e| format!("{e}"))
+            }
         }
     }
 
@@ -254,7 +302,6 @@ impl StepDispatcher for AgentAwareDispatcher {
             endpoint: self.endpoint.clone(),
             timeout_ms: self.timeout_ms,
             registry: self.registry.clone(),
-            agent_names: self.agent_names.clone(),
         }))
     }
 }
@@ -608,8 +655,8 @@ fn execute_step_with_retry(
         };
         let res = dispatcher.dispatch(
             tenant,
-            &step.function_name,
-            &step.target_node_id,
+            &step.target,
+            &step.ability,
             arguments,
             step_timeout_ms,
         );
@@ -728,8 +775,8 @@ fn process_step_result(
 
             output::step(&format!(
                 "[{global_step}/{total}] {:<20} {:<14} {} {:.1}s{bind_info}{dep_info}{retry_info}",
-                step.function_name,
-                step.target_node_id,
+                step.ability,
+                step.target.display_string(),
                 style("✓").green(),
                 elapsed_ms as f64 / 1000.0,
             ));
@@ -737,8 +784,8 @@ fn process_step_result(
             let size = result_bytes.len();
             let trace = StepTrace {
                 step_id: step.step_id.clone(),
-                function_name: step.function_name.clone(),
-                target_node_id: step.target_node_id.clone(),
+                ability: step.ability.clone(),
+                target: step.target.clone(),
                 phase_index: phase_idx,
                 started_at_unix_ms: started_at,
                 completed_at_unix_ms: completed_at,
@@ -771,8 +818,8 @@ fn process_step_result(
             };
             output::step(&format!(
                 "[{global_step}/{total}] {:<20} {:<14} {} {:.1}s{retry_info}  {message}",
-                step.function_name,
-                step.target_node_id,
+                step.ability,
+                step.target.display_string(),
                 style("✗").red(),
                 elapsed_ms as f64 / 1000.0,
             ));
@@ -785,8 +832,8 @@ fn process_step_result(
 
             let trace = StepTrace {
                 step_id: step.step_id.clone(),
-                function_name: step.function_name.clone(),
-                target_node_id: step.target_node_id.clone(),
+                ability: step.ability.clone(),
+                target: step.target.clone(),
                 phase_index: phase_idx,
                 started_at_unix_ms: started_at,
                 completed_at_unix_ms: completed_at,
@@ -893,25 +940,26 @@ mod tests {
         fn dispatch(
             &self,
             _tenant: &str,
-            function_name: &str,
-            _target_node_id: &str,
+            _target: &IrTarget,
+            ability: &AbilityName,
             _arguments: &Value,
             _timeout_ms: Option<u64>,
         ) -> Result<Value, String> {
+            let ability_str = ability.as_str().to_string();
             let call_num = self.call_count.fetch_add(1, Ordering::SeqCst);
             self.calls
                 .lock()
                 .unwrap()
-                .push((function_name.to_string(), Instant::now()));
+                .push((ability_str.clone(), Instant::now()));
 
             // Simulate work
             if self.delay_ms > 0 {
                 std::thread::sleep(Duration::from_millis(self.delay_ms));
             }
 
-            // Fail by function name (deterministic — safe for parallel tests)
-            if self.fail_functions.contains(function_name) {
-                return Err(format!("simulated failure for {function_name}"));
+            // Fail by ability name (deterministic — safe for parallel tests)
+            if self.fail_functions.contains(&ability_str) {
+                return Err(format!("simulated failure for {ability_str}"));
             }
 
             // Fail first N calls (order-dependent — use only in sequential phases)
@@ -923,7 +971,7 @@ mod tests {
             Ok(serde_json::json!({
                 "ok": true,
                 "call_num": call_num,
-                "function": function_name,
+                "function": ability_str,
             }))
         }
 
@@ -1034,8 +1082,11 @@ mod tests {
 
         let st = &trace.step_traces[0];
         assert_eq!(st.step_id, "x");
-        assert_eq!(st.function_name, "compute");
-        assert_eq!(st.target_node_id, "gpu");
+        assert_eq!(st.ability.as_str(), "compute");
+        assert_eq!(
+            st.target,
+            IrTarget::Device { node_id: "gpu".to_string() }
+        );
         assert_eq!(st.phase_index, 0);
         assert_eq!(st.outcome, StepOutcome::Completed);
         assert!(st.result_size_bytes.unwrap() > 0);
@@ -1242,9 +1293,16 @@ mod tests {
         // Non-cloneable dispatcher simulates BorrowedBridgeDispatcher
         struct SeqOnlyDispatcher(Arc<AtomicU32>);
         impl StepDispatcher for SeqOnlyDispatcher {
-            fn dispatch(&self, _: &str, f: &str, _: &str, _: &Value, _: Option<u64>) -> Result<Value, String> {
+            fn dispatch(
+                &self,
+                _: &str,
+                _target: &IrTarget,
+                ability: &AbilityName,
+                _: &Value,
+                _: Option<u64>,
+            ) -> Result<Value, String> {
                 self.0.fetch_add(1, Ordering::SeqCst);
-                Ok(serde_json::json!({"ok": true, "function": f}))
+                Ok(serde_json::json!({"ok": true, "function": ability.as_str()}))
             }
             fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, String> {
                 Err("not cloneable".into())
@@ -1290,5 +1348,143 @@ mod tests {
         assert_eq!(traces[1].input_refs.get("input"), Some(&"a".into()));
         // Both steps have result hashes (proving they executed and returned data)
         assert!(traces[1].result_sha256.is_some());
+    }
+
+    // ── Surface form → IR target asymmetry (anti-regression) ───────────────
+    //
+    // The two EAL surface forms intentionally lower to DIFFERENT IR
+    // target variants:
+    //
+    //   member-call form  `claude.chat(prompt: "hi")`
+    //     → IrTarget::Agent(AgentId { tenant: "default", name: "claude" })
+    //
+    //   traditional form  `call "chat" on "claude" with { prompt = "hi" }`
+    //     → IrTarget::Device { node_id: "claude" }
+    //
+    // The asymmetry is the design (ontology §5: device is hosting
+    // substrate, §6.4: agent is logical actor; surface forms encode
+    // the distinction). The runtime dispatcher matches `IrTarget`
+    // and never re-classifies. See AGENT_IDENTITY.md invariant 2.
+
+    /// Dispatcher that records every `(target, ability, args)` tuple
+    /// it receives. Used to verify the resolved dispatch shapes.
+    struct ShapeRecordingDispatcher {
+        seen: Arc<Mutex<Vec<(IrTarget, AbilityName, Value)>>>,
+    }
+
+    impl ShapeRecordingDispatcher {
+        fn new() -> Self {
+            Self { seen: Arc::new(Mutex::new(Vec::new())) }
+        }
+    }
+
+    impl StepDispatcher for ShapeRecordingDispatcher {
+        fn dispatch(
+            &self,
+            _tenant: &str,
+            target: &IrTarget,
+            ability: &AbilityName,
+            arguments: &Value,
+            _timeout_ms: Option<u64>,
+        ) -> Result<Value, String> {
+            self.seen.lock().unwrap().push((
+                target.clone(),
+                ability.clone(),
+                arguments.clone(),
+            ));
+            Ok(serde_json::json!({"ok": true}))
+        }
+
+        fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, String> {
+            Ok(Box::new(ShapeRecordingDispatcher {
+                seen: Arc::clone(&self.seen),
+            }))
+        }
+    }
+
+    #[test]
+    fn member_call_lowers_to_agent_target() {
+        use crate::shared::agent_id::AgentId;
+
+        let src = r#"
+            mission "member-call" {
+                let r = claude.chat(prompt: "hi")
+            }
+        "#;
+        let ir = planner::compile(&parser::parse(src).unwrap()).unwrap();
+        assert_eq!(ir.steps.len(), 1);
+        let step = &ir.steps[0];
+        assert_eq!(step.ability.as_str(), "chat");
+        assert_eq!(
+            step.target,
+            IrTarget::Agent(AgentId::parse("claude").unwrap()),
+            "member-call must lower to IrTarget::Agent"
+        );
+    }
+
+    #[test]
+    fn traditional_call_lowers_to_device_target() {
+        let src = r#"
+            mission "traditional" {
+                let r = call "chat" on "node-1" with { prompt = "hi" }
+            }
+        "#;
+        let ir = planner::compile(&parser::parse(src).unwrap()).unwrap();
+        assert_eq!(ir.steps.len(), 1);
+        let step = &ir.steps[0];
+        assert_eq!(step.ability.as_str(), "chat");
+        assert_eq!(
+            step.target,
+            IrTarget::Device { node_id: "node-1".to_string() },
+            "traditional `call ... on ...` must lower to IrTarget::Device"
+        );
+    }
+
+    #[test]
+    fn member_call_dispatches_to_agent_via_recorder() {
+        // The interpreter dispatch path receives the resolved
+        // IrTarget::Agent — no string-based classification along the way.
+        use crate::shared::agent_id::AgentId;
+
+        let src = r#"
+            mission "member-call" {
+                let r = claude.chat(prompt: "hi")
+            }
+        "#;
+        let ir = planner::compile(&parser::parse(src).unwrap()).unwrap();
+        let dispatcher = ShapeRecordingDispatcher::new();
+        execute_with_dispatcher(&dispatcher, "tenant", &ir).unwrap();
+
+        let seen = dispatcher.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(
+            seen[0].0,
+            IrTarget::Agent(AgentId::parse("claude").unwrap())
+        );
+        assert_eq!(seen[0].1.as_str(), "chat");
+        assert_eq!(
+            seen[0].2.get("prompt").and_then(|v| v.as_str()),
+            Some("hi")
+        );
+    }
+
+    #[test]
+    fn traditional_call_dispatches_to_device_via_recorder() {
+        let src = r#"
+            mission "traditional" {
+                let r = call "chat" on "node-1" with { prompt = "hi" }
+            }
+        "#;
+        let ir = planner::compile(&parser::parse(src).unwrap()).unwrap();
+        let dispatcher = ShapeRecordingDispatcher::new();
+        execute_with_dispatcher(&dispatcher, "tenant", &ir).unwrap();
+
+        let seen = dispatcher.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(
+            seen[0].0,
+            IrTarget::Device { node_id: "node-1".to_string() }
+        );
+        assert_eq!(seen[0].1.as_str(), "chat");
     }
 }

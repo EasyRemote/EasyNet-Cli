@@ -9,8 +9,14 @@
 //   Policies:    abort, skip, retry, continue
 //   Literals:    "string", 42, 3.14, true/false
 //   Identifiers: variable names (e.g., photo, config)
-//   Symbols:     { } = , .
+//   Symbols:     { } ( ) = : , .
 //   Comments:    // line comments (skipped during tokenization)
+//
+// Member-call syntax (added per ontology §6.2):
+//   `let r = agent.ability(prompt: "hello")` requires `( )` for the
+//   argument list and `:` for named-arg separators. The lexer treats them
+//   as single-character symbol tokens identical in handling to the
+//   existing `{ } = , .`.
 //
 // The lexer is context-free — keyword/identifier distinction is purely lexical.
 // `output` is NOT a keyword; it's an identifier that the parser interprets as an accessor.
@@ -24,7 +30,7 @@ pub enum Token {
     Abort, Skip, Retry, Continue,
     StringLit(String), IntLit(i64), FloatLit(f64), BoolLit(bool),
     Ident(String),
-    LBrace, RBrace, Eq, Comma, Dot,
+    LBrace, RBrace, LParen, RParen, Eq, Colon, Comma, Dot,
     Eof,
 }
 
@@ -51,7 +57,10 @@ impl<'a> Lexer<'a> {
         match ch {
             b'{' => { self.pos += 1; Ok(Token::LBrace) }
             b'}' => { self.pos += 1; Ok(Token::RBrace) }
+            b'(' => { self.pos += 1; Ok(Token::LParen) }
+            b')' => { self.pos += 1; Ok(Token::RParen) }
             b'=' => { self.pos += 1; Ok(Token::Eq) }
+            b':' => { self.pos += 1; Ok(Token::Colon) }
             b',' => { self.pos += 1; Ok(Token::Comma) }
             b'.' => { self.pos += 1; Ok(Token::Dot) }
             b'"' => self.read_string(),
@@ -116,5 +125,48 @@ impl<'a> Lexer<'a> {
             "true" => Token::BoolLit(true), "false" => Token::BoolLit(false),
             _ => Token::Ident(w),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn member_call_tokenization() {
+        // `claude.chat(prompt: "hi")` must produce the exact token
+        // sequence the parser's member_call branch expects.
+        let mut lexer = Lexer::new(r#"claude.chat(prompt: "hi")"#);
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("claude".to_string()),
+                Token::Dot,
+                Token::Ident("chat".to_string()),
+                Token::LParen,
+                Token::Ident("prompt".to_string()),
+                Token::Colon,
+                Token::StringLit("hi".to_string()),
+                Token::RParen,
+                Token::Eof,
+            ],
+        );
+    }
+
+    #[test]
+    fn empty_paren_call() {
+        let tokens = Lexer::new("claude.ping()").tokenize().unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Ident("claude".to_string()),
+                Token::Dot,
+                Token::Ident("ping".to_string()),
+                Token::LParen,
+                Token::RParen,
+                Token::Eof,
+            ],
+        );
     }
 }

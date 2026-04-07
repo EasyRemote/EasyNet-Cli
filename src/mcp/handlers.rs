@@ -269,7 +269,7 @@ pub fn send_to_agent(args: &Map<String, Value>) -> HandlerResult {
     let entry = registry.agents.get(agent_name)
         .ok_or_else(|| format!("agent '{agent_name}' not found in registry"))?;
 
-    let response = dispatch::send_to_agent(agent_name, entry, prompt, context, None)
+    let response = dispatch::send_to_agent(agent_name, entry, prompt, context, None, None)
         .map_err(|e| format!("agent dispatch: {e}"))?;
 
     Ok(json!({

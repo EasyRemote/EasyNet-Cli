@@ -155,6 +155,35 @@ impl McpToolProvider for HubCaseKit {
                     is_error: true,
                 };
             }
+
+            // Per-call audit line, visible in the MCP server's stderr
+            // stream. This is the per-call counterpart to the startup
+            // banner: every cross-agent dispatch routed through this MCP
+            // server is recorded with `from`, `to`, depth, and the
+            // current mission context (if any). Operators can scrape
+            // this stream to audit which agents talked to which during
+            // a session.
+            //
+            // TODO(tenant-aware): when AgentEntry carries a tenant
+            // field, reject targets whose tenant != self.tenant before
+            // the dispatch happens. See ontology §11.5.
+            let target_agent = patched
+                .get("agent")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let depth = std::env::var("EASYNET_AGENT_DEPTH")
+                .ok()
+                .unwrap_or_else(|| "0".to_string());
+            let mission = std::env::var("EASYNET_MISSION_ID")
+                .unwrap_or_else(|_| "<none>".to_string());
+            eprintln!(
+                "[easynet mcp dispatch] from={} to={} depth={} mission={}",
+                self.agent.as_deref().unwrap_or("?"),
+                target_agent,
+                depth,
+                mission,
+            );
+
             return match handlers::send_to_agent(&patched) {
                 Ok(v) => ToolResult { payload: v, is_error: false },
                 Err(msg) => ToolResult {

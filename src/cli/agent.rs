@@ -17,7 +17,8 @@
 use clap::{Args, Subcommand};
 use console::style;
 
-use crate::agent::{claude_code, codex, dispatch};
+use crate::agent::{claude_code, codex};
+use crate::cli::mission_runs::{self, MissionRunOpts};
 use crate::shared::agents::{self, AgentEntry, AgentType};
 use crate::shared::output;
 
@@ -71,9 +72,13 @@ pub struct SendArgs {
     /// Optional context to include
     #[arg(long)]
     pub context: Option<String>,
-    /// Timeout in seconds
-    #[arg(long, default_value_t = 300)]
+    /// Timeout in seconds (default: 900 = 15 min)
+    #[arg(long, default_value_t = 900)]
     pub timeout: u64,
+    /// Write the raw stream-json trace (one event per line) to this file.
+    /// The prompt is saved alongside it as `<file>.prompt.txt`.
+    #[arg(long)]
+    pub trace: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -168,42 +173,323 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `easynet agent send <name> "<prompt>"` is sugar for a single-line
+/// External EAL mission invoking the target agent's default `chat`
+/// ability. Quoting ontology §6.2 Decision 4:
+///
+/// > **agent send semantics**: Sugar for a single-line External EAL
+/// > mission invoking the target's default `chat` ability. Unifies all
+/// > cross-agent interaction under the mission execution model.
+///
+/// Concretely, `easynet agent send claude "hi"` desugars to:
+///
+/// ```eal
+/// mission "agent-send" {
+///   let __reply = claude.chat(prompt: "hi")
+/// }
+/// ```
+///
+/// and is then handed to `mission_runs::run_mission_inproc` — the single
+/// in-process mission entry point. There is no second path: every
+/// cross-agent call in EasyNet (CLI surface, EAL programs, MCP handlers)
+/// goes through this function. See `cli/mission_runs.rs` for the load-
+/// bearing single-entry invariant.
 fn run_send(args: SendArgs) -> anyhow::Result<()> {
+    // Validate the agent exists in the registry up-front so the user gets
+    // a clear error before we go through the mission machinery.
     let registry = agents::load_agents()?;
-
-    let entry = registry.agents.get(&args.name)
+    let _entry = registry.agents.get(&args.name)
         .ok_or_else(|| anyhow::anyhow!("agent '{}' not found. Run `easynet agent list`.", args.name))?;
 
-    // Override timeout if specified.
-    let mut entry = entry.clone();
-    entry.timeout_secs = args.timeout;
-
-    let spinner = indicatif::ProgressBar::new_spinner();
-    spinner.set_style(
-        indicatif::ProgressStyle::with_template("  {spinner:.dim} {msg:.dim}")
-            .unwrap()
-            .tick_strings(&["   ", ".  ", ".. ", "...", " ..", "  .", "   "]),
+    // User-visible counterpart to the doc-comment ontology reference.
+    // Tells the user exactly what path their command is taking, so they
+    // can reason about why a mission run dir appears, why MCP audit
+    // lines may show up, and why the dispatch invariant assertion may
+    // fire if anything is misconfigured.
+    eprintln!(
+        "  {} {}",
+        style("[agent-send]").dim(),
+        style("dispatching via mission runtime").dim(),
     );
-    spinner.set_message(format!("sending to {}", args.name));
-    spinner.enable_steady_tick(std::time::Duration::from_millis(120));
 
-    let response = dispatch::send_to_agent(
-        &args.name,
-        &entry,
-        &args.prompt,
-        args.context.as_deref(),
-        None,
+    // Compose the prompt: fold optional `--context` into the prompt body
+    // BEFORE constructing the EAL source, so the prompt that ends up in
+    // the EAL string literal is exactly the prompt the agent will see.
+    let composed_prompt = match args.context.as_deref() {
+        Some(ctx) if !ctx.trim().is_empty() => {
+            format!("{}\n\n## Context (previous discussion)\n\n{}\n", args.prompt, ctx)
+        }
+        _ => args.prompt.clone(),
+    };
+
+    // Build the single-line EAL mission source. The mission name is
+    // `agent-send`; the binding is `__reply` so the result can be
+    // pulled out of `MissionRunResult.bound_vars`.
+    let eal_source = format!(
+        "mission \"agent-send\" {{\n    let __reply = {agent}.chat(prompt: {prompt})\n}}\n",
+        agent = args.name,
+        prompt = eal_string_literal(&composed_prompt),
+    );
+
+    // Hand the source to THE single in-process mission entry point.
+    // The runner sets `EASYNET_MISSION_ID` for the duration of execution
+    // (see `mission_runs::MissionContextGuard`), so any nested
+    // `dispatch::send_to_agent` calls satisfy Step 9's invariant.
+    let result = mission_runs::run_mission_inproc(
+        &eal_source,
+        MissionRunOpts {
+            source_label: Some(format!("agent send {}", args.name)),
+            // `--trace <path>` plumbing — currently unused; the mission
+            // runner always writes the full trace into the run dir.
+            // TODO: thread this through if/when `MissionRunOpts` grows
+            // a real trace export.
+            trace_path: args.trace.clone(),
+        },
     )?;
 
-    spinner.finish_and_clear();
+    // Pull the agent's reply out of the mission's bound vars. The
+    // dispatcher returns a JSON object with shape
+    // `{"ok": true, "agent": "...", "output": "...", ...}` (see
+    // `eal::interpreter::AgentAwareDispatcher::dispatch`); the
+    // user-visible reply is the `output` field.
+    let reply_text: String = match result.bound_vars.get("__reply") {
+        Some(serde_json::Value::Object(obj)) => obj
+            .get("output")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| serde_json::Value::Object(obj.clone()).to_string()),
+        Some(other) => other.to_string(),
+        None => String::new(),
+    };
+
+    eprintln!();
     eprintln!(
-        "  {} {:.1}s",
+        "  {} {} {}",
         style(&args.name).white().bold(),
-        response.duration_ms as f64 / 1000.0,
+        style("done in").dim(),
+        style(format!("{:.1}s", result.meta.duration_ms as f64 / 1000.0)).cyan(),
+    );
+
+    // Token line: read the nested agent run dir's meta.json. The mission
+    // run dir contains the agent run dir as a sibling artefact (the
+    // dispatch layer creates it independently under
+    // ~/.easynet/workspaces/<agent>/runs/). We surface the most recent
+    // one for this agent — for a one-step `agent send` it is unambiguous.
+    //
+    // TODO(token-meta-aggregation): this token aggregation logic is a
+    // presentation-layer leak into execution detail. The right home is
+    // `MissionRunMeta` itself — after every step, the mission runner
+    // should sum the agent run stats into a `MissionRunMeta.token_usage`
+    // field. Defer to a follow-up PR.
+    if let Some(usage) = read_latest_agent_usage(&args.name) {
+        let total_in =
+            usage.input_tokens + usage.cache_read_tokens + usage.cache_creation_tokens;
+        eprintln!(
+            "  {} in={} out={} cache_read={} cache_write={} turns={} cost=${:.4}",
+            style("tokens").dim(),
+            style(total_in).cyan(),
+            style(usage.output_tokens).cyan(),
+            style(usage.cache_read_tokens).dim(),
+            style(usage.cache_creation_tokens).dim(),
+            style(usage.num_turns).dim(),
+            usage.total_cost_usd,
+        );
+    }
+
+    // "saved" path is the **mission** run dir, not the nested agent run
+    // dir. The mission run dir is the artefact users should reference —
+    // it contains source.eal, ir.json, trace.json, meta.json, and is
+    // where the (currently None) `ability_graph_traces` field will land
+    // when v2 ships.
+    eprintln!(
+        "  {} {}",
+        style("saved").dim(),
+        style(result.run_dir.display().to_string()).cyan(),
     );
     eprintln!();
-    println!("{}", response.content);
+
+    // Render the agent's final reply as markdown when stdout is a TTY;
+    // otherwise print raw text so piping into other tools stays clean.
+    if console::Term::stdout().is_term() {
+        let skin = build_markdown_skin();
+        let compact = compact_markdown(&reply_text);
+        skin.print_text(&compact);
+    } else {
+        println!("{}", reply_text);
+    }
     Ok(())
+}
+
+/// Quote a string as a valid EAL string literal: wrap in double quotes
+/// and escape backslashes, double quotes, newlines, carriage returns,
+/// and tabs. EAL's lexer (`src/eal/lexer.rs::read_string`) accepts
+/// `\\<char>` as an escape, so this is the minimal set required to
+/// round-trip arbitrary user input through the EAL source we generate.
+fn eal_string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Read the most recent agent run dir for `agent_name` and extract the
+/// usage stats from its `meta.json`. Returns `None` if no run dir
+/// exists or the meta is unreadable. This is the temporary glue that
+/// powers the token line in `run_send` — see the
+/// `TODO(token-meta-aggregation)` comment in `run_send` for the
+/// long-term plan.
+fn read_latest_agent_usage(agent_name: &str) -> Option<AgentUsageReader> {
+    use std::fs;
+
+    let runs_root = crate::shared::config::state_dir()
+        .join("workspaces")
+        .join(agent_name)
+        .join("runs");
+    if !runs_root.exists() {
+        return None;
+    }
+
+    let mut latest: Option<(String, std::path::PathBuf)> = None;
+    for entry in fs::read_dir(&runs_root).ok()? {
+        let entry = entry.ok()?;
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if latest
+            .as_ref()
+            .map(|(n, _)| name.as_str() > n.as_str())
+            .unwrap_or(true)
+        {
+            latest = Some((name, entry.path()));
+        }
+    }
+    let (_, path) = latest?;
+    let meta_path = path.join("meta.json");
+    let raw = fs::read_to_string(&meta_path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    Some(AgentUsageReader {
+        input_tokens: v.get("input_tokens").and_then(|x| x.as_u64()).unwrap_or(0),
+        output_tokens: v.get("output_tokens").and_then(|x| x.as_u64()).unwrap_or(0),
+        cache_read_tokens: v
+            .get("cache_read_tokens")
+            .and_then(|x| x.as_u64())
+            .unwrap_or(0),
+        cache_creation_tokens: v
+            .get("cache_creation_tokens")
+            .and_then(|x| x.as_u64())
+            .unwrap_or(0),
+        num_turns: v.get("num_turns").and_then(|x| x.as_u64()).unwrap_or(0),
+        total_cost_usd: v
+            .get("total_cost_usd")
+            .and_then(|x| x.as_f64())
+            .unwrap_or(0.0),
+    })
+}
+
+struct AgentUsageReader {
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_read_tokens: u64,
+    cache_creation_tokens: u64,
+    num_turns: u64,
+    total_cost_usd: f64,
+}
+
+/// Build a custom termimad skin: compact spacing, colourful header levels,
+/// high-contrast bold, bright code highlighting.
+fn build_markdown_skin() -> termimad::MadSkin {
+    use termimad::crossterm::style::{Attribute, Color};
+    use termimad::{CompoundStyle, LineStyle, MadSkin, StyledChar};
+
+    let mut skin = MadSkin::default();
+
+    // Headers — each level gets a distinct bright colour. No underline, no
+    // centring, no background — just bold colour so the hierarchy pops
+    // without wasting vertical space.
+    let header_colours = [
+        Color::Cyan,       // H1
+        Color::Magenta,    // H2
+        Color::Yellow,     // H3
+        Color::Blue,       // H4
+        Color::Green,      // H5
+        Color::DarkCyan,   // H6
+        Color::DarkMagenta,
+        Color::DarkYellow,
+    ];
+    for (i, h) in skin.headers.iter_mut().enumerate() {
+        *h = LineStyle::default();
+        h.compound_style = CompoundStyle::with_fg(
+            *header_colours.get(i).unwrap_or(&Color::White),
+        );
+        h.compound_style.add_attr(Attribute::Bold);
+    }
+
+    // Bold / italic / inline code: bright colours for contrast.
+    skin.bold = CompoundStyle::with_fg(Color::White);
+    skin.bold.add_attr(Attribute::Bold);
+
+    skin.italic = CompoundStyle::with_fg(Color::Cyan);
+    skin.italic.add_attr(Attribute::Italic);
+
+    skin.inline_code = CompoundStyle::with_fgbg(Color::Yellow, Color::Reset);
+    skin.inline_code.add_attr(Attribute::Bold);
+
+    // Code block: subtle grey background + bright foreground.
+    skin.code_block.compound_style = CompoundStyle::with_fgbg(
+        Color::Rgb { r: 220, g: 220, b: 220 },
+        Color::Rgb { r: 30, g: 30, b: 40 },
+    );
+
+    // Bullets and other decorations.
+    skin.bullet = StyledChar::from_fg_char(Color::Cyan, '▸');
+    skin.quote_mark = StyledChar::from_fg_char(Color::Blue, '▌');
+    skin.horizontal_rule =
+        StyledChar::from_fg_char(Color::DarkGrey, '─');
+
+    // Table borders — termimad's default `STANDARD_TABLE_BORDER_CHARS`
+    // already uses the same Unicode box-drawing characters as
+    // `comfy_table::presets::UTF8_FULL_CONDENSED` (│ ─ ┌┐└┘ ┬┴├┤┼), which
+    // is the style used by every other `easynet` table (`output::table`).
+    // We can't match the `╞═╪╡` header separator or `┆` dashed inside
+    // rulers because `TableBorderChars` is uniform, but the overall look
+    // is consistent. We only need to colour the border to match the dim
+    // grey the EasyNet CLI uses for table chrome.
+    skin.table.compound_style.set_fg(Color::DarkGrey);
+
+    skin
+}
+
+/// Collapse consecutive blank lines down to a single blank line and strip
+/// leading/trailing blanks, so the rendered output stays compact without
+/// fighting termimad's layout engine.
+fn compact_markdown(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut prev_blank = true; // treat start-of-doc as already-blank
+    for line in src.lines() {
+        let is_blank = line.trim().is_empty();
+        if is_blank && prev_blank {
+            continue; // skip duplicate blank lines
+        }
+        out.push_str(line);
+        out.push('\n');
+        prev_blank = is_blank;
+    }
+    // Trim trailing blank line.
+    while out.ends_with("\n\n") {
+        out.pop();
+    }
+    out
 }
 
 fn run_doctor(args: DoctorArgs) -> anyhow::Result<()> {

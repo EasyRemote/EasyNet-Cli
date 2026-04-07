@@ -23,6 +23,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+pub mod agent_id;
 pub mod agents;
 pub mod config;
 pub mod net;
