@@ -45,7 +45,7 @@ pub fn compile(program: &EalProgram) -> anyhow::Result<MissionIr> {
             phase_start = out_idx;
             cur_phase += 1;
         }
-        ir_steps.push(lower(&analyzed.steps[orig_idx]));
+        ir_steps.push(lower(&analyzed.steps[orig_idx])?);
     }
     if !ir_steps.is_empty() {
         phases.push(PhaseRange { start: phase_start, end: ir_steps.len() });
@@ -70,7 +70,9 @@ fn assign_phases(steps: &[analyzer::AnalyzedStep]) -> Vec<usize> {
     phase
 }
 
-fn lower(step: &analyzer::AnalyzedStep) -> IrStep {
+fn lower(step: &analyzer::AnalyzedStep) -> anyhow::Result<IrStep> {
+    use crate::shared::agent_id::{AbilityName, AgentId};
+
     let mut static_args = serde_json::Map::new();
     let mut input_refs = HashMap::new();
     for f in &step.call.arguments {
@@ -82,11 +84,52 @@ fn lower(step: &analyzer::AnalyzedStep) -> IrStep {
             FieldValue::Bool(b) => { static_args.insert(f.key.clone(), serde_json::json!(b)); }
         }
     }
-    IrStep {
-        step_id: step.step_id.clone(), step_name: step.step_id.clone(),
-        function_name: step.call.function_name.clone(),
-        target_node_id: step.call.target_node.clone().unwrap_or_default(),
-        static_arguments: serde_json::Value::Object(static_args), input_refs,
+
+    // Resolve target by surface form. The parser sets `target_kind` to
+    // record which production matched (member-call → Agent, traditional
+    // `call ... on ...` → Device). The runtime dispatcher matches the
+    // resolved `IrTarget` enum and never re-classifies by string lookup
+    // — see `docs/AGENT_IDENTITY.md` invariant 2.
+    let target = match step.call.target_kind {
+        TargetKind::Agent => {
+            let raw = step.call.target_node.as_deref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "step '{}': member-call form has no agent target (parser bug)",
+                    step.step_id
+                )
+            })?;
+            let agent_id = AgentId::parse(raw).map_err(|e| {
+                anyhow::anyhow!(
+                    "step '{}': agent target '{raw}' is not a valid agent id: {e}",
+                    step.step_id
+                )
+            })?;
+            IrTarget::Agent(agent_id)
+        }
+        TargetKind::Device => {
+            // Traditional form may omit `on "..."` (legacy missions);
+            // store as empty node id rather than failing the compile.
+            // The dispatcher will surface a clearer error at runtime.
+            let node_id = step.call.target_node.clone().unwrap_or_default();
+            IrTarget::Device { node_id }
+        }
+    };
+
+    let ability = AbilityName::parse(&step.call.function_name).map_err(|e| {
+        anyhow::anyhow!(
+            "step '{}': ability name '{}' is not valid: {e}",
+            step.step_id,
+            step.call.function_name
+        )
+    })?;
+
+    Ok(IrStep {
+        step_id: step.step_id.clone(),
+        step_name: step.step_id.clone(),
+        ability,
+        target,
+        static_arguments: serde_json::Value::Object(static_args),
+        input_refs,
         output_binding: step.binding.clone(),
         timeout_seconds: step.call.options.timeout_seconds.unwrap_or(0),
         max_retries: step.call.options.max_retries.unwrap_or(0),
@@ -98,7 +141,7 @@ fn lower(step: &analyzer::AnalyzedStep) -> IrStep {
         },
         optional: step.call.options.optional,
         content_type: "application/json".into(),
-    }
+    })
 }
 
 #[cfg(test)]

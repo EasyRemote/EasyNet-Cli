@@ -44,9 +44,9 @@ use clap::Parser;
 
 #[derive(Debug, Parser)]
 #[command(name = "easynet", version, about = "EasyNet Hub CLI + MCP server")]
-struct App {
+pub struct App {
     #[command(subcommand)]
-    command: cli::Command,
+    pub command: cli::Command,
 }
 
 fn main() -> anyhow::Result<()> {

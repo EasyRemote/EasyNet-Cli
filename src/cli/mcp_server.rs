@@ -52,11 +52,28 @@ pub fn run(args: McpServerArgs) -> anyhow::Result<()> {
         let lock = !args.allow_node_override;
         kit = kit.with_bound_node(node, lock);
     }
-    if let Some(agent) = args.agent {
-        kit = kit.with_agent(agent);
+    if let Some(agent) = &args.agent {
+        kit = kit.with_agent(agent.clone());
     }
     if args.enable_agent_dispatch {
         kit = kit.with_agent_dispatch(true);
+
+        // User-visible banner: tell the operator that this MCP server
+        // can spawn other agents through the mission runtime. The
+        // banner is printed unconditionally on stderr whenever the flag
+        // is set, regardless of whether it was set by the workspace
+        // launcher (the default for `easynet agent send`) or flipped
+        // manually by the user. This is the safety counterpart to the
+        // workspace `build_mcp_entry` defaulting `--enable-agent-dispatch`
+        // — there is no silent escalation path.
+        eprintln!(
+            "[easynet mcp] agent dispatch enabled — this MCP server can spawn \
+             other agents in the same tenant. Calls go through the mission \
+             runtime; depth limit = 2. See docs/easynet_ontology.tex §6.2."
+        );
+        if let Some(agent) = &args.agent {
+            eprintln!("[easynet mcp] launching agent: {agent}");
+        }
     }
 
     let server_name = kit.server_name();

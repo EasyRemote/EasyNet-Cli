@@ -161,24 +161,33 @@ fn patch_bound_node(specs: &mut [Value], bound: &str, lock: bool) {
 }
 
 /// Spec for send_to_agent tool (only included when agent dispatch is enabled).
+///
+/// The description below explicitly frames `send_to_agent` as the
+/// wire-level form of `<agent>.chat(<prompt>)`. This matches ontology
+/// §6.2 Decision 4: `agent send` is sugar for a single-line External
+/// EAL mission invoking the target's default `chat` ability. The MCP
+/// tool exists so an in-agent runtime can talk to another agent
+/// without writing EAL itself; the EasyNet Hub does the desugar
+/// internally so all cross-agent calls flow through the mission
+/// runtime regardless of which surface the caller used.
 pub fn send_to_agent_spec() -> Value {
     json!({
         "name": "send_to_agent",
-        "description": "Send a prompt to a registered AI agent (Claude Code / Codex) and get their response. Enables agent-to-agent communication through EasyNet.",
+        "description": "Wire-level form of `<agent>.chat(<prompt>)`. The EasyNet Hub desugars this to a single-line External EAL mission that calls the target agent's default `chat` ability through the mission runtime. Use this when an in-agent runtime needs to talk to another agent.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "agent": {
                     "type": "string",
-                    "description": "Registered agent name (e.g. 'claude', 'codex')"
+                    "description": "Registered agent name (e.g. 'claude', 'codex'). Equivalent to the `<agent>` in `<agent>.chat(...)`."
                 },
                 "prompt": {
                     "type": "string",
-                    "description": "The prompt/task to send to the agent"
+                    "description": "The prompt to pass as the `prompt:` named argument of the target agent's `chat` ability."
                 },
                 "context": {
                     "type": "string",
-                    "description": "Optional context from prior conversation or data"
+                    "description": "Optional prior-conversation context. Folded into the prompt before dispatch."
                 }
             },
             "required": ["agent", "prompt"]

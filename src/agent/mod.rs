@@ -10,4 +10,6 @@ pub mod codex;
 pub mod conversation;
 pub mod dispatch;
 pub mod process_runner;
+pub mod run_store;
+pub mod stream_ui;
 pub mod workspace;

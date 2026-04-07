@@ -2,20 +2,50 @@
 // =========================================
 //
 // File: src/agent/claude_code.rs
-// Description: Invokes Claude Code in print mode (claude -p).
+// Description: Invokes Claude Code in print mode (claude -p) with streaming
+//              JSON output so the user can observe tool calls live.
 //
-// MCP tools loaded via --mcp-config pointing to workspace .mcp.json.
-// Knowledge loaded via CLAUDE.md in the workspace (auto-discovered by cwd).
-// Uses -p mode which skips the workspace trust dialog.
+// Permission model:
+//   - `--permission-mode acceptEdits` auto-approves file edits within the
+//     agent's cwd (which is an isolated workspace under ~/.easynet/workspaces).
+//   - `--allowedTools` additionally whitelists Bash operations that agents
+//     commonly need (opening generated files, listing the workspace, etc.)
+//     so they run without interactive prompts.
+//
+// Output model:
+//   - `--output-format stream-json --verbose` emits one JSON event per line.
+//   - We parse each line, print a compact human-readable trace to stderr via
+//     the shared `stream_ui` module, and collect the final assistant text
+//     and run statistics as the return value.
+//   - If a `RunDir` is provided, every raw line is also mirrored to
+//     `<run>/trace.jsonl` for later inspection.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use serde_json::Value;
+
 use super::process_runner::{self, ChildOptions};
+use super::run_store::RunDir;
+use super::stream_ui::{self, Usage};
+
+/// Summary of a completed Claude Code run, extracted from the final
+/// `result` event in the stream-json output.
+#[derive(Default, Clone)]
+pub struct RunStats {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub num_turns: u64,
+    pub total_cost_usd: f64,
+    pub duration_ms: u64,
+}
 
 pub struct ClaudeOptions {
     pub model: Option<String>,
@@ -23,6 +53,9 @@ pub struct ClaudeOptions {
     pub max_output_bytes: usize,
     pub env: BTreeMap<String, String>,
     pub cwd: Option<PathBuf>,
+    /// Persistent run directory. All stream events are mirrored into
+    /// `<run>/trace.jsonl` when provided.
+    pub run_dir: Option<Arc<RunDir>>,
 }
 
 impl Default for ClaudeOptions {
@@ -33,19 +66,31 @@ impl Default for ClaudeOptions {
             max_output_bytes: 1_048_576,
             env: BTreeMap::new(),
             cwd: None,
+            run_dir: None,
         }
     }
 }
 
-/// Invoke Claude Code in print mode.
+/// Invoke Claude Code in streaming print mode.
 ///
-/// Explicitly passes `--mcp-config .mcp.json` to guarantee MCP tool loading.
-/// The `-p` flag skips workspace trust dialog, so explicit --mcp-config is needed.
-pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<String> {
+/// Prints a live timeline of tool calls to stderr and returns the final
+/// assistant text plus run statistics.
+pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunStats)> {
     let mut args: Vec<String> = vec![
         "-p".to_string(),
         "--output-format".to_string(),
-        "text".to_string(),
+        "stream-json".to_string(),
+        "--verbose".to_string(),
+        // Auto-accept file edits within cwd (the isolated workspace).
+        // Writes outside cwd still require approval.
+        "--permission-mode".to_string(),
+        "acceptEdits".to_string(),
+        // Pre-authorise common read-only / launch shell commands so the
+        // agent doesn't stall waiting for approval on `open`, `ls`, etc.
+        "--allowedTools".to_string(),
+        "Bash(open:*) Bash(ls:*) Bash(cat:*) Bash(pwd) Bash(mkdir:*) \
+         Read Write Edit Glob Grep"
+            .to_string(),
     ];
 
     if let Some(m) = &opts.model {
@@ -53,7 +98,7 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<String> {
         args.push(m.clone());
     }
 
-    // Explicitly load MCP config and system prompt from workspace.
+    // Explicitly load MCP config from the workspace.
     if let Some(cwd) = &opts.cwd {
         let mcp_json = cwd.join(".mcp.json");
         if mcp_json.exists() {
@@ -64,6 +109,23 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<String> {
 
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
+    stream_ui::print_header(opts.timeout.as_secs(), opts.model.as_deref());
+    let run_start = std::time::Instant::now();
+
+    // Shared state assembled from the stream.
+    let final_text = Arc::new(Mutex::new(String::new()));
+    let stats = Arc::new(Mutex::new(RunStats::default()));
+    let final_text_cb = Arc::clone(&final_text);
+    let stats_cb = Arc::clone(&stats);
+    let run_dir_cb = opts.run_dir.clone();
+
+    let callback = Arc::new(move |line: &str| {
+        if let Some(dir) = &run_dir_cb {
+            dir.append_trace_line(line);
+        }
+        handle_stream_line(line, &final_text_cb, &stats_cb, run_start);
+    });
+
     let result = process_runner::run_child("claude", &arg_refs, ChildOptions {
         timeout: opts.timeout,
         max_stdout_bytes: opts.max_output_bytes,
@@ -71,6 +133,7 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<String> {
         stdin_data: Some(prompt.to_string()),
         env: opts.env,
         cwd: opts.cwd,
+        stdout_line_callback: Some(callback),
     })?;
 
     if result.exit_code != 0 {
@@ -82,7 +145,127 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<String> {
         anyhow::bail!(err_msg);
     }
 
-    Ok(result.stdout)
+    let text = final_text.lock().unwrap().clone();
+    let mut final_stats = stats.lock().unwrap().clone();
+    if final_stats.duration_ms == 0 {
+        final_stats.duration_ms = run_start.elapsed().as_millis() as u64;
+    }
+
+    if text.is_empty() {
+        // Fallback: stream didn't yield a result event (unexpected). Return
+        // raw stdout so the caller still sees something useful.
+        Ok((result.stdout, final_stats))
+    } else {
+        Ok((text, final_stats))
+    }
+}
+
+/// Parse one stream-json line and print a trace event to stderr.
+fn handle_stream_line(
+    line: &str,
+    final_text: &Arc<Mutex<String>>,
+    stats: &Arc<Mutex<RunStats>>,
+    run_start: std::time::Instant,
+) {
+    let v: Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let kind = v.get("type").and_then(Value::as_str).unwrap_or("");
+
+    match kind {
+        "system" => {
+            // init banner already printed by the caller; ignore.
+        }
+        "assistant" => {
+            if let Some(content) = v.pointer("/message/content").and_then(Value::as_array) {
+                for block in content {
+                    let btype = block.get("type").and_then(Value::as_str).unwrap_or("");
+                    match btype {
+                        "text" => {
+                            if let Some(text) = block.get("text").and_then(Value::as_str) {
+                                stream_ui::print_assistant_text(run_start, text);
+                            }
+                        }
+                        "tool_use" => {
+                            let name = block.get("name").and_then(Value::as_str).unwrap_or("?");
+                            let summary = stream_ui::summarise_tool_input(
+                                name,
+                                block.get("input").unwrap_or(&Value::Null),
+                            );
+                            stream_ui::print_tool_use(run_start, name, &summary);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            // Track cumulative token usage from the assistant message and
+            // print a running total after each turn so the user can see how
+            // the budget is growing live.
+            if let Some(usage) = v.pointer("/message/usage") {
+                let mut s = stats.lock().unwrap();
+                s.input_tokens = usage.get("input_tokens").and_then(Value::as_u64).unwrap_or(s.input_tokens);
+                s.output_tokens = usage.get("output_tokens").and_then(Value::as_u64).unwrap_or(s.output_tokens);
+                s.cache_read_tokens = usage.get("cache_read_input_tokens").and_then(Value::as_u64).unwrap_or(s.cache_read_tokens);
+                s.cache_creation_tokens = usage.get("cache_creation_input_tokens").and_then(Value::as_u64).unwrap_or(s.cache_creation_tokens);
+                stream_ui::print_usage(run_start, &Usage {
+                    input_tokens: s.input_tokens,
+                    output_tokens: s.output_tokens,
+                    cache_read_tokens: s.cache_read_tokens,
+                    cache_creation_tokens: s.cache_creation_tokens,
+                });
+            }
+        }
+        "user" => {
+            // A user-role message from the stream carries tool_result blocks.
+            if let Some(content) = v.pointer("/message/content").and_then(Value::as_array) {
+                for block in content {
+                    if block.get("type").and_then(Value::as_str) == Some("tool_result") {
+                        let is_err = block.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+                        let text = extract_tool_result_text(block);
+                        stream_ui::print_tool_result(run_start, &text, is_err);
+                    }
+                }
+            }
+        }
+        "result" => {
+            // Final result event — capture the assistant's final text plus
+            // aggregate usage and cost metrics.
+            if let Some(text) = v.get("result").and_then(Value::as_str) {
+                *final_text.lock().unwrap() = text.to_string();
+            }
+            let mut s = stats.lock().unwrap();
+            if let Some(n) = v.get("num_turns").and_then(Value::as_u64) {
+                s.num_turns = n;
+            }
+            if let Some(c) = v.get("total_cost_usd").and_then(Value::as_f64) {
+                s.total_cost_usd = c;
+            }
+            if let Some(d) = v.get("duration_ms").and_then(Value::as_u64) {
+                s.duration_ms = d;
+            }
+            if let Some(usage) = v.get("usage") {
+                s.input_tokens = usage.get("input_tokens").and_then(Value::as_u64).unwrap_or(s.input_tokens);
+                s.output_tokens = usage.get("output_tokens").and_then(Value::as_u64).unwrap_or(s.output_tokens);
+                s.cache_read_tokens = usage.get("cache_read_input_tokens").and_then(Value::as_u64).unwrap_or(s.cache_read_tokens);
+                s.cache_creation_tokens = usage.get("cache_creation_input_tokens").and_then(Value::as_u64).unwrap_or(s.cache_creation_tokens);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extract_tool_result_text(block: &Value) -> String {
+    match block.get("content") {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|b| b.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join(" "),
+        _ => String::new(),
+    }
 }
 
 /// Check if the `claude` CLI is available and return version info.

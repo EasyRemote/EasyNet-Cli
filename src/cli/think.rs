@@ -14,6 +14,7 @@ use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::agent::dispatch;
+use crate::cli::mission_runs::LegacyMissionContext;
 use crate::shared::agents;
 
 #[derive(Debug, Args)]
@@ -37,6 +38,20 @@ pub fn run(args: ThinkArgs) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("agent '{}' not found", args.agent))?
         .clone();
 
+    // Mission context for the legacy `think` command. The dispatch
+    // invariant (see agent::dispatch::check_mission_context_invariant)
+    // requires every agent dispatch to originate from a real mission
+    // run dir. `think` is a deprecated alias that hasn't been migrated
+    // to a real mission yet, so we create a "legacy-think" mission run
+    // dir and set the env var to its id. The anti-forgery check passes
+    // because the dir really exists.
+    //
+    // TODO(legacy-migration): when `think` is migrated to a real
+    // mission (using `run_mission_inproc` over a generated EAL source),
+    // delete this guard and let the mission runner set the env var
+    // itself.
+    let _legacy_ctx = LegacyMissionContext::new("legacy-think")?;
+
     // Header
     eprintln!();
     eprintln!("  {} {}", style("easynet think").cyan().bold(), style("autonomous agent loop").dim());
@@ -59,7 +74,7 @@ pub fn run(args: ThinkArgs) -> anyhow::Result<()> {
         let spinner = make_spinner("thinking");
         let think_prompt = build_think_prompt(&args.goal, &history);
         let think_response = dispatch::send_to_agent(
-            &args.agent, &entry, &think_prompt, None, None,
+            &args.agent, &entry, &think_prompt, None, None, None,
         )?;
         spinner.finish_and_clear();
         eprintln!(
