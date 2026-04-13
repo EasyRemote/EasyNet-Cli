@@ -6,14 +6,16 @@
 //
 // Execution Model:
 //   Phases execute sequentially (data-flow barriers between them).
-//   Steps within a phase execute in parallel via std::thread::scope + per-thread bridge.
+//   Steps within a phase execute in parallel via rayon work-stealing threadpool.
 //   When parallel dispatch is unavailable (BorrowedBridgeDispatcher), falls back to sequential.
 //
 // Core Capabilities:
-//   1. True parallel dispatch — std::thread::scope + clone_for_thread() per step.
+//   1. True parallel dispatch — rayon::scope + clone_for_thread() per step.
 //   2. Structured ExecutionTrace — per-step audit log with timestamps, result hashes, retry history.
 //   3. Retry with exponential backoff — delay = min(base * 2^attempt, max) + deterministic jitter.
 //   4. Cross-phase data flow — results captured in HashMap, substituted into downstream input_refs.
+//   5. Lock-free result collection — crossbeam SegQueue eliminates collector contention.
+//   6. Connection pool reuse — BridgePool with adaptive sizing based on CPU cores.
 //
 // Dispatch Abstraction:
 //   `trait StepDispatcher` decouples execution from transport. Production uses
@@ -23,13 +25,16 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use console::style;
+use crossbeam_queue::SegQueue;
 use easynet_axon::dendrite_bridge::DendriteBridge;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::shared::bridge_pool::BridgePool;
 
 /// Convert `Duration::as_millis()` (u128) to u64, saturating at u64::MAX.
 #[inline]
@@ -211,19 +216,29 @@ impl StepDispatcher for BorrowedBridgeDispatcher<'_> {
 // See `docs/AGENT_IDENTITY.md` invariants 1 and 2.
 
 pub struct AgentAwareDispatcher {
-    endpoint: String,
-    timeout_ms: u64,
-    registry: crate::shared::agents::AgentRegistry,
+    pool: Arc<BridgePool>,
+    registry: Arc<crate::shared::agents::AgentRegistry>,
 }
 
 impl AgentAwareDispatcher {
     pub fn new(endpoint: &str, timeout_ms: u64) -> Self {
         let registry = crate::shared::agents::load_agents()
             .unwrap_or_default();
+        let pool = Arc::new(BridgePool::with_adaptive_size(endpoint, timeout_ms));
         Self {
-            endpoint: endpoint.to_string(),
-            timeout_ms,
-            registry,
+            pool,
+            registry: Arc::new(registry),
+        }
+    }
+
+    /// Create a dispatcher with a pre-existing shared pool (for pool reuse across missions).
+    #[allow(dead_code)]
+    pub fn with_pool(pool: Arc<BridgePool>) -> Self {
+        let registry = crate::shared::agents::load_agents()
+            .unwrap_or_default();
+        Self {
+            pool,
+            registry: Arc::new(registry),
         }
     }
 }
@@ -239,52 +254,72 @@ impl StepDispatcher for AgentAwareDispatcher {
     ) -> Result<Value, String> {
         match target {
             IrTarget::Agent(agent_id) => {
-                // Registry is keyed by string today (see Step 4
-                // follow-up: registry will be keyed by AgentId itself).
-                // For now, look up by the canonical Display form.
-                let key = agent_id.to_string();
-                let entry = self
-                    .registry
-                    .agents
-                    .get(&key)
-                    .or_else(|| {
-                        // Backwards-compat: registry files written
-                        // before the migration may use the bare name
-                        // form (`"claude"` instead of `"default/claude"`).
-                        // Fall back to the bare name when the agent
-                        // is in the default tenant.
-                        if agent_id.tenant == crate::shared::agent_id::DEFAULT_TENANT {
-                            self.registry.agents.get(&agent_id.name)
-                        } else {
-                            None
-                        }
-                    })
-                    .ok_or_else(|| format!("agent '{key}' not found in registry"))?;
-
-                let prompt = build_agent_prompt(ability.as_str(), arguments);
-
-                let response = crate::agent::dispatch::send_to_agent(
-                    &key,
-                    entry,
-                    &prompt,
-                    None,
-                    None,
-                    None,
-                )
-                .map_err(|e| format!("agent dispatch: {e}"))?;
-
-                Ok(serde_json::json!({
-                    "ok": true,
-                    "agent": response.agent,
-                    "output": response.content,
-                    "model": response.model,
-                    "duration_ms": response.duration_ms,
-                }))
+                dispatch_to_agent(&self.registry, agent_id, ability, arguments)
             }
             IrTarget::Device { node_id } => {
-                let bridge = DendriteBridge::connect(&self.endpoint, self.timeout_ms)
-                    .map_err(|e| format!("bridge connect: {e}"))?;
-                bridge
+                let guard = self.pool.checkout()?;
+                guard
+                    .bridge()
+                    .call_mcp_tool_with_timeout(
+                        tenant,
+                        ability.as_str(),
+                        node_id,
+                        arguments,
+                        timeout_ms,
+                    )
+                    .map_err(|e| format!("{e}"))
+                // guard drops here → bridge returned to pool
+            }
+        }
+    }
+
+    fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, String> {
+        Ok(Box::new(AgentAwareDispatcher {
+            pool: Arc::clone(&self.pool),
+            registry: Arc::clone(&self.registry),
+        }))
+    }
+}
+
+// ── Pooled Bridge Dispatcher (for MCP server) ──
+//
+// Unlike BorrowedBridgeDispatcher which borrows a single bridge and
+// cannot be cloned for threads, this dispatcher owns an Arc<BridgePool>
+// and supports true parallel dispatch. Used by MCP server's run_mission
+// handler to enable parallel phase execution.
+
+pub struct PooledBridgeDispatcher {
+    pool: Arc<BridgePool>,
+}
+
+impl PooledBridgeDispatcher {
+    #[allow(dead_code)]
+    pub fn new(endpoint: &str, timeout_ms: u64) -> Self {
+        Self {
+            pool: Arc::new(BridgePool::with_adaptive_size(endpoint, timeout_ms)),
+        }
+    }
+
+    /// Create a dispatcher with a pre-existing shared pool (for pool reuse across missions).
+    pub fn with_pool(pool: Arc<BridgePool>) -> Self {
+        Self { pool }
+    }
+}
+
+impl StepDispatcher for PooledBridgeDispatcher {
+    fn dispatch(
+        &self,
+        tenant: &str,
+        target: &IrTarget,
+        ability: &AbilityName,
+        arguments: &Value,
+        timeout_ms: Option<u64>,
+    ) -> Result<Value, String> {
+        match target {
+            IrTarget::Device { node_id } => {
+                let guard = self.pool.checkout()?;
+                guard
+                    .bridge()
                     .call_mcp_tool_with_timeout(
                         tenant,
                         ability.as_str(),
@@ -294,16 +329,68 @@ impl StepDispatcher for AgentAwareDispatcher {
                     )
                     .map_err(|e| format!("{e}"))
             }
+            IrTarget::Agent(_) => Err(
+                "PooledBridgeDispatcher cannot dispatch to agent targets; \
+                 use AgentAwareDispatcher (e.g. via run_mission_inproc)"
+                    .to_string(),
+            ),
         }
     }
 
     fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, String> {
-        Ok(Box::new(AgentAwareDispatcher {
-            endpoint: self.endpoint.clone(),
-            timeout_ms: self.timeout_ms,
-            registry: self.registry.clone(),
+        Ok(Box::new(PooledBridgeDispatcher {
+            pool: Arc::clone(&self.pool),
         }))
     }
+}
+
+/// Shared agent dispatch logic used by AgentAwareDispatcher.
+fn dispatch_to_agent(
+    registry: &crate::shared::agents::AgentRegistry,
+    agent_id: &crate::shared::agent_id::AgentId,
+    ability: &AbilityName,
+    arguments: &Value,
+) -> Result<Value, String> {
+    // Registry is keyed by string today (see Step 4
+    // follow-up: registry will be keyed by AgentId itself).
+    // For now, look up by the canonical Display form.
+    let key = agent_id.to_string();
+    let entry = registry
+        .agents
+        .get(&key)
+        .or_else(|| {
+            // Backwards-compat: registry files written
+            // before the migration may use the bare name
+            // form (`"claude"` instead of `"default/claude"`).
+            // Fall back to the bare name when the agent
+            // is in the default tenant.
+            if agent_id.tenant == crate::shared::agent_id::DEFAULT_TENANT {
+                registry.agents.get(&agent_id.name)
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| format!("agent '{key}' not found in registry"))?;
+
+    let prompt = build_agent_prompt(ability.as_str(), arguments);
+
+    let response = crate::agent::dispatch::send_to_agent(
+        &key,
+        entry,
+        &prompt,
+        None,
+        None,
+        None,
+    )
+    .map_err(|e| format!("agent dispatch: {e}"))?;
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "agent": response.agent,
+        "output": response.content,
+        "model": response.model,
+        "duration_ms": response.duration_ms,
+    }))
 }
 
 /// Build a prompt for an agent from an EAL step's `function_name` and arguments.
@@ -331,6 +418,25 @@ fn build_agent_prompt(function_name: &str, arguments: &Value) -> String {
 
 // ── Execute with DendriteBridge (convenience) ──
 
+/// Execute a mission using a borrowed bridge (sequential fallback).
+///
+/// This is the legacy path kept for callers that already hold a bridge.
+/// For parallel execution, prefer `execute_pooled` or `execute_with_endpoint`.
+/// Execute a mission with a pooled bridge dispatcher (parallel-capable, device-only).
+///
+/// Creates a new `PooledBridgeDispatcher` per call. For high-frequency callers
+/// (MCP server), prefer `execute_pooled_shared` with a persistent pool.
+#[allow(dead_code)]
+pub fn execute_pooled(
+    endpoint: &str,
+    tenant: &str,
+    ir: &MissionIr,
+) -> anyhow::Result<ExecutionReport> {
+    let dispatcher = PooledBridgeDispatcher::new(endpoint, crate::shared::BRIDGE_CONNECT_TIMEOUT_MS);
+    execute_with_dispatcher(&dispatcher, tenant, ir)
+}
+
+#[allow(dead_code)]
 pub fn execute(
     bridge: &DendriteBridge,
     tenant: &str,
@@ -340,11 +446,24 @@ pub fn execute(
     execute_with_dispatcher(&dispatcher, tenant, ir)
 }
 
-/// Execute using a dispatcher that connects to `endpoint` for each step.
+/// Execute a mission reusing a shared BridgePool (amortizes connection cost across missions).
 ///
-/// This enables true parallel dispatch within phases (each thread uses its own
-/// dispatcher instance). **Agent-aware**: if a step's `target_node_id` matches
-/// a registered agent, it is dispatched to the agent CLI instead of the Hub.
+/// Preferred for high-frequency callers like the MCP server that execute many
+/// missions within a single session.
+pub fn execute_pooled_shared(
+    pool: Arc<BridgePool>,
+    tenant: &str,
+    ir: &MissionIr,
+) -> anyhow::Result<ExecutionReport> {
+    let dispatcher = PooledBridgeDispatcher::with_pool(pool);
+    execute_with_dispatcher(&dispatcher, tenant, ir)
+}
+
+/// Execute using a pooled, agent-aware dispatcher.
+///
+/// This enables true parallel dispatch within phases (each thread checks out
+/// a bridge from the shared pool). **Agent-aware**: if a step's target is
+/// an `IrTarget::Agent`, it is dispatched to the agent CLI instead of the Hub.
 pub fn execute_with_endpoint(
     endpoint: &str,
     tenant: &str,
@@ -503,6 +622,9 @@ enum StepExecResult {
 
 /// Dispatch a batch of steps (identified by `indices` into `steps`) in parallel or sequentially.
 /// Returns `Vec<(local_idx, StepExecResult)>` sorted by `local_idx`.
+///
+/// Parallel path uses rayon's work-stealing threadpool (amortizes thread creation
+/// across phases) and crossbeam's lock-free SegQueue for result collection.
 fn dispatch_batch(
     dispatcher: &dyn StepDispatcher,
     tenant: &str,
@@ -515,41 +637,50 @@ fn dispatch_batch(
         return Vec::new();
     }
     if parallel && indices.len() > 1 {
-        let collector: Mutex<Vec<(usize, StepExecResult)>> = Mutex::new(Vec::new());
-        std::thread::scope(|scope| {
-            for &local_idx in indices {
+        // Pre-resolve arguments and pre-clone dispatchers on the main thread,
+        // so the rayon closure only captures Send types (no &dyn StepDispatcher).
+        let mut tasks: Vec<(usize, Box<dyn StepDispatcher + Send>, Value)> = Vec::new();
+        // Lock-free result queue — each rayon task pushes without contention.
+        let collector = SegQueue::new();
+        for &local_idx in indices {
+            let step = &steps[local_idx];
+            let merged_args = match resolve_arguments(step, captured) {
+                Ok(args) => args,
+                Err(e) => {
+                    collector.push((local_idx, StepExecResult::Error {
+                        message: e, elapsed_ms: 0, started_at: now_unix_ms(),
+                        retry_count: 0, retry_history: Vec::new(),
+                    }));
+                    continue;
+                }
+            };
+            let thread_dispatcher = match dispatcher.clone_for_thread() {
+                Ok(d) => d,
+                Err(e) => {
+                    collector.push((local_idx, StepExecResult::Error {
+                        message: e, elapsed_ms: 0, started_at: now_unix_ms(),
+                        retry_count: 0, retry_history: Vec::new(),
+                    }));
+                    continue;
+                }
+            };
+            tasks.push((local_idx, thread_dispatcher, merged_args));
+        }
+        // Spawn rayon tasks — closure captures only Send types.
+        rayon::scope(|scope| {
+            for (local_idx, thread_dispatcher, merged_args) in tasks {
                 let step = &steps[local_idx];
                 let collector_ref = &collector;
-                let merged_args = resolve_arguments(step, captured);
-                let merged_args = match merged_args {
-                    Ok(args) => args,
-                    Err(e) => {
-                        collector_ref.lock().unwrap().push((local_idx, StepExecResult::Error {
-                            message: e, elapsed_ms: 0, started_at: now_unix_ms(),
-                            retry_count: 0, retry_history: Vec::new(),
-                        }));
-                        continue;
-                    }
-                };
-                let thread_dispatcher = match dispatcher.clone_for_thread() {
-                    Ok(d) => d,
-                    Err(e) => {
-                        collector_ref.lock().unwrap().push((local_idx, StepExecResult::Error {
-                            message: e, elapsed_ms: 0, started_at: now_unix_ms(),
-                            retry_count: 0, retry_history: Vec::new(),
-                        }));
-                        continue;
-                    }
-                };
-                scope.spawn(move || {
+                scope.spawn(move |_| {
                     let result = execute_step_with_retry(
                         thread_dispatcher.as_ref(), tenant, step, &merged_args,
                     );
-                    collector_ref.lock().unwrap().push((local_idx, result));
+                    collector_ref.push((local_idx, result));
                 });
             }
         });
-        let mut results = collector.into_inner().unwrap();
+        // Drain the lock-free queue into a sorted Vec.
+        let mut results: Vec<_> = std::iter::from_fn(|| collector.pop()).collect();
         results.sort_by_key(|(idx, _)| *idx);
         results
     } else {
@@ -641,9 +772,11 @@ fn execute_step_with_retry(
 
     for attempt in 0..max_attempts {
         if attempt > 0 {
-            // Exponential backoff with deterministic jitter
+            // Exponential backoff with deterministic jitter.
+            // Use rayon::yield_now() first to let other tasks run on this thread,
+            // then sleep in small increments so rayon can still steal work between yields.
             let backoff = compute_backoff(attempt, &step.step_id);
-            std::thread::sleep(Duration::from_millis(backoff));
+            backoff_sleep(backoff);
         }
 
         let attempt_start = Instant::now();
@@ -853,6 +986,28 @@ fn process_step_result(
     }
 }
 
+/// Cooperative backoff: yields to rayon's work-stealing scheduler between
+/// short sleep intervals. This prevents a retrying step from monopolizing
+/// a rayon worker thread for the entire backoff duration.
+///
+/// - For delays ≤ 50ms: single yield + sleep (not worth splitting).
+/// - For longer delays: sleep in 50ms chunks with yields between them.
+fn backoff_sleep(total_ms: u64) {
+    const CHUNK_MS: u64 = 50;
+    if total_ms <= CHUNK_MS {
+        rayon::yield_now();
+        std::thread::sleep(Duration::from_millis(total_ms));
+        return;
+    }
+    let mut remaining = total_ms;
+    while remaining > 0 {
+        rayon::yield_now();
+        let chunk = remaining.min(CHUNK_MS);
+        std::thread::sleep(Duration::from_millis(chunk));
+        remaining = remaining.saturating_sub(chunk);
+    }
+}
+
 fn compute_backoff(attempt: u32, step_id: &str) -> u64 {
     let base = RETRY_BASE_MS * 2u64.pow(attempt.saturating_sub(1));
     let capped = base.min(RETRY_MAX_MS);
@@ -896,7 +1051,7 @@ mod tests {
     use super::*;
     use crate::eal::{parser, planner};
     use std::sync::atomic::{AtomicU32, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
     // ── Mock dispatcher for testing ──

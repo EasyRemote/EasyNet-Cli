@@ -113,7 +113,7 @@ pub fn list_a2a_agents(br: &DendriteBridge, tenant: &str, args: &Map<String, Val
         .and_then(|v| v.as_str())
         .filter(|s| !s.trim().is_empty())
         .map(ToString::to_string);
-    let limit = args.get("limit").and_then(Value::as_i64).unwrap_or(100);
+    let limit = args.get("limit").and_then(Value::as_i64).unwrap_or(100) as u32;
 
     let agents = br
         .list_a2a_agents(tenant, &tag_refs, owner_id.as_deref(), limit)
@@ -215,7 +215,15 @@ pub fn invoke_ability(br: &DendriteBridge, tenant: &str, args: &Map<String, Valu
         .map_err(|e| e.to_string())
 }
 
-pub fn run_mission(br: &DendriteBridge, tenant: &str, args: &Map<String, Value>) -> HandlerResult {
+/// Execute a mission reusing a shared BridgePool for parallel phase execution.
+///
+/// This is the primary path for MCP server calls. The pool is persisted across
+/// the MCP session lifetime, so connections are amortized across missions.
+pub fn run_mission_with_pool(
+    pool: std::sync::Arc<crate::shared::bridge_pool::BridgePool>,
+    tenant: &str,
+    args: &Map<String, Value>,
+) -> HandlerResult {
     let source = req(args, "eal_source")?;
     let emit_only = args
         .get("emit_ir_only")
@@ -229,7 +237,8 @@ pub fn run_mission(br: &DendriteBridge, tenant: &str, args: &Map<String, Value>)
         return Ok(serde_json::to_value(&ir).unwrap_or(json!(null)));
     }
 
-    let r = eal::interpreter::execute(br, tenant, &ir).map_err(|e| e.to_string())?;
+    let r = eal::interpreter::execute_pooled_shared(pool, tenant, &ir)
+        .map_err(|e| e.to_string())?;
     Ok(json!({
         "ok": true,
         "mission": ir.name,
