@@ -12,13 +12,22 @@ main() {
     detect_platform
     download_and_install
     setup_env
+    cleanup_stale_binaries
+    reload_shell
     echo ""
-    echo "  EasyNet CLI installed successfully!"
-    echo "    - easynet                      → $INSTALL_DIR/"
-    echo "    - axon-runtime                 → $INSTALL_DIR/"
-    echo "    - libaxon_dendrite_bridge.$LIB_EXT  → $NATIVE_DIR/"
+    echo "  ✓ EasyNet CLI installed successfully!"
     echo ""
-    echo "  Run 'easynet --help' to get started."
+    echo "    easynet                      → $INSTALL_DIR/"
+    echo "    axon-runtime                 → $INSTALL_DIR/"
+    echo "    libaxon_dendrite_bridge.$LIB_EXT  → $NATIVE_DIR/"
+    echo ""
+    if [ -n "${PROFILE:-}" ]; then
+        echo "  To activate in this terminal, run:"
+        echo ""
+        echo "    source $PROFILE"
+        echo ""
+    fi
+    echo "  Then run 'easynet --help' to get started."
     echo ""
 }
 
@@ -106,12 +115,40 @@ setup_env() {
             echo "# EasyNet dendrite bridge" >> "$PROFILE"
             echo "$ENV_LINE" >> "$PROFILE"
             echo "  Added EASYNET_DENDRITE_BRIDGE_LIB to $PROFILE"
-            echo "  Restart your terminal or run: source $PROFILE"
         fi
     else
         echo "  Could not detect shell profile. Add this to your shell config:"
         echo "    $ENV_LINE"
     fi
+}
+
+reload_shell() {
+    # Source the profile to make env vars available in the current session.
+    # This is a best-effort — if running via pipe (curl | sh), the sourced
+    # vars won't persist in the parent shell, but they'll be available for
+    # any easynet commands run within this script.
+    if [ -n "${PROFILE:-}" ] && [ -f "$PROFILE" ]; then
+        # shellcheck disable=SC1090
+        . "$PROFILE" 2>/dev/null || true
+    fi
+}
+
+cleanup_stale_binaries() {
+    # Remove stale easynet/axon-runtime binaries from other PATH dirs
+    # that would shadow the freshly installed copy.
+    for bin in easynet axon-runtime; do
+        IFS=:
+        for dir in $PATH; do
+            unset IFS
+            [ "$dir" = "$INSTALL_DIR" ] && continue
+            candidate="$dir/$bin"
+            [ -x "$candidate" ] || continue
+            echo "  Removing stale $candidate (shadows ${INSTALL_DIR}/${bin})"
+            rm -f "$candidate" 2>/dev/null || sudo rm -f "$candidate" 2>/dev/null || \
+                echo "  Warning: could not remove $candidate — please delete it manually"
+        done
+        unset IFS
+    done
 }
 
 main

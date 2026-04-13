@@ -111,38 +111,47 @@ use console::style;
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    // ── Layered, noun-first commands (the new public surface) ─────────────
-    /// Manage agent instances (network actors).
+    // ── Core commands ─────────────────────────────────────────────────────
+    /// Manage remote devices — pair, list, exec, terminal.
     #[command(display_order = 1)]
-    Agent(groups::agent::AgentArgs),
-
-    /// Manage public ability endpoints.
-    #[command(display_order = 2)]
-    Ability(groups::ability::AbilityArgs),
-
-    /// Manage hosting substrates (physical devices).
-    #[command(display_order = 3)]
     Device(groups::device::DeviceArgs),
 
-    /// Compile, run, and inspect EAL missions.
+    /// Manage agents — network actors that expose abilities.
+    #[command(display_order = 2)]
+    Agent(groups::agent::AgentArgs),
+
+    /// Manage abilities — deploy, invoke, list public endpoints.
+    #[command(display_order = 3)]
+    Ability(groups::ability::AbilityArgs),
+
+    /// Voice/video calls — create, join, leave multi-party conferences.
     #[command(display_order = 4)]
+    Call(groups::call::CallArgs),
+
+    /// Compile, run, and inspect EAL orchestration missions.
+    #[command(display_order = 5)]
     Mission(groups::mission::MissionArgs),
 
-    /// Manage the local Axon runtime.
-    #[command(display_order = 5)]
+    // ── Infrastructure ───────────────────────────────────────────────────
+    /// Manage the local Axon runtime (start, stop, status).
+    #[command(display_order = 6)]
     Runtime(groups::runtime::RuntimeArgs),
 
-    /// Local MCP server process.
-    #[command(display_order = 6)]
+    /// MCP server — expose device abilities to AI assistants.
+    #[command(display_order = 7)]
     Mcp(groups::mcp::McpArgs),
 
-    // ── Cross-cutting tools ───────────────────────────────────────────────
-    /// Aggregated health check across runtime / bridge / agents / MCP.
-    #[command(display_order = 7)]
+    // ── Tools ────────────────────────────────────────────────────────────
+    /// Update, check version, or uninstall EasyNet CLI.
+    #[command(display_order = 8, name = "self")]
+    SelfCmd(groups::selfcmd::SelfArgs),
+
+    /// Health check — runtime, bridge, agents, MCP connectivity.
+    #[command(display_order = 9)]
     Doctor(doctor::DoctorArgs),
 
-    /// Generate a shell completion script (bash/zsh/fish/powershell/elvish).
-    #[command(display_order = 8)]
+    /// Generate shell completion scripts (bash/zsh/fish/powershell).
+    #[command(display_order = 10)]
     Completion(completion::CompletionArgs),
 
     // ── Deprecated flat aliases (kept until next release) ─────────────────
@@ -206,8 +215,10 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         Command::Mission(args) => groups::mission::run(args),
         Command::Runtime(args) => groups::runtime::run(args),
         Command::Mcp(args) => groups::mcp::run(args),
+        Command::Call(args) => groups::call::run(args),
 
         // Cross-cutting
+        Command::SelfCmd(args) => groups::selfcmd::run(args),
         Command::Doctor(args) => doctor::run(args),
         Command::Completion(args) => completion::run::<crate::App>(args),
 

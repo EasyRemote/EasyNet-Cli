@@ -43,7 +43,7 @@ mod shared;
 use clap::Parser;
 
 #[derive(Debug, Parser)]
-#[command(name = "easynet", version, about = "EasyNet Hub CLI + MCP server")]
+#[command(name = "easynet", version, about = "EasyNet — device management, remote execution, and real-time communication")]
 pub struct App {
     #[command(subcommand)]
     pub command: cli::Command,

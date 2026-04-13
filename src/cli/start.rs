@@ -230,12 +230,14 @@ fn start_runtime_for_device(
     join_token: Option<&str>,
     insecure: bool,
 ) -> anyhow::Result<easynet_axon::server::ServerHandle> {
+    // Local runtime does not need mTLS — no TLS cert provisioning flow exists yet.
+    // The `insecure` CLI flag controls Hub gRPC transport, not local runtime mTLS.
+    let _ = insecure;
     let mut cfg = ServerConfig::default()
         .hub(hub)
         .hub_tenant(tenant)
         .hub_label(label)
-        .hub_runtime_id(runtime_id)
-        .insecure(insecure);
+        .hub_runtime_id(runtime_id);
     if let Some(t) = join_token {
         cfg = cfg.hub_join_token(t);
     }

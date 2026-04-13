@@ -118,15 +118,40 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         .get("display_name")
         .and_then(|v| v.as_str())
         .unwrap_or(&args.node_id);
-    let state = node
-        .get("state")
-        .and_then(|v| v.as_str())
-        .unwrap_or("UNKNOWN");
+
+    // state and trust_level are returned as integers from Axon SDK.
+    let state = match node.get("state").and_then(|v| v.as_i64()).unwrap_or(0) {
+        0 => "UNKNOWN",
+        1 => "JOINING",
+        2 => "PROBATION",
+        3 => "HEALTHY",
+        4 => "SUSPECT",
+        5 => "QUARANTINED",
+        6 => "DRAINING",
+        7 => "REMOVED",
+        _ => "UNKNOWN",
+    };
+    let trust = match node.get("trust_level").and_then(|v| v.as_i64()).unwrap_or(0) {
+        0 => "UNKNOWN",
+        1 => "UNTRUSTED",
+        2 => "PROBATION",
+        3 => "STANDARD",
+        4 => "TRUSTED",
+        _ => "UNKNOWN",
+    };
+    let online = node.get("online").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    let dot = if online {
+        style("●").green()
+    } else {
+        style("●").red()
+    };
 
     eprintln!();
-    eprintln!("  {} {}", style("●").cyan(), style(display_name).bold());
+    eprintln!("  {} {}", dot, style(display_name).bold());
     output::detail("node_id", &args.node_id);
-    output::detail("state", state);
+    output::detail("state", &format!("{state} (trust: {trust})"));
+    output::detail("online", &format!("{online}"));
     if let Some(os) = node.pointer("/device/os").and_then(|v| v.as_str()) {
         output::detail("os", os);
     }

@@ -25,7 +25,9 @@
 
 pub mod ability;
 pub mod agent;
+pub mod call;
 pub mod device;
 pub mod mcp;
 pub mod mission;
 pub mod runtime;
+pub mod selfcmd;

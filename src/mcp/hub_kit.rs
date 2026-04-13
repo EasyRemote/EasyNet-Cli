@@ -6,20 +6,25 @@
 //
 // Design:
 // - Caches a single DendriteBridge connection via RefCell (single-threaded stdio model).
+// - Persists a shared BridgePool (Arc) for mission execution across the MCP session.
 // - Reconnects lazily on first tool call.
 // - Dispatches tool name → handler function via match.
 // - Converts handler Result<Value, String> → ToolResult at the boundary.
 //
-// Thread Safety: intentionally !Send/!Sync (RefCell). Appropriate for MCP stdio protocol.
+// Thread Safety:
+// - RefCell<DendriteBridge>: intentionally !Send/!Sync for single-threaded MCP stdio.
+// - Arc<BridgePool>: Send+Sync, shared with rayon worker threads during mission execution.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::cell::RefCell;
+use std::sync::Arc;
 use easynet_axon::dendrite_bridge::DendriteBridge;
 use easynet_axon::mcp::{McpToolProvider, ToolResult};
 use serde_json::{json, Map, Value};
 use super::{handlers, specs};
+use crate::shared::bridge_pool::BridgePool;
 
 pub struct HubCaseKit {
     endpoint: String,
@@ -29,10 +34,18 @@ pub struct HubCaseKit {
     agent: Option<String>,
     agent_dispatch_enabled: bool,
     cached: RefCell<Option<DendriteBridge>>,
+    /// Shared connection pool for mission execution — persisted across the MCP session
+    /// lifetime so connections are reused across multiple `run_mission` calls.
+    mission_pool: Arc<BridgePool>,
 }
 
 impl HubCaseKit {
     pub fn new(endpoint: String, tenant: String) -> Self {
+        // Initialize the shared pool once at construction; reused for all missions.
+        let pool = Arc::new(BridgePool::with_adaptive_size(
+            &endpoint,
+            crate::shared::BRIDGE_CONNECT_TIMEOUT_MS,
+        ));
         Self {
             endpoint,
             tenant,
@@ -41,6 +54,7 @@ impl HubCaseKit {
             agent: None,
             agent_dispatch_enabled: false,
             cached: RefCell::new(None),
+            mission_pool: pool,
         }
     }
 
@@ -193,6 +207,20 @@ impl McpToolProvider for HubCaseKit {
             };
         }
 
+        // run_mission uses the session-persistent BridgePool for parallel execution.
+        // Connections are reused across missions — no per-call pool creation overhead.
+        if name == "run_mission" {
+            return match handlers::run_mission_with_pool(
+                Arc::clone(&self.mission_pool), &self.tenant, &patched,
+            ) {
+                Ok(v) => ToolResult { payload: v, is_error: false },
+                Err(msg) => ToolResult {
+                    payload: json!({"ok": false, "error": msg}),
+                    is_error: true,
+                },
+            };
+        }
+
         self.with_bridge(|br, tenant| match name {
             "hub_status" => handlers::hub_status(br, tenant, &patched),
             "list_devices" => handlers::list_devices(br, tenant, &patched),
@@ -205,7 +233,6 @@ impl McpToolProvider for HubCaseKit {
             "deploy_ability" => handlers::deploy_ability(br, tenant, &patched),
             "execute_command" => handlers::execute_command(br, tenant, &patched),
             "invoke_ability" => handlers::invoke_ability(br, tenant, &patched),
-            "run_mission" => handlers::run_mission(br, tenant, &patched),
             "manage_device" => handlers::manage_device(br, tenant, &patched),
             "uninstall_ability" => handlers::uninstall_ability(br, tenant, &patched),
             _ => Err(format!("unknown tool: {name}")),

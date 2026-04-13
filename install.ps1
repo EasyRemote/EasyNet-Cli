@@ -33,20 +33,34 @@ if (-not (Test-Path $NativeDir)) {
 $BridgeLib = Get-ChildItem $TmpDir -Filter "libaxon_dendrite_bridge.*" | Select-Object -First 1
 if ($BridgeLib) {
     Copy-Item $BridgeLib.FullName (Join-Path $NativeDir $BridgeLib.Name) -Force
-    # Set environment variable
-    [Environment]::SetEnvironmentVariable(
-        "EASYNET_DENDRITE_BRIDGE_LIB",
-        (Join-Path $NativeDir $BridgeLib.Name),
-        "User"
-    )
-    Write-Host "Set EASYNET_DENDRITE_BRIDGE_LIB environment variable"
+    $BridgePath = Join-Path $NativeDir $BridgeLib.Name
+    # Persist for future sessions
+    [Environment]::SetEnvironmentVariable("EASYNET_DENDRITE_BRIDGE_LIB", $BridgePath, "User")
+    # Activate in current session immediately
+    $env:EASYNET_DENDRITE_BRIDGE_LIB = $BridgePath
+    Write-Host "Set EASYNET_DENDRITE_BRIDGE_LIB = $BridgePath"
 }
 
 # Add to PATH if not already there
 $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if ($UserPath -notlike "*$InstallDir*") {
     [Environment]::SetEnvironmentVariable("Path", "$UserPath;$InstallDir", "User")
-    Write-Host "Added $InstallDir to PATH (restart your terminal to take effect)"
+    # Activate in current session immediately
+    $env:Path = "$env:Path;$InstallDir"
+    Write-Host "Added $InstallDir to PATH"
+}
+
+# Remove stale binaries from other PATH dirs that would shadow the install
+$PathDirs = $env:Path -split ";"
+foreach ($bin in @("easynet.exe", "axon-runtime.exe")) {
+    foreach ($dir in $PathDirs) {
+        if ($dir -eq $InstallDir) { continue }
+        $candidate = Join-Path $dir $bin
+        if (Test-Path $candidate) {
+            Write-Host "  Removing stale $candidate (shadows $InstallDir\$bin)"
+            Remove-Item $candidate -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 # Cleanup
@@ -54,10 +68,11 @@ Remove-Item $TmpZip -Force
 Remove-Item $TmpDir -Recurse -Force
 
 Write-Host ""
-Write-Host "  EasyNet CLI installed to $InstallDir"
-Write-Host "    - easynet.exe"
-Write-Host "    - axon-runtime.exe"
-Write-Host "    - dendrite bridge -> $NativeDir"
+Write-Host "  ✓ EasyNet CLI installed successfully!"
+Write-Host ""
+Write-Host "    easynet.exe       → $InstallDir"
+Write-Host "    axon-runtime.exe  → $InstallDir"
+Write-Host "    dendrite bridge   → $NativeDir"
 Write-Host ""
 Write-Host "  Run 'easynet --help' to get started."
 Write-Host ""

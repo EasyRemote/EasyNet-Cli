@@ -25,6 +25,7 @@
 
 pub mod agent_id;
 pub mod agents;
+pub mod bridge_pool;
 pub mod config;
 pub mod net;
 pub mod node;
