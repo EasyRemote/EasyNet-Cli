@@ -179,17 +179,24 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
             labels.insert("a2a.enabled".into(), "true".into());
             labels.insert("a2a.name".into(), hostname.clone());
 
-            let agent_names: Vec<String> = registry.agents.keys().cloned().collect();
+            // Encode full agent details as JSON so the backend can
+            // reconstruct individual agent entries from the card.
+            let agents_json: Vec<serde_json::Value> = registry.agents.iter()
+                .map(|(name, e)| serde_json::json!({
+                    "name": name,
+                    "type": format!("{:?}", e.agent_type),
+                    "model": e.model.as_deref().unwrap_or(""),
+                    "timeout": e.timeout_secs,
+                }))
+                .collect();
+            labels.insert("a2a.agents_json".into(), serde_json::to_string(&agents_json).unwrap_or_default());
+
             let desc = format!(
-                "AI agents: {}",
-                registry.agents.iter()
-                    .map(|(name, e)| format!("{name} ({:?})", e.agent_type))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                "Device hosting {} AI agent(s): {}",
+                registry.agents.len(),
+                registry.agents.keys().cloned().collect::<Vec<_>>().join(", ")
             );
             labels.insert("a2a.description".into(), desc);
-            // Encode agent list as comma-separated for discovery.
-            labels.insert("a2a.agents".into(), agent_names.join(","));
         }
     }
 
