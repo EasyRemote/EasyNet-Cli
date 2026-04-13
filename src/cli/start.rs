@@ -171,8 +171,30 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
         }
     };
 
+    // Build a2a.* labels from local agent registry so this node is
+    // discoverable as an A2A agent across the Axon federation.
+    let mut labels = std::collections::HashMap::new();
+    if let Ok(registry) = crate::shared::agents::load_agents() {
+        if !registry.agents.is_empty() {
+            labels.insert("a2a.enabled".into(), "true".into());
+            labels.insert("a2a.name".into(), hostname.clone());
+
+            let agent_names: Vec<String> = registry.agents.keys().cloned().collect();
+            let desc = format!(
+                "AI agents: {}",
+                registry.agents.iter()
+                    .map(|(name, e)| format!("{name} ({:?})", e.agent_type))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            labels.insert("a2a.description".into(), desc);
+            // Encode agent list as comma-separated for discovery.
+            labels.insert("a2a.agents".into(), agent_names.join(","));
+        }
+    }
+
     let reg_resp = bridge
-        .register_node(&creds.tenant_id, &creds.node_id, &hostname)
+        .register_node_with_labels(&creds.tenant_id, &creds.node_id, &hostname, Some(labels))
         .context("register node")?;
 
     let heartbeat_ms = reg_resp
