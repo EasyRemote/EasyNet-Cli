@@ -4,24 +4,144 @@
 // File: src/mcp/handlers.rs
 // Description: Implementation of Hub-level MCP tool handlers.
 //
-// Each handler: (bridge, tenant, args) → Result<Value, String>
-// The dispatch layer in hub_kit.rs converts to ToolResult.
+// Contract:
+//   Each handler: `(bridge, tenant, args) → Result<Value, McpError>`.
+//
+//   The `McpError` variant picks the behaviour the calling agent should
+//   take: `Validation` for bad input, `NotFound` for missing resources,
+//   `Unavailable` for transient bridge/device failures, `Internal` for
+//   bugs. The provider (`provider.rs`) renders the error into the
+//   on-the-wire envelope `{"ok": false, "error_code": ..., "error": ...}`.
+//
+//   See `mcp/error.rs` for the full design note and the stability
+//   guarantees on `error_code` strings.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use crate::eal;
+use crate::mcp::error::McpError;
+use crate::persistence::config;
+use crate::shared::node::is_online;
 use easynet_axon::dendrite_bridge::DendriteBridge;
 use serde_json::{json, Map, Value};
-use crate::eal;
-use crate::shared::node::is_online;
-use crate::shared::config;
 
-type HandlerResult = Result<Value, String>;
+/// Crate-local convenience alias for the handler return shape. Not part
+/// of the public MCP contract — that contract is governed by
+/// `McpError::error_code` and the on-the-wire envelope produced by
+/// `provider::into_tool_result`. Keeping this alias `pub(crate)` makes
+/// the boundary explicit: callers outside `mcp::` must go through the
+/// rendered `ToolResult`, not the raw Rust type.
+pub(crate) type HandlerResult = Result<Value, McpError>;
 
-fn req<'a>(args: &'a Map<String, Value>, key: &str) -> Result<&'a str, String> {
+// ── Timeouts ────────────────────────────────────────────────────────────────
+// MCP-level call budgets, in milliseconds to match the bridge API
+// (commit 14115fa unified the unit across call sites). Kept next to the
+// handlers they govern so the budget is visible at the call site rather
+// than buried in shared/*.
+
+/// Default deadline for a single `invoke_ability` call. Callers that need
+/// a different budget should pass `timeout` through the CLI flag rather
+/// than retuning this floor.
+const INVOKE_ABILITY_TIMEOUT_MS: u64 = 60_000;
+
+/// Default deadline for `execute_command`. One shot of shell is cheap;
+/// the 60 s ceiling is for slow-starting interpreters. Long-running
+/// commands belong in an ability, not in `execute_command`.
+const EXECUTE_COMMAND_TIMEOUT_MS: u64 = 60_000;
+
+// ── A2A listing bounds ──────────────────────────────────────────────────────
+// The authoritative range lives in `super::specs` where the JSON Schema
+// that advertises it to callers is generated. We pull the same constants
+// here so the validator and the schema cannot drift — changing either
+// side alone would silently produce a validator / advertised-bound
+// mismatch and confuse every LLM that trusts the schema.
+
+use super::specs::{LIST_A2A_LIMIT_DEFAULT, LIST_A2A_LIMIT_MAX, LIST_A2A_LIMIT_MIN};
+
+fn req<'a>(args: &'a Map<String, Value>, key: &str) -> Result<&'a str, McpError> {
     args.get(key)
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| format!("missing: {key}"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| McpError::Validation(format!("missing required field `{key}`")))
+}
+
+fn parse_list_a2a_limit(args: &Map<String, Value>) -> Result<u32, McpError> {
+    let err = || {
+        McpError::Validation(format!(
+            "field `limit` must be an integer in [{LIST_A2A_LIMIT_MIN}, {LIST_A2A_LIMIT_MAX}]"
+        ))
+    };
+    #[allow(clippy::cast_possible_truncation)]
+    let default_u32 = LIST_A2A_LIMIT_DEFAULT as u32;
+    match args.get("limit") {
+        None => Ok(default_u32),
+        Some(Value::Number(n)) => n
+            .as_u64()
+            .filter(|v| (LIST_A2A_LIMIT_MIN..=LIST_A2A_LIMIT_MAX).contains(v))
+            .map(|v| v as u32)
+            .ok_or_else(err),
+        Some(_) => Err(err()),
+    }
+}
+
+/// Extract `node_id` for `invoke_ability`. The empty string is the
+/// auto-route sentinel (runtime picks the first activated install);
+/// any non-empty value is validated against the `NodeId` grammar so
+/// a typo is caught at the MCP boundary instead of surfacing as a
+/// bridge-side "not found".
+fn parse_invoke_node_id(args: &Map<String, Value>) -> Result<&str, McpError> {
+    let raw = match args.get("node_id") {
+        None | Some(Value::Null) => return Ok(""),
+        // `trim()` collapses both "explicit empty" and "whitespace-only"
+        // into the same auto-route sentinel. The CLI layer (invoke.rs)
+        // rejects `--node ""` earlier; at the MCP boundary we accept it
+        // as auto-route so a programmatic caller can send an empty
+        // string without first having to strip the field.
+        Some(Value::String(s)) => s.trim(),
+        Some(_) => {
+            return Err(McpError::Validation(
+                "field `node_id` must be a string".into(),
+            ));
+        }
+    };
+    if raw.is_empty() {
+        return Ok("");
+    }
+    // Validate format at the boundary: a malformed node_id at this
+    // point is a caller contract violation, not a transport issue.
+    crate::registry::agent_id::NodeId::parse(raw).map_err(|e| {
+        McpError::Validation(format!("field `node_id`: {e}"))
+    })?;
+    Ok(raw)
+}
+
+/// Extract a required `node_id` field with format validation.
+///
+/// Unlike `req(args, "node_id")`, this runs the input through
+/// [`NodeId::parse`] so handlers that accept a node id as a hard
+/// requirement (every device-targeted verb) reject malformed input
+/// uniformly. The returned `&str` is the caller-supplied text,
+/// borrowed from `args`, and is safe to pass to bridge APIs that
+/// expect `&str`. Passing the typed `NodeId` all the way through is
+/// deferred until the bridge SDK grows a typed node-id argument; the
+/// validation boundary here is the point where a programmatic error
+/// would otherwise escape as a misleading "not found".
+fn req_node_id(args: &Map<String, Value>) -> Result<&str, McpError> {
+    let raw = req(args, "node_id")?;
+    crate::registry::agent_id::NodeId::parse(raw).map_err(|e| {
+        McpError::Validation(format!("field `node_id`: {e}"))
+    })?;
+    Ok(raw)
+}
+
+fn parse_invoke_arguments(args: &Map<String, Value>) -> Result<Value, McpError> {
+    match args.get("arguments") {
+        None | Some(Value::Null) => Ok(json!({})),
+        Some(v) if v.is_object() => Ok(v.clone()),
+        Some(_) => Err(McpError::Validation(
+            "field `arguments` must be a JSON object".into(),
+        )),
+    }
 }
 
 /// Wrap a shell command in a Python subprocess template that returns JSON.
@@ -41,8 +161,10 @@ fn build_python_subprocess_template(command: &str) -> String {
          print(json.dumps({{'entries': [combined], 'command': cmd, \
          'exit_code': proc.returncode, 'stdout': proc.stdout, 'stderr': proc.stderr}}))"
     );
-    format!("printf '%s' {json_script} | python3 -",
-        json_script = shell_escape_posix(&script))
+    format!(
+        "printf '%s' {json_script} | python3 -",
+        json_script = shell_escape_posix(&script)
+    )
 }
 
 /// POSIX-safe shell escaping: wraps in single quotes, escapes embedded single quotes.
@@ -50,14 +172,47 @@ fn shell_escape_posix(raw: &str) -> String {
     format!("'{}'", raw.replace('\'', "'\"'\"'"))
 }
 
+/// Convert an untyped error value (`anyhow::Error`,
+/// `Box<dyn Error>`, …) into an [`McpError::Unavailable`].
+///
+/// # Why this is the *only* fallback — not the default path
+///
+/// The SDK now surfaces `Result<_, AxonError>` and routes through
+/// [`From<AxonError> for McpError`](super::error::McpError). That is
+/// the typed, category-preserving path — every `br.xxx().map_err(
+/// McpError::from)` in this file classifies a `NotInstalled` as
+/// `NotFound`, a `DeadlineExceeded` as `DeadlineExceeded`, and so
+/// on. This function exists solely for the few call sites whose
+/// error type is genuinely opaque — today that is
+/// [`crate::eal::interpreter::execute_pooled_shared`], which
+/// returns `anyhow::Error` because it spans the whole mission
+/// pipeline (parse + plan + dispatch + trace-write) and no single
+/// category fits the union.
+///
+/// When a caller uses this helper, it is promising one of two
+/// things:
+///
+///   1. *I already categorised the typed errors before this call
+///      and what's left is legitimately transport-class.*
+///   2. *The error is genuinely opaque (a composition of many
+///      things) and `Unavailable` is the safest default — agents
+///      get a retryable signal, operator-facing message preserved.*
+///
+/// Any new call site should justify which case it falls under. If
+/// the source is an [`easynet_axon::AxonError`], do NOT use this
+/// helper — route through `McpError::from` for a precise category.
+fn anyhow_to_mcp(e: impl std::fmt::Display) -> McpError {
+    McpError::Unavailable(e.to_string())
+}
+
 pub fn hub_status(br: &DendriteBridge, tenant: &str, _: &Map<String, Value>) -> HandlerResult {
-    let nodes = br.list_nodes(tenant, None).map_err(|e| e.to_string())?;
+    let nodes = br.list_nodes(tenant, None).map_err(McpError::from)?;
     let on = nodes.iter().filter(|n| is_online(n)).count();
     Ok(json!({"nodes_online": on, "nodes_offline": nodes.len() - on}))
 }
 
 pub fn list_devices(br: &DendriteBridge, tenant: &str, args: &Map<String, Value>) -> HandlerResult {
-    let nodes = br.list_nodes(tenant, None).map_err(|e| e.to_string())?;
+    let nodes = br.list_nodes(tenant, None).map_err(McpError::from)?;
     let sf = args.get("state_filter").and_then(|v| v.as_str());
     let filtered: Vec<_> = nodes
         .into_iter()
@@ -72,30 +227,71 @@ pub fn list_devices(br: &DendriteBridge, tenant: &str, args: &Map<String, Value>
     Ok(json!({"devices": filtered, "count": filtered.len()}))
 }
 
-pub fn get_device_detail(br: &DendriteBridge, tenant: &str, args: &Map<String, Value>) -> HandlerResult {
-    let node_id = req(args, "node_id")?;
-    let nodes = br.list_nodes(tenant, None).map_err(|e| e.to_string())?;
+pub fn get_device_detail(
+    br: &DendriteBridge,
+    tenant: &str,
+    args: &Map<String, Value>,
+) -> HandlerResult {
+    let node_id = req_node_id(args)?;
+    let nodes = br.list_nodes(tenant, None).map_err(McpError::from)?;
+    // The device may legitimately not exist (typo, wrong tenant). Caller
+    // needs `not_found` — not `unavailable` — because retrying won't help.
     let node = nodes
         .iter()
-        .find(|n| n.get("node_id").and_then(|v| v.as_str()) == Some(node_id));
-    let abilities = br.list_mcp_tools(tenant, "", node_id).unwrap_or_default();
+        .find(|n| n.get("node_id").and_then(|v| v.as_str()) == Some(node_id))
+        .ok_or_else(|| McpError::NotFound(format!("device '{node_id}' not registered")))?;
+    // `list_mcp_tools` failure here used to be swallowed into an empty
+    // vec via `unwrap_or_default()`, which lied to the calling agent:
+    // it would see `{"abilities": []}` and conclude the device hosts no
+    // abilities, when in fact we just couldn't fetch the list. That is
+    // exactly the class of silent false-negative the structured-error
+    // migration was supposed to kill. Bridge failure here is transient
+    // (transport / timeout / remote 5xx) → `Unavailable` so agents can
+    // retry, and the device record is still surfaced for UX.
+    let abilities = br
+        .list_mcp_tools(tenant, "", node_id)
+        .map_err(McpError::from)?;
     Ok(json!({"node": node, "abilities": abilities}))
 }
 
-pub fn list_all_abilities(br: &DendriteBridge, tenant: &str, args: &Map<String, Value>) -> HandlerResult {
+/// Discover abilities across the federation, optionally filtered.
+///
+/// Historically this was two separate tools (`list_all_abilities`
+/// for glob-filtered discovery and `search_abilities` for free-text
+/// search). The bridge SDK exposes a single endpoint for both —
+/// `list_mcp_tools(tenant, pattern, node_id)` treats the pattern as
+/// a substring/glob — so the two tools were behaviourally
+/// indistinguishable at the handler layer. Presenting them as
+/// distinct MCP tools forced every LLM caller to pick between
+/// functions that did the same thing; the redundant tool has been
+/// removed and this handler absorbs the single merged spec.
+///
+/// Contract:
+/// - `node_id` absent → federation-wide view
+///   (`list_mcp_tools` returns entries keyed by tool_name with
+///   `node_ids[]` showing every server)
+/// - `node_id` present → scoped to that one device
+/// - `name_pattern` absent → no filter
+/// - `name_pattern` present → substring/glob match on tool_name
+pub fn list_all_abilities(
+    br: &DendriteBridge,
+    tenant: &str,
+    args: &Map<String, Value>,
+) -> HandlerResult {
     let node = args.get("node_id").and_then(|v| v.as_str()).unwrap_or("");
-    let pat = args.get("name_pattern").and_then(|v| v.as_str()).unwrap_or("");
-    let t = br.list_mcp_tools(tenant, pat, node).map_err(|e| e.to_string())?;
+    let pat = args
+        .get("name_pattern")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let t = br.list_mcp_tools(tenant, pat, node).map_err(McpError::from)?;
     Ok(json!({"abilities": t, "count": t.len()}))
 }
 
-pub fn search_abilities(br: &DendriteBridge, tenant: &str, args: &Map<String, Value>) -> HandlerResult {
-    let query = req(args, "query")?;
-    let t = br.list_mcp_tools(tenant, query, "").map_err(|e| e.to_string())?;
-    Ok(json!({"results": t, "count": t.len()}))
-}
-
-pub fn list_a2a_agents(br: &DendriteBridge, tenant: &str, args: &Map<String, Value>) -> HandlerResult {
+pub fn list_a2a_agents(
+    br: &DendriteBridge,
+    tenant: &str,
+    args: &Map<String, Value>,
+) -> HandlerResult {
     let tag_strings: Vec<String> = args
         .get("tags")
         .and_then(|v| v.as_array())
@@ -113,21 +309,28 @@ pub fn list_a2a_agents(br: &DendriteBridge, tenant: &str, args: &Map<String, Val
         .and_then(|v| v.as_str())
         .filter(|s| !s.trim().is_empty())
         .map(ToString::to_string);
-    let limit = args.get("limit").and_then(Value::as_i64).unwrap_or(100) as u32;
+    let limit = parse_list_a2a_limit(args)?;
 
     let agents = br
         .list_a2a_agents(tenant, &tag_refs, owner_id.as_deref(), limit)
-        .map_err(|e| e.to_string())?;
+        .map_err(McpError::from)?;
     Ok(json!({"agents": agents, "count": agents.len()}))
 }
 
-pub fn get_a2a_agent_card(br: &DendriteBridge, tenant: &str, args: &Map<String, Value>) -> HandlerResult {
-    let node_id = req(args, "node_id")?;
-    br.get_a2a_agent_card(tenant, node_id)
-        .map_err(|e| e.to_string())
+pub fn get_a2a_agent_card(
+    br: &DendriteBridge,
+    tenant: &str,
+    args: &Map<String, Value>,
+) -> HandlerResult {
+    let node_id = req_node_id(args)?;
+    br.get_a2a_agent_card(tenant, node_id).map_err(McpError::from)
 }
 
-pub fn send_a2a_task(br: &DendriteBridge, tenant: &str, args: &Map<String, Value>) -> HandlerResult {
+pub fn send_a2a_task(
+    br: &DendriteBridge,
+    tenant: &str,
+    args: &Map<String, Value>,
+) -> HandlerResult {
     let target_agent_id = req(args, "target_agent_id")?;
     let skill_id = req(args, "skill_id")?;
 
@@ -151,27 +354,42 @@ pub fn send_a2a_task(br: &DendriteBridge, tenant: &str, args: &Map<String, Value
         task_id.as_deref(),
         idempotency_key.as_deref(),
     )
-    .map_err(|e| e.to_string())
+    .map_err(McpError::from)
 }
 
-pub fn deploy_ability(br: &DendriteBridge, tenant: &str, args: &Map<String, Value>) -> HandlerResult {
-    let node_id = req(args, "node_id")?;
+pub fn deploy_ability(
+    br: &DendriteBridge,
+    tenant: &str,
+    args: &Map<String, Value>,
+) -> HandlerResult {
+    let node_id = req_node_id(args)?;
     let tool_name = req(args, "tool_name")?;
     let command = req(args, "command")?;
-    let desc = args.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    let desc = args
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     let signature = config::load_credentials()
         .ok()
         .map(|c| c.deploy_signature)
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| {
-            eprintln!("deploy_ability: no deploy signature, using ephemeral placeholder (dev only)");
+            eprintln!(
+                "deploy_ability: no deploy signature, using ephemeral placeholder (dev only)"
+            );
             easynet_axon::EPHEMERAL_SIGNATURE.to_string()
         });
 
     let mut pkg_args = Map::<String, Value>::new();
-    pkg_args.insert("ability_name".to_string(), Value::String(tool_name.to_string()));
-    pkg_args.insert("tool_name".to_string(), Value::String(tool_name.to_string()));
+    pkg_args.insert(
+        "ability_name".to_string(),
+        Value::String(tool_name.to_string()),
+    );
+    pkg_args.insert(
+        "tool_name".to_string(),
+        Value::String(tool_name.to_string()),
+    );
     pkg_args.insert("description".to_string(), Value::String(desc.to_string()));
     pkg_args.insert(
         "command_template".to_string(),
@@ -179,10 +397,15 @@ pub fn deploy_ability(br: &DendriteBridge, tenant: &str, args: &Map<String, Valu
     );
     pkg_args.insert("version".to_string(), Value::String("1.0.0".to_string()));
 
+    // `build_deploy_package` fails only on malformed caller input (bad
+    // schema, missing required field) — that is a contract violation,
+    // so it reads back as `Validation`. `deploy_package` can fail for
+    // either input reasons or transport; we keep it as `Unavailable`
+    // and let the SDK's own diagnostic string surface the detail.
     let descriptor = easynet_axon::ability::build_deploy_package(&pkg_args, &signature)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| McpError::Validation(e.to_string()))?;
     let deploy = easynet_axon::ability::deploy_package(br, tenant, node_id, &descriptor, true)
-        .map_err(|e| e.to_string())?;
+        .map_err(McpError::from)?;
     let deploy_value = easynet_axon::presets::remote_control::deploy_to_value(&deploy, &descriptor);
 
     Ok(json!({
@@ -194,25 +417,44 @@ pub fn deploy_ability(br: &DendriteBridge, tenant: &str, args: &Map<String, Valu
     }))
 }
 
-pub fn execute_command(br: &DendriteBridge, tenant: &str, args: &Map<String, Value>) -> HandlerResult {
-    let node_id = req(args, "node_id")?;
+pub fn execute_command(
+    br: &DendriteBridge,
+    tenant: &str,
+    args: &Map<String, Value>,
+) -> HandlerResult {
+    let node_id = req_node_id(args)?;
     let command = req(args, "command")?;
     br.call_mcp_tool_with_timeout(
         tenant,
         "session_bridge",
         node_id,
         &json!({"action": "exec", "command": command}),
-        Some(60_000),
+        Some(EXECUTE_COMMAND_TIMEOUT_MS),
     )
-    .map_err(|e| e.to_string())
+    .map_err(McpError::from)
 }
 
-pub fn invoke_ability(br: &DendriteBridge, tenant: &str, args: &Map<String, Value>) -> HandlerResult {
-    let node_id = req(args, "node_id")?;
+/// Invoke an ability. Omitting `node_id` triggers runtime-side auto-routing:
+/// the runtime resolves the first activated install exposing this tool
+/// within the caller's tenant and returns `selected_node_id` in the
+/// response so callers see where the call landed. Passing a non-empty
+/// `node_id` pins execution to that device.
+pub fn invoke_ability(
+    br: &DendriteBridge,
+    tenant: &str,
+    args: &Map<String, Value>,
+) -> HandlerResult {
     let ability = req(args, "ability")?;
-    let arguments = args.get("arguments").cloned().unwrap_or(json!({}));
-    br.call_mcp_tool_with_timeout(tenant, ability, node_id, &arguments, Some(60_000))
-        .map_err(|e| e.to_string())
+    let node_id = parse_invoke_node_id(args)?;
+    let arguments = parse_invoke_arguments(args)?;
+    br.call_mcp_tool_with_timeout(
+        tenant,
+        ability,
+        node_id,
+        &arguments,
+        Some(INVOKE_ABILITY_TIMEOUT_MS),
+    )
+    .map_err(McpError::from)
 }
 
 /// Execute a mission reusing a shared BridgePool for parallel phase execution.
@@ -230,15 +472,27 @@ pub fn run_mission_with_pool(
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
-    let program = eal::parser::parse(source).map_err(|e| format!("parse: {e}"))?;
-    let ir = eal::planner::compile(&program).map_err(|e| format!("compile: {e}"))?;
+    // EAL parse/compile failures are always caller-input problems
+    // (malformed mission source). Surface them as `Validation` so an
+    // agent can tell them apart from transient transport errors.
+    let program = eal::parser::parse(source)
+        .map_err(|e| McpError::Validation(format!("EAL parse: {e}")))?;
+    let ir = eal::planner::compile(&program)
+        .map_err(|e| McpError::Validation(format!("EAL compile: {e}")))?;
 
     if emit_only {
-        return Ok(serde_json::to_value(&ir).unwrap_or(json!(null)));
+        // IR serialization is infallible in practice (every field is
+        // serde-derived from plain data types), but a silent fallback
+        // to `null` was the previous behaviour and would have the
+        // agent see `{"ok": true, "emit_ir_only": null}` indistinguishable
+        // from a successfully-emitted empty IR. Surface the real error
+        // through `Internal` so the caller can report it instead of
+        // treating "null" as success.
+        return serde_json::to_value(&ir)
+            .map_err(|e| McpError::Internal(format!("IR serialize: {e}")));
     }
 
-    let r = eal::interpreter::execute_pooled_shared(pool, tenant, &ir)
-        .map_err(|e| e.to_string())?;
+    let r = eal::interpreter::execute_pooled_shared(pool, tenant, &ir).map_err(anyhow_to_mcp)?;
     Ok(json!({
         "ok": true,
         "mission": ir.name,
@@ -248,38 +502,55 @@ pub fn run_mission_with_pool(
     }))
 }
 
-pub fn manage_device(br: &DendriteBridge, tenant: &str, args: &Map<String, Value>) -> HandlerResult {
-    let node_id = req(args, "node_id")?;
+pub fn manage_device(
+    br: &DendriteBridge,
+    tenant: &str,
+    args: &Map<String, Value>,
+) -> HandlerResult {
+    let node_id = req_node_id(args)?;
     let action = req(args, "action")?;
     match action {
-        "drain" => br.drain_node(tenant, node_id, "CLI").map_err(|e| e.to_string()),
-        "disconnect" => br.deregister_node(tenant, node_id, "CLI").map_err(|e| e.to_string()),
-        _ => Err(format!("unknown action: {action} (supported: drain, disconnect)")),
+        "drain" => br.drain_node(tenant, node_id, "CLI").map_err(McpError::from),
+        "disconnect" => br
+            .deregister_node(tenant, node_id, "CLI")
+            .map_err(McpError::from),
+        // Unknown action is a caller-input bug — Validation, not Internal.
+        _ => Err(McpError::Validation(format!(
+            "unknown action `{action}` (supported: drain, disconnect)"
+        ))),
     }
 }
 
-pub fn uninstall_ability(br: &DendriteBridge, tenant: &str, args: &Map<String, Value>) -> HandlerResult {
-    let node_id = req(args, "node_id")?;
+pub fn uninstall_ability(
+    br: &DendriteBridge,
+    tenant: &str,
+    args: &Map<String, Value>,
+) -> HandlerResult {
+    let node_id = req_node_id(args)?;
     let install_id = req(args, "install_id")?;
-    let r = br.uninstall_capability(tenant, node_id, install_id).map_err(|e| e.to_string())?;
+    let r = br
+        .uninstall_capability(tenant, node_id, install_id)
+        .map_err(McpError::from)?;
     Ok(json!({"ok": true, "result": r}))
 }
 
 /// Send a prompt to a registered AI agent (pre-bridge fast path — no DendriteBridge needed).
 pub fn send_to_agent(args: &Map<String, Value>) -> HandlerResult {
     use crate::agent::dispatch;
-    use crate::shared::agents;
+    use crate::registry::agents;
 
     let agent_name = req(args, "agent")?;
     let prompt = req(args, "prompt")?;
     let context = args.get("context").and_then(|v| v.as_str());
 
-    let registry = agents::load_agents().map_err(|e| format!("load agents: {e}"))?;
-    let entry = registry.agents.get(agent_name)
-        .ok_or_else(|| format!("agent '{agent_name}' not found in registry"))?;
+    let registry = agents::load_agents()
+        .map_err(|e| McpError::Internal(format!("agent registry read failed: {e}")))?;
+    let entry = registry.agents.get(agent_name).ok_or_else(|| {
+        McpError::NotFound(format!("agent '{agent_name}' not in local registry"))
+    })?;
 
-    let response = dispatch::send_to_agent(agent_name, entry, prompt, context, None, None)
-        .map_err(|e| format!("agent dispatch: {e}"))?;
+    let response = dispatch::send_to_agent(agent_name, entry, prompt, context, None)
+        .map_err(|e| McpError::Unavailable(format!("agent dispatch: {e}")))?;
 
     Ok(json!({
         "ok": true,
@@ -288,4 +559,93 @@ pub fn send_to_agent(args: &Map<String, Value>) -> HandlerResult {
         "model": response.model,
         "duration_ms": response.duration_ms,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn obj(v: Value) -> Map<String, Value> {
+        v.as_object().expect("test input must be object").clone()
+    }
+
+    #[test]
+    fn parse_list_a2a_limit_defaults_and_accepts_valid_range() {
+        assert_eq!(parse_list_a2a_limit(&obj(json!({}))).unwrap(), 100);
+        assert_eq!(parse_list_a2a_limit(&obj(json!({"limit": 1}))).unwrap(), 1);
+        assert_eq!(
+            parse_list_a2a_limit(&obj(json!({"limit": 1000}))).unwrap(),
+            1000
+        );
+    }
+
+    #[test]
+    fn parse_list_a2a_limit_rejects_invalid_values() {
+        assert!(parse_list_a2a_limit(&obj(json!({"limit": 0}))).is_err());
+        assert!(parse_list_a2a_limit(&obj(json!({"limit": 1001}))).is_err());
+        assert!(parse_list_a2a_limit(&obj(json!({"limit": -1}))).is_err());
+        assert!(parse_list_a2a_limit(&obj(json!({"limit": "100"}))).is_err());
+    }
+
+    #[test]
+    fn parse_invoke_node_id_handles_auto_route_and_explicit_id() {
+        assert_eq!(parse_invoke_node_id(&obj(json!({}))).unwrap(), "");
+        assert_eq!(
+            parse_invoke_node_id(&obj(json!({"node_id": ""}))).unwrap(),
+            ""
+        );
+        assert_eq!(
+            parse_invoke_node_id(&obj(json!({"node_id": "   "}))).unwrap(),
+            ""
+        );
+        assert_eq!(
+            parse_invoke_node_id(&obj(json!({"node_id": "node-1"}))).unwrap(),
+            "node-1"
+        );
+        assert_eq!(
+            parse_invoke_node_id(&obj(json!({"node_id": " node-2 "}))).unwrap(),
+            "node-2"
+        );
+    }
+
+    #[test]
+    fn parse_invoke_node_id_rejects_non_string_values() {
+        assert!(parse_invoke_node_id(&obj(json!({"node_id": 1}))).is_err());
+        assert!(parse_invoke_node_id(&obj(json!({"node_id": {"x": 1}}))).is_err());
+    }
+
+    #[test]
+    fn parse_invoke_arguments_defaults_and_rejects_non_objects() {
+        assert_eq!(parse_invoke_arguments(&obj(json!({}))).unwrap(), json!({}));
+        assert_eq!(
+            parse_invoke_arguments(&obj(json!({"arguments": null}))).unwrap(),
+            json!({})
+        );
+        assert_eq!(
+            parse_invoke_arguments(&obj(json!({"arguments": {"k": "v"}}))).unwrap(),
+            json!({"k": "v"})
+        );
+        assert!(parse_invoke_arguments(&obj(json!({"arguments": []}))).is_err());
+        assert!(parse_invoke_arguments(&obj(json!({"arguments": "x"}))).is_err());
+    }
+
+    /// Input-validation failures must categorise as `validation_error`,
+    /// not `unavailable` — an agent seeing `validation_error` knows to
+    /// fix the payload, not retry. Regression-guards the whole point of
+    /// the structured-error migration.
+    #[test]
+    fn input_validation_failures_map_to_validation_error_code() {
+        let err = req(&obj(json!({})), "node_id").unwrap_err();
+        assert_eq!(err.error_code(), "validation_error");
+
+        let err = parse_invoke_node_id(&obj(json!({"node_id": 42}))).unwrap_err();
+        assert_eq!(err.error_code(), "validation_error");
+
+        let err = parse_invoke_arguments(&obj(json!({"arguments": "x"}))).unwrap_err();
+        assert_eq!(err.error_code(), "validation_error");
+
+        let err = parse_list_a2a_limit(&obj(json!({"limit": 0}))).unwrap_err();
+        assert_eq!(err.error_code(), "validation_error");
+    }
 }
