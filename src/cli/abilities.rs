@@ -2,79 +2,111 @@
 // ===========
 //
 // File: src/cli/abilities.rs
-// Description: `easynet abilities` — lists MCP tools/abilities across all federated nodes.
+// Description: `easynet abilities` — lists MCP tools/abilities across the TANet.
 //
-// Aggregation: iterates all known nodes, calls list_mcp_tools() per node, merges results.
+// Federation-wide single-RPC discovery:
+// - When --node is omitted, a single list_mcp_tools(tenant, pattern, "") call
+//   returns the deduplicated, federation-wide view. The runtime already merges
+//   local installs with federated peer abilities (see interop_native/mcp.rs
+//   list_tools). Each MCPToolEntry carries node_ids[] listing every node that
+//   has this ability activated, so we expand one entry per (tool, node) pair
+//   for the table output.
+// - When --node is set, the call is scoped to that node.
+//
 // Output: table (ability name, node, version, state) or JSON.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use clap::Args;
+use serde_json::Value;
 
-use crate::shared::{self, output::{self, OutputFormat}};
+use crate::shared::{
+    output::{self, OutputFormat},
+};
 
 #[derive(Debug, Args)]
 pub struct AbilitiesArgs {
-    /// Filter by node
-    #[arg(long)]
+    /// Filter by node id (defaults to federation-wide view).
+    #[arg(long, short = 'n', value_name = "NODE_ID")]
     pub node: Option<String>,
+    /// Glob pattern to filter by tool name (e.g. "image.*")
+    #[arg(long, default_value = "")]
+    pub pattern: String,
     /// Output format
     #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
     pub format: OutputFormat,
 }
 
-/// Maximum number of nodes to query for abilities when no --node filter is given.
-const MAX_NODES_TO_QUERY: usize = 50;
-
 pub fn run(args: AbilitiesArgs) -> anyhow::Result<()> {
-    let (br, rt) = shared::connect_bridge()?;
+    let (br, rt) = crate::persistence::config::load_and_connect()?;
     let tenant = rt.tenant_or_default();
 
-    let target_nodes: Vec<String> = if let Some(ref n) = args.node {
-        vec![n.clone()]
-    } else {
-        let nodes = br.list_nodes(tenant, None).context("list nodes")?;
-        let node_ids: Vec<String> = nodes
-            .iter()
-            .filter_map(|n| n.get("node_id").and_then(|v| v.as_str()).map(String::from))
-            .collect();
-        if node_ids.len() > MAX_NODES_TO_QUERY {
-            output::warn(&format!(
-                "querying first {} of {} nodes (use --node to target a specific device)",
-                MAX_NODES_TO_QUERY,
-                node_ids.len()
-            ));
-        }
-        node_ids.into_iter().take(MAX_NODES_TO_QUERY).collect()
+    let scope = match args.node.as_deref().map(str::trim) {
+        None => "",
+        Some("") => bail!("--node was given but empty; pass a real node id or omit --node"),
+        Some(s) => s,
     };
-
-    let mut all: Vec<serde_json::Value> = Vec::new();
-    for node_id in &target_nodes {
-        if let Ok(tools) = br.list_mcp_tools(tenant, "", node_id) {
-            for mut tool in tools {
-                if let Some(m) = tool.as_object_mut() {
-                    m.insert("node_id".into(), serde_json::json!(node_id));
-                }
-                all.push(tool);
-            }
-        }
-    }
+    let entries = br
+        .list_mcp_tools(tenant, &args.pattern, scope)
+        .context("list_mcp_tools")?;
 
     if args.format == OutputFormat::Json {
-        println!("{}", serde_json::to_string_pretty(&all)?);
+        println!("{}", serde_json::to_string_pretty(&entries)?);
+        return Ok(());
+    }
+
+    // Empty federation view — print a targeted hint and skip the table.
+    // Rendering an empty table after a warning reads like "we found things
+    // but can't show them," which is worse than a single clear message.
+    if entries.is_empty() {
+        output::warn("no abilities found in this TANet (try `easynet device list` first)");
         return Ok(());
     }
 
     let mut table = output::table(&["Ability", "Node", "Version", "Status"]);
-    for a in &all {
-        let name = a.get("tool_name").or(a.get("ability_name")).and_then(|v| v.as_str()).unwrap_or("-");
-        let node = a.get("node_id").and_then(|v| v.as_str()).unwrap_or("-");
-        let ver = a.get("ability_version").and_then(|v| v.as_str()).unwrap_or("-");
-        let st = a.get("state").and_then(|v| v.as_str()).unwrap_or("ACTIVE");
-        table.add_row(vec![name, node, ver, st]);
+    for entry in &entries {
+        let name = entry
+            .get("tool_name")
+            .or_else(|| entry.get("ability_name"))
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let ver = entry
+            .get("ability_version")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let st = entry
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("ACTIVE");
+
+        // Expand one row per node that has this ability activated.
+        let mut node_ids: Vec<&str> = entry
+            .get("node_ids")
+            .and_then(Value::as_array)
+            .map(|arr| arr.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        node_ids.sort_unstable();
+        node_ids.dedup();
+
+        if node_ids.is_empty() {
+            // Fallbacks for older runtimes that don't populate node_ids:
+            //   1. legacy per-entry node_id field
+            //   2. the --node scope itself (when scope is non-empty)
+            //   3. "-" placeholder (consistent with the other columns)
+            let legacy = entry.get("node_id").and_then(Value::as_str);
+            let single = legacy
+                .or(Some(scope).filter(|s| !s.is_empty()))
+                .unwrap_or("-");
+            table.add_row(vec![name, single, ver, st]);
+        } else {
+            for nid in &node_ids {
+                table.add_row(vec![name, nid, ver, st]);
+            }
+        }
     }
+
     println!("{table}");
     Ok(())
 }

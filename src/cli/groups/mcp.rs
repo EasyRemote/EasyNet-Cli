@@ -2,33 +2,39 @@
 // =======================
 //
 // File: src/cli/groups/mcp.rs
-// Description: `easynet mcp …` — the local MCP server *process*. Nothing
-//              else lives here.
+// Description: `easynet mcp …` — every command that touches the local
+//              MCP surface, in one place.
 //
-// Why so small?
-//   The MCP server is host-local infrastructure: it is the stdio bridge
-//   that lets a co-located AI client (Claude Code, Codex) make EAL-runtime
-//   calls. It is NOT a network first-class object (see ARCHITECTURE.md
-//   §6 — interpretation C: device is a hosting substrate, and the MCP
-//   server is one of those substrate-local processes).
+// Verbs:
 //
-//   Therefore the only verbs that belong here are the ones that touch the
-//   local server process itself:
+//   serve         — run the local Hub-level MCP server on stdio
+//   status        — report whether the local runtime can serve MCP requests
+//   install       — register an MCP server entry in a host AI client
+//                   (Claude Code or Codex) so it can call this runtime
+//   skill-install — register an MCP-shaped skill in a Claude Code project
 //
-//     serve   — run the stdio MCP server
-//     status  — report whether the local runtime can answer MCP requests
+// The MCP server is host-local infrastructure: a stdio bridge that lets
+// a co-located AI client (Claude Code, Codex) make EAL-runtime calls.
+// It is NOT a network first-class object (see ARCHITECTURE.md §6 —
+// interpretation C: a device is a hosting substrate, and the MCP server
+// is one of those substrate-local processes).
 //
-//   Skill / client config installation (`mcp-install`, `skill-install`)
-//   stays at the legacy top level for now; their final home depends on
-//   open question §13.6 in the consensus spec.
+// `install` and `skill-install` were originally top-level commands
+// (`easynet mcp-install`, `easynet skill-install`). Pre-release we
+// consolidate them under `mcp` so the noun-verb shape matches every
+// other group (`device join`, `ability deploy`, `agent add`, …) and so
+// `easynet mcp --help` is a single place to discover the surface.
+// The legacy flat aliases stay (hidden) until the next minor release —
+// see `cli/mod.rs` for the deprecation hints.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use clap::{Args, Subcommand};
 
-use crate::cli::mcp_server;
-use crate::shared::{config, output};
+use crate::cli::{mcp_install, mcp_server, skill_install};
+use crate::persistence::config;
+use crate::shared::output;
 
 #[derive(Debug, Args)]
 pub struct McpArgs {
@@ -42,12 +48,22 @@ pub enum McpAction {
     Serve(mcp_server::McpServerArgs),
     /// Report whether the local runtime can serve MCP requests.
     Status,
+    /// Register an MCP server entry in a host AI client config (Claude
+    /// Code's `~/.claude/settings.json` or Codex's `~/.codex/config.toml`)
+    /// so the client can invoke this runtime's tools.
+    Install(mcp_install::McpInstallArgs),
+    /// Register an MCP-shaped skill in a Claude Code project so the
+    /// agent can invoke it as a slash command.
+    #[command(name = "skill-install")]
+    SkillInstall(skill_install::SkillInstallArgs),
 }
 
 pub fn run(args: McpArgs) -> anyhow::Result<()> {
     match args.action {
         McpAction::Serve(a) => mcp_server::run(a),
         McpAction::Status => run_status(),
+        McpAction::Install(a) => mcp_install::run(a),
+        McpAction::SkillInstall(a) => skill_install::run(a),
     }
 }
 

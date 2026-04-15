@@ -1,0 +1,18 @@
+# {name}
+
+{desc}
+
+## Project layout
+
+- `ability.json` — manifest (MCP tool spec + Agent Skills schema)
+- `SKILL.md` — Agent Skills / Claude Code discovery file
+- `scripts/invoke.sh` — runtime entrypoint (do not edit)
+- `scripts/{handler}` — your handler logic
+
+## Next steps
+
+```
+easynet ability validate .
+easynet ability deploy . --node <node_id>
+easynet ability invoke {name} --args '{"message":"hi"}'
+```

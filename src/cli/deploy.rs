@@ -2,7 +2,8 @@
 // ===========
 //
 // File: src/cli/deploy.rs
-// Description: `easynet deploy <path> --to <node>` — three-phase ability deployment pipeline.
+// Description: `easynet ability deploy <path> --node <id>` —
+//              three-phase ability deployment pipeline.
 //
 // Protocol Responsibility:
 // - Implements a forward-recovery saga: Publish → Install → Activate.
@@ -18,9 +19,10 @@
 //   requires AXON_ALLOW_PLACEHOLDER_DEPLOY_SIGNATURE=1 env var.
 //
 // Usage Contract:
-// - The target node (--to) must be online and registered in the federation.
+// - The target node (--node) must be online and registered in the federation.
 // - ability.json must contain at minimum: "name" and "command" fields.
-// - After deployment, the ability is callable via `easynet invoke` or MCP tool calls.
+// - After deployment, the ability is callable via `easynet ability invoke`
+//   or MCP tool calls.
 //
 // Architectural Position:
 // - Write path of the ability lifecycle. Read path is abilities.rs.
@@ -34,19 +36,25 @@ use clap::Args;
 use console::style;
 use serde_json::Map;
 
-use crate::shared::{self, config, output};
+use crate::persistence::config;
+use crate::shared::{output};
 
 #[derive(Debug, Args)]
 pub struct DeployArgs {
-    /// Path to ability/skill directory
+    /// Path to the ability directory (must contain `ability.json`).
     pub path: String,
-    /// Target node ID
-    #[arg(long)]
-    pub to: String,
+    /// Target device node id. Named `--node`/`-n` to match every
+    /// other per-call command in the CLI (`ability invoke`,
+    /// `ability list`, `ability show`, `ability uninstall`).
+    /// The old `--to` spelling was removed before release — see
+    /// `docs/CLI_NAMING.md` if re-introducing an alias is ever
+    /// considered.
+    #[arg(long = "node", short = 'n', value_name = "NODE_ID")]
+    pub node: String,
 }
 
 pub fn run(args: DeployArgs) -> anyhow::Result<()> {
-    let (br, state) = shared::connect_bridge()?;
+    let (br, state) = crate::persistence::config::load_and_connect()?;
     let tenant = state.tenant_or_default();
 
     let dir = std::path::Path::new(&args.path);
@@ -56,11 +64,26 @@ pub fn run(args: DeployArgs) -> anyhow::Result<()> {
     anyhow::ensure!(desc_path.exists(), "no ability.json in {}", args.path);
 
     let desc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&desc_path)?)?;
-    let name = desc.get("name").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("missing 'name'"))?;
-    let version = desc.get("version").and_then(|v| v.as_str()).unwrap_or("1.0.0");
-    let tool_name = desc.get("tool_name").and_then(|v| v.as_str()).unwrap_or(name);
-    let description = desc.get("description").and_then(|v| v.as_str()).unwrap_or("");
-    let command = desc.get("command").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("missing 'command'"))?;
+    let name = desc
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing 'name'"))?;
+    let version = desc
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("1.0.0");
+    let tool_name = desc
+        .get("tool_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(name);
+    let description = desc
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let command = desc
+        .get("command")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing 'command'"))?;
 
     // Prefer real deploy signature from credentials; fall back to ephemeral for dev.
     let signature = config::load_credentials()
@@ -86,8 +109,13 @@ pub fn run(args: DeployArgs) -> anyhow::Result<()> {
     let descriptor = easynet_axon::ability::build_deploy_package(&pkg_args, &signature)
         .context("build deploy package")?;
 
-    eprint!("  deploying {}@{} to {} ... ", style(name).cyan(), version, style(&args.to).cyan());
-    let result = easynet_axon::ability::deploy_package(&br, tenant, &args.to, &descriptor, true)
+    eprint!(
+        "  deploying {}@{} to {} ... ",
+        style(name).cyan(),
+        version,
+        style(&args.node).cyan()
+    );
+    let result = easynet_axon::ability::deploy_package(&br, tenant, &args.node, &descriptor, true)
         .context("deploy")?;
     eprintln!("{}", style("✓").green());
 
@@ -95,4 +123,3 @@ pub fn run(args: DeployArgs) -> anyhow::Result<()> {
     output::success(&format!("activated — {tool_name} is live"));
     Ok(())
 }
-

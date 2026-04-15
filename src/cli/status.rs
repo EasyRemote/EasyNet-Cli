@@ -15,7 +15,8 @@
 
 use clap::Args;
 
-use crate::shared::{self, config, node, output};
+use crate::persistence::config;
+use crate::shared::{self, node, output};
 
 /// Maximum number of online nodes to query for ability counts.
 /// Prevents O(N) gRPC calls in large federations.
@@ -96,6 +97,8 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
     };
 
     output::info(&format!("Nodes: {online} online, {offline} offline"));
-    output::info(&format!("Abilities: {ability_count} active{ability_suffix}"));
+    output::info(&format!(
+        "Abilities: {ability_count} active{ability_suffix}"
+    ));
     Ok(())
 }

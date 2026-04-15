@@ -15,7 +15,8 @@
 
 use clap::Args;
 
-use crate::shared::{self, config, net, output};
+use crate::persistence::config;
+use crate::shared::{self, net, output};
 
 #[derive(Debug, Args)]
 pub struct StopArgs {}
@@ -35,22 +36,27 @@ pub fn run(_args: StopArgs) -> anyhow::Result<()> {
 
     output::info(&format!("Stopping runtime at {}...", state.endpoint));
 
-    // 2. If no heartbeat daemon, deregister directly.
+    // 2. If no heartbeat daemon, deregister directly. Log accurately —
+    // the previous unconditional "Node deregistered" message claimed
+    // success even on transient Hub errors, hiding inconsistent state
+    // from the operator.
     if !hb_killed {
         if let Ok(creds) = config::load_credentials() {
             if let Ok(bridge) = shared::connect_bridge_to(&state.endpoint) {
-                let _ = bridge.deregister_node(
-                    &creds.tenant_id,
-                    &creds.node_id,
-                    "device shutdown",
-                );
-                output::info("Node deregistered");
+                match bridge.deregister_node(&creds.tenant_id, &creds.node_id, "device shutdown") {
+                    Ok(_) => output::info("Node deregistered"),
+                    Err(e) => output::warn(&format!(
+                        "Hub deregister failed (continuing local stop): {e}"
+                    )),
+                }
             }
         }
     }
 
     // 3. Kill axon-runtime.
-    let pid = state.pid.or_else(|| net::discover_pid_from_endpoint(&state.endpoint));
+    let pid = state
+        .pid
+        .or_else(|| net::discover_pid_from_endpoint(&state.endpoint));
     if let Some(pid) = pid {
         stop_pid(pid);
     } else {
@@ -80,7 +86,9 @@ fn stop_heartbeat_daemon() -> bool {
 
     // Check if the process is actually alive before trying to stop it.
     if !net::is_pid_alive(pid) {
-        output::info(&format!("Heartbeat daemon (pid {pid}) already exited, cleaning up pid file"));
+        output::info(&format!(
+            "Heartbeat daemon (pid {pid}) already exited, cleaning up pid file"
+        ));
         let _ = std::fs::remove_file(&pid_path);
         return false;
     }
@@ -98,7 +106,9 @@ fn stop_heartbeat_daemon() -> bool {
     if stopped {
         output::info(&format!("Heartbeat daemon stopped (pid {pid})"));
     } else {
-        output::warn(&format!("Heartbeat daemon (pid {pid}) did not exit in time"));
+        output::warn(&format!(
+            "Heartbeat daemon (pid {pid}) did not exit in time"
+        ));
     }
     let _ = std::fs::remove_file(&pid_path);
     stopped

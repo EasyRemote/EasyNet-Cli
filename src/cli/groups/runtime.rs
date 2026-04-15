@@ -21,7 +21,7 @@ use clap::{Args, Subcommand};
 use console::style;
 
 use crate::cli::{connect, start, status, stop};
-use crate::shared::config;
+use crate::persistence::config;
 
 #[derive(Debug, Args)]
 pub struct RuntimeArgs {
@@ -31,15 +31,19 @@ pub struct RuntimeArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum RuntimeAction {
-    /// Start a local Axon runtime.
+    /// Start a local Axon runtime as a background daemon (records pid
+    /// and endpoint in `~/.easynet/runtime.json`).
     Start(start::StartArgs),
-    /// Stop the local runtime.
+    /// Signal the running runtime to shut down cleanly, then remove
+    /// `~/.easynet/runtime.json`.
     Stop(stop::StopArgs),
-    /// Show local runtime status and federation summary.
+    /// Report runtime process liveness, bridge endpoint, Hub
+    /// reachability, and online/offline node counts.
     Status(status::StatusArgs),
-    /// Foreground "paired device" mode.
+    /// Run the paired device in the foreground (no background daemon).
+    /// Blocks until Ctrl-C; useful for `systemd` / container PID 1.
     Connect(connect::ConnectArgs),
-    /// Tail the local runtime log file.
+    /// Tail (and optionally follow) the local runtime log file.
     Logs(LogsArgs),
 }
 

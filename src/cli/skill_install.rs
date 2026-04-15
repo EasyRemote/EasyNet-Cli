@@ -18,7 +18,8 @@ use std::path::{Path, PathBuf};
 use clap::Args;
 use console::style;
 
-use crate::shared::{config, output};
+use crate::persistence::config;
+use crate::shared::output;
 
 #[derive(Debug, Args)]
 pub struct SkillInstallArgs {
@@ -77,7 +78,11 @@ fn resolve_targets(args: &SkillInstallArgs) -> anyhow::Result<Vec<(&'static str,
     }
 }
 
-fn install_to(skills_src: PathBuf, target_dir: &std::path::Path, args: &SkillInstallArgs) -> anyhow::Result<()> {
+fn install_to(
+    skills_src: PathBuf,
+    target_dir: &std::path::Path,
+    args: &SkillInstallArgs,
+) -> anyhow::Result<()> {
     let target_dir = target_dir.to_path_buf();
 
     let skills_to_install = if args.name == "all" {
@@ -161,10 +166,7 @@ fn find_bundled_skills_dir() -> anyhow::Result<PathBuf> {
 
     // 2. Check relative to current working directory (dev mode)
     let cwd = std::env::current_dir()?;
-    let candidates = [
-        cwd.join("skills"),
-        cwd.join("../EasyNet-Cli/skills"),
-    ];
+    let candidates = [cwd.join("skills"), cwd.join("../EasyNet-Cli/skills")];
     for c in &candidates {
         if c.is_dir() && has_any_skill(c) {
             return Ok(c.canonicalize()?);
@@ -194,9 +196,9 @@ fn has_any_skill(dir: &Path) -> bool {
     fs::read_dir(dir)
         .ok()
         .map(|entries| {
-            entries.filter_map(|e| e.ok()).any(|e| {
-                e.path().join("SKILL.md").exists()
-            })
+            entries
+                .filter_map(|e| e.ok())
+                .any(|e| e.path().join("SKILL.md").exists())
         })
         .unwrap_or(false)
 }
@@ -239,7 +241,8 @@ fn read_skill_description(path: &Path) -> String {
         .ok()
         .and_then(|content| {
             // Parse YAML frontmatter description field
-            content.lines()
+            content
+                .lines()
                 .find(|l| l.starts_with("description:"))
                 .map(|l| l.trim_start_matches("description:").trim().to_string())
         })

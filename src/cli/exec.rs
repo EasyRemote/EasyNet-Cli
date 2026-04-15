@@ -32,16 +32,19 @@ use anyhow::Context;
 use clap::Args;
 use console::style;
 
-use crate::shared::{self, output};
+use crate::shared::{output, timeouts};
 
 #[derive(Debug, Args)]
 pub struct ExecArgs {
-    /// Target node ID
+    /// Target device node id.
     pub node: String,
-    /// Timeout in seconds (0 = no timeout)
-    #[arg(long, default_value_t = 60)]
+    /// Per-call deadline in seconds. `0` inherits the runtime default.
+    /// Default: 60 s (`shared::timeouts::INVOKE_DEFAULT_SECS`) — shares
+    /// the tower with `easynet invoke` so both flavours of one-shot
+    /// remote call have the same baseline.
+    #[arg(long, value_name = "SECS", default_value_t = timeouts::INVOKE_DEFAULT_SECS)]
     pub timeout: u64,
-    /// Command to execute (everything after --)
+    /// Command to execute (everything after `--`).
     #[arg(last = true)]
     pub command: Vec<String>,
 }
@@ -49,19 +52,28 @@ pub struct ExecArgs {
 /// Join command arguments into a shell-safe string.
 /// Arguments containing spaces or shell metacharacters are single-quoted.
 fn join_command(parts: &[String]) -> String {
-    parts.iter().map(|p| {
-        if p.contains(|c: char| c.is_ascii_whitespace() || "\"'\\$`|&;(){}[]<>?*#!~".contains(c)) {
-            format!("'{}'", p.replace('\'', "'\"'\"'"))
-        } else {
-            p.clone()
-        }
-    }).collect::<Vec<_>>().join(" ")
+    parts
+        .iter()
+        .map(|p| {
+            if p.contains(|c: char| {
+                c.is_ascii_whitespace() || "\"'\\$`|&;(){}[]<>?*#!~".contains(c)
+            }) {
+                format!("'{}'", p.replace('\'', "'\"'\"'"))
+            } else {
+                p.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub fn run(args: ExecArgs) -> anyhow::Result<()> {
-    anyhow::ensure!(!args.command.is_empty(), "no command specified (use -- to separate)");
+    anyhow::ensure!(
+        !args.command.is_empty(),
+        "no command specified (use -- to separate)"
+    );
 
-    let (br, state) = shared::connect_bridge()?;
+    let (br, state) = crate::persistence::config::load_and_connect()?;
     let tenant = state.tenant_or_default();
     let cmd_str = join_command(&args.command);
 
@@ -72,13 +84,16 @@ pub fn run(args: ExecArgs) -> anyhow::Result<()> {
     );
 
     let node = &args.node;
-    let timeout_secs = args.timeout;
     let call_args = serde_json::json!({
         "action": "exec",
         "command": cmd_str,
     });
 
-    let timeout_ms = if timeout_secs == 0 { None } else { Some(timeout_secs * 1000) };
+    // Route through the shared tower so `--timeout 0` consistently means
+    // "inherit the runtime default" across the CLI, and absurdly large
+    // seconds (e.g. `--timeout 99999999999`) surface as a clear CLI
+    // error instead of silently overflowing to milliseconds.
+    let timeout_ms = timeouts::effective_ms(args.timeout).map_err(anyhow::Error::msg)?;
     let result = br
         .call_mcp_tool_with_timeout(tenant, "session_bridge", node, &call_args, timeout_ms)
         .context("exec")?;
@@ -98,7 +113,9 @@ pub fn run(args: ExecArgs) -> anyhow::Result<()> {
         print!("{stdout}");
     }
     if let Some(stderr) = payload.get("stderr").and_then(|v| v.as_str()) {
-        if !stderr.is_empty() { eprint!("{stderr}"); }
+        if !stderr.is_empty() {
+            eprint!("{stderr}");
+        }
     }
     if let Some(code) = payload.get("exit_code").and_then(serde_json::Value::as_i64) {
         if code != 0 {

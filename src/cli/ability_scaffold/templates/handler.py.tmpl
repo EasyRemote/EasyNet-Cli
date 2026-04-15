@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""Ability handler for '{name}'.
+
+Reads a single JSON object from stdin, writes a single JSON object to stdout.
+Non-zero exit signals failure; stderr is surfaced to the caller.
+"""
+import json
+import sys
+
+
+def main() -> int:
+    raw = sys.stdin.read() or "{}"
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as e:
+        json.dump({"ok": False, "error": f"invalid JSON: {e}"}, sys.stdout)
+        return 1
+
+    # TODO: replace with your real logic.
+    json.dump({"ok": True, "echo": payload}, sys.stdout)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

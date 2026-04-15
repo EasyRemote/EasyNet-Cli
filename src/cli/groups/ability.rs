@@ -8,12 +8,15 @@
 //              `ability` is `public`, `skill` is `private`).
 //
 // Verbs:
-//   list                       List published abilities                    (-> cli::abilities)
-//   show <node> <name>         Display one endpoint's contract surface     (NEW)
-//   deploy <path> --to <node>  Publish a new ability version               (-> cli::deploy)
-//   uninstall <node> <id>      Remove a deployed ability                   (NEW)
-//   invoke <node> <name>       Call a public ability                       (-> cli::invoke)
-//   exec <node> -- <cmd>       One-shot remote shell (ad-hoc ability)      (-> cli::exec)
+//   list                        List published abilities                   (-> cli::abilities)
+//   show <node> <name>          Display one endpoint's contract surface    (NEW)
+//   new <name> [--lang LANG]    Scaffold a new ability project             (-> cli::ability_scaffold)
+//   validate <path>             Lint an ability manifest before deploy     (-> cli::ability_scaffold)
+//   deploy <path> --node <id>   Publish a new ability version              (-> cli::deploy)
+//   uninstall <node> <id>       Remove a deployed ability                  (NEW)
+//   invoke <name> [--node <id>] Call a public ability (auto-routes by      (-> cli::invoke)
+//                               default; --node pins to a specific device)
+//   exec <node> -- <cmd>        One-shot remote shell (ad-hoc ability)     (-> cli::exec)
 //
 // Verbs DELIBERATELY ABSENT:
 //
@@ -31,11 +34,12 @@
 //               wrong thing.
 //
 // Routing note (transitional misalignment):
-//   `deploy --to <node>` currently takes a *device node id*, not an agent
-//   logical id. Under interpretation C this is a known leak — the public
-//   API should resolve `<tenant>/<agent-name>` to its hosting device. The
-//   migration is tracked as a deferred item; the CLI shape stays as-is
-//   until the SDK exposes agent-id-routed deploy.
+//   `deploy --node <id>` currently takes a *device node id*, not an
+//   agent logical id. Under interpretation C this is a known leak —
+//   the public API should resolve `<tenant>/<agent-name>` to its
+//   hosting device. The migration is tracked as a deferred item; the
+//   CLI shape stays as-is until the SDK exposes agent-id-routed
+//   deploy.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -44,8 +48,10 @@ use anyhow::Context;
 use clap::{Args, Subcommand};
 use console::style;
 
-use crate::cli::{abilities, deploy, exec, invoke};
-use crate::shared::{self, output};
+use crate::cli::{abilities, ability_scaffold, deploy, exec, invoke};
+use crate::shared::{
+    output::{self, OutputFormat},
+};
 
 #[derive(Debug, Args)]
 pub struct AbilityArgs {
@@ -55,15 +61,21 @@ pub struct AbilityArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum AbilityAction {
+    /// Scaffold a new ability project (ability.json + SKILL.md + handler).
+    New(ability_scaffold::NewArgs),
+    /// Validate an ability directory's manifest before deploy.
+    Validate(ability_scaffold::ValidateArgs),
     /// List published abilities across the federation.
     List(abilities::AbilitiesArgs),
-    /// Show one ability's contract surface (schema, version, description).
+    /// Inspect a deployed ability: endpoint name, version, input
+    /// schema, runtime state, and hosting device. Use `--format json`
+    /// to pipe the raw registry record into other tools.
     Show(ShowArgs),
-    /// Publish an ability version (currently routed by device node id; will become agent-id-routed).
+    /// Publish an ability version to a device (node id today; agent-id routing is planned).
     Deploy(deploy::DeployArgs),
     /// Uninstall a previously deployed ability.
     Uninstall(UninstallArgs),
-    /// Invoke a public ability (currently routed by device node id; will become agent-id-routed).
+    /// Invoke a public ability. Auto-routes across the federation unless `--node` pins it.
     Invoke(invoke::InvokeArgs),
     /// Run a one-shot ad-hoc command on a device (ephemeral ability).
     Exec(exec::ExecArgs),
@@ -75,10 +87,11 @@ pub struct ShowArgs {
     pub node_id: String,
     /// Ability tool name.
     pub name: String,
-    /// Emit raw JSON (the underlying registry record) instead of the
-    /// human-readable contract view.
-    #[arg(long)]
-    pub json: bool,
+    /// Output format. `table` emits the human-readable contract view;
+    /// `json` emits the raw underlying registry record. Aligned with
+    /// every other list/show command — see `shared::output::OutputFormat`.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub format: OutputFormat,
 }
 
 #[derive(Debug, Args)]
@@ -94,6 +107,8 @@ pub struct UninstallArgs {
 
 pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
     match args.action {
+        AbilityAction::New(a) => ability_scaffold::run_new(a),
+        AbilityAction::Validate(a) => ability_scaffold::run_validate(a),
         AbilityAction::List(a) => abilities::run(a),
         AbilityAction::Show(a) => run_show(a),
         AbilityAction::Deploy(a) => deploy::run(a),
@@ -104,7 +119,7 @@ pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
 }
 
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
-    let (br, rt) = shared::connect_bridge()?;
+    let (br, rt) = crate::persistence::config::load_and_connect()?;
     let tenant = rt.tenant_or_default();
     let tools = br
         .list_mcp_tools(tenant, "", &args.node_id)
@@ -121,7 +136,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
             anyhow::anyhow!("ability '{}' not found on '{}'", args.name, args.node_id)
         })?;
 
-    if args.json {
+    if args.format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(tool)?);
         return Ok(());
     }
@@ -142,7 +157,10 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         .get("description")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let state = tool.get("state").and_then(|v| v.as_str()).unwrap_or("ACTIVE");
+    let state = tool
+        .get("state")
+        .and_then(|v| v.as_str())
+        .unwrap_or("ACTIVE");
 
     eprintln!();
     eprintln!(
@@ -189,7 +207,7 @@ fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
         }
     }
 
-    let (br, rt) = shared::connect_bridge()?;
+    let (br, rt) = crate::persistence::config::load_and_connect()?;
     let tenant = rt.tenant_or_default();
     let result = br
         .uninstall_capability_with_reason(

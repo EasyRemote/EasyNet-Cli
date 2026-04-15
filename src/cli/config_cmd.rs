@@ -28,7 +28,8 @@
 
 use clap::{Args, Subcommand};
 
-use crate::shared::{config, output};
+use crate::persistence::config;
+use crate::shared::output;
 
 #[derive(Debug, Args)]
 pub struct ConfigArgs {
@@ -67,7 +68,7 @@ pub fn run(args: ConfigArgs) -> anyhow::Result<()> {
                     if !settings.session_bridge_exec_enabled && !auto_confirm {
                         output::warn(
                             "This enables remote command execution on this device. \
-                             Users in the same tenant with Hub access can run commands on it."
+                             Users in the same tenant with Hub access can run commands on it.",
                         );
                         if !output::confirm("Are you sure?")? {
                             output::info("Cancelled.");

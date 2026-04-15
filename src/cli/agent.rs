@@ -19,8 +19,9 @@ use console::style;
 
 use crate::agent::{claude_code, codex};
 use crate::cli::mission_runs::{self, MissionRunOpts};
-use crate::shared::agents::{self, AgentEntry, AgentType};
+use crate::registry::agents::{self, AgentEntry, AgentType};
 use crate::shared::output;
+use crate::shared::timeouts;
 
 #[derive(Debug, Args)]
 pub struct AgentArgs {
@@ -65,19 +66,25 @@ pub struct RemoveArgs {
 
 #[derive(Debug, Args)]
 pub struct SendArgs {
-    /// Agent name
+    /// Registered agent name (from `easynet agent list`).
     pub name: String,
-    /// Prompt to send
+    /// Prompt body sent verbatim to the agent.
     pub prompt: String,
-    /// Optional context to include
-    #[arg(long)]
+    /// Prior conversation to prepend under a `## Context (previous
+    /// discussion)` section. Use this to carry state across separate
+    /// `agent send` invocations when you want the agent to build on an
+    /// earlier reply without re-pasting the history inline.
+    #[arg(long, value_name = "TEXT")]
     pub context: Option<String>,
-    /// Timeout in seconds (default: 900 = 15 min)
-    #[arg(long, default_value_t = 900)]
+    /// Per-call deadline in seconds. LLM dispatches can legitimately
+    /// take many minutes, so the default is 15 min
+    /// (`shared::timeouts::AGENT_SEND_DEFAULT_SECS`). `0` inherits the
+    /// runtime default.
+    #[arg(long, value_name = "SECS", default_value_t = timeouts::AGENT_SEND_DEFAULT_SECS)]
     pub timeout: u64,
     /// Write the raw stream-json trace (one event per line) to this file.
     /// The prompt is saved alongside it as `<file>.prompt.txt`.
-    #[arg(long)]
+    #[arg(long, value_name = "FILE")]
     pub trace: Option<std::path::PathBuf>,
 }
 
@@ -102,8 +109,11 @@ fn run_add(args: AddArgs) -> anyhow::Result<()> {
     let mut registry = agents::load_agents()?;
 
     let mut entry = AgentEntry::new(agent_type, args.model.clone());
-    if let Some(label) = args.label {
-        entry.label = Some(label);
+    if args.label.is_some() {
+        // Routed through the typed builder so this CLI write path
+        // doesn't depend on `AgentEntry`'s field layout — when the
+        // struct grows new fields, only `with_label` needs to know.
+        entry.with_label(args.label.clone());
     }
 
     let is_update = registry.agents.contains_key(&args.name);
@@ -127,7 +137,10 @@ fn run_list() -> anyhow::Result<()> {
 
     if registry.agents.is_empty() {
         eprintln!("  No agents registered.");
-        eprintln!("  Run {} to add one.", style("easynet agent add claude --type claude-code --model sonnet").cyan());
+        eprintln!(
+            "  Run {} to add one.",
+            style("easynet agent add claude --type claude-code --model sonnet").cyan()
+        );
         return Ok(());
     }
 
@@ -198,8 +211,9 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
     // Validate the agent exists in the registry up-front so the user gets
     // a clear error before we go through the mission machinery.
     let registry = agents::load_agents()?;
-    let _entry = registry.agents.get(&args.name)
-        .ok_or_else(|| anyhow::anyhow!("agent '{}' not found. Run `easynet agent list`.", args.name))?;
+    let _entry = registry.agents.get(&args.name).ok_or_else(|| {
+        anyhow::anyhow!("agent '{}' not found. Run `easynet agent list`.", args.name)
+    })?;
 
     // User-visible counterpart to the doc-comment ontology reference.
     // Tells the user exactly what path their command is taking, so they
@@ -217,18 +231,23 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
     // the EAL string literal is exactly the prompt the agent will see.
     let composed_prompt = match args.context.as_deref() {
         Some(ctx) if !ctx.trim().is_empty() => {
-            format!("{}\n\n## Context (previous discussion)\n\n{}\n", args.prompt, ctx)
+            format!(
+                "{}\n\n## Context (previous discussion)\n\n{}\n",
+                args.prompt, ctx
+            )
         }
         _ => args.prompt.clone(),
     };
 
     // Build the single-line EAL mission source. The mission name is
     // `agent-send`; the binding is `__reply` so the result can be
-    // pulled out of `MissionRunResult.bound_vars`.
+    // pulled out of `MissionRunResult.bound_vars`. `eal_string_literal`
+    // can fail if the user's prompt contains an embedded NUL byte — we
+    // surface that as a CLI error rather than silently truncating.
     let eal_source = format!(
         "mission \"agent-send\" {{\n    let __reply = {agent}.chat(prompt: {prompt})\n}}\n",
         agent = args.name,
-        prompt = eal_string_literal(&composed_prompt),
+        prompt = eal_string_literal(&composed_prompt)?,
     );
 
     // Hand the source to THE single in-process mission entry point.
@@ -282,8 +301,7 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
     // should sum the agent run stats into a `MissionRunMeta.token_usage`
     // field. Defer to a follow-up PR.
     if let Some(usage) = read_latest_agent_usage(&args.name) {
-        let total_in =
-            usage.input_tokens + usage.cache_read_tokens + usage.cache_creation_tokens;
+        let total_in = usage.input_tokens + usage.cache_read_tokens + usage.cache_creation_tokens;
         eprintln!(
             "  {} in={} out={} cache_read={} cache_write={} turns={} cost=${:.4}",
             style("tokens").dim(),
@@ -321,11 +339,30 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
 }
 
 /// Quote a string as a valid EAL string literal: wrap in double quotes
-/// and escape backslashes, double quotes, newlines, carriage returns,
-/// and tabs. EAL's lexer (`src/eal/lexer.rs::read_string`) accepts
-/// `\\<char>` as an escape, so this is the minimal set required to
-/// round-trip arbitrary user input through the EAL source we generate.
-fn eal_string_literal(s: &str) -> String {
+/// and escape every character the EAL lexer would otherwise consume or
+/// that downstream consumers (the deployed ability runtime, agent
+/// prompts) might mis-handle.
+///
+/// EAL's lexer (`src/eal/lexer.rs::read_string`) treats `\\<char>` as
+/// "skip one byte after the backslash" rather than performing real
+/// escape decoding (locked contract — see iter-4 audit notes), so we
+/// only need to defang the characters that would terminate the literal
+/// (`"`) or change how the lexer counts bytes (`\\`). The remaining
+/// escapes (`\n`, `\r`, `\t`) keep the generated EAL source readable
+/// when the user pastes a multi-line prompt.
+///
+/// We additionally reject ASCII NUL: while EAL's lexer would store it
+/// happily, downstream consumers — agent CLIs that treat the prompt as
+/// a C string, ability runtimes that exec via shell — silently
+/// truncate at the first `\0`. Better to fail loud at the call site
+/// (`run_send`) than to deliver a half-prompt.
+fn eal_string_literal(s: &str) -> anyhow::Result<String> {
+    if s.contains('\0') {
+        anyhow::bail!(
+            "prompt contains an embedded NUL byte (U+0000); strip it before sending — \
+             downstream agent CLIs treat NUL as end-of-string and would silently truncate"
+        );
+    }
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for ch in s.chars() {
@@ -339,7 +376,7 @@ fn eal_string_literal(s: &str) -> String {
         }
     }
     out.push('"');
-    out
+    Ok(out)
 }
 
 /// Read the most recent agent run dir for `agent_name` and extract the
@@ -351,7 +388,7 @@ fn eal_string_literal(s: &str) -> String {
 fn read_latest_agent_usage(agent_name: &str) -> Option<AgentUsageReader> {
     use std::fs;
 
-    let runs_root = crate::shared::config::state_dir()
+    let runs_root = crate::persistence::config::state_dir()
         .join("workspaces")
         .join(agent_name)
         .join("runs");
@@ -418,20 +455,18 @@ fn build_markdown_skin() -> termimad::MadSkin {
     // centring, no background — just bold colour so the hierarchy pops
     // without wasting vertical space.
     let header_colours = [
-        Color::Cyan,       // H1
-        Color::Magenta,    // H2
-        Color::Yellow,     // H3
-        Color::Blue,       // H4
-        Color::Green,      // H5
-        Color::DarkCyan,   // H6
+        Color::Cyan,     // H1
+        Color::Magenta,  // H2
+        Color::Yellow,   // H3
+        Color::Blue,     // H4
+        Color::Green,    // H5
+        Color::DarkCyan, // H6
         Color::DarkMagenta,
         Color::DarkYellow,
     ];
     for (i, h) in skin.headers.iter_mut().enumerate() {
         *h = LineStyle::default();
-        h.compound_style = CompoundStyle::with_fg(
-            *header_colours.get(i).unwrap_or(&Color::White),
-        );
+        h.compound_style = CompoundStyle::with_fg(*header_colours.get(i).unwrap_or(&Color::White));
         h.compound_style.add_attr(Attribute::Bold);
     }
 
@@ -447,15 +482,22 @@ fn build_markdown_skin() -> termimad::MadSkin {
 
     // Code block: subtle grey background + bright foreground.
     skin.code_block.compound_style = CompoundStyle::with_fgbg(
-        Color::Rgb { r: 220, g: 220, b: 220 },
-        Color::Rgb { r: 30, g: 30, b: 40 },
+        Color::Rgb {
+            r: 220,
+            g: 220,
+            b: 220,
+        },
+        Color::Rgb {
+            r: 30,
+            g: 30,
+            b: 40,
+        },
     );
 
     // Bullets and other decorations.
     skin.bullet = StyledChar::from_fg_char(Color::Cyan, '▸');
     skin.quote_mark = StyledChar::from_fg_char(Color::Blue, '▌');
-    skin.horizontal_rule =
-        StyledChar::from_fg_char(Color::DarkGrey, '─');
+    skin.horizontal_rule = StyledChar::from_fg_char(Color::DarkGrey, '─');
 
     // Table borders — termimad's default `STANDARD_TABLE_BORDER_CHARS`
     // already uses the same Unicode box-drawing characters as
@@ -511,7 +553,9 @@ fn run_doctor(args: DoctorArgs) -> anyhow::Result<()> {
                     ("codex".to_string(), AgentType::Codex),
                 ]
             } else {
-                registry.agents.iter()
+                registry
+                    .agents
+                    .iter()
                     .map(|(n, e)| (n.clone(), e.agent_type))
                     .collect()
             }
@@ -548,10 +592,49 @@ fn run_doctor(args: DoctorArgs) -> anyhow::Result<()> {
     eprintln!();
     if !all_ok {
         eprintln!("  Install missing CLIs:");
-        eprintln!("  Claude Code  {}", style("https://claude.ai/download").dim());
-        eprintln!("  Codex        {}", style("npm install -g @openai/codex").dim());
+        eprintln!(
+            "  Claude Code  {}",
+            style("https://claude.ai/download").dim()
+        );
+        eprintln!(
+            "  Codex        {}",
+            style("npm install -g @openai/codex").dim()
+        );
         eprintln!();
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eal_string_literal_quotes_and_escapes_metachars() {
+        // Round-trip property: every char that would either terminate
+        // the literal or change the lexer's byte-skipping behaviour
+        // must be escaped. The EAL lexer is intentionally non-decoding
+        // (it only uses `\` to skip the next byte), so we don't need
+        // numeric `\uXXXX` escapes — just the quote/backslash pair plus
+        // the readability escapes for newline/tab.
+        assert_eq!(eal_string_literal("hello").unwrap(), "\"hello\"");
+        assert_eq!(eal_string_literal(r#"a"b"#).unwrap(), r#""a\"b""#);
+        assert_eq!(eal_string_literal(r"a\b").unwrap(), r#""a\\b""#);
+        assert_eq!(eal_string_literal("a\nb").unwrap(), r#""a\nb""#);
+    }
+
+    #[test]
+    fn eal_string_literal_rejects_embedded_nul() {
+        // Downstream agent CLIs treat the prompt as a C string and
+        // silently truncate at the first NUL. Surface the bad input as
+        // an error at the CLI layer rather than delivering a corrupt
+        // half-prompt to the model.
+        let err = eal_string_literal("good\0bad").unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("NUL"),
+            "expected NUL-rejection error, got: {msg}"
+        );
+    }
 }

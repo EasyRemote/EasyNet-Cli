@@ -5,8 +5,8 @@
 // Description: `easynet mcp-server` — Hub-level MCP server on stdio for Claude Code / Codex.
 //
 // Protocol: JSON-RPC 2.0 over stdin/stdout (MCP specification).
-// Provider: HubCaseKit exposes 11 tools covering device management, ability lifecycle,
-//           remote execution, and EAL mission orchestration.
+// Provider: HubMcpProvider exposes 11 tools covering device management, ability
+//           lifecycle, remote execution, and EAL mission orchestration.
 //
 // Configuration for Claude Code:
 //   { "mcpServers": { "easynet": { "command": "easynet", "args": ["mcp-server"] } } }
@@ -17,7 +17,7 @@
 use anyhow::Context;
 use clap::Args;
 
-use crate::shared::config;
+use crate::persistence::config;
 
 #[derive(Debug, Args)]
 pub struct McpServerArgs {
@@ -47,7 +47,7 @@ pub fn run(args: McpServerArgs) -> anyhow::Result<()> {
         None => config::load()?.endpoint,
     };
 
-    let mut kit = crate::mcp::hub_kit::HubCaseKit::new(ep, args.tenant);
+    let mut kit = crate::mcp::provider::HubMcpProvider::new(ep, args.tenant);
     if let Some(node) = args.bound_node {
         let lock = !args.allow_node_override;
         kit = kit.with_bound_node(node, lock);

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Ability handler for '{name}'.
+#
+#   stdin:  JSON matching ability.json :: input_schema
+#   stdout: JSON matching ability.json :: output_schema
+#   Exit non-zero to signal failure; stderr is surfaced to the caller.
+#
+# The default body below produces a trivially-valid JSON response that
+# ignores the payload. Why: embedding the raw stdin into a shell-quoted
+# JSON string is unsafe (any `"` or `\` in the payload corrupts the output).
+# The two safe ways to echo the payload back are:
+#
+#   1. Use `jq` to build the response:
+#
+#        input="$(cat)"
+#        jq -cn --argjson echo "$input" '{ok: true, echo: $echo}'
+#
+#   2. Switch the handler language to Python (`easynet ability new --lang python`)
+#      and use the `json` module, which handles escaping for you.
+set -euo pipefail
+
+# Drain stdin to EOF. The runtime writes the JSON payload and closes its
+# side of the pipe; we don't inspect the payload in this stub, but reading
+# to EOF before we write avoids SIGPIPE if the runtime is still writing at
+# the moment we exit.
+cat >/dev/null
+
+# TODO: replace with your real logic. Until then, return a fixed response
+# that is guaranteed to be valid JSON regardless of the input.
+printf '%s' '{"ok":true}'

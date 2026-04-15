@@ -25,7 +25,8 @@ use clap::{Args, ValueEnum};
 use serde_json::{json, Map, Value};
 use toml_edit::{value as toml_value, DocumentMut, Item, Table};
 
-use crate::shared::{config, output};
+use crate::persistence::config;
+use crate::shared::output;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum McpInstallClient {
@@ -55,11 +56,21 @@ pub struct McpInstallArgs {
     #[arg(long)]
     pub endpoint: Option<String>,
 
-    /// Bind node-scoped tools to this node_id (device-bound MCP server).
-    #[arg(long)]
+    /// Pin node-scoped tools to this node_id. The MCP server will
+    /// substitute `node_id` into every invocation that omits it, so the
+    /// hosting agent (Claude Code / Codex) talks to exactly one device
+    /// for the lifetime of the session.
+    ///
+    /// By default the binding is a *hard lock*: an explicit `node_id`
+    /// that disagrees with `--bound-node` is rejected. Pass
+    /// `--allow-node-override` to demote the binding to a *default*
+    /// that callers may override on a per-call basis.
+    #[arg(long, value_name = "NODE_ID")]
     pub bound_node: Option<String>,
 
-    /// Allow overriding node_id even when --bound-node is set.
+    /// Demote `--bound-node` from a hard lock to a per-call default:
+    /// calls that carry an explicit `node_id` are routed to that node
+    /// instead of being rejected. Has no effect without `--bound-node`.
     #[arg(long)]
     pub allow_node_override: bool,
 
@@ -93,7 +104,8 @@ pub struct McpInstallArgs {
 
 pub fn run(args: McpInstallArgs) -> anyhow::Result<()> {
     let config_path = resolve_config_path(args.client, args.config_path.as_deref())?;
-    let (tenant, endpoint) = resolve_runtime_defaults(args.tenant.as_deref(), args.endpoint.as_deref());
+    let (tenant, endpoint) =
+        resolve_runtime_defaults(args.tenant.as_deref(), args.endpoint.as_deref());
 
     let spec = build_install_spec(&tenant, endpoint.as_deref(), &args)?;
 
@@ -106,8 +118,18 @@ pub fn run(args: McpInstallArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    output::success(&format!("Installed MCP server '{}' into {}", args.name, config_path.display()));
-    output::detail("client", match args.client { McpInstallClient::Claude => "claude", McpInstallClient::Codex => "codex" });
+    output::success(&format!(
+        "Installed MCP server '{}' into {}",
+        args.name,
+        config_path.display()
+    ));
+    output::detail(
+        "client",
+        match args.client {
+            McpInstallClient::Claude => "claude",
+            McpInstallClient::Codex => "codex",
+        },
+    );
     output::detail("tenant", &tenant);
     if let Some(ep) = endpoint.as_deref() {
         output::detail("endpoint", ep);
@@ -133,7 +155,10 @@ pub fn run(args: McpInstallArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn resolve_runtime_defaults(tenant: Option<&str>, endpoint: Option<&str>) -> (String, Option<String>) {
+fn resolve_runtime_defaults(
+    tenant: Option<&str>,
+    endpoint: Option<&str>,
+) -> (String, Option<String>) {
     let mut resolved_tenant = tenant.map(|s| s.to_string());
     let mut resolved_endpoint = endpoint.map(|s| s.to_string());
 
@@ -150,10 +175,16 @@ fn resolve_runtime_defaults(tenant: Option<&str>, endpoint: Option<&str>) -> (St
         }
     }
 
-    (resolved_tenant.unwrap_or_else(|| "default".to_string()), resolved_endpoint)
+    (
+        resolved_tenant.unwrap_or_else(|| "default".to_string()),
+        resolved_endpoint,
+    )
 }
 
-fn resolve_config_path(client: McpInstallClient, override_path: Option<&str>) -> anyhow::Result<PathBuf> {
+fn resolve_config_path(
+    client: McpInstallClient,
+    override_path: Option<&str>,
+) -> anyhow::Result<PathBuf> {
     if let Some(p) = override_path {
         return Ok(PathBuf::from(p));
     }
@@ -176,8 +207,11 @@ fn build_install_spec(
     endpoint: Option<&str>,
     args: &McpInstallArgs,
 ) -> anyhow::Result<InstallSpec> {
-    let mut cmd_args: Vec<String> =
-        vec!["mcp-server".to_string(), "--tenant".to_string(), tenant.to_string()];
+    let mut cmd_args: Vec<String> = vec![
+        "mcp-server".to_string(),
+        "--tenant".to_string(),
+        tenant.to_string(),
+    ];
     if let Some(ep) = endpoint {
         cmd_args.push("--endpoint".to_string());
         cmd_args.push(ep.to_string());
@@ -204,10 +238,18 @@ fn build_install_spec(
         env.insert("EASYNET_DENDRITE_BRIDGE_LIB".to_string(), lib);
     }
 
-    Ok(InstallSpec { command, args: cmd_args, env })
+    Ok(InstallSpec {
+        command,
+        args: cmd_args,
+        env,
+    })
 }
 
-fn install_for_claude(config_path: &Path, spec: &InstallSpec, args: &McpInstallArgs) -> anyhow::Result<()> {
+fn install_for_claude(
+    config_path: &Path,
+    spec: &InstallSpec,
+    args: &McpInstallArgs,
+) -> anyhow::Result<()> {
     let server_entry = build_claude_server_entry(spec)?;
 
     let mut root = load_json_object_or_empty(config_path)
@@ -247,10 +289,16 @@ fn build_claude_server_entry(spec: &InstallSpec) -> anyhow::Result<Value> {
         }
         entry.insert("env".to_string(), Value::Object(env_obj));
     }
-    Ok(Value::Object(entry.into_iter().collect::<Map<String, Value>>()))
+    Ok(Value::Object(
+        entry.into_iter().collect::<Map<String, Value>>(),
+    ))
 }
 
-fn install_for_codex(config_path: &Path, spec: &InstallSpec, args: &McpInstallArgs) -> anyhow::Result<()> {
+fn install_for_codex(
+    config_path: &Path,
+    spec: &InstallSpec,
+    args: &McpInstallArgs,
+) -> anyhow::Result<()> {
     let mut doc = load_toml_document_or_empty(config_path)
         .with_context(|| format!("read {}", config_path.display()))?;
 
@@ -290,7 +338,9 @@ fn install_for_codex(config_path: &Path, spec: &InstallSpec, args: &McpInstallAr
             let env_table = server
                 .get_mut("env")
                 .and_then(Item::as_table_mut)
-                .ok_or_else(|| anyhow::anyhow!("mcp_servers.{}.env must be a TOML table", args.name))?;
+                .ok_or_else(|| {
+                    anyhow::anyhow!("mcp_servers.{}.env must be a TOML table", args.name)
+                })?;
             for (k, v) in &spec.env {
                 env_table.insert(k, toml_value(v.clone()));
             }
@@ -321,7 +371,10 @@ fn load_json_object_or_empty(path: &Path) -> anyhow::Result<Map<String, Value>> 
     }
 }
 
-fn ensure_object_field<'a>(root: &'a mut Map<String, Value>, key: &str) -> anyhow::Result<&'a mut Map<String, Value>> {
+fn ensure_object_field<'a>(
+    root: &'a mut Map<String, Value>,
+    key: &str,
+) -> anyhow::Result<&'a mut Map<String, Value>> {
     let slot = root.entry(key.to_string()).or_insert_with(|| json!({}));
     match slot {
         Value::Object(map) => Ok(map),
@@ -354,11 +407,7 @@ fn resolve_bridge_lib(explicit: Option<&str>) -> anyhow::Result<Option<String>> 
             return Ok(None);
         }
         let path = PathBuf::from(trimmed);
-        anyhow::ensure!(
-            path.exists(),
-            "bridge lib not found at {}",
-            path.display()
-        );
+        anyhow::ensure!(path.exists(), "bridge lib not found at {}", path.display());
         return Ok(Some(trimmed.to_string()));
     }
 

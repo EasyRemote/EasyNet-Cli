@@ -15,26 +15,33 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::agent::dispatch;
 use crate::cli::mission_runs::LegacyMissionContext;
-use crate::shared::agents;
+use crate::registry::agents;
+use crate::shared::timeouts;
 
 #[derive(Debug, Args)]
 pub struct ThinkArgs {
-    /// The orchestrator agent
-    #[arg(long, default_value = "claude")]
+    /// Orchestrator agent that drives the think-act-observe loop.
+    /// Must already be registered via `easynet agent add`.
+    #[arg(long, default_value = "claude", value_name = "AGENT")]
     pub agent: String,
-    /// The goal
+    /// Goal the agent should pursue, in free-form prose.
     pub goal: String,
-    /// Max cycles
-    #[arg(long, default_value_t = 5)]
+    /// Hard upper bound on think-act cycles before giving up. The loop
+    /// exits early on `ACTION: DONE`. Must be `>= 1`.
+    #[arg(long, value_name = "N", default_value_t = 5)]
     pub max_cycles: usize,
-    /// Timeout per call (seconds)
-    #[arg(long, default_value_t = 120)]
+    /// Per-cycle deadline in seconds, covering one think-call plus one
+    /// action. Default: 120 s (`shared::timeouts::THINK_DEFAULT_SECS`).
+    /// `0` inherits the runtime default.
+    #[arg(long, value_name = "SECS", default_value_t = timeouts::THINK_DEFAULT_SECS)]
     pub timeout: u64,
 }
 
 pub fn run(args: ThinkArgs) -> anyhow::Result<()> {
     let registry = agents::load_agents()?;
-    let entry = registry.agents.get(&args.agent)
+    let entry = registry
+        .agents
+        .get(&args.agent)
         .ok_or_else(|| anyhow::anyhow!("agent '{}' not found", args.agent))?
         .clone();
 
@@ -54,9 +61,17 @@ pub fn run(args: ThinkArgs) -> anyhow::Result<()> {
 
     // Header
     eprintln!();
-    eprintln!("  {} {}", style("easynet think").cyan().bold(), style("autonomous agent loop").dim());
+    eprintln!(
+        "  {} {}",
+        style("easynet think").cyan().bold(),
+        style("autonomous agent loop").dim()
+    );
     eprintln!();
-    eprintln!("  {}  {}", style("agent").dim(), style(&args.agent).white().bold());
+    eprintln!(
+        "  {}  {}",
+        style("agent").dim(),
+        style(&args.agent).white().bold()
+    );
     eprintln!("  {}   {}", style("goal").dim(), truncate(&args.goal, 64));
     eprintln!("  {} {}", style("cycles").dim(), args.max_cycles);
     eprintln!();
@@ -73,9 +88,8 @@ pub fn run(args: ThinkArgs) -> anyhow::Result<()> {
         // Think
         let spinner = make_spinner("thinking");
         let think_prompt = build_think_prompt(&args.goal, &history);
-        let think_response = dispatch::send_to_agent(
-            &args.agent, &entry, &think_prompt, None, None, None,
-        )?;
+        let think_response =
+            dispatch::send_to_agent(&args.agent, &entry, &think_prompt, None, None)?;
         spinner.finish_and_clear();
         eprintln!(
             "  {}  thought  {}",
@@ -124,7 +138,12 @@ pub fn run(args: ThinkArgs) -> anyhow::Result<()> {
                         (format!("failed: {e}"), std::collections::HashMap::new())
                     }
                 };
-                history.push(CycleRecord { cycle, reasoning, action: source, observation });
+                history.push(CycleRecord {
+                    cycle,
+                    reasoning,
+                    action: source,
+                    observation,
+                });
             }
             AgentAction::Bash { command, reasoning } => {
                 eprintln!(
@@ -142,7 +161,11 @@ pub fn run(args: ThinkArgs) -> anyhow::Result<()> {
                 let observation = match execute_bash(&command) {
                     Ok(out) => {
                         spinner.finish_and_clear();
-                        eprintln!("  {}  {}", style("+").green(), style(truncate(&out, 80)).dim());
+                        eprintln!(
+                            "  {}  {}",
+                            style("+").green(),
+                            style(truncate(&out, 80)).dim()
+                        );
                         truncate(&out, 2000)
                     }
                     Err(e) => {
@@ -151,7 +174,12 @@ pub fn run(args: ThinkArgs) -> anyhow::Result<()> {
                         format!("failed: {e}")
                     }
                 };
-                history.push(CycleRecord { cycle, reasoning, action: command, observation });
+                history.push(CycleRecord {
+                    cycle,
+                    reasoning,
+                    action: command,
+                    observation,
+                });
             }
             AgentAction::Think { reasoning } => {
                 eprintln!(
@@ -160,7 +188,10 @@ pub fn run(args: ThinkArgs) -> anyhow::Result<()> {
                     style(truncate(&reasoning, 70)).dim()
                 );
                 history.push(CycleRecord {
-                    cycle, reasoning, action: "reflect".into(), observation: "no action".into(),
+                    cycle,
+                    reasoning,
+                    action: "reflect".into(),
+                    observation: "no action".into(),
                 });
             }
         }
@@ -188,7 +219,12 @@ fn make_spinner(msg: &str) -> ProgressBar {
 // ── Types ────────────────────────────────────────────────────────────────────
 
 #[allow(dead_code)] // All fields populated for structured logging; not all read yet.
-struct CycleRecord { cycle: usize, reasoning: String, action: String, observation: String }
+struct CycleRecord {
+    cycle: usize,
+    reasoning: String,
+    action: String,
+    observation: String,
+}
 
 enum AgentAction {
     Done { summary: String },
@@ -201,7 +237,7 @@ enum AgentAction {
 
 fn build_think_prompt(goal: &str, history: &[CycleRecord]) -> String {
     let mut prompt = format!(
-r#"You are an autonomous orchestrator in the EasyNet agent network.
+        r#"You are an autonomous orchestrator in the EasyNet agent network.
 
 ## Goal
 {goal}
@@ -235,14 +271,17 @@ REASONING: <brief>
 ACTION: DONE
 SUMMARY:
 <full deliverable content>
-"#);
+"#
+    );
 
     if !history.is_empty() {
         prompt.push_str("\n## History\n\n");
         for r in history {
             prompt.push_str(&format!(
                 "Cycle {}: {}\nResult: {}\n\n",
-                r.cycle, truncate(&r.reasoning, 150), truncate(&r.observation, 800),
+                r.cycle,
+                truncate(&r.reasoning, 150),
+                truncate(&r.observation, 800),
             ));
         }
     }
@@ -257,25 +296,32 @@ fn parse_agent_action(response: &str) -> AgentAction {
         .unwrap_or_else(|| response.lines().next().unwrap_or("").to_string());
 
     if response.contains("ACTION: DONE") || response.contains("ACTION:DONE") {
-        let summary = extract_section_after(response, "SUMMARY:")
-            .unwrap_or_else(|| reasoning.clone());
+        let summary =
+            extract_section_after(response, "SUMMARY:").unwrap_or_else(|| reasoning.clone());
         return AgentAction::Done { summary };
     }
     if response.contains("ACTION: EAL") || response.contains("```eal") {
         if let Some(eal) = extract_code_block(response, "eal") {
-            return AgentAction::Eal { source: eal, reasoning };
+            return AgentAction::Eal {
+                source: eal,
+                reasoning,
+            };
         }
     }
     if response.contains("ACTION: BASH") {
         if let Some(cmd) = extract_after(response, "COMMAND:") {
-            return AgentAction::Bash { command: cmd.trim().to_string(), reasoning };
+            return AgentAction::Bash {
+                command: cmd.trim().to_string(),
+                reasoning,
+            };
         }
     }
     AgentAction::Think { reasoning }
 }
 
 fn extract_after(text: &str, prefix: &str) -> Option<String> {
-    text.lines().find(|l| l.trim().starts_with(prefix))
+    text.lines()
+        .find(|l| l.trim().starts_with(prefix))
         .map(|l| l.trim().trim_start_matches(prefix).trim().to_string())
 }
 fn extract_section_after(text: &str, prefix: &str) -> Option<String> {
@@ -285,10 +331,18 @@ fn extract_section_after(text: &str, prefix: &str) -> Option<String> {
         if line.trim().starts_with(prefix) {
             found = true;
             let rest = line.trim().trim_start_matches(prefix).trim();
-            if !rest.is_empty() { lines.push(rest.to_string()); }
-        } else if found { lines.push(line.to_string()); }
+            if !rest.is_empty() {
+                lines.push(rest.to_string());
+            }
+        } else if found {
+            lines.push(line.to_string());
+        }
     }
-    if found { Some(lines.join("\n").trim().to_string()) } else { None }
+    if found {
+        Some(lines.join("\n").trim().to_string())
+    } else {
+        None
+    }
 }
 fn extract_code_block(text: &str, lang: &str) -> Option<String> {
     let marker = format!("```{lang}");
@@ -300,29 +354,64 @@ fn extract_code_block(text: &str, lang: &str) -> Option<String> {
 
 // ── Execute ──────────────────────────────────────────────────────────────────
 
-fn execute_eal_source(source: &str) -> anyhow::Result<(String, std::collections::HashMap<String, String>)> {
+fn execute_eal_source(
+    source: &str,
+) -> anyhow::Result<(String, std::collections::HashMap<String, String>)> {
     use crate::eal;
-    use crate::shared::config;
+    use crate::persistence::config;
     let program = eal::parser::parse(source).map_err(|e| anyhow::anyhow!("parse: {e}"))?;
     let ir = eal::planner::compile(&program).map_err(|e| anyhow::anyhow!("compile: {e}"))?;
     let state = config::load()?;
     let report = eal::interpreter::execute_with_endpoint(&state.endpoint, "default", &ir)?;
     Ok((
-        format!("{} ok, {} failed, {:.1}s", report.steps_completed, report.steps_failed, report.total_elapsed_ms as f64 / 1000.0),
+        format!(
+            "{} ok, {} failed, {:.1}s",
+            report.steps_completed,
+            report.steps_failed,
+            report.total_elapsed_ms as f64 / 1000.0
+        ),
         report.outputs,
     ))
 }
 
+/// Execute a shell command suggested by the agent during a think loop.
+///
+/// **Trust model — read before flagging this as injection.** This helper
+/// runs `sh -c <command>` *by design*: the autonomous-think loop's whole
+/// purpose is to let the agent observe its environment by issuing
+/// commands. The command string comes from the agent's own response,
+/// which the user opted into when they invoked `easynet think`. The
+/// trust boundary here is "the user trusts the agent they configured"
+/// — the same boundary that lets the agent author missions or dispatch
+/// to other agents. A future "sandbox" mode could narrow this (an
+/// allowlist of CLI tools, a chroot, etc.), but a half-measure like
+/// stripping `;`, `|`, `&` would be a false sense of security: the agent
+/// has plenty of equivalent ways to express dangerous commands.
+///
+/// If you arrive here looking to plug an injection, the right level is
+/// the *invocation* (don't run `easynet think` against an untrusted
+/// agent), not the *implementation* (which is operating as documented).
 fn execute_bash(command: &str) -> anyhow::Result<String> {
     use crate::agent::process_runner::{self, ChildOptions};
-    let result = process_runner::run_child("sh", &["-c", command], ChildOptions {
-        timeout: Duration::from_secs(30), ..Default::default()
-    })?;
-    if result.exit_code != 0 { anyhow::bail!("exit {}: {}", result.exit_code, result.stderr.trim()); }
+    let result = process_runner::run_child(
+        "sh",
+        &["-c", command],
+        ChildOptions {
+            timeout: Duration::from_secs(30),
+            ..Default::default()
+        },
+    )?;
+    if result.exit_code != 0 {
+        anyhow::bail!("exit {}: {}", result.exit_code, result.stderr.trim());
+    }
     Ok(result.stdout)
 }
 
 fn truncate(s: &str, max: usize) -> String {
     let s = s.replace('\n', " ").replace('\r', "");
-    if s.len() <= max { s } else { format!("{}...", &s[..max]) }
+    if s.len() <= max {
+        s
+    } else {
+        format!("{}...", &s[..max])
+    }
 }

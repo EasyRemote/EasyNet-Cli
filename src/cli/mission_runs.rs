@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 
-use crate::shared::config;
+use crate::persistence::config;
 
 pub fn root_dir() -> PathBuf {
     config::state_dir().join("missions").join("runs")
@@ -42,35 +42,70 @@ impl MissionRunDir {
         fs::create_dir_all(&root)?;
         let stamp = Local::now().format("%Y-%m-%d_%H%M%S").to_string();
         let safe_name = sanitize_for_path(name);
-        let mut path = root.join(format!("{stamp}_{safe_name}"));
-        let mut suffix = 0u32;
-        while path.exists() {
-            suffix += 1;
-            path = root.join(format!("{stamp}_{safe_name}-{suffix}"));
+        let path = allocate_unique_run_dir(&root, &stamp, &safe_name)?;
+        // Mark in-flight; deleted on completion. Best-effort: if the
+        // pid file fails to write the run still proceeds (the file is
+        // a debugging aid, not load-bearing for correctness).
+        if let Err(e) = fs::write(path.join("pid"), std::process::id().to_string()) {
+            eprintln!(
+                "[easynet warn] mission run {}: write pid failed ({e})",
+                path.display()
+            );
         }
-        fs::create_dir_all(&path)?;
-        // mark in-flight; deleted on completion
-        let _ = fs::write(path.join("pid"), std::process::id().to_string());
         Ok(Self { path })
     }
 
-    pub fn write_source(&self, source: &str) {
-        let _ = fs::write(self.path.join("source.eal"), source);
+    pub fn write_source(&self, source: &str) -> std::io::Result<()> {
+        fs::write(self.path.join("source.eal"), source)
     }
-    pub fn write_ir(&self, ir_json: &str) {
-        let _ = fs::write(self.path.join("ir.json"), ir_json);
+    pub fn write_ir(&self, ir_json: &str) -> std::io::Result<()> {
+        fs::write(self.path.join("ir.json"), ir_json)
     }
-    pub fn write_trace(&self, trace_json: &str) {
-        let _ = fs::write(self.path.join("trace.json"), trace_json);
+    pub fn write_trace(&self, trace_json: &str) -> std::io::Result<()> {
+        fs::write(self.path.join("trace.json"), trace_json)
     }
-    pub fn write_meta(&self, meta: &MissionRunMeta) {
-        if let Ok(s) = serde_json::to_string_pretty(meta) {
-            let _ = fs::write(self.path.join("meta.json"), s + "\n");
-        }
+    pub fn write_meta(&self, meta: &MissionRunMeta) -> std::io::Result<()> {
+        let s = serde_json::to_string_pretty(meta)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        fs::write(self.path.join("meta.json"), s + "\n")
     }
     pub fn finish(&self) {
         let _ = fs::remove_file(self.path.join("pid"));
     }
+}
+
+/// Allocate a unique mission run directory for `stamp_name` under `root`,
+/// retrying with `-1`, `-2`, ... on collision.
+///
+/// Concurrency note: the same TOCTOU bug the iter-2 `agent::run_store`
+/// fix addressed applies here verbatim — `while exists() { ... }
+/// create_dir_all(...)` lets two racers both pass the existence check
+/// and then both succeed (since `create_dir_all` treats "already
+/// exists" as OK), corrupting each other's source.eal / trace.json /
+/// meta.json. We use `create_dir`'s atomic `O_EXCL`-equivalent and
+/// retry on `AlreadyExists` instead.
+fn allocate_unique_run_dir(
+    root: &std::path::Path,
+    stamp: &str,
+    safe_name: &str,
+) -> anyhow::Result<PathBuf> {
+    const MAX_SUFFIX_ATTEMPTS: u32 = 10_000;
+    for suffix in 0..MAX_SUFFIX_ATTEMPTS {
+        let path = if suffix == 0 {
+            root.join(format!("{stamp}_{safe_name}"))
+        } else {
+            root.join(format!("{stamp}_{safe_name}-{suffix}"))
+        };
+        match fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    anyhow::bail!(
+        "could not allocate a unique mission run directory under {} after {MAX_SUFFIX_ATTEMPTS} attempts",
+        root.display()
+    )
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -304,9 +339,9 @@ fn find_implicit_agent_fallback(
     ir: &crate::eal::ir::MissionIr,
 ) -> anyhow::Result<Option<ImplicitAgentFallback>> {
     use crate::eal::ir::IrTarget;
-    use crate::shared::agent_id::{AgentId, DEFAULT_TENANT};
+    use crate::registry::agent_id::{AgentId, DEFAULT_TENANT};
 
-    let registry = crate::shared::agents::load_agents()?;
+    let registry = crate::registry::agents::load_agents()?;
 
     // Build the set of registered agent identifiers in their canonical
     // forms, plus the bare-name fallback for default-tenant agents
@@ -353,10 +388,7 @@ fn find_implicit_agent_fallback(
 ///   dispatch_step(step)     -> StepResult (already in interpreter)
 /// The single-entry contract still holds at the level of
 /// `run_mission_inproc`; the split is purely internal.
-pub fn run_mission_inproc(
-    source: &str,
-    opts: MissionRunOpts,
-) -> anyhow::Result<MissionRunResult> {
+pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<MissionRunResult> {
     // Compile.
     let program = crate::eal::parser::parse(source)?;
     let ir = crate::eal::planner::compile(&program)?;
@@ -392,11 +424,24 @@ pub fn run_mission_inproc(
         );
     }
 
-    // Persist source + IR.
+    // Persist source + IR. The writes are best-effort: a missed
+    // source.eal / ir.json means the on-disk audit record is incomplete,
+    // but the mission still runs. We log so an operator inspecting a
+    // partially-populated run dir can attribute the gap.
     let run_dir = MissionRunDir::create(&ir.name)?;
-    run_dir.write_source(source);
+    if let Err(e) = run_dir.write_source(source) {
+        eprintln!(
+            "[easynet warn] mission run {}: write source.eal failed ({e})",
+            run_dir.path.display()
+        );
+    }
     if let Ok(ir_json) = serde_json::to_string_pretty(&ir) {
-        run_dir.write_ir(&ir_json);
+        if let Err(e) = run_dir.write_ir(&ir_json) {
+            eprintln!(
+                "[easynet warn] mission run {}: write ir.json failed ({e})",
+                run_dir.path.display()
+            );
+        }
     }
     let run_id = run_dir
         .path
@@ -412,7 +457,7 @@ pub fn run_mission_inproc(
     // even if the interpreter panics.
     let _ctx = MissionContextGuard::enter(&run_id);
 
-    let state = crate::shared::config::load()?;
+    let state = crate::persistence::config::load()?;
     let tenant = state.tenant_or_default();
     let started = std::time::Instant::now();
     let started_at = chrono::Local::now().to_rfc3339();
@@ -446,9 +491,19 @@ pub fn run_mission_inproc(
                 meta.status = "partial".into();
             }
             if let Ok(trace_json) = serde_json::to_string_pretty(&report.trace) {
-                run_dir.write_trace(&trace_json);
+                if let Err(e) = run_dir.write_trace(&trace_json) {
+                    eprintln!(
+                        "[easynet warn] mission run {}: write trace.json failed ({e})",
+                        run_dir.path.display()
+                    );
+                }
             }
-            run_dir.write_meta(&meta);
+            if let Err(e) = run_dir.write_meta(&meta) {
+                eprintln!(
+                    "[easynet warn] mission run {}: write meta.json failed ({e})",
+                    run_dir.path.display()
+                );
+            }
             run_dir.finish();
 
             // Convert ExecutionReport.outputs (HashMap<String, String>)
@@ -460,8 +515,12 @@ pub fn run_mission_inproc(
                 .outputs
                 .into_iter()
                 .map(|(k, raw)| {
+                    // `unwrap_or_else` would be wasted here — parsing is
+                    // the whole operation; if it fails we fall back to
+                    // wrapping `raw` as a plain JSON string. Evaluating
+                    // the fallback eagerly costs nothing.
                     let v = serde_json::from_str::<serde_json::Value>(&raw)
-                        .unwrap_or_else(|_| serde_json::Value::String(raw));
+                        .unwrap_or(serde_json::Value::String(raw));
                     (k, v)
                 })
                 .collect();
@@ -477,7 +536,12 @@ pub fn run_mission_inproc(
         Err(e) => {
             meta.status = "error".into();
             meta.error = Some(e.to_string());
-            run_dir.write_meta(&meta);
+            if let Err(write_err) = run_dir.write_meta(&meta) {
+                eprintln!(
+                    "[easynet warn] mission run {}: write meta.json failed ({write_err})",
+                    run_dir.path.display()
+                );
+            }
             run_dir.finish();
             Err(anyhow::anyhow!("mission run failed: {e}"))
         }
@@ -522,7 +586,12 @@ impl LegacyMissionContext {
             steps_failed: 0,
             ability_graph_traces: None,
         };
-        run_dir.write_meta(&meta);
+        if let Err(e) = run_dir.write_meta(&meta) {
+            eprintln!(
+                "[easynet warn] legacy mission run {}: write meta.json failed ({e})",
+                run_dir.path.display()
+            );
+        }
         let run_id = run_dir
             .path
             .file_name()
@@ -539,38 +608,58 @@ impl LegacyMissionContext {
 
 // ── Mission context guard ──────────────────────────────────────────────────
 //
-// Sets `EASYNET_MISSION_ID` for the duration of a mission run, and restores
-// the previous value (or removes the var) on Drop. Panic-safe: even if the
-// interpreter panics mid-execution, the env var is cleaned up so the next
-// `run_mission_inproc` call starts from a clean baseline.
+// Installs the active `DispatchContext` for the duration of a mission
+// run on TWO channels:
 //
-// The dispatch invariant assertion (Step 9 in the implementation plan)
-// reads this env var to verify that every cross-agent dispatch originates
-// from a real mission context.
+//   1. The typed thread-local in `agent::context` — the primary
+//      in-process channel. Concurrent missions on different threads
+//      get independent contexts (no cross-thread stomping).
+//   2. The `EASYNET_MISSION_ID` env var — the cross-process channel.
+//      When the mission interpreter spawns an external agent CLI as a
+//      child process, the child inherits the env var and reconstructs
+//      the typed context from it on entry.
 //
-// TODO(thread-local-context): this is a process-global env var, which
-// works for the current single-threaded CLI use case but breaks the moment
-// EasyNet grows in-process parallel mission execution. The correct
-// long-term shape is an explicit `DispatchContext { mission_id, run_dir,
-// depth, origin_agent, tenant }` struct passed as a function parameter.
-// When that migration happens, audit every caller of
-// `dispatch::send_to_agent_with_depth` to thread the context through, and
-// remove the env var here.
+// Both channels are reset on Drop (panic-safe). The env-var write is the
+// remaining piece of process-global state in this codebase; it is here
+// because spawning a subprocess is the only operation that crosses the
+// thread-local boundary, and the env is the only mechanism that crosses
+// the process boundary. See `agent::context` for the design rationale.
 struct MissionContextGuard {
-    prev: Option<String>,
+    prev_env: Option<String>,
+    _ctx: crate::agent::context::ContextGuard,
 }
 
 impl MissionContextGuard {
     fn enter(run_id: &str) -> Self {
-        let prev = std::env::var("EASYNET_MISSION_ID").ok();
+        let prev_env = std::env::var("EASYNET_MISSION_ID").ok();
         std::env::set_var("EASYNET_MISSION_ID", run_id);
-        Self { prev }
+        // Install the typed thread-local. The run_dir field is filled
+        // in best-effort from the canonical mission-runs root; if the
+        // dir is missing the dispatch invariant check will surface that
+        // separately (the Stage 2 anti-forgery check).
+        let ctx =
+            crate::agent::context::DispatchContext::for_mission(run_id, root_dir().join(run_id));
+        let ctx_guard = crate::agent::context::enter(ctx);
+        Self {
+            prev_env,
+            _ctx: ctx_guard,
+        }
     }
 }
 
 impl Drop for MissionContextGuard {
     fn drop(&mut self) {
-        match self.prev.take() {
+        // Thread-local restore happens automatically via `_ctx`'s Drop;
+        // we only need to clean up the env var the SDK can't see into.
+        //
+        // Audit invariant: this `Drop` impl, together with `enter()`
+        // above, is the **only place in the codebase that writes
+        // `EASYNET_MISSION_ID`**. The cross-process *read* path is
+        // `agent::context::DispatchContext::from_env()`. If you find
+        // yourself wanting another writer, install a typed
+        // `DispatchContext` instead — the env var is the subprocess
+        // boundary, not a general-purpose channel.
+        match self.prev_env.take() {
             Some(p) => std::env::set_var("EASYNET_MISSION_ID", p),
             None => std::env::remove_var("EASYNET_MISSION_ID"),
         }
@@ -623,6 +712,67 @@ mod tests {
         assert_eq!(sanitize_for_path("///"), "mission");
     }
 
+    #[test]
+    fn allocate_unique_run_dir_returns_distinct_paths_for_same_stamp() {
+        // Sequential calls with the same stamp must each get their own
+        // directory. The suffix scheme is the user-visible contract for
+        // mission-run discovery (`easynet mission list`).
+        let root = std::env::temp_dir().join(format!(
+            "easynet-mission-runs-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let a = allocate_unique_run_dir(&root, "2026-04-15_120000", "x").unwrap();
+        let b = allocate_unique_run_dir(&root, "2026-04-15_120000", "x").unwrap();
+        let c = allocate_unique_run_dir(&root, "2026-04-15_120000", "x").unwrap();
+        assert_ne!(a, b);
+        assert_ne!(b, c);
+        assert!(a.exists() && b.exists() && c.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn allocate_unique_run_dir_survives_concurrent_callers() {
+        // Regression guard for the TOCTOU race the iter-2 `run_store`
+        // fix already addressed for agent runs. The previous
+        // `while exists() { ... } create_dir_all(...)` pattern let two
+        // racing missions both win the same directory; with
+        // `create_dir`'s atomic semantics every successful allocation
+        // must yield a distinct path.
+        use std::sync::Arc;
+        use std::thread;
+        let root = Arc::new(std::env::temp_dir().join(format!(
+            "easynet-mission-runs-race-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        )));
+        fs::create_dir_all(&*root).unwrap();
+        const N: usize = 16;
+        let workers: Vec<_> = (0..N)
+            .map(|_| {
+                let r = Arc::clone(&root);
+                thread::spawn(move || {
+                    allocate_unique_run_dir(&r, "2026-04-15_120000", "x").unwrap()
+                })
+            })
+            .collect();
+        let paths: Vec<PathBuf> = workers.into_iter().map(|w| w.join().unwrap()).collect();
+        let unique: std::collections::HashSet<_> = paths.iter().collect();
+        assert_eq!(
+            unique.len(),
+            N,
+            "expected {N} distinct paths, got {unique:?}"
+        );
+        let _ = fs::remove_dir_all(&*root);
+    }
+
     fn make_meta(name: &str) -> MissionRunMeta {
         MissionRunMeta {
             name: name.into(),
@@ -642,9 +792,15 @@ mod tests {
     fn create_writes_pid_and_finish_removes_it() {
         let _g = HomeGuard::new();
         let dir = MissionRunDir::create("smoke").expect("create");
-        assert!(dir.path.join("pid").exists(), "pid file should exist after create");
+        assert!(
+            dir.path.join("pid").exists(),
+            "pid file should exist after create"
+        );
         dir.finish();
-        assert!(!dir.path.join("pid").exists(), "pid file should be gone after finish");
+        assert!(
+            !dir.path.join("pid").exists(),
+            "pid file should be gone after finish"
+        );
     }
 
     #[test]
@@ -672,7 +828,11 @@ mod tests {
         let dir = MissionRunDir::create("noisy").expect("create");
         // No write_meta call → list_runs must skip this directory.
         let runs = list_runs().expect("list");
-        assert!(runs.is_empty(), "found {:?}", runs.iter().map(|r| &r.id).collect::<Vec<_>>());
+        assert!(
+            runs.is_empty(),
+            "found {:?}",
+            runs.iter().map(|r| &r.id).collect::<Vec<_>>()
+        );
         // Sanity: the directory itself does exist.
         assert!(dir.path.exists());
     }
@@ -682,7 +842,7 @@ mod tests {
         let _g = HomeGuard::new();
         for n in ["alpha", "beta", "gamma"] {
             let d = MissionRunDir::create(n).expect("create");
-            d.write_meta(&make_meta(n));
+            d.write_meta(&make_meta(n)).expect("write_meta");
             d.finish();
         }
         let runs = list_runs().expect("list");
@@ -691,7 +851,12 @@ mod tests {
         // collision suffix appended by `create`. Whichever ordering, the
         // contract is "sorted descending by id".
         for w in runs.windows(2) {
-            assert!(w[0].id >= w[1].id, "not sorted desc: {} vs {}", w[0].id, w[1].id);
+            assert!(
+                w[0].id >= w[1].id,
+                "not sorted desc: {} vs {}",
+                w[0].id,
+                w[1].id
+            );
         }
     }
 
@@ -706,7 +871,7 @@ mod tests {
     fn find_run_finds_exact_then_prefix() {
         let _g = HomeGuard::new();
         let d = MissionRunDir::create("solo").expect("create");
-        d.write_meta(&make_meta("solo"));
+        d.write_meta(&make_meta("solo")).expect("write_meta");
         d.finish();
 
         let id = d.path.file_name().unwrap().to_string_lossy().to_string();
@@ -727,7 +892,7 @@ mod tests {
     fn cancel_run_flips_in_flight_to_cancelled() {
         let _g = HomeGuard::new();
         let d = MissionRunDir::create("running").expect("create");
-        d.write_meta(&make_meta("running"));
+        d.write_meta(&make_meta("running")).expect("write_meta");
         // intentionally do NOT call finish — pid file stays in place.
         let id = d.path.file_name().unwrap().to_string_lossy().to_string();
 
@@ -746,7 +911,7 @@ mod tests {
     fn cancel_run_noop_on_terminal() {
         let _g = HomeGuard::new();
         let d = MissionRunDir::create("done").expect("create");
-        d.write_meta(&make_meta("done"));
+        d.write_meta(&make_meta("done")).expect("write_meta");
         d.finish(); // remove pid → terminal
         let id = d.path.file_name().unwrap().to_string_lossy().to_string();
 
@@ -776,13 +941,13 @@ mod tests {
     /// Helper: register an agent in a temp HOME so the conflict-detection
     /// has something to find.
     fn register_test_agent(name: &str) {
-        use crate::shared::agents::{AgentEntry, AgentRegistry, AgentType};
+        use crate::registry::agents::{AgentEntry, AgentRegistry, AgentType};
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             name.to_string(),
             AgentEntry::new(AgentType::ClaudeCode, None),
         );
-        crate::shared::agents::save_agents(&registry).expect("save test agent");
+        crate::registry::agents::save_agents(&registry).expect("save test agent");
     }
 
     #[test]
@@ -878,4 +1043,3 @@ mod tests {
         );
     }
 }
-

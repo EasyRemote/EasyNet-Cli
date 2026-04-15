@@ -22,8 +22,8 @@ use clap::Args;
 use console::style;
 
 use crate::agent::{claude_code, codex};
-use crate::shared::{self, agents, config};
-
+use crate::persistence::config;
+use crate::registry::agents;
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
     /// Emit JSON instead of the human-readable report.
@@ -138,7 +138,7 @@ fn check_runtime() -> Check {
 }
 
 fn check_federation() -> Check {
-    let (br, rt) = match shared::connect_bridge() {
+    let (br, rt) = match crate::persistence::config::load_and_connect() {
         Ok(t) => t,
         Err(_) => {
             return Check {

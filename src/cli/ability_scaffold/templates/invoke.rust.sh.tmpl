@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Universal ability entrypoint for Rust handlers.
+#
+# This script executes a compiled Rust binary from the ability root:
+#   target/release/{name}   (preferred)
+#   target/debug/{name}     (fallback for local dev)
+#
+# If neither binary exists and `rustc` is available, it compiles
+# `scripts/handler.rs` on-demand to target/release/{name}.
+# stdin/stdout are forwarded transparently to the binary.
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+RELEASE_BIN="$ROOT/target/release/{name}"
+DEBUG_BIN="$ROOT/target/debug/{name}"
+HANDLER_RS="$ROOT/scripts/handler.rs"
+
+if [[ -x "$RELEASE_BIN" ]]; then
+  exec "$RELEASE_BIN"
+fi
+
+if [[ -x "$DEBUG_BIN" ]]; then
+  exec "$DEBUG_BIN"
+fi
+
+# First-run convenience: compile the scaffolded handler source when possible.
+if command -v rustc >/dev/null 2>&1; then
+  if [[ ! -f "$HANDLER_RS" ]]; then
+    printf '%s' '{"ok":false,"error":"Rust handler source missing: scripts/handler.rs"}'
+    exit 1
+  fi
+  mkdir -p "$(dirname "$RELEASE_BIN")"
+  if rustc "$HANDLER_RS" -O -o "$RELEASE_BIN"; then
+    exec "$RELEASE_BIN"
+  fi
+  printf '%s' '{"ok":false,"error":"Failed to compile scripts/handler.rs with rustc"}'
+  exit 1
+fi
+
+printf '%s' '{"ok":false,"error":"Rust handler binary not found and rustc is unavailable. Prebuild with: rustc scripts/handler.rs -O -o target/release/{name}"}'
+exit 1
