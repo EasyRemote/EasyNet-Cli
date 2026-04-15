@@ -1,0 +1,28 @@
+{
+  "name": "experiment-bridge",
+  "version": "1.0.0",
+  "tool_name": "experiment-bridge",
+  "description": "Bridge between idea discovery and review loop. Reads experiment plan, implements code, deploys to GPU, collects initial results. Former ARIS skill: /experiment-bridge (Workflow 1.5).",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "plan": {
+        "type": "object",
+        "description": "Experiment plan (from idea discovery or review fixes)"
+      },
+      "base_repo": {
+        "type": "string",
+        "description": "Optional GitHub repo URL to use as base codebase"
+      }
+    },
+    "required": ["plan"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "experiment_log": { "type": "object", "description": "Structured experiment log" },
+      "results_dir": { "type": "string", "description": "Path to collected results" },
+      "run_status": { "type": "array", "description": "Status of each experiment run" }
+    }
+  }
+}

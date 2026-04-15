@@ -1,0 +1,33 @@
+{
+  "name": "review-reply",
+  "version": "1.0.0",
+  "tool_name": "review-reply",
+  "description": "Continue a multi-round review thread. Maintains conversation context via thread_id. Checks whether previous suspicions were genuinely addressed.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "thread_id": {
+        "type": "string",
+        "description": "Thread ID from the initial review call"
+      },
+      "update": {
+        "type": "string",
+        "description": "Description of changes made since last review"
+      },
+      "results": {
+        "type": "object",
+        "description": "Updated experiment results"
+      }
+    },
+    "required": ["thread_id", "update"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "score": { "type": "number" },
+      "verdict": { "type": "string" },
+      "weaknesses": { "type": "array" },
+      "resolved": { "type": "array", "description": "Previously-reported weaknesses now resolved" }
+    }
+  }
+}

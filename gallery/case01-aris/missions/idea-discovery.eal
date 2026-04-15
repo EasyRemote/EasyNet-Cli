@@ -1,0 +1,67 @@
+// idea-discovery.eal — Workflow 1: Idea Discovery Pipeline
+// =========================================================
+//
+// From broad research direction to validated, pilot-tested ideas.
+// Former ARIS: /idea-discovery SKILL.md
+//
+// DAG structure (compiler-inferred):
+//   Phase 0: lit_survey
+//   Phase 1: idea_generate (depends on lit_survey)
+//   Phase 2: novelty_check_1, novelty_check_2 (parallel, depend on ideas)
+//   Phase 3: external_review (depends on both novelty checks)
+//
+// Run:
+//   easynet mission run gallery/case01-aris/missions/idea-discovery.eal
+
+mission "aris-idea-discovery" {
+
+  // ── Phase 0: Map the research landscape ───────────────────────
+
+  let landscape = researcher.lit_survey(
+    direction:   "efficient attention mechanisms for long-context LLMs",
+    sources:     "arxiv,semantic_scholar",
+    download:    false,
+    max_results: 40
+  ) timeout 300
+
+  // ── Phase 1: Brainstorm + filter + pilot ──────────────────────
+
+  let ideas = researcher.idea_generate(
+    direction: "efficient attention mechanisms for long-context LLMs",
+    landscape: landscape.output,
+    max_ideas: 10
+  ) timeout 600
+
+  // ── Phase 2: Deep novelty verification (parallel) ─────────────
+  // Two novelty checks run in parallel — no data dependency between
+  // them. The compiler places them in the same phase.
+
+  let novelty_top1 = researcher.novelty_verify(
+    idea:   ideas.output,
+    claims: ideas.output
+  ) timeout 300
+
+  let novelty_top2 = researcher.novelty_verify(
+    idea:   ideas.output,
+    claims: ideas.output
+  ) timeout 300
+
+  // ── Phase 3: External critical review ─────────────────────────
+  // Cross-agent: researcher's artifacts go to GPT reviewer.
+  // Per ontology §4.4, the reviewer reads artifacts independently.
+  // The researcher cannot pre-digest content for the reviewer.
+
+  let critical_review = reviewer.review(
+    artifacts:  novelty_top1.output,
+    round:      1,
+    difficulty: "medium",
+    venue:      "NeurIPS"
+  ) timeout 600
+
+  // ── Phase 4: Analyze and rank ─────────────────────────────────
+
+  let final_report = researcher.analyze_results(
+    data_dir: critical_review.output,
+    metrics:  "novelty_score,pilot_signal,reviewer_score"
+  ) timeout 120
+}

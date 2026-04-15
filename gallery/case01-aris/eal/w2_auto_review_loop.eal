@@ -1,0 +1,46 @@
+// Case01 W2: autonomous review loop as External EAL mission.
+
+mission "case01-aris-w2-auto-review-loop" {
+  let idea_state = call "aris.load_artifact" on "aris-host" with {
+    stage = "idea"
+  } timeout 30
+
+  let review_r1 = oracle.review(
+    topic: "w2-auto-review-r1",
+    artifact: idea_state.output,
+    rubric: "top-venue-critical"
+  ) timeout 180
+
+  let patch_r1 = aris.apply_review(
+    review: review_r1.output,
+    round: 1,
+    project_state: idea_state.output
+  ) timeout 300
+
+  let review_r2 = oracle.review(
+    topic: "w2-auto-review-r2",
+    artifact: patch_r1.output,
+    rubric: "top-venue-critical"
+  ) timeout 180
+
+  let patch_r2 = aris.apply_review(
+    review: review_r2.output,
+    round: 2,
+    project_state: patch_r1.output
+  ) timeout 300
+
+  let score = oracle.score(
+    topic: "w2-final-score",
+    artifact: patch_r2.output,
+    rubric: "readiness-for-submission"
+  ) timeout 120
+
+  call "aris.persist_artifact" on "aris-host" with {
+    stage = "review",
+    payload = score.output
+  }
+
+  call "aris.metrics_ping" on "aris-host" with {
+    event = "w2_completed"
+  } optional
+}

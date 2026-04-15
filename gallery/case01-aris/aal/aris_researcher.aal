@@ -1,0 +1,40 @@
+agentclass ArisResearcher {
+    identity: default/aris
+
+    public:
+        ability chat(prompt, context) -> reply
+        ability idea_discovery(direction, constraints) -> idea_report
+        ability refine_idea(idea_report, review_feedback) -> refined_proposal
+        ability plan_experiments(refined_proposal) -> experiment_plan
+        ability apply_review(review, round, project_state) -> updated_project_state
+        ability write_narrative(project_state, experiment_result, review_feedback) -> narrative_report
+        ability status(project_root) -> status_snapshot
+
+    private:
+        skill research_lit
+        skill idea_creator
+        skill novelty_check
+        skill research_review
+        skill run_experiment
+        skill analyze_results
+        skill paper_write
+
+    memory_graph:
+        node papers
+        node ideas
+        node experiments
+        node claims
+        edge papers -> ideas
+        edge ideas -> experiments
+        edge experiments -> claims
+
+    workflow_graph:
+        flow w1_idea_discovery = research_lit -> idea_creator -> novelty_check -> research_review
+        flow w2_auto_review_loop = run_experiment -> analyze_results -> research_review
+        flow w3_paper_handoff = paper_write
+
+    invariants:
+        - abilities are externally callable and signature-stable
+        - skills are private and non-addressable by external eal
+        - graph state may evolve per-call without changing public signatures
+}

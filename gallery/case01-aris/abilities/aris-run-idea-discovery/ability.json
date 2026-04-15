@@ -1,0 +1,7 @@
+{
+  "name": "aris.run_idea_discovery",
+  "version": "1.0.0",
+  "tool_name": "aris.run_idea_discovery",
+  "description": "Generate idea report, refined proposal, and experiment plan",
+  "command": "bash run.sh"
+}

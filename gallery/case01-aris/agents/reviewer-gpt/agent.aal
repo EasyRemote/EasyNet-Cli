@@ -1,0 +1,102 @@
+// agent.aal — GPT Reviewer Agent
+// ================================
+//
+// The adversarial reviewer in the ARIS cross-model collaboration
+// protocol. This agent critiques, scores, and demands revisions.
+// It is backed by OpenAI's GPT models (gpt-5.4 xhigh by default).
+//
+// Ontology mapping:
+//   - ARIS role "Reviewer (GPT-5.4)" → this agent
+//   - ARIS MCP server "mcp-servers/codex/" → now a proper agent
+//     with abilities exposed via gRPC
+//   - ARIS "Reviewer Independence Protocol" → enforced by the
+//     encapsulation invariant (ontology §4.4): the researcher
+//     cannot reach into the reviewer's skills
+//
+// Key design: the reviewer's memory (REVIEWER_MEMORY.md in ARIS)
+// becomes part of this agent's memory graph. It persists across
+// rounds without the executor being able to tamper with it.
+//
+// Identity: openai/reviewer
+// Default ability: chat
+// Runtime: BCC (backed by GPT-5.4)
+
+class Reviewer {
+  public:
+    // ── Default callable ─────────────────────────────────────────
+    ability chat(prompt: String) -> reply: String
+
+    // ── Review abilities ─────────────────────────────────────────
+
+    ability review(artifacts: List<FilePath>, round: Int,
+                   difficulty: Difficulty, venue: String)
+                   -> ReviewAssessment {
+      // The core review ability. Reads artifacts INDEPENDENTLY
+      // (reviewer independence protocol enforced by ability boundary).
+      //
+      // Difficulty levels (former ARIS REVIEWER_DIFFICULTY):
+      //   medium:    Standard review, executor controls context
+      //   hard:      + Reviewer Memory + Debate Protocol
+      //   nightmare: + GPT reads repo directly, adversarial verification
+      //
+      // Returns: score (1-10), verdict, weaknesses, minimum fixes.
+      //
+      // Graph: memory tracks suspicions across rounds (the persistent
+      //        reviewer brain). Workflow evolves review strategy based
+      //        on which critique patterns lead to actual improvements.
+    }
+
+    ability review_reply(thread_id: String, update: String,
+                         results: Map<String, Value>)
+                         -> ReviewAssessment {
+      // Continue a multi-round review thread.
+      // Maintains conversation context via thread_id.
+      // Checks whether previous suspicions were genuinely addressed.
+    }
+
+    ability rule_on_rebuttal(rebuttal: RebuttalDoc,
+                             thread_id: String)
+                             -> RebuttalRuling {
+      // Debate Protocol (hard + nightmare difficulty).
+      // For each rebuttal point, rules:
+      //   SUSTAINED — author's argument is valid
+      //   OVERRULED — original criticism stands
+      //   PARTIALLY_SUSTAINED — narrow the weakness
+      //
+      // In nightmare mode, independently verifies evidence claims
+      // by reading the actual files.
+    }
+
+    ability adversarial_audit(repo_path: String, claims: List<String>)
+                              -> AuditReport {
+      // Nightmare-mode exclusive. GPT reads the repo autonomously.
+      // Verifies that reported numbers match actual output files.
+      // Checks evaluation metrics, hyperparameter choices, ablations.
+      // Former: codex exec in nightmare mode.
+    }
+
+  private:
+    // ── Skills: reviewer's internal expertise ────────────────────
+
+    skill review_calibration
+      // How strict to be at different score levels.
+      // Calibrated against actual venue acceptance rates.
+
+    skill suspicion_tracking
+      // Patterns that trigger deeper investigation.
+      // Former: REVIEWER_MEMORY.md persistence logic.
+      // Evolved from rounds where initial suspicions proved correct.
+
+    skill code_reading_strategy
+      // How to efficiently navigate an unfamiliar repo.
+      // Used in nightmare mode for adversarial audit.
+
+    skill statistical_verification
+      // How to verify statistical claims from raw data.
+      // Metrics computation checks, p-value validation.
+
+    skill prompt_engineering
+      // How to formulate maximally informative review prompts.
+      // Evolves based on which prompt structures produce
+      // the most actionable feedback.
+}

@@ -1,0 +1,7 @@
+{
+  "name": "aris.write_narrative",
+  "version": "1.0.0",
+  "tool_name": "aris.write_narrative",
+  "description": "Generate NARRATIVE_REPORT and paper/main.tex handoff artifacts",
+  "command": "bash run.sh"
+}

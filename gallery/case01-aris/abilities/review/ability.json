@@ -1,0 +1,53 @@
+{
+  "name": "review",
+  "version": "1.0.0",
+  "tool_name": "review",
+  "description": "Senior ML reviewer assessment. Reads artifacts independently (reviewer independence protocol), scores 1-10, identifies weaknesses, specifies minimum fixes. Supports three difficulty levels: medium, hard (+ memory + debate), nightmare (+ repo access). Former ARIS: auto-review-loop Phase A.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "artifacts": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "File paths for the reviewer to read independently. Only paths — no summaries or interpretations."
+      },
+      "round": {
+        "type": "integer",
+        "description": "Current review round number (1-based)"
+      },
+      "difficulty": {
+        "type": "string",
+        "enum": ["medium", "hard", "nightmare"],
+        "default": "medium",
+        "description": "How adversarial the reviewer should be"
+      },
+      "venue": {
+        "type": "string",
+        "description": "Target venue for calibration (ICLR, NeurIPS, ICML, ...)"
+      }
+    },
+    "required": ["artifacts", "round"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "score": {
+        "type": "number",
+        "description": "Score 1-10"
+      },
+      "verdict": {
+        "type": "string",
+        "enum": ["ready", "almost", "not_ready"],
+        "description": "Submission readiness verdict"
+      },
+      "weaknesses": {
+        "type": "array",
+        "description": "Ranked list of weaknesses with minimum fixes"
+      },
+      "thread_id": {
+        "type": "string",
+        "description": "Thread ID for multi-round continuation"
+      }
+    }
+  }
+}

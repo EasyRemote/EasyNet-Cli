@@ -1,0 +1,76 @@
+// Case01 full mission: W1 -> W2 -> W3 in one External EAL program.
+// Keeps ontology boundary explicit:
+// - agent.ability(...) for network-first-class actors
+// - call "..." on "aris-host" for host substrate abilities
+
+mission "case01-aris-full-research-pipeline" {
+  let bootstrap = call "aris.bootstrap" on "aris-host" with {
+    project = "case01-aris",
+    direction = "factorized gap in discrete diffusion LMs",
+    stage = "bootstrap"
+  } timeout 30
+
+  let idea_report = aris.idea_discovery(
+    direction: "factorized gap in discrete diffusion LMs",
+    constraints: bootstrap.output
+  ) timeout 240
+
+  let idea_review = oracle.review(
+    topic: "w1-idea",
+    artifact: idea_report.output,
+    rubric: "novelty+feasibility"
+  ) timeout 180
+
+  let refined = aris.refine_idea(
+    idea_report: idea_report.output,
+    review_feedback: idea_review.output
+  ) timeout 180
+
+  let experiment_plan = aris.plan_experiments(
+    refined_proposal: refined.output
+  ) timeout 120
+
+  let experiment_result = call "aris.run_experiments" on "aris-host" with {
+    plan = experiment_plan.output,
+    budget = "small"
+  } timeout 300 retries 1 on_failure retry
+
+  let review_r1 = oracle.review(
+    topic: "w2-r1",
+    artifact: experiment_result.output,
+    rubric: "top-venue-critical"
+  ) timeout 180
+
+  let patch_r1 = aris.apply_review(
+    review: review_r1.output,
+    round: 1,
+    project_state: experiment_result.output
+  ) timeout 240
+
+  let review_r2 = oracle.review(
+    topic: "w2-r2",
+    artifact: patch_r1.output,
+    rubric: "top-venue-critical"
+  ) timeout 180
+
+  let patch_r2 = aris.apply_review(
+    review: review_r2.output,
+    round: 2,
+    project_state: patch_r1.output
+  ) timeout 240
+
+  let narrative = aris.write_narrative(
+    project_state: patch_r2.output,
+    experiment_result: experiment_result.output,
+    review_feedback: review_r2.output
+  ) timeout 180
+
+  call "aris.persist_artifact" on "aris-host" with {
+    stage = "narrative",
+    payload = narrative.output
+  }
+
+  call "aris.metrics_ping" on "aris-host" with {
+    event = "case01_full_pipeline_completed"
+  } optional
+}

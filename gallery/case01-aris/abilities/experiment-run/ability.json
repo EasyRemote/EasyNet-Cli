@@ -1,0 +1,27 @@
+{
+  "name": "experiment-run",
+  "version": "1.0.0",
+  "tool_name": "experiment-run",
+  "description": "Deploy and monitor GPU experiments on remote servers. Handles SSH, screen sessions, CUDA_VISIBLE_DEVICES, and result collection. Former ARIS skill: /run-experiment.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "command": { "type": "string", "description": "Experiment launch command" },
+      "server": { "type": "string", "description": "Target GPU server" },
+      "gpu_ids": {
+        "type": "array",
+        "items": { "type": "integer" },
+        "description": "CUDA device IDs to use"
+      }
+    },
+    "required": ["command", "server"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "status": { "type": "string", "enum": ["running", "completed", "failed"] },
+      "screen_name": { "type": "string" },
+      "results": { "type": "object" }
+    }
+  }
+}

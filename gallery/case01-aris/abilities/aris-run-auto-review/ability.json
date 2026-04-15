@@ -1,0 +1,7 @@
+{
+  "name": "aris.run_auto_review",
+  "version": "1.0.0",
+  "tool_name": "aris.run_auto_review",
+  "description": "Run bounded auto review loop and persist REVIEW_STATE",
+  "command": "bash run.sh"
+}

@@ -1,0 +1,7 @@
+{
+  "name": "aris.bootstrap",
+  "version": "1.0.0",
+  "tool_name": "aris.bootstrap",
+  "description": "Initialize case01 ARIS workspace and research contract",
+  "command": "bash run.sh"
+}

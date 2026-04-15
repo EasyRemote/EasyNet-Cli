@@ -1,0 +1,25 @@
+agentclass ReviewerOracle {
+    identity: default/oracle
+
+    public:
+        ability chat(prompt, context) -> reply
+        ability review(topic, artifact, rubric) -> review_result
+        ability score(topic, artifact, rubric) -> score_result
+
+    private:
+        skill venue_rubrics
+        skill adversarial_checklist
+        skill debate_memory
+
+    memory_graph:
+        node review_history
+        node recurring_risks
+        edge review_history -> recurring_risks
+
+    workflow_graph:
+        flow review_call = venue_rubrics -> adversarial_checklist -> score
+
+    invariants:
+        - oracle only sees public artifacts passed through ability arguments
+        - oracle does not read private skills of other agents
+}

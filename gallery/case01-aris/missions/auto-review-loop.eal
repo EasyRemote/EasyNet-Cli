@@ -1,0 +1,102 @@
+// auto-review-loop.eal — Autonomous Multi-Round Review
+// =====================================================
+//
+// Repeatedly: review → implement fixes → re-review, until the
+// reviewer gives a positive assessment or max rounds is reached.
+//
+// Former ARIS: /auto-review-loop SKILL.md (450 lines of markdown)
+//
+// Key ontology insight: in ARIS, this was a single skill with
+// embedded state machine logic in markdown. In EasyNet, this is
+// a mission that makes the review loop's structure explicit and
+// machine-auditable.
+//
+// The debate protocol (hard/nightmare mode) is visible here as
+// explicit cross-agent calls: reviewer.review → researcher.rebuttal
+// → reviewer.rule_on_rebuttal. The ARIS version embedded this
+// inside a markdown skill, making it invisible to the system.
+//
+// Note: EAL does not yet have loop/conditional constructs.
+// This mission shows the UNROLLED form for 4 rounds.
+// A future EAL extension (deferred per ontology §13) would
+// support `while` and `if` for dynamic iteration.
+//
+// Run:
+//   easynet mission run gallery/case01-aris/missions/auto-review-loop.eal
+
+mission "aris-auto-review-loop" {
+
+  // ── Round 1 ───────────────────────────────────────────────────
+
+  let review_r1 = reviewer.review(
+    artifacts:  "project://EXPERIMENT_LOG.md,project://src/",
+    round:      1,
+    difficulty: "hard",
+    venue:      "ICLR"
+  ) timeout 600
+
+  // Researcher implements fixes based on review
+  let fixes_r1 = researcher.experiment_bridge(
+    plan: review_r1.output
+  ) timeout 1200
+
+  // ── Round 2 ───────────────────────────────────────────────────
+
+  let review_r2 = reviewer.review_reply(
+    thread_id: review_r1.output,
+    update:    fixes_r1.output,
+    results:   fixes_r1.output
+  ) timeout 600
+
+  // Debate protocol: researcher rebuts, reviewer rules
+  let rebuttal_r2 = researcher.rebuttal(
+    paper_dir: fixes_r1.output,
+    reviews:   review_r2.output
+  ) timeout 300
+
+  let ruling_r2 = reviewer.rule_on_rebuttal(
+    rebuttal:  rebuttal_r2.output,
+    thread_id: review_r1.output
+  ) timeout 300
+
+  // Implement remaining fixes
+  let fixes_r2 = researcher.experiment_bridge(
+    plan: ruling_r2.output
+  ) timeout 1200
+
+  // ── Round 3 ───────────────────────────────────────────────────
+
+  let review_r3 = reviewer.review_reply(
+    thread_id: review_r1.output,
+    update:    fixes_r2.output,
+    results:   fixes_r2.output
+  ) timeout 600
+
+  let rebuttal_r3 = researcher.rebuttal(
+    paper_dir: fixes_r2.output,
+    reviews:   review_r3.output
+  ) timeout 300
+
+  let ruling_r3 = reviewer.rule_on_rebuttal(
+    rebuttal:  rebuttal_r3.output,
+    thread_id: review_r1.output
+  ) timeout 300
+
+  let fixes_r3 = researcher.experiment_bridge(
+    plan: ruling_r3.output
+  ) timeout 1200
+
+  // ── Round 4 (final) ───────────────────────────────────────────
+
+  let final_review = reviewer.review_reply(
+    thread_id: review_r1.output,
+    update:    fixes_r3.output,
+    results:   fixes_r3.output
+  ) timeout 600
+
+  // Final analysis
+  let summary = researcher.analyze_results(
+    data_dir: final_review.output,
+    metrics:  "score_progression,weakness_resolution,verdict"
+  ) timeout 120
+}

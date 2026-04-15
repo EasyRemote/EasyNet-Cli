@@ -1,0 +1,31 @@
+// Case01 W1: idea discovery as External EAL mission.
+// Public surface only: agent.ability(...) + host abilities.
+
+mission "case01-aris-w1-idea-discovery" {
+  let bootstrap = call "aris.bootstrap" on "aris-host" with {
+    project = "case01-aris",
+    direction = "factorized gap in discrete diffusion LMs",
+    stage = "w1"
+  } timeout 30
+
+  let idea_report = aris.idea_discovery(
+    direction: "factorized gap in discrete diffusion LMs",
+    constraints: bootstrap.output
+  ) timeout 240
+
+  let critique = oracle.review(
+    topic: "w1-idea-discovery",
+    artifact: idea_report.output,
+    rubric: "novelty+feasibility+pilot-signal"
+  ) timeout 180
+
+  let refined = aris.refine_idea(
+    idea_report: idea_report.output,
+    review_feedback: critique.output
+  ) timeout 180
+
+  call "aris.persist_artifact" on "aris-host" with {
+    stage = "idea",
+    payload = refined.output
+  } optional
+}

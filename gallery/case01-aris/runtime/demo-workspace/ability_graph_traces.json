@@ -1,0 +1,102 @@
+[
+  {
+    "trace_id": "trace-001",
+    "ability": "aris_bootstrap",
+    "started_at_utc": "2026-04-13T15:50:01+00:00",
+    "completed_at_utc": "2026-04-13T15:50:01+00:00",
+    "inputs": {
+      "project": "case01-aris",
+      "direction": "factorized gap in discrete diffusion LMs",
+      "stage": "bootstrap"
+    },
+    "output_summary": "{\"status\": \"ok\", \"project_root\": \"gallery/case01-aris/runtime/demo-workspace\", \"direction\": \"factorized gap in discrete diffusion LMs\"}"
+  },
+  {
+    "trace_id": "trace-002",
+    "ability": "aris_run_idea_discovery",
+    "started_at_utc": "2026-04-13T15:50:01+00:00",
+    "completed_at_utc": "2026-04-13T15:50:01+00:00",
+    "inputs": {
+      "direction": "factorized gap in discrete diffusion LMs",
+      "constraints": "gallery/case01-aris/runtime/demo-workspace"
+    },
+    "output_summary": "{\"status\": \"ok\", \"selected_idea\": \"idea-001\", \"outputs\": [\"idea-stage/IDEA_REPORT.md\", \"refine-logs/FINAL_PROPOSAL.md\", \"refine-logs/EXPERIMENT_PLAN.md\"]}"
+  },
+  {
+    "trace_id": "trace-003",
+    "ability": "aris_run_experiments",
+    "started_at_utc": "2026-04-13T15:50:01+00:00",
+    "completed_at_utc": "2026-04-13T15:50:01+00:00",
+    "inputs": {
+      "plan": "refine-logs/EXPERIMENT_PLAN.md",
+      "budget": "small"
+    },
+    "output_summary": "{\"status\": \"ok\", \"best_score\": 6.8, \"outputs\": [\"refine-logs/EXPERIMENT_RESULTS.md\", \"refine-logs/EXPERIMENT_LOG.md\"]}"
+  },
+  {
+    "trace_id": "trace-004",
+    "ability": "aris_run_auto_review",
+    "started_at_utc": "2026-04-13T15:50:01+00:00",
+    "completed_at_utc": "2026-04-13T15:50:01+00:00",
+    "inputs": {
+      "topic": "factorized gap in discrete diffusion LMs",
+      "difficulty": "medium",
+      "rounds": 2
+    },
+    "output_summary": "{\"status\": \"ok\", \"final_score\": 7.0, \"verdict\": \"ready\"}"
+  },
+  {
+    "trace_id": "trace-005",
+    "ability": "aris_write_narrative",
+    "started_at_utc": "2026-04-13T15:50:01+00:00",
+    "completed_at_utc": "2026-04-13T15:50:01+00:00",
+    "inputs": {
+      "topic": "factorized gap in discrete diffusion LMs"
+    },
+    "output_summary": "{\"status\": \"ok\", \"outputs\": [\"NARRATIVE_REPORT.md\", \"paper/main.tex\"]}"
+  },
+  {
+    "trace_id": "trace-006",
+    "ability": "aris_persist_artifact",
+    "started_at_utc": "2026-04-13T15:50:01+00:00",
+    "completed_at_utc": "2026-04-13T15:50:01+00:00",
+    "inputs": {
+      "stage": "narrative",
+      "payload": {
+        "status": "ok",
+        "outputs": [
+          "NARRATIVE_REPORT.md",
+          "paper/main.tex"
+        ]
+      }
+    },
+    "output_summary": "{\"status\": \"ok\", \"artifact\": \"gallery/case01-aris/runtime/demo-workspace/artifacts/narrative_snapshot.json\"}"
+  },
+  {
+    "trace_id": "trace-007",
+    "ability": "aris_metrics_ping",
+    "started_at_utc": "2026-04-13T15:50:01+00:00",
+    "completed_at_utc": "2026-04-13T15:50:01+00:00",
+    "inputs": {
+      "event": "case01_demo_completed"
+    },
+    "output_summary": "{\"status\": \"ok\", \"event\": \"case01_demo_completed\", \"file\": \"gallery/case01-aris/runtime/demo-workspace/artifacts/metrics.log\"}"
+  },
+  {
+    "trace_id": "trace-008",
+    "ability": "aris_metrics_ping",
+    "started_at_utc": "2026-04-13T15:50:31+00:00",
+    "completed_at_utc": "2026-04-13T15:50:31+00:00",
+    "inputs": {
+      "project": "case01-aris",
+      "direction": "factorized gap in discrete diffusion LMs",
+      "topic": "factorized gap in discrete diffusion LMs",
+      "stage": "idea",
+      "rounds": 2,
+      "difficulty": "medium",
+      "payload": {},
+      "event": "manual_ping"
+    },
+    "output_summary": "{\"status\": \"ok\", \"event\": \"manual_ping\", \"file\": \"gallery/case01-aris/runtime/demo-workspace/artifacts/metrics.log\"}"
+  }
+]

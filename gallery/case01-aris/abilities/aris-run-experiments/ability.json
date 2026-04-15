@@ -1,0 +1,7 @@
+{
+  "name": "aris.run_experiments",
+  "version": "1.0.0",
+  "tool_name": "aris.run_experiments",
+  "description": "Materialize experiment results and experiment logs for the current plan",
+  "command": "bash run.sh"
+}

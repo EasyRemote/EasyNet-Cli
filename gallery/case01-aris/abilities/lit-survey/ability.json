@@ -1,0 +1,48 @@
+{
+  "name": "lit-survey",
+  "version": "1.0.0",
+  "tool_name": "lit-survey",
+  "description": "Search and synthesize research literature across arXiv, Semantic Scholar, and Google Scholar. Returns a structured landscape map with gaps, trends, and open problems. Former ARIS skill: /research-lit.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "direction": {
+        "type": "string",
+        "description": "Research direction or topic to survey"
+      },
+      "sources": {
+        "type": "array",
+        "items": { "type": "string", "enum": ["arxiv", "semantic_scholar", "google_scholar"] },
+        "description": "Literature databases to search"
+      },
+      "download": {
+        "type": "boolean",
+        "default": false,
+        "description": "Whether to download full PDFs (default: metadata only)"
+      },
+      "max_results": {
+        "type": "integer",
+        "default": 50,
+        "description": "Maximum number of papers to include"
+      }
+    },
+    "required": ["direction"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "landscape": {
+        "type": "object",
+        "description": "Structured research landscape with sub-directions, approaches, gaps"
+      },
+      "papers": {
+        "type": "array",
+        "description": "List of discovered papers with metadata"
+      },
+      "gaps": {
+        "type": "array",
+        "description": "Identified structural gaps in the literature"
+      }
+    }
+  }
+}

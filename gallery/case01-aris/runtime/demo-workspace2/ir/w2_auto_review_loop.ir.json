@@ -1,0 +1,209 @@
+{
+  "name": "case01-aris-w2-auto-review-loop",
+  "steps": [
+    {
+      "step_id": "idea_state",
+      "step_name": "idea_state",
+      "ability": "aris.load_artifact",
+      "target": {
+        "kind": "device",
+        "node_id": "aris-host"
+      },
+      "static_arguments": {
+        "stage": "idea"
+      },
+      "output_binding": "idea_state",
+      "timeout_seconds": 30,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "__anon_2",
+      "step_name": "__anon_2",
+      "ability": "aris.metrics_ping",
+      "target": {
+        "kind": "device",
+        "node_id": "aris-host"
+      },
+      "static_arguments": {
+        "event": "w2_completed"
+      },
+      "timeout_seconds": 0,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": true,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "review_r1",
+      "step_name": "review_r1",
+      "ability": "review",
+      "target": {
+        "kind": "agent",
+        "tenant": "default",
+        "name": "oracle"
+      },
+      "static_arguments": {
+        "rubric": "top-venue-critical",
+        "topic": "w2-auto-review-r1"
+      },
+      "input_refs": {
+        "artifact": "idea_state"
+      },
+      "output_binding": "review_r1",
+      "timeout_seconds": 180,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "patch_r1",
+      "step_name": "patch_r1",
+      "ability": "apply_review",
+      "target": {
+        "kind": "agent",
+        "tenant": "default",
+        "name": "aris"
+      },
+      "static_arguments": {
+        "round": 1
+      },
+      "input_refs": {
+        "review": "review_r1",
+        "project_state": "idea_state"
+      },
+      "output_binding": "patch_r1",
+      "timeout_seconds": 300,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "review_r2",
+      "step_name": "review_r2",
+      "ability": "review",
+      "target": {
+        "kind": "agent",
+        "tenant": "default",
+        "name": "oracle"
+      },
+      "static_arguments": {
+        "rubric": "top-venue-critical",
+        "topic": "w2-auto-review-r2"
+      },
+      "input_refs": {
+        "artifact": "patch_r1"
+      },
+      "output_binding": "review_r2",
+      "timeout_seconds": 180,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "patch_r2",
+      "step_name": "patch_r2",
+      "ability": "apply_review",
+      "target": {
+        "kind": "agent",
+        "tenant": "default",
+        "name": "aris"
+      },
+      "static_arguments": {
+        "round": 2
+      },
+      "input_refs": {
+        "review": "review_r2",
+        "project_state": "patch_r1"
+      },
+      "output_binding": "patch_r2",
+      "timeout_seconds": 300,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "score",
+      "step_name": "score",
+      "ability": "score",
+      "target": {
+        "kind": "agent",
+        "tenant": "default",
+        "name": "oracle"
+      },
+      "static_arguments": {
+        "rubric": "readiness-for-submission",
+        "topic": "w2-final-score"
+      },
+      "input_refs": {
+        "artifact": "patch_r2"
+      },
+      "output_binding": "score",
+      "timeout_seconds": 120,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "__anon_1",
+      "step_name": "__anon_1",
+      "ability": "aris.persist_artifact",
+      "target": {
+        "kind": "device",
+        "node_id": "aris-host"
+      },
+      "static_arguments": {
+        "stage": "review"
+      },
+      "input_refs": {
+        "payload": "score"
+      },
+      "timeout_seconds": 0,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    }
+  ],
+  "phases": [
+    {
+      "start": 0,
+      "end": 2
+    },
+    {
+      "start": 2,
+      "end": 3
+    },
+    {
+      "start": 3,
+      "end": 4
+    },
+    {
+      "start": 4,
+      "end": 5
+    },
+    {
+      "start": 5,
+      "end": 6
+    },
+    {
+      "start": 6,
+      "end": 7
+    },
+    {
+      "start": 7,
+      "end": 8
+    }
+  ],
+  "constraints": {
+    "max_parallel": 0,
+    "deadline_seconds": 0
+  }
+}

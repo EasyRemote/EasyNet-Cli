@@ -1,0 +1,21 @@
+{
+  "name": "paper-compile",
+  "version": "1.0.0",
+  "tool_name": "paper-compile",
+  "description": "Multi-pass xelatex compilation with automatic error repair. Former ARIS skill: /paper-compile.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "paper_dir": { "type": "string", "description": "Path to paper/ directory with main.tex" }
+    },
+    "required": ["paper_dir"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "pdf_path": { "type": "string" },
+      "compile_log": { "type": "string" },
+      "errors_fixed": { "type": "array" }
+    }
+  }
+}

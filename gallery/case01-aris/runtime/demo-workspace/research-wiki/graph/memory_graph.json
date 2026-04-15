@@ -1,0 +1,34 @@
+{
+  "papers": [
+    {
+      "id": "paper-001",
+      "title": "Reference baseline for ARIS case",
+      "source": "local-seed"
+    }
+  ],
+  "ideas": [
+    {
+      "id": "idea-001",
+      "title": "reviewer-memory constrained refinement",
+      "status": "selected"
+    }
+  ],
+  "experiments": [
+    {
+      "id": "run-batch-001",
+      "budget": "small",
+      "status": "completed"
+    }
+  ],
+  "claims": [
+    {
+      "id": "C1",
+      "status": "supported"
+    },
+    {
+      "id": "C2",
+      "status": "supported"
+    }
+  ],
+  "updated_at_utc": "2026-04-13T15:50:01+00:00"
+}

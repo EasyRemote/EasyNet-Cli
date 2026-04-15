@@ -1,0 +1,106 @@
+// paper-writing.eal — Workflow 3: Paper Writing Pipeline
+// =======================================================
+//
+// From narrative report to compiled PDF with iterative improvement.
+// Former ARIS: /paper-writing SKILL.md
+//
+// This mission demonstrates multi-agent collaboration in writing:
+//   - paper-writer agent drafts sections
+//   - reviewer agent provides section-level feedback
+//   - paper-writer iterates until quality threshold
+//
+// DAG structure:
+//   Phase 0: plan
+//   Phase 1: figures, write_intro, write_method (parallel)
+//   Phase 2: write_experiments (depends on figures)
+//   Phase 3: write_conclusion (depends on experiments)
+//   Phase 4: compile
+//   Phase 5: quality_review (cross-agent)
+//   Phase 6: improve
+//
+// Run:
+//   easynet mission run gallery/case01-aris/missions/paper-writing.eal
+
+mission "aris-paper-writing" {
+
+  // ── Phase 0: Plan the paper ───────────────────────────────────
+
+  let outline = writer.plan(
+    narrative: "project://NARRATIVE_REPORT.md",
+    venue:     "ICLR",
+    claims:    "project://CLAIMS_FROM_RESULTS.md"
+  ) timeout 300
+
+  // ── Phase 1: Parallel drafting ────────────────────────────────
+  // Introduction, method, and figures have no dependencies on each
+  // other — the compiler schedules them in the same phase.
+
+  let figures = writer.generate_figures(
+    plan:     outline.output,
+    data_dir: "project://results/"
+  ) timeout 300
+
+  let architecture = writer.illustrate(
+    method_description: outline.output
+  ) timeout 120
+
+  let intro = writer.write_section(
+    outline: outline.output,
+    section: "introduction",
+    results: "project://EXPERIMENT_LOG.md"
+  ) timeout 300
+
+  let method = writer.write_section(
+    outline: outline.output,
+    section: "method",
+    results: "project://EXPERIMENT_LOG.md"
+  ) timeout 300
+
+  // ── Phase 2: Experiments section (needs figures) ──────────────
+
+  let experiments = writer.write_section(
+    outline: outline.output,
+    section: "experiments",
+    results: figures.output
+  ) timeout 300
+
+  // ── Phase 3: Related work + conclusion ────────────────────────
+
+  let related = writer.write_section(
+    outline: outline.output,
+    section: "related_work",
+    results: experiments.output
+  ) timeout 300
+
+  let conclusion = writer.write_section(
+    outline: outline.output,
+    section: "conclusion",
+    results: experiments.output
+  ) timeout 120
+
+  // ── Phase 4: Compile ──────────────────────────────────────────
+
+  let pdf = writer.compile(
+    paper_dir: conclusion.output
+  ) timeout 120
+
+  // ── Phase 5: Cross-agent quality review ───────────────────────
+  // The reviewer reads the compiled paper independently.
+  // This is an explicit cross-agent call — the reviewer cannot
+  // see the writer's internal skills or drafting strategy.
+
+  let quality = reviewer.review(
+    artifacts:  pdf.output,
+    round:      1,
+    difficulty: "medium",
+    venue:      "ICLR"
+  ) timeout 600
+
+  // ── Phase 6: Iterative improvement ────────────────────────────
+
+  let final_paper = writer.improve(
+    paper_dir:  pdf.output,
+    review:     quality.output,
+    max_rounds: 3
+  ) timeout 1800
+}

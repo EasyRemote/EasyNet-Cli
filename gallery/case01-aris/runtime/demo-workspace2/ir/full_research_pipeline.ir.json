@@ -1,0 +1,337 @@
+{
+  "name": "case01-aris-full-research-pipeline",
+  "steps": [
+    {
+      "step_id": "bootstrap",
+      "step_name": "bootstrap",
+      "ability": "aris.bootstrap",
+      "target": {
+        "kind": "device",
+        "node_id": "aris-host"
+      },
+      "static_arguments": {
+        "direction": "factorized gap in discrete diffusion LMs",
+        "project": "case01-aris",
+        "stage": "bootstrap"
+      },
+      "output_binding": "bootstrap",
+      "timeout_seconds": 30,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "__anon_2",
+      "step_name": "__anon_2",
+      "ability": "aris.metrics_ping",
+      "target": {
+        "kind": "device",
+        "node_id": "aris-host"
+      },
+      "static_arguments": {
+        "event": "case01_full_pipeline_completed"
+      },
+      "timeout_seconds": 0,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": true,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "idea_report",
+      "step_name": "idea_report",
+      "ability": "idea_discovery",
+      "target": {
+        "kind": "agent",
+        "tenant": "default",
+        "name": "aris"
+      },
+      "static_arguments": {
+        "direction": "factorized gap in discrete diffusion LMs"
+      },
+      "input_refs": {
+        "constraints": "bootstrap"
+      },
+      "output_binding": "idea_report",
+      "timeout_seconds": 240,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "idea_review",
+      "step_name": "idea_review",
+      "ability": "review",
+      "target": {
+        "kind": "agent",
+        "tenant": "default",
+        "name": "oracle"
+      },
+      "static_arguments": {
+        "rubric": "novelty+feasibility",
+        "topic": "w1-idea"
+      },
+      "input_refs": {
+        "artifact": "idea_report"
+      },
+      "output_binding": "idea_review",
+      "timeout_seconds": 180,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "refined",
+      "step_name": "refined",
+      "ability": "refine_idea",
+      "target": {
+        "kind": "agent",
+        "tenant": "default",
+        "name": "aris"
+      },
+      "static_arguments": {},
+      "input_refs": {
+        "review_feedback": "idea_review",
+        "idea_report": "idea_report"
+      },
+      "output_binding": "refined",
+      "timeout_seconds": 180,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "experiment_plan",
+      "step_name": "experiment_plan",
+      "ability": "plan_experiments",
+      "target": {
+        "kind": "agent",
+        "tenant": "default",
+        "name": "aris"
+      },
+      "static_arguments": {},
+      "input_refs": {
+        "refined_proposal": "refined"
+      },
+      "output_binding": "experiment_plan",
+      "timeout_seconds": 120,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "experiment_result",
+      "step_name": "experiment_result",
+      "ability": "aris.run_experiments",
+      "target": {
+        "kind": "device",
+        "node_id": "aris-host"
+      },
+      "static_arguments": {
+        "budget": "small"
+      },
+      "input_refs": {
+        "plan": "experiment_plan"
+      },
+      "output_binding": "experiment_result",
+      "timeout_seconds": 300,
+      "max_retries": 1,
+      "on_failure": "retry",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "review_r1",
+      "step_name": "review_r1",
+      "ability": "review",
+      "target": {
+        "kind": "agent",
+        "tenant": "default",
+        "name": "oracle"
+      },
+      "static_arguments": {
+        "rubric": "top-venue-critical",
+        "topic": "w2-r1"
+      },
+      "input_refs": {
+        "artifact": "experiment_result"
+      },
+      "output_binding": "review_r1",
+      "timeout_seconds": 180,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "patch_r1",
+      "step_name": "patch_r1",
+      "ability": "apply_review",
+      "target": {
+        "kind": "agent",
+        "tenant": "default",
+        "name": "aris"
+      },
+      "static_arguments": {
+        "round": 1
+      },
+      "input_refs": {
+        "review": "review_r1",
+        "project_state": "experiment_result"
+      },
+      "output_binding": "patch_r1",
+      "timeout_seconds": 240,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "review_r2",
+      "step_name": "review_r2",
+      "ability": "review",
+      "target": {
+        "kind": "agent",
+        "tenant": "default",
+        "name": "oracle"
+      },
+      "static_arguments": {
+        "rubric": "top-venue-critical",
+        "topic": "w2-r2"
+      },
+      "input_refs": {
+        "artifact": "patch_r1"
+      },
+      "output_binding": "review_r2",
+      "timeout_seconds": 180,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "patch_r2",
+      "step_name": "patch_r2",
+      "ability": "apply_review",
+      "target": {
+        "kind": "agent",
+        "tenant": "default",
+        "name": "aris"
+      },
+      "static_arguments": {
+        "round": 2
+      },
+      "input_refs": {
+        "project_state": "patch_r1",
+        "review": "review_r2"
+      },
+      "output_binding": "patch_r2",
+      "timeout_seconds": 240,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "narrative",
+      "step_name": "narrative",
+      "ability": "write_narrative",
+      "target": {
+        "kind": "agent",
+        "tenant": "default",
+        "name": "aris"
+      },
+      "static_arguments": {},
+      "input_refs": {
+        "review_feedback": "review_r2",
+        "experiment_result": "experiment_result",
+        "project_state": "patch_r2"
+      },
+      "output_binding": "narrative",
+      "timeout_seconds": 180,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "__anon_1",
+      "step_name": "__anon_1",
+      "ability": "aris.persist_artifact",
+      "target": {
+        "kind": "device",
+        "node_id": "aris-host"
+      },
+      "static_arguments": {
+        "stage": "narrative"
+      },
+      "input_refs": {
+        "payload": "narrative"
+      },
+      "timeout_seconds": 0,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    }
+  ],
+  "phases": [
+    {
+      "start": 0,
+      "end": 2
+    },
+    {
+      "start": 2,
+      "end": 3
+    },
+    {
+      "start": 3,
+      "end": 4
+    },
+    {
+      "start": 4,
+      "end": 5
+    },
+    {
+      "start": 5,
+      "end": 6
+    },
+    {
+      "start": 6,
+      "end": 7
+    },
+    {
+      "start": 7,
+      "end": 8
+    },
+    {
+      "start": 8,
+      "end": 9
+    },
+    {
+      "start": 9,
+      "end": 10
+    },
+    {
+      "start": 10,
+      "end": 11
+    },
+    {
+      "start": 11,
+      "end": 12
+    },
+    {
+      "start": 12,
+      "end": 13
+    }
+  ],
+  "constraints": {
+    "max_parallel": 0,
+    "deadline_seconds": 0
+  }
+}
