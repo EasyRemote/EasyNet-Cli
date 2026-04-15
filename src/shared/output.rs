@@ -34,6 +34,13 @@ pub fn warn(msg: &str) {
     eprintln!("{} {msg}", style("⚠").yellow());
 }
 
+/// Print a user-facing error line. Use this for recoverable / reported
+/// errors that shouldn't abort the process — the caller is still
+/// responsible for returning a non-zero exit when appropriate.
+pub fn error(msg: &str) {
+    eprintln!("{} {msg}", style("✗").red().bold());
+}
+
 pub fn info(msg: &str) {
     eprintln!("{msg}");
 }
@@ -90,4 +97,3 @@ pub fn relative_time(unix_ms: i64) -> String {
         }
     }
 }
-

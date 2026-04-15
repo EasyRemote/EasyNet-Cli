@@ -27,15 +27,46 @@ pub struct DeviceInfo {
     pub hostname: String,
 }
 
+/// Sentinel hostname used when the OS reports an empty value. The Hub's
+/// pairing schema requires a non-empty `hostname`/`display_name`, and an
+/// empty string would render as a blank row in `easynet device list`.
+const UNKNOWN_HOSTNAME: &str = "unknown-host";
+
 pub fn collect_system_info() -> DeviceInfo {
-    let hostname = gethostname::gethostname()
-        .to_string_lossy()
-        .into_owned();
+    let hostname = gethostname::gethostname().to_string_lossy().into_owned();
+    // `gethostname` returns an empty `OsString` on misconfigured hosts
+    // (e.g. containers with no /etc/hostname). Fall back to a sentinel
+    // rather than emit an empty `hostname` field — the Hub side trims and
+    // would otherwise reject the registration with a non-obvious error.
+    let hostname = if hostname.trim().is_empty() {
+        UNKNOWN_HOSTNAME.to_string()
+    } else {
+        hostname
+    };
 
     DeviceInfo {
         display_name: hostname.clone(),
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
         hostname,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collected_hostname_is_never_empty() {
+        // The Hub pairing schema requires non-empty hostname/display_name;
+        // pinning the contract here means a future refactor of the
+        // `gethostname` fallback can't silently regress to an empty
+        // string.
+        let info = collect_system_info();
+        assert!(!info.hostname.is_empty(), "hostname must not be empty");
+        assert!(
+            !info.display_name.is_empty(),
+            "display_name must not be empty"
+        );
     }
 }

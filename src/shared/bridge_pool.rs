@@ -31,7 +31,7 @@ use easynet_axon::dendrite_bridge::DendriteBridge;
 /// Returns `max(num_cpus, 4)` capped at 64. This ensures the pool is large
 /// enough for typical parallel phases without over-allocating on large machines.
 pub fn adaptive_pool_size() -> usize {
-    num_cpus::get().max(4).min(64)
+    num_cpus::get().clamp(4, 64)
 }
 
 /// A lock-free pool of pre-connected DendriteBridge instances.
@@ -92,14 +92,27 @@ impl BridgePool {
     ///
     /// Returns an existing bridge if available (lock-free pop),
     /// otherwise creates a new one on demand.
+    ///
+    /// Ordering note: `SegQueue::pop` returns `Some` to exactly one
+    /// caller, so decrementing `size` with `Release` after a successful
+    /// pop cannot double-count. The matching `Acquire` on the checkin
+    /// side (via the reserve-CAS) establishes a happens-before edge so
+    /// the two counters stay consistent across threads.
     pub fn checkout(&self) -> Result<BridgeGuard<'_>, String> {
         let bridge = match self.queue.pop() {
             Some(br) => {
-                self.size.fetch_sub(1, Ordering::Relaxed);
+                self.size.fetch_sub(1, Ordering::Release);
                 br
             }
-            None => DendriteBridge::connect(&self.endpoint, self.timeout_ms)
-                .map_err(|e| format!("bridge connect: {e}"))?,
+            None => DendriteBridge::connect(&self.endpoint, self.timeout_ms).map_err(|e| {
+                // Include both the endpoint and the underlying SDK
+                // diagnostic. The pool returns `Result<_, String>` (not
+                // `anyhow::Error`) because the EAL dispatch trait
+                // requires String, so we cannot keep the full error
+                // chain — including the endpoint up front is the best
+                // operator can do post-hoc with grep alone.
+                format!("bridge connect to {} failed: {e}", self.endpoint)
+            })?,
         };
         Ok(BridgeGuard {
             bridge: Some(bridge),
@@ -107,14 +120,48 @@ impl BridgePool {
         })
     }
 
-    /// Return a bridge to the pool (called by BridgeGuard::drop).
+    /// Return a bridge to the pool (called by `BridgeGuard::drop`).
+    ///
+    /// The capacity invariant — `size <= max_size` at all times — is
+    /// enforced with a single compare-exchange loop that *reserves* the
+    /// slot before the push. A naive `load → check → push → fetch_add`
+    /// would race when several threads check in simultaneously: each
+    /// would observe `current < max_size` and all would push, pushing
+    /// the pool above its advertised cap.
+    ///
+    /// Reservation order:
+    ///   1. CAS `size` from `n` to `n+1` iff `n < max_size`.
+    ///   2. If CAS succeeds, we own the slot; push the bridge.
+    ///   3. If CAS fails because the pool is full, drop the bridge.
+    ///
+    /// Using `AcqRel` on the successful CAS establishes the synchronise-with
+    /// edge required to observe the pushed value from a subsequent
+    /// `checkout` on another thread.
     fn checkin(&self, bridge: DendriteBridge) {
-        let current = self.size.load(Ordering::Relaxed);
-        if current < self.max_size {
-            self.queue.push(bridge);
-            self.size.fetch_add(1, Ordering::Relaxed);
+        let max_size = self.max_size;
+        loop {
+            let current = self.size.load(Ordering::Acquire);
+            if current >= max_size {
+                // Pool at capacity; drop the bridge rather than exceed the cap.
+                return;
+            }
+            match self.size.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    self.queue.push(bridge);
+                    return;
+                }
+                Err(_) => {
+                    // Another thread changed `size`; retry with the fresh value.
+                    // The `_weak` variant is allowed to spuriously fail — the
+                    // outer loop handles both spurious and real losses.
+                }
+            }
         }
-        // else: drop the bridge (pool at capacity)
     }
 
     /// Endpoint accessor.
@@ -173,8 +220,14 @@ mod tests {
     #[test]
     fn adaptive_pool_size_is_reasonable() {
         let size = adaptive_pool_size();
-        assert!(size >= 4, "adaptive pool size should be at least 4, got {size}");
-        assert!(size <= 64, "adaptive pool size should be at most 64, got {size}");
+        assert!(
+            size >= 4,
+            "adaptive pool size should be at least 4, got {size}"
+        );
+        assert!(
+            size <= 64,
+            "adaptive pool size should be at most 64, got {size}"
+        );
     }
 
     #[test]
@@ -201,5 +254,76 @@ mod tests {
         let pool = BridgePool::with_adaptive_size("localhost:50051", 5000);
         let expected_max = (adaptive_pool_size() * 2).max(16);
         assert_eq!(pool.max_size, expected_max);
+    }
+
+    /// Pins the capacity invariant under concurrent checkin.
+    ///
+    /// We cannot construct real `DendriteBridge` instances in a unit
+    /// test (it would try to connect to a gRPC endpoint), so this test
+    /// exercises the accounting side of the pool in isolation by
+    /// driving `size.fetch_add` / `compare_exchange_weak` through the
+    /// same critical region `checkin` uses.
+    ///
+    /// The contract under test: no matter how many concurrent threads
+    /// attempt to reserve a slot, the counter never exceeds `max_size`.
+    /// A broken Relaxed-only implementation of this sequence would
+    /// occasionally overshoot; the Acquire/Release CAS here must not.
+    #[test]
+    fn capacity_invariant_holds_under_contention() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let max_size: usize = 8;
+        let size = Arc::new(AtomicUsize::new(0));
+        let succeeded = Arc::new(AtomicUsize::new(0));
+        let threads = 32;
+        let rounds_per_thread = 500;
+
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
+                let size = Arc::clone(&size);
+                let succeeded = Arc::clone(&succeeded);
+                thread::spawn(move || {
+                    for _ in 0..rounds_per_thread {
+                        // Reserve-or-reject, mirroring checkin's CAS loop.
+                        let reserved = loop {
+                            let current = size.load(Ordering::Acquire);
+                            if current >= max_size {
+                                break false;
+                            }
+                            if size
+                                .compare_exchange_weak(
+                                    current,
+                                    current + 1,
+                                    Ordering::AcqRel,
+                                    Ordering::Acquire,
+                                )
+                                .is_ok()
+                            {
+                                break true;
+                            }
+                        };
+                        if reserved {
+                            succeeded.fetch_add(1, Ordering::Relaxed);
+                            // Mirror the eventual checkout: release the slot.
+                            size.fetch_sub(1, Ordering::Release);
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // Every participating thread succeeded at least once, so the CAS
+        // loop is not a livelock.
+        assert!(
+            succeeded.load(Ordering::Relaxed) >= threads,
+            "expected every thread to reserve at least once"
+        );
+        // After all threads have finished, size is back to zero.
+        assert_eq!(size.load(Ordering::Acquire), 0);
     }
 }

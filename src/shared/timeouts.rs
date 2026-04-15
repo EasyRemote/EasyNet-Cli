@@ -1,0 +1,172 @@
+// EasyNet CLI — Timeout Tower
+// ===========================
+//
+// File: src/shared/timeouts.rs
+// Description: Single source of truth for every timeout constant in
+//              the CLI — both the user-visible `--timeout` defaults
+//              and the internal plumbing deadlines (bridge connect,
+//              …). Values are declared *here* and referenced by each
+//              call site, so help text, compiled-in value, and
+//              cross-command policy cannot drift from one another.
+//
+// Design — two layers, one file
+// -----------------------------
+//
+// The CLI has two kinds of deadline, and both belong in the tower:
+//
+// 1. **User-surface** (`--timeout <N>` defaults). Commands fall into
+//    three buckets chosen for a human's wall-clock expectation of the
+//    operation:
+//
+//     - [`INVOKE_DEFAULT_SECS`]      — short network-bound tool calls.
+//                                      60 s is generous for any
+//                                      well-behaved ability; a longer
+//                                      budget belongs in the ability's
+//                                      own execution window, not at
+//                                      the CLI surface.
+//     - [`AGENT_SEND_DEFAULT_SECS`]  — LLM-backed dispatches (Claude
+//                                      Code / Codex). These can stream
+//                                      for many minutes on a large
+//                                      prompt + heavy thinking budget,
+//                                      so the floor is 15 min and
+//                                      users can raise it explicitly.
+//     - [`THINK_DEFAULT_SECS`]       — per-cycle budget inside the
+//                                      autonomous loop. Each cycle is
+//                                      one think + one action; 120 s
+//                                      is the legacy value kept for
+//                                      back-compat.
+//
+// 2. **Infrastructure** (internal plumbing deadlines, never surfaced
+//    as a flag). Today there is one:
+//
+//     - [`BRIDGE_CONNECT_TIMEOUT_MS`] — how long a `DendriteBridge::
+//                                      connect` is allowed to block
+//                                      before we declare the local
+//                                      runtime unreachable. 5 s is
+//                                      short enough to fail fast for
+//                                      an unattended CLI invocation
+//                                      yet long enough to absorb a
+//                                      cold UDS accept under load.
+//
+// The number `0` is reserved across the CLI to mean "inherit the
+// runtime default" — never hard-coded, but often plumbed through the
+// bridge layer for per-operation budgets. [`effective_ms`] converts a
+// user-facing seconds value to an `Option<u64>` in milliseconds so
+// bridge callers can feed it straight into
+// `call_mcp_tool_with_timeout`.
+//
+// Why the infrastructure constant lives here, not in `shared::mod`
+// ----------------------------------------------------------------
+//
+// Before this consolidation, `BRIDGE_CONNECT_TIMEOUT_MS` sat bare at
+// the top of `shared/mod.rs` alongside an ad-hoc `connect_bridge()`
+// helper. Two readers went looking for "what deadline governs X?"
+// and found answers in two files — the timeout tower claimed to be
+// the single source of truth while the most-called timeout in the
+// codebase escaped it. Hoisting this constant into the tower closes
+// that gap: every `grep` for timeout policy lands in one file.
+//
+// Unit convention
+// ---------------
+//
+// User-surface constants are `_SECS` because `--timeout` is in
+// seconds. Infrastructure constants are `_MS` because the bridge SDK
+// takes milliseconds directly. The suffix is always part of the name
+// so a call site cannot mis-unit a value.
+//
+// Author: Silan Hu <silan.hu@u.nus.edu>
+// Copyright (c) 2026 EasyNet. All rights reserved.
+
+/// Default deadline for `easynet invoke` / `easynet ability invoke`,
+/// in seconds. The runtime may impose a tighter ceiling; this is only
+/// the CLI-level floor.
+pub const INVOKE_DEFAULT_SECS: u64 = 60;
+
+/// Default deadline for `easynet agent send` (LLM-backed dispatch), in
+/// seconds. LLM responses can legitimately take many minutes when the
+/// prompt is large or the model is reasoning, so the floor is 15 min.
+pub const AGENT_SEND_DEFAULT_SECS: u64 = 900;
+
+/// Default per-cycle deadline for `easynet think`, in seconds. Each
+/// cycle is one think + one action; the budget covers both.
+pub const THINK_DEFAULT_SECS: u64 = 120;
+
+/// How long a `DendriteBridge::connect` may block before we declare
+/// the local Axon runtime unreachable, in milliseconds.
+///
+/// 5 s is the calibrated floor:
+///
+/// - Long enough to absorb a cold UDS / TCP accept on a loaded box,
+///   where the runtime's `accept` loop can stall under heavy fork /
+///   heartbeat traffic for ~1 s in the worst case observed in
+///   practice. A 1 s floor produced flakes under CI load; 5 s
+///   eliminates them without making the "runtime is not running"
+///   error path feel stuck.
+/// - Short enough that an unattended CLI invocation against a down
+///   runtime fails fast — well under the 30 s a human waits before
+///   hitting Ctrl-C.
+///
+/// Not user-tunable by design: every `easynet` command that touches
+/// the runtime should wait the same amount, so `doctor` output is
+/// comparable across commands and operators can learn the shape of a
+/// "runtime down" failure once.
+pub const BRIDGE_CONNECT_TIMEOUT_MS: u64 = 5_000;
+
+/// Convert a user-facing seconds value (from a `--timeout <N>` flag) to
+/// the `Option<Duration>`-in-milliseconds shape used by the bridge API.
+///
+/// `0` is the canonical "inherit the runtime default" sentinel: it maps
+/// to `None`, which the bridge layer interprets as "use whatever the
+/// called ability specified". Any positive value is converted to
+/// milliseconds with overflow protection — a user passing `u64::MAX`
+/// seconds would otherwise panic in debug and wrap in release, neither
+/// of which we want at a CLI surface.
+pub fn effective_ms(secs: u64) -> Result<Option<u64>, &'static str> {
+    match secs {
+        0 => Ok(None),
+        s => s
+            .checked_mul(1000)
+            .map(Some)
+            .ok_or("--timeout is too large (overflow converting seconds to milliseconds)"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zero_means_inherit_runtime_default() {
+        assert_eq!(effective_ms(0), Ok(None));
+    }
+
+    #[test]
+    fn positive_seconds_round_trip_to_milliseconds() {
+        assert_eq!(effective_ms(1), Ok(Some(1_000)));
+        assert_eq!(effective_ms(INVOKE_DEFAULT_SECS), Ok(Some(60_000)));
+        assert_eq!(effective_ms(AGENT_SEND_DEFAULT_SECS), Ok(Some(900_000)));
+        assert_eq!(effective_ms(THINK_DEFAULT_SECS), Ok(Some(120_000)));
+    }
+
+    #[test]
+    fn absurdly_large_seconds_is_rejected_not_wrapped() {
+        // u64::MAX seconds * 1000 would overflow. Surface it as an error
+        // rather than silently wrapping or panicking in debug.
+        assert!(effective_ms(u64::MAX).is_err());
+    }
+
+    /// Pin the bridge-connect budget so a silent re-tune (e.g. "lower
+    /// it to 1 s to speed up offline tests") has to be made with eyes
+    /// open. The tower's whole purpose is that any change to this
+    /// value is reviewed as a timeout-policy decision, not as an
+    /// incidental `const` edit hidden in some other PR.
+    #[test]
+    fn bridge_connect_budget_is_calibrated_not_ambient() {
+        assert_eq!(
+            BRIDGE_CONNECT_TIMEOUT_MS, 5_000,
+            "BRIDGE_CONNECT_TIMEOUT_MS is a reviewed timeout-policy \
+             constant — if you are changing it, update the module \
+             doc's rationale too"
+        );
+    }
+}

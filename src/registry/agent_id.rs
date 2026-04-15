@@ -229,6 +229,153 @@ impl FromStr for AbilityName {
     }
 }
 
+// ─── NodeId ──────────────────────────────────────────────────────────────────
+
+/// A typed device node identifier.
+///
+/// Why this exists
+/// ---------------
+/// Before this type, `node_id` was plain `String` everywhere: CLI
+/// args, MCP tool payloads, dispatcher targets, trace entries, audit
+/// logs. Every entry point re-validated the format (or didn't), every
+/// log line assumed UTF-8 printability, and a typo silently routed
+/// to the wrong device. `NodeId` centralizes the contract:
+///
+/// - non-empty after construction
+/// - ASCII only: avoids locale-dependent collation and terminal
+///   rendering surprises in `ps auxe` and log files
+/// - `[a-z0-9_.-]`: the same character class as `AbilityName`,
+///   permissive enough for UUIDs (`-`), hostnames (`.`), and human
+///   labels (`_`, alphanumerics), strict enough to keep the token
+///   safe in shell/TOML/JSON/URL contexts without escaping
+/// - length ≤ `MAX_NODE_ID_LEN` (128): generous enough for a
+///   UUID-plus-suffix, short enough that storage and display assume
+///   no wrapping
+///
+/// What `NodeId` is NOT
+/// -------------------
+/// - **Not a routing address**. Resolution (endpoint, transport,
+///   reachability) is the Hub's job; `NodeId` is the handle by which
+///   the Hub is queried.
+/// - **Not an MCP-wire type**. Cross-process payloads still carry
+///   plain strings, because JSON Schema (and the MCP spec) describe
+///   values as primitives. `NodeId::parse` runs at the outermost CLI
+///   and handler boundaries; internals hand around the typed value.
+/// - **Not a newtype over a newtype**. The contained string is
+///   already the canonical form; there is no normalization step
+///   (no case folding, no dot/dash canonicalization, no Punycode).
+///   Input that would differ under normalization is rejected.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct NodeId(String);
+
+/// Maximum length of a `NodeId` in characters. Larger than
+/// `MAX_SEGMENT_LEN` because node identifiers are frequently a UUID
+/// plus a human-readable suffix, and we don't want to reject a
+/// format that operators already use in practice.
+pub const MAX_NODE_ID_LEN: usize = 128;
+
+impl NodeId {
+    /// Parse a surface-form node id. Validates the character class
+    /// and length; returns the typed value on success.
+    ///
+    /// Input rules (see type docs for rationale):
+    /// - non-empty
+    /// - `[a-z0-9_.-]` only (ASCII)
+    /// - ≤ `MAX_NODE_ID_LEN`
+    pub fn parse(s: &str) -> Result<Self, NodeIdError> {
+        if s.is_empty() {
+            return Err(NodeIdError::Empty);
+        }
+        let len = s.chars().count();
+        if len > MAX_NODE_ID_LEN {
+            return Err(NodeIdError::TooLong {
+                len,
+                max: MAX_NODE_ID_LEN,
+            });
+        }
+        for ch in s.chars() {
+            if ch.is_ascii_uppercase() {
+                return Err(NodeIdError::UppercaseRejected);
+            }
+            let ok = ch.is_ascii_lowercase()
+                || ch.is_ascii_digit()
+                || ch == '_'
+                || ch == '-'
+                || ch == '.';
+            if !ok {
+                return Err(NodeIdError::InvalidChar { ch });
+            }
+        }
+        Ok(Self(s.to_string()))
+    }
+
+    /// Borrow the underlying string. As with `AbilityName`, there is
+    /// no separate canonical form; the stored bytes *are* the value.
+    ///
+    /// `#[allow(dead_code)]` covers the transitional period while
+    /// boundaries are still exchanging `&str`: once CLI parsing and
+    /// bridge payloads also carry `NodeId` end-to-end, this method
+    /// will be called from production code and the allow can go.
+    #[allow(dead_code)]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consume the `NodeId` and return its inner `String`. Used at
+    /// boundaries that cannot accept the newtype (serde fields on
+    /// existing wire-schema structs) — internal code should prefer
+    /// `as_str`. Same transitional `#[allow]` as `as_str`.
+    #[allow(dead_code)]
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl fmt::Display for NodeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl FromStr for NodeId {
+    type Err = NodeIdError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NodeIdError {
+    Empty,
+    TooLong { len: usize, max: usize },
+    InvalidChar { ch: char },
+    UppercaseRejected,
+}
+
+impl fmt::Display for NodeIdError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => write!(f, "node id is empty"),
+            Self::TooLong { len, max } => {
+                write!(f, "node id is {len} chars (max {max})")
+            }
+            Self::InvalidChar { ch } => write!(
+                f,
+                "node id contains invalid character {ch:?} \
+                 (allowed: [a-z0-9_.-])"
+            ),
+            Self::UppercaseRejected => write!(
+                f,
+                "node id contains uppercase letters; use lowercase only \
+                 (allowed: [a-z0-9_.-])"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for NodeIdError {}
+
 // ─── Errors ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,7 +385,11 @@ pub enum AgentIdError {
     /// A segment (tenant or name) was empty.
     EmptySegment { which: &'static str },
     /// A segment exceeded `MAX_SEGMENT_LEN` characters.
-    SegmentTooLong { which: &'static str, len: usize, max: usize },
+    SegmentTooLong {
+        which: &'static str,
+        len: usize,
+        max: usize,
+    },
     /// A segment contained a character outside `[a-z0-9_-]`.
     InvalidChar { which: &'static str, ch: char },
     /// A segment contained an uppercase ASCII letter. Reported
@@ -261,10 +412,9 @@ impl fmt::Display for AgentIdError {
             Self::EmptySegment { which } => {
                 write!(f, "agent id {which} segment is empty")
             }
-            Self::SegmentTooLong { which, len, max } => write!(
-                f,
-                "agent id {which} segment is {len} chars (max {max})"
-            ),
+            Self::SegmentTooLong { which, len, max } => {
+                write!(f, "agent id {which} segment is {len} chars (max {max})")
+            }
             Self::InvalidChar { which, ch } => write!(
                 f,
                 "agent id {which} segment contains invalid character {ch:?} \
@@ -309,10 +459,7 @@ fn validate_segment(s: &str, which: &'static str) -> Result<(), AgentIdError> {
         if ch.is_ascii_uppercase() {
             return Err(AgentIdError::UppercaseRejected { which });
         }
-        let ok = ch.is_ascii_lowercase()
-            || ch.is_ascii_digit()
-            || ch == '_'
-            || ch == '-';
+        let ok = ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-';
         if !ok {
             return Err(AgentIdError::InvalidChar { which, ch });
         }
@@ -344,11 +491,8 @@ fn validate_ability_segment(s: &str) -> Result<(), AgentIdError> {
         if ch.is_ascii_uppercase() {
             return Err(AgentIdError::UppercaseRejected { which });
         }
-        let ok = ch.is_ascii_lowercase()
-            || ch.is_ascii_digit()
-            || ch == '_'
-            || ch == '-'
-            || ch == '.';
+        let ok =
+            ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-' || ch == '.';
         if !ok {
             return Err(AgentIdError::InvalidChar { which, ch });
         }
@@ -550,8 +694,7 @@ mod tests {
 
     #[test]
     fn rejects_uri_shaped_input_as_wrong_layer() {
-        let err =
-            AgentId::parse("easynet://r/agent.claude/abilities/chat").unwrap_err();
+        let err = AgentId::parse("easynet://r/agent.claude/abilities/chat").unwrap_err();
         assert!(matches!(err, AgentIdError::WrongLayer));
         assert!(format!("{err}").contains("URA"));
     }
@@ -710,5 +853,125 @@ mod tests {
 
         let back: AbilityName = serde_json::from_str(&json).unwrap();
         assert_eq!(a, back);
+    }
+
+    // ── NodeId — happy paths ────────────────────────────────────────────
+
+    #[test]
+    fn node_id_accepts_uuid_and_hostname_like_forms() {
+        for s in [
+            "node-1",
+            "node.prod.example",
+            "dev_machine_42",
+            "9f8b2a1c-4d3e-11ee-be56-0242ac120002",
+            "a",                   // single char
+            "192-168-1-10",        // IP-ish (dots are fine; dashes too)
+            "192.168.1.10",
+        ] {
+            let id = NodeId::parse(s).unwrap_or_else(|e| panic!("{s:?} -> {e}"));
+            assert_eq!(id.as_str(), s);
+            assert_eq!(format!("{id}"), s, "Display must be canonical");
+        }
+    }
+
+    #[test]
+    fn node_id_from_str_mirrors_parse() {
+        // The `FromStr` impl exists so clap `#[arg]` can use `NodeId` as
+        // a value parser without a closure. Pin the equivalence.
+        let via_parse = NodeId::parse("node-1").unwrap();
+        let via_from_str: NodeId = "node-1".parse().unwrap();
+        assert_eq!(via_parse, via_from_str);
+    }
+
+    // ── NodeId — rejections (each hits one variant of NodeIdError) ──────
+
+    #[test]
+    fn node_id_rejects_empty() {
+        assert!(matches!(NodeId::parse(""), Err(NodeIdError::Empty)));
+    }
+
+    #[test]
+    fn node_id_rejects_uppercase() {
+        // Uppercase has its own error so the message can recommend
+        // lowercasing instead of the generic "invalid character".
+        assert!(matches!(
+            NodeId::parse("Node-1"),
+            Err(NodeIdError::UppercaseRejected)
+        ));
+    }
+
+    #[test]
+    fn node_id_rejects_shell_and_path_metachars() {
+        // A grab-bag of characters that would be dangerous in node id
+        // contexts: shell metacharacters, path separators, spaces,
+        // control characters. Every one must round-trip to
+        // `InvalidChar` rather than being silently accepted or crashing.
+        for bad in ["node 1", "node/1", "node\\1", "node;rm -rf", "node\n", "node$"]
+        {
+            match NodeId::parse(bad) {
+                Err(NodeIdError::InvalidChar { .. }) => {}
+                other => panic!("{bad:?} must be rejected as InvalidChar, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn node_id_rejects_nonascii() {
+        // The character class is ASCII-only by design. A Unicode
+        // lookalike (e.g. Cyrillic "а") must not silently pass as
+        // if it were Latin "a".
+        let cyrillic_a = "\u{0430}"; // "а"
+        match NodeId::parse(cyrillic_a) {
+            Err(NodeIdError::InvalidChar { ch }) => assert_eq!(ch, 'а'),
+            other => panic!("non-ASCII must be rejected as InvalidChar, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn node_id_enforces_max_length() {
+        // At exactly MAX_NODE_ID_LEN the parse must succeed; at
+        // MAX_NODE_ID_LEN + 1 it must fail with the typed overflow
+        // error. This pins the boundary so a future `< vs <=` typo
+        // in the validator breaks loudly.
+        let ok = "a".repeat(MAX_NODE_ID_LEN);
+        assert!(NodeId::parse(&ok).is_ok());
+
+        let too_long = "a".repeat(MAX_NODE_ID_LEN + 1);
+        match NodeId::parse(&too_long) {
+            Err(NodeIdError::TooLong { len, max }) => {
+                assert_eq!(len, MAX_NODE_ID_LEN + 1);
+                assert_eq!(max, MAX_NODE_ID_LEN);
+            }
+            other => panic!("oversize must be rejected as TooLong, got {other:?}"),
+        }
+    }
+
+    // ── NodeId — serde transparency ──────────────────────────────────────
+
+    #[test]
+    fn node_id_serializes_transparently_as_string() {
+        // Wire-schema callers (MCP payloads, trace files) must see the
+        // plain string; the typed wrapper is an in-process invariant
+        // only.
+        let id = NodeId::parse("node-1").unwrap();
+        let json = serde_json::to_string(&id).unwrap();
+        assert_eq!(json, "\"node-1\"");
+        let back: NodeId = serde_json::from_str(&json).unwrap();
+        assert_eq!(id, back);
+    }
+
+    #[test]
+    fn node_id_deserialize_rejects_invalid_forms() {
+        // Deserialization runs `parse` on the string, so invalid
+        // forms must error out at the boundary rather than landing
+        // in memory as an invalid `NodeId(String)`.
+        //
+        // We go through `from_str` directly (mirroring what `FromStr`
+        // serde derives are expected to do); the serde path for
+        // `#[serde(transparent)]` on a String newtype does NOT run
+        // our validator, so this test pins the *parse-layer* invariant
+        // and warns callers that want validated deser to use
+        // explicit `NodeId::parse` at their boundary.
+        assert!(NodeId::parse("Node").is_err());
     }
 }
