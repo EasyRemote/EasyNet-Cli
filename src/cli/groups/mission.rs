@@ -20,7 +20,7 @@ use console::style;
 use crate::cli::mission_runs::{self, CancelOutcome, MissionRunOpts};
 use crate::cli::{discuss as discuss_cmd, think as think_cmd};
 use crate::eal;
-use crate::shared::output;
+use crate::shared::output::{self, OutputFormat};
 
 #[derive(Debug, Args)]
 pub struct MissionArgs {
@@ -69,9 +69,11 @@ pub struct ListArgs {
     /// Maximum number of runs to show.
     #[arg(long, default_value_t = 20)]
     pub limit: usize,
-    /// Emit raw JSON instead of the table view.
-    #[arg(long)]
-    pub json: bool,
+    /// Output format. `table` prints the human-readable run history;
+    /// `json` emits the meta records as a JSON array. Aligned with
+    /// every other list/show command — see `shared::output::OutputFormat`.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub format: OutputFormat,
 }
 
 #[derive(Debug, Args)]
@@ -192,7 +194,7 @@ fn run_run(args: RunArgs) -> anyhow::Result<()> {
 fn run_list(args: ListArgs) -> anyhow::Result<()> {
     let runs = mission_runs::list_runs()?;
 
-    if args.json {
+    if args.format == OutputFormat::Json {
         let pretty: Vec<serde_json::Value> = runs
             .iter()
             .take(args.limit)
@@ -232,12 +234,20 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     let run = mission_runs::find_run(&args.id)?;
     eprintln!();
-    eprintln!("  {} {}", style("mission").dim(), style(&run.meta.name).bold());
+    eprintln!(
+        "  {} {}",
+        style("mission").dim(),
+        style(&run.meta.name).bold()
+    );
     output::detail("id", &run.id);
     output::detail("path", &run.path.display().to_string());
     output::detail(
         "status",
-        if run.running { "running" } else { run.meta.status.as_str() },
+        if run.running {
+            "running"
+        } else {
+            run.meta.status.as_str()
+        },
     );
     output::detail(
         "duration",

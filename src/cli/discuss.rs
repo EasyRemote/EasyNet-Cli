@@ -15,7 +15,7 @@ use console::style;
 
 use crate::agent::conversation::{self, ConversationConfig};
 use crate::cli::mission_runs::LegacyMissionContext;
-use crate::shared::agents;
+use crate::registry::agents;
 
 #[derive(Debug, Args)]
 pub struct DiscussArgs {
@@ -27,11 +27,14 @@ pub struct DiscussArgs {
     #[arg(long)]
     pub topic: String,
 
-    /// Number of discussion rounds
+    /// Number of discussion rounds (1..=100).
     #[arg(long, default_value_t = 3)]
     pub rounds: usize,
 
-    /// Max context chars passed to each agent per turn (truncates older rounds)
+    /// Max context chars passed to each agent per turn (truncates older rounds).
+    /// Capped at 1_000_000 (≈1 MB) so a typo like `--max-context 999999999999`
+    /// cannot allocate gigabytes per turn — every modern model has a context
+    /// window well under that.
     #[arg(long, default_value_t = 12_000)]
     pub max_context: usize,
 
@@ -41,13 +44,25 @@ pub struct DiscussArgs {
 }
 
 pub fn run(args: DiscussArgs) -> anyhow::Result<()> {
-    let agent_names: Vec<String> = args.agents.split(',')
+    let agent_names: Vec<String> = args
+        .agents
+        .split(',')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
 
     anyhow::ensure!(!agent_names.is_empty(), "no agents specified");
-    anyhow::ensure!(args.rounds > 0, "rounds must be >= 1");
+    anyhow::ensure!(
+        (1..=100).contains(&args.rounds),
+        "--rounds must be in 1..=100 (got {})",
+        args.rounds
+    );
+    anyhow::ensure!(
+        (100..=1_000_000).contains(&args.max_context),
+        "--max-context must be in 100..=1_000_000 chars (got {}); larger values would \
+         allocate megabytes per turn with no model on the market that can use them",
+        args.max_context
+    );
 
     // Mission context for the legacy `discuss` command. See the
     // matching note in `cli::think::run`.

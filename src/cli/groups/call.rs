@@ -24,7 +24,9 @@ use anyhow::Context;
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
-use crate::shared::{self, output};
+use crate::shared::{
+    output::{self, OutputFormat},
+};
 
 #[derive(Debug, Args)]
 pub struct CallArgs {
@@ -69,18 +71,20 @@ pub struct CreateArgs {
     /// organization runs its own conference ability node.
     #[arg(long, default_value = "easynet.run")]
     pub provider: String,
-    /// Emit raw JSON instead of the human-readable view.
-    #[arg(long)]
-    pub json: bool,
+    /// Output format. Aligned with every other list/show command —
+    /// see `shared::output::OutputFormat`.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub format: OutputFormat,
 }
 
 #[derive(Debug, Args)]
 pub struct ShowArgs {
     /// Call identifier.
     pub call_id: String,
-    /// Emit raw JSON.
-    #[arg(long)]
-    pub json: bool,
+    /// Output format. Aligned with every other list/show command —
+    /// see `shared::output::OutputFormat`.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub format: OutputFormat,
 }
 
 #[derive(Debug, Args)]
@@ -169,7 +173,7 @@ fn default_codec() -> Value {
 }
 
 fn run_create(args: CreateArgs) -> anyhow::Result<()> {
-    let (br, rt) = shared::connect_bridge()?;
+    let (br, rt) = crate::persistence::config::load_and_connect()?;
     let tenant = rt.tenant_or_default();
     let call_id = if args.call_id.is_empty() {
         format!("call-{}", uuid::Uuid::new_v4())
@@ -198,7 +202,7 @@ fn run_create(args: CreateArgs) -> anyhow::Result<()> {
         )
         .context("create_voice_call")?;
 
-    if args.json {
+    if args.format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
         output::success(&format!("Call created: {call_id}"));
@@ -215,14 +219,14 @@ fn run_create(args: CreateArgs) -> anyhow::Result<()> {
 }
 
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
-    let (br, rt) = shared::connect_bridge()?;
+    let (br, rt) = crate::persistence::config::load_and_connect()?;
     let tenant = rt.tenant_or_default();
 
     let result = br
         .get_voice_call(tenant, &args.call_id)
         .context("get_voice_call")?;
 
-    if args.json {
+    if args.format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
     }
@@ -245,7 +249,10 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     if let Some(participants) = call.get("participants").and_then(Value::as_array) {
         output::detail("participants", &format!("{}", participants.len()));
         for p in participants {
-            let pid = p.get("participant_id").and_then(Value::as_str).unwrap_or("?");
+            let pid = p
+                .get("participant_id")
+                .and_then(Value::as_str)
+                .unwrap_or("?");
             let muted = p.get("muted").and_then(Value::as_bool).unwrap_or(false);
             let mute_tag = if muted { " (muted)" } else { "" };
             output::step(&format!("  {pid}{mute_tag}"));
@@ -255,11 +262,11 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
 }
 
 fn run_join(args: JoinArgs) -> anyhow::Result<()> {
-    let (br, rt) = shared::connect_bridge()?;
+    let (br, rt) = crate::persistence::config::load_and_connect()?;
     let tenant = rt.tenant_or_default();
-    let pid = args.participant_id.unwrap_or_else(|| {
-        gethostname::gethostname().to_string_lossy().to_string()
-    });
+    let pid = args
+        .participant_id
+        .unwrap_or_else(|| gethostname::gethostname().to_string_lossy().to_string());
 
     let result = br
         .join_voice_call(
@@ -274,27 +281,32 @@ fn run_join(args: JoinArgs) -> anyhow::Result<()> {
 
     output::success(&format!("Joined call {} as {pid}", args.call_id));
     let call = result.get("call").cloned().unwrap_or(json!(null));
-    if let Some(count) = call.get("participants").and_then(Value::as_array).map(|a| a.len()) {
+    if let Some(count) = call
+        .get("participants")
+        .and_then(Value::as_array)
+        .map(|a| a.len())
+    {
         output::detail("participants", &format!("{count}"));
     }
     Ok(())
 }
 
 fn run_leave(args: LeaveArgs) -> anyhow::Result<()> {
-    let (br, rt) = shared::connect_bridge()?;
+    let (br, rt) = crate::persistence::config::load_and_connect()?;
     let tenant = rt.tenant_or_default();
 
     br.leave_voice_call(tenant, &args.call_id, &args.participant_id, &args.reason)
         .context("leave_voice_call")?;
 
     output::success(&format!(
-        "{} left call {}", args.participant_id, args.call_id
+        "{} left call {}",
+        args.participant_id, args.call_id
     ));
     Ok(())
 }
 
 fn run_end(args: EndArgs) -> anyhow::Result<()> {
-    let (br, rt) = shared::connect_bridge()?;
+    let (br, rt) = crate::persistence::config::load_and_connect()?;
     let tenant = rt.tenant_or_default();
 
     let result = br
@@ -309,7 +321,7 @@ fn run_end(args: EndArgs) -> anyhow::Result<()> {
 }
 
 fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
-    let (br, rt) = shared::connect_bridge()?;
+    let (br, rt) = crate::persistence::config::load_and_connect()?;
     let tenant = rt.tenant_or_default();
 
     let result = br
@@ -326,10 +338,7 @@ fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
     if let Some(events) = events {
         for evt in events {
             let seq = evt.get("sequence").and_then(Value::as_u64).unwrap_or(0);
-            let etype = evt
-                .get("event_type")
-                .and_then(Value::as_str)
-                .unwrap_or("?");
+            let etype = evt.get("event_type").and_then(Value::as_str).unwrap_or("?");
             let ts = evt
                 .get("timestamp_unix_ms")
                 .and_then(Value::as_i64)
@@ -343,7 +352,7 @@ fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
 }
 
 fn run_metrics(args: MetricsArgs) -> anyhow::Result<()> {
-    let (br, rt) = shared::connect_bridge()?;
+    let (br, rt) = crate::persistence::config::load_and_connect()?;
     let tenant = rt.tenant_or_default();
 
     let metrics = json!({

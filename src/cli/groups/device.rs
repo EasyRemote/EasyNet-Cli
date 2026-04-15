@@ -40,7 +40,9 @@ use console::style;
 use serde_json::json;
 
 use crate::cli::{config_cmd, devices, join, reset};
-use crate::shared::{self, output};
+use crate::shared::{
+    output::{self, OutputFormat},
+};
 
 #[derive(Debug, Args)]
 pub struct DeviceArgs {
@@ -60,7 +62,10 @@ pub enum DeviceAction {
     List(devices::DevicesArgs),
     /// Show one substrate's hardware and hosted abilities.
     Show(ShowArgs),
-    /// Drain and deregister a remote substrate from the federation.
+    /// Drain in-flight work on a remote substrate, then deregister it
+    /// from the federation (the device disappears from
+    /// `device list`). Irreversible without a fresh pairing token —
+    /// prompts for confirmation unless `--yes` is passed.
     Remove(RemoveArgs),
 }
 
@@ -68,9 +73,11 @@ pub enum DeviceAction {
 pub struct ShowArgs {
     /// Target substrate node id.
     pub node_id: String,
-    /// Emit raw JSON instead of the human-readable view.
-    #[arg(long)]
-    pub json: bool,
+    /// Output format. `table` emits the human-readable view; `json`
+    /// emits the raw substrate record + abilities array. Aligned with
+    /// every other list/show command — see `shared::output::OutputFormat`.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub format: OutputFormat,
 }
 
 #[derive(Debug, Args)]
@@ -97,7 +104,7 @@ pub fn run(args: DeviceArgs) -> anyhow::Result<()> {
 }
 
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
-    let (br, rt) = shared::connect_bridge()?;
+    let (br, rt) = crate::persistence::config::load_and_connect()?;
     let tenant = rt.tenant_or_default();
 
     let nodes = br.list_nodes(tenant, None).context("list nodes")?;
@@ -106,9 +113,11 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         .find(|n| n.get("node_id").and_then(|v| v.as_str()) == Some(args.node_id.as_str()))
         .ok_or_else(|| anyhow::anyhow!("substrate '{}' not found", args.node_id))?;
 
-    let abilities = br.list_mcp_tools(tenant, "", &args.node_id).unwrap_or_default();
+    let abilities = br
+        .list_mcp_tools(tenant, "", &args.node_id)
+        .unwrap_or_default();
 
-    if args.json {
+    if args.format == OutputFormat::Json {
         let payload = json!({"node": node, "abilities": abilities});
         println!("{}", serde_json::to_string_pretty(&payload)?);
         return Ok(());
@@ -131,7 +140,11 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         7 => "REMOVED",
         _ => "UNKNOWN",
     };
-    let trust = match node.get("trust_level").and_then(|v| v.as_i64()).unwrap_or(0) {
+    let trust = match node
+        .get("trust_level")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0)
+    {
         0 => "UNKNOWN",
         1 => "UNTRUSTED",
         2 => "PROBATION",
@@ -139,7 +152,10 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         4 => "TRUSTED",
         _ => "UNKNOWN",
     };
-    let online = node.get("online").and_then(|v| v.as_bool()).unwrap_or(false);
+    let online = node
+        .get("online")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let dot = if online {
         style("●").green()
@@ -158,10 +174,16 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     if let Some(ver) = node.pointer("/device/os_version").and_then(|v| v.as_str()) {
         output::detail("os_version", ver);
     }
-    if let Some(arch) = node.pointer("/device/architecture").and_then(|v| v.as_str()) {
+    if let Some(arch) = node
+        .pointer("/device/architecture")
+        .and_then(|v| v.as_str())
+    {
         output::detail("arch", arch);
     }
-    if let Some(model) = node.pointer("/device/hardware_model").and_then(|v| v.as_str()) {
+    if let Some(model) = node
+        .pointer("/device/hardware_model")
+        .and_then(|v| v.as_str())
+    {
         output::detail("model", model);
     }
     if let Some(ms) = node
@@ -175,7 +197,11 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     eprintln!(
         "  {} {} {}",
         style(format!("{}", abilities.len())).bold(),
-        if abilities.len() == 1 { "ability" } else { "abilities" },
+        if abilities.len() == 1 {
+            "ability"
+        } else {
+            "abilities"
+        },
         style("hosted on this substrate").dim(),
     );
     for a in &abilities {
@@ -221,7 +247,7 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
         }
     }
 
-    let (br, rt) = shared::connect_bridge()?;
+    let (br, rt) = crate::persistence::config::load_and_connect()?;
     let tenant = rt.tenant_or_default();
 
     // Drain first so any in-flight calls finish, then deregister.

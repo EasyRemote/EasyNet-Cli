@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Universal ability entrypoint. The Axon runtime invokes this script with
+# the JSON payload on stdin and reads the result from stdout. Do not edit
+# unless you need a different transport.
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+exec "$HERE/{handler}"

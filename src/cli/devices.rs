@@ -15,7 +15,11 @@ use anyhow::Context;
 use clap::Args;
 use console::style;
 
-use crate::shared::{self, config, node, output::{self, OutputFormat}};
+use crate::persistence::config;
+use crate::shared::{
+    node,
+    output::{self, OutputFormat},
+};
 
 /// Display length for short node IDs: "en-" prefix (3) + 8 hex chars = 11.
 const SHORT_NODE_ID_LEN: usize = 11;
@@ -31,15 +35,26 @@ pub struct DevicesArgs {
 }
 
 pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
-    let (br, rt) = shared::connect_bridge()?;
+    // First-run UX: if we have no credentials on disk, the user simply
+    // hasn't paired this machine yet. `load_and_connect` would raise a
+    // low-level "no runtime endpoint" error that points the operator at
+    // the wrong problem — the fix is `easynet device join <token>`,
+    // not diagnosing a transport. Detect the not-paired state before
+    // we reach the bridge and emit a direct, action-oriented message.
+    if config::load_credentials().is_err() {
+        anyhow::bail!(
+            "this device has no credentials yet. Run `easynet device join <token>` to pair it \
+             with the Hub (get a pairing token from the Hub dashboard), then retry."
+        );
+    }
+
+    let (br, rt) = crate::persistence::config::load_and_connect()?;
     let tenant = rt.tenant_or_default();
     let current_node_id = config::load_credentials()
         .map(|c| c.node_id)
         .unwrap_or_default();
 
-    let nodes = br
-        .list_nodes(tenant, None)
-        .context("list nodes")?;
+    let nodes = br.list_nodes(tenant, None).context("list nodes")?;
 
     let filtered: Vec<_> = nodes
         .iter()
@@ -75,7 +90,11 @@ pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
     println!(
         "  {} {}",
         style(format!("{}", filtered.len())).bold(),
-        if filtered.len() == 1 { "device" } else { "devices" }
+        if filtered.len() == 1 {
+            "device"
+        } else {
+            "devices"
+        }
     );
     println!();
 
@@ -110,7 +129,13 @@ fn print_device(n: &serde_json::Value, current_node_id: &str) {
     } else {
         String::new()
     };
-    println!("  {} {}  {}{}", indicator, style(name).bold(), state_styled, current_tag);
+    println!(
+        "  {} {}  {}{}",
+        indicator,
+        style(name).bold(),
+        state_styled,
+        current_tag
+    );
 
     // Line 2: details
     let mut details: Vec<String> = Vec::new();
@@ -119,6 +144,11 @@ fn print_device(n: &serde_json::Value, current_node_id: &str) {
     }
     if !os_detail.is_empty() && hardware_model.is_empty() {
         details.push(os_detail);
+    }
+    // Surface federation topology: for nodes reached through a peer runtime,
+    // the `list_nodes` handler stamps the originating runtime's label.
+    if let Some(label) = node::federation_label(n) {
+        details.push(format!("via {label}"));
     }
     details.push(format!("Active {last_active}"));
     println!("    {}", style(details.join("  ·  ")).dim());
@@ -188,7 +218,10 @@ fn device_last_active(n: &serde_json::Value) -> String {
     let last_seen = n
         .get("last_seen_unix_ms")
         .and_then(serde_json::Value::as_i64)
-        .or_else(|| n.get("last_heartbeat_unix_ms").and_then(serde_json::Value::as_i64));
+        .or_else(|| {
+            n.get("last_heartbeat_unix_ms")
+                .and_then(serde_json::Value::as_i64)
+        });
     match last_seen {
         Some(ms) if ms > 0 => output::relative_time(ms),
         _ => "—".to_string(),
@@ -207,5 +240,3 @@ fn style_state(state: &str) -> String {
         _ => format!("{}", style(state).dim()),
     }
 }
-
-

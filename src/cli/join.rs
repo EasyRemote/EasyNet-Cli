@@ -30,7 +30,8 @@
 
 use clap::Args;
 
-use crate::shared::{config, output, sysinfo};
+use crate::persistence::config;
+use crate::shared::{output, sysinfo};
 
 #[derive(Debug, Args)]
 pub struct JoinArgs {
@@ -83,16 +84,41 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
 
 fn validate_token_format(token: &str) -> anyhow::Result<()> {
     if token.len() < 8 {
-        anyhow::bail!("invalid pairing token: too short (minimum 8 characters, got {})", token.len());
+        anyhow::bail!(
+            "invalid pairing token: too short (minimum 8 characters, got {})",
+            token.len()
+        );
     }
     if token.len() > 256 {
-        anyhow::bail!("invalid pairing token: too long (maximum 256 characters, got {})", token.len());
+        anyhow::bail!(
+            "invalid pairing token: too long (maximum 256 characters, got {})",
+            token.len()
+        );
     }
     // Accept hex, alphanumeric, dashes, and underscores (covers hex tokens, UUIDs, base64url).
-    if !token.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+    if !token
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
         anyhow::bail!("invalid pairing token: must contain only alphanumeric characters, dashes, or underscores");
     }
     Ok(())
+}
+
+fn pairing_status_error_message(code: u16, body: &str) -> String {
+    match code {
+        404 => "pairing token expired or already used — create a new token from the Hub dashboard"
+            .into(),
+        409 => "device already paired — run `easynet reset` first to un-pair, then retry".into(),
+        _ => format!("Hub rejected pairing (HTTP {code}): {body}"),
+    }
+}
+
+fn validate_pairing_response(creds: config::Credentials) -> anyhow::Result<config::Credentials> {
+    if creds.node_id.is_empty() {
+        anyhow::bail!("pairing response missing node_id");
+    }
+    Ok(creds)
 }
 
 fn validate_pairing_token(token: &str, hub_base: &str) -> anyhow::Result<config::Credentials> {
@@ -105,27 +131,93 @@ fn validate_pairing_token(token: &str, hub_base: &str) -> anyhow::Result<config:
         .send_json(&info)
     {
         Ok(r) => r,
-        Err(ureq::Error::Status(404, _)) => {
-            anyhow::bail!("pairing token expired or already used — create a new token from the Hub dashboard");
-        }
-        Err(ureq::Error::Status(409, _)) => {
-            anyhow::bail!("device already paired — run `easynet reset` first to un-pair, then retry");
-        }
         Err(ureq::Error::Status(code, resp)) => {
             let body = resp.into_string().unwrap_or_default();
-            anyhow::bail!("Hub rejected pairing (HTTP {code}): {body}");
+            anyhow::bail!("{}", pairing_status_error_message(code, &body));
         }
         Err(ureq::Error::Transport(e)) => {
-            anyhow::bail!("cannot reach Hub at {base}: {e}\n  Check your network connection and Hub URL.");
+            anyhow::bail!(
+                "cannot reach Hub at {base}: {e}\n  Check your network connection and Hub URL."
+            );
         }
     };
 
-    let creds: config::Credentials = resp
-        .into_json()
-        .map_err(|e| anyhow::anyhow!("invalid pairing response: {e}"))?;
+    // The Hub's pairing endpoint is a versioned REST contract (see the
+    // Hub's OpenAPI spec under /api/v1/devices/pairing). If `into_json`
+    // fails, the bytes we got back are either not JSON at all (a proxy
+    // inserted an HTML error page, a middlebox rewrote the response) or
+    // the JSON shape no longer matches `config::Credentials` (the CLI
+    // and Hub are on incompatible versions). Either way, the underlying
+    // serde error is noise to an operator — they need to know *what to
+    // do*, not which field's tag didn't match. We keep the raw cause in
+    // the error chain via `context`, so `--verbose` / log scrapers still
+    // surface the full detail, while the top-line stays operator-friendly.
+    let creds: config::Credentials = resp.into_json().map_err(|e| {
+        anyhow::Error::from(e).context(
+            "Hub returned an unreadable pairing response — the Hub is likely on an \
+             incompatible version, or a proxy rewrote the response. Verify the Hub URL \
+             and that CLI + Hub versions match; re-run with a fresh pairing token if so.",
+        )
+    })?;
 
-    if creds.node_id.is_empty() {
-        anyhow::bail!("pairing response missing node_id");
+    validate_pairing_response(creds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    #[test]
+    fn token_format_accepts_alnum_dash_underscore() {
+        for token in ["abc12345", "A_B-C_99", "token_2026_04"] {
+            assert!(
+                validate_token_format(token).is_ok(),
+                "expected valid token: {token}"
+            );
+        }
     }
-    Ok(creds)
+
+    #[test]
+    fn token_format_rejects_short_long_and_invalid_chars() {
+        assert!(validate_token_format("short").is_err());
+        assert!(validate_token_format(&"a".repeat(257)).is_err());
+        assert!(validate_token_format("bad token").is_err());
+        assert!(validate_token_format("bad/token").is_err());
+    }
+
+    #[test]
+    fn pairing_status_error_message_maps_common_cases() {
+        assert!(pairing_status_error_message(404, "x").contains("expired or already used"));
+        assert!(pairing_status_error_message(409, "x").contains("device already paired"));
+        assert_eq!(
+            pairing_status_error_message(500, "oops"),
+            "Hub rejected pairing (HTTP 500): oops"
+        );
+    }
+
+    #[test]
+    fn validate_pairing_response_rejects_empty_node_id() {
+        let creds = config::Credentials {
+            node_id: String::new(),
+            credential_token: "cred".into(),
+            hub_endpoint: "axon://easynet.run:50051".into(),
+            tenant_id: "tenant".into(),
+            deploy_signature: "sig".into(),
+            hub_api_base: None,
+        };
+        let err = validate_pairing_response(creds).expect_err("missing node_id must fail");
+        assert!(err.to_string().contains("missing node_id"));
+    }
+
+    #[test]
+    fn validate_pairing_token_surfaces_transport_failure() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind probe");
+        let addr = listener.local_addr().expect("local_addr");
+        drop(listener);
+        let base = format!("http://{}", addr);
+        let err = validate_pairing_token("token_1234", &base)
+            .expect_err("transport failure should error");
+        assert!(err.to_string().contains("cannot reach Hub"));
+    }
 }

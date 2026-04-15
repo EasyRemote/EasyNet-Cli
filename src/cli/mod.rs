@@ -68,46 +68,47 @@
 // See docs/easynet_ontology.pdf for the full ontology and the call
 // walkthrough.
 //
-// Backwards compatibility:
-//   Every old top-level verb (`devices`, `abilities`, `start`, `stop`,
-//   `connect`, `status`, `join`, `reset`, `config`, `deploy`, `invoke`,
-//   `exec`, `mcp-server`, `mcp-install`, `skill-install`, `think`,
-//   `discuss`) is preserved as a *deprecated alias* — running it still
-//   works, but a one-line stderr notice points the user at the new
-//   layered command. The aliases will be removed in a future release.
+// No flat-command compatibility layer:
+//   Pre-layered aliases (`easynet start`, `easynet devices`, `easynet
+//   exec`, …) were removed before 1.0. The product never shipped under
+//   those spellings, so there is no installed base to pay the carrying
+//   cost of two parallel command surfaces. The individual modules
+//   (`start.rs`, `stop.rs`, `connect.rs`, …) remain as *implementation
+//   details*; they are called by `groups/runtime.rs`, `groups/device.rs`,
+//   and their siblings.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-pub mod abilities;
-pub mod agent;
-pub mod agent_sessions;
-pub mod completion;
-pub mod config_cmd;
-pub mod connect;
-pub mod deploy;
-pub mod devices;
-pub mod discuss;
-pub mod doctor;
-pub mod exec;
-pub mod groups;
-pub mod heartbeat;
-pub mod invoke;
-pub mod join;
-pub mod mcp_install;
-pub mod mcp_server;
-pub mod mission_runs;
-pub mod reset;
-pub mod skill_install;
-pub mod start;
-pub mod status;
-pub mod stop;
+pub(crate) mod abilities;
+pub(crate) mod ability_scaffold;
+pub(crate) mod agent;
+pub(crate) mod agent_sessions;
+pub(crate) mod completion;
+pub(crate) mod config_cmd;
+pub(crate) mod connect;
+pub(crate) mod deploy;
+pub(crate) mod devices;
+pub(crate) mod discuss;
+pub(crate) mod doctor;
+pub(crate) mod exec;
+pub(crate) mod groups;
+pub(crate) mod heartbeat;
+pub(crate) mod invoke;
+pub(crate) mod join;
+pub(crate) mod mcp_install;
+pub(crate) mod mcp_server;
+pub(crate) mod mission_runs;
+pub(crate) mod reset;
+pub(crate) mod skill_install;
+pub(crate) mod start;
+pub(crate) mod status;
+pub(crate) mod stop;
 #[cfg(test)]
-pub mod test_support;
-pub mod think;
+pub(crate) mod test_support;
+pub(crate) mod think;
 
 use clap::Subcommand;
-use console::style;
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
@@ -150,60 +151,28 @@ pub enum Command {
     #[command(display_order = 9)]
     Doctor(doctor::DoctorArgs),
 
-    /// Generate shell completion scripts (bash/zsh/fish/powershell).
+    /// Emit a shell completion script (bash/zsh/fish/powershell) to
+    /// stdout. Pipe it into your shell's completion dir, e.g.
+    /// `easynet completion zsh > ~/.zsh/completions/_easynet`.
     #[command(display_order = 10)]
     Completion(completion::CompletionArgs),
 
-    // ── Deprecated flat aliases (kept until next release) ─────────────────
-    #[command(hide = true)]
-    Start(start::StartArgs),
-    #[command(hide = true)]
-    Stop(stop::StopArgs),
-    #[command(hide = true)]
-    Status(status::StatusArgs),
-    #[command(hide = true)]
-    Connect(connect::ConnectArgs),
-    #[command(hide = true)]
-    Devices(devices::DevicesArgs),
-    #[command(hide = true)]
-    Abilities(abilities::AbilitiesArgs),
-    #[command(hide = true)]
-    Exec(exec::ExecArgs),
-    #[command(hide = true)]
-    Deploy(deploy::DeployArgs),
-    #[command(hide = true)]
-    Invoke(invoke::InvokeArgs),
-    #[command(hide = true)]
-    Join(join::JoinArgs),
-    #[command(hide = true, name = "config")]
-    Config(config_cmd::ConfigArgs),
-    #[command(hide = true)]
-    Reset(reset::ResetArgs),
-    #[command(hide = true, name = "mcp-server")]
-    McpServer(mcp_server::McpServerArgs),
-    #[command(hide = true, name = "mcp-install")]
-    McpInstall(mcp_install::McpInstallArgs),
-    #[command(hide = true, name = "skill-install")]
-    SkillInstall(skill_install::SkillInstallArgs),
-    #[command(hide = true)]
-    Think(think::ThinkArgs),
-    #[command(hide = true)]
-    Discuss(discuss::DiscussArgs),
-
     // ── Internal ──────────────────────────────────────────────────────────
+    //
+    // Flat deprecated aliases (`easynet start`, `easynet devices`, …) were
+    // removed before 1.0. The product never shipped under those spellings,
+    // so there is no installed base to pay the carrying cost of dual
+    // command surfaces: parallel help text, parallel completion, parallel
+    // test coverage, and the live hazard of introducing a behavioural
+    // drift between a layered command and its flat alias. Users who find
+    // old docs pointing at `easynet start` will get a clean "command not
+    // found" and the `--help` listing will direct them to the layered
+    // form (`easynet runtime start`). The individual modules (`start.rs`,
+    // `stop.rs`, …) remain as *implementation* — `groups/runtime.rs` and
+    // its siblings call into them.
     /// Internal heartbeat daemon process (not for direct use).
     #[command(name = "_heartbeat-daemon", hide = true)]
     HeartbeatDaemon,
-}
-
-/// Print a one-line deprecation hint when an old flat alias is invoked.
-fn deprecated(old: &str, new: &str) {
-    eprintln!(
-        "  {} `easynet {}` is deprecated — use `easynet {}` instead.",
-        style("warning:").yellow().bold(),
-        old,
-        new,
-    );
 }
 
 pub fn run(cmd: Command) -> anyhow::Result<()> {
@@ -222,75 +191,7 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         Command::Doctor(args) => doctor::run(args),
         Command::Completion(args) => completion::run::<crate::App>(args),
 
-        // Deprecated flat aliases — print hint and forward.
-        Command::Start(args) => {
-            deprecated("start", "runtime start");
-            start::run(args)
-        }
-        Command::Stop(args) => {
-            deprecated("stop", "runtime stop");
-            stop::run(args)
-        }
-        Command::Status(args) => {
-            deprecated("status", "runtime status");
-            status::run(args)
-        }
-        Command::Connect(args) => {
-            deprecated("connect", "runtime connect");
-            connect::run(args)
-        }
-        Command::Devices(args) => {
-            deprecated("devices", "device list");
-            devices::run(args)
-        }
-        Command::Abilities(args) => {
-            deprecated("abilities", "ability list");
-            abilities::run(args)
-        }
-        Command::Exec(args) => {
-            deprecated("exec", "ability exec");
-            exec::run(args)
-        }
-        Command::Deploy(args) => {
-            deprecated("deploy", "ability deploy");
-            deploy::run(args)
-        }
-        Command::Invoke(args) => {
-            deprecated("invoke", "ability invoke");
-            invoke::run(args)
-        }
-        Command::Join(args) => {
-            deprecated("join", "device join");
-            join::run(args)
-        }
-        Command::Config(args) => {
-            deprecated("config", "device config");
-            config_cmd::run(args)
-        }
-        Command::Reset(args) => {
-            deprecated("reset", "device reset");
-            reset::run(args)
-        }
-        Command::McpServer(args) => {
-            deprecated("mcp-server", "mcp serve");
-            mcp_server::run(args)
-        }
-        Command::McpInstall(args) => {
-            deprecated("mcp-install", "mcp install");
-            mcp_install::run(args)
-        }
-        Command::SkillInstall(args) => {
-            deprecated("skill-install", "mcp skill-install");
-            skill_install::run(args)
-        }
-        Command::Think(args) => {
-            deprecated("think", "mission think");
-            think::run(args)
-        }
-        Command::Discuss(args) => {
-            deprecated("discuss", "mission discuss");
-            discuss::run(args)
-        }
+        // Internal
         Command::HeartbeatDaemon => heartbeat::run_daemon(),
     }
 }

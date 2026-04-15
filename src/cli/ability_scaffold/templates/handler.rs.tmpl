@@ -1,0 +1,24 @@
+// Ability handler for '{name}' — Rust stub.
+//
+// Build with `cargo build --release` and point ability.json's `command`
+// field at target/release/{name}.
+//
+//   stdin:  JSON matching ability.json :: input_schema
+//   stdout: JSON matching ability.json :: output_schema
+//
+// This stub depends only on std. If you want to echo the payload back,
+// add `serde_json = "1"` to Cargo.toml and parse it — do NOT splice the
+// raw stdin string into the output, embedded quotes will corrupt it.
+use std::io::{self, Read, Write};
+
+fn main() -> io::Result<()> {
+    let mut input = String::new();
+    io::stdin().read_to_string(&mut input)?;
+    // Discard the payload for now; returning a fixed response keeps the
+    // contract tight regardless of what the caller sent.
+    let _ = input;
+
+    // TODO: replace with your real logic.
+    io::stdout().write_all(br#"{"ok":true}"#)?;
+    Ok(())
+}

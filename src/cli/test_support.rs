@@ -8,12 +8,13 @@
 //              test, so tests that touch persistence (mission runs, agent
 //              sessions, etc.) don't pollute the developer's real home.
 //
-// This module is `#[cfg(test)]` only — it must not appear in release builds.
+// This module is gated at the declaration site (`src/cli/mod.rs` with
+// `#[cfg(test)] pub mod test_support;`), so it never appears in release
+// builds. Do NOT add an inner `#![cfg(test)]` here — clippy flags it as a
+// duplicated attribute, and the outer gate is the single source of truth.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
-
-#![cfg(test)]
 
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};

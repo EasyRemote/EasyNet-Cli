@@ -57,9 +57,12 @@ pub struct AgentArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum AgentAction {
-    /// Register a new agent instance.
+    /// Register a new agent instance in `~/.easynet/agents.json`
+    /// (name, wrapper type, model, timeout). The entry makes the agent
+    /// callable via EAL member syntax and `agent send`.
     Add(agent_cmd::AddArgs),
-    /// List registered agent instances.
+    /// Print a table of registered agents: name, wrapper type, model,
+    /// timeout. Empty when nothing has been added yet.
     List,
     /// Remove a registered agent instance.
     Remove(agent_cmd::RemoveArgs),

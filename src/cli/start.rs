@@ -23,19 +23,31 @@ use clap::Args;
 use easynet_axon::server::ServerConfig;
 
 use super::heartbeat::{self, HeartbeatOutcome};
-use crate::shared::{self, config, net, output, shutdown::ShutdownSignal};
+use crate::persistence::config;
+use crate::shared::{self, net, output, shutdown::ShutdownSignal};
 
-/// Register a Ctrl-C handler that triggers `shutdown`. Safe to call multiple times —
-/// only the first call installs the handler; subsequent calls are no-ops.
+/// Register a Ctrl-C handler that triggers `shutdown`. Safe to call multiple
+/// times — only the first call installs the handler; subsequent calls are
+/// no-ops.
+///
+/// `ctrlc::set_handler` only fails when an OS-level handler is already
+/// installed for SIGINT, which `OnceLock::get_or_init` already prevents
+/// for our own callers. The remaining failure mode is "another library in
+/// the process has installed a handler first" — surface that as a warning
+/// so the operator knows Ctrl-C will not gracefully shut us down.
 fn install_ctrlc_handler(shutdown: &ShutdownSignal) {
     static INSTALLED: OnceLock<()> = OnceLock::new();
     let s = shutdown.clone();
     INSTALLED.get_or_init(|| {
-        ctrlc::set_handler(move || {
+        if let Err(e) = ctrlc::set_handler(move || {
             eprintln!("\nShutting down...");
             s.trigger();
-        })
-        .ok();
+        }) {
+            eprintln!(
+                "[easynet warn] could not install Ctrl-C handler ({e}); \
+                 the process will not respond to Ctrl-C with a graceful shutdown"
+            );
+        }
     });
 }
 
@@ -89,6 +101,7 @@ impl StartArgs {
 }
 
 /// Result of `verify_credential` — tracks whether the Hub was reachable.
+#[derive(Debug, PartialEq, Eq)]
 enum CredentialCheck {
     Valid,
     NetworkUnavailable,
@@ -135,7 +148,14 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     let hostname = gethostname::gethostname().to_string_lossy().into_owned();
     let label = args.label.clone().unwrap_or_else(|| creds.node_id.clone());
 
-    let srv = start_runtime_for_device(&hub, &tenant, &label, &creds.node_id, args.token.as_deref(), args.insecure)?;
+    let srv = start_runtime_for_device(
+        &hub,
+        &tenant,
+        &label,
+        &creds.node_id,
+        args.token.as_deref(),
+        args.insecure,
+    )?;
     let endpoint = srv.url().to_string();
     let pid = net::discover_pid_from_endpoint(&endpoint);
 
@@ -166,42 +186,37 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
         Err(e) => {
             output::warn(&format!("bridge connect failed: {e}"));
             output::info("Node registration skipped — runtime is still running.");
-            output::info("Hint: set EASYNET_DENDRITE_BRIDGE_LIB to the dendrite bridge library path.");
+            output::info(
+                "Hint: set EASYNET_DENDRITE_BRIDGE_LIB to the dendrite bridge library path.",
+            );
             return run_foreground_or_detach(srv, args.foreground);
         }
     };
 
-    // Build a2a.* labels from local agent registry so this node is
-    // discoverable as an A2A agent across the Axon federation.
-    let mut labels = std::collections::HashMap::new();
-    if let Ok(registry) = crate::shared::agents::load_agents() {
-        if !registry.agents.is_empty() {
-            labels.insert("a2a.enabled".into(), "true".into());
-            labels.insert("a2a.name".into(), hostname.clone());
-
-            // Encode full agent details as JSON so the backend can
-            // reconstruct individual agent entries from the card.
-            let agents_json: Vec<serde_json::Value> = registry.agents.iter()
-                .map(|(name, e)| serde_json::json!({
-                    "name": name,
-                    "type": format!("{:?}", e.agent_type),
-                    "model": e.model.as_deref().unwrap_or(""),
-                    "timeout": e.timeout_secs,
-                }))
-                .collect();
-            labels.insert("a2a.agents_json".into(), serde_json::to_string(&agents_json).unwrap_or_default());
-
-            let desc = format!(
-                "Device hosting {} AI agent(s): {}",
-                registry.agents.len(),
-                registry.agents.keys().cloned().collect::<Vec<_>>().join(", ")
-            );
-            labels.insert("a2a.description".into(), desc);
+    // Build a2a.* labels so this node is discoverable as an A2A agent
+    // across the Axon federation. The full encoding contract lives in
+    // `registry::a2a_labels::build` — note it returns `Option<HashMap>` so
+    // "no agents registered" maps cleanly to "omit labels on the wire"
+    // (vs `Some({})` which would publish an empty map). If the agents
+    // file is missing or malformed, we also omit labels rather than
+    // registering with partial data.
+    let labels = match crate::registry::agents::load_agents() {
+        Ok(registry) => crate::registry::a2a_labels::build(&registry, &hostname),
+        Err(e) => {
+            output::warn(&format!(
+                "failed to load ~/.easynet/agents.json ({e}); registering without a2a.* labels"
+            ));
+            None
         }
-    }
+    };
 
     let reg_resp = bridge
-        .register_node_with_labels(&creds.tenant_id, &creds.node_id, &hostname, Some(labels))
+        .register_node_with_options(
+            &creds.tenant_id,
+            &creds.node_id,
+            &hostname,
+            easynet_axon::dendrite_bridge::RegisterNodeOptions { labels, role: None },
+        )
         .context("register node")?;
 
     let heartbeat_ms = reg_resp
@@ -224,6 +239,13 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
 
 /// Load credentials and verify against Hub. Returns error on revoked/missing credentials.
 fn load_and_verify_credentials() -> anyhow::Result<(config::Credentials, bool)> {
+    load_and_verify_credentials_with(verify_credential)
+}
+
+fn load_and_verify_credentials_with<F>(verify: F) -> anyhow::Result<(config::Credentials, bool)>
+where
+    F: Fn(&config::Credentials) -> CredentialCheck,
+{
     let Ok(creds) = config::load_credentials() else {
         output::info("No credentials found.");
         output::info("Visit https://easynet.run or your Hub to create a pairing token,");
@@ -232,7 +254,7 @@ fn load_and_verify_credentials() -> anyhow::Result<(config::Credentials, bool)> 
         anyhow::bail!("no credentials — cannot start device agent");
     };
 
-    match verify_credential(&creds) {
+    match verify(&creds) {
         CredentialCheck::Valid => Ok((creds, true)),
         CredentialCheck::NetworkUnavailable => Ok((creds, false)),
         CredentialCheck::Revoked(msg) => {
@@ -286,7 +308,7 @@ fn run_foreground_with_heartbeat(
         let ep = endpoint.to_string();
         let t = creds.tenant_id.clone();
         std::thread::spawn(move || {
-            let kit = crate::mcp::hub_kit::HubCaseKit::new(ep, t);
+            let kit = crate::mcp::provider::HubMcpProvider::new(ep, t);
             let server = easynet_axon::mcp::StdioMcpServer::new(kit)
                 .with_server_name("easynet-device")
                 .with_server_version(env!("CARGO_PKG_VERSION"));
@@ -300,10 +322,25 @@ fn run_foreground_with_heartbeat(
     let shutdown = ShutdownSignal::new();
     install_ctrlc_handler(&shutdown);
 
-    let outcome =
-        heartbeat::heartbeat_loop(bridge, &creds.tenant_id, &creds.node_id, heartbeat_ms, &shutdown);
+    let outcome = heartbeat::heartbeat_loop(
+        bridge,
+        &creds.tenant_id,
+        &creds.node_id,
+        heartbeat_ms,
+        &shutdown,
+    );
 
-    let _ = bridge.deregister_node(&creds.tenant_id, &creds.node_id, outcome.reason());
+    if let Err(e) = bridge.deregister_node(&creds.tenant_id, &creds.node_id, outcome.reason()) {
+        // Failing to deregister leaves a phantom node in the Hub view
+        // until the next stale-node sweep. The local shutdown still
+        // proceeds, but the operator should know the federation is in
+        // an inconsistent state.
+        output::warn(&format!(
+            "deregister_node failed for {} ({}): {e}",
+            creds.node_id,
+            outcome.reason(),
+        ));
+    }
     drop(srv);
     config::remove()?;
     match outcome {
@@ -319,7 +356,9 @@ fn run_foreground_with_heartbeat(
             config::delete_credentials().ok();
             output::success("Axon runtime stopped (device removed by admin)");
             output::step("Local credentials have been removed.");
-            output::step("To reconnect, create a new pairing token and run `easynet join <token>`.");
+            output::step(
+                "To reconnect, create a new pairing token and run `easynet join <token>`.",
+            );
         }
         HeartbeatOutcome::Shutdown => {
             output::success("Axon runtime stopped");
@@ -377,9 +416,7 @@ fn run_as_hub(args: &StartArgs) -> anyhow::Result<()> {
         cfg = cfg.hub_join_token(t);
     }
 
-    let srv = cfg
-        .start()
-        .context("start hub")?;
+    let srv = cfg.start().context("start hub")?;
 
     let endpoint = srv.url().to_string();
     let pid = net::discover_pid_from_endpoint(&endpoint);
@@ -468,11 +505,8 @@ fn assert_single_threaded() {
                 act_list_cnt: *mut libc::c_uint,
             ) -> libc::c_int;
             fn mach_task_self() -> libc::c_uint;
-            fn vm_deallocate(
-                target_task: libc::c_uint,
-                address: usize,
-                size: usize,
-            ) -> libc::c_int;
+            fn vm_deallocate(target_task: libc::c_uint, address: usize, size: usize)
+                -> libc::c_int;
         }
         let mut thread_list = MaybeUninit::<*mut libc::c_uint>::uninit();
         let mut thread_count = MaybeUninit::<libc::c_uint>::uninit();
@@ -503,7 +537,10 @@ fn assert_single_threaded() {
     }
 }
 
-fn env_patch_for_device(creds: &config::Credentials, settings: &config::DeviceSettings) -> EnvPatch {
+fn env_patch_for_device(
+    creds: &config::Credentials,
+    settings: &config::DeviceSettings,
+) -> EnvPatch {
     let mut sets = Vec::new();
     if creds.deploy_signature.is_empty() {
         // Allow ephemeral/placeholder deploy signatures in dev mode when no real
@@ -511,7 +548,10 @@ fn env_patch_for_device(creds: &config::Credentials, settings: &config::DeviceSe
         // env mutation from handler threads is UB.
         sets.push(("AXON_ALLOW_PLACEHOLDER_DEPLOY_SIGNATURE", "1".into()));
     } else {
-        sets.push(("AXON_DEPLOY_SIGNATURE_BASE64", creds.deploy_signature.clone()));
+        sets.push((
+            "AXON_DEPLOY_SIGNATURE_BASE64",
+            creds.deploy_signature.clone(),
+        ));
     }
     let exec_enabled = std::env::var("EASYNET_SESSION_BRIDGE_EXEC_ENABLED")
         .map(|v| v == "1")
@@ -534,6 +574,31 @@ fn env_patch_for_hub() -> EnvPatch {
 
 // ── Credential verification ─────────────────────────────────────────────────
 
+fn classify_credential_status_code(code: u16) -> CredentialCheck {
+    if (400..500).contains(&code) {
+        match code {
+            // 404 = endpoint not found (Hub version mismatch), 429 = rate limited — transient.
+            404 | 429 => {
+                output::warn(&format!("Hub returned HTTP {code}, continuing anyway"));
+                CredentialCheck::NetworkUnavailable
+            }
+            // 401/403 = credential explicitly rejected.
+            // Other 4xx (400, 422, etc.) = client-side error, likely a bad credential.
+            _ => CredentialCheck::Revoked(format!("credential rejected by Hub (HTTP {code})")),
+        }
+    } else if code >= 500 {
+        output::warn(&format!(
+            "Hub returned server error (HTTP {code}), continuing anyway"
+        ));
+        CredentialCheck::NetworkUnavailable
+    } else {
+        output::warn(&format!(
+            "unexpected Hub response (HTTP {code}) during credential check, continuing anyway"
+        ));
+        CredentialCheck::NetworkUnavailable
+    }
+}
+
 /// Verify device credentials with the backend API.
 fn verify_credential(creds: &config::Credentials) -> CredentialCheck {
     let base = creds.api_base();
@@ -552,34 +617,106 @@ fn verify_credential(creds: &config::Credentials) -> CredentialCheck {
             let body = r.into_string().unwrap_or_default();
             CredentialCheck::Revoked(format!("credential rejected: {body}"))
         }
-        Err(ureq::Error::Status(code, _)) if (400..500).contains(&code) => {
-            match code {
-                // 404 = endpoint not found (Hub version mismatch), 429 = rate limited — transient.
-                404 | 429 => {
-                    output::warn(&format!("Hub returned HTTP {code}, continuing anyway"));
-                    CredentialCheck::NetworkUnavailable
-                }
-                // 401/403 = credential explicitly rejected.
-                // Other 4xx (400, 422, etc.) = client-side error, likely a bad credential.
-                _ => CredentialCheck::Revoked(format!(
-                    "credential rejected by Hub (HTTP {code})"
-                )),
-            }
-        }
-        Err(ureq::Error::Status(code, _)) if code >= 500 => {
-            output::warn(&format!("Hub returned server error (HTTP {code}), continuing anyway"));
-            CredentialCheck::NetworkUnavailable
-        }
-        Err(ureq::Error::Status(code, _)) => {
-            output::warn(&format!(
-                "unexpected Hub response (HTTP {code}) during credential check, continuing anyway"
-            ));
-            CredentialCheck::NetworkUnavailable
-        }
+        Err(ureq::Error::Status(code, _)) => classify_credential_status_code(code),
         Err(e) => {
-            output::warn(&format!("could not verify credential ({e}), continuing anyway"));
+            output::warn(&format!(
+                "could not verify credential ({e}), continuing anyway"
+            ));
             CredentialCheck::NetworkUnavailable
         }
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::test_support::HomeGuard;
+
+    fn test_creds() -> config::Credentials {
+        config::Credentials {
+            node_id: "node-test".into(),
+            credential_token: "token-test".into(),
+            hub_endpoint: "axon://easynet.run:50051".into(),
+            tenant_id: "tenant-test".into(),
+            deploy_signature: "sig".into(),
+            hub_api_base: Some("https://api.example.com".into()),
+        }
+    }
+
+    #[test]
+    fn classify_credential_status_code_maps_revoked_vs_transient() {
+        assert_eq!(
+            classify_credential_status_code(401),
+            CredentialCheck::Revoked("credential rejected by Hub (HTTP 401)".into())
+        );
+        assert_eq!(
+            classify_credential_status_code(404),
+            CredentialCheck::NetworkUnavailable
+        );
+        assert_eq!(
+            classify_credential_status_code(429),
+            CredentialCheck::NetworkUnavailable
+        );
+        assert_eq!(
+            classify_credential_status_code(503),
+            CredentialCheck::NetworkUnavailable
+        );
+    }
+
+    #[test]
+    fn load_and_verify_credentials_returns_verified_when_valid() {
+        let _g = HomeGuard::new();
+        let creds = test_creds();
+        config::save_credentials(&creds).expect("save test credentials");
+
+        let (loaded, verified) = load_and_verify_credentials_with(|_| CredentialCheck::Valid)
+            .expect("valid credentials must pass");
+        assert!(verified);
+        assert_eq!(loaded.node_id, "node-test");
+        assert!(
+            config::load_credentials().is_ok(),
+            "credentials should stay on disk"
+        );
+    }
+
+    #[test]
+    fn load_and_verify_credentials_keeps_unverified_credentials_when_hub_unavailable() {
+        let _g = HomeGuard::new();
+        let creds = test_creds();
+        config::save_credentials(&creds).expect("save test credentials");
+
+        let (loaded, verified) =
+            load_and_verify_credentials_with(|_| CredentialCheck::NetworkUnavailable)
+                .expect("must continue on transient outage");
+        assert!(!verified);
+        assert_eq!(loaded.node_id, "node-test");
+        assert_eq!(loaded.api_base(), "https://api.example.com");
+        assert!(
+            config::load_credentials().is_ok(),
+            "credentials should remain on transient outage"
+        );
+    }
+
+    #[test]
+    fn load_and_verify_credentials_deletes_revoked_credentials() {
+        let _g = HomeGuard::new();
+        let creds = test_creds();
+        config::save_credentials(&creds).expect("save test credentials");
+
+        let err =
+            load_and_verify_credentials_with(|_| CredentialCheck::Revoked("bad token".into()))
+                .expect_err("revoked credentials must error");
+        assert!(err.to_string().contains("credential revoked"));
+        assert!(
+            config::load_credentials().is_err(),
+            "credentials must be deleted after revocation"
+        );
+    }
+
+    #[test]
+    fn load_and_verify_credentials_errors_when_missing() {
+        let _g = HomeGuard::new();
+        let err = load_and_verify_credentials().expect_err("missing credentials must fail");
+        assert!(err.to_string().contains("no credentials"));
+    }
+}

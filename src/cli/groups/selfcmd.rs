@@ -45,8 +45,8 @@ pub enum SelfAction {
 
 #[derive(Debug, Args)]
 pub struct UninstallArgs {
-    /// Skip confirmation prompt.
-    #[arg(long)]
+    /// Skip the interactive confirmation (non-interactive / CI use).
+    #[arg(long, short = 'y')]
     pub yes: bool,
 }
 
@@ -73,10 +73,7 @@ fn fetch_latest_version() -> anyhow::Result<String> {
     let body: serde_json::Value =
         serde_json::from_slice(&output.stdout).context("failed to parse health response")?;
 
-    let version = body["cli_version"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let version = body["cli_version"].as_str().unwrap_or("").to_string();
 
     if version.is_empty() {
         anyhow::bail!("easynet.run did not return cli_version in health response");
@@ -87,16 +84,18 @@ fn fetch_latest_version() -> anyhow::Result<String> {
 /// Compare two semver-ish version strings (e.g. "1.0.1" vs "0.1.5").
 /// Returns true if `remote` is strictly newer than `local`.
 fn is_newer(remote: &str, local: &str) -> bool {
-    let parse = |s: &str| -> Vec<u64> {
-        s.split('.').filter_map(|p| p.parse().ok()).collect()
-    };
+    let parse = |s: &str| -> Vec<u64> { s.split('.').filter_map(|p| p.parse().ok()).collect() };
     let r = parse(remote);
     let l = parse(local);
     for i in 0..r.len().max(l.len()) {
         let rv = r.get(i).copied().unwrap_or(0);
         let lv = l.get(i).copied().unwrap_or(0);
-        if rv > lv { return true; }
-        if rv < lv { return false; }
+        if rv > lv {
+            return true;
+        }
+        if rv < lv {
+            return false;
+        }
     }
     false
 }
@@ -111,7 +110,9 @@ fn run_check() -> anyhow::Result<()> {
         output::step(&format!("New version available: {latest}"));
         output::step("Run 'easynet self update' to install it.");
     } else {
-        output::success(&format!("You are on the latest version ({CURRENT_VERSION})"));
+        output::success(&format!(
+            "You are on the latest version ({CURRENT_VERSION})"
+        ));
     }
     Ok(())
 }
@@ -135,7 +136,13 @@ fn run_update() -> anyhow::Result<()> {
     // binary download, env setup, and stale binary cleanup.
     let status = if cfg!(target_os = "windows") {
         std::process::Command::new("powershell")
-            .args(["-Command", &format!("irm {} | iex", INSTALL_SCRIPT_URL.replace("/install", "/install.ps1"))])
+            .args([
+                "-Command",
+                &format!(
+                    "irm {} | iex",
+                    INSTALL_SCRIPT_URL.replace("/install", "/install.ps1")
+                ),
+            ])
             .status()
             .context("failed to run PowerShell install script")?
     } else {
@@ -185,19 +192,20 @@ fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
             let path = format!("{dir}/{bin}");
             if std::path::Path::new(&path).exists() {
                 output::step(&format!("Removing {path}"));
-                let _ = std::fs::remove_file(&path)
-                    .or_else(|_| {
-                        std::process::Command::new("sudo")
-                            .args(["rm", "-f", &path])
-                            .status()
-                            .map(|_| ())
-                    });
+                let _ = std::fs::remove_file(&path).or_else(|_| {
+                    std::process::Command::new("sudo")
+                        .args(["rm", "-f", &path])
+                        .status()
+                        .map(|_| ())
+                });
             }
         }
     }
 
     // Remove ~/.easynet directory.
-    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_default();
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default();
     let easynet_home = format!("{home}/.easynet");
     if std::path::Path::new(&easynet_home).exists() {
         output::step(&format!("Removing {easynet_home}"));
@@ -238,7 +246,9 @@ fn clean_shell_profile(home: &str) {
         if !path.exists() {
             continue;
         }
-        let Ok(content) = std::fs::read_to_string(path) else { continue };
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
         if !content.contains("EASYNET_DENDRITE_BRIDGE_LIB") {
             continue;
         }
@@ -254,7 +264,7 @@ fn clean_shell_profile(home: &str) {
 
         // Trim trailing blank lines left behind.
         let mut result: Vec<&str> = cleaned.into_iter().collect();
-        while result.last().map_or(false, |l| l.trim().is_empty()) {
+        while result.last().is_some_and(|l| l.trim().is_empty()) {
             result.pop();
         }
         // Ensure file ends with newline.
@@ -264,7 +274,9 @@ fn clean_shell_profile(home: &str) {
         }
 
         if std::fs::write(path, &out).is_ok() {
-            output::step(&format!("Cleaned EASYNET_DENDRITE_BRIDGE_LIB from {profile_path}"));
+            output::step(&format!(
+                "Cleaned EASYNET_DENDRITE_BRIDGE_LIB from {profile_path}"
+            ));
         }
     }
 }

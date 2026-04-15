@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 
-use crate::shared::config;
+use crate::persistence::config;
 
 pub fn root_dir() -> PathBuf {
     config::state_dir().join("agent_sessions")
@@ -41,14 +41,8 @@ pub fn validate_id(id: &str) -> anyhow::Result<()> {
     if trimmed != id {
         anyhow::bail!("session id must not have leading/trailing whitespace");
     }
-    if id.contains('/')
-        || id.contains('\\')
-        || id.contains('\0')
-        || id.contains("..")
-    {
-        anyhow::bail!(
-            "session id '{id}' contains illegal characters (/, \\, \\0, or '..')"
-        );
+    if id.contains('/') || id.contains('\\') || id.contains('\0') || id.contains("..") {
+        anyhow::bail!("session id '{id}' contains illegal characters (/, \\, \\0, or '..')");
     }
     Ok(())
 }
@@ -97,7 +91,12 @@ impl Session {
         let path = session_path(&self.id)?;
         fs::create_dir_all(root_dir())?;
         let json = serde_json::to_string_pretty(self)?;
-        fs::write(path, json)?;
+        // Atomic write — concurrent `easynet agent session append` calls
+        // from two terminals must not interleave a torn JSON write that
+        // poisons the session's transcript on disk. Reuses the race-safe
+        // primitive in `persistence::config` (iter-1 fix). The previous
+        // `fs::write` was non-atomic on every supported filesystem.
+        config::atomic_write(&path, json.as_bytes())?;
         Ok(())
     }
 
@@ -185,14 +184,7 @@ mod tests {
 
     #[test]
     fn validate_id_rejects_path_traversal() {
-        for bad in [
-            "../etc/passwd",
-            "..",
-            "a/b",
-            "a\\b",
-            "a..b",
-            "with\0null",
-        ] {
+        for bad in ["../etc/passwd", "..", "a/b", "a\\b", "a..b", "with\0null"] {
             assert!(validate_id(bad).is_err(), "should reject '{bad}'");
         }
     }
