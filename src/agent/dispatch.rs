@@ -21,10 +21,11 @@ use std::time::{Duration, Instant};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 
-use crate::shared::agents::{AgentEntry, AgentType};
+use crate::registry::agents::{AgentEntry, AgentType};
 
 use super::claude_code::{self, ClaudeOptions};
 use super::codex::{self, CodexOptions};
+use super::context::{self, DispatchContext};
 use super::run_store::{RunDir, RunMeta};
 use super::workspace;
 
@@ -58,12 +59,17 @@ pub struct AgentResponse {
 
 /// Send a prompt to a registered agent and return the response.
 ///
-/// Production entry point — reads `EASYNET_AGENT_DEPTH` from the env.
-/// Tests should use `send_to_agent_with_depth(.., Some(depth))` to inject
-/// a depth without mutating the process-global env var.
+/// Production entry point — reads the active `DispatchContext` via the
+/// thread-local channel in `agent::context` (which transparently falls
+/// back to the env vars for subprocess children that inherited only the
+/// env state from their parent). Tests should use
+/// `send_to_agent_with_depth(.., Some(depth))` to inject a depth without
+/// touching either channel.
 ///
 /// - Routes to the appropriate agent wrapper based on `entry.agent_type`.
-/// - Sets `EASYNET_AGENT_DEPTH` in the child environment for recursion prevention.
+/// - Propagates a *child* `DispatchContext` into the spawned agent's
+///   environment so the next link in the chain inherits the mission id
+///   and incremented depth.
 /// - Creates a per-run directory under the agent workspace and writes
 ///   prompt / response / trace / meta files.
 pub fn send_to_agent(
@@ -71,26 +77,17 @@ pub fn send_to_agent(
     entry: &AgentEntry,
     prompt: &str,
     context: Option<&str>,
-    mcp_config: Option<&Path>,
     extra_trace_path: Option<&Path>,
 ) -> anyhow::Result<AgentResponse> {
-    send_to_agent_with_depth(
-        agent_name,
-        entry,
-        prompt,
-        context,
-        mcp_config,
-        extra_trace_path,
-        None,
-    )
+    send_to_agent_with_depth(agent_name, entry, prompt, context, extra_trace_path, None)
 }
 
 /// Same as `send_to_agent` but accepts an explicit `depth_override`. When
 /// `depth_override` is `Some(d)`, that value is used as the current
-/// recursion depth instead of reading `EASYNET_AGENT_DEPTH` from the env.
-/// This exists so the dispatch tests can exercise the depth guard without
-/// mutating process-global state — see the `recursion_guard_*` tests at
-/// the bottom of this file.
+/// recursion depth instead of consulting the typed dispatch context. This
+/// exists so the dispatch tests can exercise the depth guard without
+/// installing a full mission context — see the `recursion_guard_*` tests
+/// at the bottom of this file.
 ///
 /// Mission context invariant
 /// -------------------------
@@ -99,10 +96,12 @@ pub fn send_to_agent(
 /// second path"). This function enforces that invariant in a 2-stage
 /// check at the top:
 ///
-///   Stage 1 (presence): EASYNET_MISSION_ID env var must be set.
-///   Stage 2 (anti-forgery): the value of that env var must correspond
+///   Stage 1 (presence): a `DispatchContext` must be active for this
+///   thread (installed via `mission_runs::run_inproc`'s guard, or
+///   inherited from a parent process via the env-var fallback).
+///   Stage 2 (anti-forgery): the context's `mission_id` must correspond
 ///   to an existing mission run dir on disk under
-///   ~/.easynet/missions/runs/. This catches the trivial-forgery case
+///   `~/.easynet/missions/runs/`. This catches the trivial-forgery case
 ///   ("user types `EASYNET_MISSION_ID=fake`") without claiming to be a
 ///   cryptographic guarantee.
 ///
@@ -110,42 +109,11 @@ pub fn send_to_agent(
 /// override is the test escape hatch — it explicitly turns this
 /// function into a unit-testable code path that exercises the recursion
 /// guard without requiring the full mission runtime stack to be present.
-///
-/// FUTURE FORM (not implemented in this PR): the env-var approach is
-/// process-global and breaks the moment EasyNet runs multiple missions
-/// concurrently in the same process. The correct long-term shape is an
-/// explicit context parameter:
-///
-/// ```ignore
-/// pub struct DispatchContext {
-///     pub mission_id: String,
-///     pub mission_run_dir: PathBuf,
-///     pub depth: u32,
-///     pub origin_agent: Option<String>,
-///     pub tenant: String,
-/// }
-///
-/// pub fn send_to_agent_with_context(
-///     ctx: &DispatchContext,
-///     agent_name: &str,
-///     entry: &AgentEntry,
-///     prompt: &str,
-///     ..,
-/// ) -> anyhow::Result<AgentResponse>;
-/// ```
-///
-/// TODO(thread-local-context): replace EASYNET_MISSION_ID env var with
-/// the DispatchContext struct sketched above. The env var works for the
-/// current single-threaded CLI use case but breaks the moment we run
-/// multiple missions concurrently in the same process. When this
-/// migration happens, audit every caller of this function to thread the
-/// context through, and remove the env var read here.
 pub fn send_to_agent_with_depth(
     agent_name: &str,
     entry: &AgentEntry,
     prompt: &str,
     context: Option<&str>,
-    _mcp_config: Option<&Path>,
     extra_trace_path: Option<&Path>,
     depth_override: Option<u32>,
 ) -> anyhow::Result<AgentResponse> {
@@ -156,13 +124,25 @@ pub fn send_to_agent_with_depth(
         check_mission_context_invariant()?;
     }
 
-    // Recursion guard.
-    let current_depth: u32 = depth_override.unwrap_or_else(|| {
-        std::env::var("EASYNET_AGENT_DEPTH")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0)
-    });
+    // Resolve the active dispatch context. The new typed channel
+    // (`agent::context`) is consulted first; the env-var fallback inside
+    // `context::current()` keeps backwards compatibility with subprocess
+    // children that inherit only the env vars from their parent.
+    //
+    // `depth_override` remains the test escape hatch — it bypasses both
+    // the typed context and the env vars so the dispatch tests can
+    // exercise the recursion guard without setting up a full mission
+    // runtime stack.
+    let active = depth_override
+        .map(|d| DispatchContext {
+            mission_id: "<test-override>".to_string(),
+            depth: d,
+            mission_run_dir: None,
+            origin_agent: None,
+        })
+        .or_else(context::current);
+
+    let current_depth = active.as_ref().map(|c| c.depth).unwrap_or(0);
 
     if current_depth >= MAX_AGENT_DEPTH {
         anyhow::bail!(
@@ -174,23 +154,71 @@ pub fn send_to_agent_with_depth(
     // Build full prompt with context.
     let full_prompt = compose_prompt(prompt, context);
 
-    // Build env with depth guard.
+    // Build env for the child subprocess. The env vars are how the typed
+    // context crosses the process boundary into the spawned agent CLI —
+    // see `agent::context` for the design rationale. We always emit the
+    // depth (incremented by one for the child) and propagate the mission
+    // id when one is active.
     let mut env = entry.env.clone();
-    env.insert("EASYNET_AGENT_DEPTH".to_string(), (current_depth + 1).to_string());
+    // The `active.is_none()` branch is reachable only in release builds
+    // when `check_mission_context_invariant` observed a missing mission
+    // context and chose to log rather than fail (a backcompat shim for
+    // legacy callers — see that function's rustdoc). In that degraded
+    // mode we still propagate the depth so the child's recursion guard
+    // works, but we have no mission id or origin to emit. The typed
+    // `DispatchContext` is deliberately not constructed with a synthetic
+    // mission_id here: silently fabricating one would make the audit
+    // trail lie about which mission a run belonged to.
+    if let Some(parent) = active.as_ref() {
+        parent.child(agent_name).serialize_to_env(&mut env);
+    } else {
+        env.insert(
+            "EASYNET_AGENT_DEPTH".to_string(),
+            current_depth.saturating_add(1).to_string(),
+        );
+    }
 
     let timeout = Duration::from_secs(entry.timeout_secs);
     let max_output = entry.max_output_bytes;
     let start = Instant::now();
 
     // Provision workspace with .claude/ or .codex/ config + CLAUDE.md/AGENTS.md.
-    let workspace = workspace::ensure_workspace(agent_name, entry).ok();
+    // We log the failure rather than swallow silently: a missing workspace
+    // means the agent runs without project-level MCP discovery and without
+    // CLAUDE.md / AGENTS.md context — the user's results will be silently
+    // worse, and they should see *why* on stderr instead of having to guess.
+    let workspace = match workspace::ensure_workspace(agent_name, entry) {
+        Ok(p) => Some(p),
+        Err(e) => {
+            eprintln!(
+                "[easynet warn] agent {agent_name}: workspace provisioning failed ({e}); \
+                 continuing without project-level MCP / context"
+            );
+            None
+        }
+    };
     let cwd = workspace.clone();
 
-    // Create a per-run directory. If creation fails (unlikely), we just skip
-    // persistence — the agent call still runs as normal.
-    let run_dir: Option<Arc<RunDir>> = RunDir::create(agent_name).ok().map(Arc::new);
+    // Create a per-run directory. If creation fails (e.g. workspace dir is
+    // unwritable), skip persistence — the agent call still runs, but we
+    // surface the reason so the operator knows the run is unrecorded.
+    let run_dir: Option<Arc<RunDir>> = match RunDir::create(agent_name) {
+        Ok(dir) => Some(Arc::new(dir)),
+        Err(e) => {
+            eprintln!(
+                "[easynet warn] agent {agent_name}: run dir creation failed ({e}); \
+                 continuing without per-run persistence"
+            );
+            None
+        }
+    };
     if let Some(dir) = &run_dir {
-        dir.write_prompt(&full_prompt);
+        if let Err(e) = dir.write_prompt(&full_prompt) {
+            eprintln!(
+                "[easynet warn] run {}: write prompt.txt failed ({e})",
+                dir.path().display()
+            );
+        }
     }
 
     // Legacy `--trace <path>` still supported: mirror the prompt next to the
@@ -205,28 +233,33 @@ pub fn send_to_agent_with_depth(
 
     let started_at = Local::now().to_rfc3339();
     let run_result: anyhow::Result<(String, Option<AgentUsage>)> = match entry.agent_type {
-        AgentType::ClaudeCode => {
-            claude_code::invoke(&full_prompt, ClaudeOptions {
+        AgentType::ClaudeCode => claude_code::invoke(
+            &full_prompt,
+            ClaudeOptions {
                 model: entry.model.clone(),
                 timeout,
                 max_output_bytes: max_output,
                 env,
                 cwd,
                 run_dir: run_dir.clone(),
-            })
-            .map(|(text, stats)| {
-                (text, Some(AgentUsage {
+            },
+        )
+        .map(|(text, stats)| {
+            (
+                text,
+                Some(AgentUsage {
                     input_tokens: stats.input_tokens,
                     output_tokens: stats.output_tokens,
                     cache_read_tokens: stats.cache_read_tokens,
                     cache_creation_tokens: stats.cache_creation_tokens,
                     num_turns: stats.num_turns,
                     total_cost_usd: stats.total_cost_usd,
-                }))
-            })
-        }
-        AgentType::Codex => {
-            codex::invoke_exec(&full_prompt, CodexOptions {
+                }),
+            )
+        }),
+        AgentType::Codex => codex::invoke_exec(
+            &full_prompt,
+            CodexOptions {
                 model: entry.model.clone(),
                 timeout,
                 max_output_bytes: max_output,
@@ -234,20 +267,24 @@ pub fn send_to_agent_with_depth(
                 write_mode: false,
                 cwd: workspace,
                 run_dir: run_dir.clone(),
-            })
-            .map(|(text, stats)| {
-                (text, Some(AgentUsage {
+            },
+        )
+        .map(|(text, stats)| {
+            (
+                text,
+                Some(AgentUsage {
                     input_tokens: stats.input_tokens,
                     output_tokens: stats.output_tokens,
                     cache_read_tokens: stats.cache_read_tokens,
                     cache_creation_tokens: stats.cache_creation_tokens,
                     num_turns: stats.num_turns,
                     total_cost_usd: stats.total_cost_usd,
-                }))
-            })
-        }
-        AgentType::CodexAppServer => {
-            codex::invoke_app_server(&full_prompt, CodexOptions {
+                }),
+            )
+        }),
+        AgentType::CodexAppServer => codex::invoke_app_server(
+            &full_prompt,
+            CodexOptions {
                 model: entry.model.clone(),
                 timeout,
                 max_output_bytes: max_output,
@@ -255,9 +292,9 @@ pub fn send_to_agent_with_depth(
                 write_mode: false,
                 cwd: workspace,
                 run_dir: run_dir.clone(),
-            })
-            .map(|text| (text, None))
-        }
+            },
+        )
+        .map(|text| (text, None)),
     };
 
     // Write meta.json regardless of success/failure so failed runs are still
@@ -269,10 +306,15 @@ pub fn send_to_agent_with_depth(
             Err(e) => ("error".to_string(), Some(e.to_string()), None, None),
         };
         if let Some(text) = content_for_meta {
-            dir.write_response(text);
+            if let Err(e) = dir.write_response(text) {
+                eprintln!(
+                    "[easynet warn] run {}: write response.md failed ({e})",
+                    dir.path().display()
+                );
+            }
         }
         let u = usage_for_meta.unwrap_or_default();
-        dir.write_meta(&RunMeta {
+        let meta = RunMeta {
             agent: agent_name.to_string(),
             agent_type: entry.agent_type.to_string(),
             model: entry.model.clone(),
@@ -286,7 +328,13 @@ pub fn send_to_agent_with_depth(
             cache_creation_tokens: u.cache_creation_tokens,
             num_turns: u.num_turns,
             total_cost_usd: u.total_cost_usd,
-        });
+        };
+        if let Err(e) = dir.write_meta(&meta) {
+            eprintln!(
+                "[easynet warn] run {}: write meta.json failed ({e})",
+                dir.path().display()
+            );
+        }
     }
 
     let (content, usage) = run_result?;
@@ -302,33 +350,95 @@ pub fn send_to_agent_with_depth(
     })
 }
 
+/// Delimiters for injected context. HTML comments survive verbatim in
+/// markdown and plain text, and the `easynet:context` tag is a unique
+/// string no user content realistically collides with.
+///
+/// We pick HTML comments because:
+/// - They render invisibly in markdown viewers used by downstream tools
+///   (Claude Code's transcript panel, codex-exec logs) — the user sees
+///   a clean "Context" heading, the model sees the delimiters.
+/// - They are not interpreted by any shell or argv parser, so the
+///   boundary cannot be mangled when the prompt crosses process lines.
+/// - A literal `## Context` heading in the caller-supplied context can
+///   no longer be mistaken for the boundary marker; the model can
+///   parse on these tokens reliably.
+const CONTEXT_OPEN: &str = "<!-- easynet:context-start -->";
+const CONTEXT_CLOSE: &str = "<!-- easynet:context-end -->";
+
 fn compose_prompt(prompt: &str, context: Option<&str>) -> String {
     match context.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(ctx) => format!("{prompt}\n\n## Context (previous discussion)\n\n{ctx}\n"),
+        Some(ctx) => format!(
+            "{prompt}\n\n{CONTEXT_OPEN}\n## Context (previous discussion)\n\n{ctx}\n{CONTEXT_CLOSE}\n"
+        ),
         None => prompt.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod compose_prompt_tests {
+    use super::*;
+
+    #[test]
+    fn absent_context_returns_prompt_unchanged() {
+        assert_eq!(compose_prompt("hi", None), "hi");
+        // An empty-after-trim context is treated as absent so we never
+        // emit a dangling section header.
+        assert_eq!(compose_prompt("hi", Some("   \n\t ")), "hi");
+    }
+
+    #[test]
+    fn present_context_is_delimited() {
+        let out = compose_prompt("Do X.", Some("earlier: A said B"));
+        assert!(out.contains(CONTEXT_OPEN), "open sentinel must be present");
+        assert!(out.contains(CONTEXT_CLOSE), "close sentinel must be present");
+        // Open must precede close in byte order.
+        let open_at = out.find(CONTEXT_OPEN).unwrap();
+        let close_at = out.find(CONTEXT_CLOSE).unwrap();
+        assert!(open_at < close_at);
+    }
+
+    #[test]
+    fn context_containing_section_header_survives_boundary() {
+        // The historical bug: caller-supplied context that itself
+        // starts with `## Context` was indistinguishable from the
+        // injected header. With sentinels the downstream parser can
+        // locate the true boundary regardless of content.
+        let hostile = "## Context\nuser-supplied section\n\n## Context\nsecond";
+        let out = compose_prompt("Do X.", Some(hostile));
+        assert!(out.contains(CONTEXT_OPEN));
+        assert!(out.contains(CONTEXT_CLOSE));
+        // The hostile payload appears verbatim between the sentinels.
+        let open_at = out.find(CONTEXT_OPEN).unwrap();
+        let close_at = out.find(CONTEXT_CLOSE).unwrap();
+        assert!(out[open_at..close_at].contains(hostile));
     }
 }
 
 /// Two-stage mission context check. See `send_to_agent_with_depth`'s
 /// rustdoc for the load-bearing reasoning.
 ///
-/// Stage 1 — presence: `EASYNET_MISSION_ID` must be set.
-/// Stage 2 — anti-forgery: the env var's value must correspond to an
-/// existing mission run directory under `~/.easynet/missions/runs/`.
+/// Stage 1 — presence: a `DispatchContext` must be active for this
+/// thread, either installed via `with_context` (the typed in-process
+/// channel) or recovered from the env-var fallback (the cross-process
+/// channel for spawned subprocesses).
+/// Stage 2 — anti-forgery: the context's mission id must correspond to
+/// an existing mission run directory under `~/.easynet/missions/runs/`.
 ///
 /// In **debug** builds the function panics on failure, making the
 /// invariant impossible to silently violate during development. In
 /// **release** builds it logs a warning and (for stage 2) returns an
 /// error so the dispatch fails loudly without taking the process down.
 fn check_mission_context_invariant() -> anyhow::Result<()> {
-    let mission_id = match std::env::var("EASYNET_MISSION_ID").ok() {
-        Some(id) if !id.is_empty() => id,
+    let mission_id = match context::current() {
+        Some(ctx) if !ctx.mission_id.is_empty() => ctx.mission_id,
         _ => {
-            // Stage 1 failure: env var missing.
+            // Stage 1 failure: no context active and env-var fallback
+            // also empty.
             #[cfg(debug_assertions)]
             panic!(
-                "dispatch::send_to_agent called without EASYNET_MISSION_ID. \
-                 All agent dispatches must originate from a mission context. \
+                "dispatch::send_to_agent called without a mission context. \
+                 All agent dispatches must originate from a mission runtime. \
                  See docs/easynet_ontology.tex §6.2."
             );
             #[cfg(not(debug_assertions))]
@@ -360,7 +470,7 @@ fn check_mission_context_invariant() -> anyhow::Result<()> {
     if !mission_run_dir.exists() {
         #[cfg(debug_assertions)]
         panic!(
-            "EASYNET_MISSION_ID={} does not correspond to an existing \
+            "mission_id={} does not correspond to an existing \
              mission run dir at {}. Either the env var was forged or \
              the run dir has been cleaned up mid-execution. Refusing \
              to dispatch.",
@@ -370,7 +480,7 @@ fn check_mission_context_invariant() -> anyhow::Result<()> {
         #[cfg(not(debug_assertions))]
         {
             eprintln!(
-                "[easynet warn] EASYNET_MISSION_ID={} does not match \
+                "[easynet warn] mission_id={} does not match \
                  an existing mission run dir; possible env var forgery",
                 mission_id
             );
@@ -386,7 +496,7 @@ fn check_mission_context_invariant() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::agents::AgentEntry;
+    use crate::registry::agents::AgentEntry;
 
     /// Construct a dummy `AgentEntry` for tests that exercise the
     /// dispatch guard logic in isolation. The command path is
@@ -402,15 +512,8 @@ mod tests {
     #[test]
     fn recursion_guard_blocks_at_depth_2() {
         let entry = dummy_entry();
-        let res = send_to_agent_with_depth(
-            "claude",
-            &entry,
-            "any prompt",
-            None,
-            None,
-            None,
-            Some(2),
-        );
+        let res =
+            send_to_agent_with_depth("claude", &entry, "any prompt", None, None, Some(2));
         let err = res.expect_err("depth=2 must error");
         let msg = format!("{err}");
         assert!(
@@ -430,15 +533,8 @@ mod tests {
         // Use a HomeGuard so workspace creation lands in a temp dir
         // and doesn't pollute the developer's real ~/.easynet/.
         let _g = crate::cli::test_support::HomeGuard::new();
-        let res = send_to_agent_with_depth(
-            "claude",
-            &entry,
-            "any prompt",
-            None,
-            None,
-            None,
-            Some(1),
-        );
+        let res =
+            send_to_agent_with_depth("claude", &entry, "any prompt", None, None, Some(1));
         // We expect an error (no real claude binary), but it must
         // NOT be the depth-limit error. Anything else is acceptable.
         match res {
@@ -465,15 +561,8 @@ mod tests {
         // a missing mission context).
         std::env::remove_var("EASYNET_MISSION_ID");
         let entry = dummy_entry();
-        let res = send_to_agent_with_depth(
-            "claude",
-            &entry,
-            "any prompt",
-            None,
-            None,
-            None,
-            Some(2),
-        );
+        let res =
+            send_to_agent_with_depth("claude", &entry, "any prompt", None, None, Some(2));
         assert!(res.is_err());
         let msg = format!("{}", res.unwrap_err());
         assert!(msg.contains("depth limit reached"));
@@ -532,7 +621,7 @@ mod tests {
         // Create the fake mission run dir so the anti-forgery check
         // doesn't fire before the depth check does.
         let _g = crate::cli::test_support::HomeGuard::new();
-        let runs_root = crate::shared::config::state_dir()
+        let runs_root = crate::persistence::config::state_dir()
             .join("missions")
             .join("runs");
         let _ = std::fs::create_dir_all(runs_root.join("test-recursion-guard-e2e"));
