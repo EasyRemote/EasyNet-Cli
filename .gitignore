@@ -7,3 +7,16 @@ Cargo.lock
 .idea/
 .vscode/
 *.iml
+
+# macOS BSD sed writes `<name>-e` backups when `-i ''` is mis-used.
+*-e
+
+# LaTeX auxiliary build products — keep .tex / .pdf only.
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+
+# Claude Code project-local sidecar.
+.claude/
