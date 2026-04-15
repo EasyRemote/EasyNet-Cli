@@ -92,14 +92,48 @@ pub enum FieldValue {
 pub struct StepOptions {
     pub timeout_seconds: Option<i32>,
     pub max_retries: Option<i32>,
+    /// Failure disposition for this step. `None` is equivalent to
+    /// `Some(FailurePolicy::Continue)` — the mission continues past
+    /// the failure, the trace records the step as `Failed`, and any
+    /// downstream consumers receive `ResolveError::UpstreamFailed`
+    /// for the missing binding.
     pub on_failure: Option<FailurePolicy>,
+    /// **Scheduling + best-effort marker.** An `optional` step:
+    /// - runs *after* all required steps in the same phase, so
+    ///   required work claims shared resources (API quotas, retry
+    ///   budgets) first;
+    /// - on failure, classifies as `Skipped` (not `Failed`) in the
+    ///   trace, and downstream consumers see
+    ///   `ResolveError::UpstreamSkipped` (a distinct category from
+    ///   `UpstreamFailed`);
+    /// - cannot abort the mission, regardless of `on_failure`.
+    ///
+    /// The interaction `optional = true, on_failure = Abort` is
+    /// contradictory and rejected by the analyzer: a step cannot be
+    /// simultaneously best-effort and mission-critical.
     pub optional: bool,
 }
 
+/// What to do when a step fails. Each variant has one distinct
+/// runtime effect; see the interpreter's dispatch path for the
+/// state-machine details.
 #[derive(Debug, Clone, Copy)]
 pub enum FailurePolicy {
+    /// Abort the entire mission on failure. Overridden by
+    /// `optional = true` (which forbids aborting); the combination
+    /// is rejected at analysis time.
     Abort,
+    /// Classify the outcome as `Skipped` (not `Failed`) and
+    /// continue. Downstream consumers see `UpstreamSkipped`. This
+    /// is the pure-failure-policy counterpart to `optional = true`;
+    /// `optional = true` additionally defers scheduling.
     Skip,
+    /// Re-dispatch up to `max_retries` times with exponential
+    /// backoff. Requires `max_retries > 0` (analyzer-enforced).
+    /// After retries are exhausted, the outcome is `Failed`.
     Retry,
+    /// Default: mission continues past the failure; the step is
+    /// classified `Failed`; downstream consumers see
+    /// `UpstreamFailed`. This is the variant most missions want.
     Continue,
 }

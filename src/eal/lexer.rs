@@ -26,18 +26,47 @@
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    Mission, Let, Call, On, With, Timeout, Retries, OnFailure, Optional,
-    Abort, Skip, Retry, Continue,
-    StringLit(String), IntLit(i64), FloatLit(f64), BoolLit(bool),
+    Mission,
+    Let,
+    Call,
+    On,
+    With,
+    Timeout,
+    Retries,
+    OnFailure,
+    Optional,
+    Abort,
+    Skip,
+    Retry,
+    Continue,
+    StringLit(String),
+    IntLit(i64),
+    FloatLit(f64),
+    BoolLit(bool),
     Ident(String),
-    LBrace, RBrace, LParen, RParen, Eq, Colon, Comma, Dot,
+    LBrace,
+    RBrace,
+    LParen,
+    RParen,
+    Eq,
+    Colon,
+    Comma,
+    Dot,
     Eof,
 }
 
-pub struct Lexer<'a> { input: &'a [u8], pos: usize }
+pub struct Lexer<'a> {
+    input: &'a [u8],
+    pos: usize,
+}
 
 impl<'a> Lexer<'a> {
-    pub fn new(input: &'a str) -> Self { Self { input: input.as_bytes(), pos: 0 } }
+    pub fn new(input: &'a str) -> Self {
+        Self {
+            input: input.as_bytes(),
+            pos: 0,
+        }
+    }
 
     pub fn tokenize(&mut self) -> Result<Vec<Token>, String> {
         let mut tokens = Vec::new();
@@ -45,24 +74,52 @@ impl<'a> Lexer<'a> {
             let tok = self.next_token()?;
             let done = tok == Token::Eof;
             tokens.push(tok);
-            if done { break; }
+            if done {
+                break;
+            }
         }
         Ok(tokens)
     }
 
     fn next_token(&mut self) -> Result<Token, String> {
         self.skip_ws();
-        if self.pos >= self.input.len() { return Ok(Token::Eof); }
+        if self.pos >= self.input.len() {
+            return Ok(Token::Eof);
+        }
         let ch = self.input[self.pos];
         match ch {
-            b'{' => { self.pos += 1; Ok(Token::LBrace) }
-            b'}' => { self.pos += 1; Ok(Token::RBrace) }
-            b'(' => { self.pos += 1; Ok(Token::LParen) }
-            b')' => { self.pos += 1; Ok(Token::RParen) }
-            b'=' => { self.pos += 1; Ok(Token::Eq) }
-            b':' => { self.pos += 1; Ok(Token::Colon) }
-            b',' => { self.pos += 1; Ok(Token::Comma) }
-            b'.' => { self.pos += 1; Ok(Token::Dot) }
+            b'{' => {
+                self.pos += 1;
+                Ok(Token::LBrace)
+            }
+            b'}' => {
+                self.pos += 1;
+                Ok(Token::RBrace)
+            }
+            b'(' => {
+                self.pos += 1;
+                Ok(Token::LParen)
+            }
+            b')' => {
+                self.pos += 1;
+                Ok(Token::RParen)
+            }
+            b'=' => {
+                self.pos += 1;
+                Ok(Token::Eq)
+            }
+            b':' => {
+                self.pos += 1;
+                Ok(Token::Colon)
+            }
+            b',' => {
+                self.pos += 1;
+                Ok(Token::Comma)
+            }
+            b'.' => {
+                self.pos += 1;
+                Ok(Token::Dot)
+            }
             b'"' => self.read_string(),
             b'0'..=b'9' | b'-' => self.read_number(),
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.read_word(),
@@ -73,21 +130,50 @@ impl<'a> Lexer<'a> {
     fn skip_ws(&mut self) {
         while self.pos < self.input.len() {
             let ch = self.input[self.pos];
-            if ch.is_ascii_whitespace() { self.pos += 1; }
-            else if ch == b'/' && self.pos + 1 < self.input.len() && self.input[self.pos + 1] == b'/' {
-                while self.pos < self.input.len() && self.input[self.pos] != b'\n' { self.pos += 1; }
-            } else { break; }
+            if ch.is_ascii_whitespace() {
+                self.pos += 1;
+            } else if ch == b'/'
+                && self.pos + 1 < self.input.len()
+                && self.input[self.pos + 1] == b'/'
+            {
+                while self.pos < self.input.len() && self.input[self.pos] != b'\n' {
+                    self.pos += 1;
+                }
+            } else {
+                break;
+            }
         }
     }
 
+    /// Read a `"…"` string literal.
+    ///
+    /// **Contract — escape decoding is intentionally *not* performed.** The
+    /// tokenizer only uses `\` to skip past the next byte (so an embedded
+    /// `\"` doesn't terminate the literal); the backslash and the
+    /// following character are preserved verbatim in the resulting
+    /// `StringLit`. EAL string literals therefore carry the raw text the
+    /// user typed, and downstream consumers (ability arguments, agent
+    /// prompts) decide how to interpret any escapes.
+    ///
+    /// This is a deliberate choice: the language is an *orchestration*
+    /// DSL whose strings are mostly opaque payloads forwarded to other
+    /// services. Decoding here would force every user who wants a literal
+    /// `\n` in (e.g.) a regex argument to write `\\n`, which is a worse
+    /// trade-off than the current "what you type is what gets sent."
+    /// See `tokenize_strings_preserves_escape_sequences_verbatim` in the
+    /// test module — that test pins the contract.
     fn read_string(&mut self) -> Result<Token, String> {
         self.pos += 1;
         let start = self.pos;
         while self.pos < self.input.len() && self.input[self.pos] != b'"' {
-            if self.input[self.pos] == b'\\' { self.pos += 1; }
+            if self.input[self.pos] == b'\\' {
+                self.pos += 1;
+            }
             self.pos += 1;
         }
-        if self.pos >= self.input.len() { return Err("unterminated string".into()); }
+        if self.pos >= self.input.len() {
+            return Err("unterminated string".into());
+        }
         let s = String::from_utf8_lossy(&self.input[start..self.pos]).into_owned();
         self.pos += 1;
         Ok(Token::StringLit(s))
@@ -95,13 +181,21 @@ impl<'a> Lexer<'a> {
 
     fn read_number(&mut self) -> Result<Token, String> {
         let start = self.pos;
-        if self.input[self.pos] == b'-' { self.pos += 1; }
-        while self.pos < self.input.len() && self.input[self.pos].is_ascii_digit() { self.pos += 1; }
-        let is_float = self.pos < self.input.len() && self.input[self.pos] == b'.'
-            && self.pos + 1 < self.input.len() && self.input[self.pos + 1].is_ascii_digit();
+        if self.input[self.pos] == b'-' {
+            self.pos += 1;
+        }
+        while self.pos < self.input.len() && self.input[self.pos].is_ascii_digit() {
+            self.pos += 1;
+        }
+        let is_float = self.pos < self.input.len()
+            && self.input[self.pos] == b'.'
+            && self.pos + 1 < self.input.len()
+            && self.input[self.pos + 1].is_ascii_digit();
         if is_float {
             self.pos += 1;
-            while self.pos < self.input.len() && self.input[self.pos].is_ascii_digit() { self.pos += 1; }
+            while self.pos < self.input.len() && self.input[self.pos].is_ascii_digit() {
+                self.pos += 1;
+            }
             let s = String::from_utf8_lossy(&self.input[start..self.pos]);
             Ok(Token::FloatLit(s.parse().map_err(|e| format!("{e}"))?))
         } else {
@@ -112,17 +206,28 @@ impl<'a> Lexer<'a> {
 
     fn read_word(&mut self) -> Result<Token, String> {
         let start = self.pos;
-        while self.pos < self.input.len() && (self.input[self.pos].is_ascii_alphanumeric() || self.input[self.pos] == b'_') {
+        while self.pos < self.input.len()
+            && (self.input[self.pos].is_ascii_alphanumeric() || self.input[self.pos] == b'_')
+        {
             self.pos += 1;
         }
         let w = String::from_utf8_lossy(&self.input[start..self.pos]).into_owned();
         Ok(match w.as_str() {
-            "mission" => Token::Mission, "let" => Token::Let, "call" => Token::Call,
-            "on" => Token::On, "with" => Token::With, "timeout" => Token::Timeout,
-            "retries" => Token::Retries, "on_failure" => Token::OnFailure,
-            "optional" => Token::Optional, "abort" => Token::Abort, "skip" => Token::Skip,
-            "retry" => Token::Retry, "continue" => Token::Continue,
-            "true" => Token::BoolLit(true), "false" => Token::BoolLit(false),
+            "mission" => Token::Mission,
+            "let" => Token::Let,
+            "call" => Token::Call,
+            "on" => Token::On,
+            "with" => Token::With,
+            "timeout" => Token::Timeout,
+            "retries" => Token::Retries,
+            "on_failure" => Token::OnFailure,
+            "optional" => Token::Optional,
+            "abort" => Token::Abort,
+            "skip" => Token::Skip,
+            "retry" => Token::Retry,
+            "continue" => Token::Continue,
+            "true" => Token::BoolLit(true),
+            "false" => Token::BoolLit(false),
             _ => Token::Ident(w),
         })
     }
@@ -151,6 +256,46 @@ mod tests {
                 Token::RParen,
                 Token::Eof,
             ],
+        );
+    }
+
+    #[test]
+    fn tokenize_strings_preserves_escape_sequences_verbatim() {
+        // EAL deliberately does NOT decode `\n`, `\t`, `\\`, `\"`, etc.
+        // inside string literals — the tokenizer only consumes the byte
+        // *after* a backslash so an embedded `\"` doesn't terminate the
+        // literal early. The resulting `StringLit` carries the raw text
+        // the user typed (minus the surrounding quotes). See the
+        // contract on `read_string`.
+        //
+        // This test exists so a future "let's decode escapes like every
+        // other language" refactor cannot land silently — it is a
+        // load-bearing product decision and the change must be made
+        // explicitly here.
+        let cases = &[
+            (r#""hello\nworld""#, r"hello\nworld"),
+            (r#""tab\there""#, r"tab\there"),
+            (r#""quote\"inside""#, r#"quote\"inside"#),
+            (r#""back\\slash""#, r"back\\slash"),
+        ];
+        for (src, expected) in cases {
+            let tokens = Lexer::new(src).tokenize().unwrap();
+            assert_eq!(
+                tokens,
+                vec![Token::StringLit((*expected).to_string()), Token::Eof],
+                "lexing {src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unterminated_string_yields_error() {
+        // A missing closing quote must surface as a clear lexer error,
+        // not silently consume to EOF.
+        let err = Lexer::new(r#""hello"#).tokenize().unwrap_err();
+        assert!(
+            err.contains("unterminated"),
+            "expected 'unterminated' in error, got: {err}"
         );
     }
 

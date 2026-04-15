@@ -24,7 +24,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -53,8 +53,123 @@ const RETRY_MAX_MS: u64 = 30_000;
 
 // ── Execution trace (structured audit log) ──
 
+/// On-disk schema version for `ExecutionTrace` JSON. Bump on any wire
+/// change that older readers cannot interpret (renamed fields, removed
+/// variants, changed numeric ranges). Adding *optional* fields with
+/// `#[serde(default)]` does NOT warrant a bump — old readers will
+/// transparently ignore them, which is the entire point of `default`.
+///
+/// The version is stamped on every fresh trace so trace consumers can
+/// branch on layout. Absent-version on a parsed trace means "pre-stamp";
+/// tolerant readers should treat it as `1`. The golden test
+/// `trace_schema_v1_is_stable` pins the exact serialized shape so a
+/// regression here cannot land silently.
+pub const EXECUTION_TRACE_SCHEMA_VERSION: u32 = 1;
+
+fn current_trace_schema_version() -> u32 {
+    EXECUTION_TRACE_SCHEMA_VERSION
+}
+
+/// Maximum number of `StepTrace` entries kept in memory per mission.
+/// Beyond this, the interpreter retains only the *head* (first
+/// `TRACE_CAP_HEAD`) and the *tail* (last `TRACE_CAP_TAIL`) and
+/// records the omission on [`ExecutionTrace::traces_truncated`].
+///
+/// Why a cap exists:
+/// For a realistic EAL mission (tens to hundreds of steps) this
+/// value is never hit, so in-memory behaviour is unchanged. For a
+/// pathological mission (thousands+ of steps with retry histories),
+/// an unbounded `Vec<StepTrace>` would accumulate hundreds of MB of
+/// live data through the `ExecutionReport` return path. The cap
+/// bounds peak memory at ~500KB worst case regardless of step count,
+/// while preserving the forensically useful head-and-tail view
+/// (the first steps show the mission shape; the last steps show the
+/// outcome). Operators who need every step can enable disk-backed
+/// streaming via `RunDir::append_trace_line`, which is unaffected by
+/// this cap.
+///
+/// These constants are deliberately `pub const` so downstream
+/// tooling can branch on "was this trace truncated?" and size its
+/// own buffers accordingly.
+pub const TRACE_CAP_HEAD: usize = 500;
+pub const TRACE_CAP_TAIL: usize = 500;
+/// Sum of head + tail — exported for downstream tooling that wants to
+/// pre-size its own buffers to the same ceiling. Not used directly by
+/// the interpreter; the two slots are checked independently in
+/// [`CappedTraceBuffer::push`].
+#[allow(dead_code)]
+pub const TRACE_CAP_TOTAL: usize = TRACE_CAP_HEAD + TRACE_CAP_TAIL;
+
+/// In-memory bounded buffer for `StepTrace` entries.
+///
+/// Retains the first `TRACE_CAP_HEAD` entries verbatim, and a rolling
+/// window of the most recent `TRACE_CAP_TAIL` entries. Entries that
+/// fall off the tail (after both head and tail are full) are counted
+/// in [`CappedTraceBuffer::dropped`]; the interpreter propagates that
+/// count into `ExecutionTrace::traces_truncated` at finalization.
+///
+/// This shape is deliberately chosen for forensics: the head shows
+/// the mission setup and first-phase behaviour; the tail shows how
+/// the mission ended. The middle of a very-long-mission is typically
+/// the least interesting part — retries look the same in aggregate
+/// regardless of which attempt you see.
+struct CappedTraceBuffer {
+    head: Vec<StepTrace>,
+    tail: std::collections::VecDeque<StepTrace>,
+    dropped: usize,
+}
+
+impl CappedTraceBuffer {
+    fn new() -> Self {
+        Self {
+            head: Vec::with_capacity(TRACE_CAP_HEAD.min(64)),
+            tail: std::collections::VecDeque::with_capacity(TRACE_CAP_TAIL.min(64)),
+            dropped: 0,
+        }
+    }
+
+    fn push(&mut self, t: StepTrace) {
+        if self.head.len() < TRACE_CAP_HEAD {
+            self.head.push(t);
+            return;
+        }
+        if self.tail.len() == TRACE_CAP_TAIL {
+            // Roll the oldest tail entry out; count it as dropped.
+            self.tail.pop_front();
+            self.dropped += 1;
+        }
+        self.tail.push_back(t);
+    }
+
+    /// Consume the buffer and return (combined entries, dropped count).
+    /// The ordering is head then tail — chronologically consistent with
+    /// `push` order.
+    fn into_parts(self) -> (Vec<StepTrace>, usize) {
+        let Self {
+            mut head,
+            tail,
+            dropped,
+        } = self;
+        head.reserve(tail.len());
+        head.extend(tail);
+        (head, dropped)
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.head.len() + self.tail.len()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionTrace {
+    /// Schema version of this trace document. See
+    /// `EXECUTION_TRACE_SCHEMA_VERSION` for the contract on bumping.
+    /// `#[serde(default)]` lets old on-disk traces (which lacked this
+    /// field) deserialize as version 1 — matching the tolerant-read
+    /// promise documented above.
+    #[serde(default = "current_trace_schema_version")]
+    pub schema_version: u32,
     pub mission_id: String,
     pub mission_name: String,
     pub started_at_unix_ms: u64,
@@ -66,6 +181,15 @@ pub struct ExecutionTrace {
     pub steps_skipped: usize,
     pub outcome: MissionOutcome,
     pub step_traces: Vec<StepTrace>,
+    /// Number of steps whose traces were dropped due to the
+    /// in-memory cap (see `TRACE_CAP_TOTAL`). Zero means every step
+    /// is present in `step_traces`. Nonzero means there are exactly
+    /// this many consecutive steps *between the head and tail slices*
+    /// whose trace entries are absent from `step_traces`. This field
+    /// is `#[serde(default)]` so older on-disk traces (before the cap
+    /// existed) parse as `0` — preserving the tolerant-read promise.
+    #[serde(default)]
+    pub traces_truncated: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,7 +198,7 @@ pub struct StepTrace {
     /// Ability invoked. Mirrors `IrStep.ability`. See
     /// `docs/AGENT_IDENTITY.md` §10 — this is a method name, not an
     /// identity.
-    pub ability: crate::shared::agent_id::AbilityName,
+    pub ability: crate::registry::agent_id::AbilityName,
     /// Resolved dispatch target. Mirrors `IrStep.target`. The trace
     /// records the *resolved* target (Agent vs Device) so audit
     /// readers don't have to re-classify.
@@ -89,7 +213,11 @@ pub struct StepTrace {
     pub result_size_bytes: Option<usize>,
     pub result_sha256: Option<String>,
     pub error: Option<String>,
-    pub input_refs: HashMap<String, String>,
+    /// Mirrors `IrStep::input_refs` — kept as a `BTreeMap` for the same
+    /// reason: stable JSON output for trace files. A trace JSON whose
+    /// key order shifted between runs would defeat any "diff two
+    /// mission runs" workflow.
+    pub input_refs: BTreeMap<String, String>,
     pub output_binding: Option<String>,
 }
 
@@ -137,14 +265,20 @@ struct CapturedResult {
 
 // ── Dispatch backend trait (enables test injection) ──
 
+use crate::eal::error::EalError;
 use crate::eal::ir::IrTarget;
-use crate::shared::agent_id::AbilityName;
+use crate::registry::agent_id::AbilityName;
 
 pub trait StepDispatcher {
     /// Dispatch one step. The runtime sees only the resolved
     /// `IrTarget` enum and the typed `AbilityName` — there is no
     /// string-based `is_agent` check here, by design (see
     /// `docs/AGENT_IDENTITY.md` invariant 2).
+    ///
+    /// Errors are typed via `EalError` so the interpreter (and any
+    /// future telemetry) can branch on category rather than parsing
+    /// English strings. The error is converted to its display form
+    /// when stored in `StepExecResult::Error.message`.
     fn dispatch(
         &self,
         tenant: &str,
@@ -152,11 +286,11 @@ pub trait StepDispatcher {
         ability: &AbilityName,
         arguments: &Value,
         timeout_ms: Option<u64>,
-    ) -> Result<Value, String>;
+    ) -> Result<Value, EalError>;
 
     /// Create an independent clone for parallel dispatch.
     /// Each thread in a phase needs its own dispatcher.
-    fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, String>;
+    fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError>;
 }
 
 /// Dispatcher that borrows a `DendriteBridge`.
@@ -188,22 +322,41 @@ impl StepDispatcher for BorrowedBridgeDispatcher<'_> {
         ability: &AbilityName,
         arguments: &Value,
         timeout_ms: Option<u64>,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, EalError> {
         match target {
             IrTarget::Device { node_id } => self
                 .bridge
-                .call_mcp_tool_with_timeout(tenant, ability.as_str(), node_id, arguments, timeout_ms)
-                .map_err(|e| format!("{e}")),
-            IrTarget::Agent(_) => Err(
+                .call_mcp_tool_with_timeout(
+                    tenant,
+                    ability.as_str(),
+                    node_id,
+                    arguments,
+                    timeout_ms,
+                )
+                .map_err(EalError::from),
+            // Agent target on a Device-only dispatcher is a planner /
+            // call-site contract violation, not a transient failure —
+            // categorise as Validation so retries don't fire and so
+            // operators see "validation_error" in the trace, not the
+            // misleading "unavailable".
+            IrTarget::Agent(_) => Err(EalError::Validation(
                 "BorrowedBridgeDispatcher cannot dispatch to agent targets; \
                  use AgentAwareDispatcher (e.g. via run_mission_inproc)"
                     .to_string(),
-            ),
+            )),
         }
     }
 
-    fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, String> {
-        Err("BorrowedBridgeDispatcher cannot be cloned for threads (bridge is !Send/!Sync)".into())
+    fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
+        // The cannot-clone outcome is the *signal* to the parallel
+        // dispatch path that it must fall back to sequential — see
+        // `dispatch_batch`. `Internal` is the right category here:
+        // this is not a caller bug, just a structural property of the
+        // borrowed-bridge dispatcher being `!Send`.
+        Err(EalError::Internal(
+            "BorrowedBridgeDispatcher cannot be cloned for threads (bridge is !Send/!Sync)"
+                .to_string(),
+        ))
     }
 }
 
@@ -217,13 +370,12 @@ impl StepDispatcher for BorrowedBridgeDispatcher<'_> {
 
 pub struct AgentAwareDispatcher {
     pool: Arc<BridgePool>,
-    registry: Arc<crate::shared::agents::AgentRegistry>,
+    registry: Arc<crate::registry::agents::AgentRegistry>,
 }
 
 impl AgentAwareDispatcher {
     pub fn new(endpoint: &str, timeout_ms: u64) -> Self {
-        let registry = crate::shared::agents::load_agents()
-            .unwrap_or_default();
+        let registry = load_registry_or_warn();
         let pool = Arc::new(BridgePool::with_adaptive_size(endpoint, timeout_ms));
         Self {
             pool,
@@ -234,11 +386,38 @@ impl AgentAwareDispatcher {
     /// Create a dispatcher with a pre-existing shared pool (for pool reuse across missions).
     #[allow(dead_code)]
     pub fn with_pool(pool: Arc<BridgePool>) -> Self {
-        let registry = crate::shared::agents::load_agents()
-            .unwrap_or_default();
+        let registry = load_registry_or_warn();
         Self {
             pool,
             registry: Arc::new(registry),
+        }
+    }
+}
+
+/// Load the agent registry, logging a visible warning if the load fails.
+///
+/// Previously this was `load_agents().unwrap_or_default()`, which turned
+/// "registry file is corrupt / home dir missing / permission denied"
+/// into "you have no registered agents", so an EAL member-call like
+/// `claude.chat(...)` would fail downstream with `agent '…' not found
+/// in registry` — a classic false-negative that sends operators hunting
+/// for a mis-registered agent when the real problem is upstream.
+///
+/// We still want a usable dispatcher when no agents are registered
+/// (that is a legitimate first-run state), so we return an empty
+/// registry on failure *after* logging. The distinction between
+/// "empty by design" and "empty by failure" is preserved in operator-
+/// visible logs rather than hidden from the caller.
+fn load_registry_or_warn() -> crate::registry::agents::AgentRegistry {
+    match crate::registry::agents::load_agents() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!(
+                "[easynet eal] warning: agent registry load failed ({e}); \
+                 dispatching with an empty registry. Any agent-target call \
+                 will fail with `not_found` until the registry is repaired."
+            );
+            crate::registry::agents::AgentRegistry::default()
         }
     }
 }
@@ -251,13 +430,23 @@ impl StepDispatcher for AgentAwareDispatcher {
         ability: &AbilityName,
         arguments: &Value,
         timeout_ms: Option<u64>,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, EalError> {
         match target {
             IrTarget::Agent(agent_id) => {
                 dispatch_to_agent(&self.registry, agent_id, ability, arguments)
             }
             IrTarget::Device { node_id } => {
-                let guard = self.pool.checkout()?;
+                // Both pool checkout and the subsequent bridge call are
+                // transport-class failures — categorise explicitly as
+                // `Unavailable` at each site rather than relying on a
+                // default-via-`From` impl. Explicit categorisation is
+                // cheap (one constructor per site) and makes the error
+                // category visible in the source, which is the whole
+                // point of the typed-error migration.
+                let guard = self
+                    .pool
+                    .checkout()
+                    .map_err(|e| EalError::Unavailable(format!("bridge pool: {e}")))?;
                 guard
                     .bridge()
                     .call_mcp_tool_with_timeout(
@@ -267,13 +456,13 @@ impl StepDispatcher for AgentAwareDispatcher {
                         arguments,
                         timeout_ms,
                     )
-                    .map_err(|e| format!("{e}"))
+                    .map_err(EalError::from)
                 // guard drops here → bridge returned to pool
             }
         }
     }
 
-    fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, String> {
+    fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
         Ok(Box::new(AgentAwareDispatcher {
             pool: Arc::clone(&self.pool),
             registry: Arc::clone(&self.registry),
@@ -314,10 +503,16 @@ impl StepDispatcher for PooledBridgeDispatcher {
         ability: &AbilityName,
         arguments: &Value,
         timeout_ms: Option<u64>,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, EalError> {
         match target {
             IrTarget::Device { node_id } => {
-                let guard = self.pool.checkout()?;
+                // Explicit `Unavailable` categorisation at each site —
+                // see `AgentAwareDispatcher::dispatch` for the rationale
+                // on why we do not rely on a blanket `From<String>` impl.
+                let guard = self
+                    .pool
+                    .checkout()
+                    .map_err(|e| EalError::Unavailable(format!("bridge pool: {e}")))?;
                 guard
                     .bridge()
                     .call_mcp_tool_with_timeout(
@@ -327,17 +522,19 @@ impl StepDispatcher for PooledBridgeDispatcher {
                         arguments,
                         timeout_ms,
                     )
-                    .map_err(|e| format!("{e}"))
+                    .map_err(EalError::from)
             }
-            IrTarget::Agent(_) => Err(
+            // See note on `BorrowedBridgeDispatcher`: agent target on a
+            // device-only dispatcher is a contract violation.
+            IrTarget::Agent(_) => Err(EalError::Validation(
                 "PooledBridgeDispatcher cannot dispatch to agent targets; \
                  use AgentAwareDispatcher (e.g. via run_mission_inproc)"
                     .to_string(),
-            ),
+            )),
         }
     }
 
-    fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, String> {
+    fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
         Ok(Box::new(PooledBridgeDispatcher {
             pool: Arc::clone(&self.pool),
         }))
@@ -346,11 +543,11 @@ impl StepDispatcher for PooledBridgeDispatcher {
 
 /// Shared agent dispatch logic used by AgentAwareDispatcher.
 fn dispatch_to_agent(
-    registry: &crate::shared::agents::AgentRegistry,
-    agent_id: &crate::shared::agent_id::AgentId,
+    registry: &crate::registry::agents::AgentRegistry,
+    agent_id: &crate::registry::agent_id::AgentId,
     ability: &AbilityName,
     arguments: &Value,
-) -> Result<Value, String> {
+) -> Result<Value, EalError> {
     // Registry is keyed by string today (see Step 4
     // follow-up: registry will be keyed by AgentId itself).
     // For now, look up by the canonical Display form.
@@ -364,25 +561,24 @@ fn dispatch_to_agent(
             // form (`"claude"` instead of `"default/claude"`).
             // Fall back to the bare name when the agent
             // is in the default tenant.
-            if agent_id.tenant == crate::shared::agent_id::DEFAULT_TENANT {
+            if agent_id.tenant == crate::registry::agent_id::DEFAULT_TENANT {
                 registry.agents.get(&agent_id.name)
             } else {
                 None
             }
         })
-        .ok_or_else(|| format!("agent '{key}' not found in registry"))?;
+        // Missing agent in registry is `not_found`, not `unavailable` —
+        // the caller's identifier doesn't resolve and a retry of the
+        // same id will not help.
+        .ok_or_else(|| EalError::NotFound(format!("agent '{key}' not found in registry")))?;
 
     let prompt = build_agent_prompt(ability.as_str(), arguments);
 
-    let response = crate::agent::dispatch::send_to_agent(
-        &key,
-        entry,
-        &prompt,
-        None,
-        None,
-        None,
-    )
-    .map_err(|e| format!("agent dispatch: {e}"))?;
+    // Agent CLI dispatch failures (process spawn, IO, model error) are
+    // transport-class — `unavailable` is the right bucket so the
+    // interpreter's retry policy can fire when configured.
+    let response = crate::agent::dispatch::send_to_agent(&key, entry, &prompt, None, None)
+        .map_err(|e| EalError::Unavailable(format!("agent dispatch: {e}")))?;
 
     Ok(serde_json::json!({
         "ok": true,
@@ -432,7 +628,8 @@ pub fn execute_pooled(
     tenant: &str,
     ir: &MissionIr,
 ) -> anyhow::Result<ExecutionReport> {
-    let dispatcher = PooledBridgeDispatcher::new(endpoint, crate::shared::BRIDGE_CONNECT_TIMEOUT_MS);
+    let dispatcher =
+        PooledBridgeDispatcher::new(endpoint, crate::shared::timeouts::BRIDGE_CONNECT_TIMEOUT_MS);
     execute_with_dispatcher(&dispatcher, tenant, ir)
 }
 
@@ -469,7 +666,7 @@ pub fn execute_with_endpoint(
     tenant: &str,
     ir: &MissionIr,
 ) -> anyhow::Result<ExecutionReport> {
-    let dispatcher = AgentAwareDispatcher::new(endpoint, crate::shared::BRIDGE_CONNECT_TIMEOUT_MS);
+    let dispatcher = AgentAwareDispatcher::new(endpoint, crate::shared::timeouts::BRIDGE_CONNECT_TIMEOUT_MS);
     execute_with_dispatcher(&dispatcher, tenant, ir)
 }
 
@@ -486,7 +683,15 @@ pub fn execute_with_dispatcher(
     let started_at = now_unix_ms();
 
     let mut captured: HashMap<String, CapturedResult> = HashMap::new();
-    let mut all_traces: Vec<StepTrace> = Vec::new();
+    // `skipped_bindings` mirrors `captured`: when a step with an
+    // `output_binding` is skipped (either directly or by dependency),
+    // its binding name lands here instead of in `captured`. Downstream
+    // `resolve_arguments` consults both so it can tell "skip me because
+    // my producer was skipped" apart from "unresolved ref" (which is an
+    // analyzer/planner bug). See `ResolveError::UpstreamSkipped`.
+    let mut skipped_bindings: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    let mut all_traces = CappedTraceBuffer::new();
     let mut completed = 0usize;
     let mut failed = 0usize;
     let mut skipped = 0usize;
@@ -529,34 +734,68 @@ pub fn execute_with_dispatcher(
         // This ensures "optional = low priority" is encoded in scheduling,
         // not just in post-hoc failure handling.
 
-        let required_indices: Vec<usize> = steps.iter().enumerate()
+        let required_indices: Vec<usize> = steps
+            .iter()
+            .enumerate()
             .filter(|(_, s)| !s.optional)
             .map(|(i, _)| i)
             .collect();
-        let optional_indices: Vec<usize> = steps.iter().enumerate()
+        let optional_indices: Vec<usize> = steps
+            .iter()
+            .enumerate()
             .filter(|(_, s)| s.optional)
             .map(|(i, _)| i)
             .collect();
 
         // Batch 1: required steps
         let required_results = dispatch_batch(
-            dispatcher, tenant, steps, &required_indices, &captured, can_parallel,
+            dispatcher,
+            tenant,
+            steps,
+            &required_indices,
+            &captured,
+            &skipped_bindings,
+            can_parallel,
         );
         process_batch(
-            steps, required_results, phase_idx, &mut global_step, total,
-            &mut captured, &mut completed, &mut failed, &mut skipped,
-            &mut aborted, &mut all_traces,
+            steps,
+            required_results,
+            phase_idx,
+            &mut global_step,
+            total,
+            &mut captured,
+            &mut skipped_bindings,
+            &mut completed,
+            &mut failed,
+            &mut skipped,
+            &mut aborted,
+            &mut all_traces,
         );
 
         // Batch 2: optional steps (skip if mission already aborted)
         if !aborted && !optional_indices.is_empty() {
             let optional_results = dispatch_batch(
-                dispatcher, tenant, steps, &optional_indices, &captured, can_parallel,
+                dispatcher,
+                tenant,
+                steps,
+                &optional_indices,
+                &captured,
+                &skipped_bindings,
+                can_parallel,
             );
             process_batch(
-                steps, optional_results, phase_idx, &mut global_step, total,
-                &mut captured, &mut completed, &mut failed, &mut skipped,
-                &mut aborted, &mut all_traces,
+                steps,
+                optional_results,
+                phase_idx,
+                &mut global_step,
+                total,
+                &mut captured,
+                &mut skipped_bindings,
+                &mut completed,
+                &mut failed,
+                &mut skipped,
+                &mut aborted,
+                &mut all_traces,
             );
         }
     }
@@ -571,7 +810,20 @@ pub fn execute_with_dispatcher(
         MissionOutcome::Completed
     };
 
+    let (step_traces, traces_truncated) = all_traces.into_parts();
+    if traces_truncated > 0 {
+        // One diagnostic line on stderr so operators notice a truncated
+        // trace without having to parse the JSON. Preserves the normal
+        // exit status — truncation is graceful degradation, not an
+        // error.
+        eprintln!(
+            "[easynet warn] mission trace truncated: {traces_truncated} middle step(s) \
+             omitted to bound memory (head={TRACE_CAP_HEAD}, tail={TRACE_CAP_TAIL} \
+             retained; see ExecutionTrace::traces_truncated)"
+        );
+    }
     let trace = ExecutionTrace {
+        schema_version: EXECUTION_TRACE_SCHEMA_VERSION,
         mission_id,
         mission_name: ir.name.clone(),
         started_at_unix_ms: started_at,
@@ -582,11 +834,13 @@ pub fn execute_with_dispatcher(
         steps_failed: failed,
         steps_skipped: skipped,
         outcome,
-        step_traces: all_traces,
+        step_traces,
+        traces_truncated,
     };
 
     // Convert captured results to readable strings for the report.
-    let outputs: HashMap<String, String> = captured.into_iter()
+    let outputs: HashMap<String, String> = captured
+        .into_iter()
         .map(|(k, v)| (k, String::from_utf8_lossy(&v.value).to_string()))
         .collect();
 
@@ -618,6 +872,15 @@ enum StepExecResult {
         retry_count: u32,
         retry_history: Vec<RetryRecord>,
     },
+    /// Upstream binding was skipped, so this step cannot run. Emitted by
+    /// `dispatch_batch` when `resolve_arguments` signals
+    /// `ResolveError::UpstreamSkipped`. Classified as `StepOutcome::Skipped`
+    /// in `process_step_result` regardless of this step's own
+    /// `optional` / `on_failure` flags — propagating skip is the point.
+    SkippedByDependency {
+        message: String,
+        started_at: u64,
+    },
 }
 
 /// Dispatch a batch of steps (identified by `indices` into `steps`) in parallel or sequentially.
@@ -631,6 +894,7 @@ fn dispatch_batch(
     steps: &[IrStep],
     indices: &[usize],
     captured: &HashMap<String, CapturedResult>,
+    skipped_bindings: &std::collections::HashSet<String>,
     parallel: bool,
 ) -> Vec<(usize, StepExecResult)> {
     if indices.is_empty() {
@@ -644,23 +908,59 @@ fn dispatch_batch(
         let collector = SegQueue::new();
         for &local_idx in indices {
             let step = &steps[local_idx];
-            let merged_args = match resolve_arguments(step, captured) {
+            let merged_args = match resolve_arguments(step, captured, skipped_bindings) {
                 Ok(args) => args,
-                Err(e) => {
-                    collector.push((local_idx, StepExecResult::Error {
-                        message: e, elapsed_ms: 0, started_at: now_unix_ms(),
-                        retry_count: 0, retry_history: Vec::new(),
-                    }));
+                Err(ResolveError::UpstreamSkipped { binding, arg }) => {
+                    // Propagate skip: the upstream producer chose not to
+                    // run, so this consumer must not run either.
+                    // `SkippedByDependency` surfaces as `StepOutcome::Skipped`
+                    // in `process_step_result` regardless of this step's
+                    // own `optional` / `on_failure` policy.
+                    collector.push((
+                        local_idx,
+                        StepExecResult::SkippedByDependency {
+                            message: format!(
+                                "skipped: input `{arg}` depends on `{binding}` which was skipped upstream"
+                            ),
+                            started_at: now_unix_ms(),
+                        },
+                    ));
+                    continue;
+                }
+                Err(ResolveError::Other(e)) => {
+                    collector.push((
+                        local_idx,
+                        StepExecResult::Error {
+                            message: e,
+                            elapsed_ms: 0,
+                            started_at: now_unix_ms(),
+                            retry_count: 0,
+                            retry_history: Vec::new(),
+                        },
+                    ));
                     continue;
                 }
             };
             let thread_dispatcher = match dispatcher.clone_for_thread() {
                 Ok(d) => d,
                 Err(e) => {
-                    collector.push((local_idx, StepExecResult::Error {
-                        message: e, elapsed_ms: 0, started_at: now_unix_ms(),
-                        retry_count: 0, retry_history: Vec::new(),
-                    }));
+                    // `BorrowedBridgeDispatcher::clone_for_thread`
+                    // returns `EalError::Internal` to *signal* "fall
+                    // back to sequential" — but here, in the parallel
+                    // path, hitting it means a structural setup error
+                    // (a !Send dispatcher reached the parallel path).
+                    // Render to display form (preserves error_code in
+                    // the trace) and surface it as a step error.
+                    collector.push((
+                        local_idx,
+                        StepExecResult::Error {
+                            message: e.to_string(),
+                            elapsed_ms: 0,
+                            started_at: now_unix_ms(),
+                            retry_count: 0,
+                            retry_history: Vec::new(),
+                        },
+                    ));
                     continue;
                 }
             };
@@ -673,7 +973,10 @@ fn dispatch_batch(
                 let collector_ref = &collector;
                 scope.spawn(move |_| {
                     let result = execute_step_with_retry(
-                        thread_dispatcher.as_ref(), tenant, step, &merged_args,
+                        thread_dispatcher.as_ref(),
+                        tenant,
+                        step,
+                        &merged_args,
                     );
                     collector_ref.push((local_idx, result));
                 });
@@ -687,13 +990,33 @@ fn dispatch_batch(
         let mut results = Vec::new();
         for &local_idx in indices {
             let step = &steps[local_idx];
-            let merged_args = match resolve_arguments(step, captured) {
+            let merged_args = match resolve_arguments(step, captured, skipped_bindings) {
                 Ok(args) => args,
-                Err(e) => {
-                    results.push((local_idx, StepExecResult::Error {
-                        message: e, elapsed_ms: 0, started_at: now_unix_ms(),
-                        retry_count: 0, retry_history: Vec::new(),
-                    }));
+                Err(ResolveError::UpstreamSkipped { binding, arg }) => {
+                    // Mirror of the parallel branch above — see that
+                    // site for the propagation rationale.
+                    results.push((
+                        local_idx,
+                        StepExecResult::SkippedByDependency {
+                            message: format!(
+                                "skipped: input `{arg}` depends on `{binding}` which was skipped upstream"
+                            ),
+                            started_at: now_unix_ms(),
+                        },
+                    ));
+                    continue;
+                }
+                Err(ResolveError::Other(e)) => {
+                    results.push((
+                        local_idx,
+                        StepExecResult::Error {
+                            message: e,
+                            elapsed_ms: 0,
+                            started_at: now_unix_ms(),
+                            retry_count: 0,
+                            retry_history: Vec::new(),
+                        },
+                    ));
                     continue;
                 }
             };
@@ -713,11 +1036,12 @@ fn process_batch(
     global_step: &mut usize,
     total: usize,
     captured: &mut HashMap<String, CapturedResult>,
+    skipped_bindings: &mut std::collections::HashSet<String>,
     completed: &mut usize,
     failed: &mut usize,
     skipped: &mut usize,
     aborted: &mut bool,
-    all_traces: &mut Vec<StepTrace>,
+    all_traces: &mut CappedTraceBuffer,
 ) {
     for (local_idx, exec_result) in results {
         *global_step += 1;
@@ -731,10 +1055,7 @@ fn process_batch(
                 *completed += 1;
                 if let Some(ref binding) = step.output_binding {
                     if let Some(bytes) = result_bytes {
-                        captured.insert(
-                            binding.clone(),
-                            CapturedResult { value: bytes },
-                        );
+                        captured.insert(binding.clone(), CapturedResult { value: bytes });
                     }
                 }
             }
@@ -744,7 +1065,20 @@ fn process_batch(
                     *aborted = true;
                 }
             }
-            StepOutcome::Skipped => *skipped += 1,
+            StepOutcome::Skipped => {
+                *skipped += 1;
+                // Register the (un-)produced binding so every future
+                // `resolve_arguments` call on a step consuming it
+                // returns `ResolveError::UpstreamSkipped` and the
+                // downstream step is classified Skipped too. Without
+                // this registration, the downstream step would hit
+                // the `unresolved ref` branch and get classified as
+                // Failed — miscategorising "your producer didn't run"
+                // as "you ran and failed".
+                if let Some(ref binding) = step.output_binding {
+                    skipped_bindings.insert(binding.clone());
+                }
+            }
         }
         all_traces.push(trace);
     }
@@ -796,7 +1130,32 @@ fn execute_step_with_retry(
 
         match res {
             Ok(result) => {
-                let result_bytes = serde_json::to_vec(&result).unwrap_or_default();
+                // Serializing a `serde_json::Value` back to bytes can
+                // only fail if the Value contains NaN / ±∞ numbers —
+                // JSON has no representation for those. A dispatcher
+                // that returns such a value is buggy (the producer
+                // should map NaN to `null` or a sentinel), so we
+                // surface it as a step-level `Internal` error rather
+                // than silently capturing an empty `[]` and feeding
+                // that to any downstream step that consumed the
+                // binding. Either mode would be wrong; loud failure
+                // gives operators a real error to chase.
+                let result_bytes = match serde_json::to_vec(&result) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        let elapsed_ms = millis_u64(t0.elapsed());
+                        let rendered =
+                            EalError::Internal(format!("step result not JSON-serializable: {e}"))
+                                .to_string();
+                        return StepExecResult::Error {
+                            message: rendered,
+                            elapsed_ms,
+                            started_at,
+                            retry_count: attempt,
+                            retry_history,
+                        };
+                    }
+                };
                 let result_sha256 = sha256_hex(&result_bytes);
                 let completed_at = now_unix_ms();
                 let elapsed_ms = millis_u64(t0.elapsed());
@@ -811,6 +1170,15 @@ fn execute_step_with_retry(
                 };
             }
             Err(e) => {
+                // Convert the typed `EalError` to its display form
+                // (`error_code: message`) at the boundary into the
+                // trace and retry history. The trace shape is owned
+                // by `StepExecResult` / `RetryRecord` (both String
+                // fields), so the typing migration ends here — but
+                // because `Display` prefixes the error_code, the
+                // category survives into on-disk traces and retry
+                // logs without changing the schema.
+                let rendered = e.to_string();
                 let attempt_elapsed = millis_u64(attempt_start.elapsed());
                 let backoff = if attempt + 1 < max_attempts {
                     compute_backoff(attempt + 1, &step.step_id)
@@ -821,13 +1189,13 @@ fn execute_step_with_retry(
                     attempt: attempt + 1,
                     elapsed_ms: attempt_elapsed,
                     backoff_ms: backoff,
-                    error: e.clone(),
+                    error: rendered.clone(),
                 });
                 // Last attempt: return error with retry info
                 if attempt + 1 >= max_attempts {
                     let elapsed_ms = millis_u64(t0.elapsed());
                     return StepExecResult::Error {
-                        message: e,
+                        message: rendered,
                         elapsed_ms,
                         started_at,
                         retry_count: attempt,
@@ -848,21 +1216,90 @@ fn execute_step_with_retry(
     }
 }
 
+/// Typed outcome of argument resolution. Splits the "upstream was
+/// skipped" case out from the generic error bucket so the caller can
+/// surface it as `StepOutcome::Skipped` rather than `Failed`.
+///
+/// This is what fixes the "optional upstream → required downstream"
+/// regression: without the distinction, a missing binding became a
+/// generic "unresolved ref 'x'" error and the downstream step was
+/// classified as `Failed`, even though the truth is "we couldn't run
+/// you because your input was skipped upstream". The trace outcome
+/// matters: a skipped mission leg should show up as a chain of
+/// skipped steps, not as a cascade of spurious failures.
+#[derive(Debug)]
+enum ResolveError {
+    /// An input ref's upstream binding was skipped (upstream step
+    /// chose not to run). Downstream auto-propagates as Skipped.
+    UpstreamSkipped { binding: String, arg: String },
+    /// Any other resolution problem: missing binding that wasn't
+    /// tracked as skipped (implies the binding is truly undefined,
+    /// which is an analyzer-time bug), malformed upstream JSON,
+    /// etc. Renders as a normal step error.
+    Other(String),
+}
+
+impl std::fmt::Display for ResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResolveError::UpstreamSkipped { binding, arg } => write!(
+                f,
+                "input ref `{arg}` cannot be resolved: upstream binding `{binding}` was skipped"
+            ),
+            ResolveError::Other(s) => f.write_str(s),
+        }
+    }
+}
+
 fn resolve_arguments(
     step: &IrStep,
     results: &HashMap<String, CapturedResult>,
-) -> Result<Value, String> {
+    skipped_bindings: &std::collections::HashSet<String>,
+) -> Result<Value, ResolveError> {
     let mut args = step
         .static_arguments
         .as_object()
         .cloned()
         .unwrap_or_default();
     for (key, src_binding) in &step.input_refs {
-        let captured = results
-            .get(src_binding)
-            .ok_or_else(|| format!("unresolved ref '{src_binding}'"))?;
-        let val: Value =
-            serde_json::from_slice(&captured.value).unwrap_or(Value::Null);
+        // If the producer was skipped upstream, surface the typed
+        // skip signal so the caller can propagate `Skipped` rather
+        // than `Failed`.
+        if skipped_bindings.contains(src_binding) {
+            return Err(ResolveError::UpstreamSkipped {
+                binding: src_binding.clone(),
+                arg: key.clone(),
+            });
+        }
+        let captured = results.get(src_binding).ok_or_else(|| {
+            ResolveError::Other(format!(
+                "unresolved ref `{src_binding}` (neither captured nor skipped — \
+                 likely an analyzer/planner bug)"
+            ))
+        })?;
+        // Propagate deserialization failure as a step-level error.
+        //
+        // The previous behaviour was `unwrap_or(Value::Null)`, which
+        // silently fed a `null` to the consuming step when the
+        // upstream result was malformed JSON (e.g. an ability that
+        // returned a partial stream, a network corruption, or a buggy
+        // wrapper). The downstream agent/ability would then treat the
+        // null as legitimate input and either crash much later or —
+        // worse — produce a plausible-but-wrong answer. A real
+        // pipeline of 6+ steps would surface as "step F failed for an
+        // inscrutable reason" while the actual culprit was step B's
+        // unparseable payload.
+        //
+        // Surfacing the deser failure here means the corrupted step
+        // is the one that fails, and the trace pinpoints which input
+        // ref couldn't be parsed — which is exactly the diagnostic
+        // an operator needs.
+        let val: Value = serde_json::from_slice(&captured.value).map_err(|e| {
+            ResolveError::Other(format!(
+                "input ref `{key}` from binding `{src_binding}` is not valid JSON: {e}. \
+                 Upstream step likely returned a malformed result."
+            ))
+        })?;
         args.insert(key.clone(), val);
     }
     Ok(Value::Object(args))
@@ -896,8 +1333,7 @@ fn process_step_result(
             let dep_info = if step.input_refs.is_empty() {
                 String::new()
             } else {
-                let refs: Vec<_> =
-                    step.input_refs.values().map(|v| format!("${v}")).collect();
+                let refs: Vec<_> = step.input_refs.values().map(|v| format!("${v}")).collect();
                 format!("  (← {})", refs.join(", "))
             };
             let retry_info = if retry_count > 0 {
@@ -983,6 +1419,41 @@ fn process_step_result(
 
             (outcome, trace, None)
         }
+        StepExecResult::SkippedByDependency {
+            message,
+            started_at,
+        } => {
+            // Print a distinct glyph for cascaded skips so operators
+            // can tell "I chose not to run you" (— dim) from "your
+            // input producer didn't run" (⟿ yellow). The trace
+            // outcome is `Skipped` in both cases, but the message
+            // carries the provenance.
+            output::step(&format!(
+                "[{global_step}/{total}] {:<20} {:<14} {} (dep skipped)  {message}",
+                step.ability,
+                step.target.display_string(),
+                style("⟿").yellow(),
+            ));
+            let completed_at = now_unix_ms();
+            let trace = StepTrace {
+                step_id: step.step_id.clone(),
+                ability: step.ability.clone(),
+                target: step.target.clone(),
+                phase_index: phase_idx,
+                started_at_unix_ms: started_at,
+                completed_at_unix_ms: completed_at,
+                elapsed_ms: 0,
+                outcome: StepOutcome::Skipped,
+                retry_count: 0,
+                retry_history: Vec::new(),
+                result_size_bytes: None,
+                result_sha256: None,
+                error: Some(message),
+                input_refs: step.input_refs.clone(),
+                output_binding: step.output_binding.clone(),
+            };
+            (StepOutcome::Skipped, trace, None)
+        }
     }
 }
 
@@ -1011,12 +1482,21 @@ fn backoff_sleep(total_ms: u64) {
 fn compute_backoff(attempt: u32, step_id: &str) -> u64 {
     let base = RETRY_BASE_MS * 2u64.pow(attempt.saturating_sub(1));
     let capped = base.min(RETRY_MAX_MS);
-    // Deterministic jitter based on step_id + attempt
+    // Deterministic jitter based on step_id + attempt.
     let mut hasher = Sha256::new();
     hasher.update(step_id.as_bytes());
     hasher.update(attempt.to_le_bytes());
     let hash = hasher.finalize();
-    let jitter_seed = u64::from_le_bytes(hash[..8].try_into().unwrap());
+    // SHA-256 always returns 32 bytes, so `hash[..8]` is always exactly 8
+    // bytes and the conversion to `[u8; 8]` is infallible. The `expect`
+    // (rather than `unwrap`) documents the invariant for the next reader
+    // and would surface a clear cause if the digest algorithm were ever
+    // swapped for one with a smaller output.
+    let jitter_seed = u64::from_le_bytes(
+        hash[..8]
+            .try_into()
+            .expect("SHA-256 produces 32 bytes; first-8-byte slice is always [u8; 8]"),
+    );
     let jitter = jitter_seed % (RETRY_BASE_MS / 2 + 1);
     capped + jitter
 }
@@ -1028,10 +1508,12 @@ fn sha256_hex(data: &[u8]) -> String {
 
 fn hex_encode(bytes: &[u8]) -> String {
     use std::fmt::Write;
-    bytes.iter().fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
-        s
-    })
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
 }
 
 fn now_unix_ms() -> u64 {
@@ -1099,7 +1581,7 @@ mod tests {
             ability: &AbilityName,
             _arguments: &Value,
             _timeout_ms: Option<u64>,
-        ) -> Result<Value, String> {
+        ) -> Result<Value, EalError> {
             let ability_str = ability.as_str().to_string();
             let call_num = self.call_count.fetch_add(1, Ordering::SeqCst);
             self.calls
@@ -1114,13 +1596,17 @@ mod tests {
 
             // Fail by ability name (deterministic — safe for parallel tests)
             if self.fail_functions.contains(&ability_str) {
-                return Err(format!("simulated failure for {ability_str}"));
+                return Err(EalError::Unavailable(format!(
+                    "simulated failure for {ability_str}"
+                )));
             }
 
             // Fail first N calls (order-dependent — use only in sequential phases)
             let fail_n = self.fail_first_n.load(Ordering::SeqCst);
             if call_num < fail_n {
-                return Err(format!("simulated failure #{call_num}"));
+                return Err(EalError::Unavailable(format!(
+                    "simulated failure #{call_num}"
+                )));
             }
 
             Ok(serde_json::json!({
@@ -1130,7 +1616,7 @@ mod tests {
             }))
         }
 
-        fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, String> {
+        fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
             Ok(Box::new(MockDispatcher {
                 delay_ms: self.delay_ms,
                 call_count: Arc::clone(&self.call_count),
@@ -1138,6 +1624,103 @@ mod tests {
                 fail_functions: Arc::clone(&self.fail_functions),
                 calls: Arc::clone(&self.calls),
             }))
+        }
+    }
+
+    // ── CappedTraceBuffer: bounded memory invariant ──
+
+    /// Small helper: build a synthetic `StepTrace` with the given id,
+    /// so buffer tests don't depend on executing a real mission.
+    fn synth_trace(id: &str) -> StepTrace {
+        StepTrace {
+            step_id: id.to_string(),
+            ability: crate::registry::agent_id::AbilityName::parse("t")
+                .expect("valid ability name"),
+            target: crate::eal::ir::IrTarget::Device {
+                node_id: "n".to_string(),
+            },
+            phase_index: 0,
+            started_at_unix_ms: 0,
+            completed_at_unix_ms: 0,
+            elapsed_ms: 0,
+            outcome: StepOutcome::Completed,
+            retry_count: 0,
+            retry_history: vec![],
+            result_size_bytes: None,
+            result_sha256: None,
+            error: None,
+            input_refs: BTreeMap::new(),
+            output_binding: None,
+        }
+    }
+
+    #[test]
+    fn capped_trace_buffer_under_head_cap_keeps_everything() {
+        let mut buf = CappedTraceBuffer::new();
+        for i in 0..10 {
+            buf.push(synth_trace(&format!("s{i}")));
+        }
+        assert_eq!(buf.len(), 10);
+        let (entries, dropped) = buf.into_parts();
+        assert_eq!(dropped, 0);
+        assert_eq!(entries.len(), 10);
+        // Order preserved — this is the forensics contract.
+        for (i, e) in entries.iter().enumerate() {
+            assert_eq!(e.step_id, format!("s{i}"));
+        }
+    }
+
+    #[test]
+    fn capped_trace_buffer_head_boundary_saturates_exactly() {
+        // Pushing exactly TRACE_CAP_HEAD entries must fill the head
+        // and leave the tail empty — no entries dropped, no tail use.
+        let mut buf = CappedTraceBuffer::new();
+        for i in 0..TRACE_CAP_HEAD {
+            buf.push(synth_trace(&format!("s{i}")));
+        }
+        let (entries, dropped) = buf.into_parts();
+        assert_eq!(dropped, 0);
+        assert_eq!(entries.len(), TRACE_CAP_HEAD);
+    }
+
+    #[test]
+    fn capped_trace_buffer_between_head_and_cap_uses_tail() {
+        // Head + part of tail, but within TRACE_CAP_TOTAL — nothing
+        // should be dropped.
+        let n = TRACE_CAP_HEAD + 50;
+        let mut buf = CappedTraceBuffer::new();
+        for i in 0..n {
+            buf.push(synth_trace(&format!("s{i}")));
+        }
+        let (entries, dropped) = buf.into_parts();
+        assert_eq!(dropped, 0);
+        assert_eq!(entries.len(), n);
+    }
+
+    #[test]
+    fn capped_trace_buffer_over_cap_drops_middle_with_count() {
+        // Push twice TRACE_CAP_TOTAL. Expect: head preserved, tail
+        // holds the most recent TRACE_CAP_TAIL entries, middle slab
+        // counted as dropped.
+        let n = TRACE_CAP_HEAD + TRACE_CAP_TAIL + 250;
+        let expected_dropped = n - (TRACE_CAP_HEAD + TRACE_CAP_TAIL);
+        let mut buf = CappedTraceBuffer::new();
+        for i in 0..n {
+            buf.push(synth_trace(&format!("s{i}")));
+        }
+        let (entries, dropped) = buf.into_parts();
+        assert_eq!(dropped, expected_dropped);
+        assert_eq!(entries.len(), TRACE_CAP_HEAD + TRACE_CAP_TAIL);
+
+        // Head first TRACE_CAP_HEAD entries are s0..s{HEAD-1}.
+        for (i, e) in entries.iter().take(TRACE_CAP_HEAD).enumerate() {
+            assert_eq!(e.step_id, format!("s{i}"));
+        }
+        // Tail last TRACE_CAP_TAIL entries are s{n-TAIL}..s{n-1}.
+        let tail_slice = &entries[TRACE_CAP_HEAD..];
+        for (offset, e) in tail_slice.iter().enumerate() {
+            let expected_idx = n - TRACE_CAP_TAIL + offset;
+            assert_eq!(e.step_id, format!("s{expected_idx}"));
         }
     }
 
@@ -1162,8 +1745,7 @@ mod tests {
 
         let dispatcher = MockDispatcher::new(100);
         let t0 = Instant::now();
-        let report =
-            execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
+        let report = execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
         let elapsed = t0.elapsed();
 
         assert_eq!(report.steps_completed, 3);
@@ -1193,8 +1775,7 @@ mod tests {
         assert_eq!(ir.phases.len(), 3);
 
         let dispatcher = MockDispatcher::new(10);
-        let report =
-            execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
+        let report = execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
 
         assert_eq!(report.steps_completed, 3);
 
@@ -1222,8 +1803,7 @@ mod tests {
         let ir = planner::compile(&prog).unwrap();
 
         let dispatcher = MockDispatcher::new(0);
-        let report =
-            execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
+        let report = execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
         let trace = &report.trace;
 
         assert_eq!(trace.mission_name, "traced");
@@ -1240,7 +1820,9 @@ mod tests {
         assert_eq!(st.ability.as_str(), "compute");
         assert_eq!(
             st.target,
-            IrTarget::Device { node_id: "gpu".to_string() }
+            IrTarget::Device {
+                node_id: "gpu".to_string()
+            }
         );
         assert_eq!(st.phase_index, 0);
         assert_eq!(st.outcome, StepOutcome::Completed);
@@ -1278,8 +1860,7 @@ mod tests {
 
         // Fail first 2 calls, succeed on 3rd
         let dispatcher = MockDispatcher::new(0).with_fail_first_n(2);
-        let report =
-            execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
+        let report = execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
 
         assert_eq!(report.steps_completed, 1);
         assert_eq!(report.steps_failed, 0);
@@ -1307,8 +1888,7 @@ mod tests {
 
         // Fail all calls
         let dispatcher = MockDispatcher::new(0).with_fail_first_n(100);
-        let report =
-            execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
+        let report = execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
 
         assert_eq!(report.steps_completed, 0);
         assert_eq!(report.steps_failed, 1);
@@ -1338,8 +1918,7 @@ mod tests {
         assert_eq!(ir.phases.len(), 2);
 
         let dispatcher = MockDispatcher::new(0).with_fail_first_n(1);
-        let report =
-            execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
+        let report = execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
 
         assert_eq!(report.steps_failed, 1);
         assert_eq!(report.trace.outcome, MissionOutcome::Aborted);
@@ -1376,12 +1955,64 @@ mod tests {
         // fail_first_n only fails call #0, which hits must-run.
         // To fail only the optional step, use with_fail_functions.
         let dispatcher = MockDispatcher::new(0).with_fail_functions(&["maybe"]);
-        let report =
-            execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
+        let report = execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
 
         assert_eq!(report.steps_completed, 1, "must-run should succeed");
-        assert_eq!(report.trace.steps_skipped, 1, "optional failure should be skipped");
+        assert_eq!(
+            report.trace.steps_skipped, 1,
+            "optional failure should be skipped"
+        );
         assert_eq!(report.trace.outcome, MissionOutcome::Completed);
+    }
+
+    /// Regression: when an optional step is skipped and a downstream
+    /// step consumes its output, the downstream must propagate as
+    /// `Skipped` (not `Failed`). Previously the missing binding hit
+    /// the `unresolved ref` branch and the consumer was classified
+    /// `Failed`, which miscategorised "my producer didn't run" as
+    /// "I ran and failed" in the trace — confusing operators reading
+    /// the audit log.
+    #[test]
+    fn downstream_is_auto_skipped_when_its_producer_is_skipped() {
+        let src = r#"
+            mission "cascade-skip" {
+                let p = call "producer" on "n" optional
+                let c = call "consumer" on "n" with { input = p.output }
+            }
+        "#;
+        let ir = planner::compile(&parser::parse(src).unwrap()).unwrap();
+
+        // `producer` fails (and is optional → Skipped), so `consumer`
+        // has no `p` binding to read. With the cascade-skip fix, the
+        // consumer sees `ResolveError::UpstreamSkipped` and is
+        // classified as Skipped too.
+        let dispatcher = MockDispatcher::new(0).with_fail_functions(&["producer"]);
+        let report = execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
+
+        assert_eq!(
+            report.trace.steps_skipped, 2,
+            "both the optional producer and the dependent consumer must skip; got trace: {:?}",
+            report.trace.step_traces
+        );
+        assert_eq!(report.steps_completed, 0);
+        assert_eq!(report.steps_failed, 0);
+
+        // Consumer trace carries the provenance in its error message.
+        let consumer = report
+            .trace
+            .step_traces
+            .iter()
+            .find(|t| t.ability.as_str() == "consumer")
+            .expect("consumer trace must be present");
+        assert_eq!(consumer.outcome, StepOutcome::Skipped);
+        let err = consumer
+            .error
+            .as_deref()
+            .expect("cascaded skip must carry a provenance message");
+        assert!(
+            err.contains("`p`"),
+            "cascaded-skip message must name the missing upstream binding; got: {err}"
+        );
     }
 
     // ── Test 9: Diamond graph phases + data flow ──
@@ -1403,8 +2034,7 @@ mod tests {
         // Phase 1 (b,c) should run in parallel with 50ms delay each
         let dispatcher = MockDispatcher::new(50);
         let t0 = Instant::now();
-        let report =
-            execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
+        let report = execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
         let elapsed = t0.elapsed();
 
         assert_eq!(report.steps_completed, 4);
@@ -1417,6 +2047,19 @@ mod tests {
     }
 
     // ── Test 10: Backoff calculation is deterministic and exponential ──
+    //
+    // These tests pin three properties the retry scheduler relies on:
+    //
+    //   1. **Exponential growth** (attempt N doubles attempt N-1's base).
+    //   2. **Upper bound** (capped base + bounded jitter; never unbounded).
+    //   3. **Determinism** (same `(attempt, step_id)` → same delay across
+    //      runs, threads, and processes). Determinism lets replay-based
+    //      trace comparison (two runs of the same mission) line up
+    //      exactly, which is the whole point of the deterministic jitter.
+    //
+    // Jitter bound: `jitter_seed % (RETRY_BASE_MS / 2 + 1)` → jitter is
+    // in `0..=500` ms. Asserting the *strict* upper bound (not just
+    // "capped + BASE") is what turns "works today" into "contract".
 
     #[test]
     fn backoff_is_exponential_and_deterministic() {
@@ -1424,21 +2067,52 @@ mod tests {
         let b2 = compute_backoff(2, "step-a");
         let b3 = compute_backoff(3, "step-a");
 
-        // Base: 1000ms. Attempt 1: 1000 + jitter, attempt 2: 2000 + jitter, attempt 3: 4000 + jitter
-        assert!(b1 >= RETRY_BASE_MS);
-        assert!(b2 >= RETRY_BASE_MS * 2);
-        assert!(b3 >= RETRY_BASE_MS * 4);
-        assert!(b3 <= RETRY_MAX_MS + RETRY_BASE_MS); // capped
+        // Base: 1000 ms. Attempt N adds `BASE * 2^(N-1)` (capped at MAX)
+        // plus a jitter of `0..=BASE/2`. The lower bound is the pure
+        // exponential; the upper bound is cap + jitter_max.
+        let jitter_max = RETRY_BASE_MS / 2;
+        assert!(b1 >= RETRY_BASE_MS && b1 <= RETRY_BASE_MS + jitter_max);
+        assert!(b2 >= RETRY_BASE_MS * 2 && b2 <= RETRY_BASE_MS * 2 + jitter_max);
+        assert!(b3 >= RETRY_BASE_MS * 4 && b3 <= RETRY_BASE_MS * 4 + jitter_max);
 
-        // Deterministic: same inputs → same output
+        // Determinism: same inputs → same output, same process OR fresh.
         assert_eq!(b1, compute_backoff(1, "step-a"));
         assert_eq!(b2, compute_backoff(2, "step-a"));
+        assert_eq!(b3, compute_backoff(3, "step-a"));
 
-        // Different step_id → different jitter
+        // Different step_id → independent jitter (but still in range).
         let b1_other = compute_backoff(1, "step-b");
-        // Could be same by chance, but very unlikely with sha256
-        // Just check it's valid range
-        assert!(b1_other >= RETRY_BASE_MS);
+        assert!(b1_other >= RETRY_BASE_MS && b1_other <= RETRY_BASE_MS + jitter_max);
+    }
+
+    /// Capping behaviour: beyond the saturation attempt, `base` is
+    /// clamped at `RETRY_MAX_MS` and the only variation comes from
+    /// jitter. A future refactor that removed the `min(MAX)` would
+    /// send delays into the stratosphere and fail this test.
+    #[test]
+    fn backoff_caps_base_at_retry_max_ms() {
+        let jitter_max = RETRY_BASE_MS / 2;
+        // attempt=10 → raw base = 1000 * 2^9 = 512_000, well past MAX=30_000
+        let capped = compute_backoff(10, "saturating-step");
+        assert!(
+            capped >= RETRY_MAX_MS && capped <= RETRY_MAX_MS + jitter_max,
+            "attempt=10 must saturate at RETRY_MAX_MS (~{RETRY_MAX_MS}); got {capped}"
+        );
+    }
+
+    /// Cross-step independence: two different step ids at the same
+    /// attempt number must (with overwhelming probability) yield
+    /// different jitter values. Asserting *any difference* across a
+    /// small corpus is a cheap way to catch a regression that silently
+    /// collapsed jitter to a constant (e.g. forgot to mix in step_id).
+    #[test]
+    fn backoff_jitter_varies_across_step_ids() {
+        let values: std::collections::HashSet<u64> =
+            (0..8).map(|i| compute_backoff(1, &format!("s{i}"))).collect();
+        assert!(
+            values.len() > 1,
+            "jitter collapsed to a constant across step ids — SHA256 seed broken?"
+        );
     }
 
     // ── Test 11: Graceful fallback to sequential when clone_for_thread fails ──
@@ -1455,12 +2129,12 @@ mod tests {
                 ability: &AbilityName,
                 _: &Value,
                 _: Option<u64>,
-            ) -> Result<Value, String> {
+            ) -> Result<Value, EalError> {
                 self.0.fetch_add(1, Ordering::SeqCst);
                 Ok(serde_json::json!({"ok": true, "function": ability.as_str()}))
             }
-            fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, String> {
-                Err("not cloneable".into())
+            fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
+                Err(EalError::Internal("not cloneable".into()))
             }
         }
 
@@ -1529,7 +2203,9 @@ mod tests {
 
     impl ShapeRecordingDispatcher {
         fn new() -> Self {
-            Self { seen: Arc::new(Mutex::new(Vec::new())) }
+            Self {
+                seen: Arc::new(Mutex::new(Vec::new())),
+            }
         }
     }
 
@@ -1541,25 +2217,322 @@ mod tests {
             ability: &AbilityName,
             arguments: &Value,
             _timeout_ms: Option<u64>,
-        ) -> Result<Value, String> {
-            self.seen.lock().unwrap().push((
-                target.clone(),
-                ability.clone(),
-                arguments.clone(),
-            ));
+        ) -> Result<Value, EalError> {
+            self.seen
+                .lock()
+                .unwrap()
+                .push((target.clone(), ability.clone(), arguments.clone()));
             Ok(serde_json::json!({"ok": true}))
         }
 
-        fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, String> {
+        fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
             Ok(Box::new(ShapeRecordingDispatcher {
                 seen: Arc::clone(&self.seen),
             }))
         }
     }
 
+    /// Regression: when a dispatcher returns a categorised `EalError`,
+    /// the `error_code:` prefix must survive the boundary into the
+    /// trace and retry log. Operators reading a trace file should be
+    /// able to grep for `validation_error:` / `not_found:` /
+    /// `unavailable:` / `internal_error:` without needing the typed
+    /// error available — that is the whole point of using `Display`
+    /// (rather than just `.message()`) at the boundary.
+    #[test]
+    fn dispatcher_error_code_is_preserved_in_trace_message() {
+        struct CategorisedDispatcher;
+        impl StepDispatcher for CategorisedDispatcher {
+            fn dispatch(
+                &self,
+                _tenant: &str,
+                _target: &IrTarget,
+                _ability: &AbilityName,
+                _arguments: &Value,
+                _timeout_ms: Option<u64>,
+            ) -> Result<Value, EalError> {
+                Err(EalError::NotFound("device 'node-x' not registered".into()))
+            }
+            fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
+                Ok(Box::new(CategorisedDispatcher))
+            }
+        }
+
+        let src = r#"mission "t" { let r = call "ping" on "node-x" }"#;
+        let ir = planner::compile(&parser::parse(src).unwrap()).unwrap();
+        let report = execute_with_dispatcher(&CategorisedDispatcher, "tenant", &ir).unwrap();
+
+        let trace = &report.trace.step_traces[0];
+        let err_msg = trace.error.as_deref().expect("step must have an error");
+        assert!(
+            err_msg.starts_with("not_found:"),
+            "trace error must start with the EalError code prefix; got: {err_msg}"
+        );
+        assert!(
+            err_msg.contains("device 'node-x' not registered"),
+            "trace error must include the human message; got: {err_msg}"
+        );
+    }
+
+    /// Golden test: pin the on-disk JSON shape of `ExecutionTrace` v1.
+    ///
+    /// This test is the contract between this module and any external
+    /// consumer that reads trace files (CI scrapers, external auditors,
+    /// the future trace-replay UI). Adding a field with
+    /// `#[serde(default)]` keeps this test green and is a backwards-
+    /// compatible change. *Renaming* a field, removing one, or changing
+    /// a numeric type fails this test — at which point the codebase is
+    /// telling you to bump `EXECUTION_TRACE_SCHEMA_VERSION` and write a
+    /// reader-side migration.
+    ///
+    /// We assert two properties:
+    ///   1. A freshly constructed trace serializes with
+    ///      `schema_version = EXECUTION_TRACE_SCHEMA_VERSION` and the
+    ///      full set of expected top-level keys.
+    ///   2. A *legacy* JSON payload (no `schema_version` field) round-
+    ///      trips through deserialization and lands at version 1 — the
+    ///      tolerant-read promise documented on the constant.
+    #[test]
+    fn trace_schema_v1_is_stable() {
+        // Use a hand-built trace rather than running a real mission so
+        // the expected JSON is fully deterministic — no timestamps to
+        // freeze, no SHA digests to mock.
+        let trace = ExecutionTrace {
+            schema_version: EXECUTION_TRACE_SCHEMA_VERSION,
+            mission_id: "m-test".to_string(),
+            mission_name: "test-mission".to_string(),
+            started_at_unix_ms: 1_000,
+            completed_at_unix_ms: 2_000,
+            total_elapsed_ms: 1_000,
+            phase_count: 1,
+            steps_completed: 0,
+            steps_failed: 0,
+            steps_skipped: 0,
+            outcome: MissionOutcome::Completed,
+            step_traces: vec![],
+            traces_truncated: 0,
+        };
+
+        let json: serde_json::Value =
+            serde_json::to_value(&trace).expect("trace must serialize cleanly");
+
+        // Property 1: version is stamped and the key set is fixed.
+        assert_eq!(json["schema_version"], serde_json::json!(1));
+        let expected_keys: std::collections::BTreeSet<&str> = [
+            "schema_version",
+            "mission_id",
+            "mission_name",
+            "started_at_unix_ms",
+            "completed_at_unix_ms",
+            "total_elapsed_ms",
+            "phase_count",
+            "steps_completed",
+            "steps_failed",
+            "steps_skipped",
+            "outcome",
+            "step_traces",
+            // `traces_truncated` is a v1-compatible additive field: it
+            // serializes as `0` for missions under the cap and older
+            // readers ignore unknown keys. Its presence here pins that
+            // the on-the-wire shape includes it for every fresh trace;
+            // the legacy-deserialize property below confirms old
+            // payloads without this key still parse.
+            "traces_truncated",
+        ]
+        .into_iter()
+        .collect();
+        let actual_keys: std::collections::BTreeSet<&str> = json
+            .as_object()
+            .expect("trace serializes to an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            actual_keys, expected_keys,
+            "ExecutionTrace key set drift detected. \
+             If this is intentional, bump EXECUTION_TRACE_SCHEMA_VERSION \
+             and update this test."
+        );
+
+        // Property 2: legacy payloads (no `schema_version`) read back
+        // as version 1 — the tolerant-read promise. A reader who pulls
+        // a pre-stamp trace file off disk must not get a deser error.
+        let legacy_json = serde_json::json!({
+            "mission_id": "legacy",
+            "mission_name": "legacy",
+            "started_at_unix_ms": 0,
+            "completed_at_unix_ms": 0,
+            "total_elapsed_ms": 0,
+            "phase_count": 0,
+            "steps_completed": 0,
+            "steps_failed": 0,
+            "steps_skipped": 0,
+            "outcome": "completed",
+            "step_traces": [],
+        });
+        let legacy: ExecutionTrace = serde_json::from_value(legacy_json)
+            .expect("pre-stamp trace JSON must deserialize via #[serde(default)]");
+        assert_eq!(
+            legacy.schema_version, 1,
+            "pre-stamp traces must read back as v1 — bump current_trace_schema_version() if v2+ landed"
+        );
+    }
+
+    /// Regression: a malformed upstream payload must fail the
+    /// consuming step at `resolve_arguments`, not silently inject
+    /// `null` and let the downstream step run with corrupt input. The
+    /// previous `unwrap_or(Value::Null)` made this class of bug a
+    /// debugging black hole — see commit history for the original
+    /// motivation.
+    #[test]
+    fn resolve_arguments_fails_loud_on_malformed_upstream_payload() {
+        use crate::registry::agent_id::{AbilityName, AgentId};
+        use std::collections::BTreeMap;
+
+        let mut input_refs = BTreeMap::new();
+        input_refs.insert("input".to_string(), "upstream".to_string());
+
+        let step = IrStep {
+            step_id: "consumer".to_string(),
+            step_name: "consumer".to_string(),
+            ability: AbilityName::parse("review").unwrap(),
+            target: IrTarget::Agent(AgentId::parse("claude").unwrap()),
+            static_arguments: serde_json::json!({}),
+            input_refs,
+            output_binding: None,
+            timeout_seconds: 0,
+            max_retries: 0,
+            on_failure: IrFailurePolicy::Continue,
+            optional: false,
+            content_type: "application/json".to_string(),
+        };
+
+        // "{not json" is exactly the sort of partial / corrupted output
+        // that motivated this guard — a streaming ability that died
+        // mid-flush can leave bytes like this in the captured slot.
+        let mut results: HashMap<String, CapturedResult> = HashMap::new();
+        results.insert(
+            "upstream".to_string(),
+            CapturedResult {
+                value: b"{not json".to_vec(),
+            },
+        );
+
+        let skipped: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let err = resolve_arguments(&step, &results, &skipped)
+            .expect_err("malformed upstream payload must surface as step error");
+        let msg = err.to_string();
+        // The malformed-payload path is `ResolveError::Other` (not
+        // UpstreamSkipped) — the binding *was* produced, we just
+        // couldn't parse the bytes.
+        assert!(
+            matches!(err, ResolveError::Other(_)),
+            "malformed payload is a generic resolve error, not UpstreamSkipped; got: {err:?}"
+        );
+        assert!(
+            msg.contains("input ref `input`"),
+            "error must name the consuming arg name; got: {msg}"
+        );
+        assert!(
+            msg.contains("binding `upstream`"),
+            "error must name the upstream binding; got: {msg}"
+        );
+        assert!(
+            msg.to_lowercase().contains("not valid json"),
+            "error must explain the failure category; got: {msg}"
+        );
+    }
+
+    /// Regression: when an upstream step is skipped, a consumer's
+    /// `resolve_arguments` must return the typed `UpstreamSkipped`
+    /// variant (not the generic `Other`), so the caller can propagate
+    /// `Skipped` instead of miscategorising as `Failed`. This is the
+    /// contract that prevents the "optional producer → required
+    /// consumer" trace from looking like a cascade of failures.
+    #[test]
+    fn resolve_arguments_returns_upstream_skipped_for_skipped_binding() {
+        use crate::registry::agent_id::{AbilityName, AgentId};
+        use std::collections::BTreeMap;
+
+        let mut input_refs = BTreeMap::new();
+        input_refs.insert("input".to_string(), "producer".to_string());
+
+        let step = IrStep {
+            step_id: "consumer".to_string(),
+            step_name: "consumer".to_string(),
+            ability: AbilityName::parse("review").unwrap(),
+            target: IrTarget::Agent(AgentId::parse("claude").unwrap()),
+            static_arguments: serde_json::json!({}),
+            input_refs,
+            output_binding: None,
+            timeout_seconds: 0,
+            max_retries: 0,
+            on_failure: IrFailurePolicy::Continue,
+            optional: false,
+            content_type: "application/json".to_string(),
+        };
+
+        let results: HashMap<String, CapturedResult> = HashMap::new();
+        let mut skipped = std::collections::HashSet::new();
+        skipped.insert("producer".to_string());
+
+        let err = resolve_arguments(&step, &results, &skipped)
+            .expect_err("skipped upstream must surface as typed skip");
+        match err {
+            ResolveError::UpstreamSkipped { binding, arg } => {
+                assert_eq!(binding, "producer");
+                assert_eq!(arg, "input");
+            }
+            other => panic!("expected UpstreamSkipped, got: {other:?}"),
+        }
+    }
+
+    /// Counterpart: well-formed payloads still flow through cleanly.
+    /// Pinned alongside the failure case so a future refactor that
+    /// over-tightens the parser (e.g. requires top-level objects) is
+    /// caught immediately.
+    #[test]
+    fn resolve_arguments_threads_well_formed_payload() {
+        use crate::registry::agent_id::{AbilityName, AgentId};
+        use std::collections::BTreeMap;
+
+        let mut input_refs = BTreeMap::new();
+        input_refs.insert("input".to_string(), "upstream".to_string());
+
+        let step = IrStep {
+            step_id: "consumer".to_string(),
+            step_name: "consumer".to_string(),
+            ability: AbilityName::parse("review").unwrap(),
+            target: IrTarget::Agent(AgentId::parse("claude").unwrap()),
+            static_arguments: serde_json::json!({"k": "static"}),
+            input_refs,
+            output_binding: None,
+            timeout_seconds: 0,
+            max_retries: 0,
+            on_failure: IrFailurePolicy::Continue,
+            optional: false,
+            content_type: "application/json".to_string(),
+        };
+
+        let mut results: HashMap<String, CapturedResult> = HashMap::new();
+        results.insert(
+            "upstream".to_string(),
+            CapturedResult {
+                value: b"{\"answer\": 42}".to_vec(),
+            },
+        );
+
+        let skipped: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let resolved =
+            resolve_arguments(&step, &results, &skipped).expect("well-formed payload must parse");
+        let obj = resolved.as_object().expect("resolved args are an object");
+        assert_eq!(obj.get("k"), Some(&serde_json::json!("static")));
+        assert_eq!(obj.get("input"), Some(&serde_json::json!({"answer": 42})));
+    }
+
     #[test]
     fn member_call_lowers_to_agent_target() {
-        use crate::shared::agent_id::AgentId;
+        use crate::registry::agent_id::AgentId;
 
         let src = r#"
             mission "member-call" {
@@ -1590,7 +2563,9 @@ mod tests {
         assert_eq!(step.ability.as_str(), "chat");
         assert_eq!(
             step.target,
-            IrTarget::Device { node_id: "node-1".to_string() },
+            IrTarget::Device {
+                node_id: "node-1".to_string()
+            },
             "traditional `call ... on ...` must lower to IrTarget::Device"
         );
     }
@@ -1599,7 +2574,7 @@ mod tests {
     fn member_call_dispatches_to_agent_via_recorder() {
         // The interpreter dispatch path receives the resolved
         // IrTarget::Agent — no string-based classification along the way.
-        use crate::shared::agent_id::AgentId;
+        use crate::registry::agent_id::AgentId;
 
         let src = r#"
             mission "member-call" {
@@ -1617,10 +2592,7 @@ mod tests {
             IrTarget::Agent(AgentId::parse("claude").unwrap())
         );
         assert_eq!(seen[0].1.as_str(), "chat");
-        assert_eq!(
-            seen[0].2.get("prompt").and_then(|v| v.as_str()),
-            Some("hi")
-        );
+        assert_eq!(seen[0].2.get("prompt").and_then(|v| v.as_str()), Some("hi"));
     }
 
     #[test]
@@ -1638,7 +2610,9 @@ mod tests {
         assert_eq!(seen.len(), 1);
         assert_eq!(
             seen[0].0,
-            IrTarget::Device { node_id: "node-1".to_string() }
+            IrTarget::Device {
+                node_id: "node-1".to_string()
+            }
         );
         assert_eq!(seen[0].1.as_str(), "chat");
     }
