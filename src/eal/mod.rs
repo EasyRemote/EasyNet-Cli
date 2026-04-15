@@ -10,16 +10,21 @@
 //   Mission IR v2                 — serializable execution plan
 //   Axon Invoke primitives        — gRPC execution backend
 //
-// Pipeline: source → lexer → parser → analyzer → planner → ir → interpreter
+// Pipeline: source → lexer → parser → planner → ir → interpreter
+//
+//   `planner` collapses what used to be a separate analyzer pass +
+//   planner pass into a single compile step (see `planner.rs`'s
+//   module doc for why — the old two-file split added a boundary
+//   without adding a user). The planner is the sole entry point
+//   from AST to IR.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-pub mod analyzer;
-pub mod ast;
-pub mod interpreter;
-pub mod ir;
-pub mod lexer;
-pub mod parser;
-pub mod planner;
-
+pub(crate) mod ast;
+pub(crate) mod error;
+pub(crate) mod interpreter;
+pub(crate) mod ir;
+pub(crate) mod lexer;
+pub(crate) mod parser;
+pub(crate) mod planner;

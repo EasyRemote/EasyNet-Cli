@@ -21,10 +21,10 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
-use crate::shared::agent_id::{AbilityName, AgentId};
+use crate::registry::agent_id::{AbilityName, AgentId};
 
 /// Where a step dispatches to. The two variants encode the ontological
 /// distinction between agent (network actor, ontology §6.4) and device
@@ -86,8 +86,15 @@ pub struct IrStep {
     pub target: IrTarget,
 
     pub static_arguments: serde_json::Value,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub input_refs: HashMap<String, String>,
+    /// Argument key → source binding name. Stored as a `BTreeMap` so the
+    /// serialized JSON has stable, lexicographic key order: every
+    /// compile of the same EAL source produces a byte-identical IR,
+    /// which lets `easynet mission run --emit-ir` output be diffed and
+    /// makes any future "compile cache by content hash" path correct
+    /// by construction. A `HashMap` here would have given the same
+    /// runtime semantics but a different JSON ordering on every run.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub input_refs: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_binding: Option<String>,
 
@@ -103,11 +110,19 @@ pub struct IrStep {
     pub content_type: String,
 }
 
-fn default_ct() -> String { "application/json".into() }
+fn default_ct() -> String {
+    "application/json".into()
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
-pub enum IrFailurePolicy { #[default] Continue, Abort, Skip, Retry }
+pub enum IrFailurePolicy {
+    #[default]
+    Continue,
+    Abort,
+    Skip,
+    Retry,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MissionIr {
@@ -119,7 +134,10 @@ pub struct MissionIr {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PhaseRange { pub start: usize, pub end: usize }
+pub struct PhaseRange {
+    pub start: usize,
+    pub end: usize,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IrConstraints {

@@ -58,25 +58,55 @@ use super::ast::*;
 use super::lexer::{Lexer, Token};
 
 pub fn parse(source: &str) -> anyhow::Result<EalProgram> {
-    let tokens = Lexer::new(source).tokenize().map_err(|e| anyhow::anyhow!(e))?;
+    let tokens = Lexer::new(source)
+        .tokenize()
+        .map_err(|e| anyhow::anyhow!(e))?;
     Parser::new(tokens).parse_program()
 }
 
-struct Parser { tokens: Vec<Token>, pos: usize }
+struct Parser {
+    tokens: Vec<Token>,
+    pos: usize,
+}
 
 impl Parser {
-    fn new(tokens: Vec<Token>) -> Self { Self { tokens, pos: 0 } }
-    fn peek(&self) -> &Token { self.tokens.get(self.pos).unwrap_or(&Token::Eof) }
-    fn peek_at(&self, offset: usize) -> &Token { self.tokens.get(self.pos + offset).unwrap_or(&Token::Eof) }
-    fn advance(&mut self) -> Token { let t = self.tokens.get(self.pos).cloned().unwrap_or(Token::Eof); self.pos += 1; t }
+    fn new(tokens: Vec<Token>) -> Self {
+        Self { tokens, pos: 0 }
+    }
+    fn peek(&self) -> &Token {
+        self.tokens.get(self.pos).unwrap_or(&Token::Eof)
+    }
+    fn peek_at(&self, offset: usize) -> &Token {
+        self.tokens.get(self.pos + offset).unwrap_or(&Token::Eof)
+    }
+    fn advance(&mut self) -> Token {
+        let t = self.tokens.get(self.pos).cloned().unwrap_or(Token::Eof);
+        self.pos += 1;
+        t
+    }
     fn expect(&mut self, expected: &Token) -> anyhow::Result<()> {
         let t = self.advance();
         anyhow::ensure!(&t == expected, "expected {expected:?}, got {t:?}");
         Ok(())
     }
-    fn expect_string(&mut self) -> anyhow::Result<String> { match self.advance() { Token::StringLit(s) => Ok(s), t => anyhow::bail!("expected string, got {t:?}") } }
-    fn expect_ident(&mut self) -> anyhow::Result<String> { match self.advance() { Token::Ident(s) => Ok(s), t => anyhow::bail!("expected ident, got {t:?}") } }
-    fn expect_int(&mut self) -> anyhow::Result<i64> { match self.advance() { Token::IntLit(n) => Ok(n), t => anyhow::bail!("expected int, got {t:?}") } }
+    fn expect_string(&mut self) -> anyhow::Result<String> {
+        match self.advance() {
+            Token::StringLit(s) => Ok(s),
+            t => anyhow::bail!("expected string, got {t:?}"),
+        }
+    }
+    fn expect_ident(&mut self) -> anyhow::Result<String> {
+        match self.advance() {
+            Token::Ident(s) => Ok(s),
+            t => anyhow::bail!("expected ident, got {t:?}"),
+        }
+    }
+    fn expect_int(&mut self) -> anyhow::Result<i64> {
+        match self.advance() {
+            Token::IntLit(n) => Ok(n),
+            t => anyhow::bail!("expected int, got {t:?}"),
+        }
+    }
 
     fn parse_program(&mut self) -> anyhow::Result<EalProgram> {
         let mission = self.parse_mission()?;
@@ -92,7 +122,10 @@ impl Parser {
             stmts.push(self.parse_statement()?);
         }
         self.expect(&Token::RBrace)?;
-        Ok(MissionDecl { name, statements: stmts })
+        Ok(MissionDecl {
+            name,
+            statements: stmts,
+        })
     }
 
     fn parse_statement(&mut self) -> anyhow::Result<Statement> {
@@ -116,21 +149,28 @@ impl Parser {
         match self.peek() {
             Token::Call => self.parse_call_expr(),
             Token::Ident(_) if *self.peek_at(1) == Token::Dot => self.parse_member_call(),
-            t => anyhow::bail!(
-                "expected `call ...` or `<agent>.<ability>(...)`, got {t:?}"
-            ),
+            t => anyhow::bail!("expected `call ...` or `<agent>.<ability>(...)`, got {t:?}"),
         }
     }
 
     fn parse_call_expr(&mut self) -> anyhow::Result<CallExpr> {
         self.expect(&Token::Call)?;
         let function_name = self.expect_string()?;
-        let target_node = if *self.peek() == Token::On { self.advance(); Some(self.expect_string()?) } else { None };
+        let target_node = if *self.peek() == Token::On {
+            self.advance();
+            Some(self.expect_string()?)
+        } else {
+            None
+        };
         let arguments = if *self.peek() == Token::With {
-            self.advance(); self.expect(&Token::LBrace)?;
+            self.advance();
+            self.expect(&Token::LBrace)?;
             let fields = self.parse_fields()?;
-            self.expect(&Token::RBrace)?; fields
-        } else { Vec::new() };
+            self.expect(&Token::RBrace)?;
+            fields
+        } else {
+            Vec::new()
+        };
         let options = self.parse_options()?;
         // Traditional `call X on Y` form lowers to a Device target.
         // To call an agent, use member-call syntax (`agent.ability(...)`).
@@ -192,40 +232,43 @@ impl Parser {
     /// fallback that `parse_value` allows — bare idents in a member call
     /// are reserved for future use (e.g. references), so we make them an
     /// error today rather than silently coerce them to strings.
+    ///
+    /// Implementation note: the match consumes the token via `advance()`
+    /// in a single step per arm and destructures the payload at the
+    /// same point. The earlier `peek-then-if-let-advance-else-unreachable`
+    /// form was load-bearing on the invariant that `peek()` and
+    /// `advance()` see the same token; any future change that interposes
+    /// whitespace skipping or similar between them would panic in an
+    /// `unreachable!()` arm. Destructuring inside `match self.advance()`
+    /// eliminates the invariant entirely.
     fn parse_arg_value(&mut self) -> anyhow::Result<FieldValue> {
-        match self.peek().clone() {
-            Token::StringLit(_) => {
-                if let Token::StringLit(s) = self.advance() { Ok(FieldValue::String(s)) } else { unreachable!() }
+        // For the IDENT case we need look-ahead (to see `.output`), so
+        // branch before consuming.
+        if matches!(self.peek(), Token::Ident(_)) {
+            // Only `IDENT.output` is accepted here. Anything else is
+            // an error — the grammar ambiguity guard requires that
+            // bare idents not be silently coerced to strings.
+            let ident = self.expect_ident()?;
+            if *self.peek() == Token::Dot {
+                self.advance();
+                let acc = self.expect_ident()?;
+                anyhow::ensure!(
+                    acc == "output",
+                    "unknown accessor '.{acc}' (only '.output' supported in member-call args)"
+                );
+                return Ok(FieldValue::VarRef { var_name: ident });
             }
-            Token::IntLit(_) => {
-                if let Token::IntLit(n) = self.advance() { Ok(FieldValue::Int(n)) } else { unreachable!() }
-            }
-            Token::FloatLit(_) => {
-                if let Token::FloatLit(f) = self.advance() { Ok(FieldValue::Float(f)) } else { unreachable!() }
-            }
-            Token::BoolLit(_) => {
-                if let Token::BoolLit(b) = self.advance() { Ok(FieldValue::Bool(b)) } else { unreachable!() }
-            }
-            Token::Ident(_) => {
-                // Only `IDENT.output` is accepted here. Anything else is
-                // an error — the grammar ambiguity guard requires that
-                // bare idents not be silently coerced to strings.
-                let ident = self.expect_ident()?;
-                if *self.peek() == Token::Dot {
-                    self.advance();
-                    let acc = self.expect_ident()?;
-                    anyhow::ensure!(
-                        acc == "output",
-                        "unknown accessor '.{acc}' (only '.output' supported in member-call args)"
-                    );
-                    Ok(FieldValue::VarRef { var_name: ident })
-                } else {
-                    anyhow::bail!(
-                        "bare identifier '{ident}' is not a valid argument value; \
-                         use a string literal, number, bool, or '<var>.output'"
-                    );
-                }
-            }
+            anyhow::bail!(
+                "bare identifier '{ident}' is not a valid argument value; \
+                 use a string literal, number, bool, or '<var>.output'"
+            );
+        }
+        // Scalar literals: consume and destructure in one step.
+        match self.advance() {
+            Token::StringLit(s) => Ok(FieldValue::String(s)),
+            Token::IntLit(n) => Ok(FieldValue::Int(n)),
+            Token::FloatLit(f) => Ok(FieldValue::Float(f)),
+            Token::BoolLit(b) => Ok(FieldValue::Bool(b)),
             t => anyhow::bail!("expected argument value, got {t:?}"),
         }
     }
@@ -237,28 +280,41 @@ impl Parser {
             self.expect(&Token::Eq)?;
             let value = self.parse_value()?;
             fields.push(Field { key, value });
-            if *self.peek() == Token::Comma { self.advance(); }
+            if *self.peek() == Token::Comma {
+                self.advance();
+            }
         }
         Ok(fields)
     }
 
+    /// Parse one value inside a `with { ... }` field block.
+    ///
+    /// Unlike `parse_arg_value` (member-call named args), this form
+    /// silently coerces a bare identifier to a string literal for
+    /// legacy ergonomics with the traditional `call "..." on "..." with
+    /// { key = value }` production. Everything else — var-refs, scalars
+    /// — behaves identically.
+    ///
+    /// See `parse_arg_value` for the destructure-in-one-step rationale.
     fn parse_value(&mut self) -> anyhow::Result<FieldValue> {
-        match self.peek().clone() {
-            Token::StringLit(_) => { if let Token::StringLit(s) = self.advance() { Ok(FieldValue::String(s)) } else { unreachable!() } }
-            Token::IntLit(_) => { if let Token::IntLit(n) = self.advance() { Ok(FieldValue::Int(n)) } else { unreachable!() } }
-            Token::FloatLit(_) => { if let Token::FloatLit(f) = self.advance() { Ok(FieldValue::Float(f)) } else { unreachable!() } }
-            Token::BoolLit(_) => { if let Token::BoolLit(b) = self.advance() { Ok(FieldValue::Bool(b)) } else { unreachable!() } }
-            Token::Ident(_) => {
-                let ident = self.expect_ident()?;
-                if *self.peek() == Token::Dot {
-                    self.advance();
-                    let acc = self.expect_ident()?;
-                    anyhow::ensure!(acc == "output", "unknown accessor '.{acc}' (only '.output' supported)");
-                    Ok(FieldValue::VarRef { var_name: ident })
-                } else {
-                    Ok(FieldValue::String(ident))
-                }
+        if matches!(self.peek(), Token::Ident(_)) {
+            let ident = self.expect_ident()?;
+            if *self.peek() == Token::Dot {
+                self.advance();
+                let acc = self.expect_ident()?;
+                anyhow::ensure!(
+                    acc == "output",
+                    "unknown accessor '.{acc}' (only '.output' supported)"
+                );
+                return Ok(FieldValue::VarRef { var_name: ident });
             }
+            return Ok(FieldValue::String(ident));
+        }
+        match self.advance() {
+            Token::StringLit(s) => Ok(FieldValue::String(s)),
+            Token::IntLit(n) => Ok(FieldValue::Int(n)),
+            Token::FloatLit(f) => Ok(FieldValue::Float(f)),
+            Token::BoolLit(b) => Ok(FieldValue::Bool(b)),
             t => anyhow::bail!("expected value, got {t:?}"),
         }
     }
@@ -267,20 +323,50 @@ impl Parser {
         let mut opts = StepOptions::default();
         loop {
             match self.peek() {
-                Token::Timeout => { self.advance(); opts.timeout_seconds = Some(self.expect_int()? as i32); }
-                Token::Retries => { self.advance(); opts.max_retries = Some(self.expect_int()? as i32); }
-                Token::OnFailure => { self.advance(); opts.on_failure = Some(self.parse_policy()?); }
-                Token::Optional => { self.advance(); opts.optional = true; }
+                Token::Timeout => {
+                    self.advance();
+                    opts.timeout_seconds = Some(self.expect_i32_in_range("timeout")?);
+                }
+                Token::Retries => {
+                    self.advance();
+                    opts.max_retries = Some(self.expect_i32_in_range("retries")?);
+                }
+                Token::OnFailure => {
+                    self.advance();
+                    opts.on_failure = Some(self.parse_policy()?);
+                }
+                Token::Optional => {
+                    self.advance();
+                    opts.optional = true;
+                }
                 _ => break,
             }
         }
         Ok(opts)
     }
 
+    /// Read an integer literal and bounds-check it as a non-negative i32.
+    /// The previous `expect_int()? as i32` silently truncated values
+    /// outside `[i32::MIN, i32::MAX]` (e.g. `timeout 5_000_000_000`
+    /// wrapped to `705_032_704`); negative values silently flowed
+    /// through to the runtime where they meant the opposite of intent.
+    /// Both `timeout` and `retries` are non-negative by definition, so
+    /// we reject the negative range here too rather than hand garbage
+    /// to the planner.
+    fn expect_i32_in_range(&mut self, field: &str) -> anyhow::Result<i32> {
+        let n = self.expect_int()?;
+        if !(0..=i32::MAX as i64).contains(&n) {
+            anyhow::bail!("{field} value {n} out of range (must be 0..={})", i32::MAX);
+        }
+        Ok(n as i32)
+    }
+
     fn parse_policy(&mut self) -> anyhow::Result<FailurePolicy> {
         match self.advance() {
-            Token::Abort => Ok(FailurePolicy::Abort), Token::Skip => Ok(FailurePolicy::Skip),
-            Token::Retry => Ok(FailurePolicy::Retry), Token::Continue => Ok(FailurePolicy::Continue),
+            Token::Abort => Ok(FailurePolicy::Abort),
+            Token::Skip => Ok(FailurePolicy::Skip),
+            Token::Retry => Ok(FailurePolicy::Retry),
+            Token::Continue => Ok(FailurePolicy::Continue),
             t => anyhow::bail!("expected failure policy, got {t:?}"),
         }
     }
@@ -306,7 +392,52 @@ mod tests {
     #[test]
     fn parse_optional() {
         let p = parse(r#"mission "t" { call "ping" on "m" optional }"#).unwrap();
-        match &p.mission.statements[0] { Statement::Call(c) => assert!(c.options.optional), _ => panic!() }
+        match &p.mission.statements[0] {
+            Statement::Call(c) => assert!(c.options.optional),
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn parse_rejects_oversize_timeout() {
+        // The previous `as i32` truncated values >i32::MAX into garbage
+        // (often negative) and silently passed them to the planner. The
+        // new bounds check surfaces them as a parse error so the user
+        // sees the problem at compile time, not as a mysterious negative
+        // timeout at runtime.
+        let err = parse(r#"mission "t" { call "x" on "n" timeout 5000000000 }"#).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("timeout") && msg.contains("out of range"),
+            "expected an out-of-range error mentioning 'timeout', got: {msg}"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_negative_retries() {
+        // Negative retry counts are nonsensical and previously survived
+        // the implicit `as i32` cast unchanged. Reject them at parse
+        // time so the planner never has to defend against impossible
+        // states.
+        let err = parse(r#"mission "t" { call "x" on "n" retries -1 }"#).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("retries") && msg.contains("out of range"),
+            "expected an out-of-range error mentioning 'retries', got: {msg}"
+        );
+    }
+
+    #[test]
+    fn parse_accepts_valid_timeout_and_retries_at_boundaries() {
+        // 0 (unset/no-timeout) and i32::MAX must both still parse —
+        // the bounds check rejects only values outside `0..=i32::MAX`.
+        assert!(parse(r#"mission "t" { call "x" on "n" timeout 0 }"#).is_ok());
+        assert!(parse(&format!(
+            r#"mission "t" {{ call "x" on "n" timeout {} }}"#,
+            i32::MAX
+        ))
+        .is_ok());
+        assert!(parse(r#"mission "t" { call "x" on "n" retries 0 }"#).is_ok());
     }
 
     // ── Member-call form (ontology §6.2 surface) ───────────────────────────
@@ -365,10 +496,7 @@ mod tests {
 
     #[test]
     fn member_call_with_options() {
-        let p = parse(
-            r#"mission "t" { let r = claude.chat(prompt: "hi") timeout 30 }"#,
-        )
-        .unwrap();
+        let p = parse(r#"mission "t" { let r = claude.chat(prompt: "hi") timeout 30 }"#).unwrap();
         let c = extract_call(&p, 0);
         assert_eq!(c.options.timeout_seconds, Some(30));
     }
@@ -392,10 +520,8 @@ mod tests {
 
     #[test]
     fn traditional_call_unchanged() {
-        let p = parse(
-            r#"mission "t" { let r = call "chat" on "claude" with { prompt = "hi" } }"#,
-        )
-        .unwrap();
+        let p = parse(r#"mission "t" { let r = call "chat" on "claude" with { prompt = "hi" } }"#)
+            .unwrap();
         let c = extract_call(&p, 0);
         assert_eq!(c.function_name, "chat");
         assert_eq!(c.target_node.as_deref(), Some("claude"));
