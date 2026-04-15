@@ -1,0 +1,39 @@
+{
+  "name": "novelty-verify",
+  "version": "1.0.0",
+  "tool_name": "novelty-verify",
+  "description": "Verify whether a research idea is novel against recent literature. Multi-source search plus cross-model verification. Former ARIS skill: /novelty-check.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "idea": {
+        "type": "string",
+        "description": "Method or idea description to check"
+      },
+      "claims": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Core technical claims that must be novel"
+      }
+    },
+    "required": ["idea", "claims"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "verdict": {
+        "type": "string",
+        "enum": ["novel", "partial_overlap", "already_published"],
+        "description": "Overall novelty verdict"
+      },
+      "closest_work": {
+        "type": "array",
+        "description": "Most similar existing papers with differentiation points"
+      },
+      "claim_status": {
+        "type": "object",
+        "description": "Per-claim novelty assessment"
+      }
+    }
+  }
+}

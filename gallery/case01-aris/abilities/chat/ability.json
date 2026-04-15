@@ -1,0 +1,25 @@
+{
+  "name": "chat",
+  "version": "1.0.0",
+  "tool_name": "chat",
+  "description": "Default callable for all ARIS agents. Accepts a prompt, returns a reply. Analogous to Object.toString() in Java — every agent exposes this.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "prompt": {
+        "type": "string",
+        "description": "The message or question to send to the agent"
+      }
+    },
+    "required": ["prompt"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "reply": {
+        "type": "string",
+        "description": "The agent's response"
+      }
+    }
+  }
+}

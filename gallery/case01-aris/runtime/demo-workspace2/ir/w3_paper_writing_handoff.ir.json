@@ -1,0 +1,110 @@
+{
+  "name": "case01-aris-w3-paper-writing-handoff",
+  "steps": [
+    {
+      "step_id": "review_state",
+      "step_name": "review_state",
+      "ability": "aris.load_artifact",
+      "target": {
+        "kind": "device",
+        "node_id": "aris-host"
+      },
+      "static_arguments": {
+        "stage": "review"
+      },
+      "output_binding": "review_state",
+      "timeout_seconds": 30,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "narrative",
+      "step_name": "narrative",
+      "ability": "write_narrative",
+      "target": {
+        "kind": "agent",
+        "tenant": "default",
+        "name": "aris"
+      },
+      "static_arguments": {},
+      "input_refs": {
+        "experiment_result": "review_state",
+        "project_state": "review_state",
+        "review_feedback": "review_state"
+      },
+      "output_binding": "narrative",
+      "timeout_seconds": 180,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "final_check",
+      "step_name": "final_check",
+      "ability": "review",
+      "target": {
+        "kind": "agent",
+        "tenant": "default",
+        "name": "oracle"
+      },
+      "static_arguments": {
+        "rubric": "claim-evidence-coherence",
+        "topic": "w3-narrative-check"
+      },
+      "input_refs": {
+        "artifact": "narrative"
+      },
+      "output_binding": "final_check",
+      "timeout_seconds": 120,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "__anon_1",
+      "step_name": "__anon_1",
+      "ability": "aris.persist_artifact",
+      "target": {
+        "kind": "device",
+        "node_id": "aris-host"
+      },
+      "static_arguments": {
+        "stage": "narrative"
+      },
+      "input_refs": {
+        "payload": "final_check"
+      },
+      "timeout_seconds": 0,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    }
+  ],
+  "phases": [
+    {
+      "start": 0,
+      "end": 1
+    },
+    {
+      "start": 1,
+      "end": 2
+    },
+    {
+      "start": 2,
+      "end": 3
+    },
+    {
+      "start": 3,
+      "end": 4
+    }
+  ],
+  "constraints": {
+    "max_parallel": 0,
+    "deadline_seconds": 0
+  }
+}

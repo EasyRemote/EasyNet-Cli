@@ -1,0 +1,51 @@
+// agent.aal — Gemini Reviewer Agent
+// ===================================
+//
+// Secondary reviewer using Google's Gemini models. Provides
+// diversity of perspective in the adversarial review process.
+// Can be used as an alternative or supplement to the GPT reviewer.
+//
+// Ontology mapping:
+//   - ARIS MCP server "mcp-servers/gemini-review/" → this agent
+//   - Same ability surface as reviewer-gpt, different private skills
+//   - The fact that two reviewers share the same ability signatures
+//     but have different internal skills is a textbook demonstration
+//     of the OOP view (ontology §4): same public interface,
+//     different private implementation.
+//
+// Identity: google/reviewer
+// Default ability: chat
+// Runtime: BCC (backed by Gemini 2.5 Flash/Pro)
+
+class GeminiReviewer {
+  public:
+    ability chat(prompt: String) -> reply: String
+
+    ability review(artifacts: List<FilePath>, round: Int,
+                   difficulty: Difficulty, venue: String)
+                   -> ReviewAssessment {
+      // Same signature as openai/reviewer.review.
+      // Different internal strategy: Gemini excels at visual review
+      // (figures, architecture diagrams) and long-context reading.
+    }
+
+    ability review_reply(thread_id: String, update: String,
+                         results: Map<String, Value>)
+                         -> ReviewAssessment
+
+    ability visual_review(images: List<FilePath>, context: String)
+                          -> VisualAssessment {
+      // Gemini-specific: leverages multimodal capabilities
+      // to review figures, plots, and diagrams.
+      // Not available on the GPT reviewer.
+    }
+
+  private:
+    skill review_calibration
+    skill visual_analysis_strategy
+      // How to assess figure quality, readability, information density.
+    skill long_context_reading
+      // Strategy for processing very long papers in a single pass.
+    skill api_config
+      // Gemini API keys, model selection (flash vs pro), timeouts.
+}

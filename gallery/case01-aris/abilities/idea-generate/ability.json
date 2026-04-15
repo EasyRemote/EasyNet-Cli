@@ -1,0 +1,46 @@
+{
+  "name": "idea-generate",
+  "version": "1.0.0",
+  "tool_name": "idea-generate",
+  "description": "Brainstorm research ideas from a literature landscape, filter by feasibility and compute cost, run pilot experiments, and rank by empirical signal. Former ARIS skill: /idea-creator.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "direction": {
+        "type": "string",
+        "description": "Research direction"
+      },
+      "landscape": {
+        "type": "object",
+        "description": "Output from lit-survey ability"
+      },
+      "ref_paper": {
+        "type": "string",
+        "description": "Optional reference paper path or arXiv URL to base ideas on"
+      },
+      "max_ideas": {
+        "type": "integer",
+        "default": 8,
+        "description": "Number of ideas to brainstorm before filtering"
+      }
+    },
+    "required": ["direction", "landscape"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "ideas": {
+        "type": "array",
+        "description": "Ranked list of ideas with pilot results and novelty status"
+      },
+      "recommended": {
+        "type": "object",
+        "description": "Top-ranked idea with full justification"
+      },
+      "eliminated": {
+        "type": "array",
+        "description": "Ideas killed at each phase, with reasons"
+      }
+    }
+  }
+}

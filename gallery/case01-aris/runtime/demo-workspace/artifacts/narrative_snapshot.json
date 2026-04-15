@@ -1,0 +1,11 @@
+{
+  "stage": "narrative",
+  "saved_at_utc": "2026-04-13T15:50:01+00:00",
+  "payload": {
+    "status": "ok",
+    "outputs": [
+      "NARRATIVE_REPORT.md",
+      "paper/main.tex"
+    ]
+  }
+}

@@ -1,0 +1,60 @@
+// nightmare-audit.eal — Adversarial Experiment Audit
+// ====================================================
+//
+// The most aggressive review mode in ARIS: the reviewer reads the
+// entire repo independently and verifies every claim against actual
+// code and output files.
+//
+// This mission demonstrates the extreme of cross-agent collaboration:
+//   - Two reviewers (GPT + Gemini) independently audit the same work
+//   - Neither reviewer can see the other's assessment (parallel phase)
+//   - A final synthesis compares both audits
+//
+// Former ARIS: embedded inside auto-review-loop with
+//              REVIEWER_DIFFICULTY=nightmare
+//
+// This is a pure External EAL mission — it only touches public
+// abilities. The reviewers' internal strategies (code_reading_strategy,
+// statistical_verification) are private skills that EAL cannot
+// and should not access (encapsulation invariant §4.4).
+//
+// Run:
+//   easynet mission run gallery/case01-aris/missions/nightmare-audit.eal
+
+mission "aris-nightmare-audit" {
+
+  // ── Phase 0: Independent audits (parallel) ────────────────────
+  // Two different reviewer agents audit the same repo. The compiler
+  // infers no dependency between them → same phase, parallel.
+
+  let gpt_audit = reviewer.adversarial_audit(
+    repo_path: "project://",
+    claims:    "project://NARRATIVE_REPORT.md"
+  ) timeout 900
+
+  let gemini_audit = gemini_reviewer.review(
+    artifacts:  "project://NARRATIVE_REPORT.md,project://src/,project://results/",
+    round:      1,
+    difficulty: "nightmare",
+    venue:      "ICLR"
+  ) timeout 900
+
+  // ── Phase 1: Visual audit (Gemini-specific) ───────────────────
+  // Only Gemini has the visual_review ability — demonstrating that
+  // agents with the same role can have different ability surfaces.
+
+  let visual = gemini_reviewer.visual_review(
+    images:  "project://paper/figures/",
+    context: gpt_audit.output
+  ) timeout 300
+
+  // ── Phase 2: Synthesis ────────────────────────────────────────
+  // The researcher synthesizes both audits into a comprehensive
+  // integrity report. This is the researcher calling its own
+  // analyze_results ability with the two audit outputs.
+
+  let integrity_report = researcher.analyze_results(
+    data_dir: gpt_audit.output,
+    metrics:  "verified_claims,false_claims,unverified_claims"
+  ) timeout 300
+}

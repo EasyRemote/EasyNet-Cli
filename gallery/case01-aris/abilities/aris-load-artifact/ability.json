@@ -1,0 +1,7 @@
+{
+  "name": "aris.load_artifact",
+  "version": "1.0.0",
+  "tool_name": "aris.load_artifact",
+  "description": "Load stage artifact snapshot from workspace",
+  "command": "bash run.sh"
+}

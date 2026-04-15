@@ -1,0 +1,23 @@
+{
+  "name": "paper-write",
+  "version": "1.0.0",
+  "tool_name": "paper-write",
+  "description": "Section-by-section LaTeX drafting with citation discipline (DBLP -> CrossRef -> [VERIFY]). Former ARIS skill: /paper-write.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "outline": { "type": "object", "description": "Paper outline from paper-plan" },
+      "section": { "type": "string", "description": "Which section to write (or 'all')" },
+      "results": { "type": "object", "description": "Experiment results for evidence" }
+    },
+    "required": ["outline", "section"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "tex_content": { "type": "string" },
+      "citations_added": { "type": "array" },
+      "verify_needed": { "type": "array", "description": "Citations marked [VERIFY]" }
+    }
+  }
+}

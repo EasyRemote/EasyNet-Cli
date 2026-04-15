@@ -1,0 +1,7 @@
+{
+  "name": "aris.metrics_ping",
+  "version": "1.0.0",
+  "tool_name": "aris.metrics_ping",
+  "description": "Emit metrics ping into artifacts/metrics.log",
+  "command": "bash run.sh"
+}

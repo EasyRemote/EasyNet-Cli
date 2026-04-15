@@ -1,0 +1,27 @@
+// agent-send-sugar.eal — Demonstrating ontology §7.2
+// ====================================================
+//
+// "agent send" is sugar for the default ability (chat).
+// These two forms are semantically identical:
+//
+//   easynet agent send researcher "Review my experiment plan"
+//
+//   mission "ask-researcher" {
+//     let r = researcher.chat(prompt: "Review my experiment plan")
+//   }
+//
+// This file shows how the simplest possible ARIS interaction
+// ("ask Claude a question") maps to a one-line EAL mission.
+//
+// Per ontology §7.2:
+//   1. agent send is not a special command — it is the shortest
+//      possible mission.
+//   2. Agents are callable objects — chat is the default callable.
+//   3. Mission is the universal execution model — even a simple
+//      "send a message" goes through the mission runtime.
+
+mission "ask-researcher" {
+  let reply = researcher.chat(
+    prompt: "Given our recent experiment results showing 2.3% improvement on MMLU, is this sufficient for an ICLR submission? Consider baseline strength and statistical significance."
+  ) timeout 120
+}

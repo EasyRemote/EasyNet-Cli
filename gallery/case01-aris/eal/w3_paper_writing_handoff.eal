@@ -1,0 +1,24 @@
+// Case01 W3: writing handoff mission.
+
+mission "case01-aris-w3-paper-writing-handoff" {
+  let review_state = call "aris.load_artifact" on "aris-host" with {
+    stage = "review"
+  } timeout 30
+
+  let narrative = aris.write_narrative(
+    project_state: review_state.output,
+    experiment_result: review_state.output,
+    review_feedback: review_state.output
+  ) timeout 180
+
+  let final_check = oracle.review(
+    topic: "w3-narrative-check",
+    artifact: narrative.output,
+    rubric: "claim-evidence-coherence"
+  ) timeout 120
+
+  call "aris.persist_artifact" on "aris-host" with {
+    stage = "narrative",
+    payload = final_check.output
+  }
+}

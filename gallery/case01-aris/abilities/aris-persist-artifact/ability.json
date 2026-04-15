@@ -1,0 +1,7 @@
+{
+  "name": "aris.persist_artifact",
+  "version": "1.0.0",
+  "tool_name": "aris.persist_artifact",
+  "description": "Persist a stage snapshot to artifacts/<stage>_snapshot.json",
+  "command": "bash run.sh"
+}

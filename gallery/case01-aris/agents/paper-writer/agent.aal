@@ -1,0 +1,92 @@
+// agent.aal — Paper Writer Agent
+// ================================
+//
+// Specialized agent for Workflow 3: paper writing, figure generation,
+// compilation, and iterative improvement. Separated from the
+// researcher because paper writing is a distinct competency that
+// benefits from its own skill set and memory graph.
+//
+// In ARIS, this was embedded inside the researcher's skill chain.
+// Extracting it as a separate agent means:
+//   1. It can be improved independently (its writing graph evolves
+//      from paper-specific feedback, not experiment feedback)
+//   2. Different users can share the same paper-writer agent
+//      while keeping their own researcher agents private
+//   3. The paper-writer can call the reviewer for section-level
+//      feedback during drafting (cross-agent collaboration)
+//
+// Identity: silan/paper-writer
+// Default ability: chat
+// Runtime: BCC (backed by Claude)
+
+class PaperWriter {
+  public:
+    ability chat(prompt: String) -> reply: String
+
+    ability plan(narrative: NarrativeReport, venue: String,
+                 claims: List<Claim>) -> PaperOutline {
+      // Former: /paper-plan
+      // Structured outline + claims matrix + figure inventory.
+    }
+
+    ability write_section(outline: PaperOutline, section: String,
+                          results: AnalysisReport) -> TexSection {
+      // Former: /paper-write (per-section)
+      // LaTeX drafting with citation discipline.
+      // Calls reviewer.review for section-level feedback if enabled.
+    }
+
+    ability generate_figures(plan: FigurePlan, data_dir: String)
+                             -> List<Figure> {
+      // Former: /paper-figure
+      // Matplotlib/tikz figure generation from experiment data.
+    }
+
+    ability illustrate(method_description: String)
+                       -> ArchitectureDiagram {
+      // Former: /paper-illustration
+      // Architecture diagrams from method descriptions.
+    }
+
+    ability compile(paper_dir: String) -> PdfResult {
+      // Former: /paper-compile
+      // Multi-pass xelatex with auto-repair.
+    }
+
+    ability improve(paper_dir: String, review: ReviewAssessment,
+                    max_rounds: Int) -> ImprovementLog {
+      // Former: /auto-paper-improvement-loop
+      // Iterative improvement based on reviewer feedback.
+    }
+
+    ability slides(paper_dir: String, duration: Int) -> SlidesResult {
+      // Former: /paper-slides
+      // Beamer slide generation from paper content.
+    }
+
+    ability poster(paper_dir: String, format: String) -> PosterResult {
+      // Former: /paper-poster
+      // Academic poster generation.
+    }
+
+  private:
+    skill citation_discipline
+      // DBLP → CrossRef → [VERIFY] chain.
+
+    skill writing_principles
+      // Clarity, precision, claim-evidence alignment.
+
+    skill venue_formatting
+      // Per-venue LaTeX templates, page limits, style rules.
+
+    skill figure_aesthetics
+      // Color palettes, font sizes, aspect ratios for academic figures.
+
+    skill latex_repair
+      // Common LaTeX compilation errors and fixes.
+      // Evolves from each paper-compile failure/recovery cycle.
+
+    skill narrative_structure
+      // How to weave quantitative results into a compelling story.
+      // Evolved from review feedback on past papers.
+}

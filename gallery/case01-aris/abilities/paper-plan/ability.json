@@ -1,0 +1,23 @@
+{
+  "name": "paper-plan",
+  "version": "1.0.0",
+  "tool_name": "paper-plan",
+  "description": "Generate a structured paper outline with claims matrix, figure inventory, and section dependencies. Former ARIS skill: /paper-plan.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "narrative": { "type": "string", "description": "Path to NARRATIVE_REPORT.md or report content" },
+      "venue": { "type": "string", "description": "Target venue (ICLR, NeurIPS, ...)" },
+      "claims": { "type": "array", "items": { "type": "string" }, "description": "Validated claims from experiments" }
+    },
+    "required": ["narrative", "venue"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "outline": { "type": "object" },
+      "claims_matrix": { "type": "object" },
+      "figure_inventory": { "type": "array" }
+    }
+  }
+}

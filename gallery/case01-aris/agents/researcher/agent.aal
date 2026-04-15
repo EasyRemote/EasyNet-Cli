@@ -1,0 +1,135 @@
+// agent.aal — Researcher Agent (Claude-based Executor)
+// =====================================================
+//
+// The primary research executor in the ARIS pipeline. This agent
+// drives idea discovery, experiment implementation, paper writing,
+// and all code-level work. It is the "author" in the adversarial
+// cross-model collaboration protocol.
+//
+// Ontology mapping:
+//   - ARIS role "Executor (Claude/Codex)" → this agent
+//   - ARIS skills (64 SKILL.md files) → split into public abilities
+//     (network-callable) and private skills (internal knowledge)
+//   - ARIS artifact contracts → ability input/output signatures
+//
+// Identity: silan/researcher
+// Default ability: chat
+// Runtime: BCC (Brain Cell Coding)
+
+class Researcher {
+  public:
+    // ── Default callable (ontology §7.1) ──────────────────────────
+    ability chat(prompt: String) -> reply: String
+
+    // ── Research lifecycle abilities ──────────────────────────────
+    // Each maps to a former ARIS skill that has cross-agent value.
+
+    ability lit_survey(direction: String, sources: List<String>,
+                       download: Bool, max_results: Int) -> LitReport {
+      // Former: /research-lit
+      // Searches arXiv, Semantic Scholar, Google Scholar.
+      // Returns structured landscape with gaps and open problems.
+      // Graph: memory accrues known-paper index; workflow refines
+      //        query strategies based on past survey effectiveness.
+    }
+
+    ability idea_generate(direction: String, landscape: LitReport,
+                          ref_paper: Option<Paper>,
+                          max_ideas: Int) -> IdeaReport {
+      // Former: /idea-creator
+      // Brainstorms ideas, filters by feasibility, runs pilots.
+      // Graph: memory tracks which idea patterns succeed/fail
+      //        across projects; workflow evolves filtering heuristics.
+    }
+
+    ability novelty_verify(idea: String, claims: List<String>)
+                           -> NoveltyReport {
+      // Former: /novelty-check
+      // Multi-source lit search + cross-model verification.
+      // Invokes reviewer agent's review ability for independent check.
+    }
+
+    ability experiment_bridge(plan: ExperimentPlan, base_repo: Option<String>)
+                              -> ExperimentLog {
+      // Former: /experiment-bridge (Workflow 1.5)
+      // Implements experiment code from plan, deploys to GPU,
+      // collects initial results.
+    }
+
+    ability experiment_run(command: String, server: String,
+                           gpu_ids: List<Int>) -> RunResult {
+      // Former: /run-experiment
+      // Deploys and monitors GPU experiments.
+    }
+
+    ability paper_plan(narrative: NarrativeReport, venue: String)
+                       -> PaperOutline {
+      // Former: /paper-plan
+      // Generates structured outline + claims matrix.
+    }
+
+    ability paper_write(outline: PaperOutline, sections: List<String>)
+                        -> TexDraft {
+      // Former: /paper-write
+      // Section-by-section LaTeX drafting with citation discipline.
+    }
+
+    ability paper_compile(paper_dir: String) -> PdfResult {
+      // Former: /paper-compile
+      // Multi-pass xelatex compilation with auto-repair.
+    }
+
+    ability analyze_results(data_dir: String, metrics: List<String>)
+                            -> AnalysisReport {
+      // Former: /analyze-results
+      // Statistical analysis and comparison tables.
+    }
+
+    ability rebuttal(paper_dir: String, reviews: List<Review>)
+                     -> RebuttalDoc {
+      // Former: /rebuttal
+      // Generates structured rebuttals for peer review responses.
+    }
+
+  private:
+    // ── Skills: internal knowledge, never network-visible ────────
+    // These are the agent's accumulated expertise. They inform HOW
+    // abilities execute but are never callable from outside.
+
+    skill thinking_style
+      // How this agent reasons about research problems.
+      // Evolves through feedback from successful/failed reviews.
+
+    skill code_review_prior
+      // Accumulated patterns for catching experiment bugs.
+      // Fed by experiment-audit traces.
+
+    skill citation_discipline
+      // Former: shared-references/citation-discipline.md
+      // DBLP → CrossRef → [VERIFY] chain. Never fabricate BibTeX.
+
+    skill writing_principles
+      // Former: shared-references/writing-principles.md
+      // Writing standards for academic papers.
+
+    skill venue_knowledge
+      // Former: shared-references/venue-checklists.md
+      // Formatting rules per venue (ICLR, NeurIPS, ICML, ...).
+
+    skill experiment_integrity
+      // Former: shared-references/experiment-integrity.md
+      // Prohibited fraud patterns. Executor must NOT judge its own
+      // eval code — that is the reviewer's job.
+
+    skill memory_compression_strategy
+      // How to compress long research context for session recovery.
+      // COMPACT mode: write findings.md + EXPERIMENT_LOG.md.
+
+    skill pilot_heuristics
+      // Which experiment designs are worth piloting.
+      // Evolved from past pilot success/failure rates.
+
+    skill gpu_deployment
+      // SSH + screen/tmux deployment patterns.
+      // Server-specific quirks (CUDA versions, conda envs).
+}

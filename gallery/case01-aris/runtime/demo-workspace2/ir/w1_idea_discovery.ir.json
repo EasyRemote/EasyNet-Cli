@@ -1,0 +1,137 @@
+{
+  "name": "case01-aris-w1-idea-discovery",
+  "steps": [
+    {
+      "step_id": "bootstrap",
+      "step_name": "bootstrap",
+      "ability": "aris.bootstrap",
+      "target": {
+        "kind": "device",
+        "node_id": "aris-host"
+      },
+      "static_arguments": {
+        "direction": "factorized gap in discrete diffusion LMs",
+        "project": "case01-aris",
+        "stage": "w1"
+      },
+      "output_binding": "bootstrap",
+      "timeout_seconds": 30,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "idea_report",
+      "step_name": "idea_report",
+      "ability": "idea_discovery",
+      "target": {
+        "kind": "agent",
+        "tenant": "default",
+        "name": "aris"
+      },
+      "static_arguments": {
+        "direction": "factorized gap in discrete diffusion LMs"
+      },
+      "input_refs": {
+        "constraints": "bootstrap"
+      },
+      "output_binding": "idea_report",
+      "timeout_seconds": 240,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "critique",
+      "step_name": "critique",
+      "ability": "review",
+      "target": {
+        "kind": "agent",
+        "tenant": "default",
+        "name": "oracle"
+      },
+      "static_arguments": {
+        "rubric": "novelty+feasibility+pilot-signal",
+        "topic": "w1-idea-discovery"
+      },
+      "input_refs": {
+        "artifact": "idea_report"
+      },
+      "output_binding": "critique",
+      "timeout_seconds": 180,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "refined",
+      "step_name": "refined",
+      "ability": "refine_idea",
+      "target": {
+        "kind": "agent",
+        "tenant": "default",
+        "name": "aris"
+      },
+      "static_arguments": {},
+      "input_refs": {
+        "review_feedback": "critique",
+        "idea_report": "idea_report"
+      },
+      "output_binding": "refined",
+      "timeout_seconds": 180,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": false,
+      "content_type": "application/json"
+    },
+    {
+      "step_id": "__anon_1",
+      "step_name": "__anon_1",
+      "ability": "aris.persist_artifact",
+      "target": {
+        "kind": "device",
+        "node_id": "aris-host"
+      },
+      "static_arguments": {
+        "stage": "idea"
+      },
+      "input_refs": {
+        "payload": "refined"
+      },
+      "timeout_seconds": 0,
+      "max_retries": 0,
+      "on_failure": "continue",
+      "optional": true,
+      "content_type": "application/json"
+    }
+  ],
+  "phases": [
+    {
+      "start": 0,
+      "end": 1
+    },
+    {
+      "start": 1,
+      "end": 2
+    },
+    {
+      "start": 2,
+      "end": 3
+    },
+    {
+      "start": 3,
+      "end": 4
+    },
+    {
+      "start": 4,
+      "end": 5
+    }
+  ],
+  "constraints": {
+    "max_parallel": 0,
+    "deadline_seconds": 0
+  }
+}

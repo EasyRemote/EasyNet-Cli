@@ -1,0 +1,119 @@
+// research-pipeline.eal — Full Research Pipeline (Workflow 1 → 2 → 3)
+// =====================================================================
+//
+// The end-to-end autonomous research workflow, expressed as an EAL
+// mission. This is the EasyNet-native equivalent of ARIS's
+// /research-pipeline skill.
+//
+// Former ARIS form:  A markdown SKILL.md file that Claude interprets
+//                    at runtime, chaining sub-skills by convention.
+//
+// EasyNet form:      A compilable EAL program with explicit data flow,
+//                    phase inference, and mission runtime support
+//                    (list, show, cancel).
+//
+// Ontology §7.2: every cross-agent interaction goes through the
+// mission execution model. There is no "second path."
+//
+// Prerequisites:
+//   easynet agent add researcher --type claude-code --tenant silan
+//   easynet agent add reviewer   --type codex       --tenant openai
+//   easynet agent add writer     --type claude-code --tenant silan
+//
+// Run:
+//   easynet mission run gallery/case01-aris/missions/research-pipeline.eal
+
+mission "aris-research-pipeline" {
+
+  // ── Phase 0: Literature Survey ────────────────────────────────
+  // researcher.lit_survey is a public ability (ontology §4.1).
+  // EAL can only write agent.ability(...) — it cannot reach into
+  // the researcher's private skills (encapsulation invariant §4.4).
+
+  let landscape = researcher.lit_survey(
+    direction: "sparse mixture-of-experts for edge deployment",
+    sources:   "arxiv,semantic_scholar,google_scholar",
+    download:  false,
+    max_results: 50
+  ) timeout 300
+
+  // ── Phase 1: Idea Generation (depends on landscape) ───────────
+  // The compiler infers this dependency from the variable reference.
+
+  let ideas = researcher.idea_generate(
+    direction: "sparse mixture-of-experts for edge deployment",
+    landscape: landscape.output,
+    max_ideas: 8
+  ) timeout 600
+
+  // ── Phase 2: Novelty Verification (depends on ideas) ──────────
+  // Internally, novelty_verify calls reviewer.review for cross-model
+  // verification — but that is an Internal EAL decision inside the
+  // researcher's ability graph, invisible to this External EAL.
+
+  let novelty = researcher.novelty_verify(
+    idea:   ideas.output,
+    claims: ideas.output
+  ) timeout 300
+
+  // ── Phase 3: External Review of top idea (depends on novelty) ─
+  // This is the first explicit cross-agent call in the mission.
+  // The researcher (executor) sends artifacts to the reviewer.
+  // Per reviewer independence protocol: only file paths, no summaries.
+
+  let initial_review = reviewer.review(
+    artifacts:  novelty.output,
+    round:      1,
+    difficulty: "medium",
+    venue:      "ICLR"
+  ) timeout 600
+
+  // ── Phase 4: Experiment Implementation (depends on review) ────
+
+  let experiments = researcher.experiment_bridge(
+    plan:      initial_review.output,
+    base_repo: "https://github.com/example/moe-edge"
+  ) timeout 1800
+
+  // ── Phase 5: Auto Review Loop ─────────────────────────────────
+  // This is a sub-mission invocation. The auto-review-loop mission
+  // handles the multi-round review internally.
+  // In EAL, this could be expressed as a mission call or inline.
+  // For clarity, we invoke the researcher's ability which internally
+  // runs the loop (its workflow graph handles round management).
+
+  let final_review = reviewer.review(
+    artifacts:  experiments.output,
+    round:      1,
+    difficulty: "hard",
+    venue:      "ICLR"
+  ) timeout 3600
+
+  // ── Phase 6: Paper Writing (depends on final review) ──────────
+  // Cross-agent: the paper-writer agent takes the researcher's
+  // narrative and the reviewer's final assessment.
+
+  let outline = writer.plan(
+    narrative: experiments.output,
+    venue:     "ICLR",
+    claims:    final_review.output
+  ) timeout 300
+
+  let draft = writer.write_section(
+    outline: outline.output,
+    section: "all",
+    results: experiments.output
+  ) timeout 600
+
+  let pdf = writer.compile(
+    paper_dir: draft.output
+  ) timeout 120
+
+  // ── Phase 7: Final improvement loop ───────────────────────────
+
+  let improved = writer.improve(
+    paper_dir:  pdf.output,
+    review:     final_review.output,
+    max_rounds: 3
+  ) timeout 3600
+}
