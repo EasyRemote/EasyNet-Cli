@@ -30,7 +30,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -38,7 +38,24 @@ use serde_json::Value;
 use super::process_runner::{self, ChildOptions};
 use super::run_store::RunDir;
 use super::stream_ui::{self, Usage};
+use super::toml_escape::toml_basic_string;
 use super::workspace;
+
+/// Acquire a mutex guard, recovering from poisoning.
+///
+/// See the matching helper in `claude_code.rs` for the full
+/// rationale: our accumulator mutexes carry plain data with no
+/// cross-field invariants, so treating a previous-holder panic as
+/// fatal would escalate a tolerable stream-reader-thread panic into
+/// a dead agent runner. The line-callback panic hook has already
+/// logged the failure; accepting a possibly-stale read here is the
+/// graceful-degradation path.
+fn lock_or_recover<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    match m.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
 
 /// Stats collected from a Codex run. Mirrors the Claude Code shape so the
 /// dispatch layer can treat both agents uniformly.
@@ -121,10 +138,13 @@ pub fn invoke_exec(prompt: &str, opts: CodexOptions) -> anyhow::Result<(String, 
         .to_string();
     let (mcp_cmd, mcp_args, mcp_env) = workspace::build_mcp_entry(&agent_name);
     args.push("-c".to_string());
-    args.push(format!("mcp_servers.easynet.command=\"{}\"", mcp_cmd.replace('"', "\\\"")));
+    args.push(format!(
+        "mcp_servers.easynet.command={}",
+        toml_basic_string(&mcp_cmd)
+    ));
     let args_toml = mcp_args
         .iter()
-        .map(|a| format!("\"{}\"", a.replace('"', "\\\"")))
+        .map(|a| toml_basic_string(a))
         .collect::<Vec<_>>()
         .join(", ");
     args.push("-c".to_string());
@@ -134,8 +154,8 @@ pub fn invoke_exec(prompt: &str, opts: CodexOptions) -> anyhow::Result<(String, 
             if let Some(s) = v.as_str() {
                 args.push("-c".to_string());
                 args.push(format!(
-                    "mcp_servers.easynet.env.{k}=\"{}\"",
-                    s.replace('"', "\\\"")
+                    "mcp_servers.easynet.env.{k}={}",
+                    toml_basic_string(s)
                 ));
             }
         }
@@ -172,27 +192,35 @@ pub fn invoke_exec(prompt: &str, opts: CodexOptions) -> anyhow::Result<(String, 
         handle_stream_line(line, &final_text_cb, &stats_cb, run_start);
     });
 
-    let result = process_runner::run_child("codex", &arg_refs, ChildOptions {
-        timeout: opts.timeout,
-        max_stdout_bytes: opts.max_output_bytes,
-        max_stderr_bytes: 262_144,
-        stdin_data: Some(prompt.to_string()),
-        env: opts.env,
-        cwd: opts.cwd,
-        stdout_line_callback: Some(callback),
-    })?;
+    let result = process_runner::run_child(
+        "codex",
+        &arg_refs,
+        ChildOptions {
+            timeout: opts.timeout,
+            max_stdout_bytes: opts.max_output_bytes,
+            max_stderr_bytes: 262_144,
+            stdin_data: Some(prompt.to_string()),
+            env: opts.env,
+            cwd: opts.cwd,
+            stdout_line_callback: Some(callback),
+        },
+    )?;
 
     if result.exit_code != 0 {
         let err_msg = if result.stderr.is_empty() {
             format!("codex exec exited with code {}", result.exit_code)
         } else {
-            format!("codex exec error (exit {}): {}", result.exit_code, result.stderr.trim())
+            format!(
+                "codex exec error (exit {}): {}",
+                result.exit_code,
+                result.stderr.trim()
+            )
         };
         anyhow::bail!(err_msg);
     }
 
-    let text = final_text.lock().unwrap().clone();
-    let mut final_stats = stats.lock().unwrap().clone();
+    let text = lock_or_recover(&final_text).clone();
+    let mut final_stats = lock_or_recover(&stats).clone();
     if final_stats.duration_ms == 0 {
         final_stats.duration_ms = run_start.elapsed().as_millis() as u64;
     }
@@ -259,7 +287,7 @@ fn handle_stream_line(
                         // Codex collapses the entire reply into a single
                         // agent_message item at the end of the turn; keep
                         // that as the final response value.
-                        *final_text.lock().unwrap() = text.to_string();
+                        *lock_or_recover(final_text) = text.to_string();
                     }
                 }
                 "reasoning" => {
@@ -286,10 +314,7 @@ fn handle_stream_line(
                     stream_ui::print_tool_result(run_start, &snippet, is_err);
                 }
                 "file_change" => {
-                    let status = item
-                        .get("status")
-                        .and_then(Value::as_str)
-                        .unwrap_or("done");
+                    let status = item.get("status").and_then(Value::as_str).unwrap_or("done");
                     stream_ui::print_tool_result(run_start, status, false);
                 }
                 _ => {}
@@ -297,7 +322,7 @@ fn handle_stream_line(
         }
         "turn.completed" => {
             if let Some(usage) = v.get("usage") {
-                let mut s = stats.lock().unwrap();
+                let mut s = lock_or_recover(stats);
                 s.input_tokens = usage
                     .get("input_tokens")
                     .and_then(Value::as_u64)
@@ -313,12 +338,15 @@ fn handle_stream_line(
                     .and_then(Value::as_u64)
                     .unwrap_or(s.cache_read_tokens);
                 s.num_turns = s.num_turns.saturating_add(1);
-                stream_ui::print_usage(run_start, &Usage {
-                    input_tokens: s.input_tokens,
-                    output_tokens: s.output_tokens,
-                    cache_read_tokens: s.cache_read_tokens,
-                    cache_creation_tokens: s.cache_creation_tokens,
-                });
+                stream_ui::print_usage(
+                    run_start,
+                    &Usage {
+                        input_tokens: s.input_tokens,
+                        output_tokens: s.output_tokens,
+                        cache_read_tokens: s.cache_read_tokens,
+                        cache_creation_tokens: s.cache_creation_tokens,
+                    },
+                );
             }
         }
         _ => {}
@@ -374,23 +402,34 @@ pub fn invoke_app_server(prompt: &str, opts: CodexOptions) -> anyhow::Result<Str
         cmd.env(k, v);
     }
 
-    let mut child = cmd.spawn()
+    let mut child = cmd
+        .spawn()
         .map_err(|e| anyhow::anyhow!("spawn codex app-server: {e}"))?;
 
     let mut stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
 
-    // Background reader thread.
+    // Background reader thread. The handle is kept so we can join it
+    // during shutdown — dropping it (or naming it `_reader_handle`)
+    // detaches the thread, which can outlive the function for the brief
+    // window between `child.wait()` returning and the OS finishing pipe
+    // teardown. Joining is cheap (the reader exits as soon as stdout
+    // hits EOF) and keeps the function fully synchronous from the
+    // caller's perspective.
     let (tx, rx) = mpsc::channel::<serde_json::Value>();
-    let _reader_handle = std::thread::spawn(move || {
+    let reader_handle = std::thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
         while let Ok(n) = reader.read_line(&mut line) {
-            if n == 0 { break; }
+            if n == 0 {
+                break;
+            }
             let trimmed = line.trim();
             if !trimmed.is_empty() {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                    if tx.send(v).is_err() { break; }
+                    if tx.send(v).is_err() {
+                        break;
+                    }
                 }
             }
             line.clear();
@@ -420,8 +459,11 @@ pub fn invoke_app_server(prompt: &str, opts: CodexOptions) -> anyhow::Result<Str
                 anyhow::bail!("codex app-server: timeout waiting for response id={id}");
             }
             let remaining = deadline - now;
-            let msg = rx.recv_timeout(remaining.min(Duration::from_secs(30)))
-                .map_err(|_| anyhow::anyhow!("codex app-server: timeout waiting for response id={id}"))?;
+            let msg = rx
+                .recv_timeout(remaining.min(Duration::from_secs(30)))
+                .map_err(|_| {
+                    anyhow::anyhow!("codex app-server: timeout waiting for response id={id}")
+                })?;
 
             if let Some(msg_id) = msg.get("id").and_then(|v| v.as_u64()) {
                 if msg_id == id {
@@ -436,10 +478,14 @@ pub fn invoke_app_server(prompt: &str, opts: CodexOptions) -> anyhow::Result<Str
     let mut stash: HashMap<u64, serde_json::Value> = HashMap::new();
 
     // 1. Initialize
-    send_rpc(1, "initialize", serde_json::json!({
-        "clientInfo": { "name": "easynet", "version": env!("CARGO_PKG_VERSION") },
-        "capabilities": { "experimentalApi": false }
-    }))?;
+    send_rpc(
+        1,
+        "initialize",
+        serde_json::json!({
+            "clientInfo": { "name": "easynet", "version": env!("CARGO_PKG_VERSION") },
+            "capabilities": { "experimentalApi": false }
+        }),
+    )?;
     let init = wait_response(&rx, 1, deadline, &mut stash)?;
     if init.get("error").is_some() {
         anyhow::bail!("codex app-server initialize error: {init}");
@@ -447,13 +493,17 @@ pub fn invoke_app_server(prompt: &str, opts: CodexOptions) -> anyhow::Result<Str
 
     // 2. Thread start
     let model_str = opts.model.clone().unwrap_or_else(|| "gpt-5.2".to_string());
-    send_rpc(2, "thread/start", serde_json::json!({
-        "cwd": std::env::current_dir()?.to_string_lossy(),
-        "model": model_str,
-        "sandbox": "read-only",
-        "approvalPolicy": "never",
-        "ephemeral": true,
-    }))?;
+    send_rpc(
+        2,
+        "thread/start",
+        serde_json::json!({
+            "cwd": std::env::current_dir()?.to_string_lossy(),
+            "model": model_str,
+            "sandbox": "read-only",
+            "approvalPolicy": "never",
+            "ephemeral": true,
+        }),
+    )?;
     let thread_resp = wait_response(&rx, 2, deadline, &mut stash)?;
     if thread_resp.get("error").is_some() {
         anyhow::bail!("codex app-server thread/start error: {thread_resp}");
@@ -465,10 +515,14 @@ pub fn invoke_app_server(prompt: &str, opts: CodexOptions) -> anyhow::Result<Str
         .to_string();
 
     // 3. Turn start
-    send_rpc(3, "turn/start", serde_json::json!({
-        "threadId": thread_id,
-        "input": [{ "type": "text", "text": prompt }],
-    }))?;
+    send_rpc(
+        3,
+        "turn/start",
+        serde_json::json!({
+            "threadId": thread_id,
+            "input": [{ "type": "text", "text": prompt }],
+        }),
+    )?;
     let turn_resp = wait_response(&rx, 3, deadline, &mut stash)?;
     if turn_resp.get("error").is_some() {
         anyhow::bail!("codex app-server turn/start error: {turn_resp}");
@@ -482,14 +536,16 @@ pub fn invoke_app_server(prompt: &str, opts: CodexOptions) -> anyhow::Result<Str
             anyhow::bail!("codex app-server: timeout waiting for turn/completed");
         }
         let remaining = deadline - now;
-        let msg = rx.recv_timeout(remaining.min(Duration::from_secs(30)))
+        let msg = rx
+            .recv_timeout(remaining.min(Duration::from_secs(30)))
             .map_err(|_| anyhow::anyhow!("codex app-server: timeout waiting for turn/completed"))?;
 
         let method = msg.get("method").and_then(|v| v.as_str()).unwrap_or("");
         match method {
             "turn/completed" => break,
             "item/completed" => {
-                if msg.pointer("/params/item/type").and_then(|v| v.as_str()) == Some("agentMessage") {
+                if msg.pointer("/params/item/type").and_then(|v| v.as_str()) == Some("agentMessage")
+                {
                     if let Some(text) = msg.pointer("/params/item/text").and_then(|v| v.as_str()) {
                         final_message = text.to_string();
                     }
@@ -499,10 +555,19 @@ pub fn invoke_app_server(prompt: &str, opts: CodexOptions) -> anyhow::Result<Str
         }
     }
 
-    // Clean shutdown.
+    // Clean shutdown. Order matters:
+    //   1. Drop stdin so the child sees EOF and stops issuing new RPC
+    //      responses.
+    //   2. Kill + wait the child so the stdout pipe is fully closed
+    //      from the writer side.
+    //   3. Join the reader thread, which has now seen EOF on stdout
+    //      and exited its loop. Joining surfaces a panic in the reader
+    //      (which would otherwise vanish) and ensures the thread is
+    //      gone before this function returns.
     drop(stdin);
     let _ = child.kill();
     let _ = child.wait();
+    let _ = reader_handle.join();
 
     if final_message.is_empty() {
         anyhow::bail!("codex app-server: no agent message received");
@@ -513,11 +578,15 @@ pub fn invoke_app_server(prompt: &str, opts: CodexOptions) -> anyhow::Result<Str
 
 /// Check if the `codex` CLI is available and return version info.
 pub fn doctor() -> anyhow::Result<String> {
-    let result = process_runner::run_child("codex", &["--version"], ChildOptions {
-        timeout: Duration::from_secs(10),
-        max_stdout_bytes: 4096,
-        ..Default::default()
-    })?;
+    let result = process_runner::run_child(
+        "codex",
+        &["--version"],
+        ChildOptions {
+            timeout: Duration::from_secs(10),
+            max_stdout_bytes: 4096,
+            ..Default::default()
+        },
+    )?;
     if result.exit_code != 0 {
         anyhow::bail!("codex --version failed (exit {})", result.exit_code);
     }

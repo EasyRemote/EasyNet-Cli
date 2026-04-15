@@ -41,8 +41,8 @@ impl Default for ChildOptions {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(300),
-            max_stdout_bytes: 1_048_576,  // 1 MB
-            max_stderr_bytes: 262_144,    // 256 KB
+            max_stdout_bytes: 1_048_576, // 1 MB
+            max_stderr_bytes: 262_144,   // 256 KB
             stdin_data: None,
             env: BTreeMap::new(),
             cwd: None,
@@ -86,8 +86,7 @@ pub fn run_child(cmd: &str, args: &[&str], opts: ChildOptions) -> anyhow::Result
         command.current_dir(cwd);
     }
 
-    let mut child = command.spawn()
-        .with_context(|| format!("spawn {cmd}"))?;
+    let mut child = command.spawn().with_context(|| format!("spawn {cmd}"))?;
 
     // Write stdin data if provided.
     if let Some(data) = &opts.stdin_data {
@@ -138,7 +137,11 @@ pub fn run_child(cmd: &str, args: &[&str], opts: ChildOptions) -> anyhow::Result
 
 /// Line-oriented bounded reader. Invokes `callback(line)` for each full line
 /// and returns the full collected output (up to `max_bytes`).
-fn read_bounded_lines<R: Read>(reader: R, max_bytes: usize, callback: LineCallback) -> (Vec<u8>, bool) {
+fn read_bounded_lines<R: Read>(
+    reader: R,
+    max_bytes: usize,
+    callback: LineCallback,
+) -> (Vec<u8>, bool) {
     let mut br = BufReader::new(reader);
     let mut collected: Vec<u8> = Vec::new();
     let mut truncated = false;
@@ -161,7 +164,27 @@ fn read_bounded_lines<R: Read>(reader: R, max_bytes: usize, callback: LineCallba
                 }
                 let trimmed = line.trim_end_matches(['\n', '\r']);
                 if !trimmed.is_empty() {
-                    callback(trimmed);
+                    // The callback is user-provided (codex / claude_code
+                    // both register a closure that updates a Mutex and
+                    // writes a trace line). A panic in any of those
+                    // would otherwise unwind the stdout reader thread
+                    // and then unwind the parent at `.join().unwrap()`,
+                    // killing the whole agent invocation. Catch it,
+                    // emit a one-line stderr breadcrumb, and keep
+                    // draining the pipe so the child doesn't deadlock
+                    // on a full kernel buffer.
+                    let cb_ref = &callback;
+                    let trimmed_owned = trimmed.to_string();
+                    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        cb_ref(&trimmed_owned)
+                    }))
+                    .is_err()
+                    {
+                        eprintln!(
+                            "[easynet warn] stdout line callback panicked; \
+                             continuing to drain pipe so the child does not deadlock"
+                        );
+                    }
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -210,10 +233,7 @@ fn wait_with_timeout(child: &mut std::process::Child, timeout: Duration) -> anyh
                 if Instant::now() >= deadline {
                     // Timeout: escalate kill.
                     kill_child(child);
-                    anyhow::bail!(
-                        "agent process timed out after {}s",
-                        timeout.as_secs()
-                    );
+                    anyhow::bail!("agent process timed out after {}s", timeout.as_secs());
                 }
                 std::thread::sleep(poll_interval);
             }
@@ -226,7 +246,9 @@ fn kill_child(child: &mut std::process::Child) {
     {
         let pid = child.id() as i32;
         // SIGTERM first.
-        unsafe { libc::kill(pid, libc::SIGTERM); }
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+        }
         // Wait 5s for graceful exit.
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
@@ -237,7 +259,9 @@ fn kill_child(child: &mut std::process::Child) {
             }
         }
         // SIGKILL.
-        unsafe { libc::kill(pid, libc::SIGKILL); }
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
         let _ = child.wait();
     }
     #[cfg(not(unix))]

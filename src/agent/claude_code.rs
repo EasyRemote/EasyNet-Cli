@@ -25,7 +25,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -33,6 +33,26 @@ use serde_json::Value;
 use super::process_runner::{self, ChildOptions};
 use super::run_store::RunDir;
 use super::stream_ui::{self, Usage};
+
+/// Acquire a mutex guard, recovering from poisoning.
+///
+/// A poisoned mutex means *a previous holder of this lock panicked*.
+/// For the shared accumulator mutexes used by the stream-reader and
+/// the caller thread, the data inside is always safe to observe: it
+/// is a plain data aggregator (`String` for final text, `RunStats` as
+/// plain numeric fields) with no cross-field invariants that could be
+/// mid-update. Treating poisoning as fatal here would escalate one
+/// reader-thread panic into the death of the agent runner — the user
+/// would see "agent invocation died" when the actual fault was a
+/// single malformed JSON line that the line-callback's panic hook
+/// already logged and recovered from. We accept the stale read
+/// instead.
+fn lock_or_recover<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    match m.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
 
 /// Summary of a completed Claude Code run, extracted from the final
 /// `result` event in the stream-json output.
@@ -126,27 +146,35 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
         handle_stream_line(line, &final_text_cb, &stats_cb, run_start);
     });
 
-    let result = process_runner::run_child("claude", &arg_refs, ChildOptions {
-        timeout: opts.timeout,
-        max_stdout_bytes: opts.max_output_bytes,
-        max_stderr_bytes: 262_144,
-        stdin_data: Some(prompt.to_string()),
-        env: opts.env,
-        cwd: opts.cwd,
-        stdout_line_callback: Some(callback),
-    })?;
+    let result = process_runner::run_child(
+        "claude",
+        &arg_refs,
+        ChildOptions {
+            timeout: opts.timeout,
+            max_stdout_bytes: opts.max_output_bytes,
+            max_stderr_bytes: 262_144,
+            stdin_data: Some(prompt.to_string()),
+            env: opts.env,
+            cwd: opts.cwd,
+            stdout_line_callback: Some(callback),
+        },
+    )?;
 
     if result.exit_code != 0 {
         let err_msg = if result.stderr.is_empty() {
             format!("claude exited with code {}", result.exit_code)
         } else {
-            format!("claude error (exit {}): {}", result.exit_code, result.stderr.trim())
+            format!(
+                "claude error (exit {}): {}",
+                result.exit_code,
+                result.stderr.trim()
+            )
         };
         anyhow::bail!(err_msg);
     }
 
-    let text = final_text.lock().unwrap().clone();
-    let mut final_stats = stats.lock().unwrap().clone();
+    let text = lock_or_recover(&final_text).clone();
+    let mut final_stats = lock_or_recover(&stats).clone();
     if final_stats.duration_ms == 0 {
         final_stats.duration_ms = run_start.elapsed().as_millis() as u64;
     }
@@ -204,17 +232,32 @@ fn handle_stream_line(
             // print a running total after each turn so the user can see how
             // the budget is growing live.
             if let Some(usage) = v.pointer("/message/usage") {
-                let mut s = stats.lock().unwrap();
-                s.input_tokens = usage.get("input_tokens").and_then(Value::as_u64).unwrap_or(s.input_tokens);
-                s.output_tokens = usage.get("output_tokens").and_then(Value::as_u64).unwrap_or(s.output_tokens);
-                s.cache_read_tokens = usage.get("cache_read_input_tokens").and_then(Value::as_u64).unwrap_or(s.cache_read_tokens);
-                s.cache_creation_tokens = usage.get("cache_creation_input_tokens").and_then(Value::as_u64).unwrap_or(s.cache_creation_tokens);
-                stream_ui::print_usage(run_start, &Usage {
-                    input_tokens: s.input_tokens,
-                    output_tokens: s.output_tokens,
-                    cache_read_tokens: s.cache_read_tokens,
-                    cache_creation_tokens: s.cache_creation_tokens,
-                });
+                let mut s = lock_or_recover(stats);
+                s.input_tokens = usage
+                    .get("input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(s.input_tokens);
+                s.output_tokens = usage
+                    .get("output_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(s.output_tokens);
+                s.cache_read_tokens = usage
+                    .get("cache_read_input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(s.cache_read_tokens);
+                s.cache_creation_tokens = usage
+                    .get("cache_creation_input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(s.cache_creation_tokens);
+                stream_ui::print_usage(
+                    run_start,
+                    &Usage {
+                        input_tokens: s.input_tokens,
+                        output_tokens: s.output_tokens,
+                        cache_read_tokens: s.cache_read_tokens,
+                        cache_creation_tokens: s.cache_creation_tokens,
+                    },
+                );
             }
         }
         "user" => {
@@ -222,7 +265,10 @@ fn handle_stream_line(
             if let Some(content) = v.pointer("/message/content").and_then(Value::as_array) {
                 for block in content {
                     if block.get("type").and_then(Value::as_str) == Some("tool_result") {
-                        let is_err = block.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+                        let is_err = block
+                            .get("is_error")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
                         let text = extract_tool_result_text(block);
                         stream_ui::print_tool_result(run_start, &text, is_err);
                     }
@@ -233,9 +279,9 @@ fn handle_stream_line(
             // Final result event — capture the assistant's final text plus
             // aggregate usage and cost metrics.
             if let Some(text) = v.get("result").and_then(Value::as_str) {
-                *final_text.lock().unwrap() = text.to_string();
+                *lock_or_recover(final_text) = text.to_string();
             }
-            let mut s = stats.lock().unwrap();
+            let mut s = lock_or_recover(stats);
             if let Some(n) = v.get("num_turns").and_then(Value::as_u64) {
                 s.num_turns = n;
             }
@@ -246,10 +292,22 @@ fn handle_stream_line(
                 s.duration_ms = d;
             }
             if let Some(usage) = v.get("usage") {
-                s.input_tokens = usage.get("input_tokens").and_then(Value::as_u64).unwrap_or(s.input_tokens);
-                s.output_tokens = usage.get("output_tokens").and_then(Value::as_u64).unwrap_or(s.output_tokens);
-                s.cache_read_tokens = usage.get("cache_read_input_tokens").and_then(Value::as_u64).unwrap_or(s.cache_read_tokens);
-                s.cache_creation_tokens = usage.get("cache_creation_input_tokens").and_then(Value::as_u64).unwrap_or(s.cache_creation_tokens);
+                s.input_tokens = usage
+                    .get("input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(s.input_tokens);
+                s.output_tokens = usage
+                    .get("output_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(s.output_tokens);
+                s.cache_read_tokens = usage
+                    .get("cache_read_input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(s.cache_read_tokens);
+                s.cache_creation_tokens = usage
+                    .get("cache_creation_input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(s.cache_creation_tokens);
             }
         }
         _ => {}
@@ -270,11 +328,15 @@ fn extract_tool_result_text(block: &Value) -> String {
 
 /// Check if the `claude` CLI is available and return version info.
 pub fn doctor() -> anyhow::Result<String> {
-    let result = process_runner::run_child("claude", &["--version"], ChildOptions {
-        timeout: Duration::from_secs(10),
-        max_stdout_bytes: 4096,
-        ..Default::default()
-    })?;
+    let result = process_runner::run_child(
+        "claude",
+        &["--version"],
+        ChildOptions {
+            timeout: Duration::from_secs(10),
+            max_stdout_bytes: 4096,
+            ..Default::default()
+        },
+    )?;
     if result.exit_code != 0 {
         anyhow::bail!("claude --version failed (exit {})", result.exit_code);
     }

@@ -12,7 +12,7 @@
 use console::style;
 use serde::{Deserialize, Serialize};
 
-use crate::shared::agents::AgentRegistry;
+use crate::registry::agents::AgentRegistry;
 
 use super::dispatch;
 
@@ -78,7 +78,12 @@ pub fn run_conversation(
     let mut all_exchanges: Vec<Exchange> = Vec::new();
 
     for round_num in 1..=config.rounds {
-        eprintln!("\n{}", style(format!("═══ Round {round_num}/{} ═══", config.rounds)).cyan().bold());
+        eprintln!(
+            "\n{}",
+            style(format!("═══ Round {round_num}/{} ═══", config.rounds))
+                .cyan()
+                .bold()
+        );
 
         let mut round_exchanges = Vec::new();
         let is_final_round = round_num == config.rounds;
@@ -110,15 +115,22 @@ pub fn run_conversation(
             eprint!(
                 "  {} {} ... ",
                 style(format!("[{agent_name}]")).yellow().bold(),
-                if is_final_round && agent_idx == 0 { "synthesizing" } else { "thinking" }
+                if is_final_round && agent_idx == 0 {
+                    "synthesizing"
+                } else {
+                    "thinking"
+                }
             );
 
             let response = dispatch::send_to_agent(
                 agent_name,
                 entry,
                 &prompt,
-                if context.is_empty() { None } else { Some(&context) },
-                None,
+                if context.is_empty() {
+                    None
+                } else {
+                    Some(&context)
+                },
                 None,
             )?;
 
@@ -130,7 +142,16 @@ pub fn run_conversation(
 
             // Print a preview of the response.
             let preview: String = response.content.chars().take(200).collect();
-            eprintln!("  {} {}{}", style("│").dim(), preview.trim(), if response.content.len() > 200 { "..." } else { "" });
+            eprintln!(
+                "  {} {}{}",
+                style("│").dim(),
+                preview.trim(),
+                if response.content.len() > 200 {
+                    "..."
+                } else {
+                    ""
+                }
+            );
 
             let exchange = Exchange {
                 agent: agent_name.clone(),
@@ -149,7 +170,8 @@ pub fn run_conversation(
     }
 
     // The final article is the last exchange from the final round's first agent.
-    let final_article = rounds.last()
+    let final_article = rounds
+        .last()
         .and_then(|r| r.exchanges.first())
         .map(|e| e.response.clone());
 
@@ -159,11 +181,17 @@ pub fn run_conversation(
         final_article,
     };
 
-    // Write output if path specified.
+    // Write output if path specified. Atomic so a long-running discuss
+    // command interrupted mid-write doesn't leave a truncated article
+    // file on disk in place of the previous good one.
     if let Some(path) = &config.output_path {
         let markdown = format_as_markdown(&log);
-        std::fs::write(path, &markdown)?;
-        eprintln!("\n{} Article written to {}", style("✓").green(), style(path).cyan());
+        crate::persistence::config::atomic_write(std::path::Path::new(path), markdown.as_bytes())?;
+        eprintln!(
+            "\n{} Article written to {}",
+            style("✓").green(),
+            style(path).cyan()
+        );
     }
 
     Ok(log)
@@ -179,7 +207,10 @@ fn build_context(exchanges: &[Exchange], max_chars: usize) -> String {
 
     // Include exchanges from newest to oldest, truncating oldest if needed.
     for ex in exchanges.iter().rev() {
-        let entry = format!("### {} ({}):\n{}\n", ex.agent, ex.prompt_summary, ex.response);
+        let entry = format!(
+            "### {} ({}):\n{}\n",
+            ex.agent, ex.prompt_summary, ex.response
+        );
         if total_chars + entry.len() > max_chars && !parts.is_empty() {
             parts.push("[Earlier discussion truncated for brevity]".to_string());
             break;
@@ -206,7 +237,11 @@ fn format_as_markdown(log: &ConversationLog) -> String {
     for round in &log.rounds {
         md.push_str(&format!("### Round {}\n\n", round.round_num));
         for ex in &round.exchanges {
-            md.push_str(&format!("**{}** ({}s):\n\n", ex.agent, ex.duration_ms / 1000));
+            md.push_str(&format!(
+                "**{}** ({}s):\n\n",
+                ex.agent,
+                ex.duration_ms / 1000
+            ));
             md.push_str(&ex.response);
             md.push_str("\n\n---\n\n");
         }

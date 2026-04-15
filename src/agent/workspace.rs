@@ -16,8 +16,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::shared::agents::{AgentEntry, AgentType};
-use crate::shared::config;
+use super::toml_escape::toml_basic_string;
+use crate::registry::agents::{AgentEntry, AgentType};
+use crate::persistence::config;
 
 /// Ensure a workspace exists for the given agent and return its path.
 pub fn ensure_workspace(agent_name: &str, entry: &AgentEntry) -> anyhow::Result<PathBuf> {
@@ -32,9 +33,12 @@ pub fn ensure_workspace(agent_name: &str, entry: &AgentEntry) -> anyhow::Result<
             .output();
     }
 
-    // Write knowledge doc (shared between both agent types).
-    fs::write(ws.join("CLAUDE.md"), generate_knowledge_doc())?;
-    fs::write(ws.join("AGENTS.md"), generate_knowledge_doc())?;
+    // Write knowledge doc (shared between both agent types). Atomic so
+    // a concurrent dispatch can't observe a half-written CLAUDE.md when
+    // the doc grows or shrinks across releases.
+    let knowledge = generate_knowledge_doc();
+    config::atomic_write(&ws.join("CLAUDE.md"), knowledge.as_bytes())?;
+    config::atomic_write(&ws.join("AGENTS.md"), knowledge.as_bytes())?;
 
     // Write .mcp.json — project-level MCP discovery for Claude Code (-p mode).
     write_mcp_json(&ws, agent_name)?;
@@ -70,19 +74,33 @@ fn write_mcp_json(ws: &std::path::Path, agent_name: &str) -> anyhow::Result<()> 
     });
 
     let json = serde_json::to_string_pretty(&mcp_json)? + "\n";
-    fs::write(ws.join(".mcp.json"), json)?;
+    // Atomic write — concurrent dispatches for the same agent must not
+    // observe a torn `.mcp.json` (Claude Code's `-p` mode reads this on
+    // every spawn).
+    config::atomic_write(&ws.join(".mcp.json"), json.as_bytes())?;
     Ok(())
 }
 
 // ── Codex workspace ──────────────────────────────────────────────────────────
 
-fn write_codex_config(ws: &std::path::Path, entry: &AgentEntry, agent_name: &str) -> anyhow::Result<()> {
+fn write_codex_config(
+    ws: &std::path::Path,
+    entry: &AgentEntry,
+    agent_name: &str,
+) -> anyhow::Result<()> {
     let codex_dir = ws.join(".codex");
     fs::create_dir_all(&codex_dir)?;
 
+    // Every value handed to the TOML parser must go through
+    // `toml_basic_string` — the previous open-coded `format!("\"{s}\"")`
+    // emitted invalid TOML for any value containing `\` (e.g. Windows
+    // paths) or embedded quotes, silently dropping the override. The
+    // same encoder is used by `agent::codex` so the runtime form (`-c`
+    // overrides) and the on-disk form (this file) stay in lock-step.
     let (cmd, args, env) = build_mcp_entry(agent_name);
-    let args_toml = args.iter()
-        .map(|a| format!("\"{}\"", a))
+    let args_toml = args
+        .iter()
+        .map(|a| toml_basic_string(a))
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -92,36 +110,47 @@ fn write_codex_config(ws: &std::path::Path, entry: &AgentEntry, agent_name: &str
             env_lines.push_str("\n[mcp_servers.easynet.env]\n");
             for (k, v) in map {
                 if let Some(s) = v.as_str() {
-                    env_lines.push_str(&format!("{k} = \"{s}\"\n"));
+                    env_lines.push_str(&format!("{k} = {}\n", toml_basic_string(s)));
                 }
             }
         }
     }
 
-    let model_line = entry.model.as_deref()
-        .map(|m| format!("model = \"{m}\"\n"))
+    let model_line = entry
+        .model
+        .as_deref()
+        .map(|m| format!("model = {}\n", toml_basic_string(m)))
         .unwrap_or_default();
 
     let toml = format!(
-        "{model}\n[mcp_servers.easynet]\ncommand = \"{cmd}\"\nargs = [{args}]\n{env}",
+        "{model}\n[mcp_servers.easynet]\ncommand = {cmd}\nargs = [{args}]\n{env}",
         model = model_line,
-        cmd = cmd,
+        cmd = toml_basic_string(&cmd),
         args = args_toml,
         env = env_lines,
     );
 
-    fs::write(codex_dir.join("config.toml"), toml)?;
+    // Atomic write so a concurrent `easynet agent send` for the same
+    // agent can't observe a partially-written `config.toml`. Reuses the
+    // race-safe primitive from `persistence::config` (iter-1 fix).
+    config::atomic_write(&codex_dir.join("config.toml"), toml.as_bytes())?;
     Ok(())
 }
 
 /// Write Codex-native skill in .agents/skills/ for project-level discovery.
 fn write_codex_skill(ws: &std::path::Path) -> anyhow::Result<()> {
-    let skill_dir = ws.join(".agents").join("skills").join("easynet-ability-author");
+    let skill_dir = ws
+        .join(".agents")
+        .join("skills")
+        .join("easynet-ability-author");
     let agents_dir = skill_dir.join("agents");
     fs::create_dir_all(&agents_dir)?;
 
-    fs::write(skill_dir.join("SKILL.md"), CODEX_SKILL_MD)?;
-    fs::write(agents_dir.join("openai.yaml"), CODEX_OPENAI_YAML)?;
+    config::atomic_write(&skill_dir.join("SKILL.md"), CODEX_SKILL_MD.as_bytes())?;
+    config::atomic_write(
+        &agents_dir.join("openai.yaml"),
+        CODEX_OPENAI_YAML.as_bytes(),
+    )?;
     Ok(())
 }
 
@@ -179,7 +208,10 @@ pub(super) fn build_mcp_entry(agent_name: &str) -> (String, Vec<String>, serde_j
     args.push("--enable-agent-dispatch".to_string());
 
     if let Ok(lib) = std::env::var("EASYNET_DENDRITE_BRIDGE_LIB") {
-        env.insert("EASYNET_DENDRITE_BRIDGE_LIB".to_string(), serde_json::json!(lib));
+        env.insert(
+            "EASYNET_DENDRITE_BRIDGE_LIB".to_string(),
+            serde_json::json!(lib),
+        );
     }
 
     (cmd, args, serde_json::Value::Object(env))
@@ -260,8 +292,8 @@ orchestration, and agent-to-agent dispatch.
 - `hub_status()` — Hub connectivity, node and ability counts.
 - `list_devices()` — List federation devices.
 - `get_device_detail(node_id)` — Device info plus installed abilities.
-- `list_all_abilities(node_id?, name_pattern?)` — Abilities across nodes.
-- `search_abilities(query)` — Search abilities by name or tags.
+- `list_all_abilities(node_id?, name_pattern?)` — Discover abilities
+  across nodes; `name_pattern` accepts substring or glob filters.
 - `list_a2a_agents(tags?, owner_id?, limit?)` — Remote A2A agents.
 - `get_a2a_agent_card(node_id)` — A2A agent card.
 
@@ -363,7 +395,8 @@ easynet mission list                    # show recorded mission runs
 easynet ability list                    # discover available abilities
 easynet device list                     # list hosting substrates
 ```
-"#.to_string()
+"#
+    .to_string()
 }
 
 const CODEX_SKILL_MD: &str = r#"---
@@ -437,7 +470,9 @@ mod tests {
         );
         // The agent name must be passed as `--agent <name>` (two adjacent
         // args, not a single `--agent=name`).
-        let agent_idx = args.iter().position(|a| a == "--agent")
+        let agent_idx = args
+            .iter()
+            .position(|a| a == "--agent")
             .expect("args must contain --agent");
         assert_eq!(
             args.get(agent_idx + 1).map(|s| s.as_str()),
@@ -450,8 +485,14 @@ mod tests {
     fn build_mcp_entry_threads_different_agent_names() {
         let (_, args_a, _) = build_mcp_entry("alice");
         let (_, args_b, _) = build_mcp_entry("bob");
-        let agent_a = args_a.iter().position(|a| a == "--agent").map(|i| &args_a[i + 1]);
-        let agent_b = args_b.iter().position(|a| a == "--agent").map(|i| &args_b[i + 1]);
+        let agent_a = args_a
+            .iter()
+            .position(|a| a == "--agent")
+            .map(|i| &args_a[i + 1]);
+        let agent_b = args_b
+            .iter()
+            .position(|a| a == "--agent")
+            .map(|i| &args_b[i + 1]);
         assert_eq!(agent_a.map(|s| s.as_str()), Some("alice"));
         assert_eq!(agent_b.map(|s| s.as_str()), Some("bob"));
     }

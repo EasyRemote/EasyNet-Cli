@@ -5,11 +5,13 @@
 // Description: Reverse-dispatch layer that lets EasyNet invoke external agent CLIs
 //              (Claude Code / Codex) as programmable "edge agents".
 
-pub mod claude_code;
-pub mod codex;
-pub mod conversation;
-pub mod dispatch;
-pub mod process_runner;
-pub mod run_store;
-pub mod stream_ui;
-pub mod workspace;
+pub(crate) mod claude_code;
+pub(crate) mod codex;
+pub(crate) mod context;
+pub(crate) mod conversation;
+pub(crate) mod dispatch;
+pub(crate) mod process_runner;
+pub(crate) mod run_store;
+pub(crate) mod stream_ui;
+pub(crate) mod toml_escape;
+pub(crate) mod workspace;

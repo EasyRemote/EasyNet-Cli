@@ -83,8 +83,7 @@ pub fn print_assistant_text(run_start: Instant, text: &str) {
 /// Print a cumulative-usage line: `123s tokens in=12504 out=892 cache_r=11200 cache_w=2300`.
 pub fn print_usage(run_start: Instant, usage: &Usage) {
     let elapsed = run_start.elapsed().as_secs();
-    let total_in =
-        usage.input_tokens + usage.cache_read_tokens + usage.cache_creation_tokens;
+    let total_in = usage.input_tokens + usage.cache_read_tokens + usage.cache_creation_tokens;
     eprintln!(
         "  {} {} {}",
         style(format!("{:>4}s", elapsed)).dim(),
