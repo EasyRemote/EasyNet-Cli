@@ -35,8 +35,14 @@ pub fn is_online(n: &Value) -> bool {
 ///   5=QUARANTINED, 6=DRAINING, 7=REMOVED
 /// Known protocol states — used to return `&'static str` without allocation.
 const KNOWN_STATES: &[&str] = &[
-    "UNSPECIFIED", "JOINING", "PROBATION", "HEALTHY",
-    "SUSPECT", "QUARANTINED", "DRAINING", "REMOVED",
+    "UNSPECIFIED",
+    "JOINING",
+    "PROBATION",
+    "HEALTHY",
+    "SUSPECT",
+    "QUARANTINED",
+    "DRAINING",
+    "REMOVED",
 ];
 
 /// Map an OS identifier to a user-friendly display name.
@@ -61,6 +67,35 @@ pub fn friendly_os(os: &str) -> &str {
     }
 }
 
+/// Runtime label for a node reached through federation.
+///
+/// When a node is served through the federation (the local runtime does
+/// not own it), the runtime's `list_nodes` handler stamps the originating
+/// runtime into the node's `labels` map:
+///
+///   - `axon.federation.runtime_label` — human-readable name (preferred)
+///   - `axon.federation.runtime_id`    — stable id (fallback)
+///
+/// Locally-owned nodes carry neither key and return `None`.
+///
+/// Empty-string values are treated as absent; upstream sometimes emits
+/// them for partial records, and a blank "via" suffix in the UI would
+/// be worse than no hint at all.
+pub fn federation_label(n: &Value) -> Option<String> {
+    let labels = n.get("labels")?.as_object()?;
+    for key in [
+        "axon.federation.runtime_label",
+        "axon.federation.runtime_id",
+    ] {
+        if let Some(s) = labels.get(key).and_then(Value::as_str) {
+            if !s.is_empty() {
+                return Some(s.to_string());
+            }
+        }
+    }
+    None
+}
+
 pub fn node_state_str(n: &Value) -> Cow<'_, str> {
     let Some(state) = n.get("state") else {
         return Cow::Borrowed("UNKNOWN");
@@ -76,9 +111,53 @@ pub fn node_state_str(n: &Value) -> Cow<'_, str> {
     if let Some(num) = state.as_u64() {
         // Protobuf numeric enum mapping (axon/v1/types.proto NodeState).
         let idx = usize::try_from(num).unwrap_or(usize::MAX);
-        return Cow::Borrowed(
-            KNOWN_STATES.get(idx).copied().unwrap_or("UNKNOWN")
-        );
+        return Cow::Borrowed(KNOWN_STATES.get(idx).copied().unwrap_or("UNKNOWN"));
     }
     Cow::Borrowed("UNKNOWN")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn federation_label_prefers_human_readable_label() {
+        let n = json!({
+            "labels": {
+                "axon.federation.runtime_label": "alpha",
+                "axon.federation.runtime_id": "runtime-alpha",
+            }
+        });
+        assert_eq!(federation_label(&n), Some("alpha".to_string()));
+    }
+
+    #[test]
+    fn federation_label_falls_back_to_runtime_id() {
+        let n = json!({"labels": {"axon.federation.runtime_id": "runtime-beta"}});
+        assert_eq!(federation_label(&n), Some("runtime-beta".to_string()));
+    }
+
+    #[test]
+    fn federation_label_returns_none_for_local_node() {
+        let n = json!({"labels": {}});
+        assert_eq!(federation_label(&n), None);
+    }
+
+    #[test]
+    fn federation_label_returns_none_when_labels_field_missing() {
+        let n = json!({"node_id": "local"});
+        assert_eq!(federation_label(&n), None);
+    }
+
+    #[test]
+    fn federation_label_treats_empty_string_as_absent() {
+        let n = json!({
+            "labels": {
+                "axon.federation.runtime_label": "",
+                "axon.federation.runtime_id": "",
+            }
+        });
+        assert_eq!(federation_label(&n), None);
+    }
 }

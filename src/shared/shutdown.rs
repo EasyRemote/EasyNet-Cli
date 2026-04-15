@@ -33,7 +33,9 @@ impl ShutdownSignal {
     /// Signal shutdown — wakes all waiting threads.
     pub fn trigger(&self) {
         let (lock, cvar) = &*self.inner;
-        let mut fired = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut fired = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *fired = true;
         cvar.notify_all();
     }
@@ -41,7 +43,9 @@ impl ShutdownSignal {
     /// Returns true if shutdown has been signaled.
     pub fn is_triggered(&self) -> bool {
         let (lock, _) = &*self.inner;
-        *lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        *lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Sleep for `duration` unless shutdown is signaled first.
@@ -49,7 +53,9 @@ impl ShutdownSignal {
     /// Returns `false` if shutdown was signaled (caller should stop).
     pub fn sleep_unless_triggered(&self, duration: Duration) -> bool {
         let (lock, cvar) = &*self.inner;
-        let fired = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let fired = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if *fired {
             return false;
         }
@@ -62,7 +68,9 @@ impl ShutdownSignal {
     /// Block until shutdown is signaled (no timeout).
     pub fn wait(&self) {
         let (lock, cvar) = &*self.inner;
-        let fired = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let fired = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if *fired {
             return;
         }
