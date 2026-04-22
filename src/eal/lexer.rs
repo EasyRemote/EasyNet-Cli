@@ -39,6 +39,14 @@ pub enum Token {
     Skip,
     Retry,
     Continue,
+    // PR-10: the only new reserved tokens are the three block
+    // punctuation keywords. Everything else (chat, handoff, attribute
+    // names, enum values) stays as `Ident(s)` with contextual matches
+    // in the block parsers. See the keyword-table comment below for
+    // why.
+    Loop,
+    Body,
+    Verify,
     StringLit(String),
     IntLit(i64),
     FloatLit(f64),
@@ -48,6 +56,8 @@ pub enum Token {
     RBrace,
     LParen,
     RParen,
+    LBracket,
+    RBracket,
     Eq,
     Colon,
     Comma,
@@ -103,6 +113,14 @@ impl<'a> Lexer<'a> {
             b')' => {
                 self.pos += 1;
                 Ok(Token::RParen)
+            }
+            b'[' => {
+                self.pos += 1;
+                Ok(Token::LBracket)
+            }
+            b']' => {
+                self.pos += 1;
+                Ok(Token::RBracket)
             }
             b'=' => {
                 self.pos += 1;
@@ -226,6 +244,27 @@ impl<'a> Lexer<'a> {
             "skip" => Token::Skip,
             "retry" => Token::Retry,
             "continue" => Token::Continue,
+            // PR-10 control-flow block-introducer keyword. Only
+            // `loop` is a reserved token — `chat` and `handoff`
+            // stay plain identifiers so member-call forms like
+            // `claude.chat(...)` and ability-arg names like
+            // `foo.invoke(handoff: ...)` continue to parse. The
+            // statement-level block parsers match on the `Ident(s)`
+            // value where s equals `chat` or `handoff` to
+            // disambiguate a block from a member-call at
+            // statement start (block headers never follow a `.`
+            // or `(`; member calls always do).
+            //
+            // Attribute names (`max_iters`, `max_turns`,
+            // `participants`, `topic`, `visibility`, `from`, `to`,
+            // `context_mode`, `prompt`) and enum values (`fan_out`,
+            // `round_robin`, `full`, `summary`, `none`) are also
+            // plain identifiers for the same reason. The block
+            // parsers match on the identifier value to drive the
+            // header grammar.
+            "loop" => Token::Loop,
+            "body" => Token::Body,
+            "verify" => Token::Verify,
             "true" => Token::BoolLit(true),
             "false" => Token::BoolLit(false),
             _ => Token::Ident(w),
