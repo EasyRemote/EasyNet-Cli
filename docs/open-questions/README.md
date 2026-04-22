@@ -10,6 +10,7 @@ Questions we've named but deliberately not decided. Each file states what would 
 - **[does-easynet-need-a-worktree-ability.md](does-easynet-need-a-worktree-ability.md)** — same situation for git worktrees.
 - **[does-easynet-need-a-local-ws-control-plane.md](does-easynet-need-a-local-ws-control-plane.md)** — former PR-6's WS server / bearer auth / permit interactive flow. No local client exists; Tier A (tokio + session ownership) absorbed into PR-7.
 - **[cli-dispatch-as-first-class-invocation.md](cli-dispatch-as-first-class-invocation.md)** — whether CLI dispatch migrates from "RPC with audit trail" to AXIOM §5 signed `InvocationEnvelope` + receipts. Blocked on three upstream AXIOM artefacts (URA namespace, DEFAULT_PROFILE.md, discovery agent) AND a concrete consumer need.
+- **[skill-marketplace-integration.md](skill-marketplace-integration.md)** — searching / browsing / installing skills from OpenSkill or other upstream marketplaces via Frontend + CLI. Customer has surfaced; four open design decisions (marketplace protocol, manifest format, install-target semantics, Frontend↔CLI wire) block coding.
 
 ## Discipline
 
