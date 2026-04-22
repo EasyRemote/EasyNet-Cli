@@ -73,9 +73,17 @@ pub struct ClaudeOptions {
     pub max_output_bytes: usize,
     pub env: BTreeMap<String, String>,
     pub cwd: Option<PathBuf>,
-    /// Persistent run directory. All stream events are mirrored into
-    /// `<run>/trace.jsonl` when provided.
+    /// Persistent run directory. Used for per-run artefacts
+    /// (`prompt.txt`, `response.md`, `meta.json`); the stream
+    /// event log moved to the Timeline in PR-7 Commit 2.
     pub run_dir: Option<Arc<RunDir>>,
+    /// PR-7 Commit 2: Timeline writer. When `Some`, each
+    /// streamed stdout line is emitted as a `progress` event on
+    /// the P1-P6 event log (and broadcast to any live
+    /// subscribers). When `None`, stream events are observed by
+    /// the driver's stat accumulator only — the legacy
+    /// `runs/trace.jsonl` write path is gone.
+    pub timeline: Option<Arc<crate::runtime::timeline::TimelineWriter>>,
     /// Binary to spawn. Empty string means "use the driver
     /// default" (`DEFAULT_CLAUDE_BINARY`). Dispatch fills this
     /// from `AgentEntry::command` so operators who have a
@@ -100,6 +108,7 @@ impl Default for ClaudeOptions {
             env: BTreeMap::new(),
             cwd: None,
             run_dir: None,
+            timeline: None,
             command: String::new(),
         }
     }
@@ -166,11 +175,39 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
     let stats = Arc::new(Mutex::new(RunStats::default()));
     let final_text_cb = Arc::clone(&final_text);
     let stats_cb = Arc::clone(&stats);
-    let run_dir_cb = opts.run_dir.clone();
+    let timeline_cb = opts.timeline.clone();
 
     let callback = Arc::new(move |line: &str| {
-        if let Some(dir) = &run_dir_cb {
-            dir.append_trace_line(line);
+        // PR-7 Commit 2: emit each streamed line as a `progress`
+        // event on the Timeline. The payload carries the raw
+        // JSONL line from the driver (driver-specific shape);
+        // downstream consumers (PR-10 services/chat, Frontend
+        // resume) parse the shape they expect and ignore the
+        // rest. The fsync on each emit is what gives us P2
+        // (disk durable before broadcast wake); the cost per
+        // chunk is bounded by LLM streaming rate, which is
+        // slower than fsync on any reasonable disk.
+        if let Some(tl) = &timeline_cb {
+            let payload = match serde_json::from_str::<serde_json::Value>(line) {
+                // Structured driver JSON — store the parsed
+                // value so subscribers get a typed payload
+                // instead of an opaque string.
+                Ok(v) => serde_json::json!({"driver": "claude-code", "chunk": v}),
+                // Non-JSON line (driver warning, stderr leak) —
+                // store verbatim under `raw` so it's still
+                // observable, just not typed.
+                Err(_) => serde_json::json!({"driver": "claude-code", "raw": line}),
+            };
+            if let Err(e) = tl.emit("progress", Some(payload)) {
+                // A sustained emit failure means the disk is
+                // unreachable. One stderr line is the compromise
+                // between surfacing the problem and not flooding
+                // when the LLM is streaming tokens at high rate.
+                eprintln!(
+                    "[easynet warn] timeline progress emit failed ({e}); \
+                     subsequent lines for this run may be lost"
+                );
+            }
         }
         handle_stream_line(line, &final_text_cb, &stats_cb, run_start);
     });
@@ -415,6 +452,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
                 env: opts.env,
                 cwd: Some(opts.cwd),
                 run_dir: opts.run_dir,
+                timeline: opts.timeline,
                 // Honor `InvokeOpts::command` — dispatch filled
                 // it from `AgentEntry::command`. Empty string
                 // falls through to the driver default inside

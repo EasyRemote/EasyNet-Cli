@@ -25,6 +25,11 @@ sha2 = "0.10"
 termimad = "0.31"
 toml = "0.8"
 toml_edit = "0.23"
+# Tokio adopted in PR-7 (Commit 1) as a transitive-to-direct dependency.
+# `easynet-axon` already pulls in tokio; this entry adds `sync` + `rt-multi-thread`
+# features CLI needs directly for broadcast::channel and multi-thread
+# runtime (Commit 2 flips main.rs to #[tokio::main]).
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "fs", "io-util", "time"] }
 ureq = { version = "2", features = ["json"] }
 uuid = { version = "1", features = ["v4"] }
 

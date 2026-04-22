@@ -79,9 +79,14 @@ pub struct CodexOptions {
     pub write_mode: bool,
     /// Workspace directory (with .codex/ config). If set, codex runs in this cwd.
     pub cwd: Option<PathBuf>,
-    /// Persistent run directory. All stream events are mirrored into
-    /// `<run>/trace.jsonl` when provided.
+    /// Persistent run directory. Used for per-run artefacts
+    /// (`prompt.txt`, `response.md`, `meta.json`); the stream
+    /// event log moved to the Timeline in PR-7 Commit 2.
     pub run_dir: Option<Arc<RunDir>>,
+    /// PR-7 Commit 2: Timeline writer. Same semantics as
+    /// `ClaudeOptions::timeline` — each streamed stdout line
+    /// emits a `progress` event on the P1-P6 event log.
+    pub timeline: Option<Arc<crate::runtime::timeline::TimelineWriter>>,
     /// Binary to spawn. Empty string means "use the driver
     /// default" (`DEFAULT_CODEX_BINARY`). Mirrors the behaviour
     /// of `ClaudeOptions::command`; see that field's rustdoc
@@ -102,6 +107,7 @@ impl Default for CodexOptions {
             write_mode: false,
             cwd: None,
             run_dir: None,
+            timeline: None,
             command: String::new(),
         }
     }
@@ -205,11 +211,24 @@ pub fn invoke_exec(prompt: &str, opts: CodexOptions) -> anyhow::Result<(String, 
     let stats = Arc::new(Mutex::new(RunStats::default()));
     let final_text_cb = Arc::clone(&final_text);
     let stats_cb = Arc::clone(&stats);
-    let run_dir_cb = opts.run_dir.clone();
+    let timeline_cb = opts.timeline.clone();
 
     let callback = Arc::new(move |line: &str| {
-        if let Some(dir) = &run_dir_cb {
-            dir.append_trace_line(line);
+        // PR-7 Commit 2 — same pattern as claude_code.rs. Driver
+        // stream lines emit as `progress` events through the
+        // Timeline; shape-aware consumers parse `chunk` (JSON)
+        // or `raw` (non-JSON leak) from the payload.
+        if let Some(tl) = &timeline_cb {
+            let payload = match serde_json::from_str::<serde_json::Value>(line) {
+                Ok(v) => serde_json::json!({"driver": "codex", "chunk": v}),
+                Err(_) => serde_json::json!({"driver": "codex", "raw": line}),
+            };
+            if let Err(e) = tl.emit("progress", Some(payload)) {
+                eprintln!(
+                    "[easynet warn] timeline progress emit failed ({e}); \
+                     subsequent lines for this run may be lost"
+                );
+            }
         }
         handle_stream_line(line, &final_text_cb, &stats_cb, run_start);
     });
@@ -663,6 +682,7 @@ impl AgentAdapter for CodexExecAdapter {
                 write_mode: false,
                 cwd: Some(opts.cwd),
                 run_dir: opts.run_dir,
+                timeline: opts.timeline,
                 // Honor the operator-supplied binary; empty
                 // falls back to `DEFAULT_CODEX_BINARY`.
                 command: opts.command,
@@ -705,6 +725,7 @@ impl AgentAdapter for CodexAppServerAdapter {
                 write_mode: false,
                 cwd: Some(opts.cwd),
                 run_dir: opts.run_dir,
+                timeline: opts.timeline,
                 // Honor the operator-supplied binary; empty
                 // falls back to `DEFAULT_CODEX_BINARY`.
                 command: opts.command,

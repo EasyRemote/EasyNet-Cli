@@ -30,16 +30,20 @@ fn home_lock() -> &'static Mutex<()> {
 /// RAII guard that:
 ///   1. Acquires the global home-mutation lock (serializes test execution).
 ///   2. Creates a fresh temp dir.
-///   3. Saves the current `HOME` and `XDG_STATE_HOME` env vars.
-///   4. Sets `HOME` to the temp dir.
+///   3. Saves the current `HOME` and `AXON_INVOCATION_LOG_DIR` env vars.
+///   4. Sets `HOME` to the temp dir and `AXON_INVOCATION_LOG_DIR` to a
+///      sibling dir under it (so PR-7 Timeline events are isolated per test).
 ///   5. On drop, restores the env vars and removes the temp dir.
 ///
-/// Use it at the top of any test that calls `config::state_dir()` or any
-/// function that persists to `~/.easynet/`.
+/// Use it at the top of any test that calls `config::state_dir()`, any
+/// function that persists to `~/.easynet/`, or any dispatch path that
+/// emits to the PR-7 PersistentLog (which reads
+/// `AXON_INVOCATION_LOG_DIR`).
 pub struct HomeGuard {
     _lock: MutexGuard<'static, ()>,
     temp_dir: PathBuf,
     prev_home: Option<String>,
+    prev_axon_log_dir: Option<String>,
 }
 
 impl HomeGuard {
@@ -62,10 +66,22 @@ impl HomeGuard {
         let prev_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", &temp_dir);
 
+        // Redirect the PR-7 Timeline log dir too. Without this, every
+        // dispatch test would write uuid-named files into the real
+        // `$TMPDIR/axon-invocations/`, leaving cruft across runs and
+        // making cross-test event counts unpredictable if an earlier
+        // test allocated a uuid that collides (statistically zero, but
+        // the contract is "test isolation," not "statistically likely").
+        let axon_log_dir = temp_dir.join("axon-invocations");
+        let _ = std::fs::create_dir_all(&axon_log_dir);
+        let prev_axon_log_dir = std::env::var("AXON_INVOCATION_LOG_DIR").ok();
+        std::env::set_var("AXON_INVOCATION_LOG_DIR", &axon_log_dir);
+
         Self {
             _lock: lock,
             temp_dir,
             prev_home,
+            prev_axon_log_dir,
         }
     }
 }
@@ -81,6 +97,10 @@ impl Drop for HomeGuard {
         match self.prev_home.take() {
             Some(h) => std::env::set_var("HOME", h),
             None => std::env::remove_var("HOME"),
+        }
+        match self.prev_axon_log_dir.take() {
+            Some(d) => std::env::set_var("AXON_INVOCATION_LOG_DIR", d),
+            None => std::env::remove_var("AXON_INVOCATION_LOG_DIR"),
         }
         let _ = std::fs::remove_dir_all(&self.temp_dir);
     }
