@@ -33,6 +33,66 @@ pub struct MissionDecl {
 pub enum Statement {
     LetCall { binding: String, call: CallExpr },
     Call(CallExpr),
+    /// `loop "<name>?" max_iters: N { body { … } verify { … } }`.
+    /// See RFC docs/rfc/eal-control-flow-v1.md §3.1. The parser
+    /// populates this variant unchanged; the planner lowers it to
+    /// `IrStep::Loop` (see `src/eal/ir.rs`). The anonymous form
+    /// (no name) sets `name = None` and no binding is exported;
+    /// the named form sets `name = Some(s)` and exports
+    /// `<s>.result` at the enclosing scope.
+    Loop(LoopBlock),
+    /// `chat "<name>?" participants: [...] max_turns: N { topic: …? visibility: …? }`.
+    /// See RFC §3.2.
+    Chat(ChatBlock),
+    /// `handoff "<name>?" { from: A to: B context_mode: …? prompt: …? }`.
+    /// See RFC §3.3.
+    Handoff(HandoffBlock),
+}
+
+#[derive(Debug, Clone)]
+pub struct LoopBlock {
+    pub name: Option<String>,
+    pub max_iters: u32,
+    pub body: Vec<Statement>,
+    pub verify: Vec<Statement>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChatBlock {
+    pub name: Option<String>,
+    /// Raw participant names as written in source order. The planner
+    /// resolves each via `AgentId::parse` during IR lowering; any
+    /// parse failure becomes a compile error.
+    pub participants: Vec<String>,
+    pub max_turns: u32,
+    pub topic: Option<String>,
+    pub visibility: Option<ChatVisibility>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HandoffBlock {
+    pub name: Option<String>,
+    pub from: String,
+    pub to: String,
+    pub context_mode: Option<HandoffContextMode>,
+    pub prompt: Option<String>,
+}
+
+/// AST-side counterpart of `ir::ChatVisibility`. Kept as a separate
+/// enum so the AST can be built without pulling in IR types; the
+/// planner maps between them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatVisibility {
+    FanOut,
+    RoundRobin,
+}
+
+/// AST-side counterpart of `ir::HandoffContextMode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandoffContextMode {
+    Full,
+    Summary,
+    None,
 }
 
 /// `call "ability" on "node" with { ... } <options>`

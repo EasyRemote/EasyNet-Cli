@@ -137,6 +137,25 @@ fn analyze(program: &EalProgram) -> anyhow::Result<Vec<AnalyzedStep>> {
         let (binding, call): (Option<String>, &CallExpr) = match stmt {
             Statement::LetCall { binding, call } => (Some(binding.clone()), call),
             Statement::Call(call) => (None, call),
+            // PR-10 Stage 2: control-flow blocks are parsed but
+            // not yet lowered. Stage 3 adds Loop lowering; Stage 4
+            // adds Chat / Handoff. Until then, encountering a
+            // block in the analyzer is a planner bug we surface
+            // as a compile error — the user has used v2 syntax
+            // against a v1 compiler.
+            Statement::Loop(l) => anyhow::bail!(
+                "loop block{}: executor lands in PR-10 Stage 3; \
+                 this compile path does not yet lower loop blocks",
+                l.name.as_ref().map(|n| format!(" '{n}'")).unwrap_or_default()
+            ),
+            Statement::Chat(c) => anyhow::bail!(
+                "chat block{}: executor lands in PR-10 Stage 4",
+                c.name.as_ref().map(|n| format!(" '{n}'")).unwrap_or_default()
+            ),
+            Statement::Handoff(h) => anyhow::bail!(
+                "handoff block{}: executor lands in PR-10 Stage 4",
+                h.name.as_ref().map(|n| format!(" '{n}'")).unwrap_or_default()
+            ),
         };
 
         if let Some(ref name) = binding {
