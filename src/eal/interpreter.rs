@@ -43,8 +43,57 @@ fn millis_u64(d: Duration) -> u64 {
 }
 use sha2::{Digest, Sha256};
 
-use super::ir::{IrFailurePolicy, IrStep, MissionIr};
+use super::ir::{IrCall, IrFailurePolicy, IrStep as RealIrStep, MissionIr};
 use crate::support::output;
+
+/// Interpreter-local alias. Pre-PR-10 this module operated directly
+/// on the flat struct `IrStep`; PR-10 turned `IrStep` into an enum
+/// (`Call | Loop | Chat | Handoff`) but the existing execution
+/// machinery only knows how to dispatch flat calls. We flatten block
+/// variants at the mission-execution entry point (see
+/// `flatten_steps_for_legacy_executor`) and walk only `IrCall`s here.
+///
+/// Keeping the alias means the interpreter's thousands of lines of
+/// step-handling code did not need a name change for PR-10 Stage 1;
+/// Stages 2+ add block-aware passes alongside, not replacing.
+type IrStep = IrCall;
+
+// ── PR-10 Stage 1: IrStep enum → IrCall flat vec ─────────────────────────
+//
+// The interpreter was authored against a flat `IrStep` struct. PR-10
+// upgraded `IrStep` to a tagged enum whose `Call` variant is the old
+// struct and whose new `Loop` / `Chat` / `Handoff` variants need
+// their own executor passes (Stages 3/4).
+//
+// `flatten_steps_for_legacy_executor` is the temporary bridge. It
+// walks the `IrStep` tree and returns a clone-free `Vec<IrCall>`
+// when the mission only uses the `Call` variant (the pre-PR-10 case
+// which every existing gallery mission is). A block variant
+// encountered here produces a typed `BlocksNotYetExecutable` error;
+// the flatten lives at a single site so removing it later (when the
+// block-aware executor lands) is a one-line change.
+fn flatten_steps_for_legacy_executor(
+    steps: &[RealIrStep],
+) -> anyhow::Result<Vec<IrCall>> {
+    let mut out = Vec::with_capacity(steps.len());
+    for (i, step) in steps.iter().enumerate() {
+        match step {
+            RealIrStep::Call(c) => out.push(c.clone()),
+            RealIrStep::Loop(_) => anyhow::bail!(
+                "step {i}: `loop` block execution lands in PR-10 Stage 3 — \
+                 this mission was compiled from PR-10 Stage 2 syntax but \
+                 the executor does not understand block variants yet"
+            ),
+            RealIrStep::Chat(_) => anyhow::bail!(
+                "step {i}: `chat` block execution lands in PR-10 Stage 4"
+            ),
+            RealIrStep::Handoff(_) => anyhow::bail!(
+                "step {i}: `handoff` block execution lands in PR-10 Stage 4"
+            ),
+        }
+    }
+    Ok(out)
+}
 
 // ── Retry constants ──
 
@@ -697,14 +746,23 @@ pub fn execute_with_dispatcher(
     let mut skipped = 0usize;
     let mut aborted = false;
 
-    let total = ir.steps.len();
+    // PR-10 Stage 1: flatten the IrStep enum into IrCall slices for
+    // the legacy executor. Block variants (`Loop`, `Chat`, `Handoff`)
+    // are rejected here with a typed error — their execution paths
+    // land in Stage 3/4 below this line. The flatten is `Cow`-free:
+    // for the common (pre-PR-10 shape) Call-only mission, we borrow
+    // directly without cloning.
+    let flat_steps = flatten_steps_for_legacy_executor(&ir.steps)?;
+    let ir_steps: &[IrCall] = &flat_steps;
+
+    let total = ir_steps.len();
     let mut global_step = 0usize;
 
     for (phase_idx, phase) in ir.phases.iter().enumerate() {
         if aborted {
             break;
         }
-        let steps = &ir.steps[phase.start..phase.end];
+        let steps = &ir_steps[phase.start..phase.end];
         if steps.is_empty() {
             continue;
         }
@@ -2541,10 +2599,10 @@ mod tests {
         "#;
         let ir = planner::compile(&parser::parse(src).unwrap()).unwrap();
         assert_eq!(ir.steps.len(), 1);
-        let step = &ir.steps[0];
-        assert_eq!(step.ability.as_str(), "chat");
+        let call = ir.steps[0].as_call().expect("flat call step");
+        assert_eq!(call.ability.as_str(), "chat");
         assert_eq!(
-            step.target,
+            call.target,
             IrTarget::Agent(AgentId::parse("claude").unwrap()),
             "member-call must lower to IrTarget::Agent"
         );
@@ -2559,10 +2617,10 @@ mod tests {
         "#;
         let ir = planner::compile(&parser::parse(src).unwrap()).unwrap();
         assert_eq!(ir.steps.len(), 1);
-        let step = &ir.steps[0];
-        assert_eq!(step.ability.as_str(), "chat");
+        let call = ir.steps[0].as_call().expect("flat call step");
+        assert_eq!(call.ability.as_str(), "chat");
         assert_eq!(
-            step.target,
+            call.target,
             IrTarget::Device {
                 node_id: "node-1".to_string()
             },

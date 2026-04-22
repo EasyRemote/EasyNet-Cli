@@ -328,7 +328,7 @@ fn lower(step: &AnalyzedStep) -> anyhow::Result<IrStep> {
         )
     })?;
 
-    Ok(IrStep {
+    Ok(IrStep::Call(IrCall {
         step_id: step.step_id.clone(),
         step_name: step.step_id.clone(),
         ability,
@@ -351,7 +351,7 @@ fn lower(step: &AnalyzedStep) -> anyhow::Result<IrStep> {
         },
         optional: step.call.options.optional,
         content_type: "application/json".into(),
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -531,14 +531,18 @@ mod tests {
             // references a binding must find it already registered.
             let mut binding_phase: HashMap<String, usize> = HashMap::new();
             for (phase_idx, range) in ir.phases.iter().enumerate() {
-                // First, validate every input_refs in this phase
-                // resolves to an earlier phase (strict <, not <=).
+                // PR-10: this planner test only exercises Call-shape
+                // missions — the phase/data-flow partitioning
+                // invariant is defined for flat steps. Block
+                // variants never appear in these fixtures; skipping
+                // them with `as_call()` keeps the test tight.
                 for step in &ir.steps[range.start..range.end] {
-                    for binding in step.input_refs.values() {
+                    let Some(call) = step.as_call() else { continue };
+                    for binding in call.input_refs.values() {
                         let dep_phase = binding_phase.get(binding).copied().unwrap_or_else(|| {
                             panic!(
                                 "example {i}: step '{}' references unknown binding '{}'",
-                                step.step_id, binding
+                                call.step_id, binding
                             )
                         });
                         assert!(
@@ -546,7 +550,7 @@ mod tests {
                             "example {i}: step '{}' consumes '{}' from phase {}, \
                              but itself lives in phase {} — same-phase data flow \
                              would race under parallel dispatch",
-                            step.step_id,
+                            call.step_id,
                             binding,
                             dep_phase,
                             phase_idx,
@@ -558,7 +562,8 @@ mod tests {
                 // after the input check so a step can't satisfy its
                 // own data flow via a same-phase binding.
                 for step in &ir.steps[range.start..range.end] {
-                    if let Some(b) = &step.output_binding {
+                    let Some(call) = step.as_call() else { continue };
+                    if let Some(b) = &call.output_binding {
                         binding_phase.insert(b.clone(), phase_idx);
                     }
                 }
