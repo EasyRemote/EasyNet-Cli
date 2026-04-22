@@ -46,6 +46,8 @@ pub(crate) mod dispatch;
 pub(crate) mod drivers;
 pub(crate) mod process_runner;
 pub(crate) mod run_store;
+pub(crate) mod session;
 pub(crate) mod stream_ui;
+pub(crate) mod timeline;
 pub(crate) mod toml_escape;
 pub(crate) mod workspace;

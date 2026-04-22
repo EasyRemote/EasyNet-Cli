@@ -43,6 +43,7 @@ use std::time::Duration;
 
 use super::dispatch::{AgentResponse, AgentUsage};
 use super::run_store::RunDir;
+use super::timeline::TimelineWriter;
 use crate::registry::agents::AgentEntry;
 
 /// Per-invocation knobs the dispatch layer has already resolved
@@ -54,6 +55,18 @@ pub struct InvokeOpts {
     pub env: BTreeMap<String, String>,
     pub cwd: PathBuf,
     pub run_dir: Option<Arc<RunDir>>,
+    /// PR-7 Commit 2: Timeline writer for this invocation. When
+    /// `Some`, the driver's stdout-line callback emits a
+    /// `progress` event per stream chunk, fsynced to disk and
+    /// broadcast to any live subscribers. `None` in tests that
+    /// do not need timeline observation; absence is not an error.
+    ///
+    /// Plumbing Timeline through `InvokeOpts` keeps the adapter
+    /// trait signature unchanged (still sync, no async_trait) —
+    /// the driver emits synchronously and the P2 discipline is
+    /// upheld by `TimelineWriter::emit` holding the fsync
+    /// barrier before broadcast wake (see `runtime::timeline`).
+    pub timeline: Option<Arc<TimelineWriter>>,
     /// Binary to spawn for this agent's runtime. Resolved at
     /// dispatch time from `AgentEntry::command`, with an empty
     /// string signalling "take the driver default" (claude /

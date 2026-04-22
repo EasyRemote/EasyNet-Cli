@@ -27,6 +27,7 @@ use super::adapter::InvokeOpts;
 use super::context::{self, DispatchContext};
 use super::drivers::adapter_for;
 use super::run_store::{RunDir, RunMeta};
+use super::session::Session;
 use super::workspace;
 
 /// Maximum recursion depth for agent dispatch (prevents infinite loops).
@@ -374,6 +375,45 @@ pub fn send_to_agent_with_depth(
         }
     }
 
+    // Allocate a PR-7 Session for this dispatch. The Session's
+    // invocation_id becomes the cross-reference key between the
+    // legacy `runs/<ts>/` directory (human-facing artefacts) and
+    // the PersistentLog event log (machine-auditable stream,
+    // P1-P6 compliant). Commit 1 of PR-7: dual-write — emit
+    // admitted + terminal events to the Timeline alongside the
+    // existing run_dir writes. Mid-stream progress events stay
+    // in run_dir/trace.jsonl for now; Commit 2 routes them
+    // through the Timeline broadcast path.
+    //
+    // Session construction is infallible: PersistentLog uses its
+    // own env-var / tempdir default when the caller passes None.
+    // A concurrent dispatch on the same host gets its own
+    // invocation_id (uuid v4) and therefore its own log file.
+    let session = Session::new(None);
+    // Record an `admitted` event as the first timeline entry.
+    // The payload names the agent, depth, prompt length, and
+    // origin (local vs remote, if the caller established a
+    // DispatchContext). A subscriber that joins here sees the
+    // same first event as a resumer that replays from offset 0.
+    let admitted_payload = serde_json::json!({
+        "agent": agent_name,
+        "depth": current_depth,
+        "prompt_len": full_prompt.len(),
+        // `origin_agent` names the root of the dispatch chain
+        // when one is active; absent otherwise. "local" for a
+        // CLI-direct invocation (`agent send`) with no mission
+        // context, or the root agent name inside a mission.
+        "origin_agent": active.as_ref().and_then(|c| c.origin_agent.clone()),
+        "mission_id": active.as_ref().map(|c| c.mission_id.clone()),
+        "context_present": context.is_some(),
+    });
+    if let Err(e) = session.writer().emit("admitted", Some(admitted_payload)) {
+        eprintln!(
+            "[easynet warn] agent {agent_name}: timeline admitted emit failed ({e}); \
+             continuing (run_dir write is still authoritative)"
+        );
+    }
+
     // Legacy `--trace <path>` still supported: mirror the prompt next to the
     // user-supplied trace file.
     if let Some(tp) = extra_trace_path {
@@ -416,6 +456,14 @@ pub fn send_to_agent_with_depth(
             env,
             cwd: cwd_for_adapter,
             run_dir: run_dir.clone(),
+            // Commit 2: the driver emits mid-stream progress
+            // events through the Timeline instead of (previously)
+            // through run_dir/trace.jsonl. The writer_arc is the
+            // same underlying Arc<TimelineWriter> the dispatch
+            // layer used for admitted/terminal, so the driver's
+            // progress events interleave between them in
+            // sequence order.
+            timeline: Some(session.writer_arc()),
             // Honor the operator-supplied binary override. Each
             // driver substitutes its own default when this is
             // empty (see `ClaudeOptions::resolved_command` and
@@ -453,6 +501,11 @@ pub fn send_to_agent_with_depth(
             // registry row must not shadow the spec's choice in
             // the audit trail.
             model: effective_model.clone(),
+            // Cross-reference key to the PersistentLog event log.
+            // Operators grepping for this id under
+            // `$AXON_INVOCATION_LOG_DIR/<id>.jsonl` find the
+            // P1-P6-compliant stream of events for this run.
+            invocation_id: session.invocation_id().to_string(),
             started_at,
             duration_ms,
             exit_status,
@@ -470,6 +523,47 @@ pub fn send_to_agent_with_depth(
                 dir.path().display()
             );
         }
+    }
+
+    // Terminal timeline event. One of `completed` / `failed`
+    // matches the INVOCATION_STATE_MACHINE.md §2 event kinds.
+    // `cancelled` is emitted by a future cancellation path
+    // (PR-10 mission supervisor); not reachable from this sync
+    // dispatch today. `timed_out` is folded into `failed` with a
+    // reason payload — the state machine has separate events,
+    // but CLI dispatch surfaces timeout as an error without a
+    // distinct handler path, and emitting `failed { reason:
+    // "timeout" }` keeps the wire shape consistent with the
+    // typed-error future.
+    //
+    // The fsync on this emit is what gives the log its P4 terminal
+    // idempotence: a reader opening the log after we exit finds
+    // the terminal state durably recorded.
+    let (terminal_type, terminal_payload) = match &run_result {
+        Ok((content, usage)) => (
+            "completed",
+            serde_json::json!({
+                "content_len": content.len(),
+                "duration_ms": duration_ms,
+                "usage": usage,
+            }),
+        ),
+        Err(e) => (
+            "failed",
+            serde_json::json!({
+                "error": e.to_string(),
+                "duration_ms": duration_ms,
+            }),
+        ),
+    };
+    if let Err(e) = session
+        .writer()
+        .emit(terminal_type, Some(terminal_payload))
+    {
+        eprintln!(
+            "[easynet warn] agent {agent_name}: timeline terminal emit failed ({e}); \
+             run_dir meta.json is still authoritative"
+        );
     }
 
     let (content, usage) = run_result?;
@@ -1072,6 +1166,7 @@ mod tests {
             env: std::collections::BTreeMap::new(),
             cwd: std::path::PathBuf::from("."),
             run_dir: None,
+            timeline: None,
             command: String::new(),
         };
         let (text, usage) = adapter
@@ -1100,6 +1195,7 @@ mod tests {
             env: std::collections::BTreeMap::new(),
             cwd: std::path::PathBuf::from("."),
             run_dir: None,
+            timeline: None,
             command: String::new(),
         };
         let (_text, usage) = adapter.invoke(&entry, "p", opts).unwrap();
@@ -1377,5 +1473,279 @@ mod tests {
         // we want.
         let m = resolve_model(Some("spec-model".into()), None);
         assert_eq!(m.as_deref(), Some("spec-model"));
+    }
+
+    // ── PR-7 Session + Timeline dispatch integration ────────────────────────
+
+    /// Read the Timeline events for the most recent run, using the
+    /// invocation_id recorded in that run's meta.json as the key.
+    /// Returns `None` when either meta.json or the events file is
+    /// missing (which, under the dual-write discipline, should not
+    /// happen for any dispatch that produced a run_dir).
+    fn read_timeline_for_latest_run(
+        agent_root: &std::path::Path,
+    ) -> Option<Vec<serde_json::Value>> {
+        let meta = read_latest_meta(agent_root)?;
+        if meta.invocation_id.is_empty() {
+            return None;
+        }
+        // PersistentLog uses $AXON_INVOCATION_LOG_DIR (set by the
+        // HomeGuard-equivalent tempdir redirect) or a shared
+        // tempdir by default. Open a bare PersistentLog on the
+        // same dir the dispatch wrote to and read by id.
+        use easynet_axon::invocation::persistence::PersistentLog;
+        let log = PersistentLog::new(None);
+        Some(log.read_events(&meta.invocation_id, 0))
+    }
+
+    #[test]
+    fn dispatch_emits_admitted_and_failed_events_when_adapter_fails() {
+        // The real dispatch path: `dummy_entry` has a bogus
+        // command, so the adapter spawn fails fast. We expect
+        // TWO timeline events to land on disk: `admitted` at
+        // dispatch entry, and `failed` at the terminal point.
+        // The meta.json must carry the invocation_id; the
+        // timeline file must carry both events in sequence order.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let entry = seed_agent_with_spec("alice", Some("model-x"), None);
+        let root = entry.root_path.clone().unwrap();
+
+        let _ = send_to_agent_with_depth(
+            "alice", &entry, "hello", None, None, Some(1),
+        );
+
+        let meta = read_latest_meta(&root).expect("meta.json must exist");
+        assert!(
+            !meta.invocation_id.is_empty(),
+            "meta.invocation_id must be populated after PR-7 Commit 1"
+        );
+        assert!(
+            meta.invocation_id.starts_with("cli-"),
+            "invocation_id prefix signals CLI-allocated uuid, got {:?}",
+            meta.invocation_id
+        );
+
+        let events = read_timeline_for_latest_run(&root)
+            .expect("timeline events must exist for this invocation_id");
+        assert_eq!(
+            events.len(),
+            2,
+            "expected exactly admitted + failed (2 events), got {}: {events:?}",
+            events.len()
+        );
+        assert_eq!(events[0]["sequence"], 0);
+        assert_eq!(events[0]["type"], "admitted");
+        assert_eq!(events[0]["payload"]["agent"], "alice");
+        // prompt_len is the length of the composed prompt —
+        // pinning only that it's present and non-negative avoids
+        // coupling to the exact prompt-composition format while
+        // still asserting the payload was populated.
+        assert!(events[0]["payload"]["prompt_len"].as_i64().unwrap() > 0);
+
+        assert_eq!(events[1]["sequence"], 1);
+        assert_eq!(events[1]["type"], "failed");
+        // The failure payload carries the driver error message.
+        // We don't pin the exact text (driver-dependent), only
+        // that an `error` string is present and non-empty.
+        assert!(
+            events[1]["payload"]["error"].as_str().map(|s| !s.is_empty()).unwrap_or(false),
+            "failed event must carry non-empty error string, got {:?}",
+            events[1]["payload"]
+        );
+    }
+
+    #[test]
+    fn terminal_event_marks_index_terminal_on_disk() {
+        // P4 (terminal idempotence) composed with dispatch: after
+        // a failed run, a fresh PersistentLog reader must see the
+        // FAILED terminal state in the index. This catches a
+        // hypothetical refactor where the terminal emit gets
+        // skipped (e.g. added behind a flag) — the index would
+        // stay at RUNNING and P4 would be silently violated.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let entry = seed_agent_with_spec("alice", None, None);
+        let root = entry.root_path.clone().unwrap();
+        let _ = send_to_agent_with_depth(
+            "alice", &entry, "hello", None, None, Some(1),
+        );
+
+        let meta = read_latest_meta(&root).expect("meta.json");
+        use easynet_axon::invocation::persistence::PersistentLog;
+        let log = PersistentLog::new(None);
+        let idx = log
+            .read_index(&meta.invocation_id)
+            .expect("index must be present after terminal emit");
+        assert_eq!(
+            idx.terminal_state.as_deref(),
+            Some("FAILED"),
+            "terminal state must be recorded, got {:?}",
+            idx.terminal_state
+        );
+        assert_eq!(idx.last_sequence, 1, "two events emitted, last_sequence = 1");
+    }
+
+    /// Make a progress event shaped exactly like the driver
+    /// callbacks emit (see `runtime/drivers/claude_code.rs` and
+    /// `runtime/drivers/codex.rs`). Called from the test below
+    /// to simulate the stream without spawning a real binary.
+    ///
+    /// The payload shape is part of the contract PR-10
+    /// services/chat + Frontend AgentDetailPage will read, so
+    /// pinning it here protects downstream consumers against a
+    /// future driver refactor that drops the `driver` / `chunk`
+    /// keys.
+    fn simulate_driver_progress(
+        timeline: &crate::runtime::timeline::TimelineWriter,
+        driver: &str,
+        line: &str,
+    ) {
+        let payload = match serde_json::from_str::<serde_json::Value>(line) {
+            Ok(v) => serde_json::json!({"driver": driver, "chunk": v}),
+            Err(_) => serde_json::json!({"driver": driver, "raw": line}),
+        };
+        timeline.emit("progress", Some(payload)).unwrap();
+    }
+
+    #[test]
+    fn timeline_progress_events_carry_driver_and_chunk_shape() {
+        // The contract PR-10 services relies on: every progress
+        // event carries `{driver, chunk|raw}`. Structured
+        // JSONL driver output becomes `chunk`; garbage lines
+        // become `raw`. Both shapes round-trip through disk.
+        use crate::runtime::session::Session;
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let session = Session::new(None);
+        session.writer().emit("admitted", None).unwrap();
+        simulate_driver_progress(
+            session.writer(),
+            "claude-code",
+            r#"{"kind":"delta","text":"hi"}"#,
+        );
+        simulate_driver_progress(session.writer(), "codex", "not-json-at-all");
+        session.writer().emit("completed", None).unwrap();
+
+        let events = session.resume_replay(0);
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[1].event_type, "progress");
+        let p1 = events[1].payload.as_ref().unwrap();
+        assert_eq!(p1["driver"], "claude-code");
+        assert_eq!(p1["chunk"]["kind"], "delta");
+        assert_eq!(p1["chunk"]["text"], "hi");
+
+        assert_eq!(events[2].event_type, "progress");
+        let p2 = events[2].payload.as_ref().unwrap();
+        assert_eq!(p2["driver"], "codex");
+        assert_eq!(p2["raw"], "not-json-at-all");
+
+        assert_eq!(events[3].event_type, "completed");
+    }
+
+    #[test]
+    fn timeline_broadcast_delivers_progress_events_live() {
+        // A subscriber attached BEFORE emit sees each progress
+        // event in the order the driver produced it. This is the
+        // path services/chat will use in PR-10 to tail active
+        // invocations; pinning it here protects the capability
+        // against a future refactor that drops broadcast wake
+        // from the emit path.
+        use crate::runtime::session::Session;
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let session = Session::new(None);
+        let mut rx = session.subscribe();
+        session.writer().emit("admitted", None).unwrap();
+        for n in 0..5 {
+            simulate_driver_progress(
+                session.writer(),
+                "claude-code",
+                &format!(r#"{{"chunk_n":{n}}}"#),
+            );
+        }
+        session.writer().emit("completed", None).unwrap();
+
+        // 1 admitted + 5 progress + 1 completed = 7 events
+        // queued on the broadcast receiver.
+        let mut received = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            received.push(ev);
+        }
+        assert_eq!(received.len(), 7);
+        assert_eq!(received[0].event_type, "admitted");
+        for (i, ev) in received[1..6].iter().enumerate() {
+            assert_eq!(ev.event_type, "progress", "event {} must be progress", i + 1);
+            assert_eq!(
+                ev.payload.as_ref().unwrap()["chunk"]["chunk_n"],
+                i as i64,
+                "progress events must arrive in driver-emit order (no reordering)"
+            );
+        }
+        assert_eq!(received[6].event_type, "completed");
+    }
+
+    #[test]
+    fn runs_directory_no_longer_contains_trace_jsonl() {
+        // PR-7 Commit 2 removed the runs/trace.jsonl write path.
+        // A dispatch that uses `dummy_entry` (fails at spawn, so
+        // no driver stream emits anyway) must still produce a
+        // run_dir with {prompt.txt, meta.json} but NOT
+        // trace.jsonl. This is the visible contract change
+        // operators see on disk.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let entry = seed_agent_with_spec("alice", None, None);
+        let root = entry.root_path.clone().unwrap();
+        let _ = send_to_agent_with_depth(
+            "alice", &entry, "hello", None, None, Some(1),
+        );
+
+        // Find the latest run directory.
+        let runs = root.join("runs");
+        let mut entries: Vec<_> = std::fs::read_dir(&runs)
+            .expect("runs dir must exist")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .collect();
+        entries.sort_by_key(|e| e.file_name());
+        let latest = entries.last().expect("at least one run");
+        let run_path = latest.path();
+
+        assert!(
+            run_path.join("prompt.txt").exists(),
+            "prompt.txt still persists"
+        );
+        assert!(
+            run_path.join("meta.json").exists(),
+            "meta.json still persists"
+        );
+        assert!(
+            !run_path.join("trace.jsonl").exists(),
+            "trace.jsonl must NOT exist — moved to Timeline in PR-7 Commit 2"
+        );
+    }
+
+    #[test]
+    fn meta_json_and_timeline_agree_on_invocation_id() {
+        // Cross-reference invariant: the invocation_id in
+        // meta.json MUST equal the file stem of the Timeline
+        // log. Operators rely on this — copy-pasting the id
+        // from meta.json into a grep on the log dir must land
+        // on the run's events. If a future refactor separates
+        // the two allocation sites, this test trips.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let entry = seed_agent_with_spec("alice", None, None);
+        let root = entry.root_path.clone().unwrap();
+        let _ = send_to_agent_with_depth(
+            "alice", &entry, "hello", None, None, Some(1),
+        );
+
+        let meta = read_latest_meta(&root).expect("meta.json");
+        use easynet_axon::invocation::persistence::PersistentLog;
+        let log = PersistentLog::new(None);
+        let expected_path = log.events_path(&meta.invocation_id);
+        assert!(
+            expected_path.exists(),
+            "Timeline log file must exist at PersistentLog path for meta.invocation_id. \
+             meta.invocation_id = {:?}, expected path = {}",
+            meta.invocation_id,
+            expected_path.display(),
+        );
     }
 }

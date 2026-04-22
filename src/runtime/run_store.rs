@@ -4,42 +4,37 @@
 // File: src/agent/run_store.rs
 // Description: Per-invocation persistence for agent runs. Every `agent send`
 //              call creates a timestamped directory under the agent's
-//              workspace containing prompt, response, trace, and metadata.
+//              workspace containing prompt, response, and metadata.
 //
 // Layout:
 //   ~/.easynet/workspaces/<agent>/runs/<YYYY-MM-DD_HHMMSS>/
 //     ├── prompt.txt     — composed prompt (incl. context) sent to the agent
 //     ├── response.md    — final agent reply, as markdown
-//     ├── trace.jsonl    — raw stream events (one JSON object per line)
-//     └── meta.json      — timing, token counts, cost, model, exit status
+//     └── meta.json      — timing, token counts, cost, model, exit status, invocation_id
+//
+// The stream event log (`trace.jsonl`) moved to the Timeline /
+// PersistentLog in PR-7 Commit 2. `meta.json::invocation_id` is the
+// cross-reference key: operators locate the event stream at
+// `$AXON_INVOCATION_LOG_DIR/<invocation_id>.jsonl`. See
+// `runtime::session::Session` and `runtime::timeline::TimelineWriter`.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
 
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 
 use super::workspace;
 
-/// A single persisted run directory. Cheap to clone (Arc-like file handles).
+/// A single persisted run directory. Holds per-run artefact paths
+/// (`prompt.txt`, `response.md`, `meta.json`). The stream event
+/// log lives in the Timeline (see module doc).
 pub struct RunDir {
     pub path: PathBuf,
-    /// Lazily-opened append handle for trace.jsonl.
-    trace: Mutex<Option<File>>,
-    /// Count of trace-line write failures observed on this run. Used to
-    /// gate the stderr warnings emitted by `warn_trace_throttled`:
-    /// warn on the 1st, 2nd, 4th, 8th, 16th, ... failure. A simple
-    /// "warn once" gate (the previous implementation) made a sustained
-    /// mid-run failure invisible to the operator after the first hit;
-    /// an exponential schedule bounds the stderr noise at `log2(N)`
-    /// lines for N failures while still surfacing ongoing problems.
-    trace_failures: AtomicU64,
 }
 
 impl RunDir {
@@ -50,11 +45,7 @@ impl RunDir {
         fs::create_dir_all(&runs)?;
         let stamp = Local::now().format("%Y-%m-%d_%H%M%S").to_string();
         let path = allocate_unique_run_dir(&runs, &stamp)?;
-        Ok(Self {
-            path,
-            trace: Mutex::new(None),
-            trace_failures: AtomicU64::new(0),
-        })
+        Ok(Self { path })
     }
 
     /// Write the composed prompt to `prompt.txt`.
@@ -73,48 +64,6 @@ impl RunDir {
         fs::write(self.path.join("response.md"), response)
     }
 
-    /// Append a single raw stream-event line to `trace.jsonl`. Idempotent —
-    /// the file is opened on first use and kept for the run.
-    ///
-    /// This is hot-path code (one call per streamed agent chunk), so unlike
-    /// the other writers it logs-and-continues instead of returning. A
-    /// sustained failure (full disk, EBADF, poisoned lock) emits exactly
-    /// one stderr line per `RunDir` to avoid drowning the operator while
-    /// still surfacing the fact that the trace is incomplete.
-    pub fn append_trace_line(&self, line: &str) {
-        let mut guard = match self.trace.lock() {
-            Ok(g) => g,
-            Err(poisoned) => {
-                self.warn_trace_throttled(&format!(
-                    "trace mutex poisoned ({poisoned}); subsequent trace lines for this run will be dropped"
-                ));
-                return;
-            }
-        };
-        if guard.is_none() {
-            match OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(self.path.join("trace.jsonl"))
-            {
-                Ok(f) => *guard = Some(f),
-                Err(e) => {
-                    self.warn_trace_throttled(&format!(
-                        "open trace.jsonl: {e}; subsequent trace lines for this run will be dropped"
-                    ));
-                    return;
-                }
-            }
-        }
-        if let Some(f) = guard.as_mut() {
-            if let Err(e) = writeln!(f, "{line}") {
-                self.warn_trace_throttled(&format!(
-                    "append trace.jsonl: {e}; subsequent trace lines for this run will be dropped"
-                ));
-            }
-        }
-    }
-
     /// Write the run metadata to `meta.json`. Returns `Result`; a serialize
     /// failure indicates a programming error (RunMeta is plain data) and a
     /// write failure means the operator has lost the per-run audit record.
@@ -127,26 +76,6 @@ impl RunDir {
     /// Directory path for display.
     pub fn path(&self) -> &Path {
         &self.path
-    }
-
-    /// Emit a trace-failure warning the 1st, 2nd, 4th, 8th, … Nth time.
-    ///
-    /// Rationale: a single "warn once and vanish" policy hides sustained
-    /// disk-full or EBADF conditions that start after the run begins.
-    /// Warning on every failure, on the other hand, drowns the operator
-    /// when the agent is streaming dozens of events per second. Doubling
-    /// the quiet window after each log keeps the output bounded at
-    /// `log2(N)` lines for N failures — enough for the operator to see
-    /// the problem is ongoing without flooding the terminal.
-    fn warn_trace_throttled(&self, msg: &str) {
-        let n = self.trace_failures.fetch_add(1, Ordering::Relaxed) + 1;
-        if n.is_power_of_two() {
-            eprintln!(
-                "[easynet warn] run {}: {} (failure #{n})",
-                self.path.display(),
-                msg
-            );
-        }
     }
 }
 
@@ -193,6 +122,16 @@ pub struct RunMeta {
     pub agent: String,
     pub agent_type: String,
     pub model: Option<String>,
+    /// PersistentLog invocation_id for this run. Empty on a meta
+    /// written by a pre-PR-7 binary (legacy records). A populated
+    /// id lets an operator cross-reference the run directory with
+    /// the on-disk event log at `$AXON_INVOCATION_LOG_DIR/<id>.jsonl`,
+    /// which carries the P1-P6-compliant event stream (see
+    /// `runtime::session::Session`). `#[serde(default)]` keeps
+    /// deserialisation backward-compatible with meta.json files
+    /// written before this field existed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub invocation_id: String,
     pub started_at: String,
     pub duration_ms: u64,
     pub exit_status: String, // "ok" | "error" | "timeout"

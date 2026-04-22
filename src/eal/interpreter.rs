@@ -84,9 +84,9 @@ fn current_trace_schema_version() -> u32 {
 /// bounds peak memory at ~500KB worst case regardless of step count,
 /// while preserving the forensically useful head-and-tail view
 /// (the first steps show the mission shape; the last steps show the
-/// outcome). Operators who need every step can enable disk-backed
-/// streaming via `RunDir::append_trace_line`, which is unaffected by
-/// this cap.
+/// outcome). Operators who need every step can read the P1-P6
+/// Timeline event log at `$AXON_INVOCATION_LOG_DIR/<id>.jsonl`,
+/// which is unaffected by this cap.
 ///
 /// These constants are deliberately `pub const` so downstream
 /// tooling can branch on "was this trace truncated?" and size its
