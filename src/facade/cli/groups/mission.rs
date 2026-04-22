@@ -139,10 +139,15 @@ fn run_run(args: RunArgs) -> anyhow::Result<()> {
     let ir = eal::planner::compile(&program)?;
     let total_steps = ir.steps.len();
     let total_phases = ir.phases.len();
-    let node_count = ir
-        .steps
+    // PR-10: walk every leaf call (block variants like `loop` / `chat`
+    // nest IrSteps; count the distinct targets across all leaves).
+    let mut leaves: Vec<&eal::ir::IrCall> = Vec::new();
+    for s in &ir.steps {
+        s.walk_calls(&mut leaves);
+    }
+    let node_count = leaves
         .iter()
-        .map(|s| s.target.display_string())
+        .map(|c| c.target.display_string())
         .collect::<std::collections::HashSet<_>>()
         .len();
 

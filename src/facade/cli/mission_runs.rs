@@ -365,7 +365,14 @@ fn find_implicit_agent_fallback(
         }
     }
 
-    for step in &ir.steps {
+    // PR-10: the implicit-agent-fallback check only applies to flat
+    // `Call` steps. Block variants' targets are resolved inside the
+    // block's lowering; they never surface as `call ... on <name>`.
+    let mut leaves: Vec<&crate::eal::ir::IrCall> = Vec::new();
+    for s in &ir.steps {
+        s.walk_calls(&mut leaves);
+    }
+    for step in leaves {
         if let IrTarget::Device { node_id } = &step.target {
             if registered.contains(node_id) {
                 return Ok(Some(ImplicitAgentFallback {
