@@ -266,7 +266,7 @@ fn assign_phases(steps: &[AnalyzedStep]) -> Vec<usize> {
 }
 
 fn lower(step: &AnalyzedStep) -> anyhow::Result<IrStep> {
-    use crate::registry::agent_id::{AbilityName, AgentId};
+    use crate::core::agent_id::{AbilityName, AgentId};
 
     let mut static_args = serde_json::Map::new();
     let mut input_refs = BTreeMap::new();

@@ -38,7 +38,7 @@
 // placement here makes the layering visible at the use site:
 //
 //     // 1 argument → pure transport
-//     let bridge = shared::connect_bridge_to(endpoint)?;
+//     let bridge = support::connect_bridge_to(endpoint)?;
 //     // 0 arguments → reads state, then connects
 //     let (bridge, state) = persistence::config::load_and_connect()?;
 //
@@ -210,6 +210,66 @@ pub fn state_dir() -> PathBuf {
     home_dir().join(".easynet")
 }
 
+/// Resolve the directory that holds per-agent root directories.
+///
+/// Returns the new convention (`~/.easynet/agents/`) when that path
+/// exists on disk; otherwise returns the legacy path
+/// (`~/.easynet/workspaces/`). Writers should still use the legacy
+/// path until the full `agent.toml` + `AgentDirectory` machinery
+/// lands (planned) — at that point writers flip to the new path and
+/// a one-shot migration moves any remaining legacy-path agents.
+///
+/// Rationale for "read two, write one":
+///
+/// - The on-disk layout of a per-agent root is unchanged (runs/,
+///   CLAUDE.md, AGENTS.md, .mcp.json, .codex/config.toml, .git/,
+///   .agents/skills/). Only the parent directory name changes.
+///   A read-side fallback is cheap and lets users who already have
+///   agents under `workspaces/` keep working across the upgrade
+///   without a flag day.
+/// - Committing the final rename to the writer before the new
+///   AgentDirectory model exists would leave us with the new path
+///   on disk and the old code generating into it — two versions
+///   of the same transition, confusing to debug.
+///
+/// Deprecation window: legacy fallback is kept until 1.9.0 (see
+/// `docs/rfc/eal-control-flow-v1.md` is unrelated — the window
+/// tracked in the top-level plan). A single `eprintln` warning is
+/// emitted the first time a process observes a legacy-only agents
+/// directory so operators know the rename is pending.
+pub fn agents_root() -> PathBuf {
+    let new = state_dir().join("agents");
+    if new.exists() {
+        return new;
+    }
+    let legacy = state_dir().join("workspaces");
+    if legacy.exists() {
+        warn_legacy_agents_root_once(&legacy);
+        return legacy;
+    }
+    // Neither exists yet (fresh install, or `easynet start` hasn't
+    // run). Fall through to the legacy path so the first writer
+    // stays byte-compatible with the pre-rename shape. The new
+    // AgentDirectory flip happens when that PR lands.
+    legacy
+}
+
+/// Print the "workspaces is deprecated" warning at most once per
+/// process. `state_dir()` is read on nearly every CLI invocation,
+/// so a plain `eprintln` would spam the terminal. `OnceCell` gives
+/// us the "once per process" semantic without a mutex.
+fn warn_legacy_agents_root_once(path: &std::path::Path) {
+    use std::sync::OnceLock;
+    static WARNED: OnceLock<()> = OnceLock::new();
+    if WARNED.set(()).is_ok() {
+        eprintln!(
+            "note: {} is deprecated — agents will move to {}/agents/ at 1.9.0",
+            path.display(),
+            state_dir().display(),
+        );
+    }
+}
+
 fn state_path() -> PathBuf {
     state_dir().join("runtime.json")
 }
@@ -246,7 +306,7 @@ impl RuntimeState {
     /// Open a [`DendriteBridge`] to this runtime's endpoint, using the
     /// shared connect-timeout budget.
     ///
-    /// Thin composition of [`crate::shared::connect_bridge_to`] —
+    /// Thin composition of [`crate::support::connect_bridge_to`] —
     /// lives here (not on the bridge side) so that consumers who
     /// already hold a `RuntimeState` can spell the call in a way that
     /// reads as "use this state to reach its runtime":
@@ -264,7 +324,7 @@ impl RuntimeState {
     pub fn connect_bridge(
         &self,
     ) -> anyhow::Result<easynet_axon::dendrite_bridge::DendriteBridge> {
-        crate::shared::connect_bridge_to(&self.endpoint)
+        crate::support::connect_bridge_to(&self.endpoint)
     }
 }
 
@@ -281,7 +341,7 @@ impl RuntimeState {
 /// The function spans two layers — it reads a file (`persistence`)
 /// and opens a socket (`shared`) — so placing it requires a
 /// convention. We place it in the layer that *consumes* the other:
-/// `persistence::config` imports `shared::connect_bridge_to`, and
+/// `persistence::config` imports `support::connect_bridge_to`, and
 /// `shared` imports neither. An earlier draft inverted this and put
 /// the helper in `shared/mod.rs`, which silently made the transport
 /// layer depend on the persistence layer. The doc comment there
@@ -599,5 +659,108 @@ mod tests {
             hub_api_base: None,
         };
         assert_eq!(creds.api_base(), "https://my-hub.example.org");
+    }
+
+    // ── agents_root() migration read ─────────────────────────────────────
+
+    // All of these tests use `HomeGuard` so they never touch the
+    // developer's real `~/.easynet/` tree. `HomeGuard` serializes
+    // concurrent tests via a global mutex, which is load-bearing because
+    // `agents_root()` reads `HOME`.
+
+    use crate::facade::cli::test_support::HomeGuard;
+
+    #[test]
+    fn agents_root_prefers_new_layout_when_only_new_exists() {
+        let _g = HomeGuard::new();
+        let new_path = state_dir().join("agents");
+        fs::create_dir_all(&new_path).unwrap();
+
+        assert_eq!(agents_root(), new_path);
+    }
+
+    #[test]
+    fn agents_root_falls_back_to_legacy_when_only_legacy_exists() {
+        let _g = HomeGuard::new();
+        let legacy = state_dir().join("workspaces");
+        fs::create_dir_all(&legacy).unwrap();
+
+        assert_eq!(agents_root(), legacy);
+    }
+
+    #[test]
+    fn agents_root_prefers_new_when_both_exist() {
+        // Double-presence is a real-world shape: a user who created
+        // agents on an old binary and upgrades to a newer one that has
+        // begun writing to the new path will briefly hold both trees.
+        // The helper must resolve the ambiguity toward the new path so
+        // the rest of the codebase reads a single consistent layout.
+        let _g = HomeGuard::new();
+        let legacy = state_dir().join("workspaces");
+        let new_path = state_dir().join("agents");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::create_dir_all(&new_path).unwrap();
+
+        assert_eq!(agents_root(), new_path);
+    }
+
+    #[test]
+    fn agents_root_returns_legacy_path_when_neither_exists() {
+        // Fresh install: no layout on disk. The helper returns the
+        // legacy path so the first writer lands under
+        // `~/.easynet/workspaces/`, byte-compatible with every
+        // pre-rename deployment. Flipping this default is reserved
+        // for the PR that introduces AgentDirectory writes.
+        let _g = HomeGuard::new();
+        let legacy = state_dir().join("workspaces");
+        assert_eq!(agents_root(), legacy);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agents_root_survives_an_unreadable_legacy_path() {
+        // A legacy `workspaces/` that the user cannot list (e.g.
+        // wrong ownership after a chown) must not panic the resolver
+        // or crash on every CLI call. We verify the helper still
+        // returns a path — either the new layout (preferred) or the
+        // legacy one — without aborting.
+        use std::os::unix::fs::PermissionsExt;
+
+        let _g = HomeGuard::new();
+        let legacy = state_dir().join("workspaces");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::set_permissions(&legacy, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        // The helper uses `Path::exists()` internally, which only
+        // checks metadata reachability — it tolerates unreadable
+        // targets as long as the path resolves. Either return path
+        // is acceptable here; the critical property is "no panic".
+        let got = agents_root();
+
+        // Restore permissions so `HomeGuard::drop` can clean up.
+        fs::set_permissions(&legacy, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert!(got.starts_with(state_dir()));
+    }
+
+    #[test]
+    fn agents_root_emits_deprecation_notice_at_most_once() {
+        // The deprecation notice runs through a `OnceLock`, so the
+        // first call that hits the legacy-only branch prints, and
+        // every subsequent call in the same process is silent. We
+        // can't capture stderr directly from an integration-style
+        // test, but we can still verify the helper is idempotent
+        // under repeated calls: the returned path must be stable
+        // and the process must not crash.
+        let _g = HomeGuard::new();
+        let legacy = state_dir().join("workspaces");
+        fs::create_dir_all(&legacy).unwrap();
+
+        let first = agents_root();
+        let second = agents_root();
+        let third = agents_root();
+        assert_eq!(first, legacy);
+        assert_eq!(second, legacy);
+        assert_eq!(third, legacy);
     }
 }

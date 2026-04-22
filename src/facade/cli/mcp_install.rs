@@ -1,0 +1,564 @@
+// EasyNet CLI
+// ===========
+//
+// File: src/cli/mcp_install.rs
+// Description: `easynet mcp-install` — install/update MCP server entries for Claude Code / Codex.
+//
+// Goals:
+// - One command to add an `mcpServers.<name>` entry pointing at `easynet mcp-server`.
+// - Support multiple installs (one per agent/device) by changing `--name` and `--bound-node`.
+// - Safe by default: refuses to overwrite existing entries unless `--force`.
+//
+// Notes:
+// - Claude Code settings live at `~/.claude/settings.json` (see case12 in EasyNet-Axon).
+// - Codex CLI reads MCP servers from `~/.codex/config.toml` under `[mcp_servers.<name>]`.
+//
+// Author: Silan Hu <silan.hu@u.nus.edu>
+// Copyright (c) 2026 EasyNet. All rights reserved.
+
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use anyhow::Context;
+use clap::{Args, ValueEnum};
+use serde_json::{json, Map, Value};
+use toml_edit::{value as toml_value, DocumentMut, Item, Table};
+
+use crate::persistence::config;
+use crate::support::output;
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum McpInstallClient {
+    Claude,
+    Codex,
+}
+
+#[derive(Debug, Args)]
+pub struct McpInstallArgs {
+    /// Target client (claude|codex)
+    #[arg(value_enum)]
+    pub client: McpInstallClient,
+
+    /// MCP server key under `mcpServers` (e.g. "easynet", "easynet-device-a")
+    #[arg(long, default_value = "easynet")]
+    pub name: String,
+
+    /// Tenant ID passed to `easynet mcp-server`
+    ///
+    /// If omitted, we try reading from `~/.easynet/runtime.json`, else default to "default".
+    #[arg(long)]
+    pub tenant: Option<String>,
+
+    /// Runtime endpoint passed to `easynet mcp-server`
+    ///
+    /// If omitted, `easynet mcp-server` auto-detects from `~/.easynet/runtime.json`.
+    #[arg(long)]
+    pub endpoint: Option<String>,
+
+    /// Pin node-scoped tools to this node_id. The MCP server will
+    /// substitute `node_id` into every invocation that omits it, so the
+    /// hosting agent (Claude Code / Codex) talks to exactly one device
+    /// for the lifetime of the session.
+    ///
+    /// By default the binding is a *hard lock*: an explicit `node_id`
+    /// that disagrees with `--bound-node` is rejected. Pass
+    /// `--allow-node-override` to demote the binding to a *default*
+    /// that callers may override on a per-call basis.
+    #[arg(long, value_name = "NODE_ID")]
+    pub bound_node: Option<String>,
+
+    /// Demote `--bound-node` from a hard lock to a per-call default:
+    /// calls that carry an explicit `node_id` are routed to that node
+    /// instead of being rejected. Has no effect without `--bound-node`.
+    #[arg(long)]
+    pub allow_node_override: bool,
+
+    /// Label the MCP server with an agent id (purely informational; passed to `easynet mcp-server --agent`).
+    #[arg(long)]
+    pub agent: Option<String>,
+
+    /// Override config file path.
+    ///
+    /// - claude: defaults to `~/.claude/settings.json`
+    /// - codex: defaults to `~/.codex/config.toml`
+    #[arg(long)]
+    pub config_path: Option<String>,
+
+    /// Explicit path to `libaxon_dendrite_bridge` to inject into MCP server env as
+    /// `EASYNET_DENDRITE_BRIDGE_LIB`.
+    ///
+    /// Recommended when running from GUI apps (Claude Code / Codex App) that do not inherit
+    /// your shell environment.
+    #[arg(long)]
+    pub bridge_lib: Option<String>,
+
+    /// Print the resulting JSON and do not write.
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Overwrite existing entry with the same name.
+    #[arg(long)]
+    pub force: bool,
+}
+
+pub fn run(args: McpInstallArgs) -> anyhow::Result<()> {
+    let config_path = resolve_config_path(args.client, args.config_path.as_deref())?;
+    let (tenant, endpoint) =
+        resolve_runtime_defaults(args.tenant.as_deref(), args.endpoint.as_deref());
+
+    let spec = build_install_spec(&tenant, endpoint.as_deref(), &args)?;
+
+    match args.client {
+        McpInstallClient::Claude => install_for_claude(&config_path, &spec, &args)?,
+        McpInstallClient::Codex => install_for_codex(&config_path, &spec, &args)?,
+    }
+
+    if args.dry_run {
+        return Ok(());
+    }
+
+    output::success(&format!(
+        "Installed MCP server '{}' into {}",
+        args.name,
+        config_path.display()
+    ));
+    output::detail(
+        "client",
+        match args.client {
+            McpInstallClient::Claude => "claude",
+            McpInstallClient::Codex => "codex",
+        },
+    );
+    output::detail("tenant", &tenant);
+    if let Some(ep) = endpoint.as_deref() {
+        output::detail("endpoint", ep);
+    } else {
+        output::detail("endpoint", "(auto-detect via ~/.easynet/runtime.json)");
+    }
+    if spec.env.contains_key("EASYNET_DENDRITE_BRIDGE_LIB") {
+        output::detail("bridge_lib", "configured");
+    } else {
+        output::warn("EASYNET_DENDRITE_BRIDGE_LIB not configured for this MCP server.");
+        output::step("If MCP tools fail to connect, re-run with:");
+        output::step("  easynet mcp-install ... --bridge-lib /abs/path/to/libaxon_dendrite_bridge.(dylib|so|dll)");
+    }
+    if let Some(node) = args.bound_node.as_deref() {
+        output::detail("bound_node", node);
+        if !args.allow_node_override {
+            output::detail("node_override", "disabled");
+        }
+    }
+    if let Some(agent) = args.agent.as_deref() {
+        output::detail("agent", agent);
+    }
+    Ok(())
+}
+
+fn resolve_runtime_defaults(
+    tenant: Option<&str>,
+    endpoint: Option<&str>,
+) -> (String, Option<String>) {
+    let mut resolved_tenant = tenant.map(|s| s.to_string());
+    let mut resolved_endpoint = endpoint.map(|s| s.to_string());
+
+    if let (Some(t), Some(_)) = (&resolved_tenant, &resolved_endpoint) {
+        return (t.clone(), resolved_endpoint);
+    }
+
+    if let Ok(state) = config::load() {
+        if resolved_endpoint.is_none() && !state.endpoint.trim().is_empty() {
+            resolved_endpoint = Some(state.endpoint);
+        }
+        if resolved_tenant.is_none() {
+            resolved_tenant = state.tenant.clone().or_else(|| Some("default".to_string()));
+        }
+    }
+
+    (
+        resolved_tenant.unwrap_or_else(|| "default".to_string()),
+        resolved_endpoint,
+    )
+}
+
+fn resolve_config_path(
+    client: McpInstallClient,
+    override_path: Option<&str>,
+) -> anyhow::Result<PathBuf> {
+    if let Some(p) = override_path {
+        return Ok(PathBuf::from(p));
+    }
+    let home = config::home_dir();
+    match client {
+        McpInstallClient::Claude => Ok(home.join(".claude").join("settings.json")),
+        McpInstallClient::Codex => Ok(home.join(".codex").join("config.toml")),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct InstallSpec {
+    command: String,
+    args: Vec<String>,
+    env: BTreeMap<String, String>,
+}
+
+fn build_install_spec(
+    tenant: &str,
+    endpoint: Option<&str>,
+    args: &McpInstallArgs,
+) -> anyhow::Result<InstallSpec> {
+    let mut cmd_args: Vec<String> = vec![
+        "mcp-server".to_string(),
+        "--tenant".to_string(),
+        tenant.to_string(),
+    ];
+    if let Some(ep) = endpoint {
+        cmd_args.push("--endpoint".to_string());
+        cmd_args.push(ep.to_string());
+    }
+    if let Some(node) = args.bound_node.as_deref() {
+        cmd_args.push("--bound-node".to_string());
+        cmd_args.push(node.to_string());
+        if args.allow_node_override {
+            cmd_args.push("--allow-node-override".to_string());
+        }
+    }
+    if let Some(agent) = args.agent.as_deref() {
+        cmd_args.push("--agent".to_string());
+        cmd_args.push(agent.to_string());
+    }
+
+    let command = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "easynet".to_string());
+
+    let mut env = BTreeMap::<String, String>::new();
+    if let Some(lib) = resolve_bridge_lib(args.bridge_lib.as_deref())? {
+        env.insert("EASYNET_DENDRITE_BRIDGE_LIB".to_string(), lib);
+    }
+
+    Ok(InstallSpec {
+        command,
+        args: cmd_args,
+        env,
+    })
+}
+
+fn install_for_claude(
+    config_path: &Path,
+    spec: &InstallSpec,
+    args: &McpInstallArgs,
+) -> anyhow::Result<()> {
+    let server_entry = build_claude_server_entry(spec)?;
+
+    let mut root = load_json_object_or_empty(config_path)
+        .with_context(|| format!("read {}", config_path.display()))?;
+    let servers = ensure_object_field(&mut root, "mcpServers")?;
+
+    if servers.contains_key(&args.name) && !args.force {
+        anyhow::bail!(
+            "mcpServers.{} already exists in {} (use --force to overwrite)",
+            args.name,
+            config_path.display()
+        );
+    }
+    servers.insert(args.name.clone(), server_entry);
+
+    let out = serde_json::to_string_pretty(&Value::Object(root))? + "\n";
+    if args.dry_run {
+        print!("{out}");
+        return Ok(());
+    }
+    write_atomic(config_path, out.as_bytes())?;
+    Ok(())
+}
+
+fn build_claude_server_entry(spec: &InstallSpec) -> anyhow::Result<Value> {
+    // Use a stable ordering for JSON output (helps diffs).
+    let mut entry = BTreeMap::<String, Value>::new();
+    entry.insert("command".to_string(), Value::String(spec.command.clone()));
+    entry.insert(
+        "args".to_string(),
+        Value::Array(spec.args.iter().cloned().map(Value::String).collect()),
+    );
+    if !spec.env.is_empty() {
+        let mut env_obj = Map::new();
+        for (k, v) in &spec.env {
+            env_obj.insert(k.clone(), Value::String(v.clone()));
+        }
+        entry.insert("env".to_string(), Value::Object(env_obj));
+    }
+    Ok(Value::Object(
+        entry.into_iter().collect::<Map<String, Value>>(),
+    ))
+}
+
+fn install_for_codex(
+    config_path: &Path,
+    spec: &InstallSpec,
+    args: &McpInstallArgs,
+) -> anyhow::Result<()> {
+    let mut doc = load_toml_document_or_empty(config_path)
+        .with_context(|| format!("read {}", config_path.display()))?;
+
+    ensure_table(&mut doc, "mcp_servers");
+    {
+        let servers = doc["mcp_servers"]
+            .as_table_mut()
+            .ok_or_else(|| anyhow::anyhow!("mcp_servers must be a TOML table"))?;
+
+        if servers.contains_key(&args.name) && !args.force {
+            anyhow::bail!(
+                "mcp_servers.{} already exists in {} (use --force to overwrite)",
+                args.name,
+                config_path.display()
+            );
+        }
+
+        let server_item = servers
+            .entry(&args.name)
+            .or_insert_with(|| Item::Table(Table::new()));
+        let server = server_item
+            .as_table_mut()
+            .ok_or_else(|| anyhow::anyhow!("mcp_servers.{} must be a TOML table", args.name))?;
+
+        server.insert("command", toml_value(spec.command.clone()));
+        let mut args_array = toml_edit::Array::new();
+        for arg in &spec.args {
+            args_array.push(arg.as_str());
+        }
+        server.insert("args", toml_value(args_array));
+
+        if !spec.env.is_empty() {
+            // Ensure env is a table (override inline table / non-table values if present).
+            if server.get("env").and_then(Item::as_table).is_none() {
+                server.insert("env", Item::Table(Table::new()));
+            }
+            let env_table = server
+                .get_mut("env")
+                .and_then(Item::as_table_mut)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("mcp_servers.{}.env must be a TOML table", args.name)
+                })?;
+            for (k, v) in &spec.env {
+                env_table.insert(k, toml_value(v.clone()));
+            }
+        }
+    }
+
+    let out = doc.to_string() + "\n";
+    if args.dry_run {
+        print!("{out}");
+        return Ok(());
+    }
+    write_atomic(config_path, out.as_bytes())?;
+    Ok(())
+}
+
+fn load_json_object_or_empty(path: &Path) -> anyhow::Result<Map<String, Value>> {
+    if !path.exists() {
+        return Ok(Map::new());
+    }
+    let data = fs::read_to_string(path)?;
+    if data.trim().is_empty() {
+        return Ok(Map::new());
+    }
+    let v: Value = serde_json::from_str(&data)?;
+    match v {
+        Value::Object(map) => Ok(map),
+        _ => anyhow::bail!("config file must be a JSON object"),
+    }
+}
+
+fn ensure_object_field<'a>(
+    root: &'a mut Map<String, Value>,
+    key: &str,
+) -> anyhow::Result<&'a mut Map<String, Value>> {
+    let slot = root.entry(key.to_string()).or_insert_with(|| json!({}));
+    match slot {
+        Value::Object(map) => Ok(map),
+        _ => anyhow::bail!("{key} must be a JSON object"),
+    }
+}
+
+fn load_toml_document_or_empty(path: &Path) -> anyhow::Result<DocumentMut> {
+    if !path.exists() {
+        return Ok(DocumentMut::new());
+    }
+    let data = fs::read_to_string(path)?;
+    if data.trim().is_empty() {
+        return Ok(DocumentMut::new());
+    }
+    data.parse::<DocumentMut>()
+        .map_err(|e| anyhow::anyhow!("invalid TOML: {e}"))
+}
+
+fn ensure_table(doc: &mut DocumentMut, key: &str) {
+    if !doc.contains_key(key) {
+        doc[key] = Item::Table(Table::new());
+    }
+}
+
+fn resolve_bridge_lib(explicit: Option<&str>) -> anyhow::Result<Option<String>> {
+    if let Some(raw) = explicit {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        let path = PathBuf::from(trimmed);
+        anyhow::ensure!(path.exists(), "bridge lib not found at {}", path.display());
+        return Ok(Some(trimmed.to_string()));
+    }
+
+    if let Ok(raw) = std::env::var("EASYNET_DENDRITE_BRIDGE_LIB") {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() && PathBuf::from(trimmed).exists() {
+            return Ok(Some(trimmed.to_string()));
+        }
+    }
+
+    if let Some(v) = bridge_lib_from_easynet_home() {
+        return Ok(Some(v));
+    }
+    if let Some(v) = bridge_lib_from_claude_settings() {
+        return Ok(Some(v));
+    }
+    if let Some(v) = bridge_lib_from_codex_config() {
+        return Ok(Some(v));
+    }
+    if let Some(v) = bridge_lib_from_local_repos() {
+        return Ok(Some(v));
+    }
+    Ok(None)
+}
+
+fn default_bridge_lib_filename() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "libaxon_dendrite_bridge.dylib"
+    } else if cfg!(target_os = "windows") {
+        "axon_dendrite_bridge.dll"
+    } else {
+        "libaxon_dendrite_bridge.so"
+    }
+}
+
+fn bridge_lib_from_easynet_home() -> Option<String> {
+    let home = config::home_dir();
+    let candidate = home
+        .join(".easynet")
+        .join("dendrite-bridge")
+        .join("native")
+        .join(default_bridge_lib_filename());
+    if candidate.exists() {
+        return Some(candidate.to_string_lossy().into_owned());
+    }
+    None
+}
+
+fn bridge_lib_from_claude_settings() -> Option<String> {
+    let path = config::home_dir().join(".claude").join("settings.json");
+    let data = fs::read_to_string(path).ok()?;
+    let v: Value = serde_json::from_str(&data).ok()?;
+    let servers = v.get("mcpServers")?.as_object()?;
+    for (_, server) in servers {
+        let env = server.get("env").and_then(|v| v.as_object());
+        let Some(env) = env else { continue };
+        let lib = env
+            .get("EASYNET_DENDRITE_BRIDGE_LIB")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())?;
+        if PathBuf::from(lib).exists() {
+            return Some(lib.to_string());
+        }
+    }
+    None
+}
+
+fn bridge_lib_from_codex_config() -> Option<String> {
+    let path = config::home_dir().join(".codex").join("config.toml");
+    let data = fs::read_to_string(path).ok()?;
+    let doc = data.parse::<DocumentMut>().ok()?;
+    let servers = doc.get("mcp_servers")?.as_table()?;
+    for (_, item) in servers.iter() {
+        let server = item.as_table()?;
+        let env = server.get("env")?.as_table()?;
+        let lib = env
+            .get("EASYNET_DENDRITE_BRIDGE_LIB")
+            .and_then(|i| i.as_value())
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())?;
+        if PathBuf::from(lib).exists() {
+            return Some(lib.to_string());
+        }
+    }
+    None
+}
+
+fn bridge_lib_from_local_repos() -> Option<String> {
+    let filename = default_bridge_lib_filename();
+    let mut cur = std::env::current_dir().ok()?;
+
+    for _ in 0..8 {
+        let direct_release = cur
+            .join("core")
+            .join("runtime-rs")
+            .join("dendrite-bridge")
+            .join("target")
+            .join("release")
+            .join(filename);
+        if direct_release.exists() {
+            return Some(direct_release.to_string_lossy().into_owned());
+        }
+
+        let direct_debug = cur
+            .join("core")
+            .join("runtime-rs")
+            .join("dendrite-bridge")
+            .join("target")
+            .join("debug")
+            .join(filename);
+        if direct_debug.exists() {
+            return Some(direct_debug.to_string_lossy().into_owned());
+        }
+
+        let sibling_release = cur
+            .join("EasyNet-Axon")
+            .join("core")
+            .join("runtime-rs")
+            .join("dendrite-bridge")
+            .join("target")
+            .join("release")
+            .join(filename);
+        if sibling_release.exists() {
+            return Some(sibling_release.to_string_lossy().into_owned());
+        }
+
+        let sibling_debug = cur
+            .join("EasyNet-Axon")
+            .join("core")
+            .join("runtime-rs")
+            .join("dendrite-bridge")
+            .join("target")
+            .join("debug")
+            .join(filename);
+        if sibling_debug.exists() {
+            return Some(sibling_debug.to_string_lossy().into_owned());
+        }
+
+        cur = cur.parent()?.to_path_buf();
+    }
+    None
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, bytes)?;
+    fs::rename(&tmp, path)?;
+    Ok(())
+}

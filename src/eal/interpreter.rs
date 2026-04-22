@@ -34,7 +34,7 @@ use easynet_axon::dendrite_bridge::DendriteBridge;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::shared::bridge_pool::BridgePool;
+use crate::support::bridge_pool::BridgePool;
 
 /// Convert `Duration::as_millis()` (u128) to u64, saturating at u64::MAX.
 #[inline]
@@ -44,7 +44,7 @@ fn millis_u64(d: Duration) -> u64 {
 use sha2::{Digest, Sha256};
 
 use super::ir::{IrFailurePolicy, IrStep, MissionIr};
-use crate::shared::output;
+use crate::support::output;
 
 // ── Retry constants ──
 
@@ -198,7 +198,7 @@ pub struct StepTrace {
     /// Ability invoked. Mirrors `IrStep.ability`. See
     /// `docs/AGENT_IDENTITY.md` §10 — this is a method name, not an
     /// identity.
-    pub ability: crate::registry::agent_id::AbilityName,
+    pub ability: crate::core::agent_id::AbilityName,
     /// Resolved dispatch target. Mirrors `IrStep.target`. The trace
     /// records the *resolved* target (Agent vs Device) so audit
     /// readers don't have to re-classify.
@@ -267,7 +267,7 @@ struct CapturedResult {
 
 use crate::eal::error::EalError;
 use crate::eal::ir::IrTarget;
-use crate::registry::agent_id::AbilityName;
+use crate::core::agent_id::AbilityName;
 
 pub trait StepDispatcher {
     /// Dispatch one step. The runtime sees only the resolved
@@ -363,7 +363,7 @@ impl StepDispatcher for BorrowedBridgeDispatcher<'_> {
 // ── Agent-Aware Dispatcher ──
 //
 // Matches on `IrTarget` to choose between agent CLI dispatch (via
-// `agent::dispatch::send_to_agent`) and bridge dispatch. There is no
+// `runtime::dispatch::send_to_agent`) and bridge dispatch. There is no
 // `is_agent` string check anywhere — the surface form already chose
 // the variant at parse time, and the planner baked it into the IR.
 // See `docs/AGENT_IDENTITY.md` invariants 1 and 2.
@@ -544,7 +544,7 @@ impl StepDispatcher for PooledBridgeDispatcher {
 /// Shared agent dispatch logic used by AgentAwareDispatcher.
 fn dispatch_to_agent(
     registry: &crate::registry::agents::AgentRegistry,
-    agent_id: &crate::registry::agent_id::AgentId,
+    agent_id: &crate::core::agent_id::AgentId,
     ability: &AbilityName,
     arguments: &Value,
 ) -> Result<Value, EalError> {
@@ -561,7 +561,7 @@ fn dispatch_to_agent(
             // form (`"claude"` instead of `"default/claude"`).
             // Fall back to the bare name when the agent
             // is in the default tenant.
-            if agent_id.tenant == crate::registry::agent_id::DEFAULT_TENANT {
+            if agent_id.tenant == crate::core::agent_id::DEFAULT_TENANT {
                 registry.agents.get(&agent_id.name)
             } else {
                 None
@@ -577,7 +577,7 @@ fn dispatch_to_agent(
     // Agent CLI dispatch failures (process spawn, IO, model error) are
     // transport-class — `unavailable` is the right bucket so the
     // interpreter's retry policy can fire when configured.
-    let response = crate::agent::dispatch::send_to_agent(&key, entry, &prompt, None, None)
+    let response = crate::runtime::dispatch::send_to_agent(&key, entry, &prompt, None, None)
         .map_err(|e| EalError::Unavailable(format!("agent dispatch: {e}")))?;
 
     Ok(serde_json::json!({
@@ -629,7 +629,7 @@ pub fn execute_pooled(
     ir: &MissionIr,
 ) -> anyhow::Result<ExecutionReport> {
     let dispatcher =
-        PooledBridgeDispatcher::new(endpoint, crate::shared::timeouts::BRIDGE_CONNECT_TIMEOUT_MS);
+        PooledBridgeDispatcher::new(endpoint, crate::support::timeouts::BRIDGE_CONNECT_TIMEOUT_MS);
     execute_with_dispatcher(&dispatcher, tenant, ir)
 }
 
@@ -666,7 +666,7 @@ pub fn execute_with_endpoint(
     tenant: &str,
     ir: &MissionIr,
 ) -> anyhow::Result<ExecutionReport> {
-    let dispatcher = AgentAwareDispatcher::new(endpoint, crate::shared::timeouts::BRIDGE_CONNECT_TIMEOUT_MS);
+    let dispatcher = AgentAwareDispatcher::new(endpoint, crate::support::timeouts::BRIDGE_CONNECT_TIMEOUT_MS);
     execute_with_dispatcher(&dispatcher, tenant, ir)
 }
 
@@ -1634,7 +1634,7 @@ mod tests {
     fn synth_trace(id: &str) -> StepTrace {
         StepTrace {
             step_id: id.to_string(),
-            ability: crate::registry::agent_id::AbilityName::parse("t")
+            ability: crate::core::agent_id::AbilityName::parse("t")
                 .expect("valid ability name"),
             target: crate::eal::ir::IrTarget::Device {
                 node_id: "n".to_string(),
@@ -2386,7 +2386,7 @@ mod tests {
     /// motivation.
     #[test]
     fn resolve_arguments_fails_loud_on_malformed_upstream_payload() {
-        use crate::registry::agent_id::{AbilityName, AgentId};
+        use crate::core::agent_id::{AbilityName, AgentId};
         use std::collections::BTreeMap;
 
         let mut input_refs = BTreeMap::new();
@@ -2451,7 +2451,7 @@ mod tests {
     /// consumer" trace from looking like a cascade of failures.
     #[test]
     fn resolve_arguments_returns_upstream_skipped_for_skipped_binding() {
-        use crate::registry::agent_id::{AbilityName, AgentId};
+        use crate::core::agent_id::{AbilityName, AgentId};
         use std::collections::BTreeMap;
 
         let mut input_refs = BTreeMap::new();
@@ -2493,7 +2493,7 @@ mod tests {
     /// caught immediately.
     #[test]
     fn resolve_arguments_threads_well_formed_payload() {
-        use crate::registry::agent_id::{AbilityName, AgentId};
+        use crate::core::agent_id::{AbilityName, AgentId};
         use std::collections::BTreeMap;
 
         let mut input_refs = BTreeMap::new();
@@ -2532,7 +2532,7 @@ mod tests {
 
     #[test]
     fn member_call_lowers_to_agent_target() {
-        use crate::registry::agent_id::AgentId;
+        use crate::core::agent_id::AgentId;
 
         let src = r#"
             mission "member-call" {
@@ -2574,7 +2574,7 @@ mod tests {
     fn member_call_dispatches_to_agent_via_recorder() {
         // The interpreter dispatch path receives the resolved
         // IrTarget::Agent — no string-based classification along the way.
-        use crate::registry::agent_id::AgentId;
+        use crate::core::agent_id::AgentId;
 
         let src = r#"
             mission "member-call" {

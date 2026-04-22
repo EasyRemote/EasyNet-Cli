@@ -1,0 +1,1381 @@
+// EasyNet CLI — Agent Dispatch
+// =============================
+//
+// File: src/agent/dispatch.rs
+// Description: Unified routing for agent invocation + per-run persistence +
+//              recursion guard.
+//
+// Every call creates a timestamped run directory under the agent's workspace
+// (`~/.easynet/workspaces/<agent>/runs/<stamp>/`) that stores the composed
+// prompt, the raw stream trace, the final markdown response, and a meta.json
+// with timing / token counts. The run directory path is surfaced on the
+// returned `AgentResponse` so CLI callers can show it to the user.
+//
+// Author: Silan Hu <silan.hu@u.nus.edu>
+// Copyright (c) 2026 EasyNet. All rights reserved.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use chrono::Local;
+use serde::{Deserialize, Serialize};
+
+use crate::registry::agents::AgentEntry;
+
+use super::adapter::InvokeOpts;
+use super::context::{self, DispatchContext};
+use super::drivers::adapter_for;
+use super::run_store::{RunDir, RunMeta};
+use super::workspace;
+
+/// Maximum recursion depth for agent dispatch (prevents infinite loops).
+const MAX_AGENT_DEPTH: u32 = 2;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub num_turns: u64,
+    pub total_cost_usd: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentResponse {
+    pub agent: String,
+    pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub duration_ms: u64,
+    pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<AgentUsage>,
+    /// Path to the per-run directory on disk (if persistence succeeded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_dir: Option<PathBuf>,
+}
+
+/// Resolve the dispatch timeout from spec + entry precedence.
+///
+/// `spec_timeout_secs = Some(n)` — operator set a timeout in
+/// `agent.toml`; use it verbatim. `None` — no operator choice
+/// in the spec; fall through to the v1/legacy
+/// `entry.timeout_secs` so pre-migration rows keep working.
+///
+/// Extracted so production and tests call the same code: see
+/// the doc block at the call site in `send_to_agent_with_depth`
+/// for why.
+pub(crate) fn resolve_timeout(
+    spec_timeout_secs: Option<u64>,
+    entry_timeout_secs: u64,
+) -> Duration {
+    Duration::from_secs(spec_timeout_secs.unwrap_or(entry_timeout_secs))
+}
+
+/// Resolve the dispatch model from spec + entry precedence.
+///
+/// `spec_model = Some(_)` — operator named a model in
+/// `agent.toml`; it wins. `spec_model = None` — operator did
+/// not name one; fall through to the v1/legacy `entry.model`
+/// so pre-migration rows keep dispatching to the model their
+/// registry row names. If both are `None`, the result is
+/// `None` (the runtime driver picks its own default).
+///
+/// Extracted so production and tests call the same code.
+pub(crate) fn resolve_model(
+    spec_model: Option<String>,
+    entry_model: Option<String>,
+) -> Option<String> {
+    spec_model.or(entry_model)
+}
+
+/// Send a prompt to a registered agent and return the response.
+///
+/// Production entry point — reads the active `DispatchContext` via the
+/// thread-local channel in `runtime::context` (which transparently falls
+/// back to the env vars for subprocess children that inherited only the
+/// env state from their parent). Tests should use
+/// `send_to_agent_with_depth(.., Some(depth))` to inject a depth without
+/// touching either channel.
+///
+/// - Routes to the appropriate agent wrapper based on `entry.agent_type`.
+/// - Propagates a *child* `DispatchContext` into the spawned agent's
+///   environment so the next link in the chain inherits the mission id
+///   and incremented depth.
+/// - Creates a per-run directory under the agent workspace and writes
+///   prompt / response / trace / meta files.
+pub fn send_to_agent(
+    agent_name: &str,
+    entry: &AgentEntry,
+    prompt: &str,
+    context: Option<&str>,
+    extra_trace_path: Option<&Path>,
+) -> anyhow::Result<AgentResponse> {
+    send_to_agent_with_depth(agent_name, entry, prompt, context, extra_trace_path, None)
+}
+
+/// Send a prompt to a registered agent on behalf of an *external* caller —
+/// a peer node, a federated agent, or a direct MCP tool invocation that
+/// arrived over the network rather than from inside a local mission.
+///
+/// This is the production entry point for remote `<agent>.chat`
+/// invocations — the agent's default-input ability surfaced
+/// over MCP. When a remote caller invokes that ability against
+/// this node via [`AbilityToolAdapter`], the request originates
+/// outside any local mission, so recursion depth starts at 0
+/// and no parent-mission id is propagated to the child
+/// subprocess. Functionally equivalent to
+/// `send_to_agent_with_depth(.., Some(0))`, but named for the role it
+/// plays so call sites do not rely on a test-hatch comment to justify
+/// their use.
+///
+/// # Ontology
+///
+/// The ontology (§6.2 derivation 3, "there is no second path") requires
+/// every *intra-cluster* dispatch to belong to a mission. An external
+/// tool invocation is, by construction, outside any *local* mission —
+/// it is the network boundary between the remote caller's audit realm
+/// and ours. Fabricating a synthetic mission id for it would make the
+/// local audit trail lie about provenance; starting fresh at depth 0
+/// and letting the remote caller's own audit system (if any) record
+/// their side of the hop is the honest shape.
+///
+/// The recursion guard still applies to *this* node's sub-dispatches:
+/// if the externally-triggered agent itself invokes a child agent
+/// (e.g. claude → codex via `send_to_agent`), the child's depth is 1,
+/// and so on, bounded by `MAX_AGENT_DEPTH`. The external entry point
+/// just sets the floor.
+///
+/// # Not for test use
+///
+/// The mission-context invariant check (`check_mission_context_invariant`)
+/// is skipped here because `depth_override = Some(0)` bypasses it. That
+/// is correct for an external invocation but would be a silent footgun
+/// for a test that happened to use this function without realising;
+/// tests should continue to use `send_to_agent_with_depth` directly so
+/// their bypass is visible at the call site.
+pub fn send_external(
+    agent_name: &str,
+    entry: &AgentEntry,
+    prompt: &str,
+    context: Option<&str>,
+) -> anyhow::Result<AgentResponse> {
+    send_to_agent_with_depth(agent_name, entry, prompt, context, None, Some(0))
+}
+
+/// Same as `send_to_agent` but accepts an explicit `depth_override`. When
+/// `depth_override` is `Some(d)`, that value is used as the current
+/// recursion depth instead of consulting the typed dispatch context. This
+/// exists so the dispatch tests can exercise the depth guard without
+/// installing a full mission context — see the `recursion_guard_*` tests
+/// at the bottom of this file.
+///
+/// Mission context invariant
+/// -------------------------
+/// Every cross-agent dispatch in EasyNet is required to originate from
+/// a mission runtime context (ontology §6.2 derivation 3, "there is no
+/// second path"). This function enforces that invariant in a 2-stage
+/// check at the top:
+///
+///   Stage 1 (presence): a `DispatchContext` must be active for this
+///   thread (installed via `mission_runs::run_inproc`'s guard, or
+///   inherited from a parent process via the env-var fallback).
+///   Stage 2 (anti-forgery): the context's `mission_id` must correspond
+///   to an existing mission run dir on disk under
+///   `~/.easynet/missions/runs/`. This catches the trivial-forgery case
+///   ("user types `EASYNET_MISSION_ID=fake`") without claiming to be a
+///   cryptographic guarantee.
+///
+/// Both checks are skipped when `depth_override` is `Some(_)`. The
+/// override is the test escape hatch — it explicitly turns this
+/// function into a unit-testable code path that exercises the recursion
+/// guard without requiring the full mission runtime stack to be present.
+pub fn send_to_agent_with_depth(
+    agent_name: &str,
+    entry: &AgentEntry,
+    prompt: &str,
+    context: Option<&str>,
+    extra_trace_path: Option<&Path>,
+    depth_override: Option<u32>,
+) -> anyhow::Result<AgentResponse> {
+    // Mission context invariant — only enforced in production, skipped
+    // when a test passes `depth_override` to exercise the recursion
+    // guard in isolation.
+    if depth_override.is_none() {
+        check_mission_context_invariant()?;
+    }
+
+    // Resolve the active dispatch context. The new typed channel
+    // (`runtime::context`) is consulted first; the env-var fallback inside
+    // `context::current()` keeps backwards compatibility with subprocess
+    // children that inherit only the env vars from their parent.
+    //
+    // `depth_override` remains the test escape hatch — it bypasses both
+    // the typed context and the env vars so the dispatch tests can
+    // exercise the recursion guard without setting up a full mission
+    // runtime stack.
+    let active = depth_override
+        .map(|d| DispatchContext {
+            mission_id: "<test-override>".to_string(),
+            depth: d,
+            mission_run_dir: None,
+            origin_agent: None,
+        })
+        .or_else(context::current);
+
+    let current_depth = active.as_ref().map(|c| c.depth).unwrap_or(0);
+
+    if current_depth >= MAX_AGENT_DEPTH {
+        anyhow::bail!(
+            "agent dispatch depth limit reached ({MAX_AGENT_DEPTH}). \
+             Refusing to spawn nested agent to prevent infinite recursion."
+        );
+    }
+
+    // Build full prompt with context.
+    let full_prompt = compose_prompt(prompt, context);
+
+    // ── Provision workspace + resolve the AgentDirectory ──
+    //
+    // Workspace provisioning is the step that either opens or
+    // creates the agent's on-disk root (via
+    // `ensure_workspace`'s shim) and materialises the
+    // runtime-native files (`.mcp.json`, `.codex/`, CLAUDE.md,
+    // AGENTS.md). We then open the `AgentDirectory` explicitly
+    // so the rest of this function reads configuration from
+    // `dir.spec()` — the v2 source of truth — rather than from
+    // the fat `AgentEntry` fields. The shim inside
+    // `ensure_workspace` already writes an `agent.toml`
+    // reconstructed from the entry when none exists, so the
+    // subsequent `AgentDirectory::open` always succeeds in the
+    // happy path.
+    //
+    // Provisioning failures are logged, not propagated. In
+    // that degraded mode we fall back to the `AgentEntry`'s
+    // fat fields (legacy behaviour) so an operator with a
+    // corrupt root directory still gets *some* dispatch —
+    // useful for diagnostics.
+    let start = Instant::now();
+    let (cwd, spec_source): (Option<PathBuf>, Option<crate::core::agent_spec::AgentSpec>) =
+        match workspace::ensure_workspace(agent_name, entry) {
+            Ok(p) => {
+                let spec = crate::runtime::directory::AgentDirectory::open(&p)
+                    .ok()
+                    .map(|d| d.spec().clone());
+                (Some(p), spec)
+            }
+            Err(e) => {
+                eprintln!(
+                    "[easynet warn] agent {agent_name}: workspace provisioning failed ({e}); \
+                     continuing without project-level MCP / context"
+                );
+                (None, None)
+            }
+        };
+    let cwd = cwd;
+
+    // ── Resolve dispatch knobs from spec (falling back to entry) ──
+    //
+    // Precedence per field:
+    //
+    //   * `timeout`: `spec.timeout_secs` (Some = explicit user
+    //     choice) wins; else `entry.timeout_secs` (v1 / legacy).
+    //     Matches `AgentSpec::validate`'s timeout-0 rejection —
+    //     if the spec says 60, the dispatch uses 60 even if a
+    //     stale registry row still carries 300.
+    //   * `max_output_bytes`: no spec field yet — stays on
+    //     entry. Future `agent.toml` addition will plug in the
+    //     same way.
+    //   * `command`: `spec.name`-to-binary is indirect today;
+    //     `entry.command` is the override. Keeping this from
+    //     entry retains the PR-3b.1.5 test escape hatch for
+    //     `dummy_entry()`.
+    //   * `env`: `entry.env` only, because PR-3b.2's migration
+    //     already evacuated env entries to `.env` files (and
+    //     clears `entry.env` on v2 rows). A v2 row has
+    //     `entry.env` empty; a v1 row still carries it and
+    //     migration will move it on the next load.
+    //   * `model`: `spec.model` wins when set; else
+    //     `entry.model`. A post-`agent add` edit to
+    //     `agent.toml` setting a new model takes effect on the
+    //     next dispatch without re-running the CLI.
+    //
+    // The two `resolve_*` helpers below are the single
+    // implementation of the timeout and model precedence rules.
+    // Production calls them here; tests call the same functions
+    // directly. An equivalent-looking `spec.xxx.unwrap_or(entry.xxx)`
+    // *inlined* here would make tests' "assert the rule" either a
+    // re-statement of the equation (test theatre) or an E2E
+    // subprocess observation (flaky + environment-dependent).
+    // Extracting the rule into a function keeps both production
+    // and tests bound to the same code path: a refactor that
+    // inverts the order must touch the function, and the test
+    // calling that function breaks.
+    let timeout = resolve_timeout(
+        spec_source.as_ref().and_then(|s| s.timeout_secs),
+        entry.timeout_secs,
+    );
+    let max_output = entry.max_output_bytes;
+    let effective_model = resolve_model(
+        spec_source.as_ref().and_then(|s| s.model.clone()),
+        entry.model.clone(),
+    );
+
+    // Build env for the child subprocess. The env vars are how the typed
+    // context crosses the process boundary into the spawned agent CLI —
+    // see `runtime::context` for the design rationale. We always emit the
+    // depth (incremented by one for the child) and propagate the mission
+    // id when one is active.
+    //
+    // Base env is the v1 `entry.env`; on a v2-migrated row this is empty
+    // (migration moved credentials into `<agent-root>/.env`, which the
+    // runtime driver reads on its own via the child's cwd). The typed
+    // context keys are layered on top.
+    let mut env = entry.env.clone();
+    // The `active.is_none()` branch is reachable only in release builds
+    // when `check_mission_context_invariant` observed a missing mission
+    // context and chose to log rather than fail (a backcompat shim for
+    // legacy callers — see that function's rustdoc). In that degraded
+    // mode we still propagate the depth so the child's recursion guard
+    // works, but we have no mission id or origin to emit. The typed
+    // `DispatchContext` is deliberately not constructed with a synthetic
+    // mission_id here: silently fabricating one would make the audit
+    // trail lie about which mission a run belonged to.
+    if let Some(parent) = active.as_ref() {
+        parent.child(agent_name).serialize_to_env(&mut env);
+    } else {
+        env.insert(
+            "EASYNET_AGENT_DEPTH".to_string(),
+            current_depth.saturating_add(1).to_string(),
+        );
+    }
+
+    // Create a per-run directory. If creation fails (e.g. workspace dir is
+    // unwritable), skip persistence — the agent call still runs, but we
+    // surface the reason so the operator knows the run is unrecorded.
+    let run_dir: Option<Arc<RunDir>> = match RunDir::create(agent_name) {
+        Ok(dir) => Some(Arc::new(dir)),
+        Err(e) => {
+            eprintln!(
+                "[easynet warn] agent {agent_name}: run dir creation failed ({e}); \
+                 continuing without per-run persistence"
+            );
+            None
+        }
+    };
+    if let Some(dir) = &run_dir {
+        if let Err(e) = dir.write_prompt(&full_prompt) {
+            eprintln!(
+                "[easynet warn] run {}: write prompt.txt failed ({e})",
+                dir.path().display()
+            );
+        }
+    }
+
+    // Legacy `--trace <path>` still supported: mirror the prompt next to the
+    // user-supplied trace file.
+    if let Some(tp) = extra_trace_path {
+        if let Some(parent) = tp.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let prompt_path = tp.with_extension("prompt.txt");
+        let _ = std::fs::write(&prompt_path, &full_prompt);
+    }
+
+    let started_at = Local::now().to_rfc3339();
+    // Dispatch through the trait. `adapter_for` is the single place
+    // the runtime layer matches on `AgentType`; adding a new runtime
+    // is one arm there plus one `impl AgentAdapter` block, not a
+    // sweep of this function. The `cwd` handed to the adapter is
+    // the already-resolved workspace — we clone into `InvokeOpts`
+    // because the adapter signature takes `cwd: PathBuf` (no
+    // `Option`) to reflect "dispatch always picks a cwd".
+    let adapter = adapter_for(entry.agent_type);
+    // If workspace provisioning failed above, we still try to invoke
+    // the agent; fall back to an empty `PathBuf` so the adapter runs
+    // in the caller's cwd. The warn printed earlier already surfaced
+    // the provisioning failure to the operator.
+    let cwd_for_adapter = cwd.clone().unwrap_or_default();
+    // Hand the adapter a synthetic entry whose `model` reflects
+    // the spec-resolved choice. We don't mutate the caller's
+    // entry (it's an `&AgentEntry`) — cloning into a local is
+    // cheap and keeps this seam narrow. When PR-3b's final
+    // cleanup lands (AgentDirectory passed through the adapter
+    // signature directly), this synth step collapses into the
+    // adapter call.
+    let mut entry_for_adapter = entry.clone();
+    entry_for_adapter.model = effective_model.clone();
+    let run_result = adapter.invoke(
+        &entry_for_adapter,
+        &full_prompt,
+        InvokeOpts {
+            timeout,
+            max_output_bytes: max_output,
+            env,
+            cwd: cwd_for_adapter,
+            run_dir: run_dir.clone(),
+            // Honor the operator-supplied binary override. Each
+            // driver substitutes its own default when this is
+            // empty (see `ClaudeOptions::resolved_command` and
+            // `CodexOptions::resolved_command`). Plumbing it here
+            // is what makes `dummy_entry`'s bogus command in
+            // tests actually take effect and what lets operators
+            // with a custom install path route through without
+            // editing driver source.
+            command: entry.command.clone(),
+        },
+    );
+
+    // Write meta.json regardless of success/failure so failed runs are still
+    // inspectable.
+    let duration_ms = start.elapsed().as_millis() as u64;
+    if let Some(dir) = &run_dir {
+        let (exit_status, error, content_for_meta, usage_for_meta) = match &run_result {
+            Ok((text, usage)) => ("ok".to_string(), None, Some(text.as_str()), usage.clone()),
+            Err(e) => ("error".to_string(), Some(e.to_string()), None, None),
+        };
+        if let Some(text) = content_for_meta {
+            if let Err(e) = dir.write_response(text) {
+                eprintln!(
+                    "[easynet warn] run {}: write response.md failed ({e})",
+                    dir.path().display()
+                );
+            }
+        }
+        let u = usage_for_meta.unwrap_or_default();
+        let meta = RunMeta {
+            agent: agent_name.to_string(),
+            agent_type: entry.agent_type.to_string(),
+            // Record the model actually dispatched, which is
+            // spec-resolved above. A stale entry.model on the
+            // registry row must not shadow the spec's choice in
+            // the audit trail.
+            model: effective_model.clone(),
+            started_at,
+            duration_ms,
+            exit_status,
+            error,
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
+            cache_read_tokens: u.cache_read_tokens,
+            cache_creation_tokens: u.cache_creation_tokens,
+            num_turns: u.num_turns,
+            total_cost_usd: u.total_cost_usd,
+        };
+        if let Err(e) = dir.write_meta(&meta) {
+            eprintln!(
+                "[easynet warn] run {}: write meta.json failed ({e})",
+                dir.path().display()
+            );
+        }
+    }
+
+    let (content, usage) = run_result?;
+
+    Ok(AgentResponse {
+        agent: agent_name.to_string(),
+        content,
+        // Mirror `meta.model`: the response reports the model
+        // actually dispatched, which is the spec-resolved one.
+        model: effective_model,
+        duration_ms,
+        truncated: false,
+        usage,
+        run_dir: run_dir.as_ref().map(|d| d.path().to_path_buf()),
+    })
+}
+
+/// Delimiters for injected context. HTML comments survive verbatim in
+/// markdown and plain text, and the `easynet:context` tag is a unique
+/// string no user content realistically collides with.
+///
+/// We pick HTML comments because:
+/// - They render invisibly in markdown viewers used by downstream tools
+///   (Claude Code's transcript panel, codex-exec logs) — the user sees
+///   a clean "Context" heading, the model sees the delimiters.
+/// - They are not interpreted by any shell or argv parser, so the
+///   boundary cannot be mangled when the prompt crosses process lines.
+/// - A literal `## Context` heading in the caller-supplied context can
+///   no longer be mistaken for the boundary marker; the model can
+///   parse on these tokens reliably.
+const CONTEXT_OPEN: &str = "<!-- easynet:context-start -->";
+const CONTEXT_CLOSE: &str = "<!-- easynet:context-end -->";
+
+fn compose_prompt(prompt: &str, context: Option<&str>) -> String {
+    match context.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(ctx) => format!(
+            "{prompt}\n\n{CONTEXT_OPEN}\n## Context (previous discussion)\n\n{ctx}\n{CONTEXT_CLOSE}\n"
+        ),
+        None => prompt.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod compose_prompt_tests {
+    use super::*;
+
+    #[test]
+    fn absent_context_returns_prompt_unchanged() {
+        assert_eq!(compose_prompt("hi", None), "hi");
+        // An empty-after-trim context is treated as absent so we never
+        // emit a dangling section header.
+        assert_eq!(compose_prompt("hi", Some("   \n\t ")), "hi");
+    }
+
+    #[test]
+    fn present_context_is_delimited() {
+        let out = compose_prompt("Do X.", Some("earlier: A said B"));
+        assert!(out.contains(CONTEXT_OPEN), "open sentinel must be present");
+        assert!(out.contains(CONTEXT_CLOSE), "close sentinel must be present");
+        // Open must precede close in byte order.
+        let open_at = out.find(CONTEXT_OPEN).unwrap();
+        let close_at = out.find(CONTEXT_CLOSE).unwrap();
+        assert!(open_at < close_at);
+    }
+
+    #[test]
+    fn context_containing_section_header_survives_boundary() {
+        // The historical bug: caller-supplied context that itself
+        // starts with `## Context` was indistinguishable from the
+        // injected header. With sentinels the downstream parser can
+        // locate the true boundary regardless of content.
+        let hostile = "## Context\nuser-supplied section\n\n## Context\nsecond";
+        let out = compose_prompt("Do X.", Some(hostile));
+        assert!(out.contains(CONTEXT_OPEN));
+        assert!(out.contains(CONTEXT_CLOSE));
+        // The hostile payload appears verbatim between the sentinels.
+        let open_at = out.find(CONTEXT_OPEN).unwrap();
+        let close_at = out.find(CONTEXT_CLOSE).unwrap();
+        assert!(out[open_at..close_at].contains(hostile));
+    }
+}
+
+/// Two-stage mission context check. See `send_to_agent_with_depth`'s
+/// rustdoc for the load-bearing reasoning.
+///
+/// Stage 1 — presence: a `DispatchContext` must be active for this
+/// thread, either installed via `with_context` (the typed in-process
+/// channel) or recovered from the env-var fallback (the cross-process
+/// channel for spawned subprocesses).
+/// Stage 2 — anti-forgery: the context's mission id must correspond to
+/// an existing mission run directory under `~/.easynet/missions/runs/`.
+///
+/// In **debug** builds the function panics on failure, making the
+/// invariant impossible to silently violate during development. In
+/// **release** builds it logs a warning and (for stage 2) returns an
+/// error so the dispatch fails loudly without taking the process down.
+fn check_mission_context_invariant() -> anyhow::Result<()> {
+    let mission_id = match context::current() {
+        Some(ctx) if !ctx.mission_id.is_empty() => ctx.mission_id,
+        _ => {
+            // Stage 1 failure: no context active and env-var fallback
+            // also empty.
+            #[cfg(debug_assertions)]
+            panic!(
+                "dispatch::send_to_agent called without a mission context. \
+                 All agent dispatches must originate from a mission runtime. \
+                 See docs/easynet_ontology.tex §6.2."
+            );
+            #[cfg(not(debug_assertions))]
+            {
+                eprintln!(
+                    "[easynet warn] dispatch::send_to_agent called without \
+                     mission context — this is an ontology violation, see \
+                     docs/easynet_ontology.tex §6.2"
+                );
+                // Continue execution in release mode for backwards compat
+                // with any caller that hasn't been migrated yet.
+                return Ok(());
+            }
+        }
+    };
+
+    // Stage 2: anti-forgery. The mission ID must be the directory name
+    // of a real mission run dir under ~/.easynet/missions/runs/. If not,
+    // either the env var was forged ("EASYNET_MISSION_ID=fake easynet
+    // ...") or the mission has already been cleaned up. Both cases are
+    // pathological — refuse to dispatch.
+    //
+    // This check is local-fs only and cheap (one stat). It is not a
+    // cryptographic guarantee — a determined attacker can `mkdir` a
+    // fake dir — but it eliminates the trivial-forgery case and
+    // catches the common bug pattern of "user set the env var by
+    // mistake".
+    let mission_run_dir = crate::facade::cli::mission_runs::root_dir().join(&mission_id);
+    if !mission_run_dir.exists() {
+        #[cfg(debug_assertions)]
+        panic!(
+            "mission_id={} does not correspond to an existing \
+             mission run dir at {}. Either the env var was forged or \
+             the run dir has been cleaned up mid-execution. Refusing \
+             to dispatch.",
+            mission_id,
+            mission_run_dir.display()
+        );
+        #[cfg(not(debug_assertions))]
+        {
+            eprintln!(
+                "[easynet warn] mission_id={} does not match \
+                 an existing mission run dir; possible env var forgery",
+                mission_id
+            );
+            anyhow::bail!("invalid mission context: run dir not found");
+        }
+    }
+
+    Ok(())
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::registry::agents::{AgentEntry, AgentType};
+    use crate::runtime::adapter::AgentAdapter;
+
+    /// Construct a dummy `AgentEntry` for tests that exercise the
+    /// dispatch guard logic in isolation.
+    ///
+    /// Critical: we override two fields of `AgentEntry::new` to keep
+    /// these tests fast even on a developer machine that has `claude`
+    /// or `codex` installed on `$PATH`:
+    ///
+    ///   * `command` is scrambled to a name that cannot resolve, so
+    ///     `process::Command::spawn` fails with ENOENT in ~milliseconds
+    ///     instead of the real binary starting an interactive REPL.
+    ///     Tests that only exercise the depth / mission-context
+    ///     guards never reach the spawn path; tests that *do* reach
+    ///     it (`recursion_guard_allows_depth_1`, the `send_external_*`
+    ///     tests) must observe a fast downstream error.
+    ///   * `timeout_secs` defaults to 300 s for production use; if a
+    ///     test somehow races a real subprocess, that timeout would
+    ///     mean 5-minute test hangs. 1 s is still generous for any
+    ///     subprocess boot and cheap to observe.
+    ///
+    /// Without these two overrides a machine with `claude` in PATH
+    /// would hang every test that reaches the spawn path, because
+    /// Claude Code is interactive-by-default and would wait on stdin
+    /// for the full `timeout_secs` window.
+    fn dummy_entry() -> AgentEntry {
+        let mut e = AgentEntry::new(AgentType::ClaudeCode, None);
+        e.command = "easynet-test-nonexistent-agent-binary".to_string();
+        e.timeout_secs = 1;
+        e
+    }
+
+    /// Recursion guard: depth_override=Some(2) must trip the limit
+    /// before any subprocess is spawned. The error message must
+    /// mention "depth limit reached" so operators can grep for it.
+    #[test]
+    fn recursion_guard_blocks_at_depth_2() {
+        let entry = dummy_entry();
+        let res =
+            send_to_agent_with_depth("claude", &entry, "any prompt", None, None, Some(2));
+        let err = res.expect_err("depth=2 must error");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("depth limit reached"),
+            "expected 'depth limit reached' in error, got: {msg}"
+        );
+    }
+
+    /// Recursion guard at depth=1 must not fire. The dispatch layer
+    /// reaches `adapter.invoke()`, which in turn spawns the binary
+    /// named by `entry.command`. `dummy_entry()` sets that to a
+    /// bogus name and `timeout_secs = 1`, so the spawn fails with
+    /// ENOENT in milliseconds — well inside the test budget — and
+    /// the downstream error surfaces as whatever the driver
+    /// reports for a missing binary, never a "depth limit"
+    /// message. This test proves the guard isn't over-triggering.
+    ///
+    /// Without the driver honouring `entry.command` (the pre-fix
+    /// behaviour) this test would hang on a developer machine
+    /// with Claude Code installed, because the real `claude`
+    /// binary would run and wait on stdin for up to
+    /// `entry.timeout_secs`.
+    #[test]
+    fn recursion_guard_allows_depth_1() {
+        let entry = dummy_entry();
+        // Use a HomeGuard so workspace creation lands in a temp dir
+        // and doesn't pollute the developer's real ~/.easynet/.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let res =
+            send_to_agent_with_depth("claude", &entry, "any prompt", None, None, Some(1));
+        // We expect an error (no real claude binary), but it must
+        // NOT be the depth-limit error. Anything else is acceptable.
+        match res {
+            Ok(_) => panic!("expected an error from missing claude binary"),
+            Err(e) => {
+                let msg = format!("{e}");
+                assert!(
+                    !msg.contains("depth limit"),
+                    "depth=1 must not trigger depth-limit error, got: {msg}"
+                );
+            }
+        }
+    }
+
+    /// `send_to_agent_with_depth` with a real `depth_override` must
+    /// also bypass the mission-context invariant. This is the test
+    /// escape hatch — without it, the unit tests above would have to
+    /// set up a real mission run dir, which defeats the purpose of
+    /// testing the dispatch path in isolation.
+    #[test]
+    fn depth_override_bypasses_mission_context_check() {
+        // Even with no EASYNET_MISSION_ID set, depth_override=Some(2)
+        // should still cleanly hit the depth-limit check (not panic on
+        // a missing mission context).
+        std::env::remove_var("EASYNET_MISSION_ID");
+        let entry = dummy_entry();
+        let res =
+            send_to_agent_with_depth("claude", &entry, "any prompt", None, None, Some(2));
+        assert!(res.is_err());
+        let msg = format!("{}", res.unwrap_err());
+        assert!(msg.contains("depth limit reached"));
+    }
+
+    // ── send_external — external-origin entry point ─────────────────────────
+    //
+    // `send_external` is the entry point the chat-ability adapter uses
+    // when a remote caller invokes `<agent>.chat` via MCP. Two invariants
+    // matter here:
+    //
+    //   1. **Depth starts at 0.** An external call is outside any local
+    //      mission by definition, so the recursion guard's budget is
+    //      fresh. A broken implementation that inherited the current
+    //      process's `EASYNET_AGENT_DEPTH` would trip the guard on any
+    //      call that landed inside a daemon already running at depth N.
+    //   2. **No mission-context invariant.** Because depth 0 < MAX,
+    //      `send_external` reaches the spawn path — if the invariant
+    //      check were enforced (via `depth_override = None`), no
+    //      external caller could invoke this node's agents without
+    //      forging a mission id. The test below pins that the function
+    //      makes it *past* the invariant check, by observing that it
+    //      fails with a downstream error (missing binary) rather than
+    //      the mission-context panic/error.
+
+    // These three tests exercise `send_external` end-to-end. Now
+    // that the drivers honour `entry.command`, `dummy_entry()` wires
+    // a bogus binary name through to the spawn site — the call
+    // fails with ENOENT in milliseconds, regardless of what the
+    // developer has installed on `$PATH`. The previous `#[ignore]`
+    // guards were necessary when `claude_code.rs` / `codex.rs`
+    // hard-coded the binary; removing them is the whole point of
+    // PR-3b.1.5.
+
+    /// Safe unit test: pin that `send_external` is a one-line
+    /// delegation to `send_to_agent_with_depth` with
+    /// `depth_override = Some(0)`. We cannot run `send_external`
+    /// inline (it would spawn the real `claude` binary — see the
+    /// `#[ignore]` notes on the e2e tests below), so we symbolically
+    /// test the two halves of its contract via the already-guarded
+    /// inner function:
+    ///
+    ///   * override = MAX → depth guard trips (the baseline).
+    ///   * override = MAX-1 → depth guard does NOT trip on the early
+    ///     check; any error must come from downstream.
+    ///
+    /// The equality `send_external(x) == send_to_agent_with_depth(x, Some(0))`
+    /// is enforced structurally by the implementation (single
+    /// delegation line, see `send_external`'s body). If a future
+    /// refactor breaks that structural equality, the `#[ignore]`
+    /// e2e tests will catch the behavioural regression when run.
+    #[test]
+    fn send_external_depth_guard_pins_at_max_not_below() {
+        let entry = dummy_entry();
+
+        let tripped = send_to_agent_with_depth(
+            "claude",
+            &entry,
+            "p",
+            None,
+            None,
+            Some(MAX_AGENT_DEPTH),
+        );
+        let msg = format!("{}", tripped.expect_err("override=MAX must trip"));
+        assert!(
+            msg.contains("depth limit"),
+            "override=MAX must trip the guard; got: {msg}"
+        );
+
+        // The inverse — "override < MAX does not trip the guard" —
+        // cannot be tested inline without spawning the real binary,
+        // because the path past the early-check leads straight to
+        // `adapter.invoke()`. That's what the `#[ignore]` tests
+        // below pin. Here we only verify the MAX boundary.
+    }
+
+    #[test]
+    fn send_external_ignores_inherited_depth_env_var() {
+        // A parent process at depth MAX-1 would otherwise poison a child
+        // daemon's `send_external` path. Setting the env var here and
+        // observing that the depth-limit is not tripped is the guarantee
+        // callers need.
+        let entry = dummy_entry();
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        std::env::set_var("EASYNET_AGENT_DEPTH", MAX_AGENT_DEPTH.to_string());
+        let res = send_external("claude", &entry, "hello", None);
+        std::env::remove_var("EASYNET_AGENT_DEPTH");
+        // Must not be the depth-limit error — external origin resets to 0.
+        let err = res.expect_err("no real claude binary in tests");
+        let msg = format!("{err}");
+        assert!(
+            !msg.contains("depth limit"),
+            "send_external must start at depth 0 regardless of inherited \
+             env vars; got {msg}"
+        );
+    }
+
+    #[test]
+    fn send_external_does_not_require_mission_context() {
+        // No EASYNET_MISSION_ID, no typed context installed — the
+        // invariant check would otherwise panic (debug) or error
+        // (release). `send_external` must bypass via depth_override = 0
+        // and fail only at the downstream spawn path.
+        std::env::remove_var("EASYNET_MISSION_ID");
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let entry = dummy_entry();
+        let res = send_external("claude", &entry, "hello", None);
+        let err = res.expect_err("no real claude binary in tests");
+        let msg = format!("{err}");
+        // The two strings the invariant check produces:
+        assert!(
+            !msg.contains("mission context"),
+            "send_external must not enforce the mission-context invariant; got {msg}"
+        );
+        assert!(
+            !msg.contains("mission run dir"),
+            "send_external must not trip stage-2 anti-forgery; got {msg}"
+        );
+    }
+
+    #[test]
+    fn send_external_accepts_optional_context_preamble() {
+        // The adapter may or may not pass `context` — both shapes must
+        // get past the invariant/depth checks. We don't assert on the
+        // content of the downstream error (process spawn), only that
+        // neither flavour is gated by the top-of-function checks.
+        let entry = dummy_entry();
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        for ctx in [None, Some("be terse")] {
+            let res = send_external("claude", &entry, "hello", ctx);
+            let err = res.expect_err("no real claude binary in tests");
+            let msg = format!("{err}");
+            assert!(!msg.contains("depth limit"));
+            assert!(!msg.contains("mission context"));
+        }
+    }
+
+    // The next two tests are end-to-end and require external binaries
+    // (claude CLI with auth, MCP server child, etc.). They are gated
+    // by `#[ignore]` so they only run under
+    // `cargo test -- --ignored`. They exist to validate the full
+    // production path that the unit tests above only exercise in
+    // pieces.
+
+    /// End-to-end recursion guard via the MCP server. Spawns
+    /// `easynet mcp serve --enable-agent-dispatch --agent claude` as
+    /// a child with `EASYNET_AGENT_DEPTH=2` pre-set, then sends a
+    /// `tools/call` for `send_to_agent`. The response must contain
+    /// the depth-limit error.
+    ///
+    /// Inline JSON-RPC over stdio — no dev-dep added. ~30 lines.
+    #[test]
+    #[ignore]
+    fn recursion_guard_e2e() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::process::{Command, Stdio};
+        use std::time::Duration;
+
+        // Locate the binary the test was built against. Falls back to
+        // `easynet` on PATH if neither path exists, but in practice
+        // `cargo test` ensures `target/debug/easynet` is fresh.
+        let bin = if std::path::Path::new("./target/release/easynet").exists() {
+            "./target/release/easynet"
+        } else if std::path::Path::new("./target/debug/easynet").exists() {
+            "./target/debug/easynet"
+        } else {
+            "easynet"
+        };
+
+        let mut child = Command::new(bin)
+            .args([
+                "mcp",
+                "serve",
+                "--enable-agent-dispatch",
+                "--agent",
+                "claude",
+            ])
+            .env("EASYNET_AGENT_DEPTH", "2")
+            // Set a fake mission id pointing at a tmp dir we control
+            // so the anti-forgery check passes.
+            .env("EASYNET_MISSION_ID", "test-recursion-guard-e2e")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn easynet mcp serve");
+
+        // Create the fake mission run dir so the anti-forgery check
+        // doesn't fire before the depth check does.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let runs_root = crate::persistence::config::state_dir()
+            .join("missions")
+            .join("runs");
+        let _ = std::fs::create_dir_all(runs_root.join("test-recursion-guard-e2e"));
+
+        let stdin = child.stdin.as_mut().expect("child stdin");
+        let init = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "1"},
+            },
+        });
+        writeln!(stdin, "{init}").unwrap();
+
+        let call = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "send_to_agent",
+                "arguments": {
+                    "agent": "claude",
+                    "prompt": "hi",
+                },
+            },
+        });
+        writeln!(stdin, "{call}").unwrap();
+
+        // Read responses until we see the call result or timeout.
+        let stdout = child.stdout.take().expect("child stdout");
+        let mut reader = BufReader::new(stdout);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut found_depth_error = false;
+        let mut line = String::new();
+        while std::time::Instant::now() < deadline {
+            line.clear();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                break;
+            }
+            if line.contains("depth limit") {
+                found_depth_error = true;
+                break;
+            }
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            found_depth_error,
+            "expected 'depth limit' in MCP server response stream"
+        );
+    }
+
+    /// End-to-end success path: `easynet agent send claude "say only
+    /// OK"` desugars to a mission and produces a real reply. Requires
+    /// local claude CLI + auth.
+    #[test]
+    #[ignore]
+    fn agent_send_desugar_e2e() {
+        use std::process::Command;
+
+        let bin = if std::path::Path::new("./target/release/easynet").exists() {
+            "./target/release/easynet"
+        } else if std::path::Path::new("./target/debug/easynet").exists() {
+            "./target/debug/easynet"
+        } else {
+            "easynet"
+        };
+
+        let out = Command::new(bin)
+            .args(["agent", "send", "claude", "say only the word OK"])
+            .output()
+            .expect("run easynet agent send");
+
+        assert!(out.status.success(), "non-zero exit: {:?}", out);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.to_uppercase().contains("OK"),
+            "expected 'OK' in stdout, got: {stdout}"
+        );
+
+        // The dispatching banner must appear on stderr.
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("dispatching via mission runtime"),
+            "expected mission-runtime banner on stderr, got: {stderr}"
+        );
+    }
+
+    // ── AgentAdapter trait contract ─────────────────────────────────
+
+    /// A synthetic adapter used to prove the trait's contract holds
+    /// in isolation: dispatch hands the adapter a prompt and opts,
+    /// the adapter returns a `(String, Option<AgentUsage>)` pair,
+    /// dispatch returns an `AgentResponse` that preserves both.
+    ///
+    /// This is a lightweight equivalent of the failure-mode tests we
+    /// run against each real driver; it lets us verify the trait
+    /// seam without spawning a real binary.
+    struct MockAdapter {
+        runtime_id: &'static str,
+        response: String,
+        usage: Option<crate::runtime::dispatch::AgentUsage>,
+    }
+
+    impl crate::runtime::adapter::AgentAdapter for MockAdapter {
+        fn runtime_id(&self) -> &'static str {
+            self.runtime_id
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn invoke(
+            &self,
+            _entry: &AgentEntry,
+            _prompt: &str,
+            _opts: crate::runtime::adapter::InvokeOpts,
+        ) -> anyhow::Result<(String, Option<crate::runtime::dispatch::AgentUsage>)> {
+            Ok((self.response.clone(), self.usage.clone()))
+        }
+    }
+
+    #[test]
+    fn mock_adapter_returns_its_scripted_response() {
+        let adapter = MockAdapter {
+            runtime_id: "mock",
+            response: "synthetic reply".into(),
+            usage: Some(AgentUsage {
+                input_tokens: 7,
+                output_tokens: 13,
+                ..Default::default()
+            }),
+        };
+
+        // Call the adapter directly — this is the narrow seam the
+        // dispatch layer uses. If the trait contract ever
+        // regresses (wrong argument order, missing field, etc.)
+        // this test fails before any driver-specific test does.
+        let entry = dummy_entry();
+        let opts = crate::runtime::adapter::InvokeOpts {
+            timeout: Duration::from_secs(1),
+            max_output_bytes: 1024,
+            env: std::collections::BTreeMap::new(),
+            cwd: std::path::PathBuf::from("."),
+            run_dir: None,
+            command: String::new(),
+        };
+        let (text, usage) = adapter
+            .invoke(&entry, "ignored prompt", opts)
+            .expect("mock adapter must succeed");
+        assert_eq!(text, "synthetic reply");
+        let usage = usage.expect("mock returned Some(usage)");
+        assert_eq!(usage.input_tokens, 7);
+        assert_eq!(usage.output_tokens, 13);
+    }
+
+    #[test]
+    fn mock_adapter_can_omit_usage() {
+        // Codex `app-server` mode has no structured usage today.
+        // A real adapter returns `None`; the trait's Option<Usage>
+        // must flow through dispatch without special-casing.
+        let adapter = MockAdapter {
+            runtime_id: "mock-no-usage",
+            response: "ok".into(),
+            usage: None,
+        };
+        let entry = dummy_entry();
+        let opts = crate::runtime::adapter::InvokeOpts {
+            timeout: Duration::from_secs(1),
+            max_output_bytes: 64,
+            env: std::collections::BTreeMap::new(),
+            cwd: std::path::PathBuf::from("."),
+            run_dir: None,
+            command: String::new(),
+        };
+        let (_text, usage) = adapter.invoke(&entry, "p", opts).unwrap();
+        assert!(usage.is_none());
+    }
+
+    #[test]
+    fn adapter_for_returns_distinct_singletons_per_agent_type() {
+        // Each AgentType must map to its own adapter. The runtime_id
+        // accessor is the visible fingerprint — if a future mapper
+        // accidentally aliases two types to one adapter, the id's
+        // drift from `agent_type.to_string()` immediately.
+        use crate::runtime::drivers::adapter_for;
+        let a = adapter_for(AgentType::ClaudeCode);
+        let b = adapter_for(AgentType::Codex);
+        let c = adapter_for(AgentType::CodexAppServer);
+        assert_eq!(a.runtime_id(), "claude-code");
+        assert_eq!(b.runtime_id(), "codex");
+        assert_eq!(c.runtime_id(), "codex-app-server");
+    }
+
+    // ── spec-over-entry precedence (PR-3b.5 / 3b.5.1) ───────────────────
+    //
+    // These tests exercise the real `send_to_agent_with_depth`
+    // code path rather than restate its equation in the test
+    // body. The shape:
+    //
+    //   1. Materialize an AgentDirectory with a distinct
+    //      spec.model / spec.timeout_secs.
+    //   2. Build an AgentEntry carrying conflicting
+    //      entry.model / entry.timeout_secs values.
+    //   3. Call `send_to_agent_with_depth` with
+    //      `depth_override = Some(1)` so the real dispatch
+    //      flows: `ensure_workspace` reopens the directory,
+    //      `effective_model` / `effective_timeout` resolve
+    //      from spec, and the adapter invoke fails fast
+    //      (dummy_entry's bogus `command` → ENOENT in ms).
+    //   4. Inspect `<run-dir>/meta.json` — the authoritative
+    //      audit record the dispatcher wrote BEFORE returning
+    //      the error. The field values there are what
+    //      production really computed, so if the precedence
+    //      rule regresses these assertions break.
+    //
+    // A refactor that inverts the `or_else` order in
+    // `send_to_agent_with_depth:268-277` would now flip the
+    // model written to meta.json — which the test catches.
+    // The previous "equation-restating" tests would have
+    // stayed green because they recomputed the same equation
+    // in the test body; these don't.
+
+    /// Read the most-recently-created `meta.json` under
+    /// `<agent-root>/runs/`. Tests use this to inspect what
+    /// the dispatcher actually persisted for a run that
+    /// failed downstream (at spawn time). Returns `None` if
+    /// no run dir exists yet (e.g. run_dir creation itself
+    /// failed, which is the degraded-mode branch we are not
+    /// testing here).
+    fn read_latest_meta(agent_root: &std::path::Path) -> Option<RunMeta> {
+        let runs = agent_root.join("runs");
+        if !runs.is_dir() {
+            return None;
+        }
+        let mut entries: Vec<_> = std::fs::read_dir(&runs)
+            .ok()?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .collect();
+        // Sort by file name (ISO-8601 timestamp → lexicographic
+        // order matches chronological order for same-day stamps)
+        // and take the latest.
+        entries.sort_by_key(|e| e.file_name());
+        let latest = entries.last()?;
+        let meta_path = latest.path().join("meta.json");
+        let data = std::fs::read_to_string(&meta_path).ok()?;
+        serde_json::from_str(&data).ok()
+    }
+
+    /// Build an AgentDirectory at the global `agents_root()`
+    /// with a custom spec, then return the entry that points
+    /// at it. Factored so the three tests below share the
+    /// setup dance without copy-paste.
+    fn seed_agent_with_spec(
+        name: &str,
+        spec_model: Option<&str>,
+        spec_timeout: Option<u64>,
+    ) -> AgentEntry {
+        use crate::core::agent_spec::{AgentSpec, RuntimeKind};
+        use crate::runtime::directory::{AgentDirectory, Location};
+
+        let root = crate::persistence::config::agents_root().join(name);
+        let mut spec = AgentSpec::new(name, RuntimeKind::ClaudeCode);
+        spec.model = spec_model.map(str::to_string);
+        spec.timeout_secs = spec_timeout;
+        AgentDirectory::create(&Location::Local { root: root.clone() }, spec).unwrap();
+
+        let mut entry = dummy_entry();
+        entry.root_path = Some(root);
+        entry
+    }
+
+    #[test]
+    fn spec_model_is_written_to_meta_json_when_set() {
+        // Install a spec with its own model; entry carries a
+        // disagreeing one. Run the real dispatch path. The
+        // meta.json left behind by the dispatcher must record
+        // the spec's model, not the entry's.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let mut entry = seed_agent_with_spec("alice", Some("spec-chosen-model"), None);
+        entry.model = Some("stale-registry-model".into());
+        let root = entry.root_path.clone().unwrap();
+
+        // depth_override=Some(1) bypasses mission-context
+        // enforcement (see recursion_guard_allows_depth_1's
+        // rationale) and lets the dispatch reach the spawn
+        // step, where `dummy_entry`'s bogus command fails fast.
+        let res = send_to_agent_with_depth(
+            "alice",
+            &entry,
+            "prompt",
+            None,
+            None,
+            Some(1),
+        );
+        // Failure is expected — we don't need the response.
+        // meta.json is written whether the run succeeded or
+        // failed (see dispatch.rs's "Write meta.json regardless"
+        // block), so we still have something to observe.
+        let _ = res;
+
+        let meta = read_latest_meta(&root).expect("meta.json must exist after dispatch");
+        assert_eq!(
+            meta.model.as_deref(),
+            Some("spec-chosen-model"),
+            "dispatcher must record spec.model (got {:?}; entry.model was {:?})",
+            meta.model,
+            entry.model
+        );
+    }
+
+    #[test]
+    fn entry_model_is_used_when_spec_model_is_none() {
+        // Legacy path: spec carries no model, entry does.
+        // dispatcher must fall back to entry.model in meta.json
+        // so pre-v2 registry rows continue to dispatch to the
+        // model their row names — operators whose agents have
+        // not been touched since upgrade must see no regression.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let mut entry = seed_agent_with_spec("alice", None, None);
+        entry.model = Some("legacy-entry-model".into());
+        let root = entry.root_path.clone().unwrap();
+
+        let _ = send_to_agent_with_depth(
+            "alice",
+            &entry,
+            "prompt",
+            None,
+            None,
+            Some(1),
+        );
+
+        let meta = read_latest_meta(&root).expect("meta.json must exist");
+        assert_eq!(
+            meta.model.as_deref(),
+            Some("legacy-entry-model"),
+            "spec.model = None must fall back to entry.model; got {:?}",
+            meta.model
+        );
+    }
+
+    #[test]
+    fn both_models_none_yields_meta_model_none() {
+        // Neither side names a model — meta.json records None
+        // (serializes as absent under `skip_serializing_if`).
+        // The dispatched runtime then falls back to its own
+        // default model, but that's the driver's concern; from
+        // dispatch's perspective the correct record is "no
+        // operator preference".
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let mut entry = seed_agent_with_spec("alice", None, None);
+        entry.model = None;
+        let root = entry.root_path.clone().unwrap();
+
+        let _ = send_to_agent_with_depth(
+            "alice",
+            &entry,
+            "prompt",
+            None,
+            None,
+            Some(1),
+        );
+
+        let meta = read_latest_meta(&root).expect("meta.json must exist");
+        assert!(
+            meta.model.is_none(),
+            "both-None must record None in meta; got {:?}",
+            meta.model
+        );
+    }
+
+    // ── resolve_timeout / resolve_model (spec-over-entry rule) ──
+    //
+    // These two helpers are the single implementation of the
+    // spec-vs-entry precedence rule for timeouts and model
+    // selection. Production `send_to_agent_with_depth` calls
+    // them; these tests call the same functions.
+    //
+    // This is the honest form of the rule we pin: the tests
+    // are not "recompute the equation and assert the result"
+    // (the test-theatre shape the earlier iteration took);
+    // they are "drive the one function production uses and
+    // observe its output". A refactor that inverts the
+    // precedence order in `resolve_timeout` (say, swaps to
+    // `entry_timeout_secs.unwrap_or(spec_timeout_secs)` or
+    // somesuch) flips these test outputs and the tests break.
+    //
+    // The sibling `*_is_written_to_meta_json_when_set` tests
+    // above complete the picture by proving that the resolved
+    // values flow all the way into `meta.json` through real
+    // `send_to_agent_with_depth`. Unit tests on the helper
+    // pin the rule; integration tests on the dispatcher pin
+    // the wiring. Either can fail independently and point at
+    // the correct layer.
+
+    #[test]
+    fn resolve_timeout_prefers_spec_when_set() {
+        let t = resolve_timeout(Some(42), 300);
+        assert_eq!(t, Duration::from_secs(42));
+    }
+
+    #[test]
+    fn resolve_timeout_falls_back_to_entry_when_spec_none() {
+        let t = resolve_timeout(None, 300);
+        assert_eq!(t, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn resolve_timeout_spec_trumps_entry_even_when_entry_is_smaller() {
+        // Guard against "pick the smaller of the two" drift
+        // — some tempting but wrong rules would satisfy the
+        // simple "spec wins when larger" case. If a refactor
+        // ever changes to `.min(entry_timeout_secs)` this
+        // test catches it.
+        let t = resolve_timeout(Some(600), 30);
+        assert_eq!(t, Duration::from_secs(600));
+    }
+
+    #[test]
+    fn resolve_model_prefers_spec_when_set() {
+        let m = resolve_model(
+            Some("spec-model".into()),
+            Some("entry-model".into()),
+        );
+        assert_eq!(m.as_deref(), Some("spec-model"));
+    }
+
+    #[test]
+    fn resolve_model_falls_back_to_entry_when_spec_none() {
+        let m = resolve_model(None, Some("entry-model".into()));
+        assert_eq!(m.as_deref(), Some("entry-model"));
+    }
+
+    #[test]
+    fn resolve_model_both_none_yields_none() {
+        let m = resolve_model(None, None);
+        assert_eq!(m, None);
+    }
+
+    #[test]
+    fn resolve_model_spec_some_overrides_entry_none() {
+        // The asymmetric case: a spec that explicitly names a
+        // model must not be shadowed by a None on the entry
+        // row. This one tripped the original "or_else vs or"
+        // choice — `Option::or_else` evaluates the entry
+        // closure only when spec is None, which is the shape
+        // we want.
+        let m = resolve_model(Some("spec-model".into()), None);
+        assert_eq!(m.as_deref(), Some("spec-model"));
+    }
+}
