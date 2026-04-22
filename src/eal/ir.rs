@@ -24,7 +24,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use crate::registry::agent_id::{AbilityName, AgentId};
+use crate::core::agent_id::{AbilityName, AgentId};
 
 /// Where a step dispatches to. The two variants encode the ontological
 /// distinction between agent (network actor, ontology §6.4) and device

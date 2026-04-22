@@ -23,10 +23,10 @@
 //   `crate::registry` because its contents are logical identity,
 //   not plumbing state. It happens to persist via this layer's
 //   `atomic_write`, but it is a consumer, not a cohabitant.
-// - Network plumbing (`shared::bridge_pool`, `shared::net`) — those
+// - Network plumbing (`support::bridge_pool`, `support::net`) — those
 //   are transport concerns, not persistence.
 //
-// Why `persistence` is a top-level module, not `shared::config`
+// Why `persistence` is a top-level module, not `support::config`
 // ------------------------------------------------------------
 // Before this split, `shared/` was a dumping ground containing
 // everything that didn't fit elsewhere. Three distinct concerns

@@ -52,13 +52,13 @@
     clippy::module_name_repetitions
 )]
 
-mod agent;
-mod cli;
+mod core;
 mod eal;
-mod mcp;
+mod facade;
 mod persistence;
 mod registry;
-mod shared;
+mod runtime;
+mod support;
 
 use clap::Parser;
 
@@ -70,10 +70,10 @@ use clap::Parser;
 )]
 pub struct App {
     #[command(subcommand)]
-    pub command: cli::Command,
+    pub command: facade::cli::Command,
 }
 
 fn main() -> anyhow::Result<()> {
     let app = App::parse();
-    cli::run(app.command)
+    facade::cli::run(app.command)
 }

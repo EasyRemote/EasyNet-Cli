@@ -8,11 +8,6 @@
 // Contents
 // --------
 //
-// - `agent_id`    — typed identity primitives (`AgentId`,
-//                   `AbilityName`, `NodeId`). The L2 identity layer
-//                   specified in `docs/AGENT_IDENTITY.md`. These
-//                   are pure data types with validation; they do
-//                   not touch the filesystem or the network.
 // - `agents`      — the local agent registry. Maps `AgentId`-like
 //                   keys to `AgentEntry` records describing each
 //                   registered CLI agent (claude, codex, …). Lives
@@ -23,24 +18,26 @@
 //                   `AgentRegistry` into the `a2a.agents_json`
 //                   node-label the Hub advertises to peers.
 //
+// Identity primitives (`AgentId`, `AbilityName`, `NodeId`) live in
+// `crate::core::agent_id` — the zero-dependency core layer. Registry
+// depends on core, not the other way around. Callers should import
+// identity types directly from `core`:
+//
+//     use crate::core::agent_id::{AgentId, NodeId};
+//     use crate::registry::agents;
+//
 // Why `registry` is a top-level module
 // ------------------------------------
-// `agents.rs` and `agent_id.rs` previously lived in `shared/`
-// alongside network plumbing. That meant "who are my registered
-// agents?" and "where is the bridge pool?" sat in the same
-// namespace — the dumping-ground shape made identity and transport
-// look like peers when they are orthogonal concerns. Hoisting
-// identity into `registry/` lets its use-sites say what they
-// actually need:
-//
-//     use crate::registry::agents;
-//     use crate::registry::agent_id::{AgentId, NodeId};
-//
-// instead of the previously misleading `crate::shared::*`.
+// `agents.rs` previously lived in `shared/` alongside network
+// plumbing. That meant "who are my registered agents?" and "where
+// is the bridge pool?" sat in the same namespace — the
+// dumping-ground shape made registry and transport look like peers
+// when they are orthogonal concerns. Hoisting registry into its
+// own module lets use-sites say what they actually need instead of
+// reaching into a catch-all `shared` namespace.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub(crate) mod a2a_labels;
-pub(crate) mod agent_id;
 pub(crate) mod agents;
