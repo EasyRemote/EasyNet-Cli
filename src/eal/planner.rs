@@ -67,16 +67,41 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 /// Compile an EAL program to Mission IR v2.
 pub fn compile(program: &EalProgram) -> anyhow::Result<MissionIr> {
     let analyzed = analyze(program)?;
-    let phase_of = assign_phases(&analyzed);
-    let num_phases = phase_of.iter().copied().max().map(|p| p + 1).unwrap_or(0);
 
-    let mut ordered: Vec<usize> = (0..analyzed.len()).collect();
-    ordered.sort_by_key(|&i| phase_of[i]);
+    // Loops are sequential blocks with their own internal iteration
+    // semantics (RFC §3.1); they are not participants in the outer
+    // phase scheduler's parallel-when-independent logic. If any top-
+    // level item is a Loop, collapse the outer schedule to one-step-
+    // per-phase in source order. Pure-Call missions keep the parallel-
+    // phase scheduling they had before PR-10 — the `Call`-only trace
+    // fixtures consumed by `scripts/trace-parity.sh` are unaffected.
+    let has_block = analyzed.iter().any(|a| matches!(a, AnalyzedItem::Loop(_)));
+
+    let (ordered, phase_of, num_phases) = if has_block {
+        let ordered: Vec<usize> = (0..analyzed.len()).collect();
+        let phase_of: Vec<usize> = (0..analyzed.len()).collect();
+        let num_phases = analyzed.len();
+        (ordered, phase_of, num_phases)
+    } else {
+        let phase_of = assign_phases(&analyzed);
+        let num_phases = phase_of.iter().copied().max().map(|p| p + 1).unwrap_or(0);
+        let mut ordered: Vec<usize> = (0..analyzed.len()).collect();
+        ordered.sort_by_key(|&i| phase_of[i]);
+        (ordered, phase_of, num_phases)
+    };
 
     let mut ir_steps = Vec::new();
     let mut phases = Vec::new();
     let mut cur_phase = 0usize;
     let mut phase_start = 0usize;
+
+    // Consume `analyzed` in original index order into a Vec<Option> so
+    // `lower_item` can take ownership. The schedule-order walk then
+    // takes each item exactly once. (`ordered` may permute indices
+    // away from source order when the Call-only phase scheduler
+    // fires, so a simple `into_iter` over `analyzed` would lower the
+    // wrong item at the wrong index.)
+    let mut slots: Vec<Option<AnalyzedItem>> = analyzed.into_iter().map(Some).collect();
 
     for (out_idx, &orig_idx) in ordered.iter().enumerate() {
         let phase = phase_of[orig_idx];
@@ -88,7 +113,10 @@ pub fn compile(program: &EalProgram) -> anyhow::Result<MissionIr> {
             phase_start = out_idx;
             cur_phase += 1;
         }
-        ir_steps.push(lower(&analyzed[orig_idx])?);
+        let item = slots[orig_idx]
+            .take()
+            .expect("each AnalyzedItem index visited exactly once");
+        ir_steps.push(lower_item(item)?);
     }
     if !ir_steps.is_empty() {
         phases.push(PhaseRange {
@@ -100,6 +128,18 @@ pub fn compile(program: &EalProgram) -> anyhow::Result<MissionIr> {
         let e = ir_steps.len();
         phases.push(PhaseRange { start: e, end: e });
     }
+
+    // Worst-case static call-count bound (RFC §4.1). Applies across
+    // the entire IR tree, counting every leaf `IrCall` under every
+    // `IrStep::Loop` as `max_iters * n_calls`.
+    let total_bound: u64 = ir_steps.iter().map(|s| s.static_call_bound()).sum();
+    let cap = IrConstraints::default_max_calls();
+    anyhow::ensure!(
+        total_bound <= cap,
+        "mission '{}' worst-case static call count {total_bound} exceeds cap {cap} \
+         (RFC §4.1); reduce `max_iters` or shrink the loop body",
+        program.mission.name
+    );
 
     Ok(MissionIr {
         name: program.mission.name.clone(),
@@ -125,117 +165,298 @@ struct AnalyzedStep {
     deps: HashSet<String>,
 }
 
+/// Top-level mission item — either a flat call (`let x = a.b(...)`) or
+/// a block form. `loop` is the only block form in v1; `chat` /
+/// `handoff` were removed by the approved RFC (see RFC §10 and
+/// `docs/open-questions/discuss-eal-block.md`).
+#[derive(Debug)]
+enum AnalyzedItem {
+    Call(AnalyzedStep),
+    Loop(AnalyzedLoop),
+}
+
+impl AnalyzedItem {
+    /// Binding this item exports to the enclosing scope, if any.
+    /// Calls export their `let` binding; Loops export `<name>.result`
+    /// via `result_binding`.
+    fn binding(&self) -> Option<&str> {
+        match self {
+            AnalyzedItem::Call(c) => c.binding.as_deref(),
+            AnalyzedItem::Loop(l) => l.result_binding.as_deref(),
+        }
+    }
+
+    /// Bindings this item references from the enclosing scope.
+    /// Calls see their own `input_refs`; Loops are hermetic in v1
+    /// (RFC §3.1: inner bindings do not leak out; v1 also takes the
+    /// conservative reading that outer bindings are not visible
+    /// inside). A future RFC may loosen the inbound side.
+    fn outer_deps(&self) -> &HashSet<String> {
+        static EMPTY: std::sync::OnceLock<HashSet<String>> = std::sync::OnceLock::new();
+        match self {
+            AnalyzedItem::Call(c) => &c.deps,
+            AnalyzedItem::Loop(_) => EMPTY.get_or_init(HashSet::new),
+        }
+    }
+}
+
+/// Pre-lowered Loop block. Body and verify sub-statements are already
+/// analysed + lowered to `Vec<IrStep>` in a fresh inner scope (no
+/// outer bindings visible, inner bindings not leaked except via
+/// `<name>.result`).
+#[derive(Debug)]
+struct AnalyzedLoop {
+    name: Option<String>,
+    max_iters: u32,
+    body: Vec<IrStep>,
+    verify: Vec<IrStep>,
+    /// Binding exported to the enclosing scope. `Some("<name>.result")`
+    /// for a named loop, `None` for an anonymous loop.
+    result_binding: Option<String>,
+}
+
 /// First pass: semantic analysis. Walks the AST once, builds the
 /// symbol table + dependency graph, rejects every semantic error
 /// the language guarantees to catch before IR lowering.
-fn analyze(program: &EalProgram) -> anyhow::Result<Vec<AnalyzedStep>> {
-    let mut symbols: HashMap<String, usize> = HashMap::new();
-    let mut steps = Vec::new();
-    let mut anon = 0u32;
-
-    for stmt in &program.mission.statements {
-        let (binding, call): (Option<String>, &CallExpr) = match stmt {
-            Statement::LetCall { binding, call } => (Some(binding.clone()), call),
-            Statement::Call(call) => (None, call),
-            // PR-10 Stage 2: control-flow blocks are parsed but
-            // not yet lowered. Stage 3 adds Loop lowering; Stage 4
-            // adds Chat / Handoff. Until then, encountering a
-            // block in the analyzer is a planner bug we surface
-            // as a compile error — the user has used v2 syntax
-            // against a v1 compiler.
-            Statement::Loop(l) => anyhow::bail!(
-                "loop block{}: executor lands in PR-10 Stage 3; \
-                 this compile path does not yet lower loop blocks",
-                l.name.as_ref().map(|n| format!(" '{n}'")).unwrap_or_default()
-            ),
-            Statement::Chat(c) => anyhow::bail!(
-                "chat block{}: executor lands in PR-10 Stage 4",
-                c.name.as_ref().map(|n| format!(" '{n}'")).unwrap_or_default()
-            ),
-            Statement::Handoff(h) => anyhow::bail!(
-                "handoff block{}: executor lands in PR-10 Stage 4",
-                h.name.as_ref().map(|n| format!(" '{n}'")).unwrap_or_default()
-            ),
-        };
-
-        if let Some(ref name) = binding {
-            anyhow::ensure!(!symbols.contains_key(name), "duplicate binding '{name}'");
-        }
-
-        // Prefer the binding as the step id when present (one
-        // allocation); allocate `__anon_N` only for unbound steps.
-        let step_id = match &binding {
-            Some(name) => name.clone(),
-            None => {
-                anon += 1;
-                format!("__anon_{anon}")
-            }
-        };
-
-        // Policy checks — keep in lock-step with the `FailurePolicy`
-        // rustdoc in `ast.rs`. Failures here are user-authoring
-        // errors, not language bugs, so `anyhow::ensure!` suffices.
-
-        // Retry requires an explicit positive count.
-        if matches!(call.options.on_failure, Some(FailurePolicy::Retry)) {
-            let retries = call.options.max_retries.unwrap_or(0);
-            anyhow::ensure!(
-                retries > 0,
-                "step '{step_id}': on_failure retry requires `retries N` with N > 0"
-            );
-        }
-
-        // `optional` and `on_failure abort` are contradictory — a
-        // step cannot be both best-effort and mission-critical.
-        // Previously the interpreter silently let `optional` win;
-        // rejecting here surfaces the conflict to the user.
-        anyhow::ensure!(
-            !(call.options.optional
-                && matches!(call.options.on_failure, Some(FailurePolicy::Abort))),
-            "step '{step_id}': `optional` and `on_failure abort` are contradictory; \
-             pick one (use `optional` for best-effort, `on_failure abort` for mission-critical)"
-        );
-
-        // Inferred dependency collection. Every `VarRef` must name
-        // an earlier binding.
-        let mut deps = HashSet::new();
-        for field in &call.arguments {
-            if let FieldValue::VarRef { var_name } = &field.value {
-                anyhow::ensure!(
-                    symbols.contains_key(var_name),
-                    "step '{step_id}': undefined variable '{var_name}'"
-                );
-                deps.insert(var_name.clone());
-            }
-        }
-
-        if let Some(ref name) = binding {
-            symbols.insert(name.clone(), steps.len());
-        }
-
-        steps.push(AnalyzedStep {
-            step_id,
-            binding,
-            call: call.clone(),
-            deps,
-        });
-    }
-
-    detect_cycles(&steps)?;
-    Ok(steps)
+fn analyze(program: &EalProgram) -> anyhow::Result<Vec<AnalyzedItem>> {
+    analyze_statements(&program.mission.statements, &mut 0u32)
 }
 
-fn detect_cycles(steps: &[AnalyzedStep]) -> anyhow::Result<()> {
-    let id_to_idx: HashMap<&str, usize> = steps
+/// Worker shared between the top-level mission and a loop's inner
+/// `body` / `verify` blocks. `anon_counter` is threaded through so
+/// `__anon_N` ids remain unique across the whole compile.
+fn analyze_statements(
+    stmts: &[Statement],
+    anon_counter: &mut u32,
+) -> anyhow::Result<Vec<AnalyzedItem>> {
+    analyze_statements_with_seed(stmts, anon_counter, &[])
+}
+
+/// Same as `analyze_statements` but seeds the local symbol table
+/// with the given binding names (mapped to sentinel indices outside
+/// the returned items — they represent references to items that
+/// live elsewhere, e.g. body bindings visible in verify).
+///
+/// The seed bindings participate in "is this VarRef defined?" checks
+/// but do NOT land in the returned items' dependency graph, because
+/// the returned items are a standalone block that the planner
+/// lowers as a self-contained slice. The cross-block dependency
+/// (verify on body) is expressed at execution time by the shared
+/// `iter_captured` scope in `execute_loop` — not at the IR layer.
+fn analyze_statements_with_seed(
+    stmts: &[Statement],
+    anon_counter: &mut u32,
+    seed_bindings: &[String],
+) -> anyhow::Result<Vec<AnalyzedItem>> {
+    let mut symbols: HashMap<String, usize> = HashMap::new();
+    // Sentinel indices `usize::MAX - i` for seed bindings so they
+    // cannot collide with real item indices (0..items.len()). The
+    // `item_idx` passed to `analyze_call` still uses the real
+    // running count of items; only lookup for VarRef resolution
+    // consults the sentinel entries.
+    for (i, b) in seed_bindings.iter().enumerate() {
+        symbols.insert(b.clone(), usize::MAX - i);
+    }
+    let mut items: Vec<AnalyzedItem> = Vec::new();
+
+    for stmt in stmts {
+        match stmt {
+            Statement::LetCall { binding, call } => {
+                let step = analyze_call(
+                    Some(binding.clone()),
+                    call,
+                    &mut symbols,
+                    anon_counter,
+                    items.len(),
+                )?;
+                items.push(AnalyzedItem::Call(step));
+            }
+            Statement::Call(call) => {
+                let step =
+                    analyze_call(None, call, &mut symbols, anon_counter, items.len())?;
+                items.push(AnalyzedItem::Call(step));
+            }
+            Statement::Loop(l) => {
+                let analyzed = analyze_loop(l, anon_counter)?;
+                if let Some(ref b) = analyzed.result_binding {
+                    anyhow::ensure!(
+                        !symbols.contains_key(b),
+                        "duplicate binding '{b}' from loop result"
+                    );
+                    symbols.insert(b.clone(), items.len());
+                }
+                items.push(AnalyzedItem::Loop(analyzed));
+            }
+        }
+    }
+
+    detect_cycles(&items)?;
+    Ok(items)
+}
+
+/// Analyse one `Statement::Loop` → `AnalyzedLoop`.
+///
+/// Enforces RFC §3.1 / §4.2 / §4.4 / §5.1:
+///   - `max_iters ∈ [1, 32]`.
+///   - `body` and `verify` each non-empty.
+///   - `verify` last statement is a call (so its output carries
+///     `done: bool`).
+///   - Nested loops rejected (v1 — RFC §4.2).
+///   - Body and verify analysed in a fresh inner scope (hermetic).
+fn analyze_loop(l: &LoopBlock, anon_counter: &mut u32) -> anyhow::Result<AnalyzedLoop> {
+    let label = l.name.as_deref().unwrap_or("<anonymous>");
+
+    anyhow::ensure!(
+        l.max_iters >= 1,
+        "loop '{label}': max_iters must be ≥ 1 (RFC §3.1)"
+    );
+    anyhow::ensure!(
+        l.max_iters <= 32,
+        "loop '{label}': max_iters must be ≤ 32 (RFC §3.1)"
+    );
+    anyhow::ensure!(
+        !l.body.is_empty(),
+        "loop '{label}': `body` sub-block must contain at least one statement"
+    );
+    anyhow::ensure!(
+        !l.verify.is_empty(),
+        "loop '{label}': `verify` sub-block must contain at least one statement (RFC §4.4)"
+    );
+
+    // v1: reject nested loops (RFC §4.2). A nested loop multiplies
+    // the static call bound; the gallery has no mission needing it.
+    for stmt in l.body.iter().chain(l.verify.iter()) {
+        if let Statement::Loop(inner) = stmt {
+            anyhow::bail!(
+                "loop '{label}': nested loops are not supported in v1 \
+                 (inner loop{} — RFC §4.2 static depth cap)",
+                inner
+                    .name
+                    .as_ref()
+                    .map(|n| format!(" '{n}'"))
+                    .unwrap_or_default()
+            );
+        }
+    }
+
+    // Hermetic scope vs outer mission (RFC §3.1): outer bindings are
+    // not visible inside `body` / `verify`. Within the loop, `verify`
+    // does see `body`'s bindings — "not visible outside the loop"
+    // does not mean "not visible to verify", since verify is inside
+    // the loop. So we analyse body and verify in a **shared inner
+    // scope** that starts empty (outer hidden) and accumulates body's
+    // bindings before verify runs.
+    let body_items = analyze_statements(&l.body, anon_counter)?;
+    // Build a seed symbol table from body's exported bindings so
+    // verify can reference them. `analyze_statements` builds its own
+    // local symbol table from scratch, so we instead re-run the
+    // verify analyse with a pre-populated symbol table.
+    let body_bindings: Vec<String> = body_items
+        .iter()
+        .filter_map(|it| it.binding().map(|s| s.to_string()))
+        .collect();
+    let verify_items =
+        analyze_statements_with_seed(&l.verify, anon_counter, &body_bindings)?;
+
+    // RFC §4.4: the last statement in `verify` must be a call whose
+    // output carries the termination predicate `done: bool`.
+    let last_verify_is_call = verify_items
+        .last()
+        .is_some_and(|it| matches!(it, AnalyzedItem::Call(_)));
+    anyhow::ensure!(
+        last_verify_is_call,
+        "loop '{label}': the last statement of `verify` must be an ability call \
+         (RFC §4.4 — its output carries the `done: bool` termination predicate)"
+    );
+
+    let body_ir = body_items
+        .into_iter()
+        .map(lower_item)
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let verify_ir = verify_items
+        .into_iter()
+        .map(lower_item)
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    let result_binding = l.name.as_ref().map(|n| format!("{n}.result"));
+
+    Ok(AnalyzedLoop {
+        name: l.name.clone(),
+        max_iters: l.max_iters,
+        body: body_ir,
+        verify: verify_ir,
+        result_binding,
+    })
+}
+
+fn analyze_call(
+    binding: Option<String>,
+    call: &CallExpr,
+    symbols: &mut HashMap<String, usize>,
+    anon: &mut u32,
+    item_idx: usize,
+) -> anyhow::Result<AnalyzedStep> {
+    if let Some(ref name) = binding {
+        anyhow::ensure!(!symbols.contains_key(name), "duplicate binding '{name}'");
+    }
+
+    let step_id = match &binding {
+        Some(name) => name.clone(),
+        None => {
+            *anon += 1;
+            format!("__anon_{n}", n = *anon)
+        }
+    };
+
+    if matches!(call.options.on_failure, Some(FailurePolicy::Retry)) {
+        let retries = call.options.max_retries.unwrap_or(0);
+        anyhow::ensure!(
+            retries > 0,
+            "step '{step_id}': on_failure retry requires `retries N` with N > 0"
+        );
+    }
+
+    anyhow::ensure!(
+        !(call.options.optional
+            && matches!(call.options.on_failure, Some(FailurePolicy::Abort))),
+        "step '{step_id}': `optional` and `on_failure abort` are contradictory; \
+         pick one (use `optional` for best-effort, `on_failure abort` for mission-critical)"
+    );
+
+    let mut deps = HashSet::new();
+    for field in &call.arguments {
+        if let FieldValue::VarRef { var_name } = &field.value {
+            anyhow::ensure!(
+                symbols.contains_key(var_name),
+                "step '{step_id}': undefined variable '{var_name}'"
+            );
+            deps.insert(var_name.clone());
+        }
+    }
+
+    if let Some(ref name) = binding {
+        symbols.insert(name.clone(), item_idx);
+    }
+
+    Ok(AnalyzedStep {
+        step_id,
+        binding,
+        call: call.clone(),
+        deps,
+    })
+}
+
+fn detect_cycles(items: &[AnalyzedItem]) -> anyhow::Result<()> {
+    let id_to_idx: HashMap<&str, usize> = items
         .iter()
         .enumerate()
-        .filter_map(|(i, s)| s.binding.as_deref().map(|b| (b, i)))
+        .filter_map(|(i, it)| it.binding().map(|b| (b, i)))
         .collect();
-    let mut visited = vec![false; steps.len()];
-    let mut in_stack = vec![false; steps.len()];
-    for i in 0..steps.len() {
+    let mut visited = vec![false; items.len()];
+    let mut in_stack = vec![false; items.len()];
+    for i in 0..items.len() {
         if !visited[i] {
-            dfs(i, steps, &id_to_idx, &mut visited, &mut in_stack)?;
+            dfs(i, items, &id_to_idx, &mut visited, &mut in_stack)?;
         }
     }
     Ok(())
@@ -243,19 +464,23 @@ fn detect_cycles(steps: &[AnalyzedStep]) -> anyhow::Result<()> {
 
 fn dfs(
     idx: usize,
-    steps: &[AnalyzedStep],
+    items: &[AnalyzedItem],
     map: &HashMap<&str, usize>,
     visited: &mut [bool],
     in_stack: &mut [bool],
 ) -> anyhow::Result<()> {
     visited[idx] = true;
     in_stack[idx] = true;
-    for dep in &steps[idx].deps {
+    for dep in items[idx].outer_deps() {
         if let Some(&di) = map.get(dep.as_str()) {
             if !visited[di] {
-                dfs(di, steps, map, visited, in_stack)?;
+                dfs(di, items, map, visited, in_stack)?;
             } else if in_stack[di] {
-                anyhow::bail!("cycle involving '{}' and '{dep}'", steps[idx].step_id);
+                let here = match &items[idx] {
+                    AnalyzedItem::Call(c) => c.step_id.as_str(),
+                    AnalyzedItem::Loop(l) => l.name.as_deref().unwrap_or("<anonymous-loop>"),
+                };
+                anyhow::bail!("cycle involving '{here}' and '{dep}'");
             }
         }
     }
@@ -263,17 +488,17 @@ fn dfs(
     Ok(())
 }
 
-fn assign_phases(steps: &[AnalyzedStep]) -> Vec<usize> {
-    let binding_to_idx: HashMap<&str, usize> = steps
+fn assign_phases(items: &[AnalyzedItem]) -> Vec<usize> {
+    let binding_to_idx: HashMap<&str, usize> = items
         .iter()
         .enumerate()
-        .filter_map(|(i, s)| s.binding.as_deref().map(|b| (b, i)))
+        .filter_map(|(i, it)| it.binding().map(|b| (b, i)))
         .collect();
-    let mut phase = vec![0usize; steps.len()];
-    for (i, step) in steps.iter().enumerate() {
+    let mut phase = vec![0usize; items.len()];
+    for (i, it) in items.iter().enumerate() {
         let mut max = 0usize;
         let mut has = false;
-        for dep in &step.deps {
+        for dep in it.outer_deps() {
             if let Some(&di) = binding_to_idx.get(dep.as_str()) {
                 has = true;
                 max = max.max(phase[di]);
@@ -284,7 +509,21 @@ fn assign_phases(steps: &[AnalyzedStep]) -> Vec<usize> {
     phase
 }
 
-fn lower(step: &AnalyzedStep) -> anyhow::Result<IrStep> {
+fn lower_item(item: AnalyzedItem) -> anyhow::Result<IrStep> {
+    match item {
+        AnalyzedItem::Call(s) => lower_call(&s),
+        AnalyzedItem::Loop(l) => Ok(IrStep::Loop(IrLoop {
+            kind: IrLoopTag,
+            name: l.name,
+            max_iters: l.max_iters,
+            body: l.body,
+            verify: l.verify,
+            result_binding: l.result_binding,
+        })),
+    }
+}
+
+fn lower_call(step: &AnalyzedStep) -> anyhow::Result<IrStep> {
     use crate::core::agent_id::{AbilityName, AgentId};
 
     let mut static_args = serde_json::Map::new();
@@ -387,7 +626,10 @@ mod tests {
         )
         .unwrap();
         let steps = analyze(&p).unwrap();
-        assert!(steps[1].deps.contains("a"));
+        match &steps[1] {
+            AnalyzedItem::Call(c) => assert!(c.deps.contains("a")),
+            AnalyzedItem::Loop(_) => panic!("expected Call at index 1"),
+        }
     }
 
     #[test]
@@ -636,5 +878,167 @@ mod tests {
         assert_eq!(ir.phases[1].end - ir.phases[1].start, 1);
         // Phase 2: collect
         assert_eq!(ir.phases[2].end - ir.phases[2].start, 1);
+    }
+
+    // ── PR-10 Stage 3: loop planner audit hooks ────────────────────────
+
+    /// RFC §3.1: `max_iters` is an explicit, bounded budget. The
+    /// parser already enforces presence (`max_iters:` is required
+    /// header syntax); the planner enforces the RFC's numeric
+    /// bound `[1, 32]`. Both boundary values are rejected.
+    #[test]
+    fn loop_max_iters_out_of_range_rejected() {
+        // max_iters: 0 is rejected.
+        let p0 = parser::parse(
+            r#"mission "t" { loop max_iters: 0 { body { a.x(p: "x") } verify { a.y(p: "y") } } }"#,
+        )
+        .unwrap();
+        let err0 = compile(&p0).unwrap_err().to_string();
+        assert!(err0.contains("max_iters must be ≥ 1"), "got: {err0}");
+
+        // max_iters: 33 is rejected.
+        let p33 = parser::parse(
+            r#"mission "t" { loop max_iters: 33 { body { a.x(p: "x") } verify { a.y(p: "y") } } }"#,
+        )
+        .unwrap();
+        let err33 = compile(&p33).unwrap_err().to_string();
+        assert!(err33.contains("max_iters must be ≤ 32"), "got: {err33}");
+    }
+
+    /// RFC §4.2 v1: nested loops are compile-time errors. The
+    /// motivating gallery mission does not need nesting; a future
+    /// RFC may lift this cap, but v1 refuses.
+    #[test]
+    fn nested_loops_rejected_at_compile_time() {
+        let src = r#"
+            mission "t" {
+                loop "outer" max_iters: 2 {
+                    body {
+                        loop "inner" max_iters: 2 {
+                            body { a.x(p: "x") }
+                            verify { a.y(p: "y") }
+                        }
+                    }
+                    verify { a.z(p: "z") }
+                }
+            }"#;
+        let p = parser::parse(src).unwrap();
+        let err = compile(&p).unwrap_err().to_string();
+        assert!(
+            err.contains("nested loops are not supported"),
+            "got: {err}"
+        );
+    }
+
+    /// Pins RFC §4.4's non-empty-verify invariant. An empty
+    /// `verify { }` is rejected at either the parser (grammar) or
+    /// planner (`analyze_loop` non-empty check); this test asserts
+    /// only that compilation fails, not which layer catches it.
+    ///
+    /// The separate §5.1 "last statement of `verify` must be a
+    /// call" guard in `analyze_loop` is defence-in-depth: today's
+    /// grammar makes every `Statement` either a call (`LetCall` /
+    /// `Call`) or a `Loop` block, and nested loops are rejected
+    /// earlier. So the `last_verify_is_call` check has no
+    /// dedicated test today — the grammar guarantees the invariant
+    /// by construction. If a future RFC adds a non-call statement
+    /// form (e.g. `if`, `assign`), add a test there.
+    #[test]
+    fn loop_verify_empty_rejected() {
+        let src = r#"
+            mission "t" {
+                loop max_iters: 2 {
+                    body { a.x(p: "x") }
+                    verify { }
+                }
+            }"#;
+        // Parser already bails on an empty verify block at the
+        // `{}` boundary; the planner's own check is a defence in
+        // depth. Either layer rejecting is fine — we just assert
+        // it does not compile.
+        let err = parser::parse(src)
+            .and_then(|p| compile(&p))
+            .unwrap_err()
+            .to_string();
+        assert!(!err.is_empty(), "empty verify must be rejected");
+    }
+
+    /// Hermetic scope (RFC §3.1 v1): outer mission `let` bindings
+    /// are NOT visible inside loop body/verify. A step inside the
+    /// body referencing an outer binding must be rejected as an
+    /// undefined variable, same error category as a typo.
+    #[test]
+    fn hermetic_scope_outer_binding_not_visible_inside_body() {
+        let src = r#"
+            mission "t" {
+                let outer = a.seed(p: "seed")
+                loop max_iters: 2 {
+                    body { let r = a.use(p: outer.output) }
+                    verify { a.check(of: r.output) }
+                }
+            }"#;
+        let p = parser::parse(src).unwrap();
+        let err = compile(&p).unwrap_err().to_string();
+        assert!(
+            err.contains("undefined variable") && err.contains("outer"),
+            "outer binding must be invisible to loop body; got: {err}"
+        );
+    }
+
+    /// Planner emits `IrStep::Loop` with the supplied max_iters and
+    /// `<name>.result` binding when the loop is named. Static call
+    /// bound equals max_iters * (|body calls| + |verify calls|)
+    /// per RFC §4.1.
+    #[test]
+    fn loop_lowers_to_ir_loop_with_result_binding_and_bound() {
+        let src = r#"
+            mission "t" {
+                loop "review" max_iters: 3 {
+                    body {
+                        let a = rev.review(p: "x")
+                        let b = res.fix(p: a.output)
+                    }
+                    verify { rev.ok(of: b.output) }
+                }
+            }"#;
+        let p = parser::parse(src).unwrap();
+        let ir = compile(&p).unwrap();
+        assert_eq!(ir.steps.len(), 1);
+        match &ir.steps[0] {
+            IrStep::Loop(l) => {
+                assert_eq!(l.max_iters, 3);
+                assert_eq!(l.body.len(), 2);
+                assert_eq!(l.verify.len(), 1);
+                assert_eq!(l.result_binding.as_deref(), Some("review.result"));
+            }
+            IrStep::Call(_) => panic!("expected IrStep::Loop"),
+        }
+        // max_iters (3) * (body 2 + verify 1) = 9.
+        assert_eq!(ir.steps[0].static_call_bound(), 9);
+    }
+
+    /// RFC §4.1: mission whose worst-case static call count exceeds
+    /// the cap (`IrConstraints::default_max_calls() == 256`) is
+    /// rejected at compile time. A 32-iter loop with 9 inner calls
+    /// = 288 > 256.
+    #[test]
+    fn static_call_bound_over_cap_rejected() {
+        let src = r#"
+            mission "t" {
+                loop max_iters: 32 {
+                    body {
+                        a.s1(p: "x") a.s2(p: "x") a.s3(p: "x")
+                        a.s4(p: "x") a.s5(p: "x") a.s6(p: "x")
+                        a.s7(p: "x") a.s8(p: "x")
+                    }
+                    verify { a.ok(p: "x") }
+                }
+            }"#;
+        let p = parser::parse(src).unwrap();
+        let err = compile(&p).unwrap_err().to_string();
+        assert!(
+            err.contains("worst-case static call count") && err.contains("exceeds cap"),
+            "got: {err}"
+        );
     }
 }

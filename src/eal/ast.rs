@@ -40,13 +40,15 @@ pub enum Statement {
     /// (no name) sets `name = None` and no binding is exported;
     /// the named form sets `name = Some(s)` and exports
     /// `<s>.result` at the enclosing scope.
+    ///
+    /// `loop` is the ONLY block form in v1. An earlier Draft of the
+    /// RFC proposed `chat { }` and `handoff { }` block forms; both
+    /// were removed in the approved revision (see RFC §10). `chat`
+    /// at statement position — renamed to `discuss { }` pending
+    /// consumer — is tracked in
+    /// `docs/open-questions/discuss-eal-block.md`. `handoff` was
+    /// deleted outright (expressible as two flat EAL statements).
     Loop(LoopBlock),
-    /// `chat "<name>?" participants: [...] max_turns: N { topic: …? visibility: …? }`.
-    /// See RFC §3.2.
-    Chat(ChatBlock),
-    /// `handoff "<name>?" { from: A to: B context_mode: …? prompt: …? }`.
-    /// See RFC §3.3.
-    Handoff(HandoffBlock),
 }
 
 #[derive(Debug, Clone)]
@@ -55,44 +57,6 @@ pub struct LoopBlock {
     pub max_iters: u32,
     pub body: Vec<Statement>,
     pub verify: Vec<Statement>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ChatBlock {
-    pub name: Option<String>,
-    /// Raw participant names as written in source order. The planner
-    /// resolves each via `AgentId::parse` during IR lowering; any
-    /// parse failure becomes a compile error.
-    pub participants: Vec<String>,
-    pub max_turns: u32,
-    pub topic: Option<String>,
-    pub visibility: Option<ChatVisibility>,
-}
-
-#[derive(Debug, Clone)]
-pub struct HandoffBlock {
-    pub name: Option<String>,
-    pub from: String,
-    pub to: String,
-    pub context_mode: Option<HandoffContextMode>,
-    pub prompt: Option<String>,
-}
-
-/// AST-side counterpart of `ir::ChatVisibility`. Kept as a separate
-/// enum so the AST can be built without pulling in IR types; the
-/// planner maps between them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChatVisibility {
-    FanOut,
-    RoundRobin,
-}
-
-/// AST-side counterpart of `ir::HandoffContextMode`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HandoffContextMode {
-    Full,
-    Summary,
-    None,
 }
 
 /// `call "ability" on "node" with { ... } <options>`
