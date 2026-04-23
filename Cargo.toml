@@ -15,7 +15,13 @@ console = "0.15"
 crossbeam-queue = "0.3"
 ctrlc = "3"
 easynet-axon = { path = "../EasyNet-Axon/sdk/rust" }
+# Skill-install adapter needs tarball extraction + hex encoding of
+# the content_hash digest. Kept as direct deps (not via easynet-axon)
+# because the skill subcommand is self-contained.
+flate2 = "1"
 gethostname = "0.5"
+hex = "0.4"
+tar = "0.4"
 indicatif = "0.17"
 num_cpus = "1"
 rayon = "1"
