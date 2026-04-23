@@ -762,6 +762,16 @@ mod tests {
         // must not panic, and must leave the derived files
         // byte-identical. A regression where, say, `.mcp.json`
         // embeds a timestamp would break this.
+        //
+        // HomeGuard is load-bearing: `build_mcp_entry` reads
+        // `~/.easynet/runtime_state.json` via `config::load()`.
+        // Under parallel `cargo test`, another test may create or
+        // delete that file between our two projection calls,
+        // producing two different .mcp.json files (the race flips
+        // whether --endpoint/--tenant args appear). Scoping HOME
+        // to a private tmp dir makes the "no runtime started"
+        // branch deterministic.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
         let (dir, root) = scratch_dir("idem", RuntimeKind::Codex);
         ensure_from_directory(&dir).unwrap();
         let mcp_before = fs::read(root.join(".mcp.json")).unwrap();
