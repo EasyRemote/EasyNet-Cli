@@ -162,6 +162,16 @@ pub struct InstallRecord {
     pub name: String,
     pub agent_id: String,
     pub source: SkillSource,
+    /// SHA-256 over the sorted file tree of the installed skill
+    /// directory (skill code only, excluding our `.easynet/` metadata).
+    /// **Not yet Q6-compliant.** AXIOM §6.1 specifies
+    /// `ability_snapshot.content_hash` must cover (a) skill
+    /// implementation bytes, (b) the ability's input/output schema,
+    /// (c) external dependency references — and explicitly rejects
+    /// code-only hashes ("A receipt whose snapshot is SHA-256 of
+    /// code alone fails Q6"). We cover (a); expanding to (b)+(c)
+    /// waits on RFC 002's canonical manifest format. Tracked in
+    /// `docs/open-questions/cli-dispatch-as-first-class-invocation.md`.
     pub content_hash: String,
     pub size_bytes: u64,
     pub installed_at: String,
