@@ -49,11 +49,24 @@
 // verb in this module is required to pass this encapsulation check
 // before being added.
 //
-// Two top-level commands are deliberately ABSENT and must stay absent:
+// Two top-level commands have a restricted shape (not absent):
 //
-//   skill     → skills are private; exposing them breaks encapsulation.
-//                Cross-agent reuse must go through wrapping a skill as
-//                an ability.
+//   skill     → PACKAGE MANAGEMENT ONLY. The `easynet skill
+//                {install,list,upgrade,remove}` verbs install a
+//                skill bundle from a marketplace (GitHub v1) into
+//                a NAMED agent's `<agent-root>/skills/` directory.
+//                They NEVER invoke a skill — invocation still goes
+//                through the agent's public abilities, and
+//                cross-agent skill reuse still requires the owning
+//                agent to wrap the skill as an ability. The
+//                encapsulation invariant in ontology §4 is about
+//                invocation across an agent boundary; installing
+//                your own agent's private dependencies does not
+//                cross a boundary (the agent owns the skills/
+//                directory; the operator owns the agent). An
+//                earlier version of this comment forbade the
+//                command outright — the restriction was over-
+//                scoped and has been narrowed.
 //   capability → the cross-process invocation abstraction. When this
 //                lands, it'll subsume `agent send` and `ability invoke`
 //                into one verb. Until then, do NOT add a half-baked
@@ -100,6 +113,7 @@ pub(crate) mod mcp_install;
 pub(crate) mod mcp_server;
 pub(crate) mod mission_runs;
 pub(crate) mod reset;
+pub(crate) mod skill;
 pub(crate) mod skill_install;
 pub(crate) mod start;
 pub(crate) mod status;
@@ -132,6 +146,12 @@ pub enum Command {
     /// Compile, run, and inspect EAL orchestration missions.
     #[command(display_order = 5)]
     Mission(groups::mission::MissionArgs),
+
+    /// Manage agent-owned skills — install, list, upgrade, remove from a
+    /// marketplace source (v1: GitHub). Skills are private packages the
+    /// owning agent can wrap as an ability; never directly invocable.
+    #[command(display_order = 6)]
+    Skill(skill::SkillArgs),
 
     // ── Infrastructure ───────────────────────────────────────────────────
     /// Manage the local Axon runtime (start, stop, status).
@@ -182,6 +202,7 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         Command::Ability(args) => groups::ability::run(args),
         Command::Device(args) => groups::device::run(args),
         Command::Mission(args) => groups::mission::run(args),
+        Command::Skill(args) => skill::run(args),
         Command::Runtime(args) => groups::runtime::run(args),
         Command::Mcp(args) => groups::mcp::run(args),
         Command::Call(args) => groups::call::run(args),
