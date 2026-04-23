@@ -43,56 +43,82 @@ fn millis_u64(d: Duration) -> u64 {
 }
 use sha2::{Digest, Sha256};
 
-use super::ir::{IrCall, IrFailurePolicy, IrStep as RealIrStep, MissionIr};
+use super::ir::{IrCall, IrFailurePolicy, IrLoop, IrStep as RealIrStep, MissionIr};
 use crate::support::output;
 
-/// Interpreter-local alias. Pre-PR-10 this module operated directly
-/// on the flat struct `IrStep`; PR-10 turned `IrStep` into an enum
-/// (`Call | Loop | Chat | Handoff`) but the existing execution
-/// machinery only knows how to dispatch flat calls. We flatten block
-/// variants at the mission-execution entry point (see
-/// `flatten_steps_for_legacy_executor`) and walk only `IrCall`s here.
-///
-/// Keeping the alias means the interpreter's thousands of lines of
-/// step-handling code did not need a name change for PR-10 Stage 1;
-/// Stages 2+ add block-aware passes alongside, not replacing.
+/// Interpreter-local alias. The per-step execution machinery —
+/// retries, dispatch, resolve_arguments, process_step_result — works
+/// on flat `IrCall`s. Block variants of `RealIrStep` are expanded by
+/// `execute_with_dispatcher` into batches of `IrCall`s (or iterated
+/// sequentially in the `IrStep::Loop` case) before reaching any
+/// per-step helper. The alias keeps those helpers signature-
+/// compatible with the pre-PR-10 code without a churn-only rename.
 type IrStep = IrCall;
 
-// ── PR-10 Stage 1: IrStep enum → IrCall flat vec ─────────────────────────
+// ── PR-10 Stage 3: per-variant IrStep dispatch ───────────────────────────
 //
-// The interpreter was authored against a flat `IrStep` struct. PR-10
-// upgraded `IrStep` to a tagged enum whose `Call` variant is the old
-// struct and whose new `Loop` / `Chat` / `Handoff` variants need
-// their own executor passes (Stages 3/4).
+// The mission executor consumes a mixed `Vec<RealIrStep>`
+// (`Call | Loop`). Chat and Handoff block forms were proposed in
+// the Draft revision of the RFC but removed by the approved RFC
+// (§10); the enum itself no longer carries those variants.
 //
-// `flatten_steps_for_legacy_executor` is the temporary bridge. It
-// walks the `IrStep` tree and returns a clone-free `Vec<IrCall>`
-// when the mission only uses the `Call` variant (the pre-PR-10 case
-// which every existing gallery mission is). A block variant
-// encountered here produces a typed `BlocksNotYetExecutable` error;
-// the flatten lives at a single site so removing it later (when the
-// block-aware executor lands) is a one-line change.
-fn flatten_steps_for_legacy_executor(
-    steps: &[RealIrStep],
-) -> anyhow::Result<Vec<IrCall>> {
-    let mut out = Vec::with_capacity(steps.len());
+// `split_phase_steps` partitions a phase's steps into Call runs and
+// Block singletons, preserving source order. The top-level phase
+// walk dispatches each partition: Call runs go to the existing
+// parallel/sequential path; a Loop singleton goes to `execute_loop`.
+// The planner already collapses phases to one-step-per-phase when
+// any top-level item is a Block, so in practice a phase containing
+// a Loop will never mix Calls and Loops — but the partitioning is
+// correct either way, so a future RFC relaxation (loops packed
+// into parallel phases) does not silently break this layer.
+
+#[derive(Debug)]
+enum PhasePartition<'a> {
+    /// Contiguous run of `IrStep::Call` — dispatched via the
+    /// existing parallel path when permitted by the dispatcher.
+    Calls(&'a [RealIrStep]),
+    /// A single Loop block — executed sequentially in-process via
+    /// `execute_loop`.
+    Loop(&'a IrLoop),
+}
+
+fn split_phase_steps(steps: &[RealIrStep]) -> Vec<PhasePartition<'_>> {
+    let mut out: Vec<PhasePartition<'_>> = Vec::new();
+    let mut run_start: Option<usize> = None;
     for (i, step) in steps.iter().enumerate() {
         match step {
-            RealIrStep::Call(c) => out.push(c.clone()),
-            RealIrStep::Loop(_) => anyhow::bail!(
-                "step {i}: `loop` block execution lands in PR-10 Stage 3 — \
-                 this mission was compiled from PR-10 Stage 2 syntax but \
-                 the executor does not understand block variants yet"
-            ),
-            RealIrStep::Chat(_) => anyhow::bail!(
-                "step {i}: `chat` block execution lands in PR-10 Stage 4"
-            ),
-            RealIrStep::Handoff(_) => anyhow::bail!(
-                "step {i}: `handoff` block execution lands in PR-10 Stage 4"
-            ),
+            RealIrStep::Call(_) => {
+                if run_start.is_none() {
+                    run_start = Some(i);
+                }
+            }
+            RealIrStep::Loop(l) => {
+                if let Some(s) = run_start.take() {
+                    out.push(PhasePartition::Calls(&steps[s..i]));
+                }
+                out.push(PhasePartition::Loop(l));
+            }
         }
     }
-    Ok(out)
+    if let Some(s) = run_start {
+        out.push(PhasePartition::Calls(&steps[s..]));
+    }
+    out
+}
+
+/// Extract `IrCall`s from a run of `IrStep::Call` steps. The planner
+/// guarantees every element of a `PhasePartition::Calls` slice is
+/// `IrStep::Call`; `unreachable!` is unreachable on a well-formed IR.
+fn calls_from_partition(steps: &[RealIrStep]) -> Vec<IrCall> {
+    steps
+        .iter()
+        .map(|s| match s {
+            RealIrStep::Call(c) => c.clone(),
+            RealIrStep::Loop(_) => {
+                unreachable!("calls_from_partition invoked with non-Call step — planner bug")
+            }
+        })
+        .collect()
 }
 
 // ── Retry constants ──
@@ -746,115 +772,68 @@ pub fn execute_with_dispatcher(
     let mut skipped = 0usize;
     let mut aborted = false;
 
-    // PR-10 Stage 1: flatten the IrStep enum into IrCall slices for
-    // the legacy executor. Block variants (`Loop`, `Chat`, `Handoff`)
-    // are rejected here with a typed error — their execution paths
-    // land in Stage 3/4 below this line. The flatten is `Cow`-free:
-    // for the common (pre-PR-10 shape) Call-only mission, we borrow
-    // directly without cloning.
-    let flat_steps = flatten_steps_for_legacy_executor(&ir.steps)?;
-    let ir_steps: &[IrCall] = &flat_steps;
-
-    let total = ir_steps.len();
+    // `total` counts only top-level Call steps — and, for Loop
+    // blocks, their max-case call budget (`max_iters * |body+verify
+    // calls|`). The `[i/total]` progress display shows actual
+    // dispatched calls as they happen, so Loop iterations push the
+    // `i` value up while `total` is the worst case; on early
+    // termination `i` lands below `total`, which is the correct
+    // semantics for "upper bound, not ceiling".
+    let total: usize = ir
+        .steps
+        .iter()
+        .map(|s| usize::try_from(s.static_call_bound()).unwrap_or(usize::MAX))
+        .sum();
     let mut global_step = 0usize;
 
     for (phase_idx, phase) in ir.phases.iter().enumerate() {
         if aborted {
             break;
         }
-        let steps = &ir_steps[phase.start..phase.end];
-        if steps.is_empty() {
+        let phase_steps = &ir.steps[phase.start..phase.end];
+        if phase_steps.is_empty() {
             continue;
         }
-        let wants_parallel = steps.len() > 1;
-        let can_parallel = wants_parallel && dispatcher.clone_for_thread().is_ok();
-        let phase_label = if can_parallel {
-            format!("phase {phase_idx}  parallel")
-        } else {
-            format!("phase {phase_idx}")
-        };
-        eprintln!("\n  {}", style(phase_label).cyan());
 
-        // ── Scheduling: required steps first, then optional ──────────────
-        //
-        // Within a phase, steps have no mutual data dependencies and can run
-        // in parallel.  However, required steps have higher scheduling
-        // priority than optional ones: they execute first so that they get
-        // first access to shared resources (API quotas, failure budgets, etc.)
-        // and their failures are observed before optional work begins.
-        //
-        // Execution order within a phase:
-        //   1. Dispatch all REQUIRED steps (parallel or sequential).
-        //   2. Barrier — process results, detect abort.
-        //   3. Dispatch all OPTIONAL steps (parallel or sequential).
-        //   4. Process results.
-        //
-        // This ensures "optional = low priority" is encoded in scheduling,
-        // not just in post-hoc failure handling.
-
-        let required_indices: Vec<usize> = steps
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| !s.optional)
-            .map(|(i, _)| i)
-            .collect();
-        let optional_indices: Vec<usize> = steps
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| s.optional)
-            .map(|(i, _)| i)
-            .collect();
-
-        // Batch 1: required steps
-        let required_results = dispatch_batch(
-            dispatcher,
-            tenant,
-            steps,
-            &required_indices,
-            &captured,
-            &skipped_bindings,
-            can_parallel,
-        );
-        process_batch(
-            steps,
-            required_results,
-            phase_idx,
-            &mut global_step,
-            total,
-            &mut captured,
-            &mut skipped_bindings,
-            &mut completed,
-            &mut failed,
-            &mut skipped,
-            &mut aborted,
-            &mut all_traces,
-        );
-
-        // Batch 2: optional steps (skip if mission already aborted)
-        if !aborted && !optional_indices.is_empty() {
-            let optional_results = dispatch_batch(
-                dispatcher,
-                tenant,
-                steps,
-                &optional_indices,
-                &captured,
-                &skipped_bindings,
-                can_parallel,
-            );
-            process_batch(
-                steps,
-                optional_results,
-                phase_idx,
-                &mut global_step,
-                total,
-                &mut captured,
-                &mut skipped_bindings,
-                &mut completed,
-                &mut failed,
-                &mut skipped,
-                &mut aborted,
-                &mut all_traces,
-            );
+        for partition in split_phase_steps(phase_steps) {
+            if aborted {
+                break;
+            }
+            match partition {
+                PhasePartition::Calls(call_steps) => {
+                    let calls = calls_from_partition(call_steps);
+                    execute_calls_phase_partition(
+                        dispatcher,
+                        tenant,
+                        &calls,
+                        phase_idx,
+                        &mut global_step,
+                        total,
+                        &mut captured,
+                        &mut skipped_bindings,
+                        &mut completed,
+                        &mut failed,
+                        &mut skipped,
+                        &mut aborted,
+                        &mut all_traces,
+                    );
+                }
+                PhasePartition::Loop(lp) => {
+                    execute_loop(
+                        dispatcher,
+                        tenant,
+                        lp,
+                        phase_idx,
+                        &mut global_step,
+                        total,
+                        &mut captured,
+                        &mut completed,
+                        &mut failed,
+                        &mut aborted,
+                        &mut all_traces,
+                    );
+                }
+            }
         }
     }
 
@@ -1139,6 +1118,508 @@ fn process_batch(
             }
         }
         all_traces.push(trace);
+    }
+}
+
+/// Dispatch a contiguous run of `IrStep::Call` in one phase partition.
+/// Extracted verbatim from the pre-PR-10 phase body so the parallel-
+/// when-independent scheduling behaviour is unchanged for pure-Call
+/// missions.
+#[allow(clippy::too_many_arguments)]
+fn execute_calls_phase_partition(
+    dispatcher: &dyn StepDispatcher,
+    tenant: &str,
+    steps: &[IrCall],
+    phase_idx: usize,
+    global_step: &mut usize,
+    total: usize,
+    captured: &mut HashMap<String, CapturedResult>,
+    skipped_bindings: &mut std::collections::HashSet<String>,
+    completed: &mut usize,
+    failed: &mut usize,
+    skipped: &mut usize,
+    aborted: &mut bool,
+    all_traces: &mut CappedTraceBuffer,
+) {
+    if steps.is_empty() {
+        return;
+    }
+    let wants_parallel = steps.len() > 1;
+    let can_parallel = wants_parallel && dispatcher.clone_for_thread().is_ok();
+    let phase_label = if can_parallel {
+        format!("phase {phase_idx}  parallel")
+    } else {
+        format!("phase {phase_idx}")
+    };
+    eprintln!("\n  {}", style(phase_label).cyan());
+
+    // Required first, then optional — same policy as pre-PR-10.
+    let required_indices: Vec<usize> = steps
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| !s.optional)
+        .map(|(i, _)| i)
+        .collect();
+    let optional_indices: Vec<usize> = steps
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.optional)
+        .map(|(i, _)| i)
+        .collect();
+
+    let required_results = dispatch_batch(
+        dispatcher,
+        tenant,
+        steps,
+        &required_indices,
+        captured,
+        skipped_bindings,
+        can_parallel,
+    );
+    process_batch(
+        steps,
+        required_results,
+        phase_idx,
+        global_step,
+        total,
+        captured,
+        skipped_bindings,
+        completed,
+        failed,
+        skipped,
+        aborted,
+        all_traces,
+    );
+
+    if !*aborted && !optional_indices.is_empty() {
+        let optional_results = dispatch_batch(
+            dispatcher,
+            tenant,
+            steps,
+            &optional_indices,
+            captured,
+            skipped_bindings,
+            can_parallel,
+        );
+        process_batch(
+            steps,
+            optional_results,
+            phase_idx,
+            global_step,
+            total,
+            captured,
+            skipped_bindings,
+            completed,
+            failed,
+            skipped,
+            aborted,
+            all_traces,
+        );
+    }
+}
+
+/// Execute an `IrStep::Loop` block in-process, sequentially, per RFC
+/// §3.1 / §4.1–§4.4.
+///
+/// One iteration = run every `body` step in order (sequential within
+/// the iteration — RFC §6 v1: no parallel body), then run every
+/// `verify` step. The final `verify` call's output is inspected for a
+/// top-level boolean field `done`:
+///   - `done == true` → loop terminates successfully; the winning
+///     verify output is captured as `<name>.result` if named.
+///   - `done == false` → re-enter `body` unless `max_iters` reached.
+///   - Missing output, missing `done`, or non-boolean `done` →
+///     typed `VerifyMalformed` abort (hard mission abort per §5.2).
+///
+/// `max_iters` reached without `done: true` → typed `LoopExhausted`
+/// abort. Both abort types propagate through the outer `aborted`
+/// flag; the rest of the mission does not run.
+///
+/// Scope: the loop maintains its own per-iteration `captured` map.
+/// Inner body/verify bindings live only for the iteration (RFC §3.1
+/// hermetic scope). The outer `captured` receives only
+/// `<name>.result` on a winning iteration, when the loop is named.
+#[allow(clippy::too_many_arguments)]
+fn execute_loop(
+    dispatcher: &dyn StepDispatcher,
+    tenant: &str,
+    lp: &IrLoop,
+    phase_idx: usize,
+    global_step: &mut usize,
+    total: usize,
+    outer_captured: &mut HashMap<String, CapturedResult>,
+    completed: &mut usize,
+    failed: &mut usize,
+    aborted: &mut bool,
+    all_traces: &mut CappedTraceBuffer,
+) {
+    let label = lp.name.as_deref().unwrap_or("<anonymous>");
+    eprintln!(
+        "\n  {}",
+        style(format!(
+            "phase {phase_idx}  loop '{label}' max_iters={n}",
+            n = lp.max_iters
+        ))
+        .cyan()
+    );
+
+    // Body and verify at this layer are `Vec<IrStep>` (the IR enum).
+    // The v1 planner rejects nested loops (RFC §4.2), and by design
+    // loops do not contain further block variants, so every leaf is
+    // `IrStep::Call`. Extract the flat call slice once per block
+    // so the per-iteration executor can reuse them without walking
+    // the enum every time.
+    let body_calls = flatten_loop_leaves(&lp.body, label, "body");
+    let verify_calls = flatten_loop_leaves(&lp.verify, label, "verify");
+
+    let (body_calls, verify_calls) = match (body_calls, verify_calls) {
+        (Ok(b), Ok(v)) => (b, v),
+        (Err(e), _) | (_, Err(e)) => {
+            eprintln!("  {}", style(format!("loop '{label}': {e}")).red());
+            *failed += 1;
+            *aborted = true;
+            return;
+        }
+    };
+
+    // `verify` must be non-empty (planner enforces) and its last leaf
+    // call carries the termination predicate.
+    let verify_last_idx = verify_calls.len() - 1;
+
+    for iter in 1..=lp.max_iters {
+        if *aborted {
+            return;
+        }
+
+        // Fresh per-iteration scope — outer bindings are not visible
+        // (hermetic per RFC §3.1 v1) and inner bindings do not leak
+        // across iterations. A future RFC may relax the outbound
+        // direction; the inner scope stays fresh regardless.
+        let mut iter_captured: HashMap<String, CapturedResult> = HashMap::new();
+        let mut iter_skipped: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
+        eprintln!(
+            "  {}",
+            style(format!("  iter {iter}/{max} — body", max = lp.max_iters)).cyan()
+        );
+        let body_ok = run_loop_block_sequentially(
+            dispatcher,
+            tenant,
+            &body_calls,
+            phase_idx,
+            global_step,
+            total,
+            &mut iter_captured,
+            &mut iter_skipped,
+            completed,
+            failed,
+            aborted,
+            all_traces,
+        );
+        if !body_ok || *aborted {
+            // Body step failed with abort policy or surfaced a hard
+            // error. The outer mission is already marked aborted by
+            // `run_loop_block_sequentially`; stop here.
+            return;
+        }
+
+        eprintln!(
+            "  {}",
+            style(format!("  iter {iter}/{max} — verify", max = lp.max_iters)).cyan()
+        );
+        // Track the verify final call's captured bytes so we can
+        // inspect `done` and, on a winning iteration, export
+        // `<name>.result`.
+        let verify_ok = run_loop_block_sequentially(
+            dispatcher,
+            tenant,
+            &verify_calls,
+            phase_idx,
+            global_step,
+            total,
+            &mut iter_captured,
+            &mut iter_skipped,
+            completed,
+            failed,
+            aborted,
+            all_traces,
+        );
+        if !verify_ok || *aborted {
+            return;
+        }
+
+        // RFC §4.4: inspect the final verify call's output for
+        // `done: bool`. The final call MUST have produced bytes — a
+        // successful step always writes to `iter_captured` under its
+        // `output_binding` (planner-assigned; never `None` for a
+        // lowered `let`-call) OR, for an un-bound call, the
+        // interpreter does not capture. To make this check robust
+        // regardless of whether the verify last call had an explicit
+        // `let`, we capture by synthetic binding below.
+        let final_call = &verify_calls[verify_last_idx];
+        let verify_bytes: Option<&Vec<u8>> = final_call
+            .output_binding
+            .as_ref()
+            .and_then(|b| iter_captured.get(b).map(|c| &c.value))
+            .or_else(|| iter_captured.get(LOOP_VERIFY_SYNTHETIC_BINDING).map(|c| &c.value));
+
+        let verify_bytes = match verify_bytes {
+            Some(b) => b,
+            None => {
+                eprintln!(
+                    "  {}",
+                    style(format!(
+                        "loop '{label}' iter {iter}: VerifyMalformed — verify final call produced no output"
+                    ))
+                    .red()
+                );
+                *failed += 1;
+                *aborted = true;
+                return;
+            }
+        };
+
+        let done = match verify_output_done(verify_bytes) {
+            VerifyDone::True => true,
+            VerifyDone::False => false,
+            VerifyDone::Malformed(reason) => {
+                eprintln!(
+                    "  {}",
+                    style(format!(
+                        "loop '{label}' iter {iter}: VerifyMalformed — {reason}"
+                    ))
+                    .red()
+                );
+                *failed += 1;
+                *aborted = true;
+                return;
+            }
+        };
+
+        if done {
+            eprintln!(
+                "  {}",
+                style(format!(
+                    "loop '{label}' terminated at iter {iter}/{max} (verify done=true)",
+                    max = lp.max_iters
+                ))
+                .green()
+            );
+            if let Some(ref rb) = lp.result_binding {
+                outer_captured.insert(
+                    rb.clone(),
+                    CapturedResult {
+                        value: verify_bytes.clone(),
+                    },
+                );
+            }
+            return;
+        }
+    }
+
+    // Exhausted max_iters without done: true → LoopExhausted hard
+    // abort (RFC §5.2). The mission's outcome is Aborted; no
+    // downstream steps run.
+    eprintln!(
+        "  {}",
+        style(format!(
+            "loop '{label}': LoopExhausted — reached max_iters={n} without done=true (RFC §5.2)",
+            n = lp.max_iters
+        ))
+        .red()
+    );
+    *failed += 1;
+    *aborted = true;
+}
+
+/// Synthetic output-binding used internally when a verify final call
+/// has no user-declared `let`. Never collides with a user binding
+/// because `.` is not a legal identifier char in the grammar.
+const LOOP_VERIFY_SYNTHETIC_BINDING: &str = "__loop_verify.output__";
+
+/// Flatten a loop block's `Vec<IrStep>` into `Vec<IrCall>`. Planner
+/// guarantees only `IrStep::Call` leaves inside loop bodies in v1
+/// (no nested blocks — RFC §4.2). An unexpected non-Call variant
+/// signals a planner bug and becomes an anyhow error surfaced up.
+fn flatten_loop_leaves(
+    block: &[RealIrStep],
+    label: &str,
+    which: &str,
+) -> anyhow::Result<Vec<IrCall>> {
+    let mut out = Vec::with_capacity(block.len());
+    for step in block {
+        match step {
+            RealIrStep::Call(c) => out.push(c.clone()),
+            RealIrStep::Loop(_) => {
+                anyhow::bail!(
+                    "loop '{label}' {which}: nested loops are rejected at compile time \
+                     (RFC §4.2 v1) — reaching the executor with one is a planner bug"
+                )
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Run a loop block (body or verify) sequentially in the caller-
+/// provided scope. Returns `false` if any step failed with abort
+/// policy (outer `aborted` is also set by `process_batch`).
+///
+/// Loop iterations are sequential within each block (RFC §6 v1: no
+/// parallel body). Each step goes through the same dispatch path as
+/// a flat Call, so `MAX_AGENT_DEPTH` and
+/// `check_mission_context_invariant` are honoured unchanged (RFC
+/// §4.3 single-path invariant).
+///
+/// The last step of the block is captured under
+/// `LOOP_VERIFY_SYNTHETIC_BINDING` as a fallback, so the verify
+/// `done: bool` check can read the final output even when the user
+/// did not write an explicit `let` on that statement.
+#[allow(clippy::too_many_arguments)]
+fn run_loop_block_sequentially(
+    dispatcher: &dyn StepDispatcher,
+    tenant: &str,
+    steps: &[IrCall],
+    phase_idx: usize,
+    global_step: &mut usize,
+    total: usize,
+    iter_captured: &mut HashMap<String, CapturedResult>,
+    iter_skipped: &mut std::collections::HashSet<String>,
+    completed: &mut usize,
+    failed: &mut usize,
+    aborted: &mut bool,
+    all_traces: &mut CappedTraceBuffer,
+) -> bool {
+    let last_idx = steps.len().saturating_sub(1);
+    for (i, step) in steps.iter().enumerate() {
+        if *aborted {
+            return false;
+        }
+        let merged_args = match resolve_arguments(step, iter_captured, iter_skipped) {
+            Ok(args) => args,
+            Err(ResolveError::UpstreamSkipped { binding, arg }) => {
+                let result = StepExecResult::SkippedByDependency {
+                    message: format!(
+                        "skipped: input `{arg}` depends on `{binding}` which was skipped upstream"
+                    ),
+                    started_at: now_unix_ms(),
+                };
+                let mut local_skipped = 0usize;
+                process_batch(
+                    steps,
+                    vec![(i, result)],
+                    phase_idx,
+                    global_step,
+                    total,
+                    iter_captured,
+                    iter_skipped,
+                    completed,
+                    failed,
+                    &mut local_skipped,
+                    aborted,
+                    all_traces,
+                );
+                continue;
+            }
+            Err(ResolveError::Other(e)) => {
+                let result = StepExecResult::Error {
+                    message: e,
+                    elapsed_ms: 0,
+                    started_at: now_unix_ms(),
+                    retry_count: 0,
+                    retry_history: Vec::new(),
+                };
+                let mut local_skipped = 0usize;
+                process_batch(
+                    steps,
+                    vec![(i, result)],
+                    phase_idx,
+                    global_step,
+                    total,
+                    iter_captured,
+                    iter_skipped,
+                    completed,
+                    failed,
+                    &mut local_skipped,
+                    aborted,
+                    all_traces,
+                );
+                return !*aborted;
+            }
+        };
+
+        let result = execute_step_with_retry(dispatcher, tenant, step, &merged_args);
+
+        // Mirror the "capture under synthetic binding for last step"
+        // side-effect by copying result_bytes into iter_captured
+        // before handing to process_batch (which would only capture
+        // if output_binding is Some).
+        if i == last_idx {
+            if let StepExecResult::Ok { result_bytes, .. } = &result {
+                iter_captured.insert(
+                    LOOP_VERIFY_SYNTHETIC_BINDING.to_string(),
+                    CapturedResult {
+                        value: result_bytes.clone(),
+                    },
+                );
+            }
+        }
+
+        let mut local_skipped = 0usize;
+        process_batch(
+            steps,
+            vec![(i, result)],
+            phase_idx,
+            global_step,
+            total,
+            iter_captured,
+            iter_skipped,
+            completed,
+            failed,
+            &mut local_skipped,
+            aborted,
+            all_traces,
+        );
+    }
+    !*aborted
+}
+
+/// Typed outcome of inspecting the verify block's final call output
+/// for RFC §4.4's `done: bool` predicate. `Malformed` carries a
+/// reason string used as the `VerifyMalformed` abort message.
+enum VerifyDone {
+    True,
+    False,
+    Malformed(String),
+}
+
+fn verify_output_done(bytes: &[u8]) -> VerifyDone {
+    let v: serde_json::Value = match serde_json::from_slice(bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            return VerifyDone::Malformed(format!(
+                "verify output is not JSON-decodable ({e})"
+            ));
+        }
+    };
+    let obj = match v.as_object() {
+        Some(o) => o,
+        None => {
+            return VerifyDone::Malformed(format!(
+                "verify output must be a JSON object with a top-level `done: bool` field, got {v}"
+            ));
+        }
+    };
+    match obj.get("done") {
+        Some(serde_json::Value::Bool(true)) => VerifyDone::True,
+        Some(serde_json::Value::Bool(false)) => VerifyDone::False,
+        Some(other) => VerifyDone::Malformed(format!(
+            "verify output `done` must be boolean, got {other}"
+        )),
+        None => VerifyDone::Malformed(
+            "verify output has no top-level `done` field (RFC §4.4)".to_string(),
+        ),
     }
 }
 
@@ -2673,5 +3154,212 @@ mod tests {
             }
         );
         assert_eq!(seen[0].1.as_str(), "chat");
+    }
+
+    // ── PR-10 Stage 3: loop executor audit hooks ──────────────────────────
+    //
+    // These cover the RFC §4 / §5 behaviours the planner tests
+    // cannot: runtime termination, typed error surfaces, depth
+    // non-nesting, and the `<name>.result` export contract.
+
+    /// Programmable dispatcher: returns canned JSON Values per call,
+    /// indexed by a per-ability counter so tests can script the
+    /// sequence of verify outputs across iterations.
+    struct ScriptedDispatcher {
+        outputs: Arc<Mutex<std::collections::HashMap<String, Vec<Value>>>>,
+        cursor: Arc<Mutex<std::collections::HashMap<String, usize>>>,
+        default: Value,
+        calls: Arc<Mutex<Vec<String>>>,
+        /// If set, each dispatch reads `EASYNET_AGENT_DEPTH` and
+        /// records the observed depth value. Used by the
+        /// non-nesting-depth test.
+        depth_observations: Arc<Mutex<Vec<Option<String>>>>,
+    }
+
+    impl ScriptedDispatcher {
+        fn new(default: Value) -> Self {
+            Self {
+                outputs: Arc::new(Mutex::new(std::collections::HashMap::new())),
+                cursor: Arc::new(Mutex::new(std::collections::HashMap::new())),
+                default,
+                calls: Arc::new(Mutex::new(Vec::new())),
+                depth_observations: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+        fn with_script(self, ability: &str, script: Vec<Value>) -> Self {
+            self.outputs
+                .lock()
+                .unwrap()
+                .insert(ability.to_string(), script);
+            self
+        }
+    }
+
+    impl StepDispatcher for ScriptedDispatcher {
+        fn dispatch(
+            &self,
+            _tenant: &str,
+            _target: &IrTarget,
+            ability: &AbilityName,
+            _arguments: &Value,
+            _timeout_ms: Option<u64>,
+        ) -> Result<Value, EalError> {
+            let k = ability.as_str().to_string();
+            self.calls.lock().unwrap().push(k.clone());
+            self.depth_observations
+                .lock()
+                .unwrap()
+                .push(std::env::var("EASYNET_AGENT_DEPTH").ok());
+            let mut cursors = self.cursor.lock().unwrap();
+            let cur = cursors.entry(k.clone()).or_insert(0);
+            let outs = self.outputs.lock().unwrap();
+            if let Some(script) = outs.get(&k) {
+                if *cur < script.len() {
+                    let v = script[*cur].clone();
+                    *cur += 1;
+                    return Ok(v);
+                }
+            }
+            Ok(self.default.clone())
+        }
+        fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
+            // Loops are sequential by design — no thread cloning needed
+            // for these tests. Signal "fall back to sequential" via Err.
+            Err(EalError::Internal("scripted dispatcher is single-thread".into()))
+        }
+    }
+
+    /// RFC §4.4 happy path: verify returns `done: true` on iter K;
+    /// the loop terminates successfully, and `<name>.result` binds
+    /// the verify final call's output.
+    #[test]
+    fn loop_terminates_on_done_true_and_binds_result() {
+        let src = r#"
+            mission "t" {
+                loop "review" max_iters: 4 {
+                    body { a.step(p: "x") }
+                    verify { a.ok(p: "x") }
+                }
+            }"#;
+        let prog = parser::parse(src).unwrap();
+        let ir = planner::compile(&prog).unwrap();
+        // Verify script: iter 1 → done:false; iter 2 → done:true.
+        let d = ScriptedDispatcher::new(serde_json::json!({"done": false})).with_script(
+            "ok",
+            vec![
+                serde_json::json!({"done": false}),
+                serde_json::json!({"done": true, "payload": "winner"}),
+            ],
+        );
+        let report = execute_with_dispatcher(&d, "test", &ir).unwrap();
+        assert_eq!(report.steps_failed, 0);
+        // Body + verify × 2 iterations = 4 calls total.
+        assert_eq!(d.calls.lock().unwrap().len(), 4);
+        // `<name>.result` export: captured as review.result, verify
+        // final output on the winning iteration.
+        let winner = report
+            .outputs
+            .get("review.result")
+            .expect("review.result must be exported on winning iter");
+        assert!(
+            winner.contains("winner"),
+            "result must carry verify final output; got: {winner}"
+        );
+    }
+
+    /// RFC §5.2: `LoopExhausted` — max_iters reached without
+    /// done:true. Mission outcome is Aborted; error surface cites
+    /// "LoopExhausted" and "max_iters".
+    #[test]
+    fn loop_exhausts_with_typed_error() {
+        let src = r#"
+            mission "t" {
+                loop "x" max_iters: 3 {
+                    body { a.step(p: "x") }
+                    verify { a.ok(p: "x") }
+                }
+            }"#;
+        let prog = parser::parse(src).unwrap();
+        let ir = planner::compile(&prog).unwrap();
+        // Never done.
+        let d = ScriptedDispatcher::new(serde_json::json!({"done": false}));
+        let report = execute_with_dispatcher(&d, "test", &ir).unwrap();
+        assert_eq!(report.trace.outcome, MissionOutcome::Aborted);
+        assert!(report.steps_failed >= 1);
+        // 3 iters × (body + verify) = 6 calls.
+        assert_eq!(d.calls.lock().unwrap().len(), 6);
+    }
+
+    /// RFC §4.4 / §5.2: `VerifyMalformed` — verify output missing
+    /// `done` field. Mission aborts at iter 1.
+    #[test]
+    fn verify_without_done_field_aborts() {
+        let src = r#"
+            mission "t" {
+                loop max_iters: 3 {
+                    body { a.step(p: "x") }
+                    verify { a.ok(p: "x") }
+                }
+            }"#;
+        let prog = parser::parse(src).unwrap();
+        let ir = planner::compile(&prog).unwrap();
+        // Verify returns an object with NO `done` field.
+        let d = ScriptedDispatcher::new(serde_json::json!({"ok": true}));
+        let report = execute_with_dispatcher(&d, "test", &ir).unwrap();
+        assert_eq!(report.trace.outcome, MissionOutcome::Aborted);
+        // Stopped at iter 1 (body + verify).
+        assert_eq!(d.calls.lock().unwrap().len(), 2);
+    }
+
+    /// RFC §4.4 / §5.2: non-boolean `done` is also VerifyMalformed.
+    /// Pins the strict-bool contract — a string "true" does NOT
+    /// count, to stop authors from shipping prose-predicate verify.
+    #[test]
+    fn verify_with_non_bool_done_aborts() {
+        let src = r#"
+            mission "t" {
+                loop max_iters: 2 {
+                    body { a.step(p: "x") }
+                    verify { a.ok(p: "x") }
+                }
+            }"#;
+        let prog = parser::parse(src).unwrap();
+        let ir = planner::compile(&prog).unwrap();
+        let d = ScriptedDispatcher::new(serde_json::json!({"done": "yes"}));
+        let report = execute_with_dispatcher(&d, "test", &ir).unwrap();
+        assert_eq!(report.trace.outcome, MissionOutcome::Aborted);
+    }
+
+    /// RFC §4.2 / §4.3: loop iterations do NOT stack agent-dispatch
+    /// depth. A 4-iter loop dispatching once per body and once per
+    /// verify runs 8 total dispatches, but each stays at the same
+    /// `EASYNET_AGENT_DEPTH` value the mission was invoked at — it
+    /// does not climb with iteration count. The dispatcher records
+    /// the env var each call; all values must be equal.
+    #[test]
+    fn loop_with_body_dispatch_does_not_nest_depth() {
+        let src = r#"
+            mission "t" {
+                loop max_iters: 4 {
+                    body { a.step(p: "x") }
+                    verify { a.ok(p: "x") }
+                }
+            }"#;
+        let prog = parser::parse(src).unwrap();
+        let ir = planner::compile(&prog).unwrap();
+        let d = ScriptedDispatcher::new(serde_json::json!({"done": false}));
+        let _ = execute_with_dispatcher(&d, "test", &ir).unwrap();
+        let obs = d.depth_observations.lock().unwrap();
+        // 4 iters * (body + verify) = 8 dispatches.
+        assert_eq!(obs.len(), 8);
+        // Every observation is identical — no climbing depth.
+        let first = obs.first().cloned().flatten();
+        for (i, v) in obs.iter().enumerate() {
+            assert_eq!(
+                v.clone(),
+                first.clone(),
+                "iter-dispatch {i} observed depth {v:?}, differs from first {first:?}"
+            );
+        }
     }
 }

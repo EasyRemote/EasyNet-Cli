@@ -137,17 +137,33 @@ impl Parser {
                 let call = self.parse_rhs()?;
                 Ok(Statement::LetCall { binding, call })
             }
-            // PR-10 control-flow blocks. `loop` is a reserved token;
-            // `chat` and `handoff` are contextual keywords — their
-            // statement-at-start shape disambiguates from a
-            // member-call because the next token after a block
-            // introducer is never `.` or `(`.
+            // PR-10 control-flow: `loop` is the sole block form in
+            // v1. The Draft revision of the RFC proposed `chat { }`
+            // and `handoff { }` statement-level blocks; the approved
+            // revision removed both (RFC §10). A bare `chat` or
+            // `handoff` at statement start (i.e. NOT in member-call
+            // form `chat.ability(...)`, which remains legal for any
+            // registered agent named "chat") now falls through to
+            // `parse_rhs` and surfaces as "unknown RHS" at the call
+            // site — acceptable for a keyword that never entered
+            // end-user scripts. `discuss { }` as a future EAL block
+            // form is tracked in
+            // `docs/open-questions/discuss-eal-block.md`.
             Token::Loop => Ok(Statement::Loop(self.parse_loop_block()?)),
-            Token::Ident(s) if s == "chat" && !self.is_member_call_start() => {
-                Ok(Statement::Chat(self.parse_chat_block()?))
-            }
-            Token::Ident(s) if s == "handoff" && !self.is_member_call_start() => {
-                Ok(Statement::Handoff(self.parse_handoff_block()?))
+            Token::Ident(s)
+                if (s == "chat" || s == "handoff" || s == "discuss")
+                    && !self.is_member_call_start() =>
+            {
+                anyhow::bail!(
+                    "EAL: `{s}` at statement start is not a block form. \
+                     The Draft-revision RFC proposed `chat {{ }}` / `handoff {{ }}` \
+                     but the approved RFC (`docs/rfc/eal-control-flow-v1.md` §10) \
+                     keeps only `loop {{ }}`. For multi-agent conferences, use the \
+                     CLI verb `easynet discuss`; the EAL block form is tracked in \
+                     `docs/open-questions/discuss-eal-block.md`. \
+                     For agent-to-agent handoff, write two flat EAL statements \
+                     (source.summarize + target.chat(prompt: summary.output))."
+                )
             }
             _ => Ok(Statement::Call(self.parse_rhs()?)),
         }
@@ -155,8 +171,9 @@ impl Parser {
 
     /// True when the next two tokens look like a member-call
     /// `<agent>.<ability>(...)` or a grouped ability target `<agent>(...)`.
-    /// Used to keep `chat`/`handoff` from swallowing an agent named
-    /// `chat` at statement start.
+    /// Used so a registered agent named `chat` / `handoff` / `discuss`
+    /// can still be invoked via member-call form even though those
+    /// identifiers are reserved at statement-block position.
     fn is_member_call_start(&self) -> bool {
         matches!(self.peek_at(1), Token::Dot | Token::LParen)
     }
@@ -228,150 +245,6 @@ impl Parser {
         })
     }
 
-    /// `chat "<name>?" participants: [A, B] max_turns: N { topic:? visibility:? }`
-    ///
-    /// `chat` is a contextual keyword — it arrives at this parser as
-    /// `Token::Ident("chat")` only when the statement-level
-    /// disambiguator confirmed it is not a member-call.
-    fn parse_chat_block(&mut self) -> anyhow::Result<ChatBlock> {
-        // Consume the `chat` identifier.
-        self.expect_contextual_ident("chat")?;
-        let name = self.parse_optional_block_name()?;
-        // Header attrs before `{`. Order is flexible; both required.
-        let mut participants: Option<Vec<String>> = None;
-        let mut max_turns: Option<u32> = None;
-        while *self.peek() != Token::LBrace {
-            let attr = self.expect_ident()?;
-            self.expect(&Token::Colon)?;
-            match attr.as_str() {
-                "participants" => {
-                    if participants.is_some() {
-                        anyhow::bail!("chat: duplicate `participants:` header attribute");
-                    }
-                    participants = Some(self.parse_agent_name_list()?);
-                }
-                "max_turns" => {
-                    if max_turns.is_some() {
-                        anyhow::bail!("chat: duplicate `max_turns:` header attribute");
-                    }
-                    max_turns = Some(self.expect_u32()?);
-                }
-                other => anyhow::bail!(
-                    "chat header: expected `participants:` or `max_turns:`, got `{other}:`"
-                ),
-            }
-        }
-        let participants = participants
-            .ok_or_else(|| anyhow::anyhow!("chat: missing `participants:` header attribute"))?;
-        let max_turns = max_turns
-            .ok_or_else(|| anyhow::anyhow!("chat: missing `max_turns:` header attribute"))?;
-
-        self.expect(&Token::LBrace)?;
-        let mut topic: Option<String> = None;
-        let mut visibility: Option<ChatVisibility> = None;
-        while *self.peek() != Token::RBrace {
-            let attr = self.expect_ident()?;
-            self.expect(&Token::Colon)?;
-            match attr.as_str() {
-                "topic" => {
-                    if topic.is_some() {
-                        anyhow::bail!("chat: duplicate `topic:` attribute");
-                    }
-                    topic = Some(self.expect_string()?);
-                }
-                "visibility" => {
-                    if visibility.is_some() {
-                        anyhow::bail!("chat: duplicate `visibility:` attribute");
-                    }
-                    let v = self.expect_ident()?;
-                    visibility = Some(match v.as_str() {
-                        "fan_out" => ChatVisibility::FanOut,
-                        "round_robin" => ChatVisibility::RoundRobin,
-                        other => anyhow::bail!(
-                            "chat visibility: expected `fan_out` or `round_robin`, got `{other}`"
-                        ),
-                    });
-                }
-                other => anyhow::bail!(
-                    "chat body: expected `topic:` or `visibility:`, got `{other}:`"
-                ),
-            }
-        }
-        self.expect(&Token::RBrace)?;
-        Ok(ChatBlock {
-            name,
-            participants,
-            max_turns,
-            topic,
-            visibility,
-        })
-    }
-
-    /// `handoff "<name>?" { from: A to: B context_mode:? prompt:? }`
-    ///
-    /// `handoff` is a contextual keyword; same rationale as `chat`.
-    fn parse_handoff_block(&mut self) -> anyhow::Result<HandoffBlock> {
-        self.expect_contextual_ident("handoff")?;
-        let name = self.parse_optional_block_name()?;
-        self.expect(&Token::LBrace)?;
-
-        let mut from: Option<String> = None;
-        let mut to: Option<String> = None;
-        let mut context_mode: Option<HandoffContextMode> = None;
-        let mut prompt: Option<String> = None;
-        while *self.peek() != Token::RBrace {
-            let attr = self.expect_ident()?;
-            self.expect(&Token::Colon)?;
-            match attr.as_str() {
-                "from" => {
-                    if from.is_some() {
-                        anyhow::bail!("handoff: duplicate `from:` attribute");
-                    }
-                    from = Some(self.expect_agent_ident()?);
-                }
-                "to" => {
-                    if to.is_some() {
-                        anyhow::bail!("handoff: duplicate `to:` attribute");
-                    }
-                    to = Some(self.expect_agent_ident()?);
-                }
-                "context_mode" => {
-                    if context_mode.is_some() {
-                        anyhow::bail!("handoff: duplicate `context_mode:` attribute");
-                    }
-                    let v = self.expect_ident()?;
-                    context_mode = Some(match v.as_str() {
-                        "full" => HandoffContextMode::Full,
-                        "summary" => HandoffContextMode::Summary,
-                        "none" => HandoffContextMode::None,
-                        other => anyhow::bail!(
-                            "handoff context_mode: expected `full` / `summary` / `none`, got `{other}`"
-                        ),
-                    });
-                }
-                "prompt" => {
-                    if prompt.is_some() {
-                        anyhow::bail!("handoff: duplicate `prompt:` attribute");
-                    }
-                    prompt = Some(self.expect_string()?);
-                }
-                other => anyhow::bail!(
-                    "handoff: expected `from:` / `to:` / `context_mode:` / `prompt:`, got `{other}:`"
-                ),
-            }
-        }
-        self.expect(&Token::RBrace)?;
-        let from = from.ok_or_else(|| anyhow::anyhow!("handoff: missing `from:`"))?;
-        let to = to.ok_or_else(|| anyhow::anyhow!("handoff: missing `to:`"))?;
-        Ok(HandoffBlock {
-            name,
-            from,
-            to,
-            context_mode,
-            prompt,
-        })
-    }
-
     /// Consume an `Ident(s)` token whose value equals the expected
     /// string. Used for contextual keywords that are not reserved at
     /// the lexer level.
@@ -399,39 +272,8 @@ impl Parser {
         }
     }
 
-    /// Parse a `[A, B, "c/d"]` style list of agent names. Each entry
-    /// may be a bare identifier (short form) or a string literal
-    /// (full tenant/name form). The planner resolves each via
-    /// `AgentId::parse` later.
-    fn parse_agent_name_list(&mut self) -> anyhow::Result<Vec<String>> {
-        self.expect(&Token::LBracket)?;
-        let mut out: Vec<String> = Vec::new();
-        while *self.peek() != Token::RBracket {
-            out.push(self.expect_agent_ident()?);
-            match self.peek() {
-                Token::Comma => {
-                    self.advance();
-                }
-                Token::RBracket => {}
-                t => anyhow::bail!("agent list: expected `,` or `]`, got {t:?}"),
-            }
-        }
-        self.expect(&Token::RBracket)?;
-        Ok(out)
-    }
-
-    /// Agent reference in a block header: either a bare identifier
-    /// (`claude`) or a string literal (`"tenant/claude"`).
-    fn expect_agent_ident(&mut self) -> anyhow::Result<String> {
-        match self.peek() {
-            Token::StringLit(_) => self.expect_string(),
-            Token::Ident(_) => self.expect_ident(),
-            t => anyhow::bail!("expected agent name (bare ident or string), got {t:?}"),
-        }
-    }
-
     /// Expect a non-negative integer literal that fits in u32. Used
-    /// for `max_iters` / `max_turns`.
+    /// for `max_iters`.
     fn expect_u32(&mut self) -> anyhow::Result<u32> {
         match self.peek().clone() {
             Token::IntLit(n) => {
@@ -856,19 +698,6 @@ mod tests {
             _ => None,
         }
     }
-    fn as_chat(p: &EalProgram, idx: usize) -> Option<&ChatBlock> {
-        match &p.mission.statements[idx] {
-            Statement::Chat(c) => Some(c),
-            _ => None,
-        }
-    }
-    fn as_handoff(p: &EalProgram, idx: usize) -> Option<&HandoffBlock> {
-        match &p.mission.statements[idx] {
-            Statement::Handoff(h) => Some(h),
-            _ => None,
-        }
-    }
-
     #[test]
     fn loop_block_minimal_with_name() {
         let src = r#"
@@ -933,102 +762,50 @@ mod tests {
         assert!(err.contains("missing `verify`"), "got: {err}");
     }
 
+    /// RFC §10 removed `chat { }` and `handoff { }` as statement-
+    /// level block forms. A reader encountering those keywords
+    /// at statement start must get a clear error pointing at the
+    /// open-question doc, not a cryptic "expected `call` … got
+    /// Ident" from the call path.
     #[test]
-    fn chat_block_with_participants_and_topic() {
-        let src = r#"
-            mission "t" {
-                chat "triangulate" participants: [claude, codex] max_turns: 3 {
-                    topic: "What's wrong?"
-                    visibility: fan_out
-                }
-            }"#;
-        let p = parse(src).unwrap();
-        let c = as_chat(&p, 0).expect("chat at index 0");
-        assert_eq!(c.name.as_deref(), Some("triangulate"));
-        assert_eq!(c.participants, vec!["claude", "codex"]);
-        assert_eq!(c.max_turns, 3);
-        assert_eq!(c.topic.as_deref(), Some("What's wrong?"));
-        assert_eq!(c.visibility, Some(ChatVisibility::FanOut));
-    }
-
-    #[test]
-    fn chat_block_defaults_visibility_to_none_in_ast() {
-        // RFC §3.2 says fan_out is the default; the parser records
-        // the explicit presence only — the planner applies the
-        // default when building IR. Test documents that policy:
-        // AST visibility stays `None` until the planner.
+    fn chat_at_statement_start_is_rejected_with_rfc_pointer() {
         let src = r#"
             mission "t" {
                 chat participants: [a, b] max_turns: 1 {}
             }"#;
-        let p = parse(src).unwrap();
-        let c = as_chat(&p, 0).unwrap();
-        assert!(c.visibility.is_none());
-        assert!(c.topic.is_none());
-    }
-
-    #[test]
-    fn chat_block_rejects_duplicate_participants() {
-        let src = r#"
-            mission "t" {
-                chat participants: [a] participants: [b] max_turns: 1 {}
-            }"#;
         let err = parse(src).unwrap_err().to_string();
-        assert!(err.contains("duplicate `participants:`"), "got: {err}");
-    }
-
-    #[test]
-    fn chat_block_accepts_round_robin_visibility() {
-        let src = r#"
-            mission "t" {
-                chat participants: [a, b] max_turns: 1 {
-                    visibility: round_robin
-                }
-            }"#;
-        let p = parse(src).unwrap();
-        assert_eq!(
-            as_chat(&p, 0).unwrap().visibility,
-            Some(ChatVisibility::RoundRobin)
+        assert!(
+            err.contains("discuss-eal-block.md"),
+            "chat error must point at the open-question doc; got: {err}"
         );
     }
 
     #[test]
-    fn handoff_block_full_mode() {
+    fn handoff_at_statement_start_is_rejected_with_rfc_pointer() {
         let src = r#"
             mission "t" {
-                handoff {
-                    from: claude
-                    to: codex
-                    context_mode: summary
-                    prompt: "Finish the plan"
-                }
-            }"#;
-        let p = parse(src).unwrap();
-        let h = as_handoff(&p, 0).expect("handoff at index 0");
-        assert_eq!(h.from, "claude");
-        assert_eq!(h.to, "codex");
-        assert_eq!(h.context_mode, Some(HandoffContextMode::Summary));
-        assert_eq!(h.prompt.as_deref(), Some("Finish the plan"));
-    }
-
-    #[test]
-    fn handoff_block_accepts_none_context_mode() {
-        let src = r#"
-            mission "t" {
-                handoff { from: a to: b context_mode: none }
-            }"#;
-        let p = parse(src).unwrap();
-        let h = as_handoff(&p, 0).unwrap();
-        assert_eq!(h.context_mode, Some(HandoffContextMode::None));
-    }
-
-    #[test]
-    fn handoff_block_rejects_missing_from() {
-        let src = r#"
-            mission "t" {
-                handoff { to: b }
+                handoff { from: a to: b }
             }"#;
         let err = parse(src).unwrap_err().to_string();
-        assert!(err.contains("missing `from:`"), "got: {err}");
+        assert!(
+            err.contains("docs/rfc/eal-control-flow-v1.md")
+                || err.contains("eal-control-flow-v1"),
+            "handoff error must cite the approved RFC; got: {err}"
+        );
+    }
+
+    /// An agent literally named `chat` must still be invokable via
+    /// member-call form, even though `chat` at statement start is
+    /// reserved. This is the disambiguation `is_member_call_start`
+    /// promises; if it regresses, any agent registration using
+    /// `chat` as its logical name becomes unreachable.
+    #[test]
+    fn agent_named_chat_still_dispatches_via_member_call() {
+        let src = r#"
+            mission "t" {
+                let r = chat.ping(prompt: "hi")
+            }"#;
+        let p = parse(src).unwrap();
+        assert!(matches!(p.mission.statements[0], Statement::LetCall { .. }));
     }
 }

@@ -121,32 +121,29 @@ pub struct IrCall {
 }
 
 /// A step in a mission IR. v1 had only `Call`; v2 (PR-10, per
-/// `docs/rfc/eal-control-flow-v1.md`) adds `Loop`, `Chat`, and
-/// `Handoff` for declarative control flow.
+/// `docs/rfc/eal-control-flow-v1.md`) adds `Loop` for declarative
+/// iteration. `chat` and `handoff` block forms were proposed in the
+/// RFC's Draft revision but removed in the approved revision
+/// (RFC §10); this enum therefore carries two variants only.
 ///
 /// `#[serde(untagged)]` on the enum preserves the on-disk shape for
 /// Call-only missions — that JSON is indistinguishable from the pre-
 /// PR-10 flat struct, so existing `--emit-ir` consumers and the
 /// trace-parity fixture do not see a schema break unless the mission
-/// actually uses a block form.
+/// actually uses a `loop` block.
 ///
-/// **Read ordering**: serde tries variants top-down. `Loop` / `Chat`
-/// / `Handoff` carry required discriminator keys (`"loop"` /
-/// `"chat"` / `"handoff"` via `#[serde(rename = "...")]`) that a
-/// plain Call object never has, so disambiguation is structural and
-/// unambiguous.
+/// **Read ordering**: serde tries variants top-down. `Loop` carries
+/// a required discriminator key (`"loop"` via `#[serde(rename = "loop")]`)
+/// that a plain Call object never has, so disambiguation is
+/// structural and unambiguous.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum IrStep {
     /// `loop { body { … } verify { … } }` block. See RFC §3.1.
     Loop(IrLoop),
-    /// `chat { participants … }` block. See RFC §3.2.
-    Chat(IrChat),
-    /// `handoff { from … to … }` block. See RFC §3.3.
-    Handoff(IrHandoff),
     /// Flat ability invocation. The wire shape here matches pre-PR-10
-    /// v1. Listed LAST so the tagged variants above claim their
-    /// objects first during deserialization.
+    /// v1. Listed LAST so the tagged variant above claims its
+    /// object first during deserialization.
     Call(IrCall),
 }
 
@@ -158,14 +155,14 @@ impl IrStep {
     pub fn as_call(&self) -> Option<&IrCall> {
         match self {
             IrStep::Call(c) => Some(c),
-            _ => None,
+            IrStep::Loop(_) => None,
         }
     }
 
     /// Every `IrCall` reachable inside this step, in source order.
-    /// Block variants flatten their `body` / `verify` / participant
-    /// list into the iteration. A `Call` step yields exactly itself.
-    /// Useful for static analyses that need to walk every leaf call.
+    /// A `Loop` flattens its `body` and `verify` into the iteration.
+    /// A `Call` step yields exactly itself. Useful for static
+    /// analyses that need to walk every leaf call.
     pub fn walk_calls<'a>(&'a self, out: &mut Vec<&'a IrCall>) {
         match self {
             IrStep::Call(c) => out.push(c),
@@ -177,14 +174,6 @@ impl IrStep {
                     s.walk_calls(out);
                 }
             }
-            IrStep::Chat(_) | IrStep::Handoff(_) => {
-                // Chat and Handoff do not nest IrSteps — their
-                // participant / from-to shape is flat. Their
-                // dispatch-time call count is derived from
-                // `max_turns * participants` or the single handoff
-                // call respectively; callers that need a count use
-                // `static_call_bound` below.
-            }
         }
     }
 
@@ -193,9 +182,6 @@ impl IrStep {
     ///
     /// - `Call` contributes 1.
     /// - `Loop` contributes `max_iters * (|body-calls| + |verify-calls|)`.
-    /// - `Chat` contributes `max_turns * participants.len()`.
-    /// - `Handoff` contributes 1 (summary mode adds 1 for the
-    ///   implicit `from.summarize` call; see the impl).
     pub fn static_call_bound(&self) -> u64 {
         match self {
             IrStep::Call(_) => 1,
@@ -211,13 +197,6 @@ impl IrStep {
                 (l.max_iters as u64)
                     .saturating_mul((body_calls.len() + verify_calls.len()) as u64)
             }
-            IrStep::Chat(c) => {
-                (c.max_turns as u64).saturating_mul(c.participants.len() as u64)
-            }
-            IrStep::Handoff(h) => match h.context_mode {
-                HandoffContextMode::Summary => 2,
-                _ => 1,
-            },
         }
     }
 }
@@ -252,84 +231,13 @@ pub struct IrLoop {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IrLoopTag;
 
-/// Body of `IrStep::Chat`. RFC §3.2 governs the fields.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IrChat {
-    #[serde(rename = "chat")]
-    pub kind: IrChatTag,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    pub participants: Vec<AgentId>,
-    pub max_turns: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub topic: Option<String>,
-    #[serde(default)]
-    pub visibility: ChatVisibility,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub transcript_binding: Option<String>,
-}
-
-/// Singleton tag type — serializes to the literal string `"chat"`.
-/// Manual Serialize/Deserialize lives in the `tag_serde` module.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct IrChatTag;
-
-/// Body of `IrStep::Handoff`. RFC §3.3 governs the fields.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IrHandoff {
-    #[serde(rename = "handoff")]
-    pub kind: IrHandoffTag,
-    pub from: AgentId,
-    pub to: AgentId,
-    pub context_mode: HandoffContextMode,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompt: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result_binding: Option<String>,
-}
-
-/// Singleton tag type — serializes to the literal string `"handoff"`.
-/// Manual Serialize/Deserialize lives in the `tag_serde` module.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct IrHandoffTag;
-
-/// RFC §3.2 `visibility` enum. `fan_out` is the default (every
-/// participant sees every other participant's prior turns).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ChatVisibility {
-    #[default]
-    FanOut,
-    RoundRobin,
-}
-
-/// RFC §3.3 / §4.6 `context_mode` enum.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum HandoffContextMode {
-    /// Pack the source agent's last run response verbatim. No
-    /// implicit summarize call; the receiving agent gets the full
-    /// transcript body as `prompt:`.
-    Full,
-    /// Ask the source agent to summarize its own session via
-    /// `from.summarize(of: session)` before handoff. The summary
-    /// (bounded 4 KiB) becomes the receiving agent's `prompt:`.
-    #[default]
-    Summary,
-    /// No context packing — the receiving agent sees only the
-    /// static `prompt:` attribute declared on the handoff block.
-    None,
-}
-
-/// Serializer helpers for the singleton tag types. We want each of
-/// them to serialize to a fixed string on the wire (`"loop"` /
-/// `"chat"` / `"handoff"`) without manually implementing
-/// `Serialize`/`Deserialize` against every possible bikeshed. The
-/// trick: use `#[serde(with = "...")]` would be nicer, but
-/// hand-rolling once is cheaper and more auditable. These impls
-/// live below so they stay next to the types they serve.
+/// Serializer helper for the singleton `IrLoopTag`. Serializes to
+/// the fixed wire string `"loop"`; a different value on
+/// deserialization is a hard error. Chat / Handoff tag serdes lived
+/// here in the Draft-revision scaffold and were removed with their
+/// variants in the approved RFC.
 mod tag_serde {
-    use super::{IrChatTag, IrHandoffTag, IrLoopTag};
+    use super::IrLoopTag;
     use serde::de::{self, Visitor};
     use serde::{Deserializer, Serializer};
     use std::fmt;
@@ -369,8 +277,6 @@ mod tag_serde {
     }
 
     tag_impl!(IrLoopTag, "loop");
-    tag_impl!(IrChatTag, "chat");
-    tag_impl!(IrHandoffTag, "handoff");
 }
 
 fn default_ct() -> String {
@@ -406,4 +312,17 @@ pub struct PhaseRange {
 pub struct IrConstraints {
     pub max_parallel: i32,
     pub deadline_seconds: i64,
+}
+
+impl IrConstraints {
+    /// RFC §4.1 default cap on a mission's worst-case static call
+    /// count. Enforced at compile time by the planner. Held as a
+    /// `const fn` rather than a field so the bound is unambiguous
+    /// and does not need per-mission configuration — a mission that
+    /// genuinely needs >256 static calls is one that should be
+    /// split at the mission boundary, not one that should tune a
+    /// dial on a single mission.
+    pub const fn default_max_calls() -> u64 {
+        256
+    }
 }
