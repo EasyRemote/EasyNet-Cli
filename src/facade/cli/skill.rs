@@ -175,15 +175,13 @@ pub struct InstallRecord {
 pub struct SkillSource {
     pub kind: String,
     pub identifier: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Wire name is `ref`; `ref` is a Rust keyword so the field is
+    /// `ref_` here. Backend `types.SkillSource.Ref` decodes `"ref"`.
+    #[serde(rename = "ref", default, skip_serializing_if = "Option::is_none")]
     pub ref_: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subpath: Option<String>,
 }
-
-// Serde's field-renaming trick: `ref` is a Rust keyword so we store
-// it as `ref_` in Rust and expose it as `ref` in JSON via rename.
-// Using a manual impl keeps the struct readable.
 
 impl SkillSource {
     /// Render to the CLI-facing source URL.
@@ -202,30 +200,6 @@ impl SkillSource {
             }
         }
         s
-    }
-}
-
-// Custom (de)serialize for `ref` field name. Using serde's
-// `#[serde(rename = "ref")]` directly doesn't work because `ref_`
-// in the struct + rename to `ref` collides with the keyword in the
-// derive macro expansion. We wrap in a helper module.
-mod source_ref_serde {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    #[allow(dead_code)]
-    pub fn serialize<S: Serializer>(
-        v: &Option<String>,
-        s: S,
-    ) -> Result<S::Ok, S::Error> {
-        match v {
-            Some(x) => s.serialize_str(x),
-            None => s.serialize_none(),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
-        Option::<String>::deserialize(d)
     }
 }
 
@@ -732,34 +706,31 @@ fn format_bytes(n: u64) -> String {
 
 fn emit_install_result(args: &InstallArgs, rec: &InstallRecord) -> anyhow::Result<()> {
     if args.json {
+        // Wire shape is flat: the backend unmarshals into an
+        // anonymous struct with `name`/`content_hash`/`size_bytes`/
+        // `installed_at`/`ref` at top level (see installSkillLogic.go
+        // `cliOut` decoder), so we don't emit the nested `source`
+        // object here. The on-disk InstallRecord keeps `source`; this
+        // divergence is intentional.
         #[derive(Serialize)]
         struct MachineOut<'a> {
             name: &'a str,
             agent_id: &'a str,
-            source: &'a SkillSource,
             content_hash: &'a str,
             size_bytes: u64,
             installed_at: &'a str,
+            #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
             ref_: Option<&'a String>,
         }
         let m = MachineOut {
             name: &rec.name,
             agent_id: &rec.agent_id,
-            source: &rec.source,
             content_hash: &rec.content_hash,
             size_bytes: rec.size_bytes,
             installed_at: &rec.installed_at,
             ref_: rec.source.ref_.as_ref(),
         };
-        // Flatten `ref_` → `ref` on the wire; the backend expects it
-        // that way.
-        let mut v = serde_json::to_value(&m)?;
-        if let Some(obj) = v.as_object_mut() {
-            if let Some(r) = obj.remove("ref_") {
-                obj.insert("ref".to_string(), r);
-            }
-        }
-        println!("{}", serde_json::to_string(&v)?);
+        println!("{}", serde_json::to_string(&m)?);
     } else {
         output::success(&format!(
             "Installed skill '{}' on agent '{}'",
