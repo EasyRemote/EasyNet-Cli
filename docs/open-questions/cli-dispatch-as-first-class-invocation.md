@@ -57,6 +57,20 @@ Sketch — not a spec. Revisit when triggers fire:
 
 Estimated scope when unblocked: 6–8 sessions. Not pre-reserved in the plan; the task list opens it when the triggers fire.
 
+## Side issue discovered 2026-04-23: skill `content_hash` ≠ Q6 `ability_snapshot.content_hash`
+
+`src/facade/cli/skill.rs::hash_tree` computes the skill's `content_hash` as SHA-256 over the sorted file tree of the skill directory (code only). AXIOM §6.1 (Q6, added to AXIOM on the `rev10-signed-mcp-wip` branch) explicitly rules this out:
+
+> "A receipt whose snapshot is SHA-256 of code alone fails Q6, because the executed behaviour depends on schema and dependencies as well as code."
+
+Q6's `ability_snapshot.content_hash` must cover (a) skill implementation bytes, (b) the invoked ability's public input/output schema, and (c) external dependency references resolved at execution time. The CLI currently covers only (a).
+
+**Not a regression** — the field was introduced before Q6 was written. **Not a product bug today** — the CLI's `content_hash` is still a deterministic, reproducible identifier of the skill's code (proven by the `hash_tree_is_deterministic_across_platforms` unit test), useful for local integrity checks and `skill upgrade` diffs. It is just not the Q6 attestation.
+
+**Why not fix now:** Q6 defers manifest canonicalisation to a profile document (AXIOM §6.1 names RFC 002). Expanding the hash to (b)+(c) before that canonicalisation rule exists means either (i) picking a byte layout the profile later rejects, or (ii) shipping a hash that is Q6-shaped but not Q6-interoperable. Same failure mode as signing without frozen envelope bytes.
+
+**When to fix:** when RFC 002 (or equivalent) pins the canonical ability manifest bytes. The change is then: extend `hash_tree` inputs to include the canonical manifest bytes for every `abilities/*.ability.toml` declared by the skill plus the skill's external dependency manifest, and rename the current field to `skill_tree_hash` while introducing the compliant `ability_snapshot.content_hash`. One PR; needs coordination with `InstalledSkill` schema in EasyNet backend and Frontend.
+
 ## Why this is not rolled into PR-7's open questions
 
 `docs/open-questions/axon-invocation-receipt-link.md` asks a narrower question: should CLI timeline events carry the `invocation_id` from an Axon `Receipt`? That question presumes CLI dispatch has already moved to first-class Invocation (so a receipt exists to link to). This document tracks the prerequisite migration. When PR-9 lands, the receipt-link question resolves by construction — the CLI timeline is the Axon log.
@@ -66,4 +80,5 @@ Estimated scope when unblocked: 6–8 sessions. Not pre-reserved in the plan; th
 | Date       | Event                                                                                       |
 |------------|---------------------------------------------------------------------------------------------|
 | 2026-04-23 | Opened as part of PR-7 scope delimitation (α: PersistentLog adoption without signed envelope). |
+| 2026-04-23 | Added "Side issue" section: skill `content_hash` covers code only (a), not Q6's (a)+(b)+(c). Discovered during cross-repo audit — AXIOM Q5→Q6 was added on `rev10-signed-mcp-wip`. |
 | —          | Revisit: **trigger-based**, when conditions 1+2+3 above all hold.                           |
