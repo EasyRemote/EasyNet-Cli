@@ -106,6 +106,47 @@ member-call form, and references `docs/AGENT_IDENTITY.md`. Three
 named tests guard the invariant: `no_implicit_agent_fallback_*` in
 `cli/mission_runs.rs::tests`.
 
+## External narrative discipline (avoid overclaim)
+
+Anyone writing about EasyNet externally — papers, blog posts, talks,
+investor decks — MUST describe the following with the precise
+phrasings below. Three specific overclaims are easy to produce by
+accident and will be attacked on sight by a careful reviewer:
+
+1. **"Invocation is a protocol-level primitive."** Partially true.
+   AXIOM defines invocation as a signed seven-parameter object; the
+   Axon Rust SDK ships signed-path symbols (`call_mcp_tool_signed`,
+   `InvocationEnvelope`). The Cli and backend today call through the
+   *unsigned* MCP path (`call_mcp_tool_with_timeout`), so at protocol
+   wire level, invocations in this deployment are RPC-with-audit-trail,
+   not signed first-class invocations. Correct phrasing: "**We elevate
+   invocation to a protocol-level abstraction, partially realised in
+   the current system.**" Do not say: "Invocation is a protocol-level
+   primitive" without the qualifier.
+
+2. **"Axon is the execution runtime."** Not quite. Axon is an
+   orchestration + admission layer. The actual code that runs
+   abilities lives in CLI processes on devices (and in MCP servers
+   those CLIs spawn). Axon dispatches `ExecCommand` / `CallMCPTool`
+   to the device; the device's Cli process executes and returns.
+   Correct phrasing: "**Execution is delegated to CLI-hosted
+   runtimes, with Axon coordinating invocation lifecycle.**" Do not
+   say: "Axon is a unified execution runtime" — reviewers who read
+   `interop/mod.rs` will notice the delegation immediately.
+
+3. **"EasyNet includes a proof / reputation / store / ledger layer."**
+   Not yet. Those are Tier-2 services named in the ontology as
+   planned extensions; no shipped code implements them today. Correct
+   phrasing: "**Higher-layer services (proof, reputation, store,
+   arbiter, sandbox) are planned extensions enabled by the
+   protocol.**" Do not list them as system components.
+
+These corrections are small in wording, large in credibility. The
+single novel theoretical contribution (AXIOM's necessity argument
+that HTTP-family protocols cannot satisfy Q1–Q6 without a mandatory
+signed-byte profile) is load-bearing; overclaiming around it damages
+the claim that *is* true.
+
 ## Forbidden patterns
 
 The following are explicitly forbidden by the current architecture

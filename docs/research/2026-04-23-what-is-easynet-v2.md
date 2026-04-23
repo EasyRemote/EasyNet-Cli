@@ -151,17 +151,34 @@ modal outcome, and the author should plan for it.
 
 ### What it actually is (真正的先进性)
 
-**One genuinely novel thing.** The AXIOM reduction of agent
-communication to a signed seven-parameter invocation with
-structural necessity proof at
-`EasyNet-Axon/document/concepts/AXIOM.tex:226-425`. The claim that
-HTTP-family protocols cannot satisfy the six Q-invariants without
-a mandatory signed-byte profile, and that every such profile is
-isomorphic, **is a real theoretical contribution**. It is the
-kind of claim that, if survives review, becomes how people teach
-agent interop in five years. I am not hedging this — I have read
-the argument carefully and I believe it is correct in shape,
-which is all the author can know before peer review.
+**One genuinely novel thing — as a *theoretical claim*.** The
+AXIOM reduction of agent communication to a seven-parameter
+invocation `(caller, callee, ability, subject, nonce,
+causal_context, args) → receipt`, with a structural necessity
+argument at `EasyNet-Axon/document/concepts/AXIOM.tex:226-425`.
+The claim that HTTP-family protocols cannot satisfy the six
+Q-invariants without a mandatory signed-byte profile, and that
+every such profile is isomorphic, **is a real theoretical
+contribution if it survives peer review**. I have read the
+argument carefully and I believe it is correct in shape, which
+is all the author can know before external review.
+
+Honest qualifier on the implementation side: AXIOM describes
+invocation as a *signed* protocol primitive (caller Ed25519 over
+canonical envelope bytes, callee-signed receipts, chained causal
+context). The Axon Rust SDK ships the machinery
+(`call_mcp_tool_signed` + `InvocationEnvelope` + JCS canonical
+bytes). The Cli and backend currently invoke through the
+*unsigned* path (`call_mcp_tool_with_timeout`), so in today's
+deployment, invocation is a "signed protocol primitive in theory,
+unsigned-RPC-with-audit-trail in the shipped code." Five items
+in AXIOM are marked `\deferred` (subject_id field, nonce +
+causal_context envelope fields, AgentIdentity composite,
+DEFAULT_PROFILE.md, Tier-2 discovery agent URA); closing any one
+would constrain envelope bytes and make signed adoption risk-
+free. This is why the "novelty" lives in the theorem, not in the
+running system — when writing for external audiences, do not
+conflate the two.
 
 That's one thing. Everything else is good engineering, not
 novelty:
@@ -176,10 +193,17 @@ novelty:
   principles. The novelty is that EasyNet makes them
   cross-language-byte-compatible at protocol layer — useful,
   not ground-breaking.
-- `ability_snapshot.content_hash` on receipts: attestation of
-  execution via signed hash of canonical manifest. Sigstore did
-  this for artifacts; Rekor did it for logs. EasyNet applies it
-  to agent execution — correct application, not new mechanism.
+- `ability_snapshot.content_hash` on receipts (AXIOM §6.1 Q6):
+  attestation of execution via signed hash of canonical ability
+  manifest, covering code + I/O schema + external deps, recorded
+  at invocation-receipt time as a post-hoc callee signature.
+  Sigstore did this for artifacts; Rekor did it for logs. EasyNet
+  applies it to agent execution — correct application, not new
+  mechanism. Implementation status: AXIOM defines Q6; the CLI's
+  skill-install layer computes a `skill_tree_hash` (code only,
+  install-time) that is **not** Q6, flagged honestly in code
+  and in `docs/open-questions/cli-dispatch-as-first-class-invocation.md`.
+  Q6-compliant receipt emission waits on the signed-envelope path.
 
 ### What it should be (应该的先进性)
 
