@@ -157,22 +157,40 @@ pub fn run(args: SkillArgs) -> anyhow::Result<()> {
 /// aggregating). Keeping the two schemas isomorphic means
 /// `skill list --json` output is directly parseable by the backend
 /// without a translation shim.
+///
+/// Rust field names here are chosen for *semantic* honesty (see
+/// `skill_tree_hash` doc). Wire + on-disk JSON keeps the legacy
+/// `content_hash` name via `#[serde(rename)]` so that the backend
+/// (`types.InstalledSkill.ContentHash`), the Frontend (`content_hash`
+/// in `easynet-skills.ts`), and any pre-existing `install.json`
+/// files keep parsing without a coordinated three-repo rename.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallRecord {
     pub name: String,
     pub agent_id: String,
     pub source: SkillSource,
     /// SHA-256 over the sorted file tree of the installed skill
-    /// directory (skill code only, excluding our `.easynet/` metadata).
-    /// **Not yet Q6-compliant.** AXIOM §6.1 specifies
-    /// `ability_snapshot.content_hash` must cover (a) skill
-    /// implementation bytes, (b) the ability's input/output schema,
-    /// (c) external dependency references — and explicitly rejects
-    /// code-only hashes ("A receipt whose snapshot is SHA-256 of
-    /// code alone fails Q6"). We cover (a); expanding to (b)+(c)
-    /// waits on RFC 002's canonical manifest format. Tracked in
+    /// directory (all shipped files, excluding our `.easynet/`
+    /// metadata). Pins the on-disk skill code for upgrade diffs
+    /// and install-integrity checks.
+    ///
+    /// **This is NOT AXIOM §6.1 Q6 `ability_snapshot.content_hash`.**
+    /// Q6 requires the hash to cover (a) code + (b) the ability's
+    /// public input/output schema + (c) external dependency
+    /// references, and places the attestation at invocation-receipt
+    /// time as a post-hoc callee signature — not at install time.
+    /// Q6 says so explicitly: "the snapshot is a post-hoc attestation
+    /// by the callee, not an input contract from the caller". Even
+    /// if we expanded this hash to cover (a)+(b)+(c), it would still
+    /// be install-time, not invocation-time, and so would not satisfy
+    /// Q6 semantics. The correct Q6 implementation lives on the
+    /// signed-envelope path tracked in
     /// `docs/open-questions/cli-dispatch-as-first-class-invocation.md`.
-    pub content_hash: String,
+    ///
+    /// Wire name is `content_hash` — see the struct-level doc for
+    /// why we don't rename in JSON.
+    #[serde(rename = "content_hash")]
+    pub skill_tree_hash: String,
     pub size_bytes: u64,
     pub installed_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -276,9 +294,11 @@ fn run_install(args: InstallArgs) -> anyhow::Result<()> {
     }
     let _ = fs::remove_dir_all(&workdir);
 
-    // Compute content_hash over the installed skill dir (excluding
-    // our own .easynet/ metadata).
-    let content_hash = hash_tree(&target_dir, &[".easynet"])?;
+    // Compute the skill tree hash over the installed skill dir
+    // (excluding our own .easynet/ metadata). See
+    // `InstallRecord::skill_tree_hash` for why this is not the Q6
+    // `ability_snapshot.content_hash`.
+    let tree_digest = hash_tree(&target_dir, &[".easynet"])?;
     let size_bytes = tree_size(&target_dir, &[".easynet"])?;
 
     let record = InstallRecord {
@@ -290,7 +310,7 @@ fn run_install(args: InstallArgs) -> anyhow::Result<()> {
             ref_: Some(fetch_result.resolved_ref.clone()),
             subpath: effective.subpath.clone(),
         },
-        content_hash: format!("sha256:{content_hash}"),
+        skill_tree_hash: format!("sha256:{tree_digest}"),
         size_bytes,
         installed_at: chrono::Utc::now().to_rfc3339(),
         last_checked_at: Some(chrono::Utc::now().to_rfc3339()),
@@ -509,7 +529,7 @@ fn run_upgrade(args: UpgradeArgs) -> anyhow::Result<()> {
             copy_tree(&fetch.unpacked, &skill_dir)?;
             let _ = fs::remove_dir_all(&fetch.unpacked);
         }
-        let content_hash = hash_tree(&skill_dir, &[".easynet"])?;
+        let tree_digest = hash_tree(&skill_dir, &[".easynet"])?;
         let size_bytes = tree_size(&skill_dir, &[".easynet"])?;
         let rec = InstallRecord {
             name: existing.name.clone(),
@@ -520,7 +540,7 @@ fn run_upgrade(args: UpgradeArgs) -> anyhow::Result<()> {
                 ref_: Some(fetch.resolved_ref.clone()),
                 subpath: existing.source.subpath.clone(),
             },
-            content_hash: format!("sha256:{content_hash}"),
+            skill_tree_hash: format!("sha256:{tree_digest}"),
             size_bytes,
             installed_at: chrono::Utc::now().to_rfc3339(),
             last_checked_at: Some(chrono::Utc::now().to_rfc3339()),
@@ -735,7 +755,9 @@ fn emit_install_result(args: &InstallArgs, rec: &InstallRecord) -> anyhow::Resul
         let m = MachineOut {
             name: &rec.name,
             agent_id: &rec.agent_id,
-            content_hash: &rec.content_hash,
+            // Wire field name stays `content_hash` for back-compat;
+            // semantic name inside the CLI is `skill_tree_hash`.
+            content_hash: &rec.skill_tree_hash,
             size_bytes: rec.size_bytes,
             installed_at: &rec.installed_at,
             ref_: rec.source.ref_.as_ref(),
@@ -747,7 +769,7 @@ fn emit_install_result(args: &InstallArgs, rec: &InstallRecord) -> anyhow::Resul
             rec.name, rec.agent_id
         ));
         output::detail("source", &rec.source.to_url());
-        output::detail("hash", &rec.content_hash);
+        output::detail("hash", &rec.skill_tree_hash);
         output::detail("size", &format_bytes(rec.size_bytes));
     }
     Ok(())
@@ -764,7 +786,7 @@ fn emit_upgrade_result(args: &UpgradeArgs, rec: &InstallRecord) -> anyhow::Resul
             rec.agent_id,
             rec.source.ref_.as_deref().unwrap_or("latest"),
         ));
-        output::detail("hash", &rec.content_hash);
+        output::detail("hash", &rec.skill_tree_hash);
     }
     Ok(())
 }
@@ -914,5 +936,64 @@ mod tests {
         assert_eq!(format_bytes(1023), "1023B");
         assert_eq!(format_bytes(1024), "1.0KB");
         assert_eq!(format_bytes(1024 * 1024), "1.0MB");
+    }
+
+    // ─── wire compatibility for the Q6-motivated rename ──────────
+    //
+    // The Rust field is `skill_tree_hash` (semantic name — it is
+    // NOT AXIOM §6.1 Q6's `ability_snapshot.content_hash`). The
+    // JSON wire field stays `content_hash` because the backend's
+    // `types.InstalledSkill.ContentHash` and the Frontend's
+    // `content_hash` in `easynet-skills.ts` read that name. Losing
+    // the `#[serde(rename = "content_hash")]` silently breaks the
+    // whole cross-repo wire. These tests pin both directions.
+
+    #[test]
+    fn install_record_serialize_emits_content_hash_on_wire() {
+        let rec = InstallRecord {
+            name: "alpha".into(),
+            agent_id: "alice".into(),
+            source: SkillSource {
+                kind: "github".into(),
+                identifier: "a/b".into(),
+                ref_: Some("v1".into()),
+                subpath: None,
+            },
+            skill_tree_hash: "sha256:deadbeef".into(),
+            size_bytes: 42,
+            installed_at: "2026-04-23T00:00:00Z".into(),
+            last_checked_at: None,
+            upgrade_available: false,
+        };
+        let wire = serde_json::to_string(&rec).unwrap();
+        assert!(
+            wire.contains("\"content_hash\":\"sha256:deadbeef\""),
+            "wire must emit `content_hash` (not the Rust field name): {wire}"
+        );
+        assert!(
+            !wire.contains("skill_tree_hash"),
+            "wire must NOT leak the Rust field name: {wire}"
+        );
+    }
+
+    #[test]
+    fn install_record_deserialize_reads_content_hash_from_wire() {
+        // Simulates reading a record that came across the wire
+        // (or from an older install.json file). The wire name is
+        // `content_hash`; the Rust field is `skill_tree_hash`.
+        let wire = r#"{
+            "name": "alpha",
+            "agent_id": "alice",
+            "source": {
+                "kind": "github",
+                "identifier": "a/b"
+            },
+            "content_hash": "sha256:wire",
+            "size_bytes": 99,
+            "installed_at": "2026-04-23T00:00:00Z",
+            "upgrade_available": false
+        }"#;
+        let rec: InstallRecord = serde_json::from_str(wire).unwrap();
+        assert_eq!(rec.skill_tree_hash, "sha256:wire");
     }
 }
