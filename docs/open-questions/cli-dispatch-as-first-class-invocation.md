@@ -57,7 +57,11 @@ Sketch — not a spec. Revisit when triggers fire:
 
 Estimated scope when unblocked: 6–8 sessions. Not pre-reserved in the plan; the task list opens it when the triggers fire.
 
-## Side issue discovered 2026-04-23: skill `content_hash` ≠ Q6 `ability_snapshot.content_hash`
+## Side issue discovered + partially addressed 2026-04-23: skill hash is not Q6
+
+**Status:** Semantic drift acknowledged. Rust field renamed to `skill_tree_hash`. Q6 compliance still waits on signed-envelope work (see main body above).
+
+
 
 `src/facade/cli/skill.rs::hash_tree` computes the skill's `content_hash` as SHA-256 over the sorted file tree of the skill directory (code only). AXIOM §6.1 (Q6, added to AXIOM on the `rev10-signed-mcp-wip` branch) explicitly rules this out:
 
@@ -69,7 +73,12 @@ Q6's `ability_snapshot.content_hash` must cover (a) skill implementation bytes, 
 
 **Why not fix now:** Q6 defers manifest canonicalisation to a profile document (AXIOM §6.1 names RFC 002). Expanding the hash to (b)+(c) before that canonicalisation rule exists means either (i) picking a byte layout the profile later rejects, or (ii) shipping a hash that is Q6-shaped but not Q6-interoperable. Same failure mode as signing without frozen envelope bytes.
 
-**When to fix:** when RFC 002 (or equivalent) pins the canonical ability manifest bytes. The change is then: extend `hash_tree` inputs to include the canonical manifest bytes for every `abilities/*.ability.toml` declared by the skill plus the skill's external dependency manifest, and rename the current field to `skill_tree_hash` while introducing the compliant `ability_snapshot.content_hash`. One PR; needs coordination with `InstalledSkill` schema in EasyNet backend and Frontend.
+**Resolved in part 2026-04-23:** Rust field is now `skill_tree_hash`. Commits:
+
+- Cli `dd4b55b refactor(skill): rename InstallRecord.content_hash → skill_tree_hash` — Rust rename + serde-rename pin tests.
+- EasyNet `c21c927 docs(skill): correct content_hash semantics in backend + Frontend` — backend Go comment and Frontend TS doc corrected.
+
+**Still deferred:** the actual Q6 `ability_snapshot.content_hash`. That field lives on a signed terminal receipt (callee-side, post-hoc), not inside `InstalledSkill`, so a rename alone can't produce it. Waits on RFC 002 canonical manifest bytes + signed envelopes per the main body above.
 
 ## Why this is not rolled into PR-7's open questions
 
@@ -81,4 +90,5 @@ Q6's `ability_snapshot.content_hash` must cover (a) skill implementation bytes, 
 |------------|---------------------------------------------------------------------------------------------|
 | 2026-04-23 | Opened as part of PR-7 scope delimitation (α: PersistentLog adoption without signed envelope). |
 | 2026-04-23 | Added "Side issue" section: skill `content_hash` covers code only (a), not Q6's (a)+(b)+(c). Discovered during cross-repo audit — AXIOM Q5→Q6 was added on `rev10-signed-mcp-wip`. |
+| 2026-04-23 | Part-resolved: Rust field renamed `skill_tree_hash`; wire name unchanged (`content_hash`); backend + Frontend docs corrected. Q6 compliance still deferred. |
 | —          | Revisit: **trigger-based**, when conditions 1+2+3 above all hold.                           |
