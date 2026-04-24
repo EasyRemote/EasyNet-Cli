@@ -4,6 +4,16 @@ version = "1.17.1"
 edition = "2021"
 description = "EasyNet CLI + Hub MCP server + EAL (EasyNet Ability Language)."
 license = "Apache-2.0"
+build = "build.rs"
+
+[features]
+# Compile schemas/*.proto into Rust types via prost-build. Off by
+# default in v1 so developers without protoc installed can still
+# build the CLI; feature gate flips on once the proto-generated
+# types start being consumed. v10.5 R1 PR-DAEMON ships the .proto
+# files and the toolchain wiring, but does NOT flip any call site
+# to use the generated types (that is a follow-up commit / PR-SYS).
+proto-gen = ["dep:prost", "dep:prost-types", "dep:prost-build"]
 
 # v10.5 R1 (PR-DAEMON): split historical binary-only crate into a
 # library + multiple bins. The library target carries all the
@@ -70,3 +80,23 @@ uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Protobuf schema tooling — gated behind `proto-gen` feature.
+# Plan v10.5 R1 pins Protobuf as the single source of truth for
+# cross-language schemas (Client bindings in Go / Python / Node /
+# Swift / Rust / Java all generate from the same .proto files).
+# v1 ships the schema files + build script but leaves the call
+# sites on hand-rolled JSON structs; enabling `--features
+# proto-gen` makes prost-build compile schemas/*.proto into
+# target/build/proto/ types that follow-up commits consume.
+[dependencies.prost]
+version = "0.13"
+optional = true
+
+[dependencies.prost-types]
+version = "0.13"
+optional = true
+
+[build-dependencies.prost-build]
+version = "0.13"
+optional = true
