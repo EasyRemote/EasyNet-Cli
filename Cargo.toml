@@ -1,9 +1,38 @@
 [package]
 name = "easynet"
-version = "1.6.3"
+version = "1.17.1"
 edition = "2021"
 description = "EasyNet CLI + Hub MCP server + EAL (EasyNet Ability Language)."
 license = "Apache-2.0"
+
+# v10.5 R1 (PR-DAEMON): split historical binary-only crate into a
+# library + multiple bins. The library target carries all the
+# business modules and (future) C ABI exports; bins are thin entry
+# points linking the library.
+#
+#  - rlib      — Rust-to-Rust internal linking (bins in this crate)
+#  - cdylib    — shared library for C FFI callers (Go/Python/Swift/...)
+#  - staticlib — static archive for platforms preferring static link (iOS)
+#
+# `dylib` deliberately excluded: it carries Rust symbol mangling;
+# goal is a stable C ABI, not a stable Rust ABI.
+[lib]
+name = "easynet_cli"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "easynet"
+path = "src/bin/easynet.rs"
+
+# Long-running daemon. Owns pair/heartbeat/Axon-node-identity today;
+# follow-up PRs in the v10.5 R1 series (PR-SYS / PR-ATTACH / PR-PERM
+# / PR-DISCUSS / PR-SCHED / PR-LOOP) extend it with the local IPC
+# server, schedule tick, and system.* ability publisher. `easynet
+# self control start/stop/status` supervises this bin's PID.
+[[bin]]
+name = "easynet-daemon"
+path = "src/bin/easynet-daemon.rs"
 
 [dependencies]
 anyhow = "1"

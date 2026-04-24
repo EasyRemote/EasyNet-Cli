@@ -107,6 +107,13 @@ pub(crate) mod doctor;
 pub(crate) mod exec;
 pub(crate) mod groups;
 pub(crate) mod heartbeat;
+
+/// Public re-export of the daemon entry point so the `easynet-daemon`
+/// bin (in `src/bin/easynet-daemon.rs`) can call it without widening
+/// the `heartbeat` module to `pub`. Keeping the module `pub(crate)`
+/// is the correct default — only the daemon's main needs the entry
+/// point outside the crate.
+pub use heartbeat::run_daemon;
 pub(crate) mod invoke;
 pub(crate) mod join;
 pub(crate) mod mcp_install;
@@ -122,7 +129,24 @@ pub(crate) mod stop;
 pub(crate) mod test_support;
 pub(crate) mod think;
 
-use clap::Subcommand;
+use clap::{Parser, Subcommand};
+
+/// Top-level clap App parser for the `easynet` user-facing CLI.
+///
+/// Lives in the library so that both `src/bin/easynet.rs` (user CLI)
+/// and `facade::cli::completion::run::<App>(...)` can reference it
+/// without the bin having to re-export it upward. v10.5 R1 moved it
+/// here when the crate was split into library + multiple bins.
+#[derive(Debug, Parser)]
+#[command(
+    name = "easynet",
+    version,
+    about = "EasyNet — device management, remote execution, and real-time communication"
+)]
+pub struct App {
+    #[command(subcommand)]
+    pub command: Command,
+}
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
@@ -210,7 +234,7 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         // Cross-cutting
         Command::SelfCmd(args) => groups::selfcmd::run(args),
         Command::Doctor(args) => doctor::run(args),
-        Command::Completion(args) => completion::run::<crate::App>(args),
+        Command::Completion(args) => completion::run::<App>(args),
 
         // Internal
         Command::HeartbeatDaemon => heartbeat::run_daemon(),
