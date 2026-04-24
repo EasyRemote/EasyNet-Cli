@@ -1,6 +1,6 @@
 # Open Question — Does EasyNet-Cli need a local WebSocket control plane?
 
-**Status:** Open · **Trigger-based revisit** · **Owner:** Silan Hu · **Date:** 2026-04-23
+**Status:** Closed (trigger #3 fired; landed as local IPC, not WS) · **Owner:** Silan Hu · **Date:** 2026-04-23 · **Closed:** 2026-04-25
 
 ## Why this is an open question, not a plan item
 
@@ -76,3 +76,4 @@ But each of those lines is designing without a consumer today. Revisit when a co
 |------------|---------------------------------------------------------------------------------------|
 | 2026-04-23 | Former PR-6 task deleted (#8). Tier A absorbed into PR-7 (#7). Tier B opened here.   |
 | —          | Revisit: **trigger-based**, when any of the four customer signals above surfaces.    |
+| 2026-04-25 | **Closed.** Trigger #3 fired: EasyNet-Client desktop UI is the named local consumer. Landed as a Unix-Domain-Socket / Named-Pipe IPC control plane (length-prefixed JSON, filesystem-permission auth, no bearer token), **not** as a WebSocket server. Rationale captured in `docs/design/daemon-layers-v1.md` §"Local IPC interface — UDS/Named Pipe": client & daemon are same-host by construction, so TCP+WS has no advantage over UDS; filesystem permissions give stronger cross-user isolation than a bearer token; no port footprint. Triggers #1/#2/#4 status unchanged (no `easynet attach` verb on a foreground command, no mobile client in scope, no `permit` WS clause — `permit` still lives inside missions). |
