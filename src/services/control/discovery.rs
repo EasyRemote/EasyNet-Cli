@@ -1,0 +1,251 @@
+// EasyNet CLI — control.json discovery file
+// ===========================================
+//
+// File: src/services/control/discovery.rs
+// Description: The daemon writes a small JSON "discovery" file at a
+//              well-known path (`~/.easynet/control.json`) so the
+//              Client FFI library can find the IPC listener without
+//              hard-coding a socket path. The lib reads this file at
+//              `easynet_init()` time, dials the socket/pipe whose
+//              address is encoded inside, and completes a version
+//              handshake against the declared `supported_ipc_versions`
+//              range.
+//
+// File permissions
+// ----------------
+// `control.json` is written with mode `0600` on Unix (Windows sets
+// an ACL limiting read to the current user SID). Combined with the
+// socket itself being mode `0600`, this gives us the entire auth
+// model: another user on the same machine physically cannot read
+// the discovery file nor open the socket.
+//
+// Version negotiation
+// -------------------
+// `supported_ipc_versions` is a *range* `{ min, max }`, not a single
+// value. The lib also knows a range; it picks `min(max_both)` if
+// the ranges overlap and fails early with `VERSION_INCOMPATIBLE` if
+// they don't. This lets the daemon deprecate an old protocol
+// version without a flag-day (ship `{ min: 2, max: 3 }` to drop v1;
+// old libs fail at init with a clear message).
+//
+// v1 status
+// ---------
+// The types and the `read`/`write` helpers are in place with JSON
+// serde wiring. The `write` helper does not yet chmod the file to
+// 0600 — that is a follow-up commit in PR-DAEMON alongside the real
+// transport. Shipping the wire schema now keeps the Client FFI
+// implementation additive: its `read` call compiles today even
+// though `write` is not called yet.
+//
+// Author: Silan Hu <silan.hu@u.nus.edu>
+// Copyright (c) 2026 EasyNet. All rights reserved.
+
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+use crate::persistence::config::state_dir;
+
+/// Filename inside `~/.easynet/`.
+pub const CONTROL_JSON_FILENAME: &str = "control.json";
+
+/// v1 IPC protocol version — the one the daemon actually speaks
+/// today. The range emitted into `control.json` is `{ min: 1, max:
+/// 1 }`. Bumping this requires either (a) maintaining backward
+/// compat over the frames the prior version understood or (b)
+/// widening the range with a flag-day plan.
+pub const IPC_VERSION_V1: u16 = 1;
+
+/// Contents of `~/.easynet/control.json`. The layout is frozen as
+/// of PR-DAEMON; adding a field later must use `#[serde(default)]`
+/// so old libs ignore it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ControlDiscovery {
+    /// Absolute path to the Unix Domain Socket (Linux/macOS) or
+    /// pipe name (Windows). Exactly one is populated per platform.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socket_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pipe_name: Option<String>,
+
+    /// PID of the running daemon. Clients use this to detect stale
+    /// `control.json` files from a crashed daemon.
+    pub pid: u32,
+
+    /// Human-readable daemon version, from `CARGO_PKG_VERSION`.
+    pub daemon_version: String,
+
+    /// Inclusive IPC version range this daemon accepts. Client
+    /// libraries negotiate by intersecting their supported range
+    /// with this and picking the maximum.
+    pub supported_ipc_versions: IpcVersionRange,
+
+    /// Capability flags the daemon declares. Clients use these to
+    /// feature-gate without a second RPC round-trip (e.g. the lib
+    /// can refuse to attempt ability subscription if this daemon
+    /// has not yet advertised `ability_subscribe`).
+    #[serde(default)]
+    pub capability_flags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IpcVersionRange {
+    pub min: u16,
+    pub max: u16,
+}
+
+impl IpcVersionRange {
+    pub fn single(v: u16) -> Self {
+        Self { min: v, max: v }
+    }
+
+    /// Compute the overlap with another range. Returns None when
+    /// the ranges don't overlap; otherwise returns the intersection.
+    pub fn overlap(self, other: IpcVersionRange) -> Option<IpcVersionRange> {
+        let lo = self.min.max(other.min);
+        let hi = self.max.min(other.max);
+        if lo <= hi {
+            Some(IpcVersionRange { min: lo, max: hi })
+        } else {
+            None
+        }
+    }
+}
+
+/// Capability flags the v1 daemon advertises.
+pub mod flags {
+    /// The daemon accepts `Invoke` frames.
+    pub const ABILITY_INVOKE: &str = "ability_invoke";
+    /// The daemon accepts `Subscribe` + `Cancel` frames.
+    pub const ABILITY_SUBSCRIBE: &str = "ability_subscribe";
+    /// The daemon short-circuits local-target ability calls without
+    /// a round-trip through Axon.
+    pub const LOOPBACK: &str = "loopback";
+    /// The daemon understands the three v1 misfire policies (skip,
+    /// fire_once, catch_up_windowed) — see PR-SCHED.
+    pub const MISFIRE_POLICY_V1: &str = "misfire_policy_v1";
+}
+
+/// Default discovery path. Callers should prefer this over rolling
+/// their own join of `state_dir()`.
+pub fn default_path() -> PathBuf {
+    state_dir().join(CONTROL_JSON_FILENAME)
+}
+
+/// Read and parse `~/.easynet/control.json`. Returns `Ok(None)` if
+/// the file doesn't exist; returns `Err` for any parse failure (the
+/// file existing but unreadable is an operator-visible problem, not
+/// an initial-state).
+pub fn read(path: &Path) -> anyhow::Result<Option<ControlDiscovery>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(path)?;
+    let parsed: ControlDiscovery = serde_json::from_slice(&bytes)
+        .map_err(|e| anyhow::anyhow!("control.json at {} is malformed: {e}", path.display()))?;
+    Ok(Some(parsed))
+}
+
+/// Write `control.json`. v1 does not yet chmod to 0600; the
+/// follow-up PR-DAEMON commit lands the permission tightening
+/// alongside the UDS bind.
+pub fn write(path: &Path, disc: &ControlDiscovery) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let bytes = serde_json::to_vec_pretty(disc)?;
+    std::fs::write(path, bytes)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Produce a unique sandbox directory under the OS temp dir. We
+    /// avoid `tempfile` as a dependency — the rest of this crate
+    /// uses the same `env::temp_dir` + pid/time pattern (see
+    /// `persistence::config` tests) so a test failure doesn't point
+    /// at a missing dev-dep.
+    fn unique_tmp() -> PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "easynet-control-discovery-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    fn sample() -> ControlDiscovery {
+        ControlDiscovery {
+            socket_path: Some(PathBuf::from("/tmp/x.sock")),
+            pipe_name: None,
+            pid: 12345,
+            daemon_version: "1.17.1".into(),
+            supported_ipc_versions: IpcVersionRange::single(IPC_VERSION_V1),
+            capability_flags: vec![flags::ABILITY_INVOKE.into()],
+        }
+    }
+
+    #[test]
+    fn read_missing_file_returns_none_not_error() {
+        // A missing control.json is the normal "daemon not running"
+        // state; the client library must be able to distinguish it
+        // from a corrupt file. `None` vs `Err` is the type-level
+        // way we encode that.
+        let dir = unique_tmp();
+        let p = dir.join(CONTROL_JSON_FILENAME);
+        let got = read(&p).unwrap();
+        assert!(got.is_none());
+    }
+
+    #[test]
+    fn round_trip_preserves_version_range_and_flags() {
+        // Write then read must yield the same struct. Regression
+        // guard for a field-rename or serde-attr change that
+        // silently drops a field on one side.
+        let dir = unique_tmp();
+        let p = dir.join(CONTROL_JSON_FILENAME);
+        let disc = sample();
+        write(&p, &disc).unwrap();
+        let back = read(&p).unwrap().expect("file was written above");
+        assert_eq!(back.pid, disc.pid);
+        assert_eq!(back.supported_ipc_versions, disc.supported_ipc_versions);
+        assert_eq!(back.capability_flags, disc.capability_flags);
+    }
+
+    #[test]
+    fn version_overlap_picks_intersection() {
+        // A daemon that supports {1,3} and a lib that supports
+        // {2,4} must negotiate to {2,3}. The lib then picks the
+        // maximum common version (3). Pin both steps.
+        let daemon = IpcVersionRange { min: 1, max: 3 };
+        let lib = IpcVersionRange { min: 2, max: 4 };
+        let overlap = daemon.overlap(lib).unwrap();
+        assert_eq!(overlap, IpcVersionRange { min: 2, max: 3 });
+        assert_eq!(overlap.max, 3);
+    }
+
+    #[test]
+    fn disjoint_version_ranges_do_not_overlap() {
+        let a = IpcVersionRange { min: 1, max: 1 };
+        let b = IpcVersionRange { min: 2, max: 3 };
+        assert!(a.overlap(b).is_none());
+    }
+
+    #[test]
+    fn malformed_control_json_is_a_hard_error_not_silent_none() {
+        // If the file exists but the bytes aren't valid JSON, we
+        // surface the error — silently falling back to "daemon not
+        // running" would mask an operator-visible corruption.
+        let dir = unique_tmp();
+        let p = dir.join(CONTROL_JSON_FILENAME);
+        std::fs::write(&p, b"not json").unwrap();
+        let err = read(&p).unwrap_err();
+        assert!(format!("{err}").contains("malformed"));
+    }
+}
