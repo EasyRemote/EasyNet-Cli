@@ -68,14 +68,16 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use easynet_axon::tool_adapter::{AbilityToolAdapter, ToolSpec};
 use easynet_axon::AxonError;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
 
 use super::error::McpError;
-use crate::registry::agents::{AgentEntry, AgentRegistry};
-use crate::runtime::abilities::{abilities_for, AgentAbilitySpec};
+use crate::registry::agents::AgentRegistry;
+use crate::runtime::abilities::abilities_for;
+use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
 /// Narrow MCP-side wrapper over `AbilityToolAdapter` that exposes
 /// just the three operations `HubMcpProvider` needs. Owns the
@@ -86,52 +88,79 @@ use crate::runtime::abilities::{abilities_for, AgentAbilitySpec};
 /// `!Send + !Sync` by inheritance from `AbilityToolAdapter` —
 /// matches the MCP stdio loop's single-threaded shape.
 pub struct AgentDispatchAdapter {
+    /// SDK adapter retained for `tool_specs()`. After the chat-as-
+    /// ability collapse, the SDK adapter no longer drives dispatch —
+    /// it carries only the advertised `ToolSpec`s so federated MCP
+    /// peers see the full `{name, description, resource_uri,
+    /// parameters}` quadruple. Dispatch goes through `registry`
+    /// (see `handle`).
+    ///
+    /// We register a no-op handler under each spec name to satisfy
+    /// the SDK adapter's "register before execute" invariant; the
+    /// real handler body never runs because `handle` short-circuits
+    /// to the unified registry instead of calling `inner.execute`.
     inner: AbilityToolAdapter,
-    /// Pre-hashed set of tool names registered on `inner`. The SDK's
-    /// adapter has `specs(&self) -> &[ToolSpec]`, which would force
-    /// a linear scan on every call; a `HashSet<String>` lets the
-    /// "is this my tool" check stay O(1) even when a node hosts many
-    /// agents.
+    /// Pre-hashed set of tool names this adapter owns. O(1) "is
+    /// this mine?" check at dispatch time.
     names: HashSet<String>,
+    /// Unified ability registry. `handle` looks the chat handler up
+    /// here — same handler the Kernel routes through, same handler
+    /// the IPC proxy invokes for direct subscribers. Single source of
+    /// truth across all entry points (Kernel, MCP, IPC).
+    registry: Arc<LocalAbilityRegistry>,
 }
 
 impl AgentDispatchAdapter {
-    /// Build an adapter from a loaded `AgentRegistry`. Each agent's
-    /// abilities (as enumerated by `runtime::abilities::abilities_for`)
-    /// are registered as local-handler tools. A later
-    /// `HubMcpProvider::with_agent_abilities(adapter)` wires this
-    /// into the MCP dispatch path.
+    /// Build an adapter from a loaded `AgentRegistry` and the unified
+    /// `LocalAbilityRegistry` the daemon constructed at boot. Each
+    /// agent's abilities (as enumerated by
+    /// `runtime::abilities::abilities_for`) are registered as
+    /// `ToolSpec`s on the SDK adapter for advertising; dispatch goes
+    /// through the unified registry's chat handler.
     ///
-    /// `tenant_id` is propagated into the underlying SDK adapter so
-    /// any remote-fallback dispatch (not used today — every ability
-    /// we register is local) would scope correctly. Kept as a
-    /// parameter rather than a default because a future caller may
-    /// own multi-tenant provisioning.
-    pub fn build(registry: &AgentRegistry, tenant_id: impl Into<String>) -> Self {
+    /// Why we still register stub handlers on the SDK adapter:
+    /// `AbilityToolAdapter::register` is the only way to add a
+    /// `ToolSpec` to its internal table, and the table is what
+    /// `as_dicts()` reads to produce the advertised specs. We register
+    /// a stub closure that always errors `not_implemented`; the stub
+    /// is unreachable in practice because `handle` routes to the
+    /// unified registry before ever calling `inner.execute`.
+    ///
+    /// `tenant_id` is propagated into the underlying SDK adapter for
+    /// any future remote-fallback dispatch (none today). Kept as a
+    /// parameter for symmetry with the SDK's constructor.
+    pub fn build(
+        registry: &AgentRegistry,
+        local_registry: Arc<LocalAbilityRegistry>,
+        tenant_id: impl Into<String>,
+    ) -> Self {
         let mut inner = AbilityToolAdapter::new(tenant_id);
         let mut names = HashSet::new();
         for (agent_name, entry) in &registry.agents {
             for ability in abilities_for(agent_name, entry) {
                 let name = ability.name().to_string();
                 names.insert(name.clone());
-                register_ability_on(&mut inner, agent_name.clone(), entry.clone(), ability);
+                register_spec_only(&mut inner, &name, ability.description(), ability.parameters());
             }
+            // Keep the unused-import warning quiet for AgentEntry
+            // since a future per-agent-typed branch may want it.
+            let _ = entry;
         }
-        Self { inner, names }
+        Self {
+            inner,
+            names,
+            registry: local_registry,
+        }
     }
 
     /// Construct an empty adapter (no agents registered). Used by
     /// callers that want to wire the adapter seam unconditionally —
     /// a zero-registry adapter is a no-op at dispatch time.
-    ///
-    /// Kept as a distinct constructor rather than forcing the common
-    /// path through `build(&AgentRegistry::default(), ...)` so the
-    /// intent ("I know there are no agents and that is fine") is
-    /// visible at the call site.
     pub fn empty(tenant_id: impl Into<String>) -> Self {
         Self {
             inner: AbilityToolAdapter::new(tenant_id),
             names: HashSet::new(),
+            registry: Arc::new(LocalAbilityRegistry::new()),
         }
     }
 
@@ -158,160 +187,118 @@ impl AgentDispatchAdapter {
     ///   - `None` if `name` is not an agent ability on this adapter
     ///     (the provider should fall through to the network path).
     ///   - `Some(Ok(value))` on a successful local dispatch — `value`
-    ///     is the agent's response serialized by the handler.
+    ///     is the typed chat response (`reply`, `session_id`,
+    ///     `skills_loaded`, `tool_calls`, `context_used`, `usage`,
+    ///     `elapsed_ms`).
     ///   - `Some(Err(err))` on a dispatch that reached the handler
     ///     but failed there (invalid args, subprocess error, …).
     ///
-    /// `args` is the full tool-call argument map as received over
-    /// the MCP wire; validation (missing `prompt`, non-string
-    /// `context`, …) happens inside the handler and surfaces via
-    /// `McpError`.
+    /// Routing: the call resolves to the registered chat handler in
+    /// `LocalAbilityRegistry` — the same handler `Kernel::invoke` and
+    /// the IPC proxy reach. After this collapse, every entry point
+    /// (Kernel, MCP, IPC) shares one chat code path.
     pub fn handle(&self, name: &str, args: &Map<String, Value>) -> Option<Result<Value, McpError>> {
         if !self.names.contains(name) {
             return None;
         }
-        // Bundle the argument map into a JSON value for the SDK
-        // adapter. The SDK takes `serde_json::Value`; cloning the
-        // map keeps the caller's map untouched so it can be used
-        // for audit logging alongside the dispatch.
         let payload = Value::Object(args.clone());
-        Some(self.inner.execute(name, payload).map_err(axon_to_mcp))
+        // Look up the registered handler. If it's missing, that is a
+        // boot-order bug (we advertised a spec for a name with no
+        // handler) — surface it as a typed error rather than panic so
+        // a Client gets a structured failure.
+        match self.registry.get_rpc(name) {
+            Some(handler) => Some(handler(payload).map_err(anyhow_to_mcp)),
+            None => Some(Err(McpError::Internal(format!(
+                "agent ability `{name}` is advertised but no handler is registered \
+                 in LocalAbilityRegistry — boot ordering bug"
+            )))),
+        }
     }
 }
 
-/// Register one agent-ability closure on the SDK's adapter. Factored
-/// out so `build` doesn't nest a five-level closure — this level of
-/// separation is necessary because the closure captures owned
-/// `agent_name` and `entry` clones (the handler outlives the build
-/// scope).
-fn register_ability_on(
+/// Register a `ToolSpec` on the SDK adapter without binding a real
+/// handler. The handler is required by `AbilityToolAdapter::register`
+/// (no spec-only API), so we install a stub that returns
+/// `Unimplemented` if it is ever reached. In practice it cannot be
+/// reached because `AgentDispatchAdapter::handle` routes through the
+/// unified registry before the SDK adapter's `execute` ever runs.
+fn register_spec_only(
     adapter: &mut AbilityToolAdapter,
-    agent_name: String,
-    entry: AgentEntry,
-    ability: AgentAbilitySpec,
+    name: &str,
+    description: &str,
+    parameters: &Value,
 ) {
     let spec = ToolSpec {
-        name: ability.name().to_string(),
-        description: ability.description().to_string(),
-        resource_uri: format!("easynet:///r/org/{}", ability.name()),
-        parameters: ability.parameters().clone(),
+        name: name.to_string(),
+        description: description.to_string(),
+        resource_uri: format!("easynet:///r/org/{name}"),
+        parameters: parameters.clone(),
     };
-    let handler_name = ability.name().to_string();
+    let stub_name = name.to_string();
     adapter.register(
-        handler_name,
-        move |args: Value| -> Result<Value, AxonError> {
-            dispatch_chat(&agent_name, &entry, &args)
+        name.to_string(),
+        move |_args: Value| -> Result<Value, AxonError> {
+            // Reaching this branch is a routing bug: AgentDispatchAdapter
+            // should always handle dispatch through the unified
+            // LocalAbilityRegistry. If you are seeing this error in a
+            // log, the SDK adapter's `execute` was called directly
+            // (skipping `AgentDispatchAdapter::handle`) — fix the
+            // upstream call site.
+            Err(AxonError::Invocation(format!(
+                "agent ability `{stub_name}` dispatched through SDK stub handler; \
+                 should have routed via unified LocalAbilityRegistry"
+            )))
         },
         spec,
     );
 }
 
-/// The handler body shared by every registered ability. Extracted
-/// so it can be unit-tested with a fake dispatcher (see `tests`
-/// below — the real function calls into `runtime::dispatch`, which
-/// needs a real subprocess; we indirect through this shape so the
-/// argument-validation half is testable in isolation).
-fn dispatch_chat(
-    agent_name: &str,
-    entry: &AgentEntry,
-    args: &Value,
-) -> Result<Value, AxonError> {
-    let (prompt, context) = parse_chat_args(args)?;
-    let resp = crate::runtime::dispatch::send_external(agent_name, entry, prompt, context)
-        .map_err(|e| AxonError::Invocation(format!("agent `{agent_name}` dispatch failed: {e}")))?;
-    Ok(json!({
-        "ok": true,
-        "agent": resp.agent,
-        "content": resp.content,
-        "model": resp.model,
-        "duration_ms": resp.duration_ms,
-        "truncated": resp.truncated,
-    }))
-}
-
-/// Extract `(prompt, Option<context>)` from the tool-call argument
-/// value, with the validation the JSON-Schema on the tool spec
-/// advertises but the MCP runtime does not enforce. Making the
-/// checks explicit here means a handler error carries the typed
-/// `AxonError::Validation` variant the agent-side caller can
-/// branch on, instead of a cryptic string from deep inside
-/// `send_external`.
-fn parse_chat_args(args: &Value) -> Result<(&str, Option<&str>), AxonError> {
-    let obj = args.as_object().ok_or_else(|| {
-        AxonError::Validation("ability arguments must be a JSON object".into())
-    })?;
-    let prompt = match obj.get("prompt") {
-        Some(Value::String(s)) => s.as_str(),
-        Some(Value::Null) | None => {
-            return Err(AxonError::Validation(
-                "missing required string field `prompt`".into(),
-            ))
-        }
-        Some(other) => {
-            return Err(AxonError::Validation(format!(
-                "`prompt` must be a string, got {}",
-                json_type_name(other)
-            )))
-        }
-    };
-    let context = match obj.get("context") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(s)) => Some(s.as_str()),
-        Some(other) => {
-            return Err(AxonError::Validation(format!(
-                "`context` must be a string if present, got {}",
-                json_type_name(other)
-            )))
-        }
-    };
-    Ok((prompt, context))
-}
-
-/// Human-readable JSON type name for validation error messages.
-/// Lowercase (`"number"`, `"boolean"`, …) so error text reads
-/// naturally.
-fn json_type_name(v: &Value) -> &'static str {
-    match v {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
+/// `anyhow::Error` → `McpError` conversion for handler results.
+/// The unified chat handler returns `anyhow::Result` (the
+/// `LocalRpcHandler` contract); we project that to the typed MCP
+/// taxonomy by inspecting the message for known prefixes the chat
+/// handler emits. Everything else falls through to `Internal` so a
+/// surprise error still surfaces as a structured envelope rather
+/// than dropping detail.
+fn anyhow_to_mcp(err: anyhow::Error) -> McpError {
+    let msg = format!("{err}");
+    let lower = msg.to_lowercase();
+    // Argument-shape errors from `ChatArgs::parse` and the manifest
+    // schema validators all start with `chat:`; treat them as
+    // validation. The substring check is intentional rather than a
+    // typed match because crossing a crate boundary (anyhow erases
+    // the source type) is what `anyhow::Error` is for.
+    if lower.contains("chat:") || lower.contains("required") || lower.contains("must be") {
+        return McpError::Validation(msg);
     }
-}
-
-/// `AxonError` → `McpError` conversion specialized for the adapter
-/// boundary. We delegate to the typed `From<AxonError> for McpError`
-/// impl, which is the shared taxonomy pin between MCP and EAL
-/// surfaces (see `mcp/error.rs`). A bespoke match here would be a
-/// second source of truth for the mapping, which is exactly what
-/// the shared impl exists to prevent.
-fn axon_to_mcp(err: AxonError) -> McpError {
-    McpError::from(err)
+    if lower.contains("permission denied") {
+        return McpError::Validation(msg);
+    }
+    McpError::Internal(msg)
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
-    //! Tests cover four layers:
+    //! Tests cover three layers:
     //!
-    //! 1. Argument parsing (`parse_chat_args`) — exhaustive on valid /
-    //!    invalid shapes. The production handler builds its error
-    //!    messages from this, so any regression here mis-shapes every
-    //!    downstream agent-visible error.
-    //! 2. Adapter construction (`AgentDispatchAdapter::{build, empty}`)
-    //!    — ensures zero-agent and multi-agent registries produce the
-    //!    right `tool_specs` and `handle` behaviour.
-    //! 3. Dispatch routing (`handle`) — unknown tool returns `None`
-    //!    (provider must fall through), known tool reaches the handler,
-    //!    handler errors surface as `Some(Err(McpError))`.
-    //! 4. Name-collision regression — network tool names and ability
+    //! 1. Adapter construction (`AgentDispatchAdapter::{build, empty}`)
+    //!    — zero-agent and multi-agent registries produce the right
+    //!    `tool_specs` and `handle` behaviour.
+    //! 2. Dispatch routing (`handle`) — unknown tool returns `None`
+    //!    (provider must fall through), known tool reaches the unified
+    //!    chat handler in `LocalAbilityRegistry`, handler errors
+    //!    surface as `Some(Err(McpError))` with the right taxonomy.
+    //! 3. Name-collision regression — network tool names and ability
     //!    names cannot alias.
 
     use super::*;
     use crate::registry::agents::{AgentEntry, AgentRegistry, AgentType};
+    use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+    use crate::runtime::system::chat_ability;
+    use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn registry_with(agents: Vec<(&str, AgentType)>) -> AgentRegistry {
         let mut r = AgentRegistry::default();
@@ -321,103 +308,15 @@ mod tests {
         r
     }
 
-    // ── parse_chat_args ────────────────────────────────────────────────────
-
-    #[test]
-    fn parse_chat_args_accepts_prompt_only() {
-        let v = json!({"prompt": "hello"});
-        let (p, c) = parse_chat_args(&v).unwrap();
-        assert_eq!(p, "hello");
-        assert!(c.is_none());
-    }
-
-    #[test]
-    fn parse_chat_args_accepts_prompt_and_context() {
-        let v = json!({"prompt": "hello", "context": "be terse"});
-        let (p, c) = parse_chat_args(&v).unwrap();
-        assert_eq!(p, "hello");
-        assert_eq!(c, Some("be terse"));
-    }
-
-    #[test]
-    fn parse_chat_args_treats_null_context_as_absent() {
-        // JSON callers sometimes emit `{"context": null}` when a
-        // templated variable was left unset. That is semantically
-        // "no context", not "validation error".
-        let v = json!({"prompt": "hi", "context": null});
-        let (_, c) = parse_chat_args(&v).unwrap();
-        assert!(c.is_none());
-    }
-
-    #[test]
-    fn parse_chat_args_rejects_non_object_payload() {
-        for v in [json!(null), json!("string"), json!([1, 2, 3]), json!(42)] {
-            let err = parse_chat_args(&v).expect_err("must reject");
-            assert!(
-                matches!(err, AxonError::Validation(_)),
-                "non-object payload must be a Validation error, got {err:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn parse_chat_args_rejects_missing_prompt() {
-        let v = json!({"context": "lone context is insufficient"});
-        let err = parse_chat_args(&v).expect_err("must reject");
-        let msg = format!("{err}");
-        assert!(
-            msg.contains("prompt"),
-            "error must name the missing field, got {msg}"
-        );
-    }
-
-    #[test]
-    fn parse_chat_args_rejects_null_prompt() {
-        let v = json!({"prompt": null});
-        let err = parse_chat_args(&v).expect_err("must reject");
-        assert!(matches!(err, AxonError::Validation(_)));
-    }
-
-    #[test]
-    fn parse_chat_args_rejects_non_string_prompt() {
-        for v in [
-            json!({"prompt": 42}),
-            json!({"prompt": true}),
-            json!({"prompt": ["an", "array"]}),
-            json!({"prompt": {"nested": "object"}}),
-        ] {
-            let err = parse_chat_args(&v).expect_err("must reject");
-            let msg = format!("{err}");
-            assert!(
-                msg.contains("prompt"),
-                "error must name the offending field, got {msg}"
-            );
-            assert!(
-                msg.contains("string"),
-                "error must name the expected type, got {msg}"
-            );
-        }
-    }
-
-    #[test]
-    fn parse_chat_args_rejects_non_string_context() {
-        let v = json!({"prompt": "hello", "context": 42});
-        let err = parse_chat_args(&v).expect_err("must reject");
-        let msg = format!("{err}");
-        assert!(msg.contains("context"));
-        assert!(msg.contains("string"));
-    }
-
-    /// Edge case: `context` is an empty string. An empty preamble is a
-    /// legitimate caller choice (they wanted to pass an explicit "no
-    /// system prompt" signal through a templated variable that happened
-    /// to be empty), so it must be accepted — not conflated with `None`
-    /// or rejected as a validation error.
-    #[test]
-    fn parse_chat_args_accepts_empty_string_context() {
-        let v = json!({"prompt": "hi", "context": ""});
-        let (_, c) = parse_chat_args(&v).unwrap();
-        assert_eq!(c, Some(""));
+    /// Build a `LocalAbilityRegistry` with chat handlers registered
+    /// for the agents in `agent_registry`. Mirrors what
+    /// `system::build_registry_with_services` does at boot, but
+    /// without the other system abilities — keeps the test focused
+    /// on the chat path.
+    fn local_registry_with_chat(agent_registry: &AgentRegistry) -> Arc<LocalAbilityRegistry> {
+        let mut reg = LocalAbilityRegistry::new();
+        chat_ability::register(&mut reg, agent_registry, Arc::new(Vec::new()));
+        Arc::new(reg)
     }
 
     // ── AgentDispatchAdapter construction ──────────────────────────────────
@@ -438,7 +337,8 @@ mod tests {
             ("claude", AgentType::ClaudeCode),
             ("codex", AgentType::Codex),
         ]);
-        let a = AgentDispatchAdapter::build(&registry, "tenant-x");
+        let local = local_registry_with_chat(&registry);
+        let a = AgentDispatchAdapter::build(&registry, local, "tenant-x");
         assert!(!a.is_empty());
         let specs = a.tool_specs();
         assert_eq!(specs.len(), 2, "two agents → two abilities");
@@ -456,7 +356,8 @@ mod tests {
         // parameters}`. Pin the keys so an SDK-side refactor of
         // `as_dicts` can't silently drop one.
         let registry = registry_with(vec![("claude", AgentType::ClaudeCode)]);
-        let a = AgentDispatchAdapter::build(&registry, "tenant-x");
+        let local = local_registry_with_chat(&registry);
+        let a = AgentDispatchAdapter::build(&registry, local, "tenant-x");
         let spec = &a.tool_specs()[0];
         for key in ["name", "description", "resource_uri", "parameters"] {
             assert!(
@@ -471,7 +372,8 @@ mod tests {
     #[test]
     fn handle_returns_none_for_unknown_tool() {
         let registry = registry_with(vec![("claude", AgentType::ClaudeCode)]);
-        let a = AgentDispatchAdapter::build(&registry, "tenant-x");
+        let local = local_registry_with_chat(&registry);
+        let a = AgentDispatchAdapter::build(&registry, local, "tenant-x");
         // Classic network tool names — must fall through.
         for unknown in [
             "invoke_ability",
@@ -489,16 +391,74 @@ mod tests {
 
     #[test]
     fn handle_routes_known_tool_to_validation_path_on_bad_args() {
-        // Missing `prompt` arrives at the handler, fails the validation
-        // inside `dispatch_chat`, and surfaces as a Validation McpError.
-        // The whole point of this test is to prove the routing reached
-        // the handler (Some(Err(...))), not None (fall-through).
+        // Missing `prompt` arrives at the registered chat handler,
+        // fails the ChatArgs validation, and surfaces as a Validation
+        // McpError. Proves the routing reached the handler — not None
+        // (fall-through), not the deleted local dispatch_chat.
         let registry = registry_with(vec![("claude", AgentType::ClaudeCode)]);
-        let a = AgentDispatchAdapter::build(&registry, "tenant-x");
+        let local = local_registry_with_chat(&registry);
+        let a = AgentDispatchAdapter::build(&registry, local, "tenant-x");
         let outcome = a.handle("claude.chat", &Map::new()).expect("known tool must return Some");
         let err = outcome.expect_err("missing prompt must fail validation");
         assert_eq!(err.error_code(), "validation_error");
         assert!(err.message().contains("prompt"));
+    }
+
+    /// Phase 4 fix: prove that MCP `handle()` calls the same
+    /// `LocalAbilityRegistry` handler that `Kernel::invoke` would
+    /// hit. Replace the registered chat handler with a counter-bumping
+    /// fake; route a call through `AgentDispatchAdapter::handle`;
+    /// assert the fake fired exactly once.
+    #[test]
+    fn handle_routes_through_unified_local_registry() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_for_handler = Arc::clone(&counter);
+        let mut reg = LocalAbilityRegistry::new();
+        reg.register_rpc(
+            "alice.chat",
+            Arc::new(move |_args: Value| {
+                counter_for_handler.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({"reply": "fake-from-mcp"}))
+            }),
+        );
+        // Build agent registry with `alice` so the adapter advertises
+        // the spec; build adapter with our hand-rolled registry so
+        // the handler is the fake.
+        let agents = registry_with(vec![("alice", AgentType::ClaudeCode)]);
+        let adapter = AgentDispatchAdapter::build(&agents, Arc::new(reg), "tenant-x");
+
+        let mut args = Map::new();
+        args.insert("prompt".into(), json!("hi from mcp"));
+        let outcome = adapter
+            .handle("alice.chat", &args)
+            .expect("alice.chat is registered");
+        let value = outcome.expect("fake handler must succeed");
+        assert_eq!(value.get("reply").and_then(Value::as_str), Some("fake-from-mcp"));
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "unified handler must fire exactly once per MCP dispatch"
+        );
+    }
+
+    /// Boot-ordering bug detector: if the agent registry advertises a
+    /// chat ability but the LocalAbilityRegistry has no handler for
+    /// it, `handle` must surface a typed Internal error rather than
+    /// panic or fall through silently.
+    #[test]
+    fn handle_surfaces_internal_error_when_handler_missing() {
+        let agents = registry_with(vec![("alice", AgentType::ClaudeCode)]);
+        // Pass an empty LocalAbilityRegistry — handler missing on
+        // purpose to simulate the boot-ordering bug.
+        let empty_local = Arc::new(LocalAbilityRegistry::new());
+        let adapter = AgentDispatchAdapter::build(&agents, empty_local, "tenant-x");
+
+        let mut args = Map::new();
+        args.insert("prompt".into(), json!("hi"));
+        let outcome = adapter.handle("alice.chat", &args).expect("name is in `names`");
+        let err = outcome.expect_err("missing handler must surface typed error");
+        assert_eq!(err.error_code(), "internal_error");
+        assert!(err.message().contains("boot ordering"));
     }
 
     // ── Name-collision regression ──────────────────────────────────────────
@@ -515,7 +475,8 @@ mod tests {
             ("claude", AgentType::ClaudeCode),
             ("codex", AgentType::Codex),
         ]);
-        let a = AgentDispatchAdapter::build(&registry, "tenant-x");
+        let local = local_registry_with_chat(&registry);
+        let a = AgentDispatchAdapter::build(&registry, local, "tenant-x");
         for spec in a.tool_specs() {
             let name = spec["name"].as_str().unwrap();
             assert!(
@@ -526,13 +487,19 @@ mod tests {
         }
     }
 
-    /// Regression: `AxonError::Validation` from the handler must map
-    /// to `McpError::Validation` (error_code `validation_error`).
-    /// Pinned because the round-trip is the visible contract an
-    /// agent-side caller branches on.
+    /// Regression: an `anyhow::Error` whose message names the chat
+    /// validation prefix maps to `McpError::Validation`. Pinned
+    /// because the round-trip is the visible contract an agent-side
+    /// caller branches on.
     #[test]
-    fn axon_validation_round_trips_to_mcp_validation() {
-        let err = axon_to_mcp(AxonError::Validation("bad".into()));
+    fn anyhow_chat_prefix_maps_to_validation() {
+        let err = anyhow_to_mcp(anyhow::anyhow!("chat: `prompt` (string) required"));
         assert_eq!(err.error_code(), "validation_error");
+    }
+
+    #[test]
+    fn anyhow_unrelated_error_falls_through_to_internal() {
+        let err = anyhow_to_mcp(anyhow::anyhow!("subprocess crashed with signal SIGSEGV"));
+        assert_eq!(err.error_code(), "internal_error");
     }
 }
