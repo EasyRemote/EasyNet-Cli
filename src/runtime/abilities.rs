@@ -84,7 +84,10 @@
 
 use serde_json::{json, Value};
 
+use crate::core::ability_spec::{default_chat_manifest, AbilityManifest};
+use crate::persistence::config;
 use crate::registry::agents::AgentEntry;
+use crate::runtime::directory::{AgentDirectory, ABILITY_MANIFEST_SUFFIX};
 
 /// One ability exposed by a locally-installed agent.
 ///
@@ -203,36 +206,144 @@ impl AgentAbilitySpec {
 
 /// Build the ability list for one agent entry.
 ///
-/// Today this returns a single `<agent>.chat` ability with the
-/// schema `{ prompt: string, context?: string }`. `context` is
-/// optional because the incoming remote caller may or may not want
-/// to stitch a system prefix — either is honest for an external
-/// invocation.
+/// Source of truth: the `<agent-root>/abilities/*.ability.toml`
+/// files on disk. This function:
 ///
-/// Adding a second ability (e.g. `voice`, `exec`) is a matter of
-/// pushing a new spec into the returned Vec and — if its semantics
-/// depend on the agent type — branching on `entry.agent_type()`.
-/// Consumers iterate the `Vec`, so a new ability automatically
-/// appears in discovery and dispatch simultaneously.
-pub fn abilities_for(agent_name: &str, _entry: &AgentEntry) -> Vec<AgentAbilitySpec> {
-    // The unused `_entry` parameter is intentional: today every agent
-    // type offers the same single ability, so we ignore the type tag,
-    // but keeping the parameter in the signature makes per-type
-    // branching trivial to add without a second-pass API change. The
-    // underscore silences the unused-variable lint without claiming
-    // the parameter is dead — a future per-type branch will inspect
-    // `entry.agent_type()` here.
+/// 1. Resolves the agent's root from `entry.root_path` (v2 rows
+///    always carry it; legacy v1 rows go through migration on load).
+/// 2. Lazily seeds `abilities/chat.ability.toml` from
+///    `default_chat_manifest()` when missing, so an agent that was
+///    created before the chat-as-real-ability refactor (or one that
+///    had its manifest deleted by hand) still surfaces a chat tool
+///    after the next read. The seeding is best-effort — if the disk
+///    is read-only or the user removed `abilities/` entirely, we
+///    fall back to the in-memory synth path below rather than fail
+///    discovery.
+/// 3. Reads every manifest in the abilities directory and converts
+///    each to an `AgentAbilitySpec` whose qualified name is
+///    `<agent>.<verb>`. The manifest is the protocol-level source
+///    for `name`, `description`, and `input_schema`.
+///
+/// Fallback synthesis. When the agent has no `root_path` (in-memory
+/// `AgentEntry::new` constructed for tests, or a registry row that
+/// somehow escaped migration) we synthesize a single `<agent>.chat`
+/// spec inline. The fallback exists so unit tests in this crate that
+/// build entries without touching disk continue to compile and
+/// behave as before; production rows always go through the
+/// manifest path.
+pub fn abilities_for(agent_name: &str, entry: &AgentEntry) -> Vec<AgentAbilitySpec> {
+    if let Some(specs) = abilities_from_manifests(agent_name, entry) {
+        return specs;
+    }
+    // Fallback: keep the legacy single-chat synth so callers that
+    // build an `AgentEntry` in-memory (tests, fixtures) still see a
+    // chat ability without setting up a fake disk root.
     vec![chat_ability(agent_name).expect(
         "chat_ability produces a well-formed spec for any validated agent name \
          (validate_agent_name guarantees the `<agent>.chat` shape is legal)",
     )]
 }
 
+/// Read the agent's on-disk ability manifests and convert them to
+/// network-visible specs. Returns `None` when there is no usable
+/// `root_path` or when the directory is unreadable — signaling the
+/// caller to fall back to the synth path. Returns `Some(vec)` with
+/// at least one spec on the happy path (lazy seeding guarantees
+/// `chat.ability.toml` exists after the call).
+///
+/// Errors during seeding or enumeration are logged via `tracing` and
+/// converted to `None`, never panic. Discovery failing closed (no
+/// abilities) is preferable to discovery failing loud (panic) in a
+/// long-lived daemon where one bad manifest should not take the
+/// whole roster offline; the operator sees the manifest error in
+/// `agent abilities <name>` (which keeps fail-loud semantics).
+fn abilities_from_manifests(agent_name: &str, entry: &AgentEntry) -> Option<Vec<AgentAbilitySpec>> {
+    let root = entry.root_path.as_ref()?;
+    if !root.is_dir() {
+        return None;
+    }
+    let dir = match AgentDirectory::open(root) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!(
+                "abilities_for[{agent_name}]: failed to open agent directory at {}: {e}; falling back to synth",
+                root.display()
+            );
+            return None;
+        }
+    };
+    if let Err(e) = ensure_chat_manifest(&dir) {
+        eprintln!(
+            "abilities_for[{agent_name}]: failed to seed default chat manifest: {e}; continuing with on-disk manifests"
+        );
+        // Don't bail — the user may have intentionally removed
+        // chat.ability.toml. Surface what's left.
+    }
+    let manifests = match dir.list_ability_manifests() {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!(
+                "abilities_for[{agent_name}]: failed to enumerate ability manifests: {e}; falling back to synth"
+            );
+            return None;
+        }
+    };
+    let mut specs = Vec::with_capacity(manifests.len());
+    for manifest in manifests {
+        match AgentAbilitySpec::new(
+            manifest.qualified_name(agent_name),
+            manifest.description().to_string(),
+            manifest.input_schema().clone(),
+        ) {
+            Ok(spec) => specs.push(spec),
+            Err(e) => {
+                eprintln!(
+                    "abilities_for[{agent_name}]: dropping malformed manifest {:?}: {e}",
+                    manifest.name()
+                );
+            }
+        }
+    }
+    Some(specs)
+}
+
+/// Lazy-write `abilities/chat.ability.toml` if it is missing. This
+/// is the migration seam for agents created before chat became a
+/// first-class manifest-backed ability — and a self-heal for an
+/// operator who deleted the file by accident. The write goes through
+/// `config::atomic_write` for crash-safety.
+///
+/// No-op when the file already exists (the operator's edits win).
+/// Returns `Err` only on filesystem failure; "already exists" is the
+/// expected steady state and not surfaced.
+fn ensure_chat_manifest(dir: &AgentDirectory) -> anyhow::Result<()> {
+    let abilities_dir = dir.abilities_dir();
+    let chat_path = abilities_dir.join(format!("chat{ABILITY_MANIFEST_SUFFIX}"));
+    if chat_path.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&abilities_dir).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to create abilities directory {}: {e}",
+            abilities_dir.display()
+        )
+    })?;
+    let manifest: AbilityManifest = default_chat_manifest();
+    let body = manifest.to_toml_string()?;
+    config::atomic_write(&chat_path, body.as_bytes())?;
+    eprintln!(
+        "seeded default chat ability manifest at {} (lazy migration)",
+        chat_path.display()
+    );
+    Ok(())
+}
+
 /// Build the `<agent>.chat` spec for a given agent name.
 ///
-/// Factored out so tests can exercise just the shape of the chat
-/// spec — and so a hypothetical future "abilities differ by type"
-/// variant does not have to open-code the chat spec again.
+/// Used as the in-memory fallback when no on-disk root is available
+/// (test fixtures, transient `AgentEntry::new` calls). The shape
+/// matches `default_chat_manifest()` so production (manifest-driven)
+/// and fallback (synth) paths advertise the same wire schema.
 fn chat_ability(agent_name: &str) -> Result<AgentAbilitySpec, &'static str> {
     let name = format!("{agent_name}.chat");
     let description = format!(
@@ -526,5 +637,133 @@ mod tests {
              would publish different tool specs via discovery vs. via \
              abilities/chat.ability.toml."
         );
+    }
+
+    // ── manifest-driven enumeration ─────────────────────────────────────────
+    //
+    // The tests above exercise the in-memory fallback path that stays alive
+    // for tests/fixtures with no `root_path`. The tests below exercise the
+    // production path: a real agent root on disk, manifest-sourced specs,
+    // lazy migration when chat.ability.toml is missing.
+
+    use crate::core::ability_spec::AbilityManifest;
+    use crate::runtime::directory::{AgentDirectory, Location, ABILITY_MANIFEST_SUFFIX};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Build a fresh agent root + AgentEntry pointing at it. Returns
+    /// the temp root and the entry so the test can poke at both.
+    /// The temp root is leaked rather than tracked through a `TempDir`
+    /// guard because these tests don't share state across cases and
+    /// clutter from a few abandoned temp dirs is acceptable noise.
+    fn make_agent_on_disk(name: &str) -> (std::path::PathBuf, AgentEntry) {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let root = std::env::temp_dir()
+            .join("easynet-abilities-test")
+            .join(format!("{name}-{n}-{}", std::process::id()));
+        // Clean any leftover from a previous identical run.
+        let _ = std::fs::remove_dir_all(&root);
+        let spec = crate::core::agent_spec::AgentSpec::new(
+            name.to_string(),
+            crate::core::agent_spec::RuntimeKind::ClaudeCode,
+        );
+        AgentDirectory::create(&Location::Local { root: root.clone() }, spec)
+            .expect("create agent directory");
+        let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        entry.root_path = Some(root.clone());
+        (root, entry)
+    }
+
+    #[test]
+    fn manifest_driven_path_returns_chat_from_seeded_manifest() {
+        // After `AgentDirectory::create`, `abilities/chat.ability.toml`
+        // exists. `abilities_for` must read it — not synthesize.
+        let (_root, entry) = make_agent_on_disk("alice");
+        let abilities = abilities_for("alice", &entry);
+        assert_eq!(abilities.len(), 1);
+        assert_eq!(abilities[0].name(), "alice.chat");
+    }
+
+    #[test]
+    fn manifest_driven_path_lazy_seeds_missing_chat_manifest() {
+        // Simulate an agent that pre-dates the chat-as-manifest seed
+        // (or whose file an operator deleted): remove the manifest,
+        // call abilities_for, expect lazy migration to recreate it.
+        let (root, entry) = make_agent_on_disk("bob");
+        let chat_path = root
+            .join("abilities")
+            .join(format!("chat{ABILITY_MANIFEST_SUFFIX}"));
+        std::fs::remove_file(&chat_path).expect("remove chat manifest");
+        assert!(!chat_path.exists(), "precondition: file removed");
+        let abilities = abilities_for("bob", &entry);
+        assert!(
+            chat_path.exists(),
+            "lazy migration must recreate chat.ability.toml"
+        );
+        assert_eq!(abilities.len(), 1);
+        assert_eq!(abilities[0].name(), "bob.chat");
+    }
+
+    #[test]
+    fn manifest_driven_path_surfaces_extra_abilities_from_manifests() {
+        // Drop a second manifest into the abilities directory and
+        // verify it shows up alongside chat. This is the forward-
+        // compatibility property the whole refactor exists for: an
+        // operator who adds `voice.ability.toml` should see it
+        // surface in discovery without recompiling the daemon.
+        let (root, entry) = make_agent_on_disk("carol");
+        let voice = AbilityManifest::new(
+            "voice",
+            "Speak a synthesized response.",
+            json!({"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}),
+        )
+        .expect("build voice manifest");
+        let voice_path = root
+            .join("abilities")
+            .join(format!("voice{ABILITY_MANIFEST_SUFFIX}"));
+        std::fs::write(&voice_path, voice.to_toml_string().unwrap())
+            .expect("write voice manifest");
+        let names: Vec<String> = abilities_for("carol", &entry)
+            .into_iter()
+            .map(|s| s.name().to_string())
+            .collect();
+        assert!(names.contains(&"carol.chat".to_string()), "names = {names:?}");
+        assert!(names.contains(&"carol.voice".to_string()), "names = {names:?}");
+    }
+
+    #[test]
+    fn manifest_driven_path_uses_manifest_description_not_hardcoded() {
+        // The whole point of "chat is a real ability" is that an
+        // operator can edit description / schema without touching
+        // code. Pin that the manifest's description wins over the
+        // hardcoded fallback's interpolated string.
+        let (root, entry) = make_agent_on_disk("dave");
+        let edited = AbilityManifest::new(
+            "chat",
+            "Edited blurb that the operator typed by hand.",
+            json!({"type": "object", "properties": {"prompt": {"type": "string"}}, "required": ["prompt"], "additionalProperties": false}),
+        )
+        .unwrap();
+        let chat_path = root
+            .join("abilities")
+            .join(format!("chat{ABILITY_MANIFEST_SUFFIX}"));
+        std::fs::write(&chat_path, edited.to_toml_string().unwrap()).unwrap();
+        let abilities = abilities_for("dave", &entry);
+        assert_eq!(abilities.len(), 1);
+        assert_eq!(
+            abilities[0].description(),
+            "Edited blurb that the operator typed by hand."
+        );
+    }
+
+    #[test]
+    fn entry_without_root_path_falls_back_to_synth() {
+        // The fallback path is what keeps fixture-only tests
+        // (entry built via `AgentEntry::new`) compiling. Pin it.
+        let entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        assert!(entry.root_path.is_none(), "precondition");
+        let abilities = abilities_for("ephemeral", &entry);
+        assert_eq!(abilities.len(), 1);
+        assert_eq!(abilities[0].name(), "ephemeral.chat");
     }
 }
