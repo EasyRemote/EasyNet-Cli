@@ -34,6 +34,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub mod discuss_ability;
+pub mod loop_ability;
 pub mod permission_ability;
 pub mod ping;
 pub mod schedule_ability;
@@ -43,6 +44,7 @@ use std::sync::Arc;
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 use crate::runtime::execution::discuss::DiscussService;
+use crate::runtime::execution::loop_instance::LoopService;
 use crate::runtime::execution::permission::PermissionService;
 use crate::runtime::execution::schedule::ScheduleService;
 use crate::runtime::execution::session::SessionService;
@@ -59,6 +61,7 @@ pub fn build_registry() -> Arc<LocalAbilityRegistry> {
         Arc::new(PermissionService::new()),
         Arc::new(DiscussService::new()),
         Arc::new(ScheduleService::new()),
+        Arc::new(LoopService::new()),
     )
 }
 
@@ -70,6 +73,7 @@ pub fn build_registry_with_services(
     perms: Arc<PermissionService>,
     discuss: Arc<DiscussService>,
     schedule: Arc<ScheduleService>,
+    loop_svc: Arc<LoopService>,
 ) -> Arc<LocalAbilityRegistry> {
     let mut reg = LocalAbilityRegistry::new();
     ping::register(&mut reg);
@@ -77,6 +81,7 @@ pub fn build_registry_with_services(
     permission_ability::register(&mut reg, perms);
     discuss_ability::register(&mut reg, discuss);
     schedule_ability::register(&mut reg, schedule);
+    loop_ability::register(&mut reg, loop_svc);
     Arc::new(reg)
 }
 
