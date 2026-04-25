@@ -753,4 +753,68 @@ mod tests {
         let b = uuid_like();
         assert_ne!(a, b);
     }
+
+    // ── Phase 4 unification: Kernel::invoke routes through registry ────
+    //
+    // The test below replaces the chat handler with a fake one that
+    // bumps a counter, then calls Kernel::invoke with `<agent>.chat`.
+    // Asserting the counter advanced is what proves: (a) the kernel
+    // looked up the ability in the dispatcher's registry rather than
+    // running a hardcoded `<agent>.chat` branch, and (b) the registered
+    // handler is the one that fires — there is no second code path
+    // hiding inside Kernel.
+
+    #[test]
+    fn kernel_invoke_routes_chat_through_registered_handler() {
+        use crate::runtime::ability_dispatch::{AbilityDispatcher, LocalAbilityRegistry};
+        use crate::runtime::gateway::NoopGateway;
+        use crate::runtime::invocation::{CausalContext, Invocation};
+        use crate::runtime::invocation_target::CallMode;
+        use crate::runtime::kernel::Kernel;
+        use crate::runtime::kernel_api::KernelApi;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+
+        // Fake chat handler — increments a counter on every call so we
+        // can prove the registered handler is the one that fired.
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_for_handler = Arc::clone(&counter);
+        let mut reg = LocalAbilityRegistry::new();
+        reg.register_rpc(
+            "alice.chat",
+            Arc::new(move |_args: Value| {
+                counter_for_handler.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({"reply": "fake"}))
+            }),
+        );
+        let dispatcher = Arc::new(AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway)));
+
+        let kernel = Kernel::new(Arc::new(NoopGateway));
+        kernel.set_dispatcher(dispatcher);
+
+        let _ = CallMode::Rpc; // keep the import live in case future
+                                 // versions of the test branch on mode.
+
+        let inv = Invocation {
+            caller: "easynet://nodes/a".into(),
+            callee: "easynet://nodes/a".into(),
+            ability: "alice.chat".into(),
+            subject: "easynet://nodes/a".into(),
+            nonce_hex: "aa".repeat(16),
+            causal_context: CausalContext::Null,
+            args: json!({"prompt": "hi"}),
+            caller_signature: None,
+        };
+        let receipt = kernel.invoke(inv).expect("invoke ok");
+        assert!(matches!(
+            receipt.terminal,
+            crate::runtime::invocation::TerminalState::Succeeded
+        ));
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "kernel must have called the registered <agent>.chat handler exactly once"
+        );
+    }
 }

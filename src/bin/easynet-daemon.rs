@@ -159,6 +159,15 @@ async fn main() -> anyhow::Result<()> {
     let gateway: Arc<dyn GatewayApi> = Arc::new(NoopGateway::new());
     let dispatcher = AbilityDispatcher::new(registry, gateway);
 
+    // Hand the dispatcher back to the Kernel so Kernel::invoke can
+    // route ability dispatch through the same registry the proxy
+    // uses. This closes the loop from Phase 4 of the chat-as-ability
+    // refactor: Kernel::invoke no longer special-cases <agent>.chat
+    // — it delegates to whichever handler the registry has under
+    // that name.
+    let dispatcher_for_kernel = Arc::new(dispatcher.clone());
+    kernel.set_dispatcher(dispatcher_for_kernel);
+
     // Stage-1 resolver. Local node id from EASYNET_NODE_ID env (set
     // by the supervisor from credentials.json) or "self" as a
     // harness default; controls loopback-vs-remote routing.
