@@ -385,41 +385,60 @@ fn handler(
 ///   `{"type": "error", "message": "...", "session_id": "..."}`
 ///       Terminal error frame. Mutually exclusive with `done`.
 ///
+/// Streaming topology
+/// -------------------
+/// The handler returns `StreamSource::SnapshotThenLive`:
+///
+///   * Snapshot half — `[session]` plus an optional `[loaded]` frame
+///     when skills/context were enumerated. These are computable
+///     synchronously without invoking the LLM, so the subscriber
+///     receives them on the very first poll without waiting for the
+///     subprocess to spawn.
+///
+///   * Live half — a `broadcast::Receiver<Value>` whose `Sender`
+///     is held by a dedicated OS thread that runs the synchronous
+///     dispatch path. When the LLM finishes the thread emits a
+///     terminal frame (`done` on success, `error` on failure) and
+///     drops the sender; the IPC frame-forwarder sees the channel
+///     close and emits its own `Terminal` frame with `done`.
+///
+/// Why a dedicated thread (not tokio::spawn)
+/// -----------------------------------------
+/// `dispatch::send_external_with_overrides` is fully synchronous —
+/// it spawns a child process and uses `Read`/`Write` blocking calls.
+/// Putting it on a tokio worker would either monopolise the worker
+/// for the duration of the LLM call or require `block_in_place`
+/// inside an already-async producer. A standalone OS thread keeps
+/// the cost predictable and matches the pattern the FFI layer uses
+/// for its subscription callbacks (commit 94eba05).
+///
 /// `delta` and `tool_call_*` frames are reserved for when the
-/// driver gains async token streaming and live tool-call hooks;
-/// today's synchronous driver cannot emit them, so the handler
-/// jumps from `loaded` straight to `done`.
+/// driver gains async token streaming. Today's sync driver cannot
+/// emit them mid-flight; the topology above is the seam that lets
+/// a future driver upgrade plug them in by passing the same
+/// `Sender` into the driver's per-line callback.
 fn stream_handler(
     agent_name: &str,
     entry: &AgentEntry,
     loaders: &[Arc<dyn ContextLoader>],
     args: Value,
 ) -> anyhow::Result<StreamSource> {
-    // Run the same body as the RPC handler. We deliberately do NOT
-    // share the RPC code path because the RPC handler returns the
-    // structured response directly while the stream handler must
-    // wrap it in framed events. Both call dispatch::send_external
-    // through the same shape, so behaviour stays in sync.
+    use tokio::sync::broadcast;
+
     let started = Instant::now();
     let parsed = ChatArgs::parse(&args)?;
-    // The stream entry point cannot honour `stream: false` either —
-    // the caller picked the subscribe RPC by entering this function
-    // at all. Document the redundancy for the operator who reads
-    // the timeline; do not bail.
     let session_id = parsed
         .session_id
         .clone()
         .unwrap_or_else(|| format!("chat-{}", uuid_like()));
 
-    let mut frames: Vec<Value> = Vec::with_capacity(3);
-    frames.push(json!({
+    // ── Snapshot half: session + loaded frames ─────────────────────────
+    let mut snapshot: Vec<Value> = Vec::with_capacity(2);
+    snapshot.push(json!({
         "type": "session",
         "session_id": session_id,
     }));
 
-    // Context loaders + skills enumeration — same logic as the RPC
-    // handler, but the result goes into a `loaded` frame instead of
-    // a return-value field.
     let mut context_used: Vec<Value> = Vec::new();
     let mut loaded_chunks: Vec<String> = Vec::new();
     if !matches!(parsed.context_loaders.mode, SelectionMode::None) {
@@ -453,7 +472,7 @@ fn stream_handler(
     }
     let skills_loaded = enumerate_skills(agent_name, entry, &parsed.skills);
     if !skills_loaded.is_empty() || !context_used.is_empty() {
-        frames.push(json!({
+        snapshot.push(json!({
             "type": "loaded",
             "skills_loaded": skills_loaded.clone(),
             "context_used": context_used.clone(),
@@ -467,77 +486,86 @@ fn stream_handler(
         (false, Some(c)) => Some(format!("{}\n\n{c}", loaded_chunks.join("\n\n"))),
     };
 
-    // The dispatch call. Same overrides-aware variant as the RPC
-    // handler so a streaming chat call honors `driver.model` too.
-    // Non-tokio context here because stream handlers are constructed
-    // inside the synchronous registry path; if a future async
-    // dispatcher lands, the same block_in_place dance from the RPC
-    // handler applies.
-    let driver_overrides = Some(&parsed.driver);
-    let response_result = if tokio::runtime::Handle::try_current().is_ok() {
-        tokio::task::block_in_place(|| {
-            crate::runtime::dispatch::send_external_with_overrides(
-                agent_name,
-                entry,
-                &parsed.prompt,
-                composed_context.as_deref(),
-                driver_overrides,
-            )
-        })
-    } else {
-        crate::runtime::dispatch::send_external_with_overrides(
-            agent_name,
-            entry,
-            &parsed.prompt,
-            composed_context.as_deref(),
-            driver_overrides,
-        )
-    };
+    // ── Live half: spawn dispatch thread, return receiver ──────────────
+    //
+    // Channel capacity is intentionally small (8) — chat dispatch
+    // emits at most a handful of frames per turn (session + loaded
+    // already in snapshot, then done|error). A larger buffer would
+    // just delay the moment a slow subscriber's lag surfaces as a
+    // `RecvError::Lagged`.
+    let (tx, rx) = broadcast::channel::<Value>(8);
 
-    match response_result {
-        Ok(resp) => {
+    // Move every cloneable into the thread closure. AgentEntry is
+    // Clone (registry uses it that way). Skills_loaded/context_used
+    // were computed above and are needed for the `done` frame.
+    let agent_name_owned = agent_name.to_string();
+    let entry_owned = entry.clone();
+    let prompt_owned = parsed.prompt.clone();
+    let driver_owned = parsed.driver.clone();
+    let session_id_for_thread = session_id.clone();
+    let skills_loaded_for_thread = skills_loaded;
+    let context_used_for_thread = context_used;
+    let composed_context_owned = composed_context;
+
+    std::thread::Builder::new()
+        .name(format!("chat-stream-{agent_name}"))
+        .spawn(move || {
+            let result = crate::runtime::dispatch::send_external_with_overrides(
+                &agent_name_owned,
+                &entry_owned,
+                &prompt_owned,
+                composed_context_owned.as_deref(),
+                Some(&driver_owned),
+            );
             let elapsed_ms = started.elapsed().as_millis() as u64;
-            let usage = resp.usage.as_ref().map(|u| {
-                json!({
-                    "input_tokens": u.input_tokens,
-                    "output_tokens": u.output_tokens,
-                    "model": resp.model.clone(),
-                })
-            });
-            // Same projection as the RPC handler — see comment there
-            // for why elapsed_ms per-call is 0 today.
-            let tool_calls_json: Vec<Value> = resp
-                .tool_calls
-                .iter()
-                .map(|tc| {
+            let frame = match result {
+                Ok(resp) => {
+                    let usage = resp.usage.as_ref().map(|u| {
+                        json!({
+                            "input_tokens": u.input_tokens,
+                            "output_tokens": u.output_tokens,
+                            "model": resp.model.clone(),
+                        })
+                    });
+                    let tool_calls_json: Vec<Value> = resp
+                        .tool_calls
+                        .iter()
+                        .map(|tc| {
+                            json!({
+                                "ability": tc.ability,
+                                "args": tc.args,
+                                "elapsed_ms": 0,
+                            })
+                        })
+                        .collect();
                     json!({
-                        "ability": tc.ability,
-                        "args": tc.args,
-                        "elapsed_ms": 0,
+                        "type": "done",
+                        "session_id": session_id_for_thread,
+                        "reply": resp.content,
+                        "skills_loaded": skills_loaded_for_thread,
+                        "tool_calls": tool_calls_json,
+                        "context_used": context_used_for_thread,
+                        "usage": usage.unwrap_or(Value::Null),
+                        "elapsed_ms": elapsed_ms,
                     })
-                })
-                .collect();
-            frames.push(json!({
-                "type": "done",
-                "session_id": session_id,
-                "reply": resp.content,
-                "skills_loaded": skills_loaded,
-                "tool_calls": tool_calls_json,
-                "context_used": context_used,
-                "usage": usage.unwrap_or(Value::Null),
-                "elapsed_ms": elapsed_ms,
-            }));
-        }
-        Err(e) => {
-            frames.push(json!({
-                "type": "error",
-                "session_id": session_id,
-                "message": format!("{e}"),
-            }));
-        }
-    }
+                }
+                Err(e) => json!({
+                    "type": "error",
+                    "session_id": session_id_for_thread,
+                    "message": format!("{e}"),
+                }),
+            };
+            // SendError when the receiver was dropped (subscriber
+            // disconnected before the LLM finished). That is fine —
+            // we just discard the terminal frame; the IPC server's
+            // forwarder already noticed the cancel.
+            let _ = tx.send(frame);
+            // tx drops at end of scope → broadcast channel closes →
+            // IPC forwarder emits Terminal{done}.
+        })
+        .map_err(|e| anyhow::anyhow!("chat stream: failed to spawn dispatch thread: {e}"))?;
 
-    Ok(StreamSource::Snapshot(frames))
+    Ok(StreamSource::SnapshotThenLive(snapshot, rx))
 }
 
 /// Build the list of ability names that would be exposed as tools to
@@ -807,6 +835,59 @@ mod tests {
         // No collateral registrations.
         assert!(reg.get_rpc("alice.voice").is_none());
         assert!(reg.get_rpc("system.chat").is_none());
+    }
+
+    #[test]
+    fn stream_handler_returns_snapshot_then_live_with_session_frame_first() {
+        // Topology pin: the stream handler must return a
+        // SnapshotThenLive whose snapshot starts with the `session`
+        // frame. A subscriber connecting before the LLM finishes
+        // sees this frame on the very first poll, not after the
+        // LLM completes (which would defeat the streaming refactor).
+        //
+        // We pass an entry with no on-disk root so the spawned
+        // dispatch thread will fail fast (no mission context, no
+        // workspace). The Live half then carries an `error` frame
+        // — fine for this test, which only asserts the snapshot.
+        let entry = entry();
+        let result = stream_handler(
+            "alice",
+            &entry,
+            &[],
+            json!({"prompt": "hi"}),
+        );
+        let source = result.expect("snapshot construction must succeed even if dispatch will fail");
+        match source {
+            StreamSource::SnapshotThenLive(snapshot, _rx) => {
+                assert!(!snapshot.is_empty(), "snapshot must not be empty");
+                let first = &snapshot[0];
+                assert_eq!(first.get("type").and_then(Value::as_str), Some("session"));
+                assert!(first.get("session_id").is_some());
+            }
+            other => panic!("expected SnapshotThenLive, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stream_handler_snapshot_includes_loaded_frame_when_skills_or_context_present() {
+        // The `loaded` frame is optional — emitted only when there
+        // is content to surface. With no agent skills (in-memory
+        // entry → fallback chat-only) and no loaders, the snapshot
+        // is just `[session]`. Pin that here so a future patch
+        // that always emits `loaded` (which would mislead the
+        // subscriber when both lists are empty) trips the test.
+        let entry = entry();
+        let source = stream_handler("alice", &entry, &[], json!({"prompt": "hi"})).unwrap();
+        match source {
+            StreamSource::SnapshotThenLive(snapshot, _rx) => {
+                assert_eq!(
+                    snapshot.len(),
+                    1,
+                    "no skills + no loaders → snapshot is just [session]; got {snapshot:?}"
+                );
+            }
+            other => panic!("expected SnapshotThenLive, got {other:?}"),
+        }
     }
 
     #[test]
