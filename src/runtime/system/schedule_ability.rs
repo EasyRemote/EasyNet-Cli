@@ -68,6 +68,12 @@ fn add_handler(svc: &ScheduleService, args: Value) -> anyhow::Result<Value> {
         .get("catch_up_window_secs")
         .and_then(Value::as_u64);
     let enabled = args.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+    // Optional prompt template — see ScheduleEntry::prompt for
+    // supported template variables.
+    let prompt = args
+        .get("prompt")
+        .and_then(Value::as_str)
+        .map(String::from);
     let entry = ScheduleEntry {
         id: ScheduleId::new(""),
         tenant: TenantId::default_v1(),
@@ -77,6 +83,7 @@ fn add_handler(svc: &ScheduleService, args: Value) -> anyhow::Result<Value> {
         misfire_policy,
         catch_up_window_secs,
         enabled,
+        prompt,
     };
     let id = svc.add(entry)?;
     Ok(json!({ "schedule_id": id.as_str() }))
@@ -126,7 +133,11 @@ pub fn add_input_schema() -> Value {
                 "enum": ["skip", "fire_once", "catch_up_windowed"]
             },
             "catch_up_window_secs": {"type": "integer", "minimum": 0},
-            "enabled": {"type": "boolean"}
+            "enabled": {"type": "boolean"},
+            "prompt": {
+                "type": "string",
+                "description": "Prompt template sent to target_agent at fire time. Supports {{schedule_id}}, {{fire_at_iso}}, {{catch_up}}, {{target_agent}}."
+            }
         },
         "additionalProperties": false
     })

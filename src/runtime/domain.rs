@@ -172,6 +172,22 @@ pub struct ScheduleEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catch_up_window_secs: Option<u64>,
     pub enabled: bool,
+    /// Optional prompt template the tick runner sends to the target
+    /// agent at fire time. `None` means "fire as a heartbeat" — the
+    /// tick runner uses a synthesised "Scheduled fire of …"
+    /// placeholder. With a template the cron carries real work.
+    ///
+    /// Template variables (substituted before dispatch):
+    ///   * `{{schedule_id}}`  — the schedule's id
+    ///   * `{{fire_at_iso}}`  — ISO-8601 RFC3339 fire timestamp
+    ///   * `{{catch_up}}`     — "true" / "false"
+    ///   * `{{target_agent}}` — agent name verbatim
+    ///
+    /// Variables are case-sensitive. Unknown `{{...}}` tokens are
+    /// left untouched (no template error) so a typo surfaces as
+    /// odd-looking prompt text rather than a hard fail at fire time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
 }
 
 /// Misfire policy frozen at plan v10.1 so a production misread
