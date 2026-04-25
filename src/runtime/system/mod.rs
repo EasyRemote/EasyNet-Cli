@@ -34,6 +34,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub mod chat_ability;
+pub mod context_loaders;
 pub mod discuss_ability;
 pub mod loop_ability;
 pub mod permission_ability;
