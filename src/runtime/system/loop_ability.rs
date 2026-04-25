@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::{LocalAbilityRegistry, StreamSource};
 use crate::runtime::domain::{AgentId, LoopId};
 use crate::runtime::execution::loop_instance::LoopService;
 
@@ -88,17 +88,20 @@ fn status_handler(svc: &LoopService, args: Value) -> anyhow::Result<Value> {
     }
 }
 
-fn subscribe_handler(svc: &LoopService, args: Value) -> anyhow::Result<Vec<Value>> {
+fn subscribe_handler(svc: &LoopService, args: Value) -> anyhow::Result<StreamSource> {
     let id = args
         .get("loop_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("loop.subscribe: `loop_id` required"))?;
-    // v1 emits a one-shot snapshot. PR-INVOCATION-EXEC-UNITY adds
-    // the live per-iteration frames (IterStarted / BodyFrame /
-    // VerifyFrame / Terminal) when the controller fires.
+    // v1 emits a one-shot snapshot. The loop controller (which
+    // would push live IterStarted / BodyFrame / VerifyFrame /
+    // Terminal frames into a per-loop broadcast) is its own
+    // follow-up task; until it lands, the subscribe ability is
+    // useful for "tell me the current state" but not "stream
+    // every iteration as it happens".
     match svc.status(&LoopId::new(id)) {
-        Some(inst) => Ok(vec![serde_json::to_value(inst)?]),
-        None => Ok(Vec::new()),
+        Some(inst) => Ok(StreamSource::Snapshot(vec![serde_json::to_value(inst)?])),
+        None => Ok(StreamSource::Snapshot(Vec::new())),
     }
 }
 
@@ -206,7 +209,9 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
-        let frames = subscribe_handler(&svc, json!({"loop_id": id})).unwrap();
+        let frames = subscribe_handler(&svc, json!({"loop_id": id}))
+            .unwrap()
+            .into_snapshot();
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0]["state"]["kind"], "pending");
     }
@@ -217,7 +222,9 @@ mod tests {
         // Mirrors the system.session.attach behaviour so a Client
         // observing both gets a uniform "I just missed it" UX.
         let svc = fresh();
-        let frames = subscribe_handler(&svc, json!({"loop_id": "ghost"})).unwrap();
+        let frames = subscribe_handler(&svc, json!({"loop_id": "ghost"}))
+            .unwrap()
+            .into_snapshot();
         assert!(frames.is_empty());
     }
 }

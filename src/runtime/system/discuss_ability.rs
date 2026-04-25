@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::{LocalAbilityRegistry, StreamSource};
 use crate::runtime::domain::{AgentId, RoomId};
 use crate::runtime::execution::discuss::DiscussService;
 
@@ -89,17 +89,37 @@ fn post_handler(svc: &DiscussService, args: Value) -> anyhow::Result<Value> {
     Ok(json!({ "sequence": seq }))
 }
 
-fn subscribe_handler(svc: &DiscussService, args: Value) -> anyhow::Result<Vec<Value>> {
+fn subscribe_handler(svc: &DiscussService, args: Value) -> anyhow::Result<StreamSource> {
     let room_id = args
         .get("room_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("discuss.subscribe: `room_id` required"))?;
     let since = args.get("since_seq").and_then(Value::as_i64).unwrap_or(0);
-    let turns = svc.turns_from(&RoomId::new(room_id), since)?;
-    Ok(turns
+    let room = RoomId::new(room_id);
+    // Snapshot of past turns ≥ since_seq...
+    let snapshot: Vec<Value> = svc
+        .turns_from(&room, since)?
         .into_iter()
         .map(|t| serde_json::to_value(t).unwrap_or(Value::Null))
-        .collect())
+        .collect();
+    // ...then live tail of new turns, relayed through a Value
+    // broadcast so the IPC server can forward without knowing
+    // the typed shape.
+    let mut typed_rx = svc.subscribe_room(&room)?;
+    let (json_tx, json_rx) = tokio::sync::broadcast::channel::<Value>(64);
+    tokio::spawn(async move {
+        loop {
+            match typed_rx.recv().await {
+                Ok(turn) => {
+                    let v = serde_json::to_value(&turn).unwrap_or(Value::Null);
+                    let _ = json_tx.send(v);
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+    Ok(StreamSource::SnapshotThenLive(snapshot, json_rx))
 }
 
 pub fn create_input_schema() -> Value {
@@ -163,8 +183,8 @@ mod tests {
         Arc::new(DiscussService::new())
     }
 
-    #[test]
-    fn create_post_subscribe_round_trip() {
+    #[tokio::test]
+    async fn create_post_subscribe_round_trip() {
         let svc = fresh();
         let resp = create_handler(
             &svc,
@@ -192,14 +212,16 @@ mod tests {
         )
         .unwrap();
 
-        let frames = subscribe_handler(&svc, json!({"room_id": room})).unwrap();
+        let frames = subscribe_handler(&svc, json!({"room_id": room}))
+            .unwrap()
+            .into_snapshot();
         assert_eq!(frames.len(), 2);
         assert_eq!(frames[0]["speaker"], "alice");
         assert_eq!(frames[1]["sequence"], 1);
     }
 
-    #[test]
-    fn subscribe_since_seq_filters_prior_turns() {
+    #[tokio::test]
+    async fn subscribe_since_seq_filters_prior_turns() {
         let svc = fresh();
         let room = create_handler(&svc, json!({"participants": ["a"]})).unwrap()
             ["room_id"]
@@ -213,8 +235,9 @@ mod tests {
             )
             .unwrap();
         }
-        let frames =
-            subscribe_handler(&svc, json!({"room_id": room, "since_seq": 2})).unwrap();
+        let frames = subscribe_handler(&svc, json!({"room_id": room, "since_seq": 2}))
+            .unwrap()
+            .into_snapshot();
         assert_eq!(frames.len(), 2);
         assert_eq!(frames[0]["sequence"], 2);
     }
@@ -237,8 +260,8 @@ mod tests {
         assert!(format!("{err}").contains("does not exist"));
     }
 
-    #[test]
-    fn post_payload_round_trips_through_subscribe() {
+    #[tokio::test]
+    async fn post_payload_round_trips_through_subscribe() {
         let svc = fresh();
         let room = create_handler(&svc, json!({"participants": ["a"]})).unwrap()
             ["room_id"]
@@ -255,7 +278,9 @@ mod tests {
             }),
         )
         .unwrap();
-        let frames = subscribe_handler(&svc, json!({"room_id": room})).unwrap();
+        let frames = subscribe_handler(&svc, json!({"room_id": room}))
+            .unwrap()
+            .into_snapshot();
         assert_eq!(frames[0]["payload"]["score"], 0.92);
     }
 }

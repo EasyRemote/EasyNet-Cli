@@ -37,15 +37,17 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use tokio::net::UnixStream;
+use tokio::sync::mpsc;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 use crate::runtime::kernel_api::KernelApi;
-use crate::services::control::ability_proxy::AbilityProxy;
+use crate::services::control::ability_proxy::{AbilityProxy, CancelRegistry};
 use crate::services::control::discovery::{
     self, flags, ControlDiscovery, IpcVersionRange, IPC_VERSION_V1,
 };
@@ -117,55 +119,93 @@ pub async fn accept_loop(listener: ControlListener, proxy: AbilityProxy) -> anyh
     }
 }
 
-/// Drive one accepted UnixStream: framed read → proxy → framed write
-/// in a loop until the peer closes.
+/// Drive one accepted UnixStream. Splits the framed connection
+/// into reader + writer halves so live subscriptions (multiple
+/// frames over time) can interleave with new client requests
+/// without serialising one against the other.
+///
+/// Topology:
+///
+///   reader task     → `IncomingFrame` decode
+///                  → `proxy.handle_async(req, out_tx, cancel)`
+///                       │
+///                       ├── Invoke / Snapshot subscribe: pushes
+///                       │    every frame onto `out_tx` synchronously
+///                       │    (small bounded burst).
+///                       └── Live / SnapshotThenLive subscribe:
+///                            spawns a forwarder task that pushes
+///                            frames over time as the broadcast
+///                            yields. Forwarder owns its `out_tx`
+///                            clone and observes a per-subscription
+///                            cancel token.
+///
+///   writer task     ← `OutgoingFrame` from `out_rx`
+///                  → length-prefixed JSON write to the connection
 async fn serve_connection(stream: UnixStream, proxy: AbilityProxy) -> anyhow::Result<()> {
-    // Codec: 4-byte LE length prefix; payload is JSON bytes per
-    // services/control/frames.rs. Default settings are correct for
-    // v1 (LE, max frame 8 MiB which is more than sufficient for
-    // a JSON envelope; v2 will tighten if needed).
     let codec = LengthDelimitedCodec::builder()
         .little_endian()
         .new_codec();
-    let mut framed = Framed::new(stream, codec);
+    let framed = Framed::new(stream, codec);
+    let (mut sink, mut source) = framed.split();
 
-    while let Some(frame) = framed.next().await {
-        let bytes = frame?; // BytesMut
+    // Per-connection writer queue. 256 frames bounded — large
+    // enough to absorb a permission/discuss snapshot burst without
+    // back-pressuring the forwarder, but bounded so a runaway
+    // ability cannot consume unlimited memory.
+    let (out_tx, mut out_rx) = mpsc::channel::<OutgoingFrame>(256);
+
+    // Per-connection cancel registry; subscriptions register their
+    // CancellationToken here, Cancel frames look up by id.
+    let cancel: CancelRegistry = Arc::new(Mutex::new(HashMap::new()));
+
+    // Writer task: drains the queue, serialises each frame to JSON,
+    // pushes over the codec.
+    let writer = tokio::spawn(async move {
+        while let Some(frame) = out_rx.recv().await {
+            let bytes = match serde_json::to_vec(&frame) {
+                Ok(b) => b,
+                Err(_) => continue, // unencodable frame, drop
+            };
+            if sink.send(Bytes::from(bytes)).await.is_err() {
+                break; // connection broken
+            }
+        }
+    });
+
+    // Reader loop: decode each incoming frame, hand to proxy.
+    while let Some(frame_res) = source.next().await {
+        let bytes = match frame_res {
+            Ok(b) => b,
+            Err(_) => break,
+        };
         let req: IncomingFrame = match serde_json::from_slice(&bytes) {
             Ok(r) => r,
             Err(e) => {
-                // Protocol violation: respond with an Error frame
-                // and keep the connection open. The client may have
-                // sent one bad frame and recovered.
                 let err_frame = OutgoingFrame::Error {
                     request_id: None,
                     subscription_id: None,
                     code: crate::services::control::frames::codes::PROTOCOL.into(),
                     message: format!("malformed IncomingFrame JSON: {e}"),
                 };
-                write_frame(&mut framed, &err_frame).await?;
+                if out_tx.send(err_frame).await.is_err() {
+                    break;
+                }
                 continue;
             }
         };
-        // PR-INVOCATION-EXEC-UNITY: handle returns Vec<OutgoingFrame>
-        // — exactly one for Invoke / Cancel, N+1 for a successful
-        // Subscribe (N data Frames + 1 Terminal). The accept loop
-        // writes them in order; each frame is its own length-prefixed
-        // wire envelope.
-        for resp in proxy.handle(req) {
-            write_frame(&mut framed, &resp).await?;
+        proxy.handle_async(req, out_tx.clone(), &cancel).await;
+    }
+
+    // Reader stopped → connection closing. Cancel every live
+    // subscription so forwarder tasks exit promptly.
+    {
+        let mut g = cancel.lock().expect("cancel registry lock");
+        for (_, tok) in g.drain() {
+            tok.cancel();
         }
     }
-    Ok(())
-}
-
-/// JSON-serialise an OutgoingFrame and push it over the codec.
-async fn write_frame(
-    framed: &mut Framed<UnixStream, LengthDelimitedCodec>,
-    frame: &OutgoingFrame,
-) -> anyhow::Result<()> {
-    let bytes = serde_json::to_vec(frame)?;
-    framed.send(Bytes::from(bytes)).await?;
+    drop(out_tx); // forwarders + writer task observe sender close
+    let _ = writer.await;
     Ok(())
 }
 
