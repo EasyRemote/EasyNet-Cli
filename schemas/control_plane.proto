@@ -1,0 +1,133 @@
+// EasyNet CLI — Local IPC Control Plane proto
+// ============================================
+//
+// File: schemas/control_plane.proto
+// Description: The wire protocol between a Client FFI library and
+//              the same-host `easynet-daemon` process. Covers the
+//              handshake, the Invoke/Subscribe/Cancel request
+//              envelopes, and the Result/Frame/Terminal/Error
+//              response envelopes.
+//
+// Not on the wire: bearer tokens, TLS, port numbers. Auth is
+// filesystem permissions on the UDS (mode 0600) / Named Pipe
+// (ACL pinned to current user). See docs/design/daemon-layers-v1.md.
+//
+// Version negotiation
+// -------------------
+// The daemon publishes `supported_ipc_versions: { min, max }` in
+// `~/.easynet/control.json`. On connect, the client picks the
+// highest overlap with its own supported range; mismatch fails
+// fast with `Error.code == "version_incompatible"` in the handshake
+// response. Single-value protocol versions are banned explicitly
+// because they prevent both forward and backward compat in the
+// same field.
+//
+// Framing on the wire
+// -------------------
+// Each envelope is one length-prefixed JSON record (v1) or proto
+// binary (v2). The length prefix is 4-byte LE u32 pointing at the
+// number of bytes that follow.
+
+syntax = "proto3";
+
+package easynet.v1.control;
+
+import "common.proto";
+
+// ── Handshake ────────────────────────────────────────────────────
+
+// First envelope the client writes after connect. The daemon
+// validates the requested ipc_version against its supported range
+// and replies with a HandshakeAck or an Error.
+message HandshakeRequest {
+  uint32 ipc_version = 1;
+  // Human-readable client name (e.g. "easynet-go-cgo/1.2.0"). v1
+  // uses this purely for operator-visible logging.
+  string client_name = 2;
+}
+
+message HandshakeAck {
+  // The version the daemon agreed to speak for this session.
+  uint32 negotiated_ipc_version = 1;
+  // Copy of daemon_version for confirmation.
+  string daemon_version = 2;
+  // Copy of capability_flags for client to branch on.
+  repeated string capability_flags = 3;
+}
+
+// ── Incoming request envelopes (client → daemon) ─────────────────
+
+message Invoke {
+  string request_id = 1;
+  // Fully-qualified ability name (e.g. "system.ping",
+  // "silan/claude.chat").
+  string ability = 2;
+  // Ability-specific argument payload, proto-JSON encoded in v1.
+  // The daemon does not introspect — it hands `args` verbatim to
+  // the matching AbilityToolAdapter.
+  string args_json = 3;
+}
+
+message Subscribe {
+  string subscription_id = 1;
+  string ability = 2;
+  string args_json = 3;
+}
+
+message Cancel {
+  string subscription_id = 1;
+}
+
+message IncomingFrame {
+  oneof kind {
+    HandshakeRequest handshake = 1;
+    Invoke invoke = 2;
+    Subscribe subscribe = 3;
+    Cancel cancel = 4;
+  }
+}
+
+// ── Outgoing response envelopes (daemon → client) ────────────────
+
+message Result {
+  string request_id = 1;
+  // v1 carries the server's response value as a JSON-encoded
+  // string (symmetric with Invoke's `args_json`). When the value
+  // is a Receipt, it is a proto-JSON of `common.Receipt`.
+  string value_json = 2;
+}
+
+message Frame {
+  string subscription_id = 1;
+  // One streaming event. For `system.session.attach` this is a
+  // TimelineEvent proto-JSON; for `system.permission.subscribe`
+  // a PermissionPrompt, etc.
+  string event_json = 2;
+}
+
+message Terminal {
+  string subscription_id = 1;
+  // Short machine-readable reason token: "done" | "cancelled" |
+  // "error". Ability-specific details, when present, come in a
+  // preceding Error envelope with the same subscription_id.
+  string reason = 2;
+}
+
+// Error envelope for both Invoke failures and Subscribe failures.
+// Exactly one of `request_id` / `subscription_id` is populated
+// depending on which inbound frame caused the error.
+message ControlPlaneError {
+  string request_id = 1;
+  string subscription_id = 2;
+  easynet.v1.Error error = 3;
+}
+
+message OutgoingFrame {
+  oneof kind {
+    HandshakeAck handshake_ack = 1;
+    Result result = 2;
+    Frame frame = 3;
+    Terminal terminal = 4;
+    ControlPlaneError error = 5;
+  }
+}

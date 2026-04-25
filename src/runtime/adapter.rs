@@ -111,15 +111,31 @@ pub trait AgentAdapter: Send + Sync {
 
     /// Run one prompt. Blocking. The adapter owns its own process
     /// spawn, stream parse, and usage accounting; it returns a
-    /// partial `AgentResponse` (content + usage) and the dispatch
-    /// layer fills in bookkeeping fields (agent name, duration,
-    /// run_dir path, model).
+    /// partial `AgentResponse` (content + usage + tool_calls) and
+    /// the dispatch layer fills in bookkeeping fields (agent name,
+    /// duration, run_dir path, model).
+    ///
+    /// Returns an `AdapterOutput` rather than a tuple so future
+    /// adapters can populate new fields (truncation flag, retry
+    /// count, …) without breaking the trait signature.
     fn invoke(
         &self,
         entry: &AgentEntry,
         prompt: &str,
         opts: InvokeOpts,
-    ) -> anyhow::Result<(String, Option<AgentUsage>)>;
+    ) -> anyhow::Result<AdapterOutput>;
+}
+
+/// What an adapter returns from `invoke`. Grew from a `(String,
+/// Option<AgentUsage>)` tuple when tool-call observability landed —
+/// using a struct keeps future field additions backward-compatible.
+#[derive(Debug, Clone, Default)]
+pub struct AdapterOutput {
+    pub content: String,
+    pub usage: Option<AgentUsage>,
+    /// Tool invocations captured from the driver's stream. Empty for
+    /// drivers that do not surface tool-use events (codex today).
+    pub tool_calls: Vec<crate::runtime::dispatch::ToolCall>,
 }
 
 /// Bridge the dispatcher's already-filled `AgentResponse` fields to
@@ -151,5 +167,6 @@ pub(super) fn finalize_response(
         truncated,
         usage,
         run_dir: run_dir_path,
+        tool_calls: Vec::new(),
     }
 }

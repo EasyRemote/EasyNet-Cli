@@ -43,3 +43,4 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub(crate) mod config;
+pub(crate) mod tenant_paths;

@@ -43,6 +43,41 @@ pub struct AgentUsage {
     pub total_cost_usd: f64,
 }
 
+/// Per-call driver knob overrides. Carried alongside the prompt
+/// down through `send_to_agent_with_depth` to the driver layer; lets
+/// a single chat invocation override the agent's default model
+/// without editing `agent.toml`. `temperature` and `max_tokens` are
+/// parsed and accepted but not honored by the v1 claude-code /
+/// codex CLI drivers (those CLIs do not expose either knob); they
+/// are recorded here so a future driver layer that does support them
+/// (or a remote API path) can pick them up without re-shaping the
+/// dispatch surface.
+#[derive(Debug, Clone, Default)]
+pub struct DriverOverrides {
+    /// Override the agent's default model (`agent.toml::model` or
+    /// `entry.model`). Wins over both when `Some`.
+    pub model: Option<String>,
+    /// Honored by future drivers; current claude-code / codex CLIs
+    /// ignore this field. A one-shot warning prints on first ignored
+    /// use so an operator setting this knob in chat args knows it is
+    /// not currently piped through.
+    pub temperature: Option<f64>,
+    /// Same caveat as `temperature`.
+    pub max_tokens: Option<u32>,
+}
+
+/// One tool call the LLM made during a run. Lifted from the driver
+/// layer's tool-use observability so the chat ability can surface
+/// `tool_calls` in its structured response. Does not carry the
+/// tool's result — claude-code feeds results back to the LLM
+/// internally via subsequent stream blocks; capturing them is a
+/// separate piece of work.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub ability: String,
+    pub args: serde_json::Value,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentResponse {
     pub agent: String,
@@ -56,6 +91,11 @@ pub struct AgentResponse {
     /// Path to the per-run directory on disk (if persistence succeeded).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_dir: Option<PathBuf>,
+    /// Tool invocations the LLM made during this run, in order.
+    /// Empty when the run made no tool calls. Drivers that do not
+    /// expose tool-call observability (codex today) leave this empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCall>,
 }
 
 /// Resolve the dispatch timeout from spec + entry precedence.
@@ -85,6 +125,21 @@ pub(crate) fn resolve_timeout(
 /// `None` (the runtime driver picks its own default).
 ///
 /// Extracted so production and tests call the same code.
+/// Three-tier model resolution: per-call override > agent.toml spec
+/// > legacy entry. Extracted as its own helper (rather than inlined
+/// at the call site) so production and tests bind to the same code
+/// path — the chat-ability override precedence is itself a contract
+/// that should not have a second place to drift to.
+pub(crate) fn resolve_model_with_overrides(
+    override_model: Option<String>,
+    spec_model: Option<String>,
+    entry_model: Option<String>,
+) -> Option<String> {
+    override_model
+        .or(spec_model)
+        .or(entry_model)
+}
+
 pub(crate) fn resolve_model(
     spec_model: Option<String>,
     entry_model: Option<String>,
@@ -114,7 +169,7 @@ pub fn send_to_agent(
     context: Option<&str>,
     extra_trace_path: Option<&Path>,
 ) -> anyhow::Result<AgentResponse> {
-    send_to_agent_with_depth(agent_name, entry, prompt, context, extra_trace_path, None)
+    send_to_agent_with_depth(agent_name, entry, prompt, context, extra_trace_path, None, None)
 }
 
 /// Send a prompt to a registered agent on behalf of an *external* caller —
@@ -163,7 +218,21 @@ pub fn send_external(
     prompt: &str,
     context: Option<&str>,
 ) -> anyhow::Result<AgentResponse> {
-    send_to_agent_with_depth(agent_name, entry, prompt, context, None, Some(0))
+    send_to_agent_with_depth(agent_name, entry, prompt, context, None, Some(0), None)
+}
+
+/// Same as `send_external` but lets the caller pin per-call driver
+/// knobs (model, temperature, max_tokens). Used by the chat ability
+/// handler when the caller passes a `driver` sub-object in their
+/// arguments. `overrides = None` is identical to `send_external`.
+pub fn send_external_with_overrides(
+    agent_name: &str,
+    entry: &AgentEntry,
+    prompt: &str,
+    context: Option<&str>,
+    overrides: Option<&DriverOverrides>,
+) -> anyhow::Result<AgentResponse> {
+    send_to_agent_with_depth(agent_name, entry, prompt, context, None, Some(0), overrides)
 }
 
 /// Same as `send_to_agent` but accepts an explicit `depth_override`. When
@@ -200,6 +269,7 @@ pub fn send_to_agent_with_depth(
     context: Option<&str>,
     extra_trace_path: Option<&Path>,
     depth_override: Option<u32>,
+    overrides: Option<&DriverOverrides>,
 ) -> anyhow::Result<AgentResponse> {
     // Mission context invariant — only enforced in production, skipped
     // when a test passes `depth_override` to exercise the recursion
@@ -319,10 +389,30 @@ pub fn send_to_agent_with_depth(
         entry.timeout_secs,
     );
     let max_output = entry.max_output_bytes;
-    let effective_model = resolve_model(
+    // Per-call overrides win over spec / entry defaults. The chat
+    // ability handler threads its `driver.model` arg through here so
+    // a single chat call can pin a different model than what
+    // agent.toml carries, without touching the manifest.
+    let effective_model = resolve_model_with_overrides(
+        overrides.and_then(|o| o.model.clone()),
         spec_source.as_ref().and_then(|s| s.model.clone()),
         entry.model.clone(),
     );
+
+    // The other DriverOverrides fields (temperature, max_tokens) are
+    // accepted by the schema and parsed by ChatArgs, but the v1
+    // claude-code / codex CLI drivers do not expose either knob. Log
+    // a one-shot warning the first time they are set so an operator
+    // experimenting with these knobs in chat args knows they aren't
+    // wired through yet (rather than silently being dropped). A
+    // future driver (or a remote-API path) can pick them up by
+    // reading `overrides` here without re-shaping the dispatch
+    // surface.
+    if let Some(o) = overrides {
+        if o.temperature.is_some() || o.max_tokens.is_some() {
+            warn_unhonored_driver_knobs_once(o);
+        }
+    }
 
     // Build env for the child subprocess. The env vars are how the typed
     // context crosses the process boundary into the spawned agent CLI —
@@ -481,7 +571,12 @@ pub fn send_to_agent_with_depth(
     let duration_ms = start.elapsed().as_millis() as u64;
     if let Some(dir) = &run_dir {
         let (exit_status, error, content_for_meta, usage_for_meta) = match &run_result {
-            Ok((text, usage)) => ("ok".to_string(), None, Some(text.as_str()), usage.clone()),
+            Ok(out) => (
+                "ok".to_string(),
+                None,
+                Some(out.content.as_str()),
+                out.usage.clone(),
+            ),
             Err(e) => ("error".to_string(), Some(e.to_string()), None, None),
         };
         if let Some(text) = content_for_meta {
@@ -540,12 +635,13 @@ pub fn send_to_agent_with_depth(
     // idempotence: a reader opening the log after we exit finds
     // the terminal state durably recorded.
     let (terminal_type, terminal_payload) = match &run_result {
-        Ok((content, usage)) => (
+        Ok(out) => (
             "completed",
             serde_json::json!({
-                "content_len": content.len(),
+                "content_len": out.content.len(),
                 "duration_ms": duration_ms,
-                "usage": usage,
+                "usage": out.usage,
+                "tool_call_count": out.tool_calls.len(),
             }),
         ),
         Err(e) => (
@@ -566,18 +662,19 @@ pub fn send_to_agent_with_depth(
         );
     }
 
-    let (content, usage) = run_result?;
+    let output = run_result?;
 
     Ok(AgentResponse {
         agent: agent_name.to_string(),
-        content,
+        content: output.content,
         // Mirror `meta.model`: the response reports the model
         // actually dispatched, which is the spec-resolved one.
         model: effective_model,
         duration_ms,
         truncated: false,
-        usage,
+        usage: output.usage,
         run_dir: run_dir.as_ref().map(|d| d.path().to_path_buf()),
+        tool_calls: output.tool_calls,
     })
 }
 
@@ -596,6 +693,35 @@ pub fn send_to_agent_with_depth(
 ///   parse on these tokens reliably.
 const CONTEXT_OPEN: &str = "<!-- easynet:context-start -->";
 const CONTEXT_CLOSE: &str = "<!-- easynet:context-end -->";
+
+/// One-shot warning helper for driver knobs that the v1 CLI drivers
+/// (claude-code, codex) accept in the chat args schema but cannot
+/// pass through to the underlying subprocess. We warn instead of
+/// silently dropping so an operator who set `temperature: 0.3` in a
+/// chat call sees that the value is ignored — and once per process,
+/// not on every dispatch, so the log noise is bounded.
+fn warn_unhonored_driver_knobs_once(o: &DriverOverrides) {
+    use std::sync::OnceLock;
+    static WARNED: OnceLock<()> = OnceLock::new();
+    if WARNED.set(()).is_ok() {
+        let mut knobs: Vec<&'static str> = Vec::new();
+        if o.temperature.is_some() {
+            knobs.push("temperature");
+        }
+        if o.max_tokens.is_some() {
+            knobs.push("max_tokens");
+        }
+        eprintln!(
+            "dispatch: chat `driver.{}` set but the current claude-code / codex CLI \
+             drivers do not expose this knob; values are accepted by the schema and \
+             recorded in DriverOverrides but not piped through to the subprocess. \
+             A future driver layer that supports them can read overrides from \
+             send_to_agent_with_depth without re-shaping the dispatch surface. \
+             (warned once per process)",
+            knobs.join(", driver."),
+        );
+    }
+}
 
 fn compose_prompt(prompt: &str, context: Option<&str>) -> String {
     match context.map(str::trim).filter(|s| !s.is_empty()) {
@@ -767,7 +893,7 @@ mod tests {
     fn recursion_guard_blocks_at_depth_2() {
         let entry = dummy_entry();
         let res =
-            send_to_agent_with_depth("claude", &entry, "any prompt", None, None, Some(2));
+            send_to_agent_with_depth("claude", &entry, "any prompt", None, None, Some(2), None);
         let err = res.expect_err("depth=2 must error");
         let msg = format!("{err}");
         assert!(
@@ -797,7 +923,7 @@ mod tests {
         // and doesn't pollute the developer's real ~/.easynet/.
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let res =
-            send_to_agent_with_depth("claude", &entry, "any prompt", None, None, Some(1));
+            send_to_agent_with_depth("claude", &entry, "any prompt", None, None, Some(1), None);
         // We expect an error (no real claude binary), but it must
         // NOT be the depth-limit error. Anything else is acceptable.
         match res {
@@ -825,7 +951,7 @@ mod tests {
         std::env::remove_var("EASYNET_MISSION_ID");
         let entry = dummy_entry();
         let res =
-            send_to_agent_with_depth("claude", &entry, "any prompt", None, None, Some(2));
+            send_to_agent_with_depth("claude", &entry, "any prompt", None, None, Some(2), None);
         assert!(res.is_err());
         let msg = format!("{}", res.unwrap_err());
         assert!(msg.contains("depth limit reached"));
@@ -888,6 +1014,7 @@ mod tests {
             None,
             None,
             Some(MAX_AGENT_DEPTH),
+            None,
         );
         let msg = format!("{}", tripped.expect_err("override=MAX must trip"));
         assert!(
@@ -1122,6 +1249,7 @@ mod tests {
         runtime_id: &'static str,
         response: String,
         usage: Option<crate::runtime::dispatch::AgentUsage>,
+        tool_calls: Vec<crate::runtime::dispatch::ToolCall>,
     }
 
     impl crate::runtime::adapter::AgentAdapter for MockAdapter {
@@ -1138,8 +1266,12 @@ mod tests {
             _entry: &AgentEntry,
             _prompt: &str,
             _opts: crate::runtime::adapter::InvokeOpts,
-        ) -> anyhow::Result<(String, Option<crate::runtime::dispatch::AgentUsage>)> {
-            Ok((self.response.clone(), self.usage.clone()))
+        ) -> anyhow::Result<crate::runtime::adapter::AdapterOutput> {
+            Ok(crate::runtime::adapter::AdapterOutput {
+                content: self.response.clone(),
+                usage: self.usage.clone(),
+                tool_calls: self.tool_calls.clone(),
+            })
         }
     }
 
@@ -1153,6 +1285,7 @@ mod tests {
                 output_tokens: 13,
                 ..Default::default()
             }),
+            tool_calls: Vec::new(),
         };
 
         // Call the adapter directly — this is the narrow seam the
@@ -1169,11 +1302,11 @@ mod tests {
             timeline: None,
             command: String::new(),
         };
-        let (text, usage) = adapter
+        let out = adapter
             .invoke(&entry, "ignored prompt", opts)
             .expect("mock adapter must succeed");
-        assert_eq!(text, "synthetic reply");
-        let usage = usage.expect("mock returned Some(usage)");
+        assert_eq!(out.content, "synthetic reply");
+        let usage = out.usage.expect("mock returned Some(usage)");
         assert_eq!(usage.input_tokens, 7);
         assert_eq!(usage.output_tokens, 13);
     }
@@ -1187,6 +1320,7 @@ mod tests {
             runtime_id: "mock-no-usage",
             response: "ok".into(),
             usage: None,
+            tool_calls: Vec::new(),
         };
         let entry = dummy_entry();
         let opts = crate::runtime::adapter::InvokeOpts {
@@ -1198,8 +1332,47 @@ mod tests {
             timeline: None,
             command: String::new(),
         };
-        let (_text, usage) = adapter.invoke(&entry, "p", opts).unwrap();
-        assert!(usage.is_none());
+        let out = adapter.invoke(&entry, "p", opts).unwrap();
+        assert!(out.usage.is_none());
+    }
+
+    #[test]
+    fn mock_adapter_round_trips_tool_calls() {
+        // Phase: Fix-3 wiring. The chat ability surfaces
+        // `tool_calls` in its structured response. Capture pipes
+        // through: adapter records → AdapterOutput.tool_calls →
+        // AgentResponse.tool_calls → chat handler json. Pin the
+        // first three hops here; the chat handler hop is covered
+        // by chat_ability::tests::handler_surfaces_tool_calls.
+        let adapter = MockAdapter {
+            runtime_id: "mock-with-tools",
+            response: "I called two tools".into(),
+            usage: None,
+            tool_calls: vec![
+                ToolCall {
+                    ability: "alice.voice".into(),
+                    args: serde_json::json!({"text": "hi"}),
+                },
+                ToolCall {
+                    ability: "alice.exec".into(),
+                    args: serde_json::json!({"cmd": "ls"}),
+                },
+            ],
+        };
+        let entry = dummy_entry();
+        let opts = crate::runtime::adapter::InvokeOpts {
+            timeout: Duration::from_secs(1),
+            max_output_bytes: 64,
+            env: std::collections::BTreeMap::new(),
+            cwd: std::path::PathBuf::from("."),
+            run_dir: None,
+            timeline: None,
+            command: String::new(),
+        };
+        let out = adapter.invoke(&entry, "p", opts).unwrap();
+        assert_eq!(out.tool_calls.len(), 2);
+        assert_eq!(out.tool_calls[0].ability, "alice.voice");
+        assert_eq!(out.tool_calls[1].ability, "alice.exec");
     }
 
     #[test]
@@ -1318,6 +1491,7 @@ mod tests {
             None,
             None,
             Some(1),
+            None,
         );
         // Failure is expected — we don't need the response.
         // meta.json is written whether the run succeeded or
@@ -1354,6 +1528,7 @@ mod tests {
             None,
             None,
             Some(1),
+            None,
         );
 
         let meta = read_latest_meta(&root).expect("meta.json must exist");
@@ -1385,6 +1560,7 @@ mod tests {
             None,
             None,
             Some(1),
+            None,
         );
 
         let meta = read_latest_meta(&root).expect("meta.json must exist");
@@ -1475,6 +1651,60 @@ mod tests {
         assert_eq!(m.as_deref(), Some("spec-model"));
     }
 
+    // ── resolve_model_with_overrides (chat ability driver.model) ────────────
+
+    #[test]
+    fn resolve_model_with_overrides_per_call_wins_over_spec_and_entry() {
+        // The whole point of the chat `driver.model` field: a
+        // per-invocation override beats both the agent.toml spec
+        // and the legacy entry default. Pin that explicitly so a
+        // refactor of `or` chains here can't silently invert
+        // precedence.
+        let m = resolve_model_with_overrides(
+            Some("override-model".into()),
+            Some("spec-model".into()),
+            Some("entry-model".into()),
+        );
+        assert_eq!(m.as_deref(), Some("override-model"));
+    }
+
+    #[test]
+    fn resolve_model_with_overrides_falls_through_to_spec_when_override_none() {
+        // No per-call override → spec wins (matches resolve_model's
+        // pre-overrides contract).
+        let m = resolve_model_with_overrides(
+            None,
+            Some("spec-model".into()),
+            Some("entry-model".into()),
+        );
+        assert_eq!(m.as_deref(), Some("spec-model"));
+    }
+
+    #[test]
+    fn resolve_model_with_overrides_falls_through_to_entry_when_override_and_spec_none() {
+        let m = resolve_model_with_overrides(None, None, Some("entry-model".into()));
+        assert_eq!(m.as_deref(), Some("entry-model"));
+    }
+
+    #[test]
+    fn resolve_model_with_overrides_all_none_yields_none() {
+        let m = resolve_model_with_overrides(None, None, None);
+        assert_eq!(m, None);
+    }
+
+    #[test]
+    fn resolve_model_with_overrides_override_none_does_not_shadow_spec() {
+        // An explicit `Some("...")` on a lower tier must not be
+        // shadowed by `None` from a higher tier. `Option::or` has
+        // the right semantics here; pin it because a `unwrap_or`
+        // chain or a `match` statement could easily invert the
+        // shape.
+        let m = resolve_model_with_overrides(None, Some("spec".into()), None);
+        assert_eq!(m.as_deref(), Some("spec"));
+        let m = resolve_model_with_overrides(None, None, Some("entry".into()));
+        assert_eq!(m.as_deref(), Some("entry"));
+    }
+
     // ── PR-7 Session + Timeline dispatch integration ────────────────────────
 
     /// Read the Timeline events for the most recent run, using the
@@ -1512,6 +1742,7 @@ mod tests {
 
         let _ = send_to_agent_with_depth(
             "alice", &entry, "hello", None, None, Some(1),
+            None,
         );
 
         let meta = read_latest_meta(&root).expect("meta.json must exist");
@@ -1567,6 +1798,7 @@ mod tests {
         let root = entry.root_path.clone().unwrap();
         let _ = send_to_agent_with_depth(
             "alice", &entry, "hello", None, None, Some(1),
+            None,
         );
 
         let meta = read_latest_meta(&root).expect("meta.json");
@@ -1694,6 +1926,7 @@ mod tests {
         let root = entry.root_path.clone().unwrap();
         let _ = send_to_agent_with_depth(
             "alice", &entry, "hello", None, None, Some(1),
+            None,
         );
 
         // Find the latest run directory.
@@ -1734,6 +1967,7 @@ mod tests {
         let root = entry.root_path.clone().unwrap();
         let _ = send_to_agent_with_depth(
             "alice", &entry, "hello", None, None, Some(1),
+            None,
         );
 
         let meta = read_latest_meta(&root).expect("meta.json");

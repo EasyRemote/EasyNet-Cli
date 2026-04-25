@@ -8,17 +8,102 @@
       "runtime": "claude-code",
       "skills": [
         {
-          "description": "Send a chat prompt to the locally-installed `alice` agent. The agent runs as a subprocess on this node; the response is returned verbatim. Use `context` to prepend a system-style preamble when the agent supports one.",
+          "description": "Send a chat prompt to the locally-installed agent. The agent runs as a subprocess on this node; the response is returned verbatim. The optional `skills`, `context_loaders`, and `driver` sub-objects let a single call override skill exposure, context assembly, and driver knobs without editing the agent's manifest.",
           "input_schema": {
             "additionalProperties": false,
             "properties": {
               "context": {
-                "description": "Optional system-style preamble prepended before `prompt`.",
+                "description": "Optional system-style preamble prepended before `prompt`. Carried through to compose_prompt() as a literal string; use `context_loaders` instead when the data should come from a registered loader.",
                 "type": "string"
+              },
+              "context_loaders": {
+                "additionalProperties": false,
+                "description": "Controls which registered context loaders run before the LLM is invoked. Each loader's output is appended to the prompt's context block, alongside the literal `context` arg if any.",
+                "properties": {
+                  "exclude": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "include": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "mode": {
+                    "enum": [
+                      "auto",
+                      "none",
+                      "explicit"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "driver": {
+                "additionalProperties": false,
+                "description": "Per-invocation overrides for the underlying LLM driver. Omit to use the agent's defaults from agent.toml.",
+                "properties": {
+                  "max_tokens": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "model": {
+                    "description": "Override the agent's default model for this call.",
+                    "type": "string"
+                  },
+                  "temperature": {
+                    "maximum": 2,
+                    "minimum": 0,
+                    "type": "number"
+                  }
+                },
+                "type": "object"
               },
               "prompt": {
                 "description": "The user prompt sent to the agent.",
                 "type": "string"
+              },
+              "session_id": {
+                "description": "Optional conversation id to resume an existing session. When omitted the chat handler creates a fresh one and returns the generated id in the response.",
+                "type": "string"
+              },
+              "skills": {
+                "additionalProperties": false,
+                "description": "Controls which of this agent's other abilities are exposed to the LLM as tools for the current invocation.",
+                "properties": {
+                  "exclude": {
+                    "description": "Fully-qualified ability names to filter out, applied after `mode`/`include`. Useful with `auto` to drop a noisy or expensive tool from a single call.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "include": {
+                    "description": "Fully-qualified ability names (`<agent>.<verb>`) to expose. Honoured in `explicit` mode; ignored in `auto`/`none`.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "mode": {
+                    "description": "auto = expose every ability of this agent (default); none = expose nothing; explicit = expose only those listed in `include`.",
+                    "enum": [
+                      "auto",
+                      "none",
+                      "explicit"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "stream": {
+                "description": "When true via the RPC entry point, the handler rejects the call and asks the caller to use the subscribe entry point instead. The streaming subscribe path emits typed frames (session/loaded/delta/tool_call_*/done|error).",
+                "type": "boolean"
               }
             },
             "required": [
@@ -40,17 +125,102 @@
       "runtime": "codex",
       "skills": [
         {
-          "description": "Send a chat prompt to the locally-installed `bob` agent. The agent runs as a subprocess on this node; the response is returned verbatim. Use `context` to prepend a system-style preamble when the agent supports one.",
+          "description": "Send a chat prompt to the locally-installed agent. The agent runs as a subprocess on this node; the response is returned verbatim. The optional `skills`, `context_loaders`, and `driver` sub-objects let a single call override skill exposure, context assembly, and driver knobs without editing the agent's manifest.",
           "input_schema": {
             "additionalProperties": false,
             "properties": {
               "context": {
-                "description": "Optional system-style preamble prepended before `prompt`.",
+                "description": "Optional system-style preamble prepended before `prompt`. Carried through to compose_prompt() as a literal string; use `context_loaders` instead when the data should come from a registered loader.",
                 "type": "string"
+              },
+              "context_loaders": {
+                "additionalProperties": false,
+                "description": "Controls which registered context loaders run before the LLM is invoked. Each loader's output is appended to the prompt's context block, alongside the literal `context` arg if any.",
+                "properties": {
+                  "exclude": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "include": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "mode": {
+                    "enum": [
+                      "auto",
+                      "none",
+                      "explicit"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "driver": {
+                "additionalProperties": false,
+                "description": "Per-invocation overrides for the underlying LLM driver. Omit to use the agent's defaults from agent.toml.",
+                "properties": {
+                  "max_tokens": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "model": {
+                    "description": "Override the agent's default model for this call.",
+                    "type": "string"
+                  },
+                  "temperature": {
+                    "maximum": 2,
+                    "minimum": 0,
+                    "type": "number"
+                  }
+                },
+                "type": "object"
               },
               "prompt": {
                 "description": "The user prompt sent to the agent.",
                 "type": "string"
+              },
+              "session_id": {
+                "description": "Optional conversation id to resume an existing session. When omitted the chat handler creates a fresh one and returns the generated id in the response.",
+                "type": "string"
+              },
+              "skills": {
+                "additionalProperties": false,
+                "description": "Controls which of this agent's other abilities are exposed to the LLM as tools for the current invocation.",
+                "properties": {
+                  "exclude": {
+                    "description": "Fully-qualified ability names to filter out, applied after `mode`/`include`. Useful with `auto` to drop a noisy or expensive tool from a single call.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "include": {
+                    "description": "Fully-qualified ability names (`<agent>.<verb>`) to expose. Honoured in `explicit` mode; ignored in `auto`/`none`.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "mode": {
+                    "description": "auto = expose every ability of this agent (default); none = expose nothing; explicit = expose only those listed in `include`.",
+                    "enum": [
+                      "auto",
+                      "none",
+                      "explicit"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "stream": {
+                "description": "When true via the RPC entry point, the handler rejects the call and asks the caller to use the subscribe entry point instead. The streaming subscribe path emits typed frames (session/loaded/delta/tool_call_*/done|error).",
+                "type": "boolean"
               }
             },
             "required": [
@@ -66,3 +236,4 @@
     }
   ]
 }
+

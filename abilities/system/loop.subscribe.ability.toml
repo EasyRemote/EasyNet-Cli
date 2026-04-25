@@ -1,0 +1,11 @@
+schema_version = "1"
+name = "loop.subscribe"
+description = "Subscribe to a loop's status stream. Replays buffered per-iteration frames, then tails live IterStarted, BodyChunk, VerifyChunk, IterFinished, and Terminal frames while the loop is running."
+
+[input_schema]
+type = "object"
+required = ["loop_id"]
+additionalProperties = false
+
+[input_schema.properties.loop_id]
+type = "string"

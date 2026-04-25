@@ -167,6 +167,26 @@ pub fn build(registry: &AgentRegistry, hostname: &str) -> Option<HashMap<String,
     }
     labels.insert("a2a.agents_json".into(), agents_json_str);
 
+    // PR-SYS: device-level system abilities published as a separate
+    // label key so v2-only parsers (which read `a2a.agents_json` and
+    // ignore unknown labels) keep working unchanged. v3-aware
+    // parsers will look for `a2a.system_skills_json` and merge into
+    // their discovery view.
+    //
+    // Why a separate label rather than a new envelope field on
+    // a2a.agents_json:
+    //   * tests/fixtures/a2a-v2/golden.json byte-stability is a
+    //     CI invariant; introducing a new field at the envelope
+    //     level would force a coordinated backend release.
+    //   * The 32 KiB per-label limit is enforced per key. With
+    //     two separate labels each gets its own budget.
+    //   * Disambiguates "agent abilities" from "device abilities"
+    //     in label-grep tooling.
+    let system_skills_json = system_skills_json();
+    if !system_skills_json.is_empty() {
+        labels.insert("a2a.system_skills_json".into(), system_skills_json);
+    }
+
     labels.insert(
         "a2a.description".into(),
         format!(
@@ -182,6 +202,191 @@ pub fn build(registry: &AgentRegistry, hostname: &str) -> Option<HashMap<String,
     );
 
     Some(labels)
+}
+
+/// Build the JSON for `a2a.system_skills_json`. Returns an empty
+/// string when no system abilities are registered, signalling the
+/// caller to omit the label entirely.
+///
+/// Shape: `{"system_skills": [{"name", "description", "input_schema"}, ...]}`
+/// — mirrors the per-skill structure inside `a2a.agents_json`'s
+/// agent entries so downstream tooling can reuse the same parser.
+///
+/// Iteration order follows
+/// `runtime::system::published_ability_names()` which is built from
+/// a `BTreeMap` and therefore deterministic. A regression that
+/// switched the underlying registry to a `HashMap` would silently
+/// break golden-fixture byte-stability.
+fn system_skills_json() -> String {
+    let names = crate::runtime::system::published_ability_names();
+    if names.is_empty() {
+        return String::new();
+    }
+    // Map each name to the per-skill JSON. v1 hardcodes the
+    // mapping inline because the only ability is `system.ping`;
+    // PR-ATTACH onwards adds a per-ability `to_discovery_json()`
+    // helper next to each handler so this match becomes obsolete.
+    let skills: Vec<serde_json::Value> = names
+        .iter()
+        .map(|name| match name.as_str() {
+            "system.ping" => json!({
+                "name": "system.ping",
+                "description": crate::runtime::system::ping::description(),
+                "input_schema": crate::runtime::system::ping::input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.session.list" => json!({
+                "name": "system.session.list",
+                "description": crate::runtime::system::session_ability::list_description(),
+                "input_schema":
+                    crate::runtime::system::session_ability::list_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.session.attach" => json!({
+                "name": "system.session.attach",
+                "description":
+                    crate::runtime::system::session_ability::attach_description(),
+                "input_schema":
+                    crate::runtime::system::session_ability::attach_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.permission.subscribe" => json!({
+                "name": "system.permission.subscribe",
+                "description":
+                    crate::runtime::system::permission_ability::subscribe_description(),
+                "input_schema":
+                    crate::runtime::system::permission_ability::subscribe_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.permission.decide" => json!({
+                "name": "system.permission.decide",
+                "description":
+                    crate::runtime::system::permission_ability::decide_description(),
+                "input_schema":
+                    crate::runtime::system::permission_ability::decide_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.discuss.create" => json!({
+                "name": "system.discuss.create",
+                "description":
+                    crate::runtime::system::discuss_ability::create_description(),
+                "input_schema":
+                    crate::runtime::system::discuss_ability::create_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.discuss.post" => json!({
+                "name": "system.discuss.post",
+                "description":
+                    crate::runtime::system::discuss_ability::post_description(),
+                "input_schema":
+                    crate::runtime::system::discuss_ability::post_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.discuss.subscribe" => json!({
+                "name": "system.discuss.subscribe",
+                "description":
+                    crate::runtime::system::discuss_ability::subscribe_description(),
+                "input_schema":
+                    crate::runtime::system::discuss_ability::subscribe_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.schedule.add" => json!({
+                "name": "system.schedule.add",
+                "description":
+                    crate::runtime::system::schedule_ability::add_description(),
+                "input_schema":
+                    crate::runtime::system::schedule_ability::add_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.schedule.list" => json!({
+                "name": "system.schedule.list",
+                "description":
+                    crate::runtime::system::schedule_ability::list_description(),
+                "input_schema":
+                    crate::runtime::system::schedule_ability::list_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.schedule.remove" => json!({
+                "name": "system.schedule.remove",
+                "description":
+                    crate::runtime::system::schedule_ability::remove_description(),
+                "input_schema":
+                    crate::runtime::system::schedule_ability::remove_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.schedule.enable" => json!({
+                "name": "system.schedule.enable",
+                "description":
+                    crate::runtime::system::schedule_ability::enable_description(),
+                "input_schema":
+                    crate::runtime::system::schedule_ability::enable_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.loop.create" => json!({
+                "name": "system.loop.create",
+                "description":
+                    crate::runtime::system::loop_ability::create_description(),
+                "input_schema":
+                    crate::runtime::system::loop_ability::create_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.loop.status" => json!({
+                "name": "system.loop.status",
+                "description":
+                    crate::runtime::system::loop_ability::status_description(),
+                "input_schema":
+                    crate::runtime::system::loop_ability::status_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.loop.subscribe" => json!({
+                "name": "system.loop.subscribe",
+                "description":
+                    crate::runtime::system::loop_ability::subscribe_description(),
+                "input_schema":
+                    crate::runtime::system::loop_ability::subscribe_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.loop.cancel" => json!({
+                "name": "system.loop.cancel",
+                "description":
+                    crate::runtime::system::loop_ability::cancel_description(),
+                "input_schema":
+                    crate::runtime::system::loop_ability::cancel_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            other => json!({
+                "name": other,
+                "description": "",
+                "input_schema": {"type": "object", "additionalProperties": true},
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+        })
+        .collect();
+    let envelope = json!({ "system_skills": skills });
+    match serde_json::to_string(&envelope) {
+        Ok(s) => s,
+        Err(_) => {
+            debug_assert!(false, "system_skills serialize cannot fail by shape");
+            String::new()
+        }
+    }
 }
 
 #[cfg(test)]
