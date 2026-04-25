@@ -54,6 +54,22 @@ fn lock_or_recover<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     }
 }
 
+/// One tool the LLM invoked during a run. Captured from the
+/// stream-json `assistant.content[*].type == "tool_use"` blocks so
+/// the chat ability handler can surface them in `tool_calls` for
+/// observability.
+///
+/// The driver does not see (and does not need to see) the tool
+/// result — claude-code sends results back to the LLM internally
+/// via subsequent `user.content[*].type == "tool_result"` blocks.
+/// We could capture those too in a future pass; v1 records only the
+/// invocation so a caller can answer "did the LLM use my skill?".
+#[derive(Debug, Clone, Default)]
+pub struct ToolCallRecord {
+    pub ability: String,
+    pub args: serde_json::Value,
+}
+
 /// Summary of a completed Claude Code run, extracted from the final
 /// `result` event in the stream-json output.
 #[derive(Default, Clone)]
@@ -65,6 +81,9 @@ pub struct RunStats {
     pub num_turns: u64,
     pub total_cost_usd: f64,
     pub duration_ms: u64,
+    /// Tool invocations the LLM made during this run, in order.
+    /// Empty when the run made no tool calls (single-turn answer).
+    pub tool_calls: Vec<ToolCallRecord>,
 }
 
 pub struct ClaudeOptions {
@@ -290,11 +309,21 @@ fn handle_stream_line(
                         }
                         "tool_use" => {
                             let name = block.get("name").and_then(Value::as_str).unwrap_or("?");
-                            let summary = stream_ui::summarise_tool_input(
-                                name,
-                                block.get("input").unwrap_or(&Value::Null),
-                            );
+                            let input = block.get("input").cloned().unwrap_or(Value::Null);
+                            let summary = stream_ui::summarise_tool_input(name, &input);
                             stream_ui::print_tool_use(run_start, name, &summary);
+                            // Capture the call into stats so the chat
+                            // ability handler can surface it as
+                            // tool_calls in the structured response.
+                            // Recording happens here rather than in the
+                            // UI helper because this is the only point
+                            // where we hold both the parsed name and
+                            // the unfiltered input value.
+                            let mut s = lock_or_recover(stats);
+                            s.tool_calls.push(ToolCallRecord {
+                                ability: name.to_string(),
+                                args: input,
+                            });
                         }
                         _ => {}
                     }
@@ -442,7 +471,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
         entry: &AgentEntry,
         prompt: &str,
         opts: InvokeOpts,
-    ) -> anyhow::Result<(String, Option<AgentUsage>)> {
+    ) -> anyhow::Result<crate::runtime::adapter::AdapterOutput> {
         let (text, stats) = invoke(
             prompt,
             ClaudeOptions {
@@ -460,7 +489,24 @@ impl AgentAdapter for ClaudeCodeAdapter {
                 command: opts.command,
             },
         )?;
-        Ok((text, Some(run_stats_to_usage(&stats))))
+        // Project the driver's ToolCallRecord into the dispatch-
+        // layer ToolCall (same shape, different module). The
+        // driver layer can't depend on dispatch::ToolCall directly
+        // without a circular import, so we do the projection at
+        // the trait boundary.
+        let tool_calls = stats
+            .tool_calls
+            .iter()
+            .map(|r| crate::runtime::dispatch::ToolCall {
+                ability: r.ability.clone(),
+                args: r.args.clone(),
+            })
+            .collect();
+        Ok(crate::runtime::adapter::AdapterOutput {
+            content: text,
+            usage: Some(run_stats_to_usage(&stats)),
+            tool_calls,
+        })
     }
 }
 
