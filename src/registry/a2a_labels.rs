@@ -236,6 +236,23 @@ fn system_skills_json() -> String {
                 "output_schema": serde_json::Value::Null,
                 "timeout_seconds": serde_json::Value::Null,
             }),
+            "system.session.list" => json!({
+                "name": "system.session.list",
+                "description": crate::runtime::system::session_ability::list_description(),
+                "input_schema":
+                    crate::runtime::system::session_ability::list_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.session.attach" => json!({
+                "name": "system.session.attach",
+                "description":
+                    crate::runtime::system::session_ability::attach_description(),
+                "input_schema":
+                    crate::runtime::system::session_ability::attach_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
             other => json!({
                 "name": other,
                 "description": "",
