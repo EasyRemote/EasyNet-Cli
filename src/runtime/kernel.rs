@@ -99,7 +99,8 @@ impl KernelApi for Kernel {
         id: &PermissionId,
         decision: PermissionDecision,
     ) -> anyhow::Result<()> {
-        self.permission.decide(id, decision)
+        self.permission.decide(id, decision)?;
+        Ok(())
     }
 
     fn list_schedules(&self) -> anyhow::Result<Vec<ScheduleEntry>> {
