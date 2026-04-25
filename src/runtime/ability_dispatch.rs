@@ -43,9 +43,18 @@ use serde_json::Value;
 use crate::runtime::gateway_api::{GatewayApi, RemoteTarget};
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
-/// One in-process ability handler. Boxed closure so the registry
-/// can hold heterogeneous handlers behind a uniform key.
+/// One in-process RPC handler. Boxed closure so the registry can
+/// hold heterogeneous handlers behind a uniform key.
 pub type LocalRpcHandler = Arc<dyn Fn(Value) -> anyhow::Result<Value> + Send + Sync>;
+
+/// One in-process stream handler. v1 contract: returns the entire
+/// frame sequence eagerly as a Vec. v2 will swap to a true
+/// `Stream<Item = Value>` once the IPC server learns to push
+/// frames as they arrive. The Vec shape lets PR-ATTACH ship the
+/// dispatch surface without bringing in tokio-stream wiring; the
+/// API change at v2 is additive (a sibling `register_async_stream`
+/// alongside this one).
+pub type LocalStreamHandler = Arc<dyn Fn(Value) -> anyhow::Result<Vec<Value>> + Send + Sync>;
 
 /// Local-ability registry. Keyed by full ability name. v1 shape is
 /// a `BTreeMap` for deterministic iteration order; the registry
@@ -54,6 +63,7 @@ pub type LocalRpcHandler = Arc<dyn Fn(Value) -> anyhow::Result<Value> + Send + S
 #[derive(Default)]
 pub struct LocalAbilityRegistry {
     rpc: BTreeMap<String, LocalRpcHandler>,
+    stream: BTreeMap<String, LocalStreamHandler>,
 }
 
 impl LocalAbilityRegistry {
@@ -69,16 +79,37 @@ impl LocalAbilityRegistry {
         self.rpc.insert(ability.into(), handler);
     }
 
+    /// Register a stream handler under `ability`. Same single-
+    /// writer model as `register_rpc`.
+    pub fn register_stream(&mut self, ability: impl Into<String>, handler: LocalStreamHandler) {
+        self.stream.insert(ability.into(), handler);
+    }
+
     /// Lookup helper — exposed because PR-ATTACH onwards will need
     /// a way to introspect "what abilities does this daemon
     /// publish?" without reflecting through the dispatcher.
+    ///
+    /// Returns the union of RPC + stream ability names, sorted.
+    /// Discovery callers should not see the call-mode distinction.
     pub fn list_abilities(&self) -> Vec<String> {
-        self.rpc.keys().cloned().collect()
+        let mut names: Vec<String> = self.rpc.keys().cloned().collect();
+        for k in self.stream.keys() {
+            if !names.iter().any(|n| n == k) {
+                names.push(k.clone());
+            }
+        }
+        names.sort();
+        names
     }
 
     /// Returns Some when an RPC handler is registered for `ability`.
     pub fn get_rpc(&self, ability: &str) -> Option<&LocalRpcHandler> {
         self.rpc.get(ability)
+    }
+
+    /// Returns Some when a stream handler is registered for `ability`.
+    pub fn get_stream(&self, ability: &str) -> Option<&LocalStreamHandler> {
+        self.stream.get(ability)
     }
 }
 
@@ -121,6 +152,39 @@ impl AbilityDispatcher {
                     ability: target.ability,
                 },
                 &target.normalized_args,
+            ),
+        }
+    }
+
+    /// Execute a Stream-mode `InvocationTarget`. v1 contract:
+    /// returns the full frame sequence as a Vec. The IPC server
+    /// fans these out as separate wire frames to the Client.
+    ///
+    /// Remote streams are not yet supported in v1 — `subscribe_remote_ability`
+    /// on the gateway is callback-shaped, so a Vec-shaped wrapper
+    /// here would have to buffer the entire stream which contradicts
+    /// the streaming intent. PR-INVOCATION-EXEC-UNITY adds proper
+    /// streaming routing once the IPC server's frame fan-out is
+    /// in place.
+    pub fn execute_stream(&self, target: InvocationTarget) -> anyhow::Result<Vec<Value>> {
+        if target.call_mode != CallMode::Stream {
+            anyhow::bail!(
+                "AbilityDispatcher::execute_stream called with non-Stream call_mode \
+                 (got {:?}); use execute_rpc instead",
+                target.call_mode
+            );
+        }
+        match target.scope {
+            TargetScope::Local => match self.local.get_stream(&target.ability) {
+                Some(handler) => handler(target.normalized_args),
+                None => anyhow::bail!(
+                    "no local stream handler registered for ability {} (loopback path)",
+                    target.ability
+                ),
+            },
+            TargetScope::Remote { .. } => anyhow::bail!(
+                "remote stream dispatch not yet wired in v1; \
+                 PR-INVOCATION-EXEC-UNITY adds the IPC frame fan-out"
             ),
         }
     }
