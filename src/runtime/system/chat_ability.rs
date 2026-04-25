@@ -53,24 +53,32 @@
 // `stream`) are all parsed and surfaced in the response, but the
 // substantive behaviours land in subsequent PRs:
 //
-//   * skills loading: enumerates correctly, but does NOT yet inject
-//     the listed abilities as tools into the LLM driver — the driver
-//     adapters need a tools surface for that, which is a separate
-//     change.
-//   * context loaders: the trait seam exists; zero loaders are
-//     registered today. `context_used` returns `[]`.
-//   * driver overrides: parsed and validated, but not yet threaded
-//     through `dispatch::send_external` — that requires a small
-//     widening of the dispatch surface, addressed in Phase 4.
-//   * stream: rejected with a clear "use subscribe" error in the RPC
-//     handler. Phase 5 wires the stream variant.
+//   * skills loading: `skills_loaded` enumerates the agent's other
+//     abilities (filtered by mode/include/exclude). Those abilities
+//     are ALREADY callable by the LLM — the workspace's .mcp.json
+//     points at the EasyNet MCP server with `--enable-agent-dispatch`
+//     so the AgentDispatchAdapter advertises every <agent>.chat tool.
+//     The skills filter is currently advisory: we report what we
+//     would expose; per-call enforcement of the include/exclude
+//     filter against claude-code's tool-discovery wire is a follow-up.
+//   * context loaders: the trait seam exists; v1 ships ScheduleLoader
+//     / MemoryLoader / UserProfileLoader. `context_used` reports
+//     which loaders contributed and how many bytes each.
+//   * driver overrides: `driver.model` flows through dispatch via
+//     send_external_with_overrides. `temperature` and `max_tokens`
+//     are accepted by the schema and recorded but not piped to the
+//     v1 claude-code / codex CLI drivers (see warn_unhonored_driver_knobs_once
+//     in dispatch.rs).
+//   * stream: register_for_agent mounts both an RPC and a Stream
+//     handler; the stream variant emits typed frames. `stream:true`
+//     under the RPC entry point is rejected with a clear error.
 //
-// The output schema's `usage`, `tool_calls`, and `context_used` fields
-// are populated as well as the underlying machinery permits today.
-// `usage` mirrors what `AgentResponse.usage` carries when the driver
-// reports it; `tool_calls` is `[]` until skills loading actually
-// surfaces tools; `context_used` is `[]` until at least one loader is
-// registered.
+// The output schema's `usage`, `tool_calls`, and `context_used`
+// fields are populated by the driver layer's tool-use observability
+// (via dispatch::ToolCall, projected from claude-code's tool_use
+// stream events). Codex adapters return empty `tool_calls` because
+// they do not surface tool-use events. `usage` mirrors
+// `AgentResponse.usage` when the driver reports it.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -321,14 +329,31 @@ fn handler(
         })
     });
 
+    // tool_calls comes from the driver layer's tool-use observability
+    // (see runtime::drivers::claude_code::ToolCallRecord). Codex
+    // adapters return an empty Vec so the field is `[]` for codex
+    // agents — present for schema stability, just empty.
+    let tool_calls_json: Vec<Value> = resp
+        .tool_calls
+        .iter()
+        .map(|tc| {
+            json!({
+                "ability": tc.ability,
+                "args": tc.args,
+                // elapsed_ms per-call is not yet captured by the
+                // driver; the schema lists it as required so emit a
+                // 0 placeholder rather than dropping the field. A
+                // future driver upgrade can populate per-call timing.
+                "elapsed_ms": 0,
+            })
+        })
+        .collect();
+
     Ok(json!({
         "session_id": session_id,
         "reply": resp.content,
         "skills_loaded": skills_loaded,
-        // tool_calls remains `[]` until skills loading actually
-        // injects tools; `output_schema.required` includes it so we
-        // emit the empty array rather than omitting the field.
-        "tool_calls": Value::Array(vec![]),
+        "tool_calls": tool_calls_json,
         "context_used": Value::Array(context_used),
         "usage": usage.unwrap_or(Value::Null),
         "elapsed_ms": elapsed_ms,
@@ -479,12 +504,25 @@ fn stream_handler(
                     "model": resp.model.clone(),
                 })
             });
+            // Same projection as the RPC handler — see comment there
+            // for why elapsed_ms per-call is 0 today.
+            let tool_calls_json: Vec<Value> = resp
+                .tool_calls
+                .iter()
+                .map(|tc| {
+                    json!({
+                        "ability": tc.ability,
+                        "args": tc.args,
+                        "elapsed_ms": 0,
+                    })
+                })
+                .collect();
             frames.push(json!({
                 "type": "done",
                 "session_id": session_id,
                 "reply": resp.content,
                 "skills_loaded": skills_loaded,
-                "tool_calls": Value::Array(vec![]),
+                "tool_calls": tool_calls_json,
                 "context_used": context_used,
                 "usage": usage.unwrap_or(Value::Null),
                 "elapsed_ms": elapsed_ms,
