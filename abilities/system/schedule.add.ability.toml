@@ -1,0 +1,28 @@
+schema_version = "1"
+name = "schedule.add"
+description = "Register a new cron schedule. Required: target_node, target_agent, cron_expr (5- or 6-field), misfire_policy (skip|fire_once|catch_up_windowed). Returns the assigned schedule_id."
+
+[input_schema]
+type = "object"
+required = ["target_node", "target_agent", "cron_expr", "misfire_policy"]
+additionalProperties = false
+
+[input_schema.properties.target_node]
+type = "string"
+
+[input_schema.properties.target_agent]
+type = "string"
+
+[input_schema.properties.cron_expr]
+type = "string"
+
+[input_schema.properties.misfire_policy]
+type = "string"
+enum = ["skip", "fire_once", "catch_up_windowed"]
+
+[input_schema.properties.catch_up_window_secs]
+type = "integer"
+minimum = 0
+
+[input_schema.properties.enabled]
+type = "boolean"

@@ -85,6 +85,11 @@ futures = "0.3"
 bytes = "1"
 ureq = { version = "2", features = ["json"] }
 uuid = { version = "1", features = ["v4"] }
+# Cron expression parsing for PR-SCHED. The crate parses
+# `0 9 * * *`-style strings into a `Schedule` and computes the
+# next-fire instant in a given timezone — minimum surface needed
+# for the daemon's tick runner.
+cron = "0.12"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

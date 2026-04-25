@@ -298,6 +298,42 @@ fn system_skills_json() -> String {
                 "output_schema": serde_json::Value::Null,
                 "timeout_seconds": serde_json::Value::Null,
             }),
+            "system.schedule.add" => json!({
+                "name": "system.schedule.add",
+                "description":
+                    crate::runtime::system::schedule_ability::add_description(),
+                "input_schema":
+                    crate::runtime::system::schedule_ability::add_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.schedule.list" => json!({
+                "name": "system.schedule.list",
+                "description":
+                    crate::runtime::system::schedule_ability::list_description(),
+                "input_schema":
+                    crate::runtime::system::schedule_ability::list_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.schedule.remove" => json!({
+                "name": "system.schedule.remove",
+                "description":
+                    crate::runtime::system::schedule_ability::remove_description(),
+                "input_schema":
+                    crate::runtime::system::schedule_ability::remove_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.schedule.enable" => json!({
+                "name": "system.schedule.enable",
+                "description":
+                    crate::runtime::system::schedule_ability::enable_description(),
+                "input_schema":
+                    crate::runtime::system::schedule_ability::enable_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
             other => json!({
                 "name": other,
                 "description": "",

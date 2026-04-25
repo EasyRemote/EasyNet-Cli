@@ -36,6 +36,7 @@
 pub mod discuss_ability;
 pub mod permission_ability;
 pub mod ping;
+pub mod schedule_ability;
 pub mod session_ability;
 
 use std::sync::Arc;
@@ -43,6 +44,7 @@ use std::sync::Arc;
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 use crate::runtime::execution::discuss::DiscussService;
 use crate::runtime::execution::permission::PermissionService;
+use crate::runtime::execution::schedule::ScheduleService;
 use crate::runtime::execution::session::SessionService;
 
 /// Build a `LocalAbilityRegistry` populated with every v1 system
@@ -56,6 +58,7 @@ pub fn build_registry() -> Arc<LocalAbilityRegistry> {
         Arc::new(SessionService::new()),
         Arc::new(PermissionService::new()),
         Arc::new(DiscussService::new()),
+        Arc::new(ScheduleService::new()),
     )
 }
 
@@ -66,12 +69,14 @@ pub fn build_registry_with_services(
     sessions: Arc<SessionService>,
     perms: Arc<PermissionService>,
     discuss: Arc<DiscussService>,
+    schedule: Arc<ScheduleService>,
 ) -> Arc<LocalAbilityRegistry> {
     let mut reg = LocalAbilityRegistry::new();
     ping::register(&mut reg);
     session_ability::register(&mut reg, sessions);
     permission_ability::register(&mut reg, perms);
     discuss_ability::register(&mut reg, discuss);
+    schedule_ability::register(&mut reg, schedule);
     Arc::new(reg)
 }
 
