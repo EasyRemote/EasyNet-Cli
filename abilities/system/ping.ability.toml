@@ -1,0 +1,7 @@
+schema_version = "1"
+name = "ping"
+description = "Round-trip smoke ability. Returns the caller's args plus a daemon timestamp. Use to confirm the dispatch path is wired between peer and local handlers."
+
+[input_schema]
+type = "object"
+additionalProperties = true

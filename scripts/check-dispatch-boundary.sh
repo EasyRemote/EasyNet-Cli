@@ -39,8 +39,11 @@ violations=0
 #   * target_node    — handler inspecting a routing decision
 #   * my_node == / == my_node — equivalent check spelled differently
 #
-# Each hit is flagged with a pointer to resolve() + InvocationTarget.
-bad=$(grep -rnE 'self\.node_id|\btarget_node\b' src/runtime/system || true)
+# Whole-line `//` comments are excluded — module / function doc
+# comments may name `target_node` while explaining why handlers
+# do not touch it.
+bad=$(grep -rnE 'self\.node_id|\btarget_node\b' src/runtime/system \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
 if [ -n "$bad" ]; then
     echo "ERROR: ability handler reads node identity / target_node directly:"
     echo "$bad"

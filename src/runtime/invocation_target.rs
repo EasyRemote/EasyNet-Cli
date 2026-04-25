@@ -88,14 +88,60 @@ pub enum CallMode {
     Stream,
 }
 
-/// Trait for the resolver. Concrete impl lives in PR-SYS.
+/// Trait for the resolver. Concrete impl: `LocalNodeResolver`.
 pub trait TargetResolver: Send + Sync {
     fn resolve(&self, plan: InvocationPlan) -> anyhow::Result<InvocationTarget>;
+}
+
+/// PR-SYS concrete resolver. Knows the local node's id; resolves
+/// `Local` when the plan's `target_node_hint` is absent or matches
+/// the local id; resolves `Remote { node }` otherwise.
+///
+/// Resolution rules (single source of truth — no handler may
+/// re-derive them):
+///
+///   1. `target_node_hint == None`           → `Local`
+///   2. `target_node_hint == Some(local_id)` → `Local`  (loopback)
+///   3. `target_node_hint == Some(other)`    → `Remote { node: other }`
+///
+/// The args are passed through unchanged in v1; v2 may add
+/// proto-canonicalisation here.
+pub struct LocalNodeResolver {
+    local_node: NodeId,
+}
+
+impl LocalNodeResolver {
+    pub fn new(local_node: NodeId) -> Self {
+        Self { local_node }
+    }
+
+    /// The local node id this resolver was built with. Exposed for
+    /// observability and for tests that assert "loopback fired".
+    pub fn local_node(&self) -> &NodeId {
+        &self.local_node
+    }
+}
+
+impl TargetResolver for LocalNodeResolver {
+    fn resolve(&self, plan: InvocationPlan) -> anyhow::Result<InvocationTarget> {
+        let scope = match &plan.target_node_hint {
+            None => TargetScope::Local,
+            Some(node) if node == &self.local_node => TargetScope::Local,
+            Some(node) => TargetScope::Remote { node: node.clone() },
+        };
+        Ok(InvocationTarget {
+            scope,
+            ability: plan.ability,
+            normalized_args: plan.args,
+            call_mode: plan.call_mode,
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn target_scope_distinguishes_local_from_remote_by_equality() {
@@ -113,5 +159,68 @@ mod tests {
         assert_eq!(local, TargetScope::Local);
         assert_ne!(local, remote_a);
         assert_ne!(remote_a, remote_b);
+    }
+
+    fn plan(hint: Option<&str>) -> InvocationPlan {
+        InvocationPlan {
+            ability: "system.ping".into(),
+            args: json!({}),
+            target_node_hint: hint.map(NodeId::new),
+            call_mode: CallMode::Rpc,
+        }
+    }
+
+    #[test]
+    fn resolver_no_hint_means_local() {
+        // The most common case: Client did not name a target node.
+        // Loopback is the right default — every operation defaults
+        // to "do it here" rather than guessing a peer.
+        let r = LocalNodeResolver::new(NodeId::new("self"));
+        let t = r.resolve(plan(None)).unwrap();
+        assert_eq!(t.scope, TargetScope::Local);
+        assert_eq!(t.ability, "system.ping");
+    }
+
+    #[test]
+    fn resolver_hint_equal_to_local_means_loopback() {
+        // The "loopback shortcut" — Client explicitly named *this*
+        // node, so the resolver returns Local instead of routing
+        // back through Axon. This is the optimisation the plan
+        // calls "本机 loopback" — ~10× lower latency than a remote
+        // call to the same address.
+        let r = LocalNodeResolver::new(NodeId::new("alpha"));
+        let t = r.resolve(plan(Some("alpha"))).unwrap();
+        assert_eq!(t.scope, TargetScope::Local);
+    }
+
+    #[test]
+    fn resolver_hint_different_from_local_means_remote() {
+        // The cross-machine case: Client named a peer. Resolver
+        // surfaces a Remote scope; the executor will dispatch via
+        // GatewayApi.
+        let r = LocalNodeResolver::new(NodeId::new("alpha"));
+        let t = r.resolve(plan(Some("beta"))).unwrap();
+        assert_eq!(
+            t.scope,
+            TargetScope::Remote {
+                node: NodeId::new("beta")
+            }
+        );
+    }
+
+    #[test]
+    fn resolver_passes_args_through_unchanged_in_v1() {
+        // v1 does not normalise args. A regression that started
+        // mutating them (e.g. inserting a synthesised `node:` field)
+        // would surprise downstream handlers.
+        let r = LocalNodeResolver::new(NodeId::new("self"));
+        let plan = InvocationPlan {
+            ability: "x.y".into(),
+            args: json!({"prompt": "hello", "count": 3}),
+            target_node_hint: None,
+            call_mode: CallMode::Rpc,
+        };
+        let t = r.resolve(plan).unwrap();
+        assert_eq!(t.normalized_args, json!({"prompt": "hello", "count": 3}));
     }
 }

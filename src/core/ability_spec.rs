@@ -66,6 +66,46 @@ use serde_json::Value;
 /// `CURRENT_SCHEMA_VERSION` on every file it generates.
 pub const CURRENT_SCHEMA_VERSION: &str = "1";
 
+/// Two kinds of ability the CLI publishes. Introduced by PR-SYS to
+/// disambiguate agent abilities (per-agent `<agent>.chat`-style)
+/// from device-level system abilities (`system.<feature>`).
+///
+/// Why an enum and not a free-form string: a name beginning with
+/// `system.` is a wire-level promise that the publishing node
+/// itself owns the handler — no agent subprocess gets reached. The
+/// enum lets a reader look at one field and know which dispatch
+/// path applies, instead of grepping the prefix.
+///
+/// `Agent` is the existing case (every `<name>.chat` pre-PR-SYS
+/// shipped under this kind, even though the kind didn't exist
+/// then). `System` is the new case enabled by PR-SYS — the daemon
+/// publishes the handler, no agent involved. Future kinds (e.g.
+/// `Skill` for installable skill bundles) plug in here as another
+/// variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AbilityKind {
+    /// Belongs to one registered agent; dispatch lands inside the
+    /// agent's subprocess. Names: `<agent>.<verb>`.
+    Agent,
+    /// Belongs to the daemon (the node) itself; dispatch lands
+    /// in-process via `runtime::system::*`. Names: `system.<feature>`.
+    System,
+}
+
+impl AbilityKind {
+    /// Infer kind from a fully-qualified ability name. Useful at
+    /// dispatch-router boundaries that receive a string and need
+    /// to know which sub-system owns the handler.
+    pub fn from_qualified_name(name: &str) -> Self {
+        if name.starts_with("system.") {
+            Self::System
+        } else {
+            Self::Agent
+        }
+    }
+}
+
 /// Versions the reader will accept. When bumping:
 ///   1. Extend this array with the new version.
 ///   2. Add a migration pass that rewrites manifests from the old

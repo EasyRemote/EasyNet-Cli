@@ -101,3 +101,13 @@ pub mod kernel;
 // other. scripts/check-subservice-isolation.sh grep-enforces the
 // "no peer import" rule.
 pub mod execution;
+
+// PR-SYS: stage-2 dispatch executor + the `system.*` ability
+// namespace. `ability_dispatch` consumes `InvocationTarget` (from
+// stage-1 resolver in `invocation_target.rs`) and routes either to
+// the in-process `LocalAbilityRegistry` or via `GatewayApi`.
+// `system::build_registry` populates the registry with every
+// device-level ability the daemon publishes (today: `system.ping`;
+// PR-ATTACH onwards extends this).
+pub mod ability_dispatch;
+pub mod system;
