@@ -189,6 +189,16 @@ impl AbilityDispatcher {
         Self { local, gateway }
     }
 
+    /// Borrow the unified local-ability registry. Used by `Kernel`
+    /// to look up handlers without going through `execute_rpc`'s
+    /// `InvocationTarget` envelope — Kernel admission has already
+    /// resolved scope to local by this point. Exposed as a borrow
+    /// (rather than a clone) so the caller chooses whether to
+    /// retain a handle.
+    pub fn local_registry(&self) -> &Arc<LocalAbilityRegistry> {
+        &self.local
+    }
+
     /// Execute an RPC-mode `InvocationTarget`. Returns the response
     /// value (for local) or the gateway's response (for remote).
     pub fn execute_rpc(&self, target: InvocationTarget) -> anyhow::Result<Value> {
