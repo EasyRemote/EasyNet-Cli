@@ -74,6 +74,16 @@ pub struct ClientSession {
     /// is one-frame-in / one-frame-out and concurrent calls on the
     /// same handle would interleave reads.
     pub client: Option<Mutex<IpcClient>>,
+    /// Per-handle subscription registry. Each `easynet_ability_subscribe`
+    /// call:
+    ///   * dials a fresh UDS connection (so the existing
+    ///     round-trip socket stays a clean 1-frame-in / 1-frame-out
+    ///     pipe);
+    ///   * spawns a reader task on the lib runtime;
+    ///   * stores a CancellationToken here keyed by the local
+    ///     subscription_id so easynet_subscription_cancel can fire
+    ///     the token + the reader exits.
+    pub subscriptions: Mutex<std::collections::HashMap<u64, tokio_util::sync::CancellationToken>>,
 }
 
 impl ClientSession {
@@ -84,6 +94,7 @@ impl ClientSession {
             ipc_version,
             control_path,
             client: Some(Mutex::new(client)),
+            subscriptions: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -96,6 +107,7 @@ impl ClientSession {
             ipc_version: 0,
             control_path,
             client: None,
+            subscriptions: Mutex::new(std::collections::HashMap::new()),
         }
     }
 }
@@ -131,17 +143,22 @@ pub(crate) fn lib_runtime() -> anyhow::Result<&'static Runtime> {
     // but in practice runtime construction fails only on resource
     // exhaustion (no threads / no fds), which the next call will
     // also fail on; a fresh attempt each time is acceptable.
+    //
+    // Multi-thread runtime so spawned reader tasks (subscribe
+    // forwarders) keep making progress while a separate `block_on`
+    // serves an Invoke. With `new_current_thread` a fire-and-forget
+    // task only runs while another `block_on` is active, which
+    // would deadlock the subscribe path.
     static RT: OnceLock<Runtime> = OnceLock::new();
     if let Some(rt) = RT.get() {
         return Ok(rt);
     }
-    let rt = tokio::runtime::Builder::new_current_thread()
+    let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
+        .worker_threads(2)
         .thread_name("easynet-ffi-io")
         .build()
         .map_err(|e| anyhow::anyhow!("FFI: tokio runtime build failed: {e}"))?;
-    // get_or_init is the single-init form; if a concurrent caller
-    // already initialised, drop the rt we just built and use theirs.
     Ok(RT.get_or_init(|| rt))
 }
 

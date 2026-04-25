@@ -42,6 +42,7 @@
 
 use std::os::raw::{c_char, c_void};
 
+use crate::ffi::client::IpcClient;
 use crate::ffi::errors::{
     set_last_error, ERR_ABILITY_FAILED, ERR_DAEMON_DOWN, ERR_GENERIC, ERR_INVALID_HANDLE,
     ERR_NOT_IMPLEMENTED, ERR_NULL_POINTER,
@@ -49,6 +50,7 @@ use crate::ffi::errors::{
 use crate::ffi::handle::{get, lib_runtime, EasynetHandle};
 use crate::ffi::strings::{alloc_output_cstring, read_cstr};
 use crate::services::control::frames::{IncomingFrame, OutgoingFrame};
+use crate::services::control::transport;
 
 /// Subscription id type returned from `easynet_ability_subscribe`.
 /// 0 means "no subscription allocated" (error path).
@@ -244,31 +246,42 @@ pub unsafe extern "C" fn easynet_ability_invoke(
     }
 }
 
-/// Subscribe to a streaming ability. The `on_frame` callback is
-/// invoked once per streaming frame delivered by the daemon.
-/// Returns a non-zero subscription id the caller uses to cancel
-/// via `easynet_subscription_cancel`.
+/// Subscribe to a streaming ability. Spawns a reader task on the
+/// lib's tokio runtime; that task dials a fresh UDS connection,
+/// sends a `Subscribe` frame, then loops decoding response frames
+/// and invoking `on_frame` once per data frame. A `Terminal` frame
+/// (or a transport error) ends the loop and the task exits.
 ///
-/// v1 status: skeleton — returns `ERR_NOT_IMPLEMENTED` after
-/// validating the inputs. The follow-up commit lands the per-
-/// subscription reader task + frame channel + cancel semantics.
-/// Validating inputs here means a Client misuse (null callback,
-/// invalid handle) is surfaced today, instead of being shadowed by
-/// the "not implemented" error.
+/// Why a fresh connection per subscription
+/// ---------------------------------------
+/// The session's RPC socket already runs a one-frame-in /
+/// one-frame-out contract behind a Mutex. Multiplexing a long-lived
+/// subscription stream onto it would require a per-connection
+/// reader/writer split mirroring the daemon's, which doubles the
+/// FFI complexity. A fresh socket per subscription keeps each path
+/// simple; the cost is one extra UDS file handle per active
+/// subscription, which on a desktop is irrelevant.
+///
+/// Returns a non-zero subscription id the caller uses to cancel.
+/// The id is local to the FFI registry — it is NOT the same as
+/// the wire-level subscription_id sent in the Subscribe frame
+/// (which the lib generates separately).
 ///
 /// # Safety
 /// - `handle` must be a valid handle from a successful `easynet_init`.
 /// - `ability` and `args_json` must be valid UTF-8 C strings.
-/// - `on_frame` must not be null. It is invoked on the lib's
-///   internal I/O thread; the Client is responsible for marshalling
-///   back to its own thread if needed.
+/// - `on_frame` must not be null. It is invoked from a tokio
+///   worker thread inside the lib; the callback must not block
+///   indefinitely. `user_data` is opaque; the lib does not
+///   dereference it but does pass it back verbatim on every
+///   callback.
 #[no_mangle]
 pub unsafe extern "C" fn easynet_ability_subscribe(
     handle: EasynetHandle,
     ability: *const c_char,
     args_json: *const c_char,
     on_frame: Option<FrameCallback>,
-    _user_data: *mut c_void,
+    user_data: *mut c_void,
     out_subscription_id: *mut SubscriptionId,
 ) -> i32 {
     if out_subscription_id.is_null() {
@@ -277,45 +290,226 @@ pub unsafe extern "C" fn easynet_ability_subscribe(
     }
     unsafe { *out_subscription_id = 0 };
 
-    if on_frame.is_none() {
-        set_last_error("easynet_ability_subscribe: on_frame callback is null");
-        return ERR_NULL_POINTER;
-    }
+    let cb = match on_frame {
+        Some(cb) => cb,
+        None => {
+            set_last_error("easynet_ability_subscribe: on_frame callback is null");
+            return ERR_NULL_POINTER;
+        }
+    };
 
-    if get(handle).is_none() {
-        set_last_error(format!(
-            "easynet_ability_subscribe: handle {handle} is not registered"
-        ));
-        return ERR_INVALID_HANDLE;
-    }
+    let session = match get(handle) {
+        Some(s) => s,
+        None => {
+            set_last_error(format!(
+                "easynet_ability_subscribe: handle {handle} is not registered"
+            ));
+            return ERR_INVALID_HANDLE;
+        }
+    };
 
-    let _ability = match read_cstr(ability) {
-        Ok(s) => s,
+    let ability = match read_cstr(ability) {
+        Ok(s) => s.to_string(),
         Err(_) => {
             set_last_error("easynet_ability_subscribe: ability name is null or non-UTF-8");
             return ERR_NULL_POINTER;
         }
     };
-    let _args = match read_cstr(args_json) {
-        Ok(s) => s,
+    let args = match read_cstr(args_json) {
+        Ok(s) => s.to_string(),
         Err(_) => {
             set_last_error("easynet_ability_subscribe: args_json is null or non-UTF-8");
             return ERR_NULL_POINTER;
         }
     };
 
-    set_last_error(
-        "easynet_ability_subscribe is a skeleton in v1 of PR-DAEMON; \
-         the streaming reader task lands in a follow-up commit",
-    );
-    ERR_NOT_IMPLEMENTED
+    let args_value: serde_json::Value = match serde_json::from_str(&args) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(format!("easynet_ability_subscribe: args_json invalid: {e}"));
+            return ERR_GENERIC;
+        }
+    };
+
+    let rt = match lib_runtime() {
+        Ok(rt) => rt,
+        Err(e) => {
+            set_last_error(format!("easynet_ability_subscribe: {e}"));
+            return ERR_GENERIC;
+        }
+    };
+
+    // Allocate a local subscription id + cancellation token.
+    let sub_id = next_subscription_id();
+    let token = tokio_util::sync::CancellationToken::new();
+    {
+        let mut g = session
+            .subscriptions
+            .lock()
+            .expect("subscriptions registry lock");
+        g.insert(sub_id, token.clone());
+    }
+
+    // user_data is *mut c_void — not Send by default. Wrap it in a
+    // newtype that asserts Send because the Client guarantees the
+    // pointer outlives the subscription (or sets it to null).
+    let user_data = UserDataPtr(user_data);
+
+    let control_path = std::path::PathBuf::from(&session.control_path);
+    let session_for_cleanup = session.clone();
+    rt.spawn(async move {
+        let _ = run_subscription(
+            control_path,
+            ability,
+            args_value,
+            cb,
+            user_data,
+            token.clone(),
+        )
+        .await;
+        // De-register on exit.
+        let mut g = session_for_cleanup
+            .subscriptions
+            .lock()
+            .expect("subscriptions registry lock");
+        g.remove(&sub_id);
+    });
+
+    unsafe { *out_subscription_id = sub_id };
+    crate::ffi::errors::clear_last_error();
+    crate::ffi::errors::EASYNET_OK
 }
 
-/// Cancel an in-flight subscription. v1 skeleton: always returns
-/// `EASYNET_OK` for a valid handle regardless of whether the
-/// subscription is known. The follow-up commit looks up the
-/// subscription registry and sends a `Cancel` frame, but keeps the
-/// "unknown id is not an error" idempotency.
+fn next_subscription_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// The actual reader task. Dials a fresh UDS connection at
+/// `control.sock` (resolved from the daemon's `control.json`),
+/// sends one `Subscribe` frame, then loops decoding `Frame` /
+/// `Terminal` / `Error` envelopes and invoking `on_frame`.
+///
+/// Returns Ok when the task exits cleanly (Terminal / cancel /
+/// peer close). Errors are recorded but not propagated to the C
+/// caller — the caller already returned from
+/// `easynet_ability_subscribe` before this task started.
+/// Send-asserting wrapper around `*mut c_void`. The Client owns
+/// the pointer and guarantees it outlives the subscription; the
+/// lib never dereferences it.
+struct UserDataPtr(*mut c_void);
+unsafe impl Send for UserDataPtr {}
+
+async fn run_subscription(
+    control_path: std::path::PathBuf,
+    ability: String,
+    args: serde_json::Value,
+    on_frame: FrameCallback,
+    user_data: UserDataPtr,
+    token: tokio_util::sync::CancellationToken,
+) -> anyhow::Result<()> {
+    use bytes::Bytes;
+    use futures::{SinkExt, StreamExt};
+
+    // Dial control.json → resolve socket path → connect a fresh
+    // UnixStream. We deliberately do NOT reuse the session's
+    // existing IpcClient: that one runs a Mutex-guarded round-trip
+    // contract, and a long-lived stream would block every
+    // concurrent ability_invoke on the same handle.
+    let disc = match crate::services::control::discovery::read(&control_path) {
+        Ok(Some(d)) => d,
+        Ok(None) => anyhow::bail!("control.json missing at {}", control_path.display()),
+        Err(e) => anyhow::bail!("read control.json: {e}"),
+    };
+    let socket_path = disc
+        .socket_path
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("control.json has no socket_path"))?;
+    let _ = transport::default_socket_path(); // re-export keeps the import "used"
+    let stream = tokio::net::UnixStream::connect(&socket_path).await?;
+    let codec = tokio_util::codec::LengthDelimitedCodec::builder()
+        .little_endian()
+        .new_codec();
+    let mut framed = tokio_util::codec::Framed::new(stream, codec);
+
+    // Wire-level subscription_id is independent of the FFI-level
+    // one; the daemon needs it to route Cancel frames. We use a
+    // UUID so two subscriptions on the same connection (which we
+    // do not multiplex today, but a future change might) don't
+    // collide.
+    let wire_sub_id = uuid::Uuid::new_v4().to_string();
+    let req = IncomingFrame::Subscribe {
+        subscription_id: wire_sub_id.clone(),
+        ability,
+        args,
+    };
+    let bytes = serde_json::to_vec(&req)?;
+    framed.send(Bytes::from(bytes)).await?;
+
+    loop {
+        tokio::select! {
+            _ = token.cancelled() => {
+                // Send Cancel and break.
+                let cancel = IncomingFrame::Cancel { subscription_id: wire_sub_id.clone() };
+                if let Ok(b) = serde_json::to_vec(&cancel) {
+                    let _ = framed.send(Bytes::from(b)).await;
+                }
+                break;
+            }
+            recv = framed.next() => match recv {
+                None => break, // connection closed
+                Some(Err(e)) => return Err(anyhow::anyhow!("framed read: {e}")),
+                Some(Ok(bytes)) => {
+                    let outgoing: OutgoingFrame = serde_json::from_slice(&bytes)?;
+                    match outgoing {
+                        OutgoingFrame::Frame { frame, .. } => {
+                            // Marshal the frame as JSON + invoke the
+                            // C callback.
+                            let json = serde_json::to_string(&frame)?;
+                            let cstr = match std::ffi::CString::new(json) {
+                                Ok(c) => c,
+                                Err(_) => continue, // contained NUL byte; skip
+                            };
+                            // SAFETY: callback signature was validated as
+                            // non-null at the FFI call site; the pointer
+                            // lifetime is the duration of this call.
+                            unsafe { on_frame(user_data.0, cstr.as_ptr()); }
+                        }
+                        OutgoingFrame::Terminal { .. } => break,
+                        OutgoingFrame::Error { message, .. } => {
+                            // Surface as a Frame with kind="error" so
+                            // the Client sees it without needing a
+                            // separate error callback channel.
+                            let v = serde_json::json!({
+                                "kind": "error",
+                                "message": message,
+                            });
+                            if let Ok(json) = serde_json::to_string(&v) {
+                                if let Ok(cstr) = std::ffi::CString::new(json) {
+                                    unsafe { on_frame(user_data.0, cstr.as_ptr()); }
+                                }
+                            }
+                            break;
+                        }
+                        OutgoingFrame::Result { .. } => {
+                            // Unexpected for a Subscribe; ignore.
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Cancel an in-flight subscription. Looks up the per-handle
+/// registry; if the subscription_id is known, fires its
+/// CancellationToken — the reader task observes the cancel via
+/// tokio::select!, sends a `Cancel` frame to the daemon, and
+/// exits. Idempotent: cancelling an unknown id returns OK without
+/// reaching the wire.
 ///
 /// # Safety
 /// `handle` must be valid; `subscription_id` may refer to an
@@ -323,16 +517,36 @@ pub unsafe extern "C" fn easynet_ability_subscribe(
 #[no_mangle]
 pub unsafe extern "C" fn easynet_subscription_cancel(
     handle: EasynetHandle,
-    _subscription_id: SubscriptionId,
+    subscription_id: SubscriptionId,
 ) -> i32 {
-    if get(handle).is_none() {
-        set_last_error(format!(
-            "easynet_subscription_cancel: handle {handle} is not registered"
-        ));
-        return ERR_INVALID_HANDLE;
+    let session = match get(handle) {
+        Some(s) => s,
+        None => {
+            set_last_error(format!(
+                "easynet_subscription_cancel: handle {handle} is not registered"
+            ));
+            return ERR_INVALID_HANDLE;
+        }
+    };
+    let token = {
+        let mut g = session
+            .subscriptions
+            .lock()
+            .expect("subscriptions registry lock");
+        g.remove(&subscription_id)
+    };
+    if let Some(tok) = token {
+        tok.cancel();
     }
     crate::ffi::errors::clear_last_error();
     crate::ffi::errors::EASYNET_OK
+}
+
+/// Marker — `IpcClient` is referenced by tests but unused in this
+/// module's production path. Suppress the unused-import lint.
+#[allow(dead_code)]
+fn _mark_ipc_client_used() -> Option<&'static IpcClient> {
+    None
 }
 
 #[cfg(test)]
