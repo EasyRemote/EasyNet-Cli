@@ -21,20 +21,21 @@
 //   (c) The ABI stability contract has exactly two functions to
 //       review for breakage.
 //
-// The shape "generic invoke + typed wrappers in Client-side code"
-// is deliberate. Per-ability *convenience* functions (e.g. a
-// Go `easynet_session_attach`) can be added on top, but every
-// one of them is a thin wrapper over the generic helper — so the
-// stability contract stays on the two functions in this file.
+// v1 status (PR-DAEMON Commit 4)
+// -------------------------------
+// `easynet_ability_invoke` is wired through `IpcClient::round_trip`
+// to the daemon. The daemon's `AbilityProxy` still returns the v1
+// skeleton `Error` envelope (PR-INVOCATION-EXEC-UNITY swaps that
+// for real Kernel::invoke dispatch), so a successful round-trip
+// today returns `ERR_ABILITY_FAILED` with the daemon's message in
+// the last-error slot — distinct from "transport broke".
 //
-// v1 status — skeleton
-// --------------------
-// Both exported functions return `ERR_NOT_IMPLEMENTED` after
-// setting a clear last-error message. Wiring them to the real
-// `IpcClient` is the next PR-DAEMON commit. Shipping the symbols
-// now means Client builds against `libeasynet_cli` link
-// successfully — the functions just fail at runtime until the
-// transport lands.
+// `easynet_ability_subscribe` remains a skeleton: streaming needs
+// a long-lived reader task per subscription plus a bounded channel
+// pumping bytes back to the FFI callback. That lands in a focused
+// follow-up commit; shipping it half-built would create a confusing
+// state where some subscriptions deliver frames and others silently
+// drop.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -42,10 +43,12 @@
 use std::os::raw::{c_char, c_void};
 
 use crate::ffi::errors::{
-    set_last_error, ERR_INVALID_HANDLE, ERR_NOT_IMPLEMENTED, ERR_NULL_POINTER,
+    set_last_error, ERR_ABILITY_FAILED, ERR_DAEMON_DOWN, ERR_GENERIC, ERR_INVALID_HANDLE,
+    ERR_NOT_IMPLEMENTED, ERR_NULL_POINTER,
 };
-use crate::ffi::handle::{get, EasynetHandle};
-use crate::ffi::strings::read_cstr;
+use crate::ffi::handle::{get, lib_runtime, EasynetHandle};
+use crate::ffi::strings::{alloc_output_cstring, read_cstr};
+use crate::services::control::frames::{IncomingFrame, OutgoingFrame};
 
 /// Subscription id type returned from `easynet_ability_subscribe`.
 /// 0 means "no subscription allocated" (error path).
@@ -60,10 +63,34 @@ pub type SubscriptionId = u64;
 pub type FrameCallback =
     unsafe extern "C" fn(user_data: *mut c_void, frame_json: *const c_char);
 
+/// Generate a request id for an Invoke frame the FFI synthesises.
+///
+/// Why FFI-side and not Client-side: the Client doesn't see the
+/// IPC layer; the FFI is the only place that can guarantee
+/// uniqueness within a single library load. v1 uses a process-
+/// monotonic counter (good enough — `request_id` is a v1 dedupe
+/// key, not a security claim). The follow-up commit that wires
+/// real Invocation envelopes will replace this with the AXIOM §2
+/// nonce + caller-side canonical bytes.
+fn next_invoke_request_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("ffi-{n}")
+}
+
 /// Invoke an ability synchronously. Writes the result JSON string
 /// to `*out_result` (caller frees via `easynet_string_free`) and
 /// returns `EASYNET_OK`. On failure returns a non-zero code and
 /// `*out_result` is set to NULL.
+///
+/// Mapping of daemon responses to ABI codes:
+///   - `OutgoingFrame::Result` → `EASYNET_OK`, `*out_result` =
+///     newly-allocated CString of the `value` JSON.
+///   - `OutgoingFrame::Error`  → `ERR_ABILITY_FAILED`, last-error
+///     set to the daemon's message; `*out_result` = NULL.
+///   - Transport failure (peer closed, decode error) →
+///     `ERR_DAEMON_DOWN`; last-error carries the I/O reason.
 ///
 /// # Safety
 /// - `handle` must be a valid handle from a successful `easynet_init`.
@@ -85,39 +112,149 @@ pub unsafe extern "C" fn easynet_ability_invoke(
     // check it on the failure path.
     unsafe { *out_result = std::ptr::null_mut() };
 
-    if get(handle).is_none() {
-        set_last_error(format!(
-            "easynet_ability_invoke: handle {handle} is not registered"
-        ));
-        return ERR_INVALID_HANDLE;
-    }
+    let session = match get(handle) {
+        Some(s) => s,
+        None => {
+            set_last_error(format!(
+                "easynet_ability_invoke: handle {handle} is not registered"
+            ));
+            return ERR_INVALID_HANDLE;
+        }
+    };
 
-    let _ability = match read_cstr(ability) {
-        Ok(s) => s,
+    let ability_name = match read_cstr(ability) {
+        Ok(s) => s.to_string(),
         Err(_) => {
             set_last_error("easynet_ability_invoke: ability name is null or non-UTF-8");
             return ERR_NULL_POINTER;
         }
     };
-    let _args = match read_cstr(args_json) {
-        Ok(s) => s,
+    let args_raw = match read_cstr(args_json) {
+        Ok(s) => s.to_string(),
         Err(_) => {
             set_last_error("easynet_ability_invoke: args_json is null or non-UTF-8");
             return ERR_NULL_POINTER;
         }
     };
 
-    set_last_error(
-        "easynet_ability_invoke is a skeleton in v1 of PR-DAEMON; \
-         the follow-up commit wires it through IpcClient to the daemon",
-    );
-    ERR_NOT_IMPLEMENTED
+    // Parse args JSON into a serde_json::Value. `args_json` is a
+    // string of JSON, not a JSON-encoded string of JSON — passing
+    // `{}` literal is correct, passing `"{}"` (with extra quoting)
+    // is a Client bug we surface as ERR_NULL_POINTER.
+    let args_value: serde_json::Value = match serde_json::from_str(&args_raw) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(format!(
+                "easynet_ability_invoke: args_json is not valid JSON: {e}"
+            ));
+            return ERR_NULL_POINTER;
+        }
+    };
+
+    let req = IncomingFrame::Invoke {
+        request_id: next_invoke_request_id(),
+        ability: ability_name,
+        args: args_value,
+    };
+
+    // Build / fetch the lib's tokio runtime; hold the IPC client
+    // mutex across the round-trip so concurrent FFI calls on the
+    // same handle serialise (single framed stream cannot interleave
+    // request/response pairs).
+    let rt = match lib_runtime() {
+        Ok(rt) => rt,
+        Err(e) => {
+            set_last_error(format!("easynet_ability_invoke: {e}"));
+            return ERR_GENERIC;
+        }
+    };
+
+    let client_mutex = match session.client.as_ref() {
+        Some(m) => m,
+        None => {
+            // A test session created without a real IPC client
+            // somehow ended up with a registered handle — only
+            // possible from inside the test suite. Surface it as a
+            // generic failure rather than panic.
+            set_last_error(
+                "easynet_ability_invoke: handle has no IPC client \
+                 (test-only session?); call easynet_init first",
+            );
+            return ERR_GENERIC;
+        }
+    };
+
+    let resp_result = {
+        let mut client = client_mutex
+            .lock()
+            .expect("ipc client mutex not poisoned");
+        rt.block_on(client.round_trip(req))
+    };
+
+    let resp = match resp_result {
+        Ok(r) => r,
+        Err(e) => {
+            set_last_error(format!("easynet_ability_invoke: {e:#}"));
+            return ERR_DAEMON_DOWN;
+        }
+    };
+
+    match resp {
+        OutgoingFrame::Result { value, .. } => {
+            // Serialise the value back to a JSON string the caller
+            // will read out via `*out_result`. The string is heap-
+            // allocated; the caller must `easynet_string_free` it.
+            let json = match serde_json::to_string(&value) {
+                Ok(s) => s,
+                Err(e) => {
+                    set_last_error(format!(
+                        "easynet_ability_invoke: encode result JSON failed: {e}"
+                    ));
+                    return ERR_GENERIC;
+                }
+            };
+            let ptr = alloc_output_cstring(json);
+            if ptr.is_null() {
+                set_last_error(
+                    "easynet_ability_invoke: out-of-memory allocating result string",
+                );
+                return ERR_GENERIC;
+            }
+            unsafe { *out_result = ptr };
+            crate::ffi::errors::clear_last_error();
+            crate::ffi::errors::EASYNET_OK
+        }
+        OutgoingFrame::Error {
+            code, message, ..
+        } => {
+            set_last_error(format!(
+                "easynet_ability_invoke: daemon returned error \"{code}\": {message}"
+            ));
+            ERR_ABILITY_FAILED
+        }
+        // The daemon should not send Frame/Terminal in response to
+        // an Invoke (those are subscription replies). Treat as a
+        // protocol violation — fail loud, don't paper over.
+        other => {
+            set_last_error(format!(
+                "easynet_ability_invoke: daemon sent unexpected frame for an Invoke: {other:?}"
+            ));
+            ERR_DAEMON_DOWN
+        }
+    }
 }
 
 /// Subscribe to a streaming ability. The `on_frame` callback is
 /// invoked once per streaming frame delivered by the daemon.
 /// Returns a non-zero subscription id the caller uses to cancel
 /// via `easynet_subscription_cancel`.
+///
+/// v1 status: skeleton — returns `ERR_NOT_IMPLEMENTED` after
+/// validating the inputs. The follow-up commit lands the per-
+/// subscription reader task + frame channel + cancel semantics.
+/// Validating inputs here means a Client misuse (null callback,
+/// invalid handle) is surfaced today, instead of being shadowed by
+/// the "not implemented" error.
 ///
 /// # Safety
 /// - `handle` must be a valid handle from a successful `easynet_init`.
@@ -169,15 +306,16 @@ pub unsafe extern "C" fn easynet_ability_subscribe(
 
     set_last_error(
         "easynet_ability_subscribe is a skeleton in v1 of PR-DAEMON; \
-         the follow-up commit wires the streaming path through IpcClient",
+         the streaming reader task lands in a follow-up commit",
     );
     ERR_NOT_IMPLEMENTED
 }
 
 /// Cancel an in-flight subscription. v1 skeleton: always returns
-/// `EASYNET_OK` regardless of whether the subscription is known;
-/// the follow-up commit looks up the subscription registry and
-/// sends a `Cancel` frame.
+/// `EASYNET_OK` for a valid handle regardless of whether the
+/// subscription is known. The follow-up commit looks up the
+/// subscription registry and sends a `Cancel` frame, but keeps the
+/// "unknown id is not an error" idempotency.
 ///
 /// # Safety
 /// `handle` must be valid; `subscription_id` may refer to an
@@ -206,7 +344,10 @@ mod tests {
     /// A handle to something alive in the registry. Tests that
     /// need "a valid handle" use this; tests exercising invalid
     /// handles pass literal `0` or a large unknown value.
-    fn live_handle() -> EasynetHandle {
+    fn live_handle_no_client() -> EasynetHandle {
+        // Test session has no IPC client. Real wire tests live in
+        // src/ffi/client.rs (which has the server-harness setup);
+        // here we exercise the validation paths only.
         let (h, _) = alloc(test_session());
         h
     }
@@ -242,19 +383,37 @@ mod tests {
     }
 
     #[test]
-    fn invoke_with_valid_handle_returns_not_implemented_in_v1_skeleton() {
-        // The v1 skeleton surfaces a distinct error code for "wired
-        // to the skeleton" vs "programmer error". This test pins
-        // that distinction so the Client's error-handling code can
-        // branch on `ERR_NOT_IMPLEMENTED` and tell a user "feature
-        // not ready yet".
-        let h = live_handle();
+    fn invoke_rejects_non_json_args() {
+        // A handle with no IPC client gets us through the handle
+        // validation and into the args-decode path. Pin: a Client
+        // that passes a malformed args string sees ERR_NULL_POINTER
+        // (the closest "your arg is wrong" code we have today),
+        // never a panic.
+        let h = live_handle_no_client();
+        let ability = CString::new("system.ping").unwrap();
+        // Trailing comma, not legal JSON.
+        let bad_args = CString::new("{,}").unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+        let code = unsafe {
+            easynet_ability_invoke(h, ability.as_ptr(), bad_args.as_ptr(), &mut out)
+        };
+        assert_eq!(code, ERR_NULL_POINTER);
+        assert!(out.is_null());
+    }
+
+    #[test]
+    fn invoke_on_test_session_without_client_returns_generic_error() {
+        // A test-only session has `client: None`; reaching the IPC
+        // dispatch branch must surface as a generic error with a
+        // distinctive message, not a panic. This pins the safety
+        // net for misuse from inside the crate's own tests.
+        let h = live_handle_no_client();
         let ability = CString::new("system.ping").unwrap();
         let args = CString::new("{}").unwrap();
         let mut out: *mut c_char = std::ptr::null_mut();
         let code =
             unsafe { easynet_ability_invoke(h, ability.as_ptr(), args.as_ptr(), &mut out) };
-        assert_eq!(code, ERR_NOT_IMPLEMENTED);
+        assert_eq!(code, ERR_GENERIC);
     }
 
     #[test]
@@ -262,7 +421,7 @@ mod tests {
         // A null callback would be impossible to deliver frames
         // through; reject at the ABI boundary rather than crashing
         // later when the first frame arrives.
-        let h = live_handle();
+        let h = live_handle_no_client();
         let ability = CString::new("system.session.attach").unwrap();
         let args = CString::new("{}").unwrap();
         let mut sub: SubscriptionId = 42;
@@ -286,7 +445,7 @@ mod tests {
         // because the real implementation will preserve the same
         // idempotency — a Client re-sending a cancel must never
         // fail.
-        let h = live_handle();
+        let h = live_handle_no_client();
         let code = unsafe { easynet_subscription_cancel(h, 999_999) };
         assert_eq!(code, crate::ffi::errors::EASYNET_OK);
     }
