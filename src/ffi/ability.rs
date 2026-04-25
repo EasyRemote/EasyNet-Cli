@@ -401,6 +401,16 @@ fn next_subscription_id() -> u64 {
 struct UserDataPtr(*mut c_void);
 unsafe impl Send for UserDataPtr {}
 
+impl UserDataPtr {
+    /// Read the wrapped raw pointer. Done via a method (not field
+    /// projection) so closure capture sees `&UserDataPtr` instead
+    /// of `&*mut c_void` — Rust 2021's disjoint-field capture would
+    /// otherwise drop the Send guarantee on the spawned thread.
+    fn raw(&self) -> *mut c_void {
+        self.0
+    }
+}
+
 async fn run_subscription(
     control_path: std::path::PathBuf,
     ability: String,
@@ -447,11 +457,76 @@ async fn run_subscription(
     let bytes = serde_json::to_vec(&req)?;
     framed.send(Bytes::from(bytes)).await?;
 
+    // Dedicated OS thread for delivering frames to the C callback.
+    //
+    // Why an OS thread and not "just call on_frame here":
+    // ---------------------------------------------------
+    // Bindings like koffi (Node) implement the callback round-trip
+    // synchronously: when a non-V8-thread calls the registered
+    // function pointer, koffi's native trampoline blocks the caller
+    // on a condvar until the V8 main thread has executed the JS
+    // callback. If we invoke on_frame from a tokio worker, that
+    // worker is parked for the entire JS dispatch. With the lib's
+    // 2-worker runtime, two concurrent frame deliveries can park
+    // both workers while V8 main is parked in `block_on` for the
+    // next `easynet_ability_invoke` — three-way deadlock.
+    //
+    // Punting the synchronous on_frame call to a dedicated, non-
+    // tokio thread keeps every tokio worker free. The tokio reader
+    // only does a non-blocking mpsc send; the dispatcher thread
+    // owns the callback's blocking semantics.
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    // Move the Send-asserting wrapper itself into the closure (NOT
+    // the raw pointer; destructuring inside the closure would re-
+    // introduce the *mut c_void into the captured set and trip Send).
+    let cb_user_data: UserDataPtr = user_data;
+    let dispatcher = std::thread::Builder::new()
+        .name(format!("easynet-cb-{wire_sub_id}"))
+        .spawn(move || {
+            // Use the accessor method instead of field projection
+            // so the closure captures `cb_user_data: UserDataPtr`
+            // (Send) rather than the raw pointer (not Send).
+            let ud = cb_user_data.raw();
+            while let Ok(json_bytes) = rx.recv() {
+                let cstr = match std::ffi::CString::new(json_bytes) {
+                    Ok(c) => c,
+                    Err(_) => continue, // contained NUL; skip
+                };
+                // SAFETY: on_frame was validated non-null at the
+                // FFI call site; the C string lives for the call.
+                unsafe { on_frame(ud, cstr.as_ptr()); }
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("spawn dispatcher thread: {e}"))?;
+
+    let result = run_subscription_loop(&mut framed, &token, &wire_sub_id, &tx).await;
+
+    // Dropping the sender wakes the dispatcher's `rx.recv()` with
+    // Err and lets the thread exit. Joining is best-effort: the
+    // dispatcher thread blocks on the user's callback, so a runaway
+    // user callback would also park us — detach instead.
+    drop(tx);
+    let _ = dispatcher; // detach; thread exits on channel close
+
+    result
+}
+
+async fn run_subscription_loop(
+    framed: &mut tokio_util::codec::Framed<
+        tokio::net::UnixStream,
+        tokio_util::codec::LengthDelimitedCodec,
+    >,
+    token: &tokio_util::sync::CancellationToken,
+    wire_sub_id: &str,
+    tx: &std::sync::mpsc::Sender<Vec<u8>>,
+) -> anyhow::Result<()> {
+    use bytes::Bytes;
+    use futures::{SinkExt, StreamExt};
+
     loop {
         tokio::select! {
             _ = token.cancelled() => {
-                // Send Cancel and break.
-                let cancel = IncomingFrame::Cancel { subscription_id: wire_sub_id.clone() };
+                let cancel = IncomingFrame::Cancel { subscription_id: wire_sub_id.to_string() };
                 if let Ok(b) = serde_json::to_vec(&cancel) {
                     let _ = framed.send(Bytes::from(b)).await;
                 }
@@ -464,38 +539,24 @@ async fn run_subscription(
                     let outgoing: OutgoingFrame = serde_json::from_slice(&bytes)?;
                     match outgoing {
                         OutgoingFrame::Frame { frame, .. } => {
-                            // Marshal the frame as JSON + invoke the
-                            // C callback.
-                            let json = serde_json::to_string(&frame)?;
-                            let cstr = match std::ffi::CString::new(json) {
-                                Ok(c) => c,
-                                Err(_) => continue, // contained NUL byte; skip
-                            };
-                            // SAFETY: callback signature was validated as
-                            // non-null at the FFI call site; the pointer
-                            // lifetime is the duration of this call.
-                            unsafe { on_frame(user_data.0, cstr.as_ptr()); }
+                            let json = serde_json::to_vec(&frame)?;
+                            // Hand the JSON off to the dispatcher
+                            // thread. If the dispatcher has died the
+                            // send fails — treat like terminal.
+                            if tx.send(json).is_err() { break; }
                         }
                         OutgoingFrame::Terminal { .. } => break,
                         OutgoingFrame::Error { message, .. } => {
-                            // Surface as a Frame with kind="error" so
-                            // the Client sees it without needing a
-                            // separate error callback channel.
                             let v = serde_json::json!({
                                 "kind": "error",
                                 "message": message,
                             });
-                            if let Ok(json) = serde_json::to_string(&v) {
-                                if let Ok(cstr) = std::ffi::CString::new(json) {
-                                    unsafe { on_frame(user_data.0, cstr.as_ptr()); }
-                                }
+                            if let Ok(json) = serde_json::to_vec(&v) {
+                                let _ = tx.send(json);
                             }
                             break;
                         }
-                        OutgoingFrame::Result { .. } => {
-                            // Unexpected for a Subscribe; ignore.
-                            continue;
-                        }
+                        OutgoingFrame::Result { .. } => continue,
                     }
                 }
             }
