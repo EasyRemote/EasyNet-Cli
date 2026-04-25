@@ -1,0 +1,11 @@
+schema_version = "1"
+name = "loop.subscribe"
+description = "Subscribe to a loop's status stream. v1 emits a one-shot snapshot; live per-iteration frames land with PR-INVOCATION-EXEC-UNITY."
+
+[input_schema]
+type = "object"
+required = ["loop_id"]
+additionalProperties = false
+
+[input_schema.properties.loop_id]
+type = "string"

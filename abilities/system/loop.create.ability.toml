@@ -1,0 +1,15 @@
+schema_version = "1"
+name = "loop.create"
+description = "Create a worker+verify loop instance bounded by max_iters. v1 starts in Pending state; PR-INVOCATION-EXEC-UNITY drives per-iteration body and verify Invocations through Kernel::invoke."
+
+[input_schema]
+type = "object"
+required = ["worker_agent", "max_iters"]
+additionalProperties = false
+
+[input_schema.properties.worker_agent]
+type = "string"
+
+[input_schema.properties.max_iters]
+type = "integer"
+minimum = 1

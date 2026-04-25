@@ -334,6 +334,42 @@ fn system_skills_json() -> String {
                 "output_schema": serde_json::Value::Null,
                 "timeout_seconds": serde_json::Value::Null,
             }),
+            "system.loop.create" => json!({
+                "name": "system.loop.create",
+                "description":
+                    crate::runtime::system::loop_ability::create_description(),
+                "input_schema":
+                    crate::runtime::system::loop_ability::create_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.loop.status" => json!({
+                "name": "system.loop.status",
+                "description":
+                    crate::runtime::system::loop_ability::status_description(),
+                "input_schema":
+                    crate::runtime::system::loop_ability::status_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.loop.subscribe" => json!({
+                "name": "system.loop.subscribe",
+                "description":
+                    crate::runtime::system::loop_ability::subscribe_description(),
+                "input_schema":
+                    crate::runtime::system::loop_ability::subscribe_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.loop.cancel" => json!({
+                "name": "system.loop.cancel",
+                "description":
+                    crate::runtime::system::loop_ability::cancel_description(),
+                "input_schema":
+                    crate::runtime::system::loop_ability::cancel_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
             other => json!({
                 "name": other,
                 "description": "",
