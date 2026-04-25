@@ -38,11 +38,18 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use chrono::Utc;
 use easynet_cli::facade::cli::run_daemon;
 use easynet_cli::runtime::ability_dispatch::AbilityDispatcher;
-use easynet_cli::runtime::domain::{NodeId, TenantId};
+use easynet_cli::runtime::domain::{
+    AgentId, NodeId, ScheduleId, Session, SessionId, TenantId,
+};
+use easynet_cli::runtime::execution::schedule::ScheduleService;
+use easynet_cli::runtime::execution::session::SessionService;
 use easynet_cli::runtime::gateway::NoopGateway;
 use easynet_cli::runtime::gateway_api::GatewayApi;
 use easynet_cli::runtime::invocation_target::{LocalNodeResolver, TargetResolver};
@@ -88,6 +95,13 @@ async fn main() -> anyhow::Result<()> {
     // the registry off fresh sub-services (the pre-PR shape) would
     // give the IPC plane a parallel state not reachable from the
     // Kernel — silently breaking session.list / discuss.subscribe.
+    // Snapshot the sub-service handles we'll need for the tick
+    // runner BEFORE moving the kernel into the proxy. session +
+    // schedule handles are Arc clones so the tick runner sees the
+    // same state as the registry / proxy / KernelApi calls.
+    let sessions_for_tick = kernel.session_service();
+    let schedule_for_tick = kernel.schedule_service();
+
     let registry = system::build_registry_with_services(
         kernel.session_service(),
         kernel.permission_service(),
@@ -134,7 +148,113 @@ async fn main() -> anyhow::Result<()> {
             })?;
     }
 
+    // Schedule tick runner. Fires due schedules every TICK_PERIOD.
+    // Each fire creates a session-shaped record in SessionService
+    // so a Client subscribed to system.session.attach for the
+    // synthetic session id sees the fire event live.
+    let session_handle = sessions_for_tick;
+    let schedule_handle = schedule_for_tick;
+    spawn_schedule_tick(session_handle, schedule_handle);
+
     // Foreground: Control-plane IPC server. Returns when the listener
     // is dropped (i.e. never, in v1 — we exit on SIGTERM via the OS).
     server::run(proxy).await
 }
+
+/// Spawn the schedule tick runner. Every `TICK_PERIOD` it asks the
+/// ScheduleService for due fires and turns each into a session-
+/// shaped record so attached Clients see a live `scheduled_fire`
+/// frame.
+///
+/// v1 idempotency: an in-memory `last_fire_at` map keyed by
+/// `schedule_id` keeps a fire from re-emitting on the next tick if
+/// the cron expression's resolution is finer than the tick period.
+/// Daemon restart loses this state — schedules due since the last
+/// fire will refire once on resume per their misfire policy. v2
+/// will durably persist last-fire-at alongside the schedule entry.
+fn spawn_schedule_tick(
+    sessions: Arc<SessionService>,
+    schedule: Arc<ScheduleService>,
+) {
+    const TICK_PERIOD: Duration = Duration::from_secs(15);
+    tokio::spawn(async move {
+        let last_fire: Arc<Mutex<HashMap<ScheduleId, i64>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let mut interval = tokio::time::interval(TICK_PERIOD);
+        // First tick fires immediately; skip it so a daemon
+        // restart does not double-fire schedules whose cron is at
+        // a coarse interval.
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let _ = interval.tick().await;
+        loop {
+            interval.tick().await;
+            let now = Utc::now();
+            let lookup_last = {
+                let lf = Arc::clone(&last_fire);
+                move |id: &ScheduleId| -> Option<i64> {
+                    lf.lock().ok().and_then(|g| g.get(id).copied())
+                }
+            };
+            let due = schedule.due(now, lookup_last);
+            if due.is_empty() {
+                continue;
+            }
+            for fire in due {
+                let now_ms = now.timestamp_millis();
+                if let Ok(mut g) = last_fire.lock() {
+                    g.insert(fire.schedule_id.clone(), now_ms);
+                }
+                // Synthesize a session for the fire so Clients see
+                // it on system.session.attach. The session id is a
+                // composite "sched-<id>-<fire_ms>" so attach can
+                // target one specific fire's timeline.
+                let sid = SessionId::new(format!(
+                    "sched-{}-{}",
+                    fire.schedule_id.as_str(),
+                    fire.fire_at.timestamp_millis()
+                ));
+                let synthetic = Session {
+                    id: sid.clone(),
+                    agent: AgentId::new(
+                        schedule
+                            .list()
+                            .iter()
+                            .find(|s| s.id == fire.schedule_id)
+                            .map(|s| s.target_agent.as_str().to_string())
+                            .unwrap_or_else(|| "?".into()),
+                    ),
+                    node: NodeId::new("self"),
+                    tenant: TenantId::default_v1(),
+                    started_unix_ms: now_ms,
+                    ended_unix_ms: None,
+                };
+                if let Err(e) = sessions.admit(synthetic) {
+                    // Already admitted with the same id (= same
+                    // minute, same schedule) — idempotent skip.
+                    eprintln!(
+                        "[schedule-tick] skip duplicate fire for {}: {e}",
+                        fire.schedule_id
+                    );
+                    continue;
+                }
+                let _ = sessions.emit_event(
+                    &sid,
+                    serde_json::json!({
+                        "kind": "scheduled_fire",
+                        "schedule_id": fire.schedule_id.as_str(),
+                        "fire_at_unix_ms": fire.fire_at.timestamp_millis(),
+                        "catch_up": fire.catch_up,
+                    }),
+                );
+                let _ = sessions.terminate(&sid, now_ms);
+                eprintln!(
+                    "[schedule-tick] fired {} at {} (catch_up={})",
+                    fire.schedule_id,
+                    fire.fire_at,
+                    fire.catch_up,
+                );
+            }
+        }
+    });
+}
+
