@@ -1,0 +1,7 @@
+schema_version = "1"
+name = "permission.subscribe"
+description = "Subscribe to the approval-broker pending queue. v1 returns a one-shot snapshot of all pending PermissionRequests; live updates land with PR-INVOCATION-EXEC-UNITY."
+
+[input_schema]
+type = "object"
+additionalProperties = false
