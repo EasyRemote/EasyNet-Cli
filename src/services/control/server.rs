@@ -59,7 +59,13 @@ use crate::services::control::transport::{self, ControlAddress, ControlListener}
 /// during bind / discovery write are returned synchronously; errors
 /// inside per-connection tasks are logged but do not tear down the
 /// loop (one bad client must not kill the daemon).
-pub async fn run(kernel: Arc<dyn KernelApi>) -> anyhow::Result<()> {
+///
+/// `proxy` carries the dispatcher + resolver the daemon already
+/// built off the Kernel's sub-service handles. Passing it in (rather
+/// than constructing a fresh one here) preserves the U1 unity
+/// property: every IPC dispatch and every direct KernelApi call
+/// observe one set of sub-service state.
+pub async fn run(proxy: AbilityProxy) -> anyhow::Result<()> {
     let (listener, addr) = transport::bind_default()?;
 
     // Advertise via control.json.
@@ -80,7 +86,7 @@ pub async fn run(kernel: Arc<dyn KernelApi>) -> anyhow::Result<()> {
     discovery::write(&discovery::default_path(), &disc)?;
 
     // Accept loop.
-    accept_loop(listener, AbilityProxy::new(kernel)).await
+    accept_loop(listener, proxy).await
 }
 
 /// Accept connections forever, spawn one tokio task per connection.
@@ -141,8 +147,14 @@ async fn serve_connection(stream: UnixStream, proxy: AbilityProxy) -> anyhow::Re
                 continue;
             }
         };
-        let resp = proxy.handle(req);
-        write_frame(&mut framed, &resp).await?;
+        // PR-INVOCATION-EXEC-UNITY: handle returns Vec<OutgoingFrame>
+        // — exactly one for Invoke / Cancel, N+1 for a successful
+        // Subscribe (N data Frames + 1 Terminal). The accept loop
+        // writes them in order; each frame is its own length-prefixed
+        // wire envelope.
+        for resp in proxy.handle(req) {
+            write_frame(&mut framed, &resp).await?;
+        }
     }
     Ok(())
 }
@@ -218,17 +230,12 @@ mod tests {
     }
 
     /// End-to-end smoke: bind UDS at a temp path, send one Invoke
-    /// frame from a client UnixStream, observe the v1 skeleton
-    /// Error response. Validates: bind → accept → codec read →
-    /// AbilityProxy.handle → codec write → close.
-    ///
-    /// Pinned to the v1 skeleton response (`ABILITY_FAILED`) on
-    /// purpose: when PR-INVOCATION-EXEC-UNITY swaps the proxy body
-    /// for real dispatch, this test will fail with a clear message
-    /// pointing at the stale v1 expectation.
+    /// frame from a client UnixStream, observe the dispatcher's
+    /// Result response. Validates: bind → accept → codec read →
+    /// AbilityProxy.handle → dispatcher → codec write → close.
     #[cfg(unix)]
     #[tokio::test]
-    async fn end_to_end_invoke_round_trip_returns_v1_skeleton_error() {
+    async fn end_to_end_invoke_round_trip_returns_result_for_system_ping() {
         let dir = unique_tmp();
         let path = dir.join("smoke.sock");
 
@@ -268,17 +275,17 @@ mod tests {
         let mut resp_buf = vec![0u8; resp_len];
         client.read_exact(&mut resp_buf).await.unwrap();
 
+        // PR-INVOCATION-EXEC-UNITY: Invoke now dispatches through the
+        // unified registry, so `system.ping` returns a Result envelope
+        // (not the v1 skeleton Error). The exact value shape is owned
+        // by the ping handler; here we only pin the request_id round-
+        // trip + the envelope variant.
         let resp: OutgoingFrame = serde_json::from_slice(&resp_buf).unwrap();
         match resp {
-            OutgoingFrame::Error {
-                request_id,
-                code,
-                ..
-            } => {
-                assert_eq!(request_id.as_deref(), Some("smoke-1"));
-                assert_eq!(code, crate::services::control::frames::codes::ABILITY_FAILED);
+            OutgoingFrame::Result { request_id, .. } => {
+                assert_eq!(request_id, "smoke-1");
             }
-            other => panic!("expected v1 skeleton Error frame, got {other:?}"),
+            other => panic!("expected Result frame for system.ping, got {other:?}"),
         }
 
         // Close the client side; the server's read loop sees EOF
@@ -346,15 +353,16 @@ mod tests {
         let mut resp_buf = vec![0u8; resp_len];
         client.read_exact(&mut resp_buf).await.unwrap();
 
+        // PR-INVOCATION-EXEC-UNITY: the recovered second frame is a
+        // valid `system.ping` Invoke, so the response is a Result
+        // envelope. The point of the test is that the connection
+        // survived the bad frame and is still serving real requests.
         let resp: OutgoingFrame = serde_json::from_slice(&resp_buf).unwrap();
-        // Skeleton error, not a protocol error: confirms the
-        // connection delivered the second frame to the proxy.
         match resp {
-            OutgoingFrame::Error { code, request_id, .. } => {
-                assert_eq!(code, crate::services::control::frames::codes::ABILITY_FAILED);
-                assert_eq!(request_id.as_deref(), Some("after-bad"));
+            OutgoingFrame::Result { request_id, .. } => {
+                assert_eq!(request_id, "after-bad");
             }
-            other => panic!("expected skeleton error after recovery, got {other:?}"),
+            other => panic!("expected Result frame after recovery, got {other:?}"),
         }
 
         drop(client);

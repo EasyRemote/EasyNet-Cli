@@ -287,17 +287,16 @@ mod tests {
             .await
             .expect("round_trip");
 
+        // PR-INVOCATION-EXEC-UNITY: Invoke now reaches the real
+        // dispatcher; system.ping returns a Result envelope. The
+        // request_id round-trip is the load-bearing assertion (Client
+        // bindings correlate by it); the value shape is owned by the
+        // ping handler.
         match resp {
-            OutgoingFrame::Error {
-                request_id, code, ..
-            } => {
-                assert_eq!(request_id.as_deref(), Some("ffi-1"));
-                assert_eq!(
-                    code,
-                    crate::services::control::frames::codes::ABILITY_FAILED
-                );
+            OutgoingFrame::Result { request_id, .. } => {
+                assert_eq!(request_id, "ffi-1");
             }
-            other => panic!("expected v1 skeleton Error frame, got {other:?}"),
+            other => panic!("expected Result frame for system.ping, got {other:?}"),
         }
 
         // Drop the client to close its side; server task exits via EOF.

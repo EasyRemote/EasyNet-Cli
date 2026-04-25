@@ -41,10 +41,15 @@
 use std::sync::Arc;
 
 use easynet_cli::facade::cli::run_daemon;
+use easynet_cli::runtime::ability_dispatch::AbilityDispatcher;
+use easynet_cli::runtime::domain::NodeId;
 use easynet_cli::runtime::gateway::NoopGateway;
+use easynet_cli::runtime::gateway_api::GatewayApi;
+use easynet_cli::runtime::invocation_target::{LocalNodeResolver, TargetResolver};
 use easynet_cli::runtime::kernel::Kernel;
 use easynet_cli::runtime::kernel_api::KernelApi;
 use easynet_cli::runtime::system;
+use easynet_cli::services::control::ability_proxy::AbilityProxy;
 use easynet_cli::services::control::server;
 
 /// Heartbeat is opt-in: only spawn the legacy loop if the parent
@@ -67,18 +72,36 @@ async fn main() -> anyhow::Result<()> {
     // the registry off fresh sub-services (the pre-PR shape) would
     // give the IPC plane a parallel state not reachable from the
     // Kernel — silently breaking session.list / discuss.subscribe.
-    let _registry = system::build_registry_with_services(
+    let registry = system::build_registry_with_services(
         kernel.session_service(),
         kernel.permission_service(),
         kernel.discuss_service(),
         kernel.schedule_service(),
         kernel.loop_service(),
     );
-    // _registry will be wired into the AbilityProxy in a follow-up
-    // commit; today the proxy still returns the v1 skeleton Error
-    // envelope, so building the registry is purely a side-effect-
-    // free unity check that the boot path can produce a coherent
-    // set of handles.
+
+    // Stage-2 dispatcher (executor). Wired with the unified registry
+    // and the same NoopGateway the Kernel holds — a real Gateway impl
+    // pointing at Axon lands in a focused follow-up.
+    let gateway: Arc<dyn GatewayApi> = Arc::new(NoopGateway::new());
+    let dispatcher = AbilityDispatcher::new(registry, gateway);
+
+    // Stage-1 resolver. Local node id from EASYNET_NODE_ID env (set
+    // by the supervisor from credentials.json) or "self" as a
+    // harness default; controls loopback-vs-remote routing.
+    let local_node = std::env::var("EASYNET_NODE_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(NodeId::new)
+        .unwrap_or_else(|| NodeId::new("self"));
+    let resolver: Arc<dyn TargetResolver> = Arc::new(LocalNodeResolver::new(local_node));
+
+    let kernel_api: Arc<dyn KernelApi> = kernel;
+    let proxy = AbilityProxy::new_with_dispatcher(
+        Arc::clone(&kernel_api),
+        dispatcher,
+        resolver,
+    );
 
     // Optional sidecar: heartbeat. Run on a dedicated OS thread
     // because run_daemon() is blocking (ureq + ctrlc handler). Errors
@@ -97,6 +120,5 @@ async fn main() -> anyhow::Result<()> {
 
     // Foreground: Control-plane IPC server. Returns when the listener
     // is dropped (i.e. never, in v1 — we exit on SIGTERM via the OS).
-    let kernel_api: Arc<dyn KernelApi> = kernel;
-    server::run(kernel_api).await
+    server::run(proxy).await
 }
