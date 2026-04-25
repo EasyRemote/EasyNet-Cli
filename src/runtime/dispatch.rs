@@ -66,6 +66,18 @@ pub struct DriverOverrides {
     pub max_tokens: Option<u32>,
 }
 
+/// One tool call the LLM made during a run. Lifted from the driver
+/// layer's tool-use observability so the chat ability can surface
+/// `tool_calls` in its structured response. Does not carry the
+/// tool's result — claude-code feeds results back to the LLM
+/// internally via subsequent stream blocks; capturing them is a
+/// separate piece of work.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub ability: String,
+    pub args: serde_json::Value,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentResponse {
     pub agent: String,
@@ -79,6 +91,11 @@ pub struct AgentResponse {
     /// Path to the per-run directory on disk (if persistence succeeded).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_dir: Option<PathBuf>,
+    /// Tool invocations the LLM made during this run, in order.
+    /// Empty when the run made no tool calls. Drivers that do not
+    /// expose tool-call observability (codex today) leave this empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCall>,
 }
 
 /// Resolve the dispatch timeout from spec + entry precedence.
@@ -554,7 +571,12 @@ pub fn send_to_agent_with_depth(
     let duration_ms = start.elapsed().as_millis() as u64;
     if let Some(dir) = &run_dir {
         let (exit_status, error, content_for_meta, usage_for_meta) = match &run_result {
-            Ok((text, usage)) => ("ok".to_string(), None, Some(text.as_str()), usage.clone()),
+            Ok(out) => (
+                "ok".to_string(),
+                None,
+                Some(out.content.as_str()),
+                out.usage.clone(),
+            ),
             Err(e) => ("error".to_string(), Some(e.to_string()), None, None),
         };
         if let Some(text) = content_for_meta {
@@ -613,12 +635,13 @@ pub fn send_to_agent_with_depth(
     // idempotence: a reader opening the log after we exit finds
     // the terminal state durably recorded.
     let (terminal_type, terminal_payload) = match &run_result {
-        Ok((content, usage)) => (
+        Ok(out) => (
             "completed",
             serde_json::json!({
-                "content_len": content.len(),
+                "content_len": out.content.len(),
                 "duration_ms": duration_ms,
-                "usage": usage,
+                "usage": out.usage,
+                "tool_call_count": out.tool_calls.len(),
             }),
         ),
         Err(e) => (
@@ -639,18 +662,19 @@ pub fn send_to_agent_with_depth(
         );
     }
 
-    let (content, usage) = run_result?;
+    let output = run_result?;
 
     Ok(AgentResponse {
         agent: agent_name.to_string(),
-        content,
+        content: output.content,
         // Mirror `meta.model`: the response reports the model
         // actually dispatched, which is the spec-resolved one.
         model: effective_model,
         duration_ms,
         truncated: false,
-        usage,
+        usage: output.usage,
         run_dir: run_dir.as_ref().map(|d| d.path().to_path_buf()),
+        tool_calls: output.tool_calls,
     })
 }
 
@@ -1225,6 +1249,7 @@ mod tests {
         runtime_id: &'static str,
         response: String,
         usage: Option<crate::runtime::dispatch::AgentUsage>,
+        tool_calls: Vec<crate::runtime::dispatch::ToolCall>,
     }
 
     impl crate::runtime::adapter::AgentAdapter for MockAdapter {
@@ -1241,8 +1266,12 @@ mod tests {
             _entry: &AgentEntry,
             _prompt: &str,
             _opts: crate::runtime::adapter::InvokeOpts,
-        ) -> anyhow::Result<(String, Option<crate::runtime::dispatch::AgentUsage>)> {
-            Ok((self.response.clone(), self.usage.clone()))
+        ) -> anyhow::Result<crate::runtime::adapter::AdapterOutput> {
+            Ok(crate::runtime::adapter::AdapterOutput {
+                content: self.response.clone(),
+                usage: self.usage.clone(),
+                tool_calls: self.tool_calls.clone(),
+            })
         }
     }
 
@@ -1256,6 +1285,7 @@ mod tests {
                 output_tokens: 13,
                 ..Default::default()
             }),
+            tool_calls: Vec::new(),
         };
 
         // Call the adapter directly — this is the narrow seam the
@@ -1272,11 +1302,11 @@ mod tests {
             timeline: None,
             command: String::new(),
         };
-        let (text, usage) = adapter
+        let out = adapter
             .invoke(&entry, "ignored prompt", opts)
             .expect("mock adapter must succeed");
-        assert_eq!(text, "synthetic reply");
-        let usage = usage.expect("mock returned Some(usage)");
+        assert_eq!(out.content, "synthetic reply");
+        let usage = out.usage.expect("mock returned Some(usage)");
         assert_eq!(usage.input_tokens, 7);
         assert_eq!(usage.output_tokens, 13);
     }
@@ -1290,6 +1320,7 @@ mod tests {
             runtime_id: "mock-no-usage",
             response: "ok".into(),
             usage: None,
+            tool_calls: Vec::new(),
         };
         let entry = dummy_entry();
         let opts = crate::runtime::adapter::InvokeOpts {
@@ -1301,8 +1332,47 @@ mod tests {
             timeline: None,
             command: String::new(),
         };
-        let (_text, usage) = adapter.invoke(&entry, "p", opts).unwrap();
-        assert!(usage.is_none());
+        let out = adapter.invoke(&entry, "p", opts).unwrap();
+        assert!(out.usage.is_none());
+    }
+
+    #[test]
+    fn mock_adapter_round_trips_tool_calls() {
+        // Phase: Fix-3 wiring. The chat ability surfaces
+        // `tool_calls` in its structured response. Capture pipes
+        // through: adapter records → AdapterOutput.tool_calls →
+        // AgentResponse.tool_calls → chat handler json. Pin the
+        // first three hops here; the chat handler hop is covered
+        // by chat_ability::tests::handler_surfaces_tool_calls.
+        let adapter = MockAdapter {
+            runtime_id: "mock-with-tools",
+            response: "I called two tools".into(),
+            usage: None,
+            tool_calls: vec![
+                ToolCall {
+                    ability: "alice.voice".into(),
+                    args: serde_json::json!({"text": "hi"}),
+                },
+                ToolCall {
+                    ability: "alice.exec".into(),
+                    args: serde_json::json!({"cmd": "ls"}),
+                },
+            ],
+        };
+        let entry = dummy_entry();
+        let opts = crate::runtime::adapter::InvokeOpts {
+            timeout: Duration::from_secs(1),
+            max_output_bytes: 64,
+            env: std::collections::BTreeMap::new(),
+            cwd: std::path::PathBuf::from("."),
+            run_dir: None,
+            timeline: None,
+            command: String::new(),
+        };
+        let out = adapter.invoke(&entry, "p", opts).unwrap();
+        assert_eq!(out.tool_calls.len(), 2);
+        assert_eq!(out.tool_calls[0].ability, "alice.voice");
+        assert_eq!(out.tool_calls[1].ability, "alice.exec");
     }
 
     #[test]

@@ -671,7 +671,7 @@ impl AgentAdapter for CodexExecAdapter {
         entry: &AgentEntry,
         prompt: &str,
         opts: InvokeOpts,
-    ) -> anyhow::Result<(String, Option<AgentUsage>)> {
+    ) -> anyhow::Result<crate::runtime::adapter::AdapterOutput> {
         let (text, stats) = invoke_exec(
             prompt,
             CodexOptions {
@@ -688,7 +688,13 @@ impl AgentAdapter for CodexExecAdapter {
                 command: opts.command,
             },
         )?;
-        Ok((text, Some(run_stats_to_usage(&stats))))
+        // codex exec does not surface tool-use events on its
+        // wire today; tool_calls is empty for this adapter.
+        Ok(crate::runtime::adapter::AdapterOutput {
+            content: text,
+            usage: Some(run_stats_to_usage(&stats)),
+            tool_calls: Vec::new(),
+        })
     }
 }
 
@@ -708,13 +714,13 @@ impl AgentAdapter for CodexAppServerAdapter {
         entry: &AgentEntry,
         prompt: &str,
         opts: InvokeOpts,
-    ) -> anyhow::Result<(String, Option<AgentUsage>)> {
+    ) -> anyhow::Result<crate::runtime::adapter::AdapterOutput> {
         // `codex app-server` does not emit a structured usage
         // block today — we return `None` and the dispatch layer
         // handles the absence uniformly. If Codex starts emitting
         // usage on this mode later, flip the `None` here to a
         // populated `AgentUsage` without touching the dispatch
-        // seam.
+        // seam. Tool-calls is similarly empty.
         let text = invoke_app_server(
             prompt,
             CodexOptions {
@@ -731,7 +737,11 @@ impl AgentAdapter for CodexAppServerAdapter {
                 command: opts.command,
             },
         )?;
-        Ok((text, None))
+        Ok(crate::runtime::adapter::AdapterOutput {
+            content: text,
+            usage: None,
+            tool_calls: Vec::new(),
+        })
     }
 }
 
