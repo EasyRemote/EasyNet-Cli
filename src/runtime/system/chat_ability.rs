@@ -82,6 +82,7 @@ use serde_json::{json, Value};
 
 use crate::registry::agents::{AgentEntry, AgentRegistry};
 use crate::runtime::ability_dispatch::{LocalAbilityRegistry, StreamSource};
+use crate::runtime::dispatch::DriverOverrides;
 
 /// The wire-level *verb* portion of every chat ability name. The
 /// fully-qualified ability name is always `<agent>.chat`. A future
@@ -279,25 +280,34 @@ fn handler(
         (false, Some(c)) => Some(format!("{}\n\n{c}", loaded_chunks.join("\n\n"))),
     };
 
-    // The dispatch call. `send_external` is synchronous (subprocess
-    // + wait); when invoked from a tokio worker thread we must yield
-    // the worker via `block_in_place` to avoid stalling other tasks.
-    // Mirrors the same pattern Kernel::dispatch_agent_chat uses today.
+    // The dispatch call. `send_external_with_overrides` is the
+    // overrides-aware variant — when `parsed.driver` is the default
+    // it behaves identically to `send_external`; when the caller set
+    // `driver.model` (or temperature / max_tokens, see warn-once in
+    // dispatch.rs) those values flow into model resolution.
+    //
+    // Synchronous (subprocess + wait); when invoked from a tokio
+    // worker thread we yield the worker via `block_in_place` to
+    // avoid stalling other tasks. Mirrors the same pattern the
+    // pre-refactor Kernel::dispatch_agent_chat used.
+    let driver_overrides = Some(&parsed.driver);
     let response_result = if tokio::runtime::Handle::try_current().is_ok() {
         tokio::task::block_in_place(|| {
-            crate::runtime::dispatch::send_external(
+            crate::runtime::dispatch::send_external_with_overrides(
                 agent_name,
                 entry,
                 &parsed.prompt,
                 composed_context.as_deref(),
+                driver_overrides,
             )
         })
     } else {
-        crate::runtime::dispatch::send_external(
+        crate::runtime::dispatch::send_external_with_overrides(
             agent_name,
             entry,
             &parsed.prompt,
             composed_context.as_deref(),
+            driver_overrides,
         )
     };
 
@@ -432,25 +442,30 @@ fn stream_handler(
         (false, Some(c)) => Some(format!("{}\n\n{c}", loaded_chunks.join("\n\n"))),
     };
 
-    // The dispatch call. Non-tokio context here because stream
-    // handlers are constructed inside the synchronous registry
-    // path; if a future async dispatcher lands, the same
-    // block_in_place dance from the RPC handler applies.
+    // The dispatch call. Same overrides-aware variant as the RPC
+    // handler so a streaming chat call honors `driver.model` too.
+    // Non-tokio context here because stream handlers are constructed
+    // inside the synchronous registry path; if a future async
+    // dispatcher lands, the same block_in_place dance from the RPC
+    // handler applies.
+    let driver_overrides = Some(&parsed.driver);
     let response_result = if tokio::runtime::Handle::try_current().is_ok() {
         tokio::task::block_in_place(|| {
-            crate::runtime::dispatch::send_external(
+            crate::runtime::dispatch::send_external_with_overrides(
                 agent_name,
                 entry,
                 &parsed.prompt,
                 composed_context.as_deref(),
+                driver_overrides,
             )
         })
     } else {
-        crate::runtime::dispatch::send_external(
+        crate::runtime::dispatch::send_external_with_overrides(
             agent_name,
             entry,
             &parsed.prompt,
             composed_context.as_deref(),
+            driver_overrides,
         )
     };
 
@@ -532,7 +547,6 @@ struct ChatArgs {
     session_id: Option<String>,
     skills: Selection,
     context_loaders: Selection,
-    #[allow(dead_code)] // wired in Phase 4 when dispatch surface widens
     driver: DriverOverrides,
     stream: bool,
 }
@@ -567,7 +581,7 @@ impl ChatArgs {
             .unwrap_or_default();
         let driver = obj
             .get("driver")
-            .map(DriverOverrides::parse)
+            .map(parse_driver_overrides)
             .transpose()?
             .unwrap_or_default();
         let stream = obj.get("stream").and_then(Value::as_bool).unwrap_or(false);
@@ -647,48 +661,45 @@ impl Selection {
     }
 }
 
-/// Per-call driver knob overrides. Parsed and validated here so the
-/// downstream `send_external` widening (Phase 4) consumes a typed
-/// view rather than reaching back into the raw JSON.
-#[derive(Debug, Clone, Default)]
-struct DriverOverrides {
-    #[allow(dead_code)] // wired in Phase 4
-    model: Option<String>,
-    #[allow(dead_code)]
-    temperature: Option<f64>,
-    #[allow(dead_code)]
-    max_tokens: Option<u32>,
-}
-
-impl DriverOverrides {
-    fn parse(value: &Value) -> anyhow::Result<Self> {
-        let obj = value
-            .as_object()
-            .ok_or_else(|| anyhow::anyhow!("chat: `driver` must be an object"))?;
-        let model = obj.get("model").and_then(Value::as_str).map(str::to_string);
-        let temperature = match obj.get("temperature") {
-            None => None,
-            Some(v) => Some(
-                v.as_f64()
-                    .ok_or_else(|| anyhow::anyhow!("chat: driver.temperature must be a number"))?,
-            ),
-        };
-        let max_tokens = match obj.get("max_tokens") {
-            None => None,
-            Some(v) => Some(
-                v.as_u64()
-                    .and_then(|n| u32::try_from(n).ok())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("chat: driver.max_tokens must be a positive integer")
-                    })?,
-            ),
-        };
-        Ok(Self {
-            model,
-            temperature,
-            max_tokens,
-        })
-    }
+/// Parse the chat ability's `driver` sub-object into the shared
+/// `dispatch::DriverOverrides` type. Kept as a free function (not an
+/// inherent impl) because `DriverOverrides` is a foreign type to
+/// this module — Rust's coherence rules require either-or.
+///
+/// `model` is honored by the dispatch layer today; `temperature` and
+/// `max_tokens` are accepted by the schema and recorded but not
+/// piped through (the v1 claude-code / codex CLI drivers do not
+/// expose either knob — see warn_unhonored_driver_knobs_once in
+/// dispatch.rs). Validation still happens here so a malformed
+/// `temperature: "hot"` surfaces at the API boundary instead of
+/// dispatch time.
+fn parse_driver_overrides(value: &Value) -> anyhow::Result<DriverOverrides> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("chat: `driver` must be an object"))?;
+    let model = obj.get("model").and_then(Value::as_str).map(str::to_string);
+    let temperature = match obj.get("temperature") {
+        None => None,
+        Some(v) => Some(
+            v.as_f64()
+                .ok_or_else(|| anyhow::anyhow!("chat: driver.temperature must be a number"))?,
+        ),
+    };
+    let max_tokens = match obj.get("max_tokens") {
+        None => None,
+        Some(v) => Some(
+            v.as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("chat: driver.max_tokens must be a positive integer")
+                })?,
+        ),
+    };
+    Ok(DriverOverrides {
+        model,
+        temperature,
+        max_tokens,
+    })
 }
 
 /// Parse a JSON array of strings, returning an empty Vec when absent.
