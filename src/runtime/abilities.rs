@@ -342,33 +342,18 @@ fn ensure_chat_manifest(dir: &AgentDirectory) -> anyhow::Result<()> {
 ///
 /// Used as the in-memory fallback when no on-disk root is available
 /// (test fixtures, transient `AgentEntry::new` calls). The shape
-/// matches `default_chat_manifest()` so production (manifest-driven)
-/// and fallback (synth) paths advertise the same wire schema.
+/// comes verbatim from `default_chat_manifest()` so the production
+/// (manifest-driven) and fallback (synth) paths cannot drift on the
+/// input schema — there is exactly one source for that.
 fn chat_ability(agent_name: &str) -> Result<AgentAbilitySpec, &'static str> {
-    let name = format!("{agent_name}.chat");
-    let description = format!(
-        "Send a chat prompt to the locally-installed `{agent_name}` agent. \
-         The agent runs as a subprocess on this node; the response is returned \
-         verbatim. Use `context` to prepend a system-style preamble when the \
-         agent supports one."
-    );
-    let parameters = json!({
-        "type": "object",
-        "properties": {
-            "prompt": {
-                "type": "string",
-                "description": "The user prompt sent to the agent."
-            },
-            "context": {
-                "type": "string",
-                "description": "Optional system-style preamble prepended before `prompt`."
-            },
-        },
-        "required": ["prompt"],
-        "additionalProperties": false,
-    });
-    AgentAbilitySpec::new(name, description, parameters)
+    let manifest = default_chat_manifest();
+    AgentAbilitySpec::new(
+        manifest.qualified_name(agent_name),
+        manifest.description().to_string(),
+        manifest.input_schema().clone(),
+    )
 }
+
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
