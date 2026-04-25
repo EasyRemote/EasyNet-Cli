@@ -46,6 +46,7 @@ use chrono::Utc;
 use easynet_cli::facade::cli::run_daemon;
 use easynet_cli::runtime::ability_dispatch::AbilityDispatcher;
 use easynet_cli::runtime::domain::{NodeId, ScheduleId, TenantId};
+use easynet_cli::runtime::execution::loop_instance::KernelLoopInvocationDriver;
 use easynet_cli::runtime::execution::schedule::ScheduleService;
 use easynet_cli::runtime::gateway::NoopGateway;
 use easynet_cli::runtime::gateway_api::GatewayApi;
@@ -94,6 +95,24 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("[daemon] loop store bind failed: {e:#}");
     }
 
+    let local_node = std::env::var("EASYNET_NODE_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(NodeId::new)
+        .unwrap_or_else(|| NodeId::new("self"));
+    let kernel_api: Arc<dyn KernelApi> = Arc::clone(&kernel) as Arc<dyn KernelApi>;
+    let loop_driver = Arc::new(KernelLoopInvocationDriver::new(
+        Arc::clone(&kernel_api),
+        kernel.session_service(),
+        local_node.clone(),
+    ));
+    if let Err(e) = kernel.loop_service().install_driver(loop_driver) {
+        eprintln!("[daemon] loop controller install failed: {e:#}");
+    }
+    if let Err(e) = kernel.loop_service().resume_inflight() {
+        eprintln!("[daemon] loop resume failed: {e:#}");
+    }
+
     // Build the system.* ability registry off the SAME sub-service
     // handles the Kernel holds. This is the U1 unity property at
     // the boot path: every ability lookup and every KernelApi call
@@ -127,14 +146,7 @@ async fn main() -> anyhow::Result<()> {
     // Stage-1 resolver. Local node id from EASYNET_NODE_ID env (set
     // by the supervisor from credentials.json) or "self" as a
     // harness default; controls loopback-vs-remote routing.
-    let local_node = std::env::var("EASYNET_NODE_ID")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .map(NodeId::new)
-        .unwrap_or_else(|| NodeId::new("self"));
     let resolver: Arc<dyn TargetResolver> = Arc::new(LocalNodeResolver::new(local_node));
-
-    let kernel_api: Arc<dyn KernelApi> = kernel;
     let proxy = AbilityProxy::new_with_dispatcher(
         Arc::clone(&kernel_api),
         dispatcher,
@@ -282,4 +294,3 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
         }
     });
 }
-
