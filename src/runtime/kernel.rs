@@ -23,9 +23,11 @@
 
 use std::sync::Arc;
 
+use serde_json::json;
+
 use crate::runtime::domain::{
-    DiscussRoom, LoopId, LoopInstance, PermissionDecision, PermissionId, PermissionRequest,
-    RoomId, ScheduleEntry, ScheduleId, Session, SessionId,
+    AgentId, DiscussRoom, LoopId, LoopInstance, NodeId, PermissionDecision, PermissionId,
+    PermissionRequest, RoomId, ScheduleEntry, ScheduleId, Session, SessionId, TenantId,
 };
 use crate::runtime::execution::{
     discuss::DiscussService, loop_instance::LoopService, permission::PermissionService,
@@ -92,20 +94,202 @@ impl Kernel {
     pub fn loop_service(&self) -> Arc<LoopService> {
         Arc::clone(&self.loop_svc)
     }
+
+    /// Real agent-chat dispatch. Looks up `agent_name` in the local
+    /// registry, calls `runtime::dispatch::send_external` (which
+    /// shells out to the configured driver — claude / codex /
+    /// codex-app-server). Streams driver progress as `kind: progress`
+    /// session events so a Client subscribed to system.session.attach
+    /// for this invocation_id sees the run unfold live.
+    ///
+    /// v1 streams progress in coarse grain only (a single
+    /// `agent_response` event with the full markdown body) because
+    /// `send_external` is synchronous. A finer-grained per-token
+    /// stream would require teaching the driver layer about an
+    /// SSE-style callback into SessionService — that lands when the
+    /// driver crate gets its async surface.
+    fn dispatch_agent_chat(
+        &self,
+        session_id: &SessionId,
+        agent_name: &str,
+        args: &serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        let prompt = args
+            .get("prompt")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                anyhow::anyhow!("agent.chat: `prompt` (string) required in args")
+            })?;
+        let context = args.get("context").and_then(serde_json::Value::as_str);
+
+        let registry = crate::registry::agents::load_agents()
+            .map_err(|e| anyhow::anyhow!("agent registry load failed: {e}"))?;
+        let entry = registry
+            .agents
+            .get(agent_name)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!("agent {agent_name:?} not registered in this daemon")
+            })?;
+
+        let _ = self.session.emit_event(
+            session_id,
+            json!({
+                "kind": "agent_dispatch_starting",
+                "agent": agent_name,
+                "prompt_len": prompt.len(),
+            }),
+        );
+
+        // send_external runs synchronously (subprocess + wait). The
+        // Kernel is called from the proxy's tokio worker thread; we
+        // don't want to block the entire worker for a 30-second
+        // agent run. Defer the blocking call to a dedicated thread
+        // via `tokio::task::block_in_place` if a runtime is in
+        // scope; otherwise call directly.
+        let response_result = if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::task::block_in_place(|| {
+                crate::runtime::dispatch::send_external(agent_name, &entry, prompt, context)
+            })
+        } else {
+            crate::runtime::dispatch::send_external(agent_name, &entry, prompt, context)
+        };
+
+        match response_result {
+            Ok(resp) => {
+                let usage = resp
+                    .usage
+                    .as_ref()
+                    .map(|u| {
+                        json!({
+                            "input_tokens": u.input_tokens,
+                            "output_tokens": u.output_tokens,
+                            "num_turns": u.num_turns,
+                            "total_cost_usd": u.total_cost_usd,
+                        })
+                    })
+                    .unwrap_or(serde_json::Value::Null);
+                let _ = self.session.emit_event(
+                    session_id,
+                    json!({
+                        "kind": "agent_response",
+                        "content": resp.content,
+                        "model": resp.model,
+                        "duration_ms": resp.duration_ms,
+                        "truncated": resp.truncated,
+                        "usage": usage,
+                    }),
+                );
+                Ok(json!({
+                    "agent": resp.agent,
+                    "content": resp.content,
+                    "duration_ms": resp.duration_ms,
+                }))
+            }
+            Err(e) => {
+                let _ = self.session.emit_event(
+                    session_id,
+                    json!({
+                        "kind": "agent_error",
+                        "error": format!("{e}"),
+                    }),
+                );
+                Err(e)
+            }
+        }
+    }
+}
+
+/// Parse `<agent>.chat` ability names. Returns `Some(<agent>)`
+/// for the chat-style ability that Kernel::invoke routes through
+/// `dispatch::send_external`; returns `None` for anything else
+/// (system.*, future ability namespaces).
+fn parse_agent_chat(ability: &str) -> Option<String> {
+    if ability.starts_with("system.") {
+        return None;
+    }
+    let (head, tail) = ability.rsplit_once('.')?;
+    if tail != "chat" {
+        return None;
+    }
+    if head.is_empty() {
+        return None;
+    }
+    Some(head.to_string())
 }
 
 impl KernelApi for Kernel {
     fn invoke(&self, invocation: Invocation) -> anyhow::Result<Receipt> {
-        // v1 admission stub: compute the invocation_id, build a
-        // Succeeded Receipt with no events, and return. This is the
-        // minimum behaviour required for the trait to be instantiable.
-        // PR-INVOCATION-EXEC-UNITY replaces this stub with the full
-        // admission (nonce dedup → permission broker → schedule
-        // conflict → dispatch) + terminal pipeline.
+        // Plan v10.3 C* unity entry. Three phases:
+        //   1. Admission — compute invocation_id, register a Session
+        //      keyed by that id so live attachers see the run from
+        //      its first frame.
+        //   2. Dispatch — branch on the ability shape:
+        //        * `<agent>.chat`        → real agent subprocess via
+        //                                  runtime::dispatch::send_external
+        //        * `system.*`            → reserved (system abilities
+        //                                  are dispatched via the
+        //                                  proxy's stage-2 executor;
+        //                                  Kernel::invoke for them is
+        //                                  redundant in v1)
+        //        * anything else         → Failed(NotFound)
+        //   3. Terminal — emit `kind: terminated`, mark the session
+        //      ended, return the Receipt.
         let id = invocation_id_of(&invocation);
+        let session_id = SessionId::new(id.clone());
+        let agent_name = parse_agent_chat(&invocation.ability);
+        let admit = Session {
+            id: session_id.clone(),
+            agent: AgentId::new(agent_name.clone().unwrap_or_else(|| "?".into())),
+            node: NodeId::new("self"),
+            tenant: TenantId::default_v1(),
+            started_unix_ms: chrono::Utc::now().timestamp_millis(),
+            ended_unix_ms: None,
+        };
+        // Idempotent admit: if a prior call admitted the same id
+        // already (replay) we reuse the existing entry.
+        let _ = self.session.admit(admit);
+        let _ = self.session.emit_event(
+            &session_id,
+            json!({
+                "kind": "invoke_admitted",
+                "ability": invocation.ability,
+                "caller": invocation.caller,
+                "callee": invocation.callee,
+            }),
+        );
+
+        let outcome: anyhow::Result<serde_json::Value> = match agent_name {
+            Some(name) => self.dispatch_agent_chat(&session_id, &name, &invocation.args),
+            None => {
+                // System abilities are not dispatched through Kernel::invoke
+                // in v1 — the proxy executes them directly. We accept
+                // them here for "I just want a receipt without doing
+                // anything" callers.
+                Ok(json!({"note": "no-op kernel.invoke for non-agent ability"}))
+            }
+        };
+
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let terminal = match &outcome {
+            Ok(_) => TerminalState::Succeeded,
+            Err(e) => TerminalState::Failed { reason: format!("{e}") },
+        };
+        let _ = self.session.emit_event(
+            &session_id,
+            json!({
+                "kind": "invoke_terminal",
+                "outcome": match &outcome {
+                    Ok(v) => json!({"ok": v}),
+                    Err(e) => json!({"err": format!("{e}")}),
+                },
+            }),
+        );
+        let _ = self.session.terminate(&session_id, now_ms);
+
         Ok(Receipt {
             invocation_id: id,
-            terminal: TerminalState::Succeeded,
+            terminal,
             events: Vec::new(),
             prior: PriorChain::None,
             callee_signature: None,
@@ -214,9 +398,7 @@ mod tests {
     #[test]
     fn kernel_invoke_returns_receipt_with_matching_id_for_same_invocation() {
         // The v1 stub must at minimum return a Receipt whose
-        // invocation_id matches `invocation_id_of(&inv)`. This is
-        // the anchor contract the future PR-INVOCATION-EXEC-UNITY
-        // fleshes out.
+        // invocation_id matches `invocation_id_of(&inv)`.
         let k = Kernel::new(Arc::new(NoopGateway));
         let inv = Invocation {
             caller: "easynet://nodes/a".into(),
@@ -232,5 +414,62 @@ mod tests {
         let r = k.invoke(inv).unwrap();
         assert_eq!(r.invocation_id, expected_id);
         assert!(matches!(r.terminal, TerminalState::Succeeded));
+    }
+
+    #[test]
+    fn parse_agent_chat_recognises_dot_chat_suffix() {
+        assert_eq!(parse_agent_chat("alice.chat"), Some("alice".to_string()));
+        assert_eq!(
+            parse_agent_chat("claude-code.chat"),
+            Some("claude-code".to_string())
+        );
+        assert_eq!(parse_agent_chat("a.b.chat"), Some("a.b".to_string()));
+    }
+
+    #[test]
+    fn parse_agent_chat_rejects_system_and_non_chat() {
+        // system.* abilities never go through the agent-dispatch
+        // path; they are handled by the proxy's stage-2 executor.
+        assert_eq!(parse_agent_chat("system.session.attach"), None);
+        assert_eq!(parse_agent_chat("system.ping"), None);
+        // Anything that doesn't end in `.chat` is not the agent-chat
+        // shape Kernel::invoke knows about.
+        assert_eq!(parse_agent_chat("alice.voice"), None);
+        assert_eq!(parse_agent_chat("alice"), None);
+        assert_eq!(parse_agent_chat(".chat"), None);
+        assert_eq!(parse_agent_chat(""), None);
+    }
+
+    #[test]
+    fn invoke_with_unknown_agent_returns_failed_receipt() {
+        // An invocation against an agent the registry does not
+        // know lands as Failed with a clear reason. This is the
+        // contract a Client uses to render a "no such agent"
+        // dialog rather than spinning forever.
+        let k = Kernel::new(Arc::new(NoopGateway));
+        // HomeGuard so the registry lookup hits an empty per-test
+        // config dir, not whatever agents.json the developer has
+        // installed locally.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let inv = Invocation {
+            caller: "easynet://nodes/a".into(),
+            callee: "easynet://nodes/a".into(),
+            ability: "ghost-agent.chat".into(),
+            subject: "easynet://nodes/a".into(),
+            nonce_hex: "00".repeat(16),
+            causal_context: CausalContext::Null,
+            args: json!({"prompt": "hi"}),
+            caller_signature: None,
+        };
+        let r = k.invoke(inv).unwrap();
+        match r.terminal {
+            TerminalState::Failed { reason } => {
+                assert!(
+                    reason.contains("ghost-agent") || reason.contains("not registered"),
+                    "expected agent-not-registered reason; got {reason}"
+                );
+            }
+            other => panic!("expected Failed receipt, got {other:?}"),
+        }
     }
 }
