@@ -1,29 +1,80 @@
-// EasyNet Daemon — thin bin wrapper
-// ==================================
+// EasyNet Daemon — process entry point
+// =====================================
 //
 // File: src/bin/easynet-daemon.rs
-// Description: Long-running daemon entry point. v10.5 R1 PR-DAEMON
-//              introduces this bin as the permanent home of the
-//              heartbeat loop + Axon node identity + (future) local
-//              IPC server + system.* ability publisher.
+// Description: Long-running daemon entry. v10.5 R1 PR-DAEMON Commit 3
+//              wires the local Control-plane IPC server alongside the
+//              existing heartbeat loop ("scheme X" — one process owns
+//              pair, heartbeat, IPC, and (later) ability dispatch).
 //
-// v1 behaviour — "scheme X"
-// -------------------------
-// The plan pins a single-daemon architecture: one process handles
-// pair, heartbeat, agent runtime hosting, ability publishing, and
-// local IPC. v1 starts that process by calling the library's
-// existing `facade::cli::heartbeat::run_daemon`. Later PRs extend
-// that function (or the library adds a sibling `run_daemon_v2`)
-// with IPC server, schedule tick, and system ability dispatch.
+// Current shape
+// -------------
+// - Always: spin up a tokio multi-thread runtime and run the
+//   Control-plane accept loop on it (UDS bind, control.json write,
+//   per-connection task spawn). This is the surface FFI clients dial.
+// - Optional: if `_EASYNET_HB_ENDPOINT` is set in the environment,
+//   start the heartbeat loop on a dedicated OS thread. The heartbeat
+//   loop is sync today (uses ureq + ctrlc); embedding it on the tokio
+//   runtime would block the accept loop, hence the dedicated thread.
 //
-// No business logic lives in this file. It is the process entry
-// point, nothing more.
+// Why both?
+// ---------
+// Plan v10.5 R1 §"方案 X" pins single-daemon ownership of pair +
+// heartbeat + IPC + ability publisher. v1 ships pair + heartbeat from
+// `facade::cli::run_daemon` and IPC from `services::control::server`.
+// PR-INVOCATION-EXEC-UNITY collapses the two so heartbeat lives on the
+// same Kernel handle the IPC server already holds; until then we run
+// them as cooperating-but-separate subsystems.
+//
+// What is NOT here yet
+// --------------------
+// - Schedule tick (PR-SCHED).
+// - System ability dispatch — proxy still returns the v1 skeleton
+//   error envelope (PR-INVOCATION-EXEC-UNITY).
+// - Graceful shutdown that removes `~/.easynet/control.json` on
+//   SIGTERM. Today the file is left behind for the next start to
+//   overwrite; the OS frees the UDS file on process exit.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use easynet_cli::facade::cli::run_daemon;
+use std::sync::Arc;
 
-fn main() -> anyhow::Result<()> {
-    run_daemon()
+use easynet_cli::facade::cli::run_daemon;
+use easynet_cli::runtime::gateway::NoopGateway;
+use easynet_cli::runtime::kernel::Kernel;
+use easynet_cli::runtime::kernel_api::KernelApi;
+use easynet_cli::services::control::server;
+
+/// Heartbeat is opt-in: only spawn the legacy loop if the parent
+/// process configured an endpoint. This lets `cargo run --bin
+/// easynet-daemon` boot in IPC-only mode for FFI smoke tests without
+/// requiring a Hub.
+const ENV_HB_ENDPOINT: &str = "_EASYNET_HB_ENDPOINT";
+
+#[tokio::main(flavor = "multi_thread")]
+async fn main() -> anyhow::Result<()> {
+    // v1: a Kernel wrapping a NoopGateway is sufficient for the proxy
+    // to construct Receipts; PR-INVOCATION-EXEC-UNITY swaps in the
+    // real Gateway impl that talks to Axon.
+    let kernel: Arc<dyn KernelApi> = Arc::new(Kernel::new(Arc::new(NoopGateway::new())));
+
+    // Optional sidecar: heartbeat. Run on a dedicated OS thread
+    // because run_daemon() is blocking (ureq + ctrlc handler). Errors
+    // are logged but do not tear down the IPC server; if heartbeat
+    // dies the device is in a degraded state but Client UIs can still
+    // attach via FFI.
+    if std::env::var_os(ENV_HB_ENDPOINT).is_some() {
+        std::thread::Builder::new()
+            .name("easynet-heartbeat".into())
+            .spawn(|| {
+                if let Err(e) = run_daemon() {
+                    eprintln!("[heartbeat] daemon exited with error: {e:#}");
+                }
+            })?;
+    }
+
+    // Foreground: Control-plane IPC server. Returns when the listener
+    // is dropped (i.e. never, in v1 — we exit on SIGTERM via the OS).
+    server::run(kernel).await
 }
