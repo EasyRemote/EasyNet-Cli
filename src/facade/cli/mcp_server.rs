@@ -56,10 +56,22 @@ pub fn run(args: McpServerArgs) -> anyhow::Result<()> {
     // missing / malformed registry (same degraded-but-running policy
     // as the device-mode path in `cli::start`).
     let agent_abilities = match crate::registry::agents::load_agents() {
-        Ok(registry) => crate::facade::mcp::agent_dispatch::AgentDispatchAdapter::build(
-            &registry,
-            args.tenant.clone(),
-        ),
+        Ok(registry) => {
+            // Build a LocalAbilityRegistry with chat handlers so MCP
+            // dispatch routes through the unified handler (same code
+            // path the daemon uses for its own ability registry).
+            let mut local = crate::runtime::ability_dispatch::LocalAbilityRegistry::new();
+            crate::runtime::system::chat_ability::register(
+                &mut local,
+                &registry,
+                std::sync::Arc::new(Vec::new()),
+            );
+            crate::facade::mcp::agent_dispatch::AgentDispatchAdapter::build(
+                &registry,
+                std::sync::Arc::new(local),
+                args.tenant.clone(),
+            )
+        }
         Err(e) => {
             eprintln!(
                 "[easynet mcp] agents.json unreadable ({e}); advertising no agent abilities"
