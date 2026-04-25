@@ -1,13 +1,12 @@
-// EasyNet CLI — FFI opaque handle registry
-// ==========================================
+// EasyNet CLI — FFI opaque handle registry + lib-internal runtime
+// =================================================================
 //
 // File: src/ffi/handle.rs
 // Description: The integer handles the Client FFI uses to name
 //              library-side state across the C ABI. A handle is a
 //              `u64` value that indexes a process-local registry of
-//              per-Client sessions (IPC connection state, cancel
-//              tokens for in-flight subscriptions, etc.). Opaque
-//              on purpose: the C side never inspects the integer.
+//              per-Client sessions (one open IPC connection to the
+//              daemon, plus future per-session metadata).
 //
 // Why a registry, not raw `Box<T>` -> pointer casts
 // --------------------------------------------------
@@ -16,68 +15,99 @@
 // has a use-after-free that manifests at some distant ability
 // call, and (b) concurrent shutdown races between "lib shutdown"
 // and "Client calls easynet_ability_invoke" have to be papered
-// over in user code.
+// over in user code. A u64 handle + a process-wide registry puts
+// both of those problems on the library side.
 //
-// A u64 handle + `DashMap<u64, Arc<ClientSession>>` puts both of
-// those problems on the library side. An invalid handle is an
-// explicit `ERR_INVALID_HANDLE` return; a dropped handle's
-// `ClientSession` is reclaimed when the last Arc clone goes
-// away, which happens when the registry is the only remaining
-// holder at `easynet_shutdown` time.
+// Lib-internal tokio runtime
+// --------------------------
+// The IPC client (`crate::ffi::client::IpcClient`) is built on
+// `tokio::net::UnixStream` + `tokio_util::codec::Framed`, which
+// require a tokio runtime to drive. The C ABI is sync, so the lib
+// owns a process-wide `tokio::runtime::Runtime` and routes every
+// async call through `Runtime::block_on`.
 //
-// v1 state
-// --------
-// The `ClientSession` struct is a placeholder. It carries the
-// fields the next PR-DAEMON commit will populate: an IPC client
-// connected to the daemon, the negotiated IPC version, an
-// in-flight subscription registry, and the cancel tokens for
-// each. v1 ships the shape; real wiring lands alongside
-// `services::control::transport`.
+// Why `current_thread` and not `multi_thread`
+// -------------------------------------------
+// Plan v10.5 R1 §"lib 内部 tokio runtime — 决策项" pins a single
+// dedicated I/O thread by default to avoid Go cgo / Python GIL /
+// Swift main-thread conflicts. `current_thread` runtime + a
+// dedicated OS thread that calls `Runtime::block_on` per FFI call
+// is the simplest expression of that decision. v1 ships this; if a
+// platform smoke test breaks, the fallback is a fully-sync
+// `std::os::unix::net::UnixStream` path with no tokio inside the lib.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
+
+use tokio::runtime::Runtime;
+
+use crate::ffi::client::IpcClient;
 
 /// Opaque handle exposed to the C ABI. A value of 0 is reserved as
 /// "null handle" / "not yet allocated".
 pub type EasynetHandle = u64;
 
-/// Library-side state for one Client. Held in an Arc and indexed
-/// by a u64 handle.
-#[allow(dead_code)] // fields filled in by follow-up PR-DAEMON commit
+/// Library-side state for one Client.
+///
+/// Wrapped in an `Arc<ClientSession>` inside the registry so that
+/// (a) `get()` can hand back a cheap clone the FFI function holds
+/// while it awaits a round-trip, and (b) `release()` does not
+/// invalidate an `Arc` already held by an in-flight call. The
+/// `IpcClient` is behind a `Mutex` because the round-trip
+/// contract is "send one frame, read one frame"; concurrent calls
+/// would interleave the framed reads.
 pub struct ClientSession {
-    /// IPC version negotiated with the daemon. 0 means "handshake
-    /// not yet performed".
+    /// IPC version negotiated with the daemon. 0 means "no IPC
+    /// connection attempted" (test sessions); a real session always
+    /// carries the value chosen by the version-overlap check.
     pub ipc_version: u16,
     /// Path to the control.json the Client was told to dial. Used
     /// in diagnostic messages so an operator can see "which daemon
     /// did this handle connect to".
     pub control_path: String,
-    // Future fields (landed by follow-up PR-DAEMON commit):
-    //   pub client: Mutex<IpcClient>,                       // framed UDS/Pipe
-    //   pub subscriptions: DashMap<u64, CancelToken>,        // id -> token
+    /// The framed UDS connection. `None` for test sessions that
+    /// only exercise the registry, `Some(...)` for sessions opened
+    /// via `easynet_init`. Behind a `Mutex` because the round-trip
+    /// is one-frame-in / one-frame-out and concurrent calls on the
+    /// same handle would interleave reads.
+    pub client: Option<Mutex<IpcClient>>,
 }
 
 impl ClientSession {
-    fn new(control_path: String) -> Self {
+    /// Construct a session that owns a live IPC client.
+    pub fn with_client(control_path: String, client: IpcClient) -> Self {
+        let ipc_version = client.ipc_version;
+        Self {
+            ipc_version,
+            control_path,
+            client: Some(Mutex::new(client)),
+        }
+    }
+
+    /// Test-only constructor: a session with no IPC client. The
+    /// registry tests use this to exercise alloc/get/release without
+    /// reaching for `easynet_init`.
+    #[cfg(test)]
+    fn dummy(control_path: String) -> Self {
         Self {
             ipc_version: 0,
             control_path,
+            client: None,
         }
     }
 }
 
-/// Process-wide registry. v1 uses a plain `Mutex<HashMap>` rather
-/// than a dependency like `dashmap` because the contention is low
-/// (one entry per live Client process) and a single dep is easier
-/// to audit than a new external crate. The follow-up commit can
-/// swap for DashMap if benchmarks show lock contention under the
-/// real subscription volume.
+/// Process-wide registry. A plain `Mutex<HashMap>` is sufficient
+/// here because the contention surface is "one entry per live
+/// Client process", which is essentially never contested. A future
+/// commit can swap for `DashMap` if subscription volume justifies
+/// it.
 struct Registry {
     next: AtomicU64,
-    entries: Mutex<std::collections::HashMap<EasynetHandle, std::sync::Arc<ClientSession>>>,
+    entries: Mutex<std::collections::HashMap<EasynetHandle, Arc<ClientSession>>>,
 }
 
 fn registry() -> &'static Registry {
@@ -89,14 +119,39 @@ fn registry() -> &'static Registry {
     })
 }
 
+/// Process-wide tokio runtime used by the FFI surface to drive
+/// async I/O against the daemon.
+///
+/// Initialised lazily on first use (typically inside `easynet_init`).
+/// Errors during runtime construction abort the call site with a
+/// recorded last-error message — the library is unusable without a
+/// runtime, so failing fast is the right outcome.
+pub(crate) fn lib_runtime() -> anyhow::Result<&'static Runtime> {
+    // OnceLock<Result<Runtime, ...>> would let us cache the error,
+    // but in practice runtime construction fails only on resource
+    // exhaustion (no threads / no fds), which the next call will
+    // also fail on; a fresh attempt each time is acceptable.
+    static RT: OnceLock<Runtime> = OnceLock::new();
+    if let Some(rt) = RT.get() {
+        return Ok(rt);
+    }
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .thread_name("easynet-ffi-io")
+        .build()
+        .map_err(|e| anyhow::anyhow!("FFI: tokio runtime build failed: {e}"))?;
+    // get_or_init is the single-init form; if a concurrent caller
+    // already initialised, drop the rt we just built and use theirs.
+    Ok(RT.get_or_init(|| rt))
+}
+
 /// Allocate a new handle for the given `ClientSession` and return
 /// both. The caller stores the handle in the Client; the Arc is
 /// retained by the registry.
-#[allow(dead_code)] // consumed by `easynet_init` in a follow-up commit
-pub(crate) fn alloc(session: ClientSession) -> (EasynetHandle, std::sync::Arc<ClientSession>) {
+pub(crate) fn alloc(session: ClientSession) -> (EasynetHandle, Arc<ClientSession>) {
     let reg = registry();
     let id = reg.next.fetch_add(1, Ordering::Relaxed);
-    let arc = std::sync::Arc::new(session);
+    let arc = Arc::new(session);
     reg.entries
         .lock()
         .expect("handle registry lock not poisoned")
@@ -107,7 +162,7 @@ pub(crate) fn alloc(session: ClientSession) -> (EasynetHandle, std::sync::Arc<Cl
 /// Look up a handle. Returns `None` when the handle is 0 (null) or
 /// not present (freed / never issued). Callers map `None` to
 /// `ERR_INVALID_HANDLE`.
-pub(crate) fn get(handle: EasynetHandle) -> Option<std::sync::Arc<ClientSession>> {
+pub(crate) fn get(handle: EasynetHandle) -> Option<Arc<ClientSession>> {
     if handle == 0 {
         return None;
     }
@@ -122,7 +177,6 @@ pub(crate) fn get(handle: EasynetHandle) -> Option<std::sync::Arc<ClientSession>
 /// Release a handle. Returns `true` when the handle was present
 /// (and is now removed), `false` when the handle was unknown.
 /// Idempotent — a double-free returns `false` the second time.
-#[allow(dead_code)] // consumed by `easynet_shutdown`
 pub(crate) fn release(handle: EasynetHandle) -> bool {
     if handle == 0 {
         return false;
@@ -140,7 +194,7 @@ pub(crate) fn release(handle: EasynetHandle) -> bool {
 /// reaching for the real `easynet_init`.
 #[cfg(test)]
 pub(crate) fn test_session() -> ClientSession {
-    ClientSession::new("/tmp/test-control.json".into())
+    ClientSession::dummy("/tmp/test-control.json".into())
 }
 
 #[cfg(test)]
@@ -184,5 +238,16 @@ mod tests {
         let (a, _) = alloc(test_session());
         let (b, _) = alloc(test_session());
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn lib_runtime_returns_same_runtime_across_calls() {
+        // OnceLock semantics: the second call must hand back the
+        // same runtime instance, not allocate a new one. A future
+        // refactor that lost this invariant would silently leak a
+        // runtime per FFI call.
+        let a = lib_runtime().expect("runtime build #1");
+        let b = lib_runtime().expect("runtime build #2");
+        assert!(std::ptr::eq(a, b));
     }
 }

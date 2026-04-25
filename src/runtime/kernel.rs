@@ -39,12 +39,19 @@ use crate::runtime::kernel_api::KernelApi;
 /// Gateway handle for federation calls. Feature PRs extend the
 /// sub-service handles; the Kernel itself stays thin — it is a
 /// router, not a state owner.
+///
+/// Sub-services are held as `Arc` so the same handle can be
+/// shared with the `runtime::system::*` ability handlers without
+/// the Kernel having to re-vend through method delegation. The
+/// daemon bin builds the registry off the same Arcs the Kernel
+/// holds, so dispatch and direct KernelApi calls observe one
+/// state.
 pub struct Kernel {
-    session: SessionService,
-    permission: PermissionService,
-    discuss: DiscussService,
-    schedule: ScheduleService,
-    loop_svc: LoopService,
+    session: Arc<SessionService>,
+    permission: Arc<PermissionService>,
+    discuss: Arc<DiscussService>,
+    schedule: Arc<ScheduleService>,
+    loop_svc: Arc<LoopService>,
     #[allow(dead_code)]
     gateway: Arc<dyn GatewayApi>,
 }
@@ -54,13 +61,36 @@ impl Kernel {
     /// provided Gateway.
     pub fn new(gateway: Arc<dyn GatewayApi>) -> Self {
         Self {
-            session: SessionService::new(),
-            permission: PermissionService::new(),
-            discuss: DiscussService::new(),
-            schedule: ScheduleService::new(),
-            loop_svc: LoopService::new(),
+            session: Arc::new(SessionService::new()),
+            permission: Arc::new(PermissionService::new()),
+            discuss: Arc::new(DiscussService::new()),
+            schedule: Arc::new(ScheduleService::new()),
+            loop_svc: Arc::new(LoopService::new()),
             gateway,
         }
+    }
+
+    /// Borrow the SessionService handle. Used by the daemon bin's
+    /// boot path to share the same Arc into the system ability
+    /// registry.
+    pub fn session_service(&self) -> Arc<SessionService> {
+        Arc::clone(&self.session)
+    }
+
+    pub fn permission_service(&self) -> Arc<PermissionService> {
+        Arc::clone(&self.permission)
+    }
+
+    pub fn discuss_service(&self) -> Arc<DiscussService> {
+        Arc::clone(&self.discuss)
+    }
+
+    pub fn schedule_service(&self) -> Arc<ScheduleService> {
+        Arc::clone(&self.schedule)
+    }
+
+    pub fn loop_service(&self) -> Arc<LoopService> {
+        Arc::clone(&self.loop_svc)
     }
 }
 
@@ -128,7 +158,7 @@ impl KernelApi for Kernel {
     }
 
     fn list_discuss_rooms(&self) -> anyhow::Result<Vec<DiscussRoom>> {
-        Ok(self.discuss.list())
+        Ok((*self.discuss).list())
     }
 
     fn loop_status(&self, id: &LoopId) -> anyhow::Result<Option<LoopInstance>> {

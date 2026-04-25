@@ -271,6 +271,33 @@ fn system_skills_json() -> String {
                 "output_schema": serde_json::Value::Null,
                 "timeout_seconds": serde_json::Value::Null,
             }),
+            "system.discuss.create" => json!({
+                "name": "system.discuss.create",
+                "description":
+                    crate::runtime::system::discuss_ability::create_description(),
+                "input_schema":
+                    crate::runtime::system::discuss_ability::create_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.discuss.post" => json!({
+                "name": "system.discuss.post",
+                "description":
+                    crate::runtime::system::discuss_ability::post_description(),
+                "input_schema":
+                    crate::runtime::system::discuss_ability::post_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.discuss.subscribe" => json!({
+                "name": "system.discuss.subscribe",
+                "description":
+                    crate::runtime::system::discuss_ability::subscribe_description(),
+                "input_schema":
+                    crate::runtime::system::discuss_ability::subscribe_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
             other => json!({
                 "name": other,
                 "description": "",
