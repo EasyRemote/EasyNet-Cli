@@ -81,7 +81,7 @@ use std::time::Instant;
 use serde_json::{json, Value};
 
 use crate::registry::agents::{AgentEntry, AgentRegistry};
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::{LocalAbilityRegistry, StreamSource};
 
 /// The wire-level *verb* portion of every chat ability name. The
 /// fully-qualified ability name is always `<agent>.chat`. A future
@@ -144,6 +144,13 @@ pub fn register(
 /// Register a single `<agent>.chat` handler. Factored out so a
 /// future "an agent was added at runtime" path can call it directly
 /// without re-walking the registry.
+///
+/// Mounts both the RPC and the Stream handler on the same name. The
+/// dispatcher routes by `CallMode`: `Rpc` invocations land on the
+/// RPC handler, `Stream`/Subscribe lands on the stream handler.
+/// Sharing the ability name across both modes is the point — a
+/// caller chooses how it wants to consume chat (one-shot vs framed),
+/// not which "kind of chat" it is calling.
 pub fn register_for_agent(
     reg: &mut LocalAbilityRegistry,
     agent_name: String,
@@ -151,9 +158,24 @@ pub fn register_for_agent(
     loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
 ) {
     let ability = format!("{agent_name}.{ABILITY_VERB}");
+
+    // RPC: the legacy synchronous one-shot path.
+    let rpc_agent = agent_name.clone();
+    let rpc_entry = entry.clone();
+    let rpc_loaders = Arc::clone(&loaders);
     reg.register_rpc(
         &ability,
-        Arc::new(move |args: Value| handler(&agent_name, &entry, &loaders, args)),
+        Arc::new(move |args: Value| handler(&rpc_agent, &rpc_entry, &rpc_loaders, args)),
+    );
+
+    // Stream: emit framed events. v1 ships a Snapshot variant
+    // (eagerly materialised list) because the underlying LLM driver
+    // is synchronous; once the driver gains an async token stream
+    // the handler upgrades to `Live(broadcast::Receiver)` without
+    // changing the wire frame shape.
+    reg.register_stream(
+        &ability,
+        Arc::new(move |args: Value| stream_handler(&agent_name, &entry, &loaders, args)),
     );
 }
 
@@ -301,6 +323,168 @@ fn handler(
         "usage": usage.unwrap_or(Value::Null),
         "elapsed_ms": elapsed_ms,
     }))
+}
+
+/// Stream-mode chat handler. Same parsing + dispatch as the RPC
+/// handler, but the response is materialised as a list of typed
+/// frames the IPC server emits in order.
+///
+/// Frame shapes (typed via the `type` discriminator):
+///
+///   `{"type": "session", "session_id": "..."}`
+///       Always the first frame. Lets a subscriber correlate
+///       subsequent `delta`/`done` frames back to the session id
+///       even when the caller did not supply one.
+///
+///   `{"type": "loaded", "skills_loaded": [...], "context_used": [...]}`
+///       Sent after skill enumeration + context loading complete,
+///       before the LLM is invoked. Optional in v1 (absent when
+///       both lists would be empty) but always present when
+///       either has content.
+///
+///   `{"type": "done", "reply": "...", "tool_calls": [...], "context_used": [...], "usage": {...}, "elapsed_ms": N, "session_id": "..."}`
+///       Terminal happy-path frame. Carries the same payload the
+///       RPC handler returns, so a subscriber that only reads the
+///       last frame is equivalent to an RPC caller.
+///
+///   `{"type": "error", "message": "...", "session_id": "..."}`
+///       Terminal error frame. Mutually exclusive with `done`.
+///
+/// `delta` and `tool_call_*` frames are reserved for when the
+/// driver gains async token streaming and live tool-call hooks;
+/// today's synchronous driver cannot emit them, so the handler
+/// jumps from `loaded` straight to `done`.
+fn stream_handler(
+    agent_name: &str,
+    entry: &AgentEntry,
+    loaders: &[Arc<dyn ContextLoader>],
+    args: Value,
+) -> anyhow::Result<StreamSource> {
+    // Run the same body as the RPC handler. We deliberately do NOT
+    // share the RPC code path because the RPC handler returns the
+    // structured response directly while the stream handler must
+    // wrap it in framed events. Both call dispatch::send_external
+    // through the same shape, so behaviour stays in sync.
+    let started = Instant::now();
+    let parsed = ChatArgs::parse(&args)?;
+    // The stream entry point cannot honour `stream: false` either —
+    // the caller picked the subscribe RPC by entering this function
+    // at all. Document the redundancy for the operator who reads
+    // the timeline; do not bail.
+    let session_id = parsed
+        .session_id
+        .clone()
+        .unwrap_or_else(|| format!("chat-{}", uuid_like()));
+
+    let mut frames: Vec<Value> = Vec::with_capacity(3);
+    frames.push(json!({
+        "type": "session",
+        "session_id": session_id,
+    }));
+
+    // Context loaders + skills enumeration — same logic as the RPC
+    // handler, but the result goes into a `loaded` frame instead of
+    // a return-value field.
+    let mut context_used: Vec<Value> = Vec::new();
+    let mut loaded_chunks: Vec<String> = Vec::new();
+    if !matches!(parsed.context_loaders.mode, SelectionMode::None) {
+        for loader in loaders {
+            if !parsed.context_loaders.is_selected(loader.name()) {
+                continue;
+            }
+            match loader.load(agent_name, &session_id) {
+                Ok(Some(chunk)) => {
+                    let bytes = chunk.len();
+                    loaded_chunks.push(chunk);
+                    context_used.push(json!({
+                        "loader": loader.name(),
+                        "bytes": bytes,
+                    }));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!(
+                        "chat[{agent_name}] (stream): context loader {:?} failed: {e}",
+                        loader.name()
+                    );
+                    context_used.push(json!({
+                        "loader": loader.name(),
+                        "bytes": 0,
+                        "error": format!("{e}"),
+                    }));
+                }
+            }
+        }
+    }
+    let skills_loaded = enumerate_skills(agent_name, entry, &parsed.skills);
+    if !skills_loaded.is_empty() || !context_used.is_empty() {
+        frames.push(json!({
+            "type": "loaded",
+            "skills_loaded": skills_loaded.clone(),
+            "context_used": context_used.clone(),
+        }));
+    }
+
+    let composed_context: Option<String> = match (loaded_chunks.is_empty(), &parsed.context) {
+        (true, None) => None,
+        (true, Some(c)) => Some(c.clone()),
+        (false, None) => Some(loaded_chunks.join("\n\n")),
+        (false, Some(c)) => Some(format!("{}\n\n{c}", loaded_chunks.join("\n\n"))),
+    };
+
+    // The dispatch call. Non-tokio context here because stream
+    // handlers are constructed inside the synchronous registry
+    // path; if a future async dispatcher lands, the same
+    // block_in_place dance from the RPC handler applies.
+    let response_result = if tokio::runtime::Handle::try_current().is_ok() {
+        tokio::task::block_in_place(|| {
+            crate::runtime::dispatch::send_external(
+                agent_name,
+                entry,
+                &parsed.prompt,
+                composed_context.as_deref(),
+            )
+        })
+    } else {
+        crate::runtime::dispatch::send_external(
+            agent_name,
+            entry,
+            &parsed.prompt,
+            composed_context.as_deref(),
+        )
+    };
+
+    match response_result {
+        Ok(resp) => {
+            let elapsed_ms = started.elapsed().as_millis() as u64;
+            let usage = resp.usage.as_ref().map(|u| {
+                json!({
+                    "input_tokens": u.input_tokens,
+                    "output_tokens": u.output_tokens,
+                    "model": resp.model.clone(),
+                })
+            });
+            frames.push(json!({
+                "type": "done",
+                "session_id": session_id,
+                "reply": resp.content,
+                "skills_loaded": skills_loaded,
+                "tool_calls": Value::Array(vec![]),
+                "context_used": context_used,
+                "usage": usage.unwrap_or(Value::Null),
+                "elapsed_ms": elapsed_ms,
+            }));
+        }
+        Err(e) => {
+            frames.push(json!({
+                "type": "error",
+                "session_id": session_id,
+                "message": format!("{e}"),
+            }));
+        }
+    }
+
+    Ok(StreamSource::Snapshot(frames))
 }
 
 /// Build the list of ability names that would be exposed as tools to
@@ -568,6 +752,9 @@ mod tests {
         register(&mut reg, &agents, Arc::new(Vec::new()));
         assert!(reg.get_rpc("alice.chat").is_some());
         assert!(reg.get_rpc("bob.chat").is_some());
+        // Stream handler registered too — same name, different mode.
+        assert!(reg.get_stream("alice.chat").is_some());
+        assert!(reg.get_stream("bob.chat").is_some());
         // No collateral registrations.
         assert!(reg.get_rpc("alice.voice").is_none());
         assert!(reg.get_rpc("system.chat").is_none());

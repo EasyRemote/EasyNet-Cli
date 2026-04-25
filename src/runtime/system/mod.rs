@@ -169,4 +169,39 @@ mod tests {
         let advertised = published_ability_names();
         assert_eq!(live, advertised);
     }
+
+    #[test]
+    fn registry_includes_chat_handler_per_registered_agent() {
+        // After Phase 3 wired chat as a system ability, every agent
+        // in the registry should produce a `<agent>.chat` handler in
+        // the unified LocalAbilityRegistry. This is the load-bearing
+        // property that lets the proxy dispatch chat through the
+        // same registry as ping/session/permission.
+        use crate::registry::agents::{AgentEntry, AgentType};
+        let mut agents = AgentRegistry::default();
+        agents
+            .agents
+            .insert("alice".into(), AgentEntry::new(AgentType::ClaudeCode, None));
+        agents
+            .agents
+            .insert("bob".into(), AgentEntry::new(AgentType::Codex, None));
+        let reg = build_registry_with_services(
+            Arc::new(SessionService::new()),
+            Arc::new(PermissionService::new()),
+            Arc::new(DiscussService::new()),
+            Arc::new(ScheduleService::new()),
+            Arc::new(LoopService::new()),
+            &agents,
+            Arc::new(Vec::new()),
+        );
+        let names = reg.list_abilities();
+        assert!(
+            names.iter().any(|n| n == "alice.chat"),
+            "alice.chat must be registered; got {names:?}"
+        );
+        assert!(
+            names.iter().any(|n| n == "bob.chat"),
+            "bob.chat must be registered; got {names:?}"
+        );
+    }
 }
