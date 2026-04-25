@@ -15,14 +15,6 @@
 // every importer into r#loop syntax. The suffix sidesteps the
 // keyword while keeping the file's role obvious.
 //
-// What this PR does NOT ship
-// --------------------------
-// The actual per-iteration execution (body Invocation → verify
-// Invocation → state transition) lands in PR-INVOCATION-EXEC-UNITY.
-// v1 here is the registry surface — Client can create / observe /
-// cancel; the controller that drives iterations is the unity PR's
-// job.
-//
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
@@ -61,23 +53,36 @@ pub fn register(reg: &mut LocalAbilityRegistry, svc: Arc<LoopService>) {
     );
 }
 
-fn create_handler(svc: &LoopService, args: Value) -> anyhow::Result<Value> {
+fn create_handler(svc: &Arc<LoopService>, args: Value) -> anyhow::Result<Value> {
     let worker_agent = args
         .get("worker_agent")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("loop.create: `worker_agent` required"))?;
+    let verify_expr = args
+        .get("verify_expr")
+        .and_then(Value::as_str)
+        .unwrap_or("true");
     let max_iters = args
         .get("max_iters")
         .and_then(Value::as_u64)
         .ok_or_else(|| anyhow::anyhow!("loop.create: `max_iters` (positive integer) required"))?;
+    let body_prompt = args
+        .get("body_prompt")
+        .and_then(Value::as_str)
+        .unwrap_or("Continue the loop task and return the current result.");
     if max_iters > u32::MAX as u64 {
         anyhow::bail!("loop.create: max_iters too large (≤ u32::MAX)");
     }
-    let id = svc.create(AgentId::new(worker_agent), max_iters as u32)?;
+    let id = svc.create(
+        AgentId::new(worker_agent),
+        verify_expr.to_owned(),
+        max_iters as u32,
+        body_prompt.to_owned(),
+    )?;
     Ok(json!({ "loop_id": id.as_str() }))
 }
 
-fn status_handler(svc: &LoopService, args: Value) -> anyhow::Result<Value> {
+fn status_handler(svc: &Arc<LoopService>, args: Value) -> anyhow::Result<Value> {
     let id = args
         .get("loop_id")
         .and_then(Value::as_str)
@@ -88,24 +93,20 @@ fn status_handler(svc: &LoopService, args: Value) -> anyhow::Result<Value> {
     }
 }
 
-fn subscribe_handler(svc: &LoopService, args: Value) -> anyhow::Result<StreamSource> {
+fn subscribe_handler(svc: &Arc<LoopService>, args: Value) -> anyhow::Result<StreamSource> {
     let id = args
         .get("loop_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("loop.subscribe: `loop_id` required"))?;
-    // v1 emits a one-shot snapshot. The loop controller (which
-    // would push live IterStarted / BodyFrame / VerifyFrame /
-    // Terminal frames into a per-loop broadcast) is its own
-    // follow-up task; until it lands, the subscribe ability is
-    // useful for "tell me the current state" but not "stream
-    // every iteration as it happens".
-    match svc.status(&LoopId::new(id)) {
-        Some(inst) => Ok(StreamSource::Snapshot(vec![serde_json::to_value(inst)?])),
-        None => Ok(StreamSource::Snapshot(Vec::new())),
+    let loop_id = LoopId::new(id);
+    let (snapshot, live) = svc.subscribe(&loop_id)?;
+    match live {
+        Some(rx) => Ok(StreamSource::SnapshotThenLive(snapshot, rx)),
+        None => Ok(StreamSource::Snapshot(snapshot)),
     }
 }
 
-fn cancel_handler(svc: &LoopService, args: Value) -> anyhow::Result<Value> {
+fn cancel_handler(svc: &Arc<LoopService>, args: Value) -> anyhow::Result<Value> {
     let id = args
         .get("loop_id")
         .and_then(Value::as_str)
@@ -120,7 +121,9 @@ pub fn create_input_schema() -> Value {
         "required": ["worker_agent", "max_iters"],
         "properties": {
             "worker_agent": {"type": "string"},
-            "max_iters": {"type": "integer", "minimum": 1}
+            "verify_expr": {"type": "string"},
+            "max_iters": {"type": "integer", "minimum": 1},
+            "body_prompt": {"type": "string"}
         },
         "additionalProperties": false
     })
@@ -144,8 +147,9 @@ pub fn cancel_input_schema() -> Value {
 }
 
 pub fn create_description() -> &'static str {
-    "Create a worker+verify loop instance bounded by max_iters. v1 starts in Pending state; \
-     PR-INVOCATION-EXEC-UNITY drives per-iteration body and verify Invocations through Kernel::invoke."
+    "Create a worker+verify loop instance bounded by max_iters. The daemon immediately starts the \
+     per-loop controller, which drives body and verify Invocations through Kernel::invoke until a \
+     terminal state is reached."
 }
 
 pub fn status_description() -> &'static str {
@@ -153,8 +157,8 @@ pub fn status_description() -> &'static str {
 }
 
 pub fn subscribe_description() -> &'static str {
-    "Subscribe to a loop's status stream. v1 emits a one-shot snapshot; live per-iteration frames \
-     land with PR-INVOCATION-EXEC-UNITY."
+    "Subscribe to a loop's status stream. Replays any buffered per-iteration frames, then tails \
+     live IterStarted / BodyChunk / VerifyChunk / IterFinished / Terminal frames while the loop is running."
 }
 
 pub fn cancel_description() -> &'static str {
@@ -181,7 +185,7 @@ mod tests {
         let id = resp["loop_id"].as_str().unwrap().to_string();
         let s = status_handler(&svc, json!({"loop_id": id})).unwrap();
         assert_eq!(s["max_iters"], 3);
-        assert_eq!(s["state"]["kind"], "pending");
+        assert_eq!(s["verify_expr"], "true");
     }
 
     #[test]
@@ -199,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    fn subscribe_known_loop_emits_one_snapshot_frame() {
+    fn subscribe_known_loop_emits_snapshot_or_live_stream() {
         let svc = fresh();
         let id = create_handler(
             &svc,
@@ -209,22 +213,15 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
-        let frames = subscribe_handler(&svc, json!({"loop_id": id}))
-            .unwrap()
-            .into_snapshot();
-        assert_eq!(frames.len(), 1);
-        assert_eq!(frames[0]["state"]["kind"], "pending");
+        let stream = subscribe_handler(&svc, json!({"loop_id": id})).unwrap();
+        let frames = stream.into_snapshot();
+        assert!(frames.is_empty() || frames[0]["kind"] == "iter_started");
     }
 
     #[test]
     fn subscribe_unknown_loop_yields_empty_stream() {
-        // v1 contract: unknown id → empty stream (not an error).
-        // Mirrors the system.session.attach behaviour so a Client
-        // observing both gets a uniform "I just missed it" UX.
         let svc = fresh();
-        let frames = subscribe_handler(&svc, json!({"loop_id": "ghost"}))
-            .unwrap()
-            .into_snapshot();
-        assert!(frames.is_empty());
+        let err = subscribe_handler(&svc, json!({"loop_id": "ghost"})).unwrap_err();
+        assert!(format!("{err}").contains("not found"));
     }
 }
