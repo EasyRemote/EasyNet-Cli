@@ -129,12 +129,28 @@ async fn main() -> anyhow::Result<()> {
     let schedule_for_tick = kernel.schedule_service();
     let kernel_for_tick: Arc<Kernel> = Arc::clone(&kernel);
 
-    let registry = system::build_registry_with_services(
+    // Build the full ability registry. `build_registry_for_daemon`
+    // loads the agent registry from disk so `chat_ability::register`
+    // can mount one `<agent>.chat` handler per locally-registered
+    // agent. A load failure degrades to "no agents" rather than
+    // crashing — chat is one ability among many, and a registry that
+    // briefly disagrees about agents should not take down
+    // ping/session/permission alongside it.
+    //
+    // No context loaders are registered in v1. The Vec exists so a
+    // subsequent PR can plug in user-profile / schedule / memory
+    // loaders by appending here, without touching system::mod or the
+    // chat handler itself.
+    let chat_loaders: Arc<Vec<Arc<dyn system::chat_ability::ContextLoader>>> =
+        Arc::new(Vec::new());
+
+    let registry = system::build_registry_for_daemon(
         kernel.session_service(),
         kernel.permission_service(),
         kernel.discuss_service(),
         kernel.schedule_service(),
         kernel.loop_service(),
+        chat_loaders,
     );
 
     // Stage-2 dispatcher (executor). Wired with the unified registry
