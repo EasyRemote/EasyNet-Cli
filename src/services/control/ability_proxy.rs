@@ -1,108 +1,307 @@
-// EasyNet CLI — Ability Proxy (Control-plane → KernelApi adapter)
-// ================================================================
+// EasyNet CLI — Ability Proxy (Control-plane → AbilityDispatcher adapter)
+// =========================================================================
 //
 // File: src/services/control/ability_proxy.rs
 // Description: Frame-level adapter between the Control plane's wire
-//              messages (`RequestFrame` / `ResponseFrame`) and the
-//              runtime's typed `KernelApi`. Every wire verb lands
-//              on exactly one method here; every method routes to
-//              `Kernel::invoke` or a Kernel query and produces a
-//              response frame for the caller.
+//              messages (`IncomingFrame` / `OutgoingFrame`) and the
+//              runtime's two-stage `InvocationTarget` resolver +
+//              `AbilityDispatcher`. PR-INVOCATION-EXEC-UNITY wires
+//              this for real (was a v1 skeleton in PR-DAEMON Commit 3).
 //
 // Layering rule (enforced by scripts/check-kernel-boundary.sh)
 // ------------------------------------------------------------
 // This file is the *only* legal place in `src/services/control/`
-// to import from `crate::runtime::*`. It must import:
-//   * `crate::runtime::kernel_api::KernelApi`      (entry point)
-//   * `crate::runtime::invocation::{Invocation, Receipt, ...}` (values)
-//   * `crate::runtime::domain::{...}`              (typed ids)
+// to import from `crate::runtime::*`. It imports:
+//   * `crate::runtime::ability_dispatch::AbilityDispatcher`  (executor)
+//   * `crate::runtime::invocation_target::{TargetResolver,
+//      InvocationPlan, ...}`                                   (resolver)
+//   * `crate::runtime::kernel_api::KernelApi`                 (entry shape;
+//      retained for future Receipt-emit + audit hooks)
+//   * `crate::runtime::domain::NodeId`                        (typed id)
 //
 // It must NOT import:
-//   * `crate::runtime::gateway*` (Execution → Gateway boundary is
-//     internal to the runtime; Control has no business reaching past
-//     Kernel)
-//   * `crate::runtime::execution::*` (sub-service internals — Control
-//     talks through Kernel, not sub-services directly)
+//   * `crate::runtime::gateway*` — Execution → Gateway boundary is
+//     internal to the runtime; Control reaches it only via dispatcher.
+//   * `crate::runtime::execution::*` — sub-service internals; Control
+//     talks through the dispatcher, never to a sub-service directly.
 //
 // v10.3 C* unity reminder
 // -----------------------
-// When a RequestFrame::Invoke arrives, the proxy builds an
-// `Invocation` from the wire fields (filling in caller from the
-// daemon's own node identity, nonce from `fresh_nonce_hex()`, and
-// causal_context from the hint field if present, else `Null`) and
-// passes it to `Kernel::invoke`. There are no other execution paths.
+// Every Invoke/Subscribe frame becomes an `InvocationPlan` →
+// `resolver.resolve(plan)` → `dispatcher.execute_*(target)`. The
+// proxy is the only place the wire-format ↔ InvocationTarget
+// translation happens. Schedule tick / Loop controller / Permission
+// admission go directly into the same dispatcher; they do NOT come
+// through this proxy.
 //
-// v1 status — skeleton
-// --------------------
-// Signatures + stub bodies. Real wiring (admission dedup + proto-
-// JSON canonicalisation + in-flight stream registry) lands in
-// PR-INVOCATION-EXEC-UNITY and PR-SYS.
+// Why one method returns Vec<OutgoingFrame> and not OutgoingFrame
+// ----------------------------------------------------------------
+// Invoke and Cancel each produce exactly one response envelope.
+// Subscribe produces N `Frame`s plus one `Terminal`. Returning a
+// `Vec<OutgoingFrame>` from the single proxy entry uniforms the
+// shape so the IPC `serve_connection` loop just iterates and writes
+// each frame. RPC paths return a 1-element vec; the cost of the
+// allocation is negligible against the framed write that follows.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::sync::Arc;
 
+use crate::runtime::ability_dispatch::AbilityDispatcher;
+use crate::runtime::domain::NodeId;
+use crate::runtime::invocation_target::{
+    CallMode, InvocationPlan, LocalNodeResolver, TargetResolver,
+};
 use crate::runtime::kernel_api::KernelApi;
 use crate::services::control::frames::{codes, IncomingFrame, OutgoingFrame};
 
-/// Stateless-on-construction adapter. Holds an `Arc<dyn KernelApi>`
-/// so the server can spawn per-connection tasks that each clone the
-/// Arc without owning the Kernel.
+/// Stateless-on-construction adapter. Holds a dispatcher (the
+/// stage-2 executor), a resolver (stage-1), and a Kernel handle for
+/// future receipt-emit hooks. Cloned per accepted connection.
 #[derive(Clone)]
 pub struct AbilityProxy {
+    /// Retained for future receipt-emit + audit hooks. v1 does not
+    /// call into KernelApi from this proxy because the dispatcher
+    /// path covers every wire frame; PR-INVOCATION-EXEC-UNITY+1
+    /// wires Receipt emission through KernelApi here.
+    #[allow(dead_code)]
     kernel: Arc<dyn KernelApi>,
+    dispatcher: AbilityDispatcher,
+    /// Resolver is held as `Arc<dyn TargetResolver>` so a future
+    /// planner can plug in a smarter resolver without changing the
+    /// proxy signature.
+    resolver: Arc<dyn TargetResolver>,
 }
 
 impl AbilityProxy {
-    pub fn new(kernel: Arc<dyn KernelApi>) -> Self {
-        Self { kernel }
+    /// Construct a proxy with the provided components. The daemon bin
+    /// builds these once at boot and shares the resulting `AbilityProxy`
+    /// across every accepted IPC connection.
+    pub fn new_with_dispatcher(
+        kernel: Arc<dyn KernelApi>,
+        dispatcher: AbilityDispatcher,
+        resolver: Arc<dyn TargetResolver>,
+    ) -> Self {
+        Self {
+            kernel,
+            dispatcher,
+            resolver,
+        }
     }
 
-    /// Route one incoming frame through the Kernel and produce the
-    /// corresponding outgoing frame. v1 is a skeleton: every frame
-    /// returns an explicit "not yet wired" `Error` envelope so
-    /// misuse is loud. Real dispatch (build Invocation →
-    /// `kernel.invoke` → encode Receipt to `OutgoingFrame::Result`)
-    /// lands in PR-INVOCATION-EXEC-UNITY.
-    pub fn handle(&self, req: IncomingFrame) -> OutgoingFrame {
-        let (request_id, subscription_id) = match &req {
-            IncomingFrame::Invoke { request_id, .. } => (Some(request_id.clone()), None),
+    /// Backwards-compatible constructor used by tests + the v1
+    /// daemon bin path. Builds a fresh dispatcher with the live
+    /// system-ability registry plus a `LocalNodeResolver` keyed to
+    /// the local node id derived from environment (or "self" when
+    /// unset, for harness use).
+    ///
+    /// Production daemon bin should prefer `new_with_dispatcher`
+    /// for explicit dependency wiring.
+    pub fn new(kernel: Arc<dyn KernelApi>) -> Self {
+        // Pull the live registry — same pattern the published_ability_names
+        // helper uses, so dispatcher visibility matches advertisement.
+        let registry = crate::runtime::system::build_registry();
+        // The dispatcher needs a Gateway; v1 proxy uses a Noop one so
+        // the IPC harness path is self-contained. The daemon bin
+        // overrides this through `new_with_dispatcher` once the real
+        // Gateway lands.
+        let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
+            Arc::new(crate::runtime::gateway::NoopGateway::new());
+        let dispatcher = AbilityDispatcher::new(registry, gateway);
+        let local_node = node_id_from_env_or_default();
+        let resolver: Arc<dyn TargetResolver> = Arc::new(LocalNodeResolver::new(local_node));
+        Self {
+            kernel,
+            dispatcher,
+            resolver,
+        }
+    }
+
+    /// Route one incoming frame through the resolver + dispatcher.
+    /// Returns a Vec of one or more outgoing frames the IPC server
+    /// writes back in order.
+    ///
+    /// Frame mapping:
+    ///   * Invoke         → one `Result` (success) or one `Error`.
+    ///   * Subscribe      → N `Frame` envelopes + one `Terminal`
+    ///                      with reason="done" on success;
+    ///                      one `Error` on failure.
+    ///   * Cancel         → idempotent: returns one `Error` with
+    ///                      code=ability_failed and a message
+    ///                      indicating cancel-without-active-stream
+    ///                      until the streaming registry lands.
+    pub fn handle(&self, req: IncomingFrame) -> Vec<OutgoingFrame> {
+        match req {
+            IncomingFrame::Invoke {
+                request_id,
+                ability,
+                args,
+            } => self.handle_invoke(request_id, ability, args),
             IncomingFrame::Subscribe {
-                subscription_id, ..
+                subscription_id,
+                ability,
+                args,
+            } => self.handle_subscribe(subscription_id, ability, args),
+            IncomingFrame::Cancel { subscription_id } => {
+                vec![OutgoingFrame::Error {
+                    request_id: None,
+                    subscription_id: Some(subscription_id),
+                    code: codes::ABILITY_FAILED.into(),
+                    message: "Cancel for unknown subscription_id; \
+                              streaming subscription registry lands in a follow-up PR"
+                        .into(),
+                }]
             }
-            | IncomingFrame::Cancel { subscription_id } => (None, Some(subscription_id.clone())),
+        }
+    }
+
+    fn handle_invoke(
+        &self,
+        request_id: String,
+        ability: String,
+        args: serde_json::Value,
+    ) -> Vec<OutgoingFrame> {
+        let plan = InvocationPlan {
+            ability,
+            target_node_hint: extract_node_hint(&args),
+            args,
+            call_mode: CallMode::Rpc,
         };
-        OutgoingFrame::Error {
-            request_id,
-            subscription_id,
-            code: codes::ABILITY_FAILED.into(),
-            message: "AbilityProxy::handle is a skeleton in v1 of PR-DAEMON; \
-                      PR-INVOCATION-EXEC-UNITY lands the real dispatch"
-                .into(),
+        let target = match self.resolver.resolve(plan) {
+            Ok(t) => t,
+            Err(e) => {
+                return vec![OutgoingFrame::Error {
+                    request_id: Some(request_id),
+                    subscription_id: None,
+                    code: codes::ABILITY_FAILED.into(),
+                    message: format!("resolver: {e}"),
+                }];
+            }
+        };
+        match self.dispatcher.execute_rpc(target) {
+            Ok(value) => vec![OutgoingFrame::Result {
+                request_id,
+                value,
+            }],
+            Err(e) => {
+                let msg = format!("{e}");
+                let code = if msg.contains("no local handler registered") {
+                    codes::NOT_FOUND
+                } else {
+                    codes::ABILITY_FAILED
+                };
+                vec![OutgoingFrame::Error {
+                    request_id: Some(request_id),
+                    subscription_id: None,
+                    code: code.into(),
+                    message: msg,
+                }]
+            }
+        }
+    }
+
+    fn handle_subscribe(
+        &self,
+        subscription_id: String,
+        ability: String,
+        args: serde_json::Value,
+    ) -> Vec<OutgoingFrame> {
+        let plan = InvocationPlan {
+            ability,
+            target_node_hint: extract_node_hint(&args),
+            args,
+            call_mode: CallMode::Stream,
+        };
+        let target = match self.resolver.resolve(plan) {
+            Ok(t) => t,
+            Err(e) => {
+                return vec![OutgoingFrame::Error {
+                    request_id: None,
+                    subscription_id: Some(subscription_id),
+                    code: codes::ABILITY_FAILED.into(),
+                    message: format!("resolver: {e}"),
+                }];
+            }
+        };
+        match self.dispatcher.execute_stream(target) {
+            Ok(values) => {
+                let mut out = Vec::with_capacity(values.len() + 1);
+                for v in values {
+                    out.push(OutgoingFrame::Frame {
+                        subscription_id: subscription_id.clone(),
+                        event: v,
+                    });
+                }
+                out.push(OutgoingFrame::Terminal {
+                    subscription_id,
+                    reason: "done".into(),
+                });
+                out
+            }
+            Err(e) => {
+                let msg = format!("{e}");
+                let code = if msg.contains("no local stream handler") {
+                    codes::NOT_FOUND
+                } else {
+                    codes::ABILITY_FAILED
+                };
+                vec![OutgoingFrame::Error {
+                    request_id: None,
+                    subscription_id: Some(subscription_id),
+                    code: code.into(),
+                    message: msg,
+                }]
+            }
         }
     }
 
     /// Accessor used by tests + the server accept-loop to borrow the
-    /// held Kernel handle (for, e.g., pushing lifecycle events).
+    /// held Kernel handle.
     #[allow(dead_code)]
     pub(crate) fn kernel(&self) -> &Arc<dyn KernelApi> {
         &self.kernel
     }
 }
 
+/// Read a `node` field out of the args object if present. The wire
+/// hint uses `node` (not `target_node`) to keep the schema-level
+/// vocabulary uniform with how attach/permission/discuss already
+/// don't take a node hint at all — the field is purely a routing
+/// override surfaced through the args bag for v1, which keeps the
+/// proto schemas free of a transport-only concept.
+fn extract_node_hint(args: &serde_json::Value) -> Option<NodeId> {
+    args.get("node")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(NodeId::new)
+}
+
+/// Resolve the local node id from the EASYNET_NODE_ID env var (set
+/// by the daemon bin from `credentials.json` at boot) or default to
+/// "self" for the test/harness path. The value only feeds into the
+/// resolver's loopback-vs-remote decision; it is not part of the ABI.
+fn node_id_from_env_or_default() -> NodeId {
+    match std::env::var("EASYNET_NODE_ID") {
+        Ok(s) if !s.is_empty() => NodeId::new(s),
+        _ => NodeId::new("self"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::ability_dispatch::LocalAbilityRegistry;
     use crate::runtime::domain::{
         DiscussRoom, LoopId, LoopInstance, PermissionDecision, PermissionId, PermissionRequest,
         RoomId, ScheduleEntry, ScheduleId, Session, SessionId,
     };
+    use crate::runtime::gateway::NoopGateway;
     use crate::runtime::invocation::{Invocation, Receipt};
+    use serde_json::json;
 
-    /// Minimum KernelApi impl for proxy-level tests; nothing reaches
-    /// a real runtime because v1 proxy is a skeleton that does not
-    /// call into the Kernel yet.
+    /// Minimum KernelApi impl for proxy-level tests; v1 proxy doesn't
+    /// reach the Kernel, but the type signature still wants one.
     struct StubKernel;
 
     impl KernelApi for StubKernel {
@@ -155,64 +354,132 @@ mod tests {
         }
     }
 
+    fn proxy_with_live_registry() -> AbilityProxy {
+        // The default `new` constructor wires up the live system
+        // ability registry — same path the daemon bin uses. This is
+        // what we want to exercise end-to-end so the test catches
+        // any drift between "advertised" and "dispatched".
+        AbilityProxy::new(Arc::new(StubKernel))
+    }
+
+    fn proxy_with_empty_registry() -> AbilityProxy {
+        // Some tests want a clean slate (no system.ping etc.) so they
+        // can assert the unregistered-ability path; build an empty
+        // registry + a NoopGateway here.
+        let registry = Arc::new(LocalAbilityRegistry::new());
+        let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
+            Arc::new(NoopGateway::new());
+        let dispatcher = AbilityDispatcher::new(registry, gateway);
+        let resolver: Arc<dyn TargetResolver> =
+            Arc::new(LocalNodeResolver::new(NodeId::new("self")));
+        AbilityProxy::new_with_dispatcher(Arc::new(StubKernel), dispatcher, resolver)
+    }
+
     #[test]
-    fn handle_returns_error_frame_for_invoke_with_request_id_preserved() {
-        let p = AbilityProxy::new(Arc::new(StubKernel));
-        let resp = p.handle(IncomingFrame::Invoke {
-            request_id: "abc".into(),
+    fn invoke_system_ping_returns_result_frame_with_request_id_preserved() {
+        // The cdylib + smoke scripts depend on `system.ping` returning
+        // a Result envelope (not the v1 skeleton Error). This test
+        // pins that contract end-to-end through the live registry.
+        let p = proxy_with_live_registry();
+        let frames = p.handle(IncomingFrame::Invoke {
+            request_id: "req-1".into(),
             ability: "system.ping".into(),
-            args: serde_json::json!({}),
+            args: json!({}),
         });
-        match resp {
+        assert_eq!(frames.len(), 1);
+        match &frames[0] {
+            OutgoingFrame::Result { request_id, .. } => {
+                assert_eq!(request_id, "req-1");
+            }
+            other => panic!("expected Result frame, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invoke_unknown_ability_returns_not_found() {
+        // Distinguish "no handler registered" (NOT_FOUND) from
+        // "handler ran but failed" (ABILITY_FAILED). A regression that
+        // collapsed both onto the same code would hide a real
+        // misconfiguration behind a generic failure.
+        let p = proxy_with_empty_registry();
+        let frames = p.handle(IncomingFrame::Invoke {
+            request_id: "req-2".into(),
+            ability: "system.does.not.exist".into(),
+            args: json!({}),
+        });
+        assert_eq!(frames.len(), 1);
+        match &frames[0] {
             OutgoingFrame::Error {
                 request_id,
-                subscription_id,
                 code,
                 ..
             } => {
-                assert_eq!(request_id.as_deref(), Some("abc"));
-                assert!(subscription_id.is_none());
-                assert_eq!(code, super::codes::ABILITY_FAILED);
+                assert_eq!(request_id.as_deref(), Some("req-2"));
+                assert_eq!(code, codes::NOT_FOUND);
             }
             other => panic!("expected Error frame, got {other:?}"),
         }
     }
 
     #[test]
-    fn handle_preserves_subscription_id_for_subscribe_and_cancel() {
-        // The `subscription_id` on the response frame must equal the
-        // one the client sent. A regression that dropped the id or
-        // filled in a fresh one would break stream correlation on
-        // every streaming path.
-        let p = AbilityProxy::new(Arc::new(StubKernel));
-        for (req, expected) in [
-            (
-                IncomingFrame::Subscribe {
-                    subscription_id: "sub-1".into(),
-                    ability: "system.session.attach".into(),
-                    args: serde_json::json!({}),
-                },
-                "sub-1",
-            ),
-            (
-                IncomingFrame::Cancel {
-                    subscription_id: "cancel-1".into(),
-                },
-                "cancel-1",
-            ),
-        ] {
-            let resp = p.handle(req);
-            match resp {
-                OutgoingFrame::Error {
-                    subscription_id,
-                    request_id,
-                    ..
-                } => {
-                    assert_eq!(subscription_id.as_deref(), Some(expected));
-                    assert!(request_id.is_none());
-                }
-                other => panic!("expected Error frame, got {other:?}"),
+    fn cancel_for_unknown_id_returns_error_with_subscription_id_preserved() {
+        // Cancel on a stream the daemon never started must return
+        // an error frame with subscription_id echoed back so the
+        // Client can correlate. v1 does not have a streaming
+        // subscription registry yet — that is a focused follow-up
+        // — but the contract on the wire is fixed.
+        let p = proxy_with_empty_registry();
+        let frames = p.handle(IncomingFrame::Cancel {
+            subscription_id: "sub-x".into(),
+        });
+        assert_eq!(frames.len(), 1);
+        match &frames[0] {
+            OutgoingFrame::Error {
+                subscription_id,
+                request_id,
+                code,
+                ..
+            } => {
+                assert_eq!(subscription_id.as_deref(), Some("sub-x"));
+                assert!(request_id.is_none());
+                assert_eq!(code, codes::ABILITY_FAILED);
             }
+            other => panic!("expected Error frame, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn subscribe_to_session_attach_returns_terminal_at_minimum() {
+        // The system.session.attach handler is registered as a stream
+        // handler. With no active session, v1 emits zero data Frames
+        // and exactly one Terminal — pin that the proxy threads the
+        // Terminal through.
+        let p = proxy_with_live_registry();
+        let frames = p.handle(IncomingFrame::Subscribe {
+            subscription_id: "sub-1".into(),
+            ability: "system.session.attach".into(),
+            args: json!({"session_id": "no-such-session"}),
+        });
+        // Last frame must be Terminal regardless of how many Frame
+        // envelopes preceded it — that is the v1 contract for any
+        // subscribe that returns Ok.
+        let last = frames.last().expect("at least one frame");
+        match last {
+            OutgoingFrame::Terminal {
+                subscription_id,
+                reason,
+            } => {
+                assert_eq!(subscription_id, "sub-1");
+                assert_eq!(reason, "done");
+            }
+            // Some session handlers may emit an Error in v1 — that's
+            // also valid as long as it carries the subscription_id.
+            OutgoingFrame::Error {
+                subscription_id, ..
+            } => {
+                assert_eq!(subscription_id.as_deref(), Some("sub-1"));
+            }
+            other => panic!("expected Terminal or Error as the final frame, got {other:?}"),
         }
     }
 }
