@@ -118,25 +118,27 @@ assert rc == 0, (
 assert handle.value != 0, "init returned OK but handle is 0"
 print(f"[ffi-smoke] init OK; handle={handle.value}")
 
-# 3. easynet_ability_invoke with system.ping. v1 daemon proxy
-# returns ERR_ABILITY_FAILED (9) with the v1-skeleton message.
+# 3. easynet_ability_invoke with system.ping.
+# PR-INVOCATION-EXEC-UNITY wired the proxy through the real
+# dispatcher, so we now expect EASYNET_OK (0) and a non-NULL
+# result string. The result JSON shape is owned by the ping
+# handler; we do not pin the value bytes here, only the ABI-
+# level invariants (rc=0, out_result populated, freeable).
 out_ptr = ctypes.c_char_p()
 rc = lib.easynet_ability_invoke(
     handle, b"system.ping", b"{}", ctypes.byref(out_ptr)
 )
-assert rc == 9, (
-    f"expected ERR_ABILITY_FAILED (9), got {rc}; "
+assert rc == 0, (
+    f"expected EASYNET_OK (0), got {rc}; "
     f"last_error={lib.easynet_last_error()}"
 )
-assert not out_ptr.value, "out_result must be NULL on the failure path"
-err_msg = lib.easynet_last_error()
-assert err_msg is not None, "last_error must be non-NULL after a failed invoke"
-err_msg = err_msg.decode("utf-8")
-assert "ability_failed" in err_msg, f"unexpected error message: {err_msg}"
-assert "skeleton" in err_msg, (
-    f"v1 skeleton message expected to mention skeleton, got: {err_msg}"
-)
-print(f"[ffi-smoke] invoke returned ERR_ABILITY_FAILED with message: {err_msg!r}")
+assert out_ptr.value, "out_result must be a non-NULL CString on the OK path"
+result_json = out_ptr.value.decode("utf-8")
+print(f"[ffi-smoke] invoke OK; result={result_json!r}")
+# The ABI requires the caller to free the heap-allocated CString
+# via easynet_string_free; otherwise valgrind / asan would catch
+# a per-call leak in production.
+lib.easynet_string_free(out_ptr)
 
 # 4. easynet_shutdown — handle was registered, so this returns OK.
 rc = lib.easynet_shutdown(handle.value)

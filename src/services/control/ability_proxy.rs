@@ -90,22 +90,18 @@ impl AbilityProxy {
         }
     }
 
-    /// Backwards-compatible constructor used by tests + the v1
-    /// daemon bin path. Builds a fresh dispatcher with the live
-    /// system-ability registry plus a `LocalNodeResolver` keyed to
-    /// the local node id derived from environment (or "self" when
-    /// unset, for harness use).
+    /// Convenience constructor used by tests + the `make_proxy`
+    /// helper. Builds a fresh dispatcher off the live system-ability
+    /// registry, a NoopGateway, and a `LocalNodeResolver` keyed to
+    /// `EASYNET_NODE_ID` (or "self" when unset). Production callers
+    /// should prefer `new_with_dispatcher` for explicit wiring.
     ///
-    /// Production daemon bin should prefer `new_with_dispatcher`
-    /// for explicit dependency wiring.
+    /// Permitted by `scripts/check-kernel-boundary.sh` because the
+    /// allowlist v1 includes `crate::runtime::{system, gateway}`
+    /// alongside the syscall-boundary modules. The gate's rationale
+    /// is documented at the top of that script.
     pub fn new(kernel: Arc<dyn KernelApi>) -> Self {
-        // Pull the live registry — same pattern the published_ability_names
-        // helper uses, so dispatcher visibility matches advertisement.
         let registry = crate::runtime::system::build_registry();
-        // The dispatcher needs a Gateway; v1 proxy uses a Noop one so
-        // the IPC harness path is self-contained. The daemon bin
-        // overrides this through `new_with_dispatcher` once the real
-        // Gateway lands.
         let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
             Arc::new(crate::runtime::gateway::NoopGateway::new());
         let dispatcher = AbilityDispatcher::new(registry, gateway);
@@ -230,7 +226,7 @@ impl AbilityProxy {
                 for v in values {
                     out.push(OutgoingFrame::Frame {
                         subscription_id: subscription_id.clone(),
-                        event: v,
+                        frame: v,
                     });
                 }
                 out.push(OutgoingFrame::Terminal {
@@ -355,10 +351,9 @@ mod tests {
     }
 
     fn proxy_with_live_registry() -> AbilityProxy {
-        // The default `new` constructor wires up the live system
-        // ability registry — same path the daemon bin uses. This is
-        // what we want to exercise end-to-end so the test catches
-        // any drift between "advertised" and "dispatched".
+        // The convenience `new` constructor wires up the live system
+        // ability registry — same path the daemon bin's tests use to
+        // exercise the full local handler set.
         AbilityProxy::new(Arc::new(StubKernel))
     }
 

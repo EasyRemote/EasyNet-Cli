@@ -86,12 +86,16 @@ PY
 
 echo "[smoke] response: $RESP"
 
-# v1 skeleton assertion: Error frame, request_id preserved, code=ability_failed.
+# PR-INVOCATION-EXEC-UNITY post-condition: system.ping dispatches
+# through the real registry, so we expect a `result` envelope with
+# `request_id` round-tripped. The exact `value` shape is owned by
+# the ping handler — do not pin the value bytes here, only the
+# wire-level invariants that Client bindings depend on.
 echo "$RESP" | python3 -c '
 import json, sys
 r = json.loads(sys.stdin.read())
-assert r.get("type") == "error", f"expected type=error, got {r}"
+assert r.get("type") == "result", f"expected type=result, got {r}"
 assert r.get("request_id") == "smoke-1", f"request_id mismatch: {r}"
-assert r.get("code") == "ability_failed", f"unexpected code (v1 skeleton expects ability_failed): {r}"
+assert "value" in r, f"missing value field: {r}"
 print("[smoke] PASS")
 '

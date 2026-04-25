@@ -44,7 +44,25 @@ echo "== check-kernel-boundary.sh =="
 # Control boundary, add it here + document the reasoning in the
 # daemon-layers spec.
 if [ -d "src/services/control" ]; then
-    allowed='kernel_api|invocation|domain|invocation_target'
+    # Allowlist (final v1 set):
+    #   * kernel_api          — syscall boundary trait
+    #   * invocation          — Invocation/Receipt types
+    #   * invocation_target   — stage-1 resolver shape
+    #   * domain              — typed ids + handles
+    #   * ability_dispatch    — stage-2 executor struct (interface
+    #                           type the proxy consumes)
+    #   * gateway_api         — Gateway trait (interface)
+    #   * gateway             — NoopGateway used as the v1 default
+    #                           when the proxy is constructed without
+    #                           an injected Gateway
+    #   * system              — `build_registry()` factory the
+    #                           convenience proxy constructor calls
+    #                           to materialise the local handler set
+    #
+    # Forbidden: execution::* sub-services, the concrete Kernel
+    # struct, runtime::session/runtime::abilities (legacy paths
+    # that pre-date the Kernel boundary).
+    allowed='kernel_api|invocation|invocation_target|domain|ability_dispatch|gateway_api|gateway|system'
     # Find non-allowlisted `crate::runtime::<mod>` references in
     # non-test Rust code. Exclusions:
     #   * `^\s*//` — whole-line doc/code comments reference modules
