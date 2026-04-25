@@ -81,14 +81,45 @@ if [ -d "src/runtime/execution" ]; then
     fi
 fi
 
-# ── Rule 3 (reserved for PR-INVOCATION-EXEC-UNITY) ────────────────
-# TODO(PR-INVOCATION-EXEC-UNITY): once schedule/runner.rs, loop/
-# runner.rs, permission/broker.rs land, add grep clauses that
-# forbid:
-#   - run_mission_inproc call-sites inside execution/schedule/
-#   - direct Session::subscribe inside execution/loop_instance/
-#   - broker side-channel inside dispatch.rs for execution/permission/
-# The rules are disabled today because the files do not yet exist.
+# ── Rule 3 (active, PR-INVOCATION-EXEC-UNITY) ─────────────────────
+# Sub-services may not bypass `Kernel::invoke` by reaching for
+# the legacy mission/session paths directly:
+#
+#   * execution/schedule/    — must not call `run_mission_inproc`
+#                              (the tick runner builds an
+#                              Invocation and routes through
+#                              Kernel::invoke).
+#   * execution/loop_instance/ — must not call Session::subscribe
+#                              or dispatch::send_to_agent directly.
+#                              The loop controller emits one
+#                              Invocation per body / verify step.
+#   * execution/permission/  — broker may not be invoked from
+#                              outside Kernel::invoke's admission
+#                              phase. The legacy "broker side-
+#                              channel inside dispatch.rs" pattern
+#                              is forbidden.
+#
+# Whole-line `//` comments are excluded; subdir-scoped to keep
+# the check from catching helper modules in other parts of the
+# tree.
+rule3_check() {
+    local dir="$1"
+    local pat="$2"
+    [ -d "$dir" ] || return 0
+    local bad
+    bad=$(grep -rnE "$pat" "$dir" 2>/dev/null \
+        | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
+    if [ -n "$bad" ]; then
+        echo "ERROR: sub-service '$dir' bypasses Kernel::invoke:"
+        echo "$bad"
+        echo "  Build an Invocation and route through Kernel::invoke;"
+        echo "  do not reach for run_mission_inproc / Session::subscribe / send_to_agent."
+        violations=$((violations + 1))
+    fi
+}
+rule3_check "src/runtime/execution/schedule"      'run_mission_inproc'
+rule3_check "src/runtime/execution/loop_instance" 'Session::subscribe|send_to_agent\(|run_mission_inproc'
+rule3_check "src/runtime/execution/permission"    'run_mission_inproc'
 
 if [ "$violations" -eq 0 ]; then
     echo "ok (no invocation-unity violations)"

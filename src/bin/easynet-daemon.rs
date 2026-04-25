@@ -44,6 +44,7 @@ use easynet_cli::facade::cli::run_daemon;
 use easynet_cli::runtime::gateway::NoopGateway;
 use easynet_cli::runtime::kernel::Kernel;
 use easynet_cli::runtime::kernel_api::KernelApi;
+use easynet_cli::runtime::system;
 use easynet_cli::services::control::server;
 
 /// Heartbeat is opt-in: only spawn the legacy loop if the parent
@@ -57,7 +58,27 @@ async fn main() -> anyhow::Result<()> {
     // v1: a Kernel wrapping a NoopGateway is sufficient for the proxy
     // to construct Receipts; PR-INVOCATION-EXEC-UNITY swaps in the
     // real Gateway impl that talks to Axon.
-    let kernel: Arc<dyn KernelApi> = Arc::new(Kernel::new(Arc::new(NoopGateway::new())));
+    let kernel = Arc::new(Kernel::new(Arc::new(NoopGateway::new())));
+
+    // Build the system.* ability registry off the SAME sub-service
+    // handles the Kernel holds. This is the U1 unity property at
+    // the boot path: every ability lookup and every KernelApi call
+    // observe one set of sub-service state. A regression that built
+    // the registry off fresh sub-services (the pre-PR shape) would
+    // give the IPC plane a parallel state not reachable from the
+    // Kernel — silently breaking session.list / discuss.subscribe.
+    let _registry = system::build_registry_with_services(
+        kernel.session_service(),
+        kernel.permission_service(),
+        kernel.discuss_service(),
+        kernel.schedule_service(),
+        kernel.loop_service(),
+    );
+    // _registry will be wired into the AbilityProxy in a follow-up
+    // commit; today the proxy still returns the v1 skeleton Error
+    // envelope, so building the registry is purely a side-effect-
+    // free unity check that the boot path can produce a coherent
+    // set of handles.
 
     // Optional sidecar: heartbeat. Run on a dedicated OS thread
     // because run_daemon() is blocking (ureq + ctrlc handler). Errors
@@ -76,5 +97,6 @@ async fn main() -> anyhow::Result<()> {
 
     // Foreground: Control-plane IPC server. Returns when the listener
     // is dropped (i.e. never, in v1 — we exit on SIGTERM via the OS).
-    server::run(kernel).await
+    let kernel_api: Arc<dyn KernelApi> = kernel;
+    server::run(kernel_api).await
 }
