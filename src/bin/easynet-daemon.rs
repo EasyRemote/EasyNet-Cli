@@ -67,10 +67,16 @@ const ENV_HB_ENDPOINT: &str = "_EASYNET_HB_ENDPOINT";
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
-    // v1: a Kernel wrapping a NoopGateway is sufficient for the proxy
-    // to construct Receipts; PR-INVOCATION-EXEC-UNITY swaps in the
-    // real Gateway impl that talks to Axon.
-    let kernel = Arc::new(Kernel::new(Arc::new(NoopGateway::new())));
+    // v1: a Kernel wrapping a NoopGateway is sufficient for the
+    // proxy to construct Receipts. The daemon installs the
+    // SubscriberBroker permission variant so a Client UI
+    // connected to system.permission.subscribe sees real pending
+    // requests when an agent dispatch is gated. (When no Client
+    // is subscribed the broker auto-allows — a daemon running
+    // headless does not freeze on permission gates.)
+    let kernel = Arc::new(Kernel::new_with_subscriber_broker(Arc::new(
+        NoopGateway::new(),
+    )));
 
     // Bind sub-services that have a disk-backed store to the
     // current tenant so persistence actually works across daemon
