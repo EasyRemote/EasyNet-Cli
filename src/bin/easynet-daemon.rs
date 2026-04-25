@@ -227,10 +227,23 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
                     }
                 };
                 let agent = entry.target_agent.as_str().to_string();
-                let prompt = format!(
-                    "Scheduled fire of {} at {} (catch_up={})",
-                    fire.schedule_id, fire.fire_at, fire.catch_up
-                );
+                // Use the schedule's prompt template if present;
+                // otherwise fall back to a heartbeat-style placeholder.
+                // The template renderer substitutes {{schedule_id}},
+                // {{fire_at_iso}}, {{catch_up}}, {{target_agent}}.
+                let prompt = match &entry.prompt {
+                    Some(template) => easynet_cli::runtime::execution::schedule::render_prompt(
+                        template,
+                        fire.schedule_id.as_str(),
+                        &fire.fire_at,
+                        fire.catch_up,
+                        &agent,
+                    ),
+                    None => format!(
+                        "Scheduled fire of {} at {} (catch_up={})",
+                        fire.schedule_id, fire.fire_at, fire.catch_up
+                    ),
+                };
                 let inv = Invocation {
                     caller: format!("easynet://nodes/{}", entry.target_node.as_str()),
                     callee: format!("easynet://nodes/{}", entry.target_node.as_str()),

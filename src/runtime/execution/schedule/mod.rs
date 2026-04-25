@@ -345,7 +345,31 @@ pub fn make_entry(
         misfire_policy: misfire,
         catch_up_window_secs: None,
         enabled: true,
+        prompt: None,
     }
+}
+
+/// Render a schedule's prompt template for one fire.
+///
+/// Substitutes the four supported `{{var}}` tokens with their
+/// values. Unknown tokens stay literal (no template error) so a
+/// typo surfaces as odd prompt text instead of a hard schedule
+/// failure. v1 takes the simple-replace approach over a real
+/// template engine (handlebars / tera) because the supported
+/// variable set is small and bounded; a v2 expansion to richer
+/// expressions would justify a real engine.
+pub fn render_prompt(
+    template: &str,
+    schedule_id: &str,
+    fire_at: &chrono::DateTime<chrono::Utc>,
+    catch_up: bool,
+    target_agent: &str,
+) -> String {
+    template
+        .replace("{{schedule_id}}", schedule_id)
+        .replace("{{fire_at_iso}}", &fire_at.to_rfc3339())
+        .replace("{{catch_up}}", if catch_up { "true" } else { "false" })
+        .replace("{{target_agent}}", target_agent)
 }
 
 #[cfg(test)]
@@ -483,5 +507,40 @@ mod tests {
         let next = svc.next_fire_after(&id, now).unwrap().unwrap();
         // Expect 09:00 the same day.
         assert_eq!(next.format("%H:%M").to_string(), "09:00");
+    }
+
+    #[test]
+    fn render_prompt_substitutes_supported_variables() {
+        // Spirit: a Client UI that types "Daily report for
+        // {{target_agent}} fired at {{fire_at_iso}}" sees both
+        // tokens replaced verbatim. Unknown tokens stay literal
+        // so a typo surfaces in the rendered prompt rather than
+        // as a hard schedule error.
+        let fire_at = Utc.with_ymd_and_hms(2026, 4, 25, 9, 0, 0).unwrap();
+        let template = "[{{schedule_id}}] {{target_agent}} @ {{fire_at_iso}} catch_up={{catch_up}} | unknown={{nope}}";
+        let rendered = render_prompt(template, "sched-abc", &fire_at, false, "alice");
+        assert!(rendered.contains("[sched-abc]"));
+        assert!(rendered.contains("alice @ 2026-04-25T09:00:00+00:00"));
+        assert!(rendered.contains("catch_up=false"));
+        // Unknown tokens stay literal.
+        assert!(rendered.contains("unknown={{nope}}"));
+    }
+
+    #[test]
+    fn schedule_entry_round_trips_with_prompt_field() {
+        // Verify the new ScheduleEntry.prompt field serialises
+        // and deserialises as Option<String>. Serde should treat
+        // a missing field on read as None (legacy entries
+        // pre-prompt remain readable).
+        let mut e = entry("0 9 * * *", MisfirePolicy::Skip);
+        e.prompt = Some("hi {{target_agent}}".into());
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(json.contains("\"prompt\":\"hi {{target_agent}}\""));
+        let back: ScheduleEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.prompt.as_deref(), Some("hi {{target_agent}}"));
+        // Legacy entry without the prompt field should parse with prompt=None.
+        let legacy_json = json.replace(",\"prompt\":\"hi {{target_agent}}\"", "");
+        let legacy: ScheduleEntry = serde_json::from_str(&legacy_json).unwrap();
+        assert!(legacy.prompt.is_none());
     }
 }

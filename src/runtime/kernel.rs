@@ -132,12 +132,20 @@ impl Kernel {
                 anyhow::anyhow!("agent {agent_name:?} not registered in this daemon")
             })?;
 
+        // Surface a 200-char preview of the prompt so a Client UI
+        // can see the rendered template in the timeline (cron with
+        // a "Daily report on {{date}}" template renders here as
+        // "Daily report on 2026-04-25", which is what the user
+        // configured). Truncated to keep the event size bounded
+        // for long prompts.
+        let preview: String = prompt.chars().take(200).collect();
         let _ = self.session.emit_event(
             session_id,
             json!({
                 "kind": "agent_dispatch_starting",
                 "agent": agent_name,
                 "prompt_len": prompt.len(),
+                "prompt_preview": preview,
             }),
         );
 
