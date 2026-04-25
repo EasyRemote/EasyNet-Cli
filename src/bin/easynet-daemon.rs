@@ -42,7 +42,7 @@ use std::sync::Arc;
 
 use easynet_cli::facade::cli::run_daemon;
 use easynet_cli::runtime::ability_dispatch::AbilityDispatcher;
-use easynet_cli::runtime::domain::NodeId;
+use easynet_cli::runtime::domain::{NodeId, TenantId};
 use easynet_cli::runtime::gateway::NoopGateway;
 use easynet_cli::runtime::gateway_api::GatewayApi;
 use easynet_cli::runtime::invocation_target::{LocalNodeResolver, TargetResolver};
@@ -64,6 +64,22 @@ async fn main() -> anyhow::Result<()> {
     // to construct Receipts; PR-INVOCATION-EXEC-UNITY swaps in the
     // real Gateway impl that talks to Axon.
     let kernel = Arc::new(Kernel::new(Arc::new(NoopGateway::new())));
+
+    // Bind sub-services that have a disk-backed store to the
+    // current tenant so persistence actually works across daemon
+    // restarts. Without this call, ScheduleService and LoopService
+    // operate on an in-memory cache only — schedules and loops
+    // vanish on every reboot.
+    //
+    // v1 single-tenant: hardcode `TenantId::default_v1()`. v2 will
+    // route this from credentials.json via IPC handshake.
+    let tenant = TenantId::default_v1();
+    if let Err(e) = kernel.schedule_service().bind(&tenant) {
+        eprintln!("[daemon] schedule store bind failed: {e:#}");
+    }
+    if let Err(e) = kernel.loop_service().bind(&tenant) {
+        eprintln!("[daemon] loop store bind failed: {e:#}");
+    }
 
     // Build the system.* ability registry off the SAME sub-service
     // handles the Kernel holds. This is the U1 unity property at
