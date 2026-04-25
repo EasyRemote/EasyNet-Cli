@@ -33,6 +33,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+pub mod chat_ability;
 pub mod discuss_ability;
 pub mod loop_ability;
 pub mod permission_ability;
@@ -42,6 +43,7 @@ pub mod session_ability;
 
 use std::sync::Arc;
 
+use crate::registry::agents::AgentRegistry;
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 use crate::runtime::execution::discuss::DiscussService;
 use crate::runtime::execution::loop_instance::LoopService;
@@ -52,9 +54,9 @@ use crate::runtime::execution::session::SessionService;
 /// Build a `LocalAbilityRegistry` populated with every v1 system
 /// ability handler. Suitable for early-boot smoke tests + the
 /// `published_ability_names` helper that the discovery publisher
-/// consumes. Tests get fresh empty sub-services; the daemon bin
-/// calls `build_registry_with_services` instead with its real
-/// Kernel handles.
+/// consumes. Tests get fresh empty sub-services and an empty agent
+/// registry; the daemon bin calls `build_registry_with_services`
+/// instead with its real Kernel handles + loaded agents.
 pub fn build_registry() -> Arc<LocalAbilityRegistry> {
     build_registry_with_services(
         Arc::new(SessionService::new()),
@@ -62,18 +64,28 @@ pub fn build_registry() -> Arc<LocalAbilityRegistry> {
         Arc::new(DiscussService::new()),
         Arc::new(ScheduleService::new()),
         Arc::new(LoopService::new()),
+        &AgentRegistry::default(),
+        Arc::new(Vec::new()),
     )
 }
 
 /// Build a `LocalAbilityRegistry` with sub-service handles wired
 /// in. The daemon bin calls this with the Kernel's actual handles
 /// at boot; tests construct a fresh registry per case.
+///
+/// `agents` and `loaders` were added when chat became a first-class
+/// system-registered ability: a `<agent>.chat` handler is registered
+/// per agent (see `chat_ability::register`). `loaders` is the seam
+/// for pluggable context loaders — empty in v1, populated in
+/// subsequent PRs without touching the daemon's startup code.
 pub fn build_registry_with_services(
     sessions: Arc<SessionService>,
     perms: Arc<PermissionService>,
     discuss: Arc<DiscussService>,
     schedule: Arc<ScheduleService>,
     loop_svc: Arc<LoopService>,
+    agents: &AgentRegistry,
+    loaders: Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>,
 ) -> Arc<LocalAbilityRegistry> {
     let mut reg = LocalAbilityRegistry::new();
     ping::register(&mut reg);
@@ -82,7 +94,39 @@ pub fn build_registry_with_services(
     discuss_ability::register(&mut reg, discuss);
     schedule_ability::register(&mut reg, schedule);
     loop_ability::register(&mut reg, loop_svc);
+    chat_ability::register(&mut reg, agents, loaders);
     Arc::new(reg)
+}
+
+/// Daemon-side convenience wrapper. Loads the agent registry and
+/// builds the full `LocalAbilityRegistry` in one call, swallowing a
+/// load failure into the empty-registry case (so a brand-new install
+/// without `~/.easynet/agents.json` still boots).
+///
+/// Exists so `bin/easynet-daemon.rs` does not have to reach into the
+/// `pub(crate) registry::agents` module — that module's visibility is
+/// intentionally crate-private.
+pub fn build_registry_for_daemon(
+    sessions: Arc<SessionService>,
+    perms: Arc<PermissionService>,
+    discuss: Arc<DiscussService>,
+    schedule: Arc<ScheduleService>,
+    loop_svc: Arc<LoopService>,
+    loaders: Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>,
+) -> Arc<LocalAbilityRegistry> {
+    let agents = match crate::registry::agents::load_agents() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!(
+                "system::build_registry_for_daemon: failed to load agent registry: {e}; \
+                 continuing with no agents (chat handlers will not be registered)"
+            );
+            AgentRegistry::default()
+        }
+    };
+    build_registry_with_services(
+        sessions, perms, discuss, schedule, loop_svc, &agents, loaders,
+    )
 }
 
 /// Public list of every v1 system-ability *name*. Used by
