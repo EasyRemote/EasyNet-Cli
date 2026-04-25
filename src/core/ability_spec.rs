@@ -66,6 +66,46 @@ use serde_json::Value;
 /// `CURRENT_SCHEMA_VERSION` on every file it generates.
 pub const CURRENT_SCHEMA_VERSION: &str = "1";
 
+/// Two kinds of ability the CLI publishes. Introduced by PR-SYS to
+/// disambiguate agent abilities (per-agent `<agent>.chat`-style)
+/// from device-level system abilities (`system.<feature>`).
+///
+/// Why an enum and not a free-form string: a name beginning with
+/// `system.` is a wire-level promise that the publishing node
+/// itself owns the handler — no agent subprocess gets reached. The
+/// enum lets a reader look at one field and know which dispatch
+/// path applies, instead of grepping the prefix.
+///
+/// `Agent` is the existing case (every `<name>.chat` pre-PR-SYS
+/// shipped under this kind, even though the kind didn't exist
+/// then). `System` is the new case enabled by PR-SYS — the daemon
+/// publishes the handler, no agent involved. Future kinds (e.g.
+/// `Skill` for installable skill bundles) plug in here as another
+/// variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AbilityKind {
+    /// Belongs to one registered agent; dispatch lands inside the
+    /// agent's subprocess. Names: `<agent>.<verb>`.
+    Agent,
+    /// Belongs to the daemon (the node) itself; dispatch lands
+    /// in-process via `runtime::system::*`. Names: `system.<feature>`.
+    System,
+}
+
+impl AbilityKind {
+    /// Infer kind from a fully-qualified ability name. Useful at
+    /// dispatch-router boundaries that receive a string and need
+    /// to know which sub-system owns the handler.
+    pub fn from_qualified_name(name: &str) -> Self {
+        if name.starts_with("system.") {
+            Self::System
+        } else {
+            Self::Agent
+        }
+    }
+}
+
 /// Versions the reader will accept. When bumping:
 ///   1. Extend this array with the new version.
 ///   2. Add a migration pass that rewrites manifests from the old
@@ -342,30 +382,223 @@ impl AbilityManifest {
 /// in `runtime::abilities`'s test module — if you touch the shape
 /// on either side, update both or the parity test will fail loud.
 pub fn default_chat_manifest() -> AbilityManifest {
+    // The schema below is the wire contract for the chat ability. It
+    // is intentionally backward-compatible: only `prompt` is required;
+    // every newer field is optional, so a legacy caller sending only
+    // `{ "prompt": "...", "context": "..." }` still validates and runs
+    // identically to the pre-refactor behaviour. The new fields exist
+    // so the chat handler can: (1) resume a multi-turn session via
+    // `session_id`, (2) decide which other abilities of the same agent
+    // to expose to the LLM as tools (`skills`), (3) decide which
+    // context loaders to run before invoking the LLM
+    // (`context_loaders`), (4) override per-invocation driver knobs
+    // without editing agent.toml (`driver`), and (5) flip on a
+    // streaming RPC variant (`stream`).
+    //
+    // `additionalProperties: false` is load-bearing — sending an
+    // unrecognised top-level field surfaces as a schema error rather
+    // than silently being dropped, which makes "I added context but
+    // it didn't take effect" tractable to debug. Sub-objects use the
+    // same rule recursively.
+    let input_schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "prompt": {
+                "type": "string",
+                "description": "The user prompt sent to the agent."
+            },
+            "context": {
+                "type": "string",
+                "description": "Optional system-style preamble prepended before `prompt`. \
+                                Carried through to compose_prompt() as a literal string; \
+                                use `context_loaders` instead when the data should come \
+                                from a registered loader."
+            },
+            "session_id": {
+                "type": "string",
+                "description": "Optional conversation id to resume an existing session. When \
+                                omitted the chat handler creates a fresh one and returns the \
+                                generated id in the response."
+            },
+            "skills": {
+                "type": "object",
+                "description": "Controls which of this agent's other abilities are exposed \
+                                to the LLM as tools for the current invocation.",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["auto", "none", "explicit"],
+                        "description": "auto = expose every ability of this agent (default); \
+                                        none = expose nothing; explicit = expose only those \
+                                        listed in `include`."
+                    },
+                    "include": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Fully-qualified ability names (`<agent>.<verb>`) to \
+                                        expose. Honoured in `explicit` mode; ignored in \
+                                        `auto`/`none`."
+                    },
+                    "exclude": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Fully-qualified ability names to filter out, applied \
+                                        after `mode`/`include`. Useful with `auto` to drop \
+                                        a noisy or expensive tool from a single call."
+                    }
+                },
+                "additionalProperties": false
+            },
+            "context_loaders": {
+                "type": "object",
+                "description": "Controls which registered context loaders run before the LLM \
+                                is invoked. Each loader's output is appended to the prompt's \
+                                context block, alongside the literal `context` arg if any.",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["auto", "none", "explicit"]
+                    },
+                    "include": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    },
+                    "exclude": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    }
+                },
+                "additionalProperties": false
+            },
+            "driver": {
+                "type": "object",
+                "description": "Per-invocation overrides for the underlying LLM driver. \
+                                Omit to use the agent's defaults from agent.toml.",
+                "properties": {
+                    "model": {
+                        "type": "string",
+                        "description": "Override the agent's default model for this call."
+                    },
+                    "temperature": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 2
+                    },
+                    "max_tokens": {
+                        "type": "integer",
+                        "minimum": 1
+                    }
+                },
+                "additionalProperties": false
+            },
+            "stream": {
+                "type": "boolean",
+                "description": "When true via the RPC entry point, the handler rejects the \
+                                call and asks the caller to use the subscribe entry point \
+                                instead. The streaming subscribe path emits typed frames \
+                                (session/loaded/delta/tool_call_*/done|error)."
+            }
+        },
+        "required": ["prompt"],
+        "additionalProperties": false,
+    });
+
+    // Output schema documents what an RPC invocation returns. It is
+    // optional in AbilityManifest and historically the chat ability
+    // omitted it (chat replies were "opaque text"). With the refactor
+    // we publish a typed shape so the EasyNet frontend's ability
+    // detail card can render structured output, and so an agent
+    // composing other abilities can introspect what to expect.
+    //
+    // Most fields are required because they appear on every RPC reply
+    // — `usage` is the exception (LLM driver may not surface token
+    // counts on every backend).
+    let output_schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "session_id": {
+                "type": "string",
+                "description": "The session id used for this turn. Echoes the input when \
+                                provided; freshly generated otherwise."
+            },
+            "reply": {
+                "type": "string",
+                "description": "The LLM's final reply text. The legacy single-string return \
+                                value lives here; pre-refactor callers can read just this \
+                                field and ignore everything else."
+            },
+            "skills_loaded": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Fully-qualified ability names that were actually exposed to \
+                                the LLM as tools for this call (after applying `skills.mode` \
+                                and `exclude`)."
+            },
+            "tool_calls": {
+                "type": "array",
+                "description": "Per-tool-call observability: every ability the LLM invoked \
+                                during this turn, in order, with args/result/error/elapsed.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "ability": {"type": "string"},
+                        "args": {},
+                        "result": {},
+                        "error": {"type": "string"},
+                        "elapsed_ms": {"type": "integer", "minimum": 0}
+                    },
+                    "required": ["ability", "elapsed_ms"]
+                }
+            },
+            "context_used": {
+                "type": "array",
+                "description": "Per-loader contribution: which context loaders ran and how \
+                                many bytes each contributed to the assembled context block.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "loader": {"type": "string"},
+                        "bytes": {"type": "integer", "minimum": 0}
+                    },
+                    "required": ["loader", "bytes"]
+                }
+            },
+            "usage": {
+                "type": "object",
+                "description": "Token accounting reported by the driver, when the underlying \
+                                LLM backend exposes it.",
+                "properties": {
+                    "input_tokens": {"type": "integer", "minimum": 0},
+                    "output_tokens": {"type": "integer", "minimum": 0},
+                    "model": {"type": "string"}
+                }
+            },
+            "elapsed_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Wall-clock duration of the full chat invocation."
+            }
+        },
+        "required": ["session_id", "reply", "skills_loaded", "tool_calls", "context_used", "elapsed_ms"]
+    });
+
     AbilityManifest::new(
         "chat",
         "Send a chat prompt to the locally-installed agent. The agent runs as a \
-         subprocess on this node; the response is returned verbatim. Use `context` \
-         to prepend a system-style preamble when the agent supports one.",
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "prompt": {
-                    "type": "string",
-                    "description": "The user prompt sent to the agent."
-                },
-                "context": {
-                    "type": "string",
-                    "description": "Optional system-style preamble prepended before `prompt`."
-                },
-            },
-            "required": ["prompt"],
-            "additionalProperties": false,
-        }),
+         subprocess on this node; the response is returned verbatim. The optional \
+         `skills`, `context_loaders`, and `driver` sub-objects let a single call \
+         override skill exposure, context assembly, and driver knobs without \
+         editing the agent's manifest.",
+        input_schema,
     )
     .expect(
         "default_chat_manifest is a constant, well-formed input; validation failing \
          here would be a compile-time contract violation in this file",
+    )
+    .with_output_schema(output_schema)
+    .expect(
+        "the embedded output schema is a JSON object; validation failure here would \
+         be a compile-time contract violation in this file",
     )
 }
 
@@ -427,6 +660,152 @@ mod tests {
             m.input_schema().get("additionalProperties"),
             Some(&Value::Bool(false)),
             "schema must reject extra args"
+        );
+    }
+
+    #[test]
+    fn default_chat_manifest_declares_extended_input_fields() {
+        // The post-refactor input schema adds optional fields that the
+        // chat handler reads at invocation time. Pin every one — losing
+        // any of them silently would break the contract the EasyNet
+        // backend's ability detail card depends on.
+        let m = default_chat_manifest();
+        let props = m
+            .input_schema()
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("properties must be an object");
+        for required_key in [
+            "prompt",
+            "context",
+            "session_id",
+            "skills",
+            "context_loaders",
+            "driver",
+            "stream",
+        ] {
+            assert!(
+                props.contains_key(required_key),
+                "input_schema.properties is missing {required_key:?}; got keys = {:?}",
+                props.keys().collect::<Vec<_>>()
+            );
+        }
+        // Only `prompt` is required — every newer field is optional so
+        // a legacy `{"prompt": "..."}` call still validates.
+        let required = m
+            .input_schema()
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("required is an array");
+        assert_eq!(required.len(), 1);
+        assert_eq!(required[0].as_str(), Some("prompt"));
+    }
+
+    #[test]
+    fn default_chat_manifest_skills_subobject_uses_mode_include_exclude() {
+        // The shape `{ mode, include, exclude }` is shared between
+        // `skills` and `context_loaders` so a renderer (frontend
+        // SchemaForm) can treat them uniformly. Drift on either side
+        // would break that uniformity.
+        let m = default_chat_manifest();
+        for key in ["skills", "context_loaders"] {
+            let sub = m
+                .input_schema()
+                .get("properties")
+                .and_then(|p| p.get(key))
+                .and_then(|s| s.get("properties"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{key} sub-object must declare properties"));
+            for inner in ["mode", "include", "exclude"] {
+                assert!(
+                    sub.contains_key(inner),
+                    "{key}.{inner} missing; got {:?}",
+                    sub.keys().collect::<Vec<_>>()
+                );
+            }
+            let mode_enum = m
+                .input_schema()
+                .get("properties")
+                .and_then(|p| p.get(key))
+                .and_then(|s| s.get("properties"))
+                .and_then(|p| p.get("mode"))
+                .and_then(|m| m.get("enum"))
+                .and_then(Value::as_array)
+                .unwrap_or_else(|| panic!("{key}.mode.enum must be a list"));
+            let modes: Vec<&str> = mode_enum.iter().filter_map(Value::as_str).collect();
+            assert_eq!(modes, vec!["auto", "none", "explicit"]);
+        }
+    }
+
+    #[test]
+    fn default_chat_manifest_publishes_typed_output_schema() {
+        // Pre-refactor chat omitted output_schema (opaque text). Post-
+        // refactor we publish a typed shape so the EasyNet ability
+        // detail card can render structured output and so an agent
+        // composing other abilities knows what to expect.
+        let m = default_chat_manifest();
+        let out = m
+            .output_schema()
+            .expect("default chat manifest must publish an output_schema");
+        let props = out
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("output_schema.properties must be an object");
+        for key in [
+            "session_id",
+            "reply",
+            "skills_loaded",
+            "tool_calls",
+            "context_used",
+            "usage",
+            "elapsed_ms",
+        ] {
+            assert!(
+                props.contains_key(key),
+                "output_schema is missing {key:?}; got {:?}",
+                props.keys().collect::<Vec<_>>()
+            );
+        }
+        // `reply` is the legacy single-string return value; pre-
+        // refactor callers reading just this field must still work.
+        assert_eq!(
+            props
+                .get("reply")
+                .and_then(|p| p.get("type"))
+                .and_then(Value::as_str),
+            Some("string"),
+        );
+        // `usage` is intentionally NOT required (some drivers don't
+        // surface tokens). Pin that explicitly.
+        let required = out
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("required is an array");
+        let req: Vec<&str> = required.iter().filter_map(Value::as_str).collect();
+        assert!(!req.contains(&"usage"), "usage must NOT be required");
+        for must in [
+            "session_id",
+            "reply",
+            "skills_loaded",
+            "tool_calls",
+            "context_used",
+            "elapsed_ms",
+        ] {
+            assert!(req.contains(&must), "output_schema.required missing {must}");
+        }
+    }
+
+    #[test]
+    fn default_chat_manifest_rejects_unknown_top_level_args() {
+        // additionalProperties: false is load-bearing. A legacy caller
+        // sending only {prompt, context} validates; an unknown field
+        // surfaces as a schema error rather than being silently
+        // dropped, which is what makes "I added X but it didn't take
+        // effect" tractable to debug.
+        let m = default_chat_manifest();
+        assert_eq!(
+            m.input_schema().get("additionalProperties"),
+            Some(&Value::Bool(false))
         );
     }
 

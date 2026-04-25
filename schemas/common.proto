@@ -1,0 +1,154 @@
+// EasyNet CLI — Common proto definitions
+// =======================================
+//
+// File: schemas/common.proto
+// Description: Shared message types used across every feature PR's
+//              proto file. Landing these once up-front means
+//              PR-ATTACH / PR-PERM / PR-DISCUSS / PR-SCHED / PR-LOOP
+//              can import the same NodeId / AgentId / Receipt /
+//              Error types instead of each re-defining them.
+//
+// v10.5 R1 schema source of truth
+// -------------------------------
+// This file is the canonical schema for every cross-language type
+// surfaced by the CLI to Client FFI bindings. Rust daemon code
+// generates `prost` structs from this file at build time; Client
+// bindings (Go / Python / Node / Swift / Rust / Java) each run
+// their own `protoc` against the same file to generate language-
+// native types. One schema, six binding generators, zero hand-
+// rolled type drift.
+//
+// Wire format
+// -----------
+// v1 ships proto JSON mapping over the IPC socket (human-debug-
+// gable with `socat UNIX-CONNECT:~/.easynet/control.sock -`).
+// v2 switches to proto binary when cross-language binding
+// stability demands tighter-on-the-wire payloads.
+//
+// Schema evolution rules (follow-up PR enforces via
+// scripts/check-proto-compat.sh using `buf breaking`)
+// ---------------------------------------------------
+//   * new field: add new field number; old clients ignore
+//   * removed field: mark `reserved` (never recycle numbers)
+//   * renamed field: forbidden; add new name as new field
+//   * breaking change: bump package name (easynet.v2)
+
+syntax = "proto3";
+
+package easynet.v1;
+
+// Stable identity wrappers. Proto3 does not distinguish newtypes
+// from strings at the wire level, but defining them here at the
+// proto layer means every generated language sees the same
+// top-level message name and can choose to wrap or not.
+
+message NodeId {
+  string value = 1;
+}
+
+message AgentId {
+  string value = 1;
+}
+
+message TenantId {
+  string value = 1;
+}
+
+message SessionId {
+  string value = 1;
+}
+
+message RoomId {
+  string value = 1;
+}
+
+message ScheduleId {
+  string value = 1;
+}
+
+message LoopId {
+  string value = 1;
+}
+
+message PermissionId {
+  string value = 1;
+}
+
+// Version range used by the IPC handshake to negotiate the highest
+// mutually-supported protocol version between lib and daemon.
+// Single-value version fields are banned in v10.5 R1; see
+// control_plane.proto handshake flow for why.
+message VersionRange {
+  uint32 min = 1;
+  uint32 max = 2;
+}
+
+// AXIOM §6.1 I3 Receipt. The terminal record that an Invocation
+// terminated, replicated at the proto layer so Client bindings see
+// the same shape the runtime uses in memory.
+//
+// v1 caller_signature / callee_signature are always empty; v2
+// populates them when signed-invocation ships (AXIOM §6.3).
+message Receipt {
+  // 64-char hex sha256 of canonical Invocation bytes.
+  string invocation_id = 1;
+
+  // Terminal state discriminator. proto3 oneof keeps variants
+  // expandable without breaking older clients; known variants
+  // today are Succeeded / Failed / Cancelled.
+  oneof terminal {
+    Succeeded succeeded = 2;
+    Failed failed = 3;
+    Cancelled cancelled = 4;
+  }
+
+  // Prior-receipt chain reference.
+  oneof prior {
+    PriorNone prior_none = 5;
+    PriorHash prior_hash = 6;
+    PriorHashes prior_hashes = 7;
+    PriorRoot prior_root = 8;
+  }
+
+  // v1 empty; v2 non-empty callee Ed25519 signature over canonical
+  // Receipt bytes.
+  bytes callee_signature = 9;
+}
+
+message Succeeded {}
+
+message Failed {
+  string reason = 1;
+}
+
+message Cancelled {}
+
+message PriorNone {}
+
+message PriorHash {
+  string prior_hash = 1;
+}
+
+message PriorHashes {
+  repeated string prior_hashes = 1;
+}
+
+message PriorRoot {
+  string prior_root = 1;
+}
+
+// Generic error envelope used by the IPC control plane's Error
+// frames and by ability handlers that surface structured errors.
+// The `code` field is a stable wire token (see
+// services/control/frames.rs `codes::` constants); `message` is
+// operator-facing prose and not stability-bound.
+message Error {
+  string code = 1;
+  string message = 2;
+  // Optional map of key/value pairs carrying error context. Keys
+  // follow the same "stable wire token" rule as `code`; values
+  // are prose. v1 uses this for `node_id` / `ability` / `request_id`
+  // contextualisation when the error is not specific to one of
+  // the envelope's own id fields.
+  map<string, string> details = 3;
+}

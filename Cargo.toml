@@ -1,9 +1,48 @@
 [package]
 name = "easynet"
-version = "1.6.3"
+version = "1.17.1"
 edition = "2021"
 description = "EasyNet CLI + Hub MCP server + EAL (EasyNet Ability Language)."
 license = "Apache-2.0"
+build = "build.rs"
+
+[features]
+# Compile schemas/*.proto into Rust types via prost-build. Off by
+# default in v1 so developers without protoc installed can still
+# build the CLI; feature gate flips on once the proto-generated
+# types start being consumed. v10.5 R1 PR-DAEMON ships the .proto
+# files and the toolchain wiring, but does NOT flip any call site
+# to use the generated types (that is a follow-up commit / PR-SYS).
+proto-gen = ["dep:prost", "dep:prost-types", "dep:prost-build"]
+
+# v10.5 R1 (PR-DAEMON): split historical binary-only crate into a
+# library + multiple bins. The library target carries all the
+# business modules and (future) C ABI exports; bins are thin entry
+# points linking the library.
+#
+#  - rlib      — Rust-to-Rust internal linking (bins in this crate)
+#  - cdylib    — shared library for C FFI callers (Go/Python/Swift/...)
+#  - staticlib — static archive for platforms preferring static link (iOS)
+#
+# `dylib` deliberately excluded: it carries Rust symbol mangling;
+# goal is a stable C ABI, not a stable Rust ABI.
+[lib]
+name = "easynet_cli"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "easynet"
+path = "src/bin/easynet.rs"
+
+# Long-running daemon. Owns pair/heartbeat/Axon-node-identity today;
+# follow-up PRs in the v10.5 R1 series (PR-SYS / PR-ATTACH / PR-PERM
+# / PR-DISCUSS / PR-SCHED / PR-LOOP) extend it with the local IPC
+# server, schedule tick, and system.* ability publisher. `easynet
+# self control start/stop/status` supervises this bin's PID.
+[[bin]]
+name = "easynet-daemon"
+path = "src/bin/easynet-daemon.rs"
 
 [dependencies]
 anyhow = "1"
@@ -35,9 +74,42 @@ toml_edit = "0.23"
 # `easynet-axon` already pulls in tokio; this entry adds `sync` + `rt-multi-thread`
 # features CLI needs directly for broadcast::channel and multi-thread
 # runtime (Commit 2 flips main.rs to #[tokio::main]).
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "fs", "io-util", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "fs", "io-util", "time", "net", "signal", "process"] }
+# tokio-util LengthDelimitedCodec + Framed for IPC frame I/O
+# (4-byte LE length prefix + JSON payload). Plan v10.5 §架构决策
+# — 本机 IPC 接口.
+tokio-util = { version = "0.7", features = ["codec", "rt"] }
+# futures stream/sink traits for Framed reader/writer halves.
+futures = "0.3"
+# bytes::BytesMut backing the codec.
+bytes = "1"
 ureq = { version = "2", features = ["json"] }
 uuid = { version = "1", features = ["v4"] }
+# Cron expression parsing for PR-SCHED. The crate parses
+# `0 9 * * *`-style strings into a `Schedule` and computes the
+# next-fire instant in a given timezone — minimum surface needed
+# for the daemon's tick runner.
+cron = "0.12"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Protobuf schema tooling — gated behind `proto-gen` feature.
+# Plan v10.5 R1 pins Protobuf as the single source of truth for
+# cross-language schemas (Client bindings in Go / Python / Node /
+# Swift / Rust / Java all generate from the same .proto files).
+# v1 ships the schema files + build script but leaves the call
+# sites on hand-rolled JSON structs; enabling `--features
+# proto-gen` makes prost-build compile schemas/*.proto into
+# target/build/proto/ types that follow-up commits consume.
+[dependencies.prost]
+version = "0.13"
+optional = true
+
+[dependencies.prost-types]
+version = "0.13"
+optional = true
+
+[build-dependencies.prost-build]
+version = "0.13"
+optional = true

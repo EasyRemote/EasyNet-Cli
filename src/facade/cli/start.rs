@@ -317,8 +317,20 @@ fn run_foreground_with_heartbeat(
         // module doc).
         let agent_abilities = match crate::registry::agents::load_agents() {
             Ok(registry) => {
+                // Build a LocalAbilityRegistry with chat handlers so
+                // AgentDispatchAdapter::handle routes through the same
+                // unified handler the daemon uses. Without this the MCP
+                // adapter would have nothing to dispatch to and surface
+                // an Internal "boot ordering" error on every chat call.
+                let mut local = crate::runtime::ability_dispatch::LocalAbilityRegistry::new();
+                crate::runtime::system::chat_ability::register(
+                    &mut local,
+                    &registry,
+                    std::sync::Arc::new(Vec::new()),
+                );
                 crate::facade::mcp::agent_dispatch::AgentDispatchAdapter::build(
                     &registry,
+                    std::sync::Arc::new(local),
                     creds.tenant_id.clone(),
                 )
             }
