@@ -21,10 +21,11 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use serde_json::json;
 
+use crate::runtime::ability_dispatch::AbilityDispatcher;
 use crate::runtime::domain::{
     AgentId, DiscussRoom, LoopId, LoopInstance, NodeId, PermissionDecision, PermissionId,
     PermissionRequest, PermissionSensitivity, RoomId, ScheduleEntry, ScheduleId, Session,
@@ -60,6 +61,22 @@ pub struct Kernel {
     loop_svc: Arc<LoopService>,
     #[allow(dead_code)]
     gateway: Arc<dyn GatewayApi>,
+    /// Dispatcher handle, set by `set_dispatcher` after the daemon
+    /// has built the unified `LocalAbilityRegistry`. Held in a
+    /// `OnceLock` because the construction order is: 1) build Kernel,
+    /// 2) build registry off the Kernel's sub-services, 3) build
+    /// dispatcher off the registry, 4) hand the dispatcher back here.
+    /// A field that is only readable after step 4 — and never written
+    /// twice — is exactly what `OnceLock` is for.
+    ///
+    /// `Kernel::invoke` reads this through `get()`. If unset (tests
+    /// that build a Kernel without a daemon, or the loop runner's
+    /// in-process driver before Phase 4 wired it), invoke degrades to
+    /// admission + permission gate + terminal events without
+    /// dispatching to a handler — preserving the pre-refactor
+    /// "no-op kernel.invoke for non-agent ability" semantics for the
+    /// duration of the refactor and for unit tests.
+    dispatcher: OnceLock<Arc<AbilityDispatcher>>,
 }
 
 impl Kernel {
@@ -77,6 +94,7 @@ impl Kernel {
             schedule: Arc::new(ScheduleService::new()),
             loop_svc: Arc::new(LoopService::new()),
             gateway,
+            dispatcher: OnceLock::new(),
         }
     }
 
@@ -101,7 +119,23 @@ impl Kernel {
             schedule: Arc::new(ScheduleService::new()),
             loop_svc: Arc::new(LoopService::new()),
             gateway,
+            dispatcher: OnceLock::new(),
         }
+    }
+
+    /// Wire the unified dispatcher into the Kernel post-construction.
+    /// Called by `bin/easynet-daemon.rs` after step 3 of the boot
+    /// sequence — `Kernel::invoke` then routes ability dispatch
+    /// through the same registry the IPC proxy uses, removing the
+    /// pre-refactor `<agent>.chat` special-case in invoke.
+    ///
+    /// Idempotent within a single `OnceLock`: a second call is a
+    /// no-op and silently returns the first value via `set`'s Result.
+    /// We intentionally do not surface that as an error — daemons
+    /// that re-wire on hot-reload (a future PR) will benefit from
+    /// the no-op being free.
+    pub fn set_dispatcher(&self, dispatcher: Arc<AbilityDispatcher>) {
+        let _ = self.dispatcher.set(dispatcher);
     }
 
     /// Borrow the SessionService handle. Used by the daemon bin's
@@ -205,135 +239,125 @@ impl Kernel {
         decision
     }
 
-    /// Real agent-chat dispatch. Looks up `agent_name` in the local
-    /// registry, calls `runtime::dispatch::send_external` (which
-    /// shells out to the configured driver — claude / codex /
-    /// codex-app-server). Streams driver progress as `kind: progress`
-    /// session events so a Client subscribed to system.session.attach
-    /// for this invocation_id sees the run unfold live.
+    /// Dispatch an admitted invocation through the unified ability
+    /// registry. Looks up the named ability's local handler and
+    /// invokes it; the kernel is intentionally agnostic about what
+    /// the handler does internally (chat, voice, system.*, future
+    /// abilities all flow through here).
     ///
-    /// v1 streams progress in coarse grain only (a single
-    /// `agent_response` event with the full markdown body) because
-    /// `send_external` is synchronous. A finer-grained per-token
-    /// stream would require teaching the driver layer about an
-    /// SSE-style callback into SessionService — that lands when the
-    /// driver crate gets its async surface.
-    fn dispatch_agent_chat(
+    /// Returns `Ok(Value::Null)` when no dispatcher is wired (tests
+    /// that build a Kernel without a daemon, or callers that want
+    /// admission + permission + terminal events without a real
+    /// dispatch). The pre-refactor "no-op kernel.invoke for
+    /// non-agent ability" semantic is preserved by this fall-through.
+    fn dispatch_via_registry(
         &self,
         session_id: &SessionId,
-        agent_name: &str,
-        args: &serde_json::Value,
+        ability: &str,
+        args: serde_json::Value,
     ) -> anyhow::Result<serde_json::Value> {
-        let prompt = args
+        let dispatcher = match self.dispatcher.get() {
+            Some(d) => d,
+            None => {
+                // No dispatcher wired — the kernel is being used in
+                // isolation (test fixture or pre-PR-4 caller). Behave
+                // as the pre-refactor non-agent path did: succeed
+                // with a marker payload so terminal state is `Succeeded`.
+                return Ok(json!({
+                    "note": "kernel has no dispatcher wired; ability would have routed through registry",
+                    "ability": ability,
+                }));
+            }
+        };
+        let registry = dispatcher.local_registry();
+        let handler = registry.get_rpc(ability).cloned();
+        let Some(handler) = handler else {
+            // Distinguish "ability unknown" from "registered but
+            // failed". The proxy that normally fronts the registry
+            // would also surface this as an error; matching that
+            // shape keeps Kernel::invoke and proxy-dispatch paths
+            // observable-equivalent.
+            anyhow::bail!("no local handler registered for ability {ability}");
+        };
+
+        // Surface a 200-char preview of the prompt for chat-style
+        // calls so a Client UI can see the rendered template in the
+        // timeline. The preview key is only emitted when the
+        // arguments have a string `prompt`; for non-chat abilities
+        // the event simply records the dispatch start without
+        // peeking at the args' shape.
+        let preview: String = args
             .get("prompt")
             .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| {
-                anyhow::anyhow!("agent.chat: `prompt` (string) required in args")
-            })?;
-        let context = args.get("context").and_then(serde_json::Value::as_str);
-
-        let registry = crate::registry::agents::load_agents()
-            .map_err(|e| anyhow::anyhow!("agent registry load failed: {e}"))?;
-        let entry = registry
-            .agents
-            .get(agent_name)
-            .cloned()
-            .ok_or_else(|| {
-                anyhow::anyhow!("agent {agent_name:?} not registered in this daemon")
-            })?;
-
-        // Surface a 200-char preview of the prompt so a Client UI
-        // can see the rendered template in the timeline (cron with
-        // a "Daily report on {{date}}" template renders here as
-        // "Daily report on 2026-04-25", which is what the user
-        // configured). Truncated to keep the event size bounded
-        // for long prompts.
-        let preview: String = prompt.chars().take(200).collect();
+            .unwrap_or("")
+            .chars()
+            .take(200)
+            .collect();
         let _ = self.session.emit_event(
             session_id,
             json!({
-                "kind": "agent_dispatch_starting",
-                "agent": agent_name,
-                "prompt_len": prompt.len(),
+                "kind": "ability_dispatch_starting",
+                "ability": ability,
                 "prompt_preview": preview,
             }),
         );
 
-        // send_external runs synchronously (subprocess + wait). The
-        // Kernel is called from the proxy's tokio worker thread; we
-        // don't want to block the entire worker for a 30-second
-        // agent run. Defer the blocking call to a dedicated thread
-        // via `tokio::task::block_in_place` if a runtime is in
-        // scope; otherwise call directly.
-        let response_result = if tokio::runtime::Handle::try_current().is_ok() {
-            tokio::task::block_in_place(|| {
-                crate::runtime::dispatch::send_external(agent_name, &entry, prompt, context)
-            })
+        // Handlers may block (chat shells out to a subprocess and
+        // waits). When called from a tokio worker we yield via
+        // block_in_place so other tasks on the runtime can make
+        // progress; in non-tokio contexts we call directly.
+        let result = if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::task::block_in_place(|| handler(args))
         } else {
-            crate::runtime::dispatch::send_external(agent_name, &entry, prompt, context)
+            handler(args)
         };
 
-        match response_result {
-            Ok(resp) => {
-                let usage = resp
-                    .usage
-                    .as_ref()
-                    .map(|u| {
-                        json!({
-                            "input_tokens": u.input_tokens,
-                            "output_tokens": u.output_tokens,
-                            "num_turns": u.num_turns,
-                            "total_cost_usd": u.total_cost_usd,
-                        })
-                    })
-                    .unwrap_or(serde_json::Value::Null);
+        match &result {
+            Ok(value) => {
                 let _ = self.session.emit_event(
                     session_id,
                     json!({
-                        "kind": "agent_response",
-                        "content": resp.content,
-                        "model": resp.model,
-                        "duration_ms": resp.duration_ms,
-                        "truncated": resp.truncated,
-                        "usage": usage,
+                        "kind": "ability_response",
+                        "ability": ability,
+                        "result": value,
                     }),
                 );
-                Ok(json!({
-                    "agent": resp.agent,
-                    "content": resp.content,
-                    "duration_ms": resp.duration_ms,
-                }))
             }
             Err(e) => {
                 let _ = self.session.emit_event(
                     session_id,
                     json!({
-                        "kind": "agent_error",
+                        "kind": "ability_error",
+                        "ability": ability,
                         "error": format!("{e}"),
                     }),
                 );
-                Err(e)
             }
         }
+        result
     }
 }
 
-/// Parse `<agent>.chat` ability names. Returns `Some(<agent>)`
-/// for the chat-style ability that Kernel::invoke routes through
-/// `dispatch::send_external`; returns `None` for anything else
-/// (system.*, future ability namespaces).
-fn parse_agent_chat(ability: &str) -> Option<String> {
-    if ability.starts_with("system.") {
-        return None;
-    }
-    let (head, tail) = ability.rsplit_once('.')?;
-    if tail != "chat" {
-        return None;
-    }
-    if head.is_empty() {
-        return None;
-    }
-    Some(head.to_string())
+/// Decide whether an ability name should be routed through the
+/// permission gate. Today the rule is "agent abilities gate; system
+/// abilities don't" — preserving the pre-refactor behaviour where
+/// `<agent>.chat` triggered the broker but `system.ping` did not.
+///
+/// A future per-ability sensitivity config (`runtime::abilities` or
+/// the manifest layer) would replace this name-prefix check with a
+/// lookup; until then the prefix-based rule is exactly what was
+/// there before, just generalised away from "is_chat" to "is_agent".
+fn should_gate(ability: &str) -> bool {
+    !ability.starts_with("system.")
+}
+
+/// Extract the agent name portion of an `<agent>.<verb>` ability
+/// for use in permission events (`agent` field). Returns the full
+/// ability name unchanged when there is no `.` — keeps the event
+/// shape stable even for malformed inputs that should never reach
+/// this far.
+fn agent_portion(ability: &str) -> &str {
+    ability.rsplit_once('.').map(|(head, _)| head).unwrap_or(ability)
 }
 
 impl KernelApi for Kernel {
@@ -342,23 +366,27 @@ impl KernelApi for Kernel {
         //   1. Admission — compute invocation_id, register a Session
         //      keyed by that id so live attachers see the run from
         //      its first frame.
-        //   2. Dispatch — branch on the ability shape:
-        //        * `<agent>.chat`        → real agent subprocess via
-        //                                  runtime::dispatch::send_external
-        //        * `system.*`            → reserved (system abilities
-        //                                  are dispatched via the
-        //                                  proxy's stage-2 executor;
-        //                                  Kernel::invoke for them is
-        //                                  redundant in v1)
-        //        * anything else         → Failed(NotFound)
-        //   3. Terminal — emit `kind: terminated`, mark the session
+        //   2. Permission gate — for agent abilities (`<agent>.<verb>`),
+        //      ask the broker; system.* skip the gate to preserve the
+        //      pre-refactor behaviour where ping/session/permission
+        //      calls do not prompt the operator.
+        //   3. Dispatch — look up the ability in the unified
+        //      registry via `dispatch_via_registry` and invoke it.
+        //      All abilities — chat, system.*, future verbs — flow
+        //      through the same code path; the kernel does not
+        //      special-case any one of them.
+        //   4. Terminal — emit `invoke_terminal`, mark the session
         //      ended, return the Receipt.
         let id = invocation_id_of(&invocation);
         let session_id = SessionId::new(id.clone());
-        let agent_name = parse_agent_chat(&invocation.ability);
+        // The session's `agent` field is for observability only —
+        // for system.* abilities it carries the verb portion, for
+        // agent abilities it carries the agent name. Either way it
+        // is the head of `<head>.<tail>`.
+        let admit_agent = agent_portion(&invocation.ability).to_string();
         let admit = Session {
             id: session_id.clone(),
-            agent: AgentId::new(agent_name.clone().unwrap_or_else(|| "?".into())),
+            agent: AgentId::new(admit_agent.clone()),
             node: NodeId::new("self"),
             tenant: TenantId::default_v1(),
             started_unix_ms: chrono::Utc::now().timestamp_millis(),
@@ -377,36 +405,35 @@ impl KernelApi for Kernel {
             }),
         );
 
-        // Permission admission gate. Only triggers for agent
-        // dispatches — system.* abilities are dispatched by the
-        // proxy directly and don't traverse this path. AllowAll
-        // broker (default) auto-allows; SubscriberBroker publishes
-        // a PermissionRequest and blocks until a Client decides.
-        let outcome: anyhow::Result<serde_json::Value> = match &agent_name {
-            Some(name) => match self.gate_permission(&session_id, name, &invocation.args) {
-                PermissionDecision::Allow | PermissionDecision::AllowOnce => {
-                    self.dispatch_agent_chat(&session_id, name, &invocation.args)
-                }
+        // Permission admission gate. Triggers for agent abilities
+        // (everything not under the `system.*` namespace);
+        // system abilities skip the gate as before so that ping,
+        // session.list, etc. do not prompt the operator.
+        // AllowAllBroker (default) auto-allows; SubscriberBroker
+        // publishes a PermissionRequest and blocks until a Client
+        // decides.
+        let outcome: anyhow::Result<serde_json::Value> = if should_gate(&invocation.ability) {
+            let agent_label = agent_portion(&invocation.ability);
+            match self.gate_permission(&session_id, agent_label, &invocation.args) {
+                PermissionDecision::Allow | PermissionDecision::AllowOnce => self
+                    .dispatch_via_registry(&session_id, &invocation.ability, invocation.args),
                 PermissionDecision::Deny => {
                     let _ = self.session.emit_event(
                         &session_id,
                         json!({
                             "kind": "permission_denied",
-                            "agent": name,
+                            "agent": agent_label,
+                            "ability": invocation.ability,
                         }),
                     );
                     Err(anyhow::anyhow!(
-                        "permission denied for {name}.chat"
+                        "permission denied for {}",
+                        invocation.ability
                     ))
                 }
-            },
-            None => {
-                // System abilities are not dispatched through Kernel::invoke
-                // in v1 — the proxy executes them directly. We accept
-                // them here for "I just want a receipt without doing
-                // anything" callers.
-                Ok(json!({"note": "no-op kernel.invoke for non-agent ability"}))
             }
+        } else {
+            self.dispatch_via_registry(&session_id, &invocation.ability, invocation.args)
         };
 
         let now_ms = chrono::Utc::now().timestamp_millis();
@@ -556,27 +583,40 @@ mod tests {
     }
 
     #[test]
-    fn parse_agent_chat_recognises_dot_chat_suffix() {
-        assert_eq!(parse_agent_chat("alice.chat"), Some("alice".to_string()));
-        assert_eq!(
-            parse_agent_chat("claude-code.chat"),
-            Some("claude-code".to_string())
-        );
-        assert_eq!(parse_agent_chat("a.b.chat"), Some("a.b".to_string()));
+    fn should_gate_passes_agent_abilities_and_skips_system() {
+        // Replaces the old `parse_agent_chat` tests after Phase 4
+        // generalised invoke from "is_chat" to "is_agent". The
+        // contract preserved across the refactor: system.* never
+        // gates (operator never prompted for ping); everything else
+        // gates (matches the pre-refactor `<agent>.chat` rule).
+        assert!(should_gate("alice.chat"));
+        assert!(should_gate("claude-code.chat"));
+        assert!(should_gate("alice.voice"));
+        assert!(should_gate("a.b.chat"));
+        // The narrower "<agent>.chat"-only behaviour is gone — voice,
+        // exec, and any future verbs all gate the same way as chat.
+        // Pin that explicitly so a reviewer notices the broader gate
+        // rather than discovering it via a permission-prompt incident.
+        assert!(should_gate("alice.exec"));
+        // system.* must never gate.
+        assert!(!should_gate("system.session.attach"));
+        assert!(!should_gate("system.ping"));
+        assert!(!should_gate("system.permission.subscribe"));
     }
 
     #[test]
-    fn parse_agent_chat_rejects_system_and_non_chat() {
-        // system.* abilities never go through the agent-dispatch
-        // path; they are handled by the proxy's stage-2 executor.
-        assert_eq!(parse_agent_chat("system.session.attach"), None);
-        assert_eq!(parse_agent_chat("system.ping"), None);
-        // Anything that doesn't end in `.chat` is not the agent-chat
-        // shape Kernel::invoke knows about.
-        assert_eq!(parse_agent_chat("alice.voice"), None);
-        assert_eq!(parse_agent_chat("alice"), None);
-        assert_eq!(parse_agent_chat(".chat"), None);
-        assert_eq!(parse_agent_chat(""), None);
+    fn agent_portion_extracts_head_of_dotted_name() {
+        // The session's `agent` field is for observability only;
+        // the head of `<head>.<tail>` is what makes the timeline
+        // readable ("alice did X" rather than "alice.chat did X").
+        assert_eq!(agent_portion("alice.chat"), "alice");
+        assert_eq!(agent_portion("a.b.chat"), "a.b");
+        assert_eq!(agent_portion("system.ping"), "system");
+        // Defensive: a malformed input with no `.` returns the whole
+        // string rather than panicking — keeps invoke's event shape
+        // stable even for shapes that should never reach this far.
+        assert_eq!(agent_portion("noseparator"), "noseparator");
+        assert_eq!(agent_portion(""), "");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -635,15 +675,24 @@ mod tests {
     }
 
     #[test]
-    fn invoke_with_unknown_agent_returns_failed_receipt() {
-        // An invocation against an agent the registry does not
-        // know lands as Failed with a clear reason. This is the
-        // contract a Client uses to render a "no such agent"
-        // dialog rather than spinning forever.
+    fn invoke_with_unknown_ability_returns_failed_receipt() {
+        // An invocation against an ability the unified registry does
+        // not know lands as Failed with a clear reason. This is the
+        // contract a Client uses to render a "no such ability" /
+        // "no such agent" dialog rather than spinning forever.
+        //
+        // Pre-Phase-4 this test asserted the same property by going
+        // through the agent-registry path. After the refactor the
+        // kernel routes through the unified dispatcher, so we wire
+        // an empty registry — same observable contract via a
+        // different code path.
         let k = Kernel::new(Arc::new(NoopGateway));
-        // HomeGuard so the registry lookup hits an empty per-test
-        // config dir, not whatever agents.json the developer has
-        // installed locally.
+        let empty_registry = Arc::new(crate::runtime::ability_dispatch::LocalAbilityRegistry::new());
+        let dispatcher = Arc::new(crate::runtime::ability_dispatch::AbilityDispatcher::new(
+            empty_registry,
+            Arc::new(NoopGateway),
+        ));
+        k.set_dispatcher(dispatcher);
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let inv = Invocation {
             caller: "easynet://nodes/a".into(),
@@ -659,11 +708,35 @@ mod tests {
         match r.terminal {
             TerminalState::Failed { reason } => {
                 assert!(
-                    reason.contains("ghost-agent") || reason.contains("not registered"),
-                    "expected agent-not-registered reason; got {reason}"
+                    reason.contains("ghost-agent.chat") || reason.contains("no local handler"),
+                    "expected ability-not-registered reason; got {reason}"
                 );
             }
             other => panic!("expected Failed receipt, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn invoke_without_dispatcher_falls_through_to_succeeded_receipt() {
+        // The OnceLock fall-through is the test-friendly escape
+        // hatch: a Kernel built in isolation (no daemon, no
+        // registry) admits the session, runs the permission gate
+        // (AllowAll auto-allows), then returns a no-op marker
+        // payload. Pinning this lets a future test that builds
+        // Kernel directly know the safe shape to expect.
+        let k = Kernel::new(Arc::new(NoopGateway));
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let inv = Invocation {
+            caller: "easynet://nodes/a".into(),
+            callee: "easynet://nodes/a".into(),
+            ability: "alice.chat".into(),
+            subject: "easynet://nodes/a".into(),
+            nonce_hex: "ff".repeat(16),
+            causal_context: CausalContext::Null,
+            args: json!({"prompt": "hi"}),
+            caller_signature: None,
+        };
+        let r = k.invoke(inv).unwrap();
+        assert!(matches!(r.terminal, TerminalState::Succeeded));
     }
 }
