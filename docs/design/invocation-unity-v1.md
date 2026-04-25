@@ -84,11 +84,17 @@ Receipt per unit of termination.
    objects (`Invocation`, `SessionId`, `PermissionRequest`, …).
 2. Kernel::invoke cannot be called from inside an Execution
    sub-service (the Kernel calls sub-services, not vice versa).
-3. (reserved for PR-INVOCATION-EXEC-UNITY) `run_mission_inproc`
-   cannot appear in `execution/schedule/runner.rs`;
-   `Session::subscribe` cannot appear in
-   `execution/loop_instance/runner.rs`; the permission broker
-   cannot be called outside `Kernel::invoke`.
+3. (active, PR-INVOCATION-EXEC-UNITY) Sub-services may not bypass
+   Kernel::invoke by reaching for legacy mission/session paths:
+   - `execution/schedule/` cannot call `run_mission_inproc`
+     (the tick runner builds an Invocation and routes through
+     `Kernel::invoke`).
+   - `execution/loop_instance/` cannot call `Session::subscribe`,
+     `send_to_agent(...)`, or `run_mission_inproc`. The loop
+     controller emits one Invocation per body / verify step.
+   - `execution/permission/` cannot call `run_mission_inproc`.
+     The broker is an admission hook inside `Kernel::invoke`,
+     not a side-channel from elsewhere in the dispatch path.
 
 ## 6. What this plan explicitly does **not** deliver in v1
 
