@@ -33,26 +33,30 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+pub mod permission_ability;
 pub mod ping;
 pub mod session_ability;
 
 use std::sync::Arc;
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::execution::permission::PermissionService;
 use crate::runtime::execution::session::SessionService;
 
 /// Build a `LocalAbilityRegistry` populated with every v1 system
-/// ability handler that does NOT need a sub-service handle.
-/// Suitable for early-boot smoke tests + the `published_ability_names`
-/// helper that the discovery publisher consumes.
-///
-/// PR-ATTACH onwards: sub-service-aware abilities live on
-/// `build_registry_with_services` because they need handles to the
-/// sub-services the Kernel owns. The discovery name list is
-/// computed off the *with-services* registry so peers see every
-/// ability the daemon actually publishes.
+/// ability handler. Suitable for early-boot smoke tests + the
+/// `published_ability_names` helper that the discovery publisher
+/// consumes. Tests get fresh empty sub-services; the daemon bin
+/// calls `build_registry_with_services` instead with its real
+/// Kernel handles.
 pub fn build_registry() -> Arc<LocalAbilityRegistry> {
-    build_registry_with_services(Arc::new(SessionService::new()))
+    build_registry_with_services(
+        Arc::new(SessionService::new()),
+        // PR-PERM: tests default to AllowAllBroker for backwards
+        // compatibility with every pre-PR-PERM call site that
+        // expected dispatch never to block on a missing observer.
+        Arc::new(PermissionService::new()),
+    )
 }
 
 /// Build a `LocalAbilityRegistry` with sub-service handles wired
@@ -60,10 +64,12 @@ pub fn build_registry() -> Arc<LocalAbilityRegistry> {
 /// at boot; tests construct a fresh registry per case.
 pub fn build_registry_with_services(
     sessions: Arc<SessionService>,
+    perms: Arc<PermissionService>,
 ) -> Arc<LocalAbilityRegistry> {
     let mut reg = LocalAbilityRegistry::new();
     ping::register(&mut reg);
     session_ability::register(&mut reg, sessions);
+    permission_ability::register(&mut reg, perms);
     Arc::new(reg)
 }
 

@@ -253,6 +253,24 @@ fn system_skills_json() -> String {
                 "output_schema": serde_json::Value::Null,
                 "timeout_seconds": serde_json::Value::Null,
             }),
+            "system.permission.subscribe" => json!({
+                "name": "system.permission.subscribe",
+                "description":
+                    crate::runtime::system::permission_ability::subscribe_description(),
+                "input_schema":
+                    crate::runtime::system::permission_ability::subscribe_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
+            "system.permission.decide" => json!({
+                "name": "system.permission.decide",
+                "description":
+                    crate::runtime::system::permission_ability::decide_description(),
+                "input_schema":
+                    crate::runtime::system::permission_ability::decide_input_schema(),
+                "output_schema": serde_json::Value::Null,
+                "timeout_seconds": serde_json::Value::Null,
+            }),
             other => json!({
                 "name": other,
                 "description": "",
