@@ -27,11 +27,15 @@ use serde_json::json;
 
 use crate::runtime::domain::{
     AgentId, DiscussRoom, LoopId, LoopInstance, NodeId, PermissionDecision, PermissionId,
-    PermissionRequest, RoomId, ScheduleEntry, ScheduleId, Session, SessionId, TenantId,
+    PermissionRequest, PermissionSensitivity, RoomId, ScheduleEntry, ScheduleId, Session,
+    SessionId, TenantId,
 };
 use crate::runtime::execution::{
-    discuss::DiscussService, loop_instance::LoopService, permission::PermissionService,
-    schedule::ScheduleService, session::SessionService,
+    discuss::DiscussService,
+    loop_instance::LoopService,
+    permission::{AskContext, PermissionService},
+    schedule::ScheduleService,
+    session::SessionService,
 };
 use crate::runtime::gateway_api::GatewayApi;
 use crate::runtime::invocation::{invocation_id_of, Invocation, PriorChain, Receipt, TerminalState};
@@ -60,11 +64,39 @@ pub struct Kernel {
 
 impl Kernel {
     /// Construct a Kernel backed by fresh sub-services and the
-    /// provided Gateway.
+    /// provided Gateway. Uses the AllowAllBroker permission default
+    /// — every Kernel::invoke admission auto-allows. Daemons that
+    /// want interactive approval should use
+    /// `new_with_subscriber_broker` instead so a Client subscribed
+    /// to system.permission.subscribe sees pending requests.
     pub fn new(gateway: Arc<dyn GatewayApi>) -> Self {
         Self {
             session: Arc::new(SessionService::new()),
             permission: Arc::new(PermissionService::new()),
+            discuss: Arc::new(DiscussService::new()),
+            schedule: Arc::new(ScheduleService::new()),
+            loop_svc: Arc::new(LoopService::new()),
+            gateway,
+        }
+    }
+
+    /// Construct a Kernel with the SubscriberBroker permission
+    /// variant installed — every Kernel::invoke admission against
+    /// a non-system ability publishes a PermissionRequest on the
+    /// broker's broadcast channel, then blocks waiting for the
+    /// matching `system.permission.decide` decision.
+    ///
+    /// When no subscriber is connected the broker auto-allows
+    /// (per docs/rfc/permission-broker-v1.md §4 cross-machine
+    /// advisory downgrade and §6 "no observer means no human in
+    /// the loop"). The default `new()` should be preferred for
+    /// tests and for daemons running without a Client; the
+    /// daemon bin uses this constructor so the Permission tab
+    /// in the GUI sees real pending requests.
+    pub fn new_with_subscriber_broker(gateway: Arc<dyn GatewayApi>) -> Self {
+        Self {
+            session: Arc::new(SessionService::new()),
+            permission: Arc::new(PermissionService::with_subscriber_broker()),
             discuss: Arc::new(DiscussService::new()),
             schedule: Arc::new(ScheduleService::new()),
             loop_svc: Arc::new(LoopService::new()),
@@ -93,6 +125,84 @@ impl Kernel {
 
     pub fn loop_service(&self) -> Arc<LoopService> {
         Arc::clone(&self.loop_svc)
+    }
+
+    /// Permission admission gate. Asks the broker; emits a
+    /// `permission_pending` event before the call and a
+    /// `permission_decided` event after, so a Client subscribed to
+    /// system.session.attach for this invocation_id sees admission
+    /// was gated even when the broker auto-allows.
+    ///
+    /// AllowAllBroker returns immediately. SubscriberBroker
+    /// publishes a PermissionRequest on its broadcast channel
+    /// (which a Client connected to system.permission.subscribe
+    /// receives live) and blocks `ask` until a matching
+    /// `system.permission.decide` lands or the broker's internal
+    /// timeout fires.
+    ///
+    /// v1 sensitivity is hardcoded to `Medium`. A future config
+    /// layer (per-ability or per-agent) will let an operator pin
+    /// "always ask" abilities at `High` and demote idempotent
+    /// reads to `Low`.
+    fn gate_permission(
+        &self,
+        session_id: &SessionId,
+        agent_name: &str,
+        args: &serde_json::Value,
+    ) -> PermissionDecision {
+        let prompt_preview: String = args
+            .get("prompt")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .chars()
+            .take(120)
+            .collect();
+        let pending_prompt = format!(
+            "{} wants to chat (preview: {})",
+            agent_name,
+            if prompt_preview.is_empty() {
+                "(no prompt)".into()
+            } else {
+                format!("\"{prompt_preview}\"")
+            }
+        );
+        let _ = self.session.emit_event(
+            session_id,
+            json!({
+                "kind": "permission_pending",
+                "agent": agent_name,
+                "sensitivity": "medium",
+                "prompt_preview": prompt_preview,
+            }),
+        );
+        let ctx = AskContext {
+            prompt: pending_prompt,
+            sensitivity: PermissionSensitivity::Medium,
+            session: session_id.clone(),
+            tenant: TenantId::default_v1(),
+            capability_claim: None,
+        };
+        // The broker's `ask` is sync but blocks on a tokio oneshot
+        // for the SubscriberBroker variant. block_in_place lets us
+        // wait without freezing the tokio worker.
+        let decision = if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::task::block_in_place(|| self.permission.broker().ask(ctx))
+        } else {
+            self.permission.broker().ask(ctx)
+        };
+        let _ = self.session.emit_event(
+            session_id,
+            json!({
+                "kind": "permission_decided",
+                "agent": agent_name,
+                "decision": match decision {
+                    PermissionDecision::Allow => "allow",
+                    PermissionDecision::Deny => "deny",
+                    PermissionDecision::AllowOnce => "allow_once",
+                },
+            }),
+        );
+        decision
     }
 
     /// Real agent-chat dispatch. Looks up `agent_name` in the local
@@ -267,8 +377,29 @@ impl KernelApi for Kernel {
             }),
         );
 
-        let outcome: anyhow::Result<serde_json::Value> = match agent_name {
-            Some(name) => self.dispatch_agent_chat(&session_id, &name, &invocation.args),
+        // Permission admission gate. Only triggers for agent
+        // dispatches — system.* abilities are dispatched by the
+        // proxy directly and don't traverse this path. AllowAll
+        // broker (default) auto-allows; SubscriberBroker publishes
+        // a PermissionRequest and blocks until a Client decides.
+        let outcome: anyhow::Result<serde_json::Value> = match &agent_name {
+            Some(name) => match self.gate_permission(&session_id, name, &invocation.args) {
+                PermissionDecision::Allow | PermissionDecision::AllowOnce => {
+                    self.dispatch_agent_chat(&session_id, name, &invocation.args)
+                }
+                PermissionDecision::Deny => {
+                    let _ = self.session.emit_event(
+                        &session_id,
+                        json!({
+                            "kind": "permission_denied",
+                            "agent": name,
+                        }),
+                    );
+                    Err(anyhow::anyhow!(
+                        "permission denied for {name}.chat"
+                    ))
+                }
+            },
             None => {
                 // System abilities are not dispatched through Kernel::invoke
                 // in v1 — the proxy executes them directly. We accept
@@ -446,6 +577,61 @@ mod tests {
         assert_eq!(parse_agent_chat("alice"), None);
         assert_eq!(parse_agent_chat(".chat"), None);
         assert_eq!(parse_agent_chat(""), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn invoke_with_subscriber_broker_publishes_pending_request_and_blocks_until_decision() {
+        // End-to-end: a daemon with SubscriberBroker installed
+        // gates an agent dispatch; the test acts as the Client
+        // by subscribing to the broker, pulling the pending
+        // request, and calling decide(Deny). The Receipt comes
+        // back as Failed("permission denied") and the session
+        // timeline contains permission_pending → permission_denied
+        // events the GUI needs to render the dialog.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let k = Arc::new(Kernel::new_with_subscriber_broker(Arc::new(NoopGateway)));
+
+        // Subscribe to the broker BEFORE invoking — has_subscribers()
+        // gates the SubscriberBroker fallback to Allow when empty.
+        let perm_svc = k.permission_service();
+        let sub = perm_svc.subscriber().expect("with-subscriber-broker variant").clone();
+        let mut pending_rx = sub.subscribe();
+
+        // Spawn the kernel.invoke call in a blocking task — broker.ask
+        // blocks waiting for the decision.
+        let k_clone = Arc::clone(&k);
+        let invoke_task = tokio::task::spawn_blocking(move || {
+            let inv = Invocation {
+                caller: "easynet://nodes/a".into(),
+                callee: "easynet://nodes/a".into(),
+                ability: "ghost-agent.chat".into(),
+                subject: "easynet://nodes/a".into(),
+                nonce_hex: "11".repeat(16),
+                causal_context: CausalContext::Null,
+                args: json!({"prompt": "do the thing"}),
+                caller_signature: None,
+            };
+            k_clone.invoke(inv).unwrap()
+        });
+
+        // Pull the pending request off the broadcast.
+        let pending = pending_rx.recv().await.expect("pending broadcast");
+        assert_eq!(pending.prompt.contains("ghost-agent"), true);
+
+        // Decide Deny; the kernel's gate_permission returns Deny;
+        // invoke returns a Failed receipt.
+        sub.decide(&pending.id, PermissionDecision::Deny).unwrap();
+
+        let receipt = invoke_task.await.unwrap();
+        match receipt.terminal {
+            TerminalState::Failed { reason } => {
+                assert!(
+                    reason.contains("permission denied"),
+                    "expected denial reason; got {reason}"
+                );
+            }
+            other => panic!("expected Failed(permission denied), got {other:?}"),
+        }
     }
 
     #[test]
