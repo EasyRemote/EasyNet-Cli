@@ -505,7 +505,18 @@ mod tests {
     fn tool_specs_includes_agent_abilities_when_adapter_is_populated() {
         let endpoint = "http://127.0.0.1:50151".to_string();
         let tenant = "tenant-x".to_string();
-        let adapter = AgentDispatchAdapter::build(&registry_with_claude(), tenant.clone());
+        let registry = registry_with_claude();
+        let mut local = crate::runtime::ability_dispatch::LocalAbilityRegistry::new();
+        crate::runtime::system::chat_ability::register(
+            &mut local,
+            &registry,
+            std::sync::Arc::new(Vec::new()),
+        );
+        let adapter = AgentDispatchAdapter::build(
+            &registry,
+            std::sync::Arc::new(local),
+            tenant.clone(),
+        );
 
         let p = HubMcpProvider::new(endpoint, tenant).with_agent_abilities(adapter);
         let specs = p.tool_specs();
@@ -546,7 +557,18 @@ mod tests {
         // strong observable proxy: if the call completes near-instantly
         // with a Validation error (missing prompt), the bridge path
         // cannot have been exercised.
-        let adapter = AgentDispatchAdapter::build(&registry_with_claude(), "tenant-x".to_string());
+        let registry = registry_with_claude();
+        let mut local = crate::runtime::ability_dispatch::LocalAbilityRegistry::new();
+        crate::runtime::system::chat_ability::register(
+            &mut local,
+            &registry,
+            std::sync::Arc::new(Vec::new()),
+        );
+        let adapter = AgentDispatchAdapter::build(
+            &registry,
+            std::sync::Arc::new(local),
+            "tenant-x".to_string(),
+        );
         let p = HubMcpProvider::new(
             // Link-local unroutable host — would hang for the 5 s
             // connect budget if the call reached the bridge path.
