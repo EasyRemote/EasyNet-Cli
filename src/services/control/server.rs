@@ -164,6 +164,21 @@ pub fn make_proxy(kernel: Arc<dyn KernelApi>) -> AbilityProxy {
     AbilityProxy::new(kernel)
 }
 
+/// Test-only escape hatch for sibling FFI client tests.
+///
+/// `serve_connection` is private on purpose — production code only
+/// reaches it via `accept_loop`. The FFI client tests in
+/// `crate::ffi::client` need to drive exactly one connection so the
+/// test can dial into the real server harness; route them through
+/// this wrapper instead of pub-ing the private function.
+#[cfg(test)]
+pub(crate) async fn serve_one_for_test(
+    stream: UnixStream,
+    proxy: AbilityProxy,
+) -> anyhow::Result<()> {
+    serve_connection(stream, proxy).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
