@@ -158,6 +158,7 @@ mod tests {
             misfire_policy: MisfirePolicy::Skip,
             catch_up_window_secs: None,
             enabled: true,
+            prompt: None,
         }
     }
 
