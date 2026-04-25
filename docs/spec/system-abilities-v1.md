@@ -35,7 +35,7 @@
 | `system.schedule.enable`         | RPC     | toggle enabled flag                                                | PR-SCHED   |
 | `system.loop.create`             | RPC     | register a worker+verify loop bounded by max_iters                 | PR-LOOP    |
 | `system.loop.status`             | RPC     | fetch loop instance state                                          | PR-LOOP    |
-| `system.loop.subscribe`          | Stream  | snapshot loop status; live frames (PR-INVOCATION)                  | PR-LOOP    |
+| `system.loop.subscribe`          | Stream  | replay buffered loop frames, then tail live controller output      | PR-LOOP    |
 | `system.loop.cancel`             | RPC     | cancel an in-flight loop                                           | PR-LOOP    |
 
 ## 3. Schema layout
@@ -85,6 +85,4 @@ abilities/system/
   `system.loop.subscribe`, `system.discuss.subscribe`.
 - Schedule tick runner that fires schedules at next-fire instants
   (PR-INVOCATION-EXEC-UNITY's deferred half).
-- Loop controller that drives per-iteration body / verify
-  Invocations through `Kernel::invoke`.
 - Proto-encoded args/responses replacing the JSON v1 wire format.

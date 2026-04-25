@@ -218,9 +218,15 @@ pub struct LoopInstance {
     pub id: LoopId,
     pub tenant: TenantId,
     pub worker_agent: AgentId,
+    pub verify_expr: String,
+    pub body_prompt: String,
     pub max_iters: u32,
     pub current_iter: u32,
     pub state: LoopState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_body_output: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_verify_output: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

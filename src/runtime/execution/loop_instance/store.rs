@@ -120,9 +120,13 @@ mod tests {
             id: LoopId::new(id),
             tenant: TenantId::default_v1(),
             worker_agent: AgentId::new("alice"),
+            verify_expr: "true".into(),
+            body_prompt: "do work".into(),
             max_iters: 5,
             current_iter: 0,
             state: LoopState::Pending,
+            last_body_output: None,
+            last_verify_output: None,
         }
     }
 

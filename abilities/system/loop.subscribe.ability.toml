@@ -1,6 +1,6 @@
 schema_version = "1"
 name = "loop.subscribe"
-description = "Subscribe to a loop's status stream. v1 emits a one-shot snapshot; live per-iteration frames land with PR-INVOCATION-EXEC-UNITY."
+description = "Subscribe to a loop's status stream. Replays buffered per-iteration frames, then tails live IterStarted, BodyChunk, VerifyChunk, IterFinished, and Terminal frames while the loop is running."
 
 [input_schema]
 type = "object"
