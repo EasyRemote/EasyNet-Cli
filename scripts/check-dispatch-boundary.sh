@@ -34,18 +34,26 @@ fi
 
 violations=0
 
-# Forbidden patterns inside handler files:
-#   * self.node_id   — handler inspecting its owner's node identity
-#   * target_node    — handler inspecting a routing decision
-#   * my_node == / == my_node — equivalent check spelled differently
+# Forbidden patterns inside handler files (locality-derivation):
+#   * self.node_id        — handler inspecting its owner's node identity
+#   * target_node ==      — handler comparing routing decision
+#   * == target_node      — same, spelled the other way around
+#   * my_node ==          — equivalent check via a renamed local
+#
+# `target_node` is permitted as a domain field name (e.g. inside a
+# `ScheduleEntry { target_node: NodeId::new(arg), ... }` constructor
+# or as a JSON arg key) — that records "where the scheduled fire
+# should land", which is a domain attribute, not a dispatch decision.
+# The dispatch decision is what we ban: any comparison that branches
+# on locality.
 #
 # Whole-line `//` comments are excluded — module / function doc
 # comments may name `target_node` while explaining why handlers
 # do not touch it.
-bad=$(grep -rnE 'self\.node_id|\btarget_node\b' src/runtime/system \
+bad=$(grep -rnE 'self\.node_id|\btarget_node[[:space:]]*==|==[[:space:]]*\btarget_node|\bmy_node[[:space:]]*==' src/runtime/system \
     | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
 if [ -n "$bad" ]; then
-    echo "ERROR: ability handler reads node identity / target_node directly:"
+    echo "ERROR: ability handler branches on locality directly:"
     echo "$bad"
     echo "  Consume InvocationTarget::scope from the stage-1 resolver"
     echo "  in src/runtime/invocation_target.rs; handlers do not branch"
