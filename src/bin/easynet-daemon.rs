@@ -137,12 +137,14 @@ async fn main() -> anyhow::Result<()> {
     // briefly disagrees about agents should not take down
     // ping/session/permission alongside it.
     //
-    // No context loaders are registered in v1. The Vec exists so a
-    // subsequent PR can plug in user-profile / schedule / memory
-    // loaders by appending here, without touching system::mod or the
-    // chat handler itself.
+    // The v1 default context-loader chain: user_profile (global) +
+    // schedule (agent-scoped) + memory (agent-scoped). Tests and the
+    // standalone MCP server pass an empty Vec when they want chat
+    // without any context injection.
     let chat_loaders: Arc<Vec<Arc<dyn system::chat_ability::ContextLoader>>> =
-        Arc::new(Vec::new());
+        Arc::new(system::context_loaders::default_loaders(
+            kernel.schedule_service(),
+        ));
 
     let registry = system::build_registry_for_daemon(
         kernel.session_service(),
