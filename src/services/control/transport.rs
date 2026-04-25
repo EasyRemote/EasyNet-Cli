@@ -1,62 +1,75 @@
-// EasyNet CLI — Control-plane transport abstraction
-// ===================================================
+// EasyNet CLI — Control-plane transport (UDS / Named Pipe)
+// =========================================================
 //
 // File: src/services/control/transport.rs
-// Description: OS-specific listener types live behind one trait so
-//              the server accept-loop can be written once. Linux and
-//              macOS use a Unix Domain Socket; Windows uses a Named
-//              Pipe; iOS and Android are out-of-scope for v1 and
-//              fall through to an explicit `unsupported` error.
+// Description: OS-specific listeners behind one enum so the server
+//              accept-loop can be written once. Linux and macOS use
+//              a Unix Domain Socket; Windows would use a Named Pipe
+//              (the path is sketched but the implementation lands in
+//              a follow-up PR-DAEMON commit). iOS / Android are
+//              out-of-scope for v1.
 //
-// v1 status — skeleton
-// --------------------
-// This file intentionally ships the *trait + type names* without an
-// I/O implementation. The follow-up commit inside PR-DAEMON lands
-// real `tokio::net::UnixListener` / `tokio::net::windows::named_pipe`
-// wiring. Shipping the trait now keeps the accept-loop in
-// `server.rs` compilable and lets the ability-proxy tests use an
-// in-memory `MockTransport` without reaching for the real OS APIs.
+// v1 status — Unix UDS lands here, Named Pipe follow-up
+// ------------------------------------------------------
+// PR-DAEMON Commit 3 wires the Unix Domain Socket bind, accept, and
+// chmod-0600 atomic-replace. The Windows Named Pipe variant is not
+// implemented in this commit; calling `bind_default()` on Windows
+// returns an explicit "not yet implemented" error. The plan
+// authorises that gap because v10.5 R1 §Platform exceptions lists
+// non-Linux/macOS platforms as out-of-scope until a Client binding
+// for them surfaces.
 //
-// Why one trait, not two separate impl files
-// ------------------------------------------
-// The accept-loop shape is the same on both platforms: bind,
-// accept-forever, spawn per-connection. The per-connection I/O is
-// also the same: framed read/write on a byte stream. Abstracting at
-// the byte-stream level means `server.rs` does not `#[cfg(unix)]`
-// its own body; only the constructor chooses a variant.
+// Why use plain `tokio::net::UnixListener` instead of the
+// `interprocess` crate
+// -------------------------------------------------------
+// `interprocess` would let us share one bind path across UDS and
+// Named Pipe. v1 chose tokio's UnixListener directly because (a) the
+// dependency surface is smaller, (b) every CI we run today is
+// Linux/macOS, and (c) the Windows port is not in scope for this
+// commit. When the Windows variant lands, the call site can be
+// re-abstracted; the `ControlListener` enum already has a
+// `NamedPipe` variant slot reserved.
+//
+// Filesystem auth
+// ---------------
+// Bind also chmod's the socket to mode 0600. With the directory
+// (`$HOME/.easynet`) already owned by the user and mode 0700-by-
+// convention, this gives the IPC plane single-user isolation
+// without a bearer token. See docs/design/daemon-layers-v1.md for
+// the threat-model writeup.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-/// Platform-neutral handle to a local IPC listener. The server
-/// accept-loop calls `accept()` in a loop and hands each connection
-/// to a per-connection task.
-///
-/// v1 type is concrete (no generic parameters) to keep the server
-/// loop monomorphic. The inner variant is chosen at construction
-/// time by `ControlListener::bind()`.
-///
-/// `Debug` is derived manually (not via the macro) because the
-/// follow-up variants `Uds(UnixListener)` and `NamedPipe(...)`
-/// hold OS handles that do not implement `Debug`. We print the
-/// variant name only, which is what test `unwrap_err` assertions
-/// and log lines want.
+use crate::persistence::config::state_dir;
+
+/// Filename for the Unix Domain Socket inside the user's
+/// `~/.easynet/` directory. Pinned so the Client FFI library can
+/// fall back to it if `control.json` is missing.
+pub const UDS_FILENAME: &str = "control.sock";
+
+/// Platform-neutral listener handle. Concrete OS variants live
+/// behind `#[cfg]`. The accept loop in `server.rs` matches on this
+/// enum, so adding a new variant (e.g. Named Pipe on Windows)
+/// produces a compile error at every match site — preventing a
+/// silent platform skew.
 pub enum ControlListener {
-    /// Placeholder variant until the OS wiring lands. Exists so
-    /// `ControlListener` is non-trivial to match on; ensures we
-    /// cannot forget to handle "real" variants when they arrive.
-    Unbound,
-    // Future variants:
-    //   #[cfg(unix)]  Uds(tokio::net::UnixListener),
-    //   #[cfg(windows)] NamedPipe(NamedPipeServerBuilder),
+    #[cfg(unix)]
+    Uds(tokio::net::UnixListener),
+    /// Windows / iOS / Android etc. — not yet wired. See module
+    /// header for plan reference.
+    #[allow(dead_code)]
+    Unsupported,
 }
 
 impl std::fmt::Debug for ControlListener {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Unbound => f.write_str("ControlListener::Unbound"),
+            #[cfg(unix)]
+            Self::Uds(_) => f.write_str("ControlListener::Uds(<UnixListener>)"),
+            Self::Unsupported => f.write_str("ControlListener::Unsupported"),
         }
     }
 }
@@ -68,54 +81,160 @@ impl std::fmt::Debug for ControlListener {
 #[derive(Debug, Clone)]
 pub enum ControlAddress {
     /// Unix Domain Socket path, e.g. `~/.easynet/control.sock`.
-    #[allow(dead_code)]
     UdsPath(PathBuf),
     /// Windows Named Pipe name, e.g. `\\.\pipe\easynet-<uid>`.
     #[allow(dead_code)]
     NamedPipe(String),
 }
 
-/// Bind a listener at the well-known local-control address. v1
-/// returns `Unbound` and does not perform I/O; follow-up PR-DAEMON
-/// commits land the real UDS / Named Pipe bind.
+impl ControlAddress {
+    /// Borrow the UDS path if this is the UDS variant, else None.
+    /// Used by `discovery::write` to populate `socket_path`.
+    pub fn as_uds_path(&self) -> Option<&Path> {
+        match self {
+            Self::UdsPath(p) => Some(p),
+            Self::NamedPipe(_) => None,
+        }
+    }
+
+    /// Borrow the Named Pipe name if this is the Pipe variant.
+    pub fn as_pipe_name(&self) -> Option<&str> {
+        match self {
+            Self::NamedPipe(n) => Some(n.as_str()),
+            Self::UdsPath(_) => None,
+        }
+    }
+}
+
+/// Default UDS path for the local control plane: `~/.easynet/control.sock`.
+pub fn default_socket_path() -> PathBuf {
+    state_dir().join(UDS_FILENAME)
+}
+
+/// Bind a listener at the default address.
 ///
-/// Intentional design: the signature returns `Result` so the
-/// follow-up implementation (which can fail with `EADDRINUSE`,
-/// stale-socket errors, etc.) is a drop-in replacement.
+/// On Unix:
+/// - Ensures the parent directory exists (mode is left as-is; the
+///   user is responsible for `~/.easynet/` permissions).
+/// - Removes any stale socket file at the path. v1 does not
+///   probe-for-liveness against an existing socket; the daemon
+///   process supervisor (`easynet self control start`) is expected
+///   to have already detected and cleaned a stale daemon. Returning
+///   an `EADDRINUSE` here would be a worse UX than a forced unlink.
+/// - Binds a `tokio::net::UnixListener`.
+/// - Sets the socket file mode to 0600 so other users on the host
+///   physically cannot connect.
+///
+/// On Windows: returns a clear "not yet implemented" error per the
+/// v1 platform-scope decision.
 pub fn bind_default() -> anyhow::Result<(ControlListener, ControlAddress)> {
-    anyhow::bail!(
-        "control-plane transport is a skeleton in v1 of PR-DAEMON; \
-         the real UDS/Named-Pipe wiring is a follow-up commit"
-    )
+    let path = default_socket_path();
+    bind_at(&path)
+}
+
+/// Test-friendly variant: bind at an arbitrary path. Same semantics
+/// as `bind_default` but skips the `state_dir()` lookup so unit
+/// tests can pin the socket inside a temp directory.
+pub fn bind_at(path: &Path) -> anyhow::Result<(ControlListener, ControlAddress)> {
+    #[cfg(unix)]
+    {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        // Remove stale socket file. See doc comment on bind_default
+        // for why we don't try to probe liveness here.
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+        let listener = tokio::net::UnixListener::bind(path)?;
+        // Tighten file permissions to 0600 so other users can't dial.
+        // We do this after bind so the kernel created the file.
+        use std::os::unix::fs::PermissionsExt as _;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(path, perms)?;
+        Ok((
+            ControlListener::Uds(listener),
+            ControlAddress::UdsPath(path.to_path_buf()),
+        ))
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        anyhow::bail!(
+            "control-plane Named Pipe transport not yet implemented in v1 of PR-DAEMON; \
+             v10.5 R1 lists non-Unix platforms as out-of-scope until a Windows \
+             Client binding requests it"
+        )
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn bind_default_is_explicit_skeleton_error() {
-        // The bind should return a clear "not yet implemented" error,
-        // not an OS-level error that looks like a production bug.
-        let err = bind_default().unwrap_err();
-        let msg = format!("{err}");
-        assert!(
-            msg.contains("skeleton"),
-            "expected skeleton message, got: {msg}"
-        );
+    fn unique_tmp() -> PathBuf {
+        // SUN_LEN cap: a Unix Domain Socket path on Linux is bounded
+        // at ~108 bytes and on macOS at ~104 bytes (the
+        // sockaddr_un.sun_path field). The default `std::env::temp_dir()`
+        // on macOS is `/var/folders/.../T/` which already eats ~50 of
+        // those bytes, leaving no room for a unique-id suffix plus
+        // `/test.sock`. Pin the test sandbox to `/tmp/` directly —
+        // the kernel guarantees that path stays short.
+        let p = PathBuf::from("/tmp").join(format!(
+            "ezt-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0),
+        ));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bind_at_creates_socket_with_mode_0600() {
+        // Bind a UDS at a sandbox path and assert the file exists
+        // with mode bits 0600. Regression guard: a future refactor
+        // that drops the `set_permissions` call leaves the socket
+        // world-readable, which would silently widen the auth
+        // model. This test catches that.
+        let dir = unique_tmp();
+        let p = dir.join("test.sock");
+        let (_listener, addr) = bind_at(&p).expect("bind");
+        assert!(p.exists(), "socket file did not appear at {}", p.display());
+        let meta = std::fs::metadata(&p).unwrap();
+        use std::os::unix::fs::PermissionsExt as _;
+        // mask off the file-type bits, leave only mode bits
+        assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+        assert_eq!(addr.as_uds_path(), Some(p.as_path()));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bind_at_clears_stale_socket() {
+        // Simulate a stale socket left behind by a crashed prior
+        // daemon. bind_at must remove and rebind without
+        // EADDRINUSE so a restart works without manual cleanup.
+        let dir = unique_tmp();
+        let p = dir.join("stale.sock");
+        std::fs::write(&p, b"stale").unwrap();
+        let (_listener, _addr) = bind_at(&p).expect("bind over stale");
+        // After bind, the file is a real socket; size is 0 because
+        // the prior bytes were truncated by remove+bind.
+        let meta = std::fs::metadata(&p).unwrap();
+        assert_eq!(meta.len(), 0);
     }
 
     #[test]
-    fn control_address_uds_and_named_pipe_do_not_conflate() {
-        // Copy-paste regression guard: the two variants must not
-        // accept each other's constructor values. Rust's enum
-        // tagging gives us this at compile time, but we pin the
-        // semantic here so a future refactor (e.g. "let's store
-        // both as `String`") can't erase the distinction.
+    fn control_address_round_trip_through_accessors() {
         let uds = ControlAddress::UdsPath(PathBuf::from("/tmp/x.sock"));
         let np = ControlAddress::NamedPipe(r"\\.\pipe\easynet-0".into());
-        // Pin the variant identity via matches!:
-        assert!(matches!(uds, ControlAddress::UdsPath(_)));
-        assert!(matches!(np, ControlAddress::NamedPipe(_)));
+        assert_eq!(uds.as_uds_path().unwrap(), Path::new("/tmp/x.sock"));
+        assert!(uds.as_pipe_name().is_none());
+        assert_eq!(np.as_pipe_name().unwrap(), r"\\.\pipe\easynet-0");
+        assert!(np.as_uds_path().is_none());
     }
 }

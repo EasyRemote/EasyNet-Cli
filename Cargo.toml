@@ -74,7 +74,15 @@ toml_edit = "0.23"
 # `easynet-axon` already pulls in tokio; this entry adds `sync` + `rt-multi-thread`
 # features CLI needs directly for broadcast::channel and multi-thread
 # runtime (Commit 2 flips main.rs to #[tokio::main]).
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "fs", "io-util", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "fs", "io-util", "time", "net", "signal", "process"] }
+# tokio-util LengthDelimitedCodec + Framed for IPC frame I/O
+# (4-byte LE length prefix + JSON payload). Plan v10.5 §架构决策
+# — 本机 IPC 接口.
+tokio-util = { version = "0.7", features = ["codec"] }
+# futures stream/sink traits for Framed reader/writer halves.
+futures = "0.3"
+# bytes::BytesMut backing the codec.
+bytes = "1"
 ureq = { version = "2", features = ["json"] }
 uuid = { version = "1", features = ["v4"] }
 
