@@ -32,7 +32,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::{LocalAbilityRegistry, StreamSource};
 use crate::runtime::domain::{PermissionDecision, PermissionId};
 use crate::runtime::execution::permission::PermissionService;
 
@@ -54,20 +54,52 @@ pub fn register(reg: &mut LocalAbilityRegistry, perms: Arc<PermissionService>) {
 
 /// `system.permission.subscribe` stream handler.
 ///
-/// Args: `{ }` — no parameters in v1 (a future filter param can
-/// limit by tenant/session, but v1 surfaces the whole queue so
-/// Client UIs don't need a query language).
+/// Args: `{ }` — no parameters in v1.
 ///
-/// Returns: snapshot of pending requests. v1 is a one-shot Vec;
-/// PR-INVOCATION-EXEC-UNITY swaps to a live tail by exposing the
-/// SubscriberBroker's broadcast::Receiver through the IPC stream
-/// fan-out.
-fn subscribe_handler(svc: &PermissionService, _args: Value) -> anyhow::Result<Vec<Value>> {
-    let pending = svc.pending();
-    Ok(pending
+/// Returns a SnapshotThenLive stream when the SubscriberBroker is
+/// installed: snapshot of currently-pending requests first, then a
+/// broadcast::Receiver tailing every new pending request. When no
+/// SubscriberBroker is installed (i.e. AllowAllBroker default),
+/// returns an empty Snapshot — the queue is structurally empty.
+fn subscribe_handler(svc: &PermissionService, _args: Value) -> anyhow::Result<StreamSource> {
+    let snapshot: Vec<Value> = svc
+        .pending()
         .into_iter()
         .map(|r| serde_json::to_value(r).unwrap_or(Value::Null))
-        .collect())
+        .collect();
+    match svc.subscriber() {
+        Some(sub) => {
+            // Convert PermissionRequest broadcast → JSON Value
+            // broadcast via a relay task. broadcast doesn't support
+            // map-in-place, so we spawn a forwarder and hand back
+            // the relay's receiver.
+            let mut typed_rx = sub.subscribe();
+            let (json_tx, json_rx) = tokio::sync::broadcast::channel::<Value>(64);
+            tokio::spawn(async move {
+                loop {
+                    match typed_rx.recv().await {
+                        Ok(req) => {
+                            let v = serde_json::to_value(&req).unwrap_or(Value::Null);
+                            // If no live IPC subscribers attached the
+                            // first message gets dropped; that's fine —
+                            // late attaches see it via the snapshot.
+                            let _ = json_tx.send(v);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            // forwarder is slow; skip lost frames and
+                            // keep going. The IPC client will get a
+                            // Terminal{error} only if its own receiver
+                            // also lags downstream.
+                            continue;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+            Ok(StreamSource::SnapshotThenLive(snapshot, json_rx))
+        }
+        None => Ok(StreamSource::Snapshot(snapshot)),
+    }
 }
 
 /// `system.permission.decide` RPC handler.
@@ -136,10 +168,12 @@ mod tests {
         Arc::new(PermissionService::with_subscriber_broker())
     }
 
-    #[test]
-    fn subscribe_returns_empty_for_idle_queue() {
+    #[tokio::test]
+    async fn subscribe_returns_empty_for_idle_queue() {
         let svc = fresh();
-        let frames = subscribe_handler(&svc, json!({})).unwrap();
+        let frames = subscribe_handler(&svc, json!({}))
+            .unwrap()
+            .into_snapshot();
         assert!(frames.is_empty());
     }
 

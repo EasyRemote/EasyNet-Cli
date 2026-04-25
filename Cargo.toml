@@ -78,7 +78,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "fs", 
 # tokio-util LengthDelimitedCodec + Framed for IPC frame I/O
 # (4-byte LE length prefix + JSON payload). Plan v10.5 §架构决策
 # — 本机 IPC 接口.
-tokio-util = { version = "0.7", features = ["codec"] }
+tokio-util = { version = "0.7", features = ["codec", "rt"] }
 # futures stream/sink traits for Framed reader/writer halves.
 futures = "0.3"
 # bytes::BytesMut backing the codec.

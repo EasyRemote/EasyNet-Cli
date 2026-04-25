@@ -46,15 +46,25 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
-use crate::runtime::ability_dispatch::AbilityDispatcher;
+use tokio::sync::mpsc;
+
+use crate::runtime::ability_dispatch::{AbilityDispatcher, StreamSource};
 use crate::runtime::domain::NodeId;
 use crate::runtime::invocation_target::{
     CallMode, InvocationPlan, LocalNodeResolver, TargetResolver,
 };
 use crate::runtime::kernel_api::KernelApi;
 use crate::services::control::frames::{codes, IncomingFrame, OutgoingFrame};
+
+/// Per-connection cancel registry. Each active subscription gets a
+/// `CancellationToken` clone stored under its `subscription_id`. A
+/// `Cancel` frame from the client looks up the id and calls
+/// `cancel()` on the token; the forwarder task awaits the token in
+/// a `tokio::select!` and exits cleanly when triggered.
+pub type CancelRegistry = Arc<Mutex<HashMap<String, tokio_util::sync::CancellationToken>>>;
 
 /// Stateless-on-construction adapter. Holds a dispatcher (the
 /// stage-2 executor), a resolver (stage-1), and a Kernel handle for
@@ -114,6 +124,154 @@ impl AbilityProxy {
         }
     }
 
+    /// Async-aware request dispatch. This is the production path
+    /// the IPC server uses; the older `handle()` variant below is
+    /// kept for unit tests that prefer a synchronous shape.
+    ///
+    /// `out` is the per-connection writer queue. Frames the proxy
+    /// owes the client are pushed onto it in order. For live
+    /// subscriptions the proxy spawns a forwarder task that owns
+    /// the `out` clone and pushes frames as the underlying
+    /// broadcast::Receiver yields them; the spawned task observes
+    /// `cancel.token(subscription_id)` and exits cleanly when the
+    /// client sends a `Cancel` frame.
+    ///
+    /// `cancel` is the per-connection registry of in-flight
+    /// subscription tokens. The proxy registers a token under the
+    /// subscription_id at Subscribe-frame time, and removes it
+    /// when the forwarder completes (success or cancel).
+    pub async fn handle_async(
+        &self,
+        req: IncomingFrame,
+        out: mpsc::Sender<OutgoingFrame>,
+        cancel: &CancelRegistry,
+    ) {
+        match req {
+            IncomingFrame::Invoke {
+                request_id,
+                ability,
+                args,
+            } => {
+                let frames = self.handle_invoke(request_id, ability, args);
+                for f in frames {
+                    if out.send(f).await.is_err() {
+                        return;
+                    }
+                }
+            }
+            IncomingFrame::Subscribe {
+                subscription_id,
+                ability,
+                args,
+            } => {
+                self.handle_subscribe_async(subscription_id, ability, args, out, cancel)
+                    .await;
+            }
+            IncomingFrame::Cancel { subscription_id } => {
+                let token = {
+                    let mut g = cancel.lock().expect("cancel registry lock");
+                    g.remove(&subscription_id)
+                };
+                match token {
+                    Some(tok) => {
+                        tok.cancel();
+                        // Don't write a response; the forwarder
+                        // emits its own Terminal{cancelled} on its
+                        // way out.
+                    }
+                    None => {
+                        let _ = out
+                            .send(OutgoingFrame::Error {
+                                request_id: None,
+                                subscription_id: Some(subscription_id),
+                                code: codes::ABILITY_FAILED.into(),
+                                message: "Cancel for unknown subscription_id".into(),
+                            })
+                            .await;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn handle_subscribe_async(
+        &self,
+        subscription_id: String,
+        ability: String,
+        args: serde_json::Value,
+        out: mpsc::Sender<OutgoingFrame>,
+        cancel: &CancelRegistry,
+    ) {
+        let plan = InvocationPlan {
+            ability,
+            target_node_hint: extract_node_hint(&args),
+            args,
+            call_mode: CallMode::Stream,
+        };
+        let target = match self.resolver.resolve(plan) {
+            Ok(t) => t,
+            Err(e) => {
+                let _ = out
+                    .send(OutgoingFrame::Error {
+                        request_id: None,
+                        subscription_id: Some(subscription_id),
+                        code: codes::ABILITY_FAILED.into(),
+                        message: format!("resolver: {e}"),
+                    })
+                    .await;
+                return;
+            }
+        };
+        let stream = match self.dispatcher.execute_stream(target) {
+            Ok(s) => s,
+            Err(e) => {
+                let msg = format!("{e}");
+                let code = if msg.contains("no local stream handler") {
+                    codes::NOT_FOUND
+                } else {
+                    codes::ABILITY_FAILED
+                };
+                let _ = out
+                    .send(OutgoingFrame::Error {
+                        request_id: None,
+                        subscription_id: Some(subscription_id),
+                        code: code.into(),
+                        message: msg,
+                    })
+                    .await;
+                return;
+            }
+        };
+        match stream {
+            StreamSource::Snapshot(values) => {
+                for v in values {
+                    if out
+                        .send(OutgoingFrame::Frame {
+                            subscription_id: subscription_id.clone(),
+                            frame: v,
+                        })
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                let _ = out
+                    .send(OutgoingFrame::Terminal {
+                        subscription_id,
+                        reason: "done".into(),
+                    })
+                    .await;
+            }
+            StreamSource::Live(rx) => {
+                spawn_forwarder(subscription_id, Vec::new(), rx, out, cancel.clone());
+            }
+            StreamSource::SnapshotThenLive(snap, rx) => {
+                spawn_forwarder(subscription_id, snap, rx, out, cancel.clone());
+            }
+        }
+    }
+
     /// Route one incoming frame through the resolver + dispatcher.
     /// Returns a Vec of one or more outgoing frames the IPC server
     /// writes back in order.
@@ -127,6 +285,11 @@ impl AbilityProxy {
     ///                      code=ability_failed and a message
     ///                      indicating cancel-without-active-stream
     ///                      until the streaming registry lands.
+    ///
+    /// Synchronous variant retained for unit tests. Live streams
+    /// (`StreamSource::Live` / `SnapshotThenLive`) are degraded to
+    /// snapshot-only here because the sync surface has nowhere to
+    /// pump live frames into; production IPC uses `handle_async`.
     pub fn handle(&self, req: IncomingFrame) -> Vec<OutgoingFrame> {
         match req {
             IncomingFrame::Invoke {
@@ -221,9 +384,17 @@ impl AbilityProxy {
             }
         };
         match self.dispatcher.execute_stream(target) {
-            Ok(values) => {
-                let mut out = Vec::with_capacity(values.len() + 1);
-                for v in values {
+            Ok(stream) => {
+                // Sync surface: degrade live streams to snapshot
+                // only. Tests using this path that need live
+                // behaviour should invoke `handle_async` instead.
+                let snapshot: Vec<serde_json::Value> = match stream {
+                    StreamSource::Snapshot(v) => v,
+                    StreamSource::Live(_) => Vec::new(),
+                    StreamSource::SnapshotThenLive(s, _) => s,
+                };
+                let mut out = Vec::with_capacity(snapshot.len() + 1);
+                for v in snapshot {
                     out.push(OutgoingFrame::Frame {
                         subscription_id: subscription_id.clone(),
                         frame: v,
@@ -258,6 +429,75 @@ impl AbilityProxy {
     pub(crate) fn kernel(&self) -> &Arc<dyn KernelApi> {
         &self.kernel
     }
+}
+
+/// Spawn a per-subscription forwarder task. Drains the snapshot
+/// onto `out`, then pumps every value from the broadcast::Receiver
+/// `rx` until the sender drops or the cancel token fires. Removes
+/// itself from the cancel registry on exit.
+fn spawn_forwarder(
+    subscription_id: String,
+    snapshot: Vec<serde_json::Value>,
+    mut rx: tokio::sync::broadcast::Receiver<serde_json::Value>,
+    out: mpsc::Sender<OutgoingFrame>,
+    cancel: CancelRegistry,
+) {
+    let token = tokio_util::sync::CancellationToken::new();
+    {
+        let mut g = cancel.lock().expect("cancel registry lock");
+        g.insert(subscription_id.clone(), token.clone());
+    }
+    tokio::spawn(async move {
+        // 1. Drain snapshot.
+        for v in snapshot {
+            if out
+                .send(OutgoingFrame::Frame {
+                    subscription_id: subscription_id.clone(),
+                    frame: v,
+                })
+                .await
+                .is_err()
+            {
+                // Connection closed mid-snapshot. Drop the entry
+                // and return; the writer task on the connection
+                // owns cleanup of the rest of the registry.
+                let mut g = cancel.lock().expect("cancel registry lock");
+                g.remove(&subscription_id);
+                return;
+            }
+        }
+        // 2. Pump live frames.
+        let reason = loop {
+            tokio::select! {
+                _ = token.cancelled() => break "cancelled",
+                recv = rx.recv() => match recv {
+                    Ok(v) => {
+                        if out
+                            .send(OutgoingFrame::Frame {
+                                subscription_id: subscription_id.clone(),
+                                frame: v,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            // Connection writer task gave up. Stop.
+                            break "done";
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break "done",
+                }
+            }
+        };
+        let _ = out
+            .send(OutgoingFrame::Terminal {
+                subscription_id: subscription_id.clone(),
+                reason: reason.into(),
+            })
+            .await;
+        let mut g = cancel.lock().expect("cancel registry lock");
+        g.remove(&subscription_id);
+    });
 }
 
 /// Read a `node` field out of the args object if present. The wire

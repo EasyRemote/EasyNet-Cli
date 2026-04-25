@@ -39,6 +39,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde_json::Value;
+use tokio::sync::broadcast;
 
 use crate::runtime::gateway_api::{GatewayApi, RemoteTarget};
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
@@ -47,14 +48,74 @@ use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope}
 /// hold heterogeneous handlers behind a uniform key.
 pub type LocalRpcHandler = Arc<dyn Fn(Value) -> anyhow::Result<Value> + Send + Sync>;
 
-/// One in-process stream handler. v1 contract: returns the entire
-/// frame sequence eagerly as a Vec. v2 will swap to a true
-/// `Stream<Item = Value>` once the IPC server learns to push
-/// frames as they arrive. The Vec shape lets PR-ATTACH ship the
-/// dispatch surface without bringing in tokio-stream wiring; the
-/// API change at v2 is additive (a sibling `register_async_stream`
-/// alongside this one).
-pub type LocalStreamHandler = Arc<dyn Fn(Value) -> anyhow::Result<Vec<Value>> + Send + Sync>;
+/// What a stream-mode ability handler may return.
+///
+/// Three shapes:
+///
+///   * `Snapshot(frames)` — finite, eagerly-materialised list. The
+///     IPC server emits each frame in order then sends a `Terminal`
+///     frame with reason `done`. Used for "give me what's on disk"
+///     queries (replay-only).
+///
+///   * `Live(broadcast::Receiver<Value>)` — long-lived live tail.
+///     The IPC server spawns a forwarder task that reads from the
+///     receiver and emits each value as a `Frame`. Forwarder
+///     terminates with reason `done` when the sender drops,
+///     `error` on lag, or `cancelled` if the Client cancels.
+///
+///   * `SnapshotThenLive(snapshot, rx)` — snapshot first, live tail
+///     after. The "replay then subscribe" composition every Paseo-
+///     style UI wants: a Permission dialog joining mid-flight needs
+///     to see currently-pending requests AND new ones; a Discuss
+///     room view shows past turns AND new posts.
+///
+/// The `From` impls let handlers return either a `Vec<Value>` or a
+/// `broadcast::Receiver<Value>` directly via `.into()`.
+#[derive(Debug)]
+pub enum StreamSource {
+    Snapshot(Vec<Value>),
+    Live(broadcast::Receiver<Value>),
+    SnapshotThenLive(Vec<Value>, broadcast::Receiver<Value>),
+}
+
+impl From<Vec<Value>> for StreamSource {
+    fn from(frames: Vec<Value>) -> Self {
+        StreamSource::Snapshot(frames)
+    }
+}
+
+impl From<broadcast::Receiver<Value>> for StreamSource {
+    fn from(rx: broadcast::Receiver<Value>) -> Self {
+        StreamSource::Live(rx)
+    }
+}
+
+impl From<(Vec<Value>, broadcast::Receiver<Value>)> for StreamSource {
+    fn from((snap, rx): (Vec<Value>, broadcast::Receiver<Value>)) -> Self {
+        StreamSource::SnapshotThenLive(snap, rx)
+    }
+}
+
+impl StreamSource {
+    /// Take just the snapshot portion. Returns the `Snapshot`
+    /// vec verbatim, the snapshot half of `SnapshotThenLive`, and
+    /// an empty Vec for a pure `Live` source. Used by unit tests
+    /// that only assert on the replayable history portion of a
+    /// stream — the live tail is exercised separately.
+    pub fn into_snapshot(self) -> Vec<Value> {
+        match self {
+            StreamSource::Snapshot(v) => v,
+            StreamSource::Live(_) => Vec::new(),
+            StreamSource::SnapshotThenLive(s, _) => s,
+        }
+    }
+}
+
+/// One in-process stream handler. Returns either an eager snapshot
+/// or a live broadcast::Receiver — see `StreamSource` for the
+/// contract.
+pub type LocalStreamHandler =
+    Arc<dyn Fn(Value) -> anyhow::Result<StreamSource> + Send + Sync>;
 
 /// Local-ability registry. Keyed by full ability name. v1 shape is
 /// a `BTreeMap` for deterministic iteration order; the registry
@@ -156,17 +217,16 @@ impl AbilityDispatcher {
         }
     }
 
-    /// Execute a Stream-mode `InvocationTarget`. v1 contract:
-    /// returns the full frame sequence as a Vec. The IPC server
-    /// fans these out as separate wire frames to the Client.
+    /// Execute a Stream-mode `InvocationTarget`. Returns a
+    /// `StreamSource` — either an eager snapshot (Vec) or a live
+    /// broadcast::Receiver. The caller (IPC server) decides how to
+    /// fan it out into wire frames.
     ///
-    /// Remote streams are not yet supported in v1 — `subscribe_remote_ability`
-    /// on the gateway is callback-shaped, so a Vec-shaped wrapper
-    /// here would have to buffer the entire stream which contradicts
-    /// the streaming intent. PR-INVOCATION-EXEC-UNITY adds proper
-    /// streaming routing once the IPC server's frame fan-out is
-    /// in place.
-    pub fn execute_stream(&self, target: InvocationTarget) -> anyhow::Result<Vec<Value>> {
+    /// Remote streams are not yet supported in v1 —
+    /// `subscribe_remote_ability` on the gateway is callback-shaped
+    /// and would need a separate plumbing pass to forward through
+    /// the IPC connection.
+    pub fn execute_stream(&self, target: InvocationTarget) -> anyhow::Result<StreamSource> {
         if target.call_mode != CallMode::Stream {
             anyhow::bail!(
                 "AbilityDispatcher::execute_stream called with non-Stream call_mode \
@@ -184,7 +244,8 @@ impl AbilityDispatcher {
             },
             TargetScope::Remote { .. } => anyhow::bail!(
                 "remote stream dispatch not yet wired in v1; \
-                 PR-INVOCATION-EXEC-UNITY adds the IPC frame fan-out"
+                 lands once GatewayApi::subscribe_remote_ability is plumbed \
+                 to forward into the IPC stream"
             ),
         }
     }

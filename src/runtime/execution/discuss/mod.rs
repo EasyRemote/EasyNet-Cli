@@ -155,9 +155,28 @@ impl DiscussService {
         }
     }
 
-    /// Read every turn in a room from `since_seq` onwards. v1
-    /// "subscribe" handler returns this snapshot eagerly; the
-    /// live broadcast tail lands at PR-INVOCATION-EXEC-UNITY.
+    /// Subscribe to live turns posted to a room. Each call returns
+    /// a fresh `broadcast::Receiver`; subscribers obtained AFTER a
+    /// turn was posted do not see that turn — combine with
+    /// `turns_from(room, since_seq)` for the "replay then tail"
+    /// pattern. The system.discuss.subscribe ability handler does
+    /// this composition via `StreamSource::SnapshotThenLive`.
+    pub fn subscribe_room(
+        &self,
+        room: &RoomId,
+    ) -> anyhow::Result<broadcast::Receiver<DiscussTurn>> {
+        let g = self
+            .rooms
+            .read()
+            .map_err(|_| anyhow::anyhow!("DiscussService lock poisoned"))?;
+        let state = g
+            .get(room)
+            .ok_or_else(|| anyhow::anyhow!("room {room} does not exist"))?;
+        Ok(state.broadcast.subscribe())
+    }
+
+    /// Read every turn in a room from `since_seq` onwards. Used as
+    /// the "snapshot" half of the SnapshotThenLive stream.
     pub fn turns_from(&self, room: &RoomId, since_seq: i64) -> anyhow::Result<Vec<DiscussTurn>> {
         let g = self
             .rooms

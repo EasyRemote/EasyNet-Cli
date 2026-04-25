@@ -37,7 +37,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::{LocalAbilityRegistry, StreamSource};
 use crate::runtime::domain::SessionId;
 use crate::runtime::execution::session::SessionService;
 
@@ -90,41 +90,35 @@ fn list_handler(svc: &SessionService, args: Value) -> anyhow::Result<Value> {
 /// `system.session.attach` stream handler.
 ///
 /// Args: `{ "session_id": string, "since_seq": int? = 0 }`
-/// Returns: a stream of TimelineEvent frames followed by an
-/// implicit terminal frame when the session ends. v1 emits only
-/// the disk-backed replay (PR-INVOCATION-EXEC-UNITY adds the live
-/// broadcast tail).
+/// Returns a SnapshotThenLive stream:
+///   * snapshot half = `history[since_seq..]` from SessionService
+///   * live half     = a fresh broadcast::Receiver tailing every
+///                     event emitted via `SessionService::emit_event`
+///                     after the call point.
 ///
-/// Why v1 only emits the replay portion
-/// ------------------------------------
-/// The live broadcast tail requires the Kernel::invoke admission
-/// path to install the Session into the SessionService at
-/// admission time. PR-INVOCATION-EXEC-UNITY lands that wiring;
-/// until then this handler returns the on-disk prefix only. A
-/// reader walking the in-process tests sees the same shape they
-/// will see at the wire level.
-fn attach_handler(svc: &SessionService, args: Value) -> anyhow::Result<Vec<Value>> {
+/// When the session_id is unknown (no admission has fired yet) the
+/// handler returns an empty Snapshot. The Client interprets this
+/// as "session not found / not yet" and may retry; emitting an
+/// error frame instead would force every stale-id case to surface
+/// as a hard fault, which is too coarse for the timeline view.
+fn attach_handler(svc: &SessionService, args: Value) -> anyhow::Result<StreamSource> {
     let session_id = args
         .get("session_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("system.session.attach: `session_id` required"))?
         .to_string();
-    let _since_seq = args.get("since_seq").and_then(Value::as_i64).unwrap_or(0);
+    let since_seq = args
+        .get("since_seq")
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+        .max(0) as usize;
 
-    // v1 returns an empty stream when the session_id is unknown
-    // (no admission has fired yet). PR-INVOCATION-EXEC-UNITY makes
-    // this branch unreachable for any active run.
-    let _meta = match svc.get(&SessionId::new(&session_id)) {
-        Some(s) => s,
-        None => return Ok(Vec::new()),
-    };
-
-    // PR-INVOCATION-EXEC-UNITY: replace this placeholder with a
-    // composed `resume_replay(since_seq) ++ subscribe()` stream.
-    // For now return an empty stream so the dispatch path is
-    // exercised at the type level and the test asserting "unknown
-    // id → empty" stays meaningful.
-    Ok(Vec::new())
+    let id = SessionId::new(&session_id);
+    if svc.get(&id).is_none() {
+        return Ok(StreamSource::Snapshot(Vec::new()));
+    }
+    let (snapshot, rx) = svc.subscribe_session(&id, since_seq)?;
+    Ok(StreamSource::SnapshotThenLive(snapshot, rx))
 }
 
 /// Discovery JSON for `system.session.list`. Mirrors the shape
@@ -202,11 +196,44 @@ mod tests {
     #[test]
     fn attach_unknown_session_returns_empty_stream() {
         // v1 contract: unknown session_id → empty stream (not
-        // an error). PR-INVOCATION-EXEC-UNITY tightens this to
-        // "live tail when the run is admitted".
+        // an error).
         let svc = svc_with(&[]);
-        let frames = attach_handler(&svc, json!({"session_id": "nope"})).unwrap();
+        let frames = attach_handler(&svc, json!({"session_id": "nope"}))
+            .unwrap()
+            .into_snapshot();
         assert!(frames.is_empty());
+    }
+
+    #[tokio::test]
+    async fn attach_known_session_returns_history_then_live_tail() {
+        // The "看得见" contract: a Client attaching after a
+        // session was admitted and progressed sees the history
+        // (admitted + emitted progress) AND new emitted events
+        // arriving after attach.
+        let svc = svc_with(&["live-1"]);
+        svc.emit_event(
+            &SessionId::new("live-1"),
+            json!({"kind": "progress", "n": 1}),
+        )
+        .unwrap();
+
+        let stream = attach_handler(&svc, json!({"session_id": "live-1"})).unwrap();
+        let (snap, mut rx) = match stream {
+            crate::runtime::ability_dispatch::StreamSource::SnapshotThenLive(s, r) => (s, r),
+            other => panic!("expected SnapshotThenLive, got {other:?}"),
+        };
+        assert_eq!(snap.len(), 2); // admitted + first progress
+        assert_eq!(snap[0]["kind"], "admitted");
+        assert_eq!(snap[1]["kind"], "progress");
+
+        // After attach, emit a second progress; live tail receives.
+        svc.emit_event(
+            &SessionId::new("live-1"),
+            json!({"kind": "progress", "n": 2}),
+        )
+        .unwrap();
+        let live = rx.recv().await.expect("live frame");
+        assert_eq!(live["n"], 2);
     }
 
     #[test]

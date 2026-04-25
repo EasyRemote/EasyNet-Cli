@@ -33,7 +33,21 @@
 use std::collections::BTreeMap;
 use std::sync::RwLock;
 
+use serde_json::Value;
+use tokio::sync::broadcast;
+
 use crate::runtime::domain::{AgentId, NodeId, Session, SessionId, TenantId};
+
+/// One indexed session, plus its per-session timeline broadcast.
+struct SessionEntry {
+    meta: Session,
+    /// Past timeline frames in admission order. Late subscribers
+    /// receive these as the snapshot half of SnapshotThenLive.
+    history: Vec<Value>,
+    /// Live broadcast — a fresh receiver gets every frame emitted
+    /// AFTER the receiver was created.
+    broadcast: broadcast::Sender<Value>,
+}
 
 /// Session sub-service handle. Holds a `BTreeMap` for deterministic
 /// iteration; `RwLock` is sufficient because admit/terminate are
@@ -41,7 +55,7 @@ use crate::runtime::domain::{AgentId, NodeId, Session, SessionId, TenantId};
 /// active sessions.
 #[derive(Default)]
 pub struct SessionService {
-    sessions: RwLock<BTreeMap<SessionId, Session>>,
+    sessions: RwLock<BTreeMap<SessionId, SessionEntry>>,
 }
 
 impl SessionService {
@@ -61,25 +75,93 @@ impl SessionService {
         if g.contains_key(&id) {
             anyhow::bail!("session id {id} already admitted");
         }
-        g.insert(id.clone(), session);
+        let (tx, _) = broadcast::channel(256);
+        let admitted_event = serde_json::json!({
+            "kind": "admitted",
+            "session_id": id.as_str(),
+            "agent": session.agent.as_str(),
+            "node": session.node.as_str(),
+            "started_unix_ms": session.started_unix_ms,
+        });
+        let entry = SessionEntry {
+            meta: session,
+            history: vec![admitted_event],
+            broadcast: tx,
+        };
+        g.insert(id.clone(), entry);
         Ok(id)
     }
 
     /// Mark a session terminated. Writes `ended_unix_ms` to the
-    /// indexed entry; the entry stays in the index so late-joining
-    /// readers still observe the run.
+    /// indexed entry, emits a `terminated` timeline frame, and
+    /// drops the broadcast sender so live subscribers see the
+    /// channel close (their next recv returns Closed → IPC server
+    /// emits Terminal{done}).
     pub fn terminate(&self, id: &SessionId, ended_unix_ms: i64) -> anyhow::Result<()> {
         let mut g = self
             .sessions
             .write()
             .map_err(|_| anyhow::anyhow!("SessionService lock poisoned"))?;
         match g.get_mut(id) {
-            Some(s) => {
-                s.ended_unix_ms = Some(ended_unix_ms);
+            Some(entry) => {
+                entry.meta.ended_unix_ms = Some(ended_unix_ms);
+                let event = serde_json::json!({
+                    "kind": "terminated",
+                    "session_id": id.as_str(),
+                    "ended_unix_ms": ended_unix_ms,
+                });
+                entry.history.push(event.clone());
+                let _ = entry.broadcast.send(event);
+                // Note: we keep the entry around so late attaches
+                // can still replay history. The broadcast::Sender
+                // stays alive too — a "done" terminal is the
+                // Client's signal that no more frames will come,
+                // not a hard channel close.
                 Ok(())
             }
             None => anyhow::bail!("session {id} not found"),
         }
+    }
+
+    /// Emit one timeline frame on a session. Stored in history
+    /// (so late subscribers replay it) AND broadcast (so live
+    /// subscribers see it). Used by the future Kernel::invoke
+    /// admission path to push agent-driver progress into the
+    /// session timeline.
+    pub fn emit_event(&self, id: &SessionId, event: Value) -> anyhow::Result<()> {
+        let mut g = self
+            .sessions
+            .write()
+            .map_err(|_| anyhow::anyhow!("SessionService lock poisoned"))?;
+        match g.get_mut(id) {
+            Some(entry) => {
+                entry.history.push(event.clone());
+                let _ = entry.broadcast.send(event);
+                Ok(())
+            }
+            None => anyhow::bail!("session {id} not found"),
+        }
+    }
+
+    /// Subscribe to live timeline frames on a session. Returns the
+    /// past `history[since_seq..]` as the snapshot half plus a
+    /// fresh broadcast receiver for the live half. The session.attach
+    /// ability handler hands the pair to StreamSource::SnapshotThenLive.
+    pub fn subscribe_session(
+        &self,
+        id: &SessionId,
+        since_seq: usize,
+    ) -> anyhow::Result<(Vec<Value>, broadcast::Receiver<Value>)> {
+        let g = self
+            .sessions
+            .read()
+            .map_err(|_| anyhow::anyhow!("SessionService lock poisoned"))?;
+        let entry = g
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("session {id} not found"))?;
+        let history = entry.history.iter().skip(since_seq).cloned().collect();
+        let rx = entry.broadcast.subscribe();
+        Ok((history, rx))
     }
 
     /// Snapshot of every session currently indexed (active or
@@ -87,14 +169,17 @@ impl SessionService {
     /// index grows large.
     pub fn list_active(&self) -> Vec<Session> {
         match self.sessions.read() {
-            Ok(g) => g.values().cloned().collect(),
+            Ok(g) => g.values().map(|e| e.meta.clone()).collect(),
             Err(_) => Vec::new(),
         }
     }
 
     /// Lookup by id.
     pub fn get(&self, id: &SessionId) -> Option<Session> {
-        self.sessions.read().ok().and_then(|g| g.get(id).cloned())
+        self.sessions
+            .read()
+            .ok()
+            .and_then(|g| g.get(id).map(|e| e.meta.clone()))
     }
 
     /// Convenience constructor for admission code paths that have
@@ -178,6 +263,56 @@ mod tests {
         assert_eq!(s.ended_unix_ms, Some(1_700_000_000_000));
         // Entry kept in the index — list_active surfaces it.
         assert_eq!(svc.list_active().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn subscribe_replays_history_and_tails_live_emits() {
+        // The "replay then tail" property: a subscriber joining
+        // mid-flight sees every past event since `since_seq` (in
+        // the snapshot) AND every event emitted after subscribe
+        // (on the broadcast). This is what makes the session
+        // attach view in the GUI not lose state when the user
+        // opens the panel late.
+        let svc = SessionService::new();
+        svc.admit(s("live", "alice")).unwrap();
+        // history at this point = [admitted].
+        svc.emit_event(
+            &SessionId::new("live"),
+            serde_json::json!({"kind": "progress", "n": 1}),
+        )
+        .unwrap();
+
+        let (snap, mut rx) = svc.subscribe_session(&SessionId::new("live"), 0).unwrap();
+        // 2 frames already in history.
+        assert_eq!(snap.len(), 2);
+        assert_eq!(snap[0]["kind"], "admitted");
+        assert_eq!(snap[1]["kind"], "progress");
+
+        // Emit one more after subscribe; live tail receives it.
+        svc.emit_event(
+            &SessionId::new("live"),
+            serde_json::json!({"kind": "progress", "n": 2}),
+        )
+        .unwrap();
+
+        let live = rx.recv().await.expect("live frame");
+        assert_eq!(live["kind"], "progress");
+        assert_eq!(live["n"], 2);
+    }
+
+    #[test]
+    fn since_seq_skips_history_prefix() {
+        // since_seq=1 means "I already have frame 0". Replay must
+        // begin at frame 1.
+        let svc = SessionService::new();
+        svc.admit(s("late", "alice")).unwrap();
+        svc.emit_event(&SessionId::new("late"), serde_json::json!({"x": 1}))
+            .unwrap();
+        svc.emit_event(&SessionId::new("late"), serde_json::json!({"x": 2}))
+            .unwrap();
+        let (snap, _) = svc.subscribe_session(&SessionId::new("late"), 1).unwrap();
+        assert_eq!(snap.len(), 2); // [{x:1}, {x:2}], skipped admitted
+        assert_eq!(snap[0]["x"], 1);
     }
 
     #[test]
