@@ -35,7 +35,7 @@ use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
 /// Wire name of the ability. Pinned so a future rename trips a
 /// fixture-byte-stability test in `registry::a2a_labels`.
-pub const ABILITY_NAME: &str = "system.ping";
+pub const ABILITY_NAME: &str = "observe.health";
 
 /// Register the `system.ping` handler on the supplied registry.
 /// Called from `runtime::system::build_registry`.

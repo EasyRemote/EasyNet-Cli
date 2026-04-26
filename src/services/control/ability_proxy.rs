@@ -618,7 +618,7 @@ mod tests {
         let p = proxy_with_live_registry();
         let frames = p.handle(IncomingFrame::Invoke {
             request_id: "req-1".into(),
-            ability: "system.ping".into(),
+            ability: "observe.health".into(),
             args: json!({}),
         });
         assert_eq!(frames.len(), 1);
@@ -692,7 +692,7 @@ mod tests {
         let p = proxy_with_live_registry();
         let frames = p.handle(IncomingFrame::Subscribe {
             subscription_id: "sub-1".into(),
-            ability: "system.session.attach".into(),
+            ability: "fleet.attach_session".into(),
             args: json!({"session_id": "no-such-session"}),
         });
         // Last frame must be Terminal regardless of how many Frame

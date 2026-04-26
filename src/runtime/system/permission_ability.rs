@@ -36,8 +36,8 @@ use crate::runtime::ability_dispatch::{LocalAbilityRegistry, StreamSource};
 use crate::runtime::domain::{PermissionDecision, PermissionId};
 use crate::runtime::execution::permission::PermissionService;
 
-pub const ABILITY_SUBSCRIBE: &str = "system.permission.subscribe";
-pub const ABILITY_DECIDE: &str = "system.permission.decide";
+pub const ABILITY_SUBSCRIBE: &str = "consent.subscribe";
+pub const ABILITY_DECIDE: &str = "consent.decide";
 
 /// Register the two permission abilities on the registry.
 pub fn register(reg: &mut LocalAbilityRegistry, perms: Arc<PermissionService>) {

@@ -122,7 +122,7 @@ mod tests {
         // fixture strings rather than byte buffers.
         let f = IncomingFrame::Invoke {
             request_id: "r-1".into(),
-            ability: "system.ping".into(),
+            ability: "observe.health".into(),
             args: serde_json::json!({}),
         };
         let s = serde_json::to_string(&f).unwrap();
@@ -134,7 +134,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(request_id, "r-1");
-                assert_eq!(ability, "system.ping");
+                assert_eq!(ability, "observe.health");
             }
             _ => panic!("expected Invoke variant after round-trip"),
         }

@@ -28,9 +28,9 @@ use crate::runtime::ability_dispatch::{LocalAbilityRegistry, StreamSource};
 use crate::runtime::domain::{AgentId, RoomId};
 use crate::runtime::execution::discuss::DiscussService;
 
-pub const ABILITY_CREATE: &str = "system.discuss.create";
-pub const ABILITY_POST: &str = "system.discuss.post";
-pub const ABILITY_SUBSCRIBE: &str = "system.discuss.subscribe";
+pub const ABILITY_CREATE: &str = "discuss.create";
+pub const ABILITY_POST: &str = "discuss.post";
+pub const ABILITY_SUBSCRIBE: &str = "discuss.subscribe";
 
 pub fn register(reg: &mut LocalAbilityRegistry, svc: Arc<DiscussService>) {
     let a = Arc::clone(&svc);

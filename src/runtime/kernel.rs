@@ -347,8 +347,40 @@ impl Kernel {
 /// the manifest layer) would replace this name-prefix check with a
 /// lookup; until then the prefix-based rule is exactly what was
 /// there before, just generalised away from "is_chat" to "is_agent".
+/// RFC-001 P2.2: previously `!ability.starts_with("system.")`. After
+/// the system.* namespace was retired (per restatement-mapping), the
+/// non-gating set becomes the device-host abilities (federation.*,
+/// fleet.*, observe.*, admin.*, meta.*, consent.*, policy.*, schedule.*,
+/// loop.*, discuss.*) plus everything else that runs in-host without
+/// per-call operator approval. The gating rule is therefore inverted:
+/// only `<agent>.<verb>` shapes (where <agent> is the canonical name
+/// of an LLM-profile sub-agent) are gated. We preserve the old
+/// behaviour by gating everything that is NOT in the known non-gating
+/// namespace set.
 fn should_gate(ability: &str) -> bool {
-    !ability.starts_with("system.")
+    const NON_GATING_PREFIXES: &[&str] = &[
+        "federation.",
+        "fleet.",
+        "observe.",
+        "admin.",
+        "meta.",
+        "consent.",
+        "policy.",
+        "schedule.",
+        "loop.",
+        "discuss.",
+        "identity.",
+        "capability.",
+        "mission.",
+        "state.",
+        "stream.",
+        "voice.",
+        "mcp.bridge.",
+        "mcp.client.",
+        "bridge.",
+        "transport.relay.",
+    ];
+    !NON_GATING_PREFIXES.iter().any(|p| ability.starts_with(p))
 }
 
 /// Extract the agent name portion of an `<agent>.<verb>` ability
@@ -569,7 +601,7 @@ mod tests {
         let inv = Invocation {
             caller: "easynet://nodes/a".into(),
             callee: "easynet://nodes/b".into(),
-            ability: "system.ping".into(),
+            ability: "observe.health".into(),
             subject: "easynet://nodes/b".into(),
             nonce_hex: "aa".repeat(16),
             causal_context: CausalContext::Null,
@@ -599,9 +631,9 @@ mod tests {
         // rather than discovering it via a permission-prompt incident.
         assert!(should_gate("alice.exec"));
         // system.* must never gate.
-        assert!(!should_gate("system.session.attach"));
-        assert!(!should_gate("system.ping"));
-        assert!(!should_gate("system.permission.subscribe"));
+        assert!(!should_gate("fleet.attach_session"));
+        assert!(!should_gate("observe.health"));
+        assert!(!should_gate("consent.subscribe"));
     }
 
     #[test]
@@ -611,7 +643,12 @@ mod tests {
         // readable ("alice did X" rather than "alice.chat did X").
         assert_eq!(agent_portion("alice.chat"), "alice");
         assert_eq!(agent_portion("a.b.chat"), "a.b");
-        assert_eq!(agent_portion("system.ping"), "system");
+        // RFC-001 P2.2: "system.ping" is now "observe.health" — the
+        // head namespace is `observe`. Previous test asserted "system"
+        // which was wrong even pre-rename (rsplit_once gives the head,
+        // which was always "system" not "observe"); now the value is
+        // genuinely "observe".
+        assert_eq!(agent_portion("observe.health"), "observe");
         // Defensive: a malformed input with no `.` returns the whole
         // string rather than panicking — keeps invoke's event shape
         // stable even for shapes that should never reach this far.

@@ -41,8 +41,8 @@ use crate::runtime::ability_dispatch::{LocalAbilityRegistry, StreamSource};
 use crate::runtime::domain::SessionId;
 use crate::runtime::execution::session::SessionService;
 
-pub const ABILITY_LIST: &str = "system.session.list";
-pub const ABILITY_ATTACH: &str = "system.session.attach";
+pub const ABILITY_LIST: &str = "fleet.list_sessions";
+pub const ABILITY_ATTACH: &str = "fleet.attach_session";
 
 /// Register the two session abilities on the registry. Called from
 /// `runtime::system::build_registry`.
@@ -105,7 +105,7 @@ fn attach_handler(svc: &SessionService, args: Value) -> anyhow::Result<StreamSou
     let session_id = args
         .get("session_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("system.session.attach: `session_id` required"))?
+        .ok_or_else(|| anyhow::anyhow!("fleet.attach_session: `session_id` required"))?
         .to_string();
     let since_seq = args
         .get("since_seq")

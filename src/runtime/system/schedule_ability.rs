@@ -29,10 +29,10 @@ use crate::runtime::domain::{
 };
 use crate::runtime::execution::schedule::ScheduleService;
 
-pub const ABILITY_ADD: &str = "system.schedule.add";
-pub const ABILITY_LIST: &str = "system.schedule.list";
-pub const ABILITY_REMOVE: &str = "system.schedule.remove";
-pub const ABILITY_ENABLE: &str = "system.schedule.enable";
+pub const ABILITY_ADD: &str = "schedule.add";
+pub const ABILITY_LIST: &str = "schedule.list";
+pub const ABILITY_REMOVE: &str = "schedule.remove";
+pub const ABILITY_ENABLE: &str = "schedule.enable";
 
 pub fn register(reg: &mut LocalAbilityRegistry, svc: Arc<ScheduleService>) {
     let a = Arc::clone(&svc);

@@ -162,7 +162,7 @@ pub fn publish_one(
 /// manifest — they are registered in the daemon's in-memory
 /// `LocalAbilityRegistry` (see `runtime::system::build_registry_for_daemon`).
 /// Without this function, the axon-runtime's MCP catalog never learns
-/// the names: a Hub-mediated `CallMcpTool("system.skill.list", node)`
+/// the names: a Hub-mediated `CallMcpTool("fleet.list_abilities", node)`
 /// returns "tool not found" and the EasyNet frontend's Skills page
 /// silently shows zero installs (the backend's listInstalledLogic
 /// degrades a missing-ability response to an empty list, by design).

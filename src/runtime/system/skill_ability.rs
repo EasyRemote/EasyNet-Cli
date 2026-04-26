@@ -58,7 +58,7 @@ use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
 /// The wire-level ability name. Pinned because backend + frontend
 /// query it by string; a rename would break both repos at once.
-pub const ABILITY_LIST: &str = "system.skill.list";
+pub const ABILITY_LIST: &str = "fleet.list_abilities";
 
 /// Register every skill verb on the registry. v1 only ships `list`;
 /// the other verbs (`install`, `remove`, `upgrade`) plug in here
@@ -139,7 +139,7 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
                             // daemon log; the rest of the list
                             // surfaces normally.
                             eprintln!(
-                                "system.skill.list: skipping {}: {e}",
+                                "fleet.list_abilities: skipping {}: {e}",
                                 dir_entry.path().display()
                             );
                         }
