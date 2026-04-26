@@ -183,23 +183,45 @@ impl AgentAbilitySpec {
     }
 
     /// Serialise into the per-entry JSON object used inside
-    /// `a2a.agents_json[*].skills`. The shape is a wire contract
-    /// specified by `docs/spec/node-roster-label-v2.md` — the field
-    /// names match what the EasyNet backend's `ParseAgentsJSON`
-    /// reads at the v2 envelope's skill layer.
+    /// `a2a.agents_json[*].skills`.
     ///
-    /// Optional fields (`output_schema`, `timeout_seconds`) are
-    /// emitted as explicit `null` rather than omitted. Spec §"null
-    /// vs absent" fixes this writer-side rule so `golden.json` is
-    /// byte-stable across rebuilds; readers on the backend tolerate
-    /// either null or absent per the same spec section.
+    /// **Why this is a thin discovery payload, not the full schema**
+    /// ---------------------------------------------------------
+    /// The Hub enforces a 4 KiB cap on each `a2a.*` label value
+    /// (gRPC-side: `register_node` rejects with
+    /// `InvalidArgument: invalid labels: label value … exceeds 4096
+    /// bytes`). When chat became a first-class manifest-backed
+    /// ability with extended input/output schemas (skills,
+    /// context_loaders, driver, session_id, stream — see
+    /// `default_chat_manifest`) the per-skill JSON ballooned past
+    /// ~3 KB, and a node with two agents (claude + codex) blew the
+    /// label past 4 KB and could not register.
+    ///
+    /// The fix: discovery labels carry only the *fingerprint* a peer
+    /// needs to know "this skill exists, here's a one-liner." The
+    /// full input_schema lives where it always did:
+    ///   * on disk in `<agent-root>/abilities/<verb>.ability.toml`
+    ///   * surfaced through `system.<feature>.{list,get}` abilities
+    ///   * surfaced through MCP `ListTools` over the local IPC
+    /// A peer that wants the full schema fetches it on demand from
+    /// one of those surfaces — federation-wide discovery does not.
+    ///
+    /// `has_input_schema` is a boolean rather than the schema itself
+    /// so a UI or tooling layer can show "this tool takes parameters
+    /// (click to view)" without paying the bytes cost. Always `true`
+    /// today (every ability declares an input_schema), but typed as
+    /// a bool so a future stub-ability that accepts `()` can opt out.
+    ///
+    /// The shape is a wire contract specified by
+    /// `docs/spec/node-roster-label-v2.md`; the EasyNet backend's
+    /// `ParseAgentsJSON` reader tolerates absent vs. `null` for the
+    /// trimmed fields (`input_schema`, `output_schema`,
+    /// `timeout_seconds`).
     pub fn to_discovery_json(&self) -> Value {
         json!({
             "name": self.name,
             "description": self.description,
-            "input_schema": self.parameters,
-            "output_schema": Value::Null,
-            "timeout_seconds": Value::Null,
+            "has_input_schema": true,
         })
     }
 }
@@ -460,32 +482,35 @@ mod tests {
             .unwrap();
         let json = spec.to_discovery_json();
         let obj = json.as_object().expect("discovery json is an object");
-        // Five keys: name, description, input_schema, output_schema,
-        // timeout_seconds. The last two are `null` for the seeded chat
-        // ability but MUST be present — the writer chose `null` over
-        // absent so the golden fixture stays byte-stable.
+        // Three keys after the chat-as-ability collapse trimmed
+        // the discovery payload to fit the Hub's 4 KiB label cap:
+        // `name`, `description`, `has_input_schema`. See
+        // `to_discovery_json`'s doc for why the input_schema /
+        // output_schema / timeout_seconds fields moved to MCP
+        // ListTools and the on-disk manifest.
         assert_eq!(
             obj.len(),
-            5,
-            "exactly 5 keys: name, description, input_schema, output_schema, timeout_seconds — got {obj:?}"
+            3,
+            "exactly 3 keys: name, description, has_input_schema — got {obj:?}"
         );
         assert!(obj.contains_key("name"));
         assert!(obj.contains_key("description"));
-        assert!(obj.contains_key("input_schema"));
-        assert!(obj.contains_key("output_schema"));
-        assert!(obj.contains_key("timeout_seconds"));
-        assert!(
-            obj["input_schema"].is_object(),
-            "input_schema must be a JSON object (JSON Schema shape)"
+        assert!(obj.contains_key("has_input_schema"));
+        assert_eq!(
+            obj["has_input_schema"],
+            serde_json::Value::Bool(true),
+            "every v1 ability declares an input_schema"
         );
-        assert!(
-            obj["output_schema"].is_null(),
-            "output_schema is null for the seeded chat ability"
-        );
-        assert!(
-            obj["timeout_seconds"].is_null(),
-            "timeout_seconds is null for the seeded chat ability"
-        );
+        // The bytes-cost fields must NOT be re-introduced — that
+        // would re-trigger the 4 KiB Hub cap regression. Pinned
+        // here so the next person tempted to "just add the schema
+        // back" trips the test before they ship it.
+        for forbidden in ["input_schema", "output_schema", "timeout_seconds", "parameters"] {
+            assert!(
+                !obj.contains_key(forbidden),
+                "v2 thin payload must not carry `{forbidden}` (would blow the Hub label cap)"
+            );
+        }
     }
 
     #[test]

@@ -582,13 +582,16 @@ pub fn default_chat_manifest() -> AbilityManifest {
         "required": ["session_id", "reply", "skills_loaded", "tool_calls", "context_used", "elapsed_ms"]
     });
 
+    // The description is intentionally short — it ships in the
+    // 4 KiB-capped `a2a.agents_json` discovery label for every
+    // registered agent. The verbose blurb that used to live here
+    // (4 sentences × ~250 bytes) blew the label past the cap when
+    // a node had two agents. Long-form documentation lives in
+    // `docs/`; the per-field `description` strings inside
+    // `input_schema` carry the per-arg detail.
     AbilityManifest::new(
         "chat",
-        "Send a chat prompt to the locally-installed agent. The agent runs as a \
-         subprocess on this node; the response is returned verbatim. The optional \
-         `skills`, `context_loaders`, and `driver` sub-objects let a single call \
-         override skill exposure, context assembly, and driver knobs without \
-         editing the agent's manifest.",
+        "Send a prompt to the agent and get its reply.",
         input_schema,
     )
     .expect(
