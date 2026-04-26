@@ -109,6 +109,7 @@ pub mod execution;
 // `agents::build_registry` populates the registry with every
 // device-level ability the daemon publishes (today: `observe.health`;
 // PR-ATTACH onwards extends this).
+pub mod ability_descriptor;
 pub mod ability_dispatch;
 pub mod federation_client;
 pub mod provisional_ura;
