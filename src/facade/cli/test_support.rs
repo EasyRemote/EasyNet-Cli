@@ -54,13 +54,19 @@ impl HomeGuard {
         // restored by the previous Drop impl.
         let lock = home_lock().lock().unwrap_or_else(|p| p.into_inner());
 
-        // Build a unique temp dir under the OS temp root.
+        // Build a unique temp dir under the OS temp root. We use a
+        // process-global atomic counter rather than a timestamp
+        // because the home_lock above serialises HomeGuard
+        // construction — two tests can drop+acquire within the same
+        // nanosecond when SystemTime resolution is coarser than the
+        // lock-release-to-acquire latency. Counter eliminates the
+        // collision class entirely; was the root cause of the
+        // intermittent registry::agents test flake.
+        static TEMPDIR_SEQ: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
         let pid = std::process::id();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(0);
-        let temp_dir = std::env::temp_dir().join(format!("easynet-test-{pid}-{nanos}"));
+        let seq = TEMPDIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let temp_dir = std::env::temp_dir().join(format!("easynet-test-{pid}-{seq}"));
         let _ = std::fs::create_dir_all(&temp_dir);
 
         let prev_home = std::env::var("HOME").ok();
