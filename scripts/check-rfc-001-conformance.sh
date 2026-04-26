@@ -58,8 +58,15 @@ count_pattern() {
   local raw
   raw="$(rg "${rg_args[@]}" "$pattern" "${paths[@]}" 2>/dev/null || true)"
   if [[ -n "$raw" ]]; then
-    while IFS=':' read -r _file count; do
-      hits=$((hits + count))
+    # rg -c output: "file:count" multi-file, or just "count" single-file.
+    while IFS= read -r line; do
+      if [[ "$line" == *":"* ]]; then
+        local count="${line##*:}"
+      else
+        local count="$line"
+      fi
+      count="${count//[^0-9]/}"
+      [[ -n "$count" ]] && hits=$((hits + count))
     done <<< "$raw"
   fi
 
