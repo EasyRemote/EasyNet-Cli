@@ -307,41 +307,49 @@ fn publish_to_local_runtime_best_effort(agent_name: &str, directory: &AgentDirec
     let socket_path = crate::persistence::config::state_dir().join("control.sock");
     let dispatch_endpoint = format!("ipc://{}", socket_path.display());
 
-    let outcomes = crate::runtime::publish::publish_agent_to_local_runtime(
-        &bridge,
-        tenant_id,
-        &creds.node_id,
-        agent_name,
-        directory,
-        &dispatch_endpoint,
-    );
+    let _ = (directory, dispatch_endpoint);
+    // RFC-001 P4.8: replace the legacy per-agent register-tool path
+    // with a full federation.advertise_* sweep. The just-added
+    // agent is already in registry.agents, so the bootstrap+advertise
+    // path picks it up; we don't need agent-specific plumbing here.
+    let plan =
+        match crate::facade::cli::start::build_bootstrap_plan_from(tenant_id, &creds.node_id) {
+            Ok(p) => p,
+            Err(e) => {
+                output::warn(&format!("publish bootstrap plan: {e}"));
+                return;
+            }
+        };
+    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::new(&bridge);
+    let outcomes =
+        crate::runtime::publish::republish_abilities_via_advertise(&invoker, tenant_id, &plan);
 
-    if outcomes.is_empty() {
-        return;
-    }
-    let mut ok_count = 0usize;
+    let mut ok = 0usize;
+    let mut total = 0usize;
     for o in &outcomes {
+        if o.label == "skipped" || o.label == "local-agents.json" {
+            continue;
+        }
+        total += 1;
         match &o.result {
-            Ok(replaced) => {
-                ok_count += 1;
-                let suffix = if *replaced { " (replaced prior)" } else { "" };
-                output::detail("published", &format!("{}{suffix}", o.tool_name));
+            Ok(_) => {
+                ok += 1;
+                if o.label.starts_with("abilities/") {
+                    output::detail("published", &format!("{} {}", o.agent_uri, o.label));
+                }
             }
             Err(msg) => {
-                output::warn(&format!("publish {} failed: {msg}", o.tool_name));
+                output::warn(&format!("publish {} failed: {msg}", o.label));
             }
         }
     }
-    if ok_count > 0 {
+    if total > 0 {
         output::detail(
-            "abilities",
-            &format!(
-                "{}/{} registered with local runtime — visible in EasyNet Abilities",
-                ok_count,
-                outcomes.len()
-            ),
+            "directory",
+            &format!("{ok}/{total} federation.advertise_* calls — entries visible to peers"),
         );
     }
+    let _ = agent_name;
 }
 
 /// Best-effort unpublish for `easynet agent remove`. Mirror of
@@ -364,24 +372,38 @@ fn unpublish_from_local_runtime_best_effort(agent_name: &str, directory: &AgentD
     };
     let tenant_id = state.tenant.as_deref().unwrap_or(&creds.tenant_id);
 
-    let outcomes = crate::runtime::publish::unpublish_agent_from_local_runtime(
-        &bridge,
-        tenant_id,
-        &creds.node_id,
-        agent_name,
-        directory,
-    );
-    for o in &outcomes {
-        match &o.result {
-            Ok(was_registered) => {
-                if *was_registered {
-                    output::detail("unpublished", &o.tool_name);
-                }
-            }
-            Err(msg) => {
-                output::warn(&format!("unpublish {} failed: {msg}", o.tool_name));
-            }
+    let _ = directory;
+    // RFC-001 P4.8: revoke this agent's directory entry via
+    // federation.revoke. Look up the URA from local-agents.json
+    // (the bootstrap step persists every llm sub-agent under
+    // `(profile=llm, name=<agent_name>)`); if absent, the agent
+    // was never advertised, which makes the revoke a no-op.
+    let file = match crate::persistence::local_agents::load() {
+        Ok(f) => f,
+        Err(e) => {
+            output::warn(&format!("could not read local-agents.json for revoke: {e}"));
+            return;
         }
+    };
+    let agent_uri = match crate::persistence::local_agents::lookup_hosted_uri(
+        &file, "llm", agent_name,
+    ) {
+        Some(uri) => uri,
+        None => return,
+    };
+    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::new(&bridge);
+    let realm = crate::facade::cli::start::realm_from_agent_uri(&file.host_device_agent_uri)
+        .unwrap_or("");
+    let outcome = crate::runtime::publish::unpublish_abilities_via_revoke(
+        &invoker,
+        tenant_id,
+        realm,
+        &agent_uri,
+        "operator removed agent",
+    );
+    match outcome.result {
+        Ok(_) => output::detail("revoked", &outcome.agent_uri),
+        Err(msg) => output::warn(&format!("revoke {} failed: {msg}", outcome.agent_uri)),
     }
 }
 

@@ -166,7 +166,7 @@ pub struct SystemAbilityMetadata {
 ///
 /// `<agent>.chat` is **excluded** even when the live registry would
 /// include it: those entries are already published to the
-/// axon-runtime via `runtime::publish::publish_agent_to_local_runtime`
+/// axon-runtime via `runtime::publish::republish_abilities_via_advertise`
 /// off the on-disk `chat.ability.toml` manifest, and re-publishing
 /// them through the system path would double-register with a
 /// different (synthesised) schema. Filter is by suffix because the
@@ -285,7 +285,7 @@ mod tests {
         // CallMcpTool, which in turn looks up the runtime-local tool
         // registry on the target node. That registry is populated from
         // exactly this list (see `runtime::publish::
-        // publish_system_abilities_to_local_runtime`). A regression
+        // republish_abilities_via_advertise`). A regression
         // that dropped skill.list from `published_abilities()` would
         // silently empty the Skills page across the fleet.
         let metas = published_abilities();
@@ -316,7 +316,7 @@ mod tests {
     #[test]
     fn published_abilities_excludes_per_agent_chat_handlers() {
         // `<agent>.chat` is published via the per-agent manifest path
-        // (`runtime::publish::publish_agent_to_local_runtime`) off the
+        // (`runtime::publish::republish_abilities_via_advertise`) off the
         // on-disk `chat.ability.toml`. Re-publishing it through the
         // system path would double-register with a synthesised schema
         // that shadows the manifest's real one. The filter in

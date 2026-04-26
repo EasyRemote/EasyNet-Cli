@@ -261,7 +261,7 @@ fn system_skills_json() -> String {
 ///
 /// Authoritative source lives in `runtime::agents::description_for` —
 /// kept there so the federation label and the runtime-local register
-/// publisher (`runtime::publish::publish_system_abilities_to_local_runtime`)
+/// publisher (`runtime::publish::republish_abilities_via_advertise`)
 /// pull from one table. This function exists as a thin local alias so
 /// the call sites in this module read naturally; do NOT inline a
 /// second match here, that's exactly the drift the centralisation

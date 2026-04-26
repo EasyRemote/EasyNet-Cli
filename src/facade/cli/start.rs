@@ -245,14 +245,14 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     // discovery just degrades to "this node has no abilities yet"
     // until a successful re-publish lands. A subsequent
     // `easynet agent add` against a healthy runtime fixes it.
-    republish_all_agents_best_effort(&bridge, &creds);
-
-    // RFC-001 P2.4: republish_system_abilities_best_effort is a stub
-    // (publish.rs::publish_system_abilities_to_local_runtime returns
-    // synthetic success per ability now that register_runtime_local_mcp_tool
-    // is removed). The real device-profile Agent advertise via
-    // federation.advertise_abilities lands in P3.
-    republish_system_abilities_best_effort(&bridge, &creds);
+    // RFC-001 P4.8: federation.advertise_* path replaces both the
+    // legacy per-agent publish and the legacy system-abilities
+    // publish. Driven by `runtime::publish::republish_abilities_via_advertise`
+    // which: (1) bootstraps URAs into local-agents.json, (2)
+    // advertises the device-profile + each hosted profile, (3)
+    // advertises descriptors for each Agent. Best-effort: per-row
+    // failures are warned but never abort startup.
+    republish_via_federation_best_effort(&bridge, &creds);
 
     if args.foreground {
         run_foreground_with_heartbeat(srv, &bridge, &creds, &endpoint, heartbeat_ms, args.no_mcp)
@@ -261,125 +261,129 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     }
 }
 
-/// Re-publish every registered agent's ability manifests to the freshly
-/// started axon-runtime. The runtime-local tool registry is in-memory
-/// by design (see EasyNet-Axon `core/runtime-rs/src/state/runtime_tool.rs`),
-/// so a runtime restart drops every register-tool entry. Without this
-/// step the EasyNet frontend's Abilities catalog goes empty after every
-/// `easynet runtime stop && start` even though the agent registry and
-/// the on-disk manifests are unchanged.
+/// Re-publish every Agent's directory entry + descriptor list to
+/// the realm hub via `federation.advertise_*`. Replaces the two
+/// pre-RFC-001 helpers (`republish_all_agents_best_effort` +
+/// `republish_system_abilities_best_effort`) with the single
+/// federation-shaped path.
 ///
-/// Best-effort. We log per-agent outcomes but do not propagate errors —
-/// runtime startup must complete so other surfaces (heartbeat,
-/// federation join) keep working. A registry that is briefly missing
-/// abilities is recoverable; a runtime that refused to start because
-/// one agent's directory is unreadable is not.
-fn republish_all_agents_best_effort(
+/// Steps:
+///   1. Build a `BootstrapPlan` from credentials + the loaded
+///      AgentRegistry. Today every host enables consent; policy /
+///      mcp default off until the [profiles] config wiring lands.
+///   2. Hand the plan to `runtime::publish::republish_abilities_via_advertise`.
+///   3. Render outcomes — one warn per failed advertise; one
+///      info line summarising successes.
+///
+/// Best-effort by contract — daemon startup completes regardless
+/// of advertise failures so heartbeat, federation join, and other
+/// surfaces stay reachable. The directory just degrades until a
+/// later boot or operator-initiated re-advertise catches up.
+fn republish_via_federation_best_effort(
     bridge: &easynet_axon::dendrite_bridge::DendriteBridge,
     creds: &config::Credentials,
 ) {
-    let registry = match crate::registry::agents::load_agents() {
-        Ok(r) => r,
+    let plan = match build_bootstrap_plan(creds) {
+        Ok(p) => p,
         Err(e) => {
-            output::warn(&format!(
-                "could not load agent registry for re-publish: {e}"
-            ));
+            output::warn(&format!("bootstrap plan: {e}"));
             return;
         }
     };
-    if registry.agents.is_empty() {
-        // Brand-new install with no agents yet — nothing to re-publish.
-        return;
-    }
-    let socket_path = config::state_dir().join("control.sock");
-    let dispatch_endpoint = format!("ipc://{}", socket_path.display());
+    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::new(bridge);
+    let outcomes = crate::runtime::publish::republish_abilities_via_advertise(
+        &invoker,
+        &creds.tenant_id,
+        &plan,
+    );
 
-    let mut total_ok = 0usize;
-    let mut total_published = 0usize;
-    for (agent_name, entry) in &registry.agents {
-        let Some(root) = entry.root_path.as_ref() else {
+    let mut ok = 0usize;
+    let mut total = 0usize;
+    let mut skipped = false;
+    for o in &outcomes {
+        if o.label == "skipped" {
+            skipped = true;
             continue;
-        };
-        let directory = match crate::runtime::directory::AgentDirectory::open(root) {
-            Ok(d) => d,
-            Err(e) => {
-                output::warn(&format!(
-                    "re-publish {agent_name}: open agent directory failed: {e}"
-                ));
-                continue;
-            }
-        };
-        let outcomes = crate::runtime::publish::publish_agent_to_local_runtime(
-            bridge,
-            &creds.tenant_id,
-            &creds.node_id,
-            agent_name,
-            &directory,
-            &dispatch_endpoint,
-        );
-        for o in &outcomes {
-            total_published += 1;
-            match &o.result {
-                Ok(_) => total_ok += 1,
-                Err(msg) => {
-                    output::warn(&format!("re-publish {} failed: {msg}", o.tool_name));
-                }
+        }
+        total += 1;
+        match &o.result {
+            Ok(_) => ok += 1,
+            Err(msg) => {
+                output::warn(&format!("advertise {} failed: {msg}", o.label));
             }
         }
     }
-    if total_published > 0 {
+    if skipped {
         output::detail(
-            "abilities",
+            "directory",
+            "advertise deferred — daemon has no realm yet (run easynet join)",
+        );
+    } else if total > 0 {
+        output::detail(
+            "directory",
             &format!(
-                "{}/{} re-published — visible in EasyNet Abilities",
-                total_ok, total_published
+                "{ok}/{total} federation.advertise_* calls succeeded — entries visible to peers"
             ),
         );
     }
 }
 
-/// Re-publish every `system.*` ability to the freshly started
-/// axon-runtime. Mirrors `republish_all_agents_best_effort` but for
-/// the device-level handlers that have no on-disk manifest — they
-/// live in the daemon's `LocalAbilityRegistry` and would otherwise be
-/// invisible to the Hub-mediated `CallMcpTool` path.
-///
-/// Same best-effort policy: per-tool failures are warned but never
-/// abort startup. The runtime is up regardless; the federation
-/// discovery surface for system abilities just degrades until a
-/// healthy daemon restart catches up.
-fn republish_system_abilities_best_effort(
-    bridge: &easynet_axon::dendrite_bridge::DendriteBridge,
+/// Build a `BootstrapPlan` from credentials + the loaded agent
+/// registry. Pure function so the test below can exercise it
+/// without a real bridge.
+fn build_bootstrap_plan(
     creds: &config::Credentials,
-) {
-    let socket_path = config::state_dir().join("control.sock");
-    let dispatch_endpoint = format!("ipc://{}", socket_path.display());
+) -> anyhow::Result<crate::runtime::agents::profiles::bootstrap::BootstrapPlan> {
+    build_bootstrap_plan_from(&creds.tenant_id, &creds.node_id)
+}
 
-    let outcomes = crate::runtime::publish::publish_system_abilities_to_local_runtime(
-        bridge,
-        &creds.tenant_id,
-        &creds.node_id,
-        &dispatch_endpoint,
-    );
-    let total_published = outcomes.len();
-    let mut total_ok = 0usize;
-    for o in &outcomes {
-        match &o.result {
-            Ok(_) => total_ok += 1,
-            Err(msg) => {
-                output::warn(&format!("re-publish {} failed: {msg}", o.tool_name));
-            }
-        }
-    }
-    if total_published > 0 {
-        output::detail(
-            "system abilities",
-            &format!(
-                "{}/{} re-published — Skills + system.* visible to backend",
-                total_ok, total_published
-            ),
-        );
-    }
+/// Variant that takes the inputs directly. Public so `agent.rs`'s
+/// publish path can construct the plan from a `(tenant_id,
+/// node_id)` pair already in scope without re-loading credentials.
+pub(crate) fn build_bootstrap_plan_from(
+    tenant_id: &str,
+    node_id: &str,
+) -> anyhow::Result<crate::runtime::agents::profiles::bootstrap::BootstrapPlan> {
+    use crate::runtime::agents::profiles::bootstrap::{BootstrapPlan, LlmSubAgent};
+
+    let registry = crate::registry::agents::load_agents()
+        .map_err(|e| anyhow::anyhow!("load agent registry: {e}"))?;
+
+    let llm_sub_agents: Vec<LlmSubAgent> = registry
+        .agents
+        .iter()
+        .map(|(name, entry)| LlmSubAgent {
+            name: name.clone(),
+            agent_type_display: entry.agent_type.to_string(),
+        })
+        .collect();
+
+    Ok(BootstrapPlan {
+        // The credentials' realm field maps to the tenant for now;
+        // a future config split will separate them.
+        realm: tenant_id.to_string(),
+        // node_id from credentials is the device-profile URA. Pre-
+        // RFC daemons used it as a node identifier; same string,
+        // RFC-001 reuses it as an Agent URA at the §1.3 Model A
+        // anchor. P5 backend SDK rewrite confirms the shape.
+        host_device_uri: node_id.to_string(),
+        // Defaults match plan §1's "default-on consent on
+        // interactive hosts"; policy + mcp default off until
+        // [profiles] config wiring lands.
+        consent: true,
+        policy: false,
+        mcp: false,
+        llm_sub_agents,
+    })
+}
+
+/// Extract the realm segment from a canonical Agent URA. Returns
+/// `None` if the URA shape is not the expected
+/// `easynet:///r/<realm>/agent/<id>` form. Used by `agent remove`
+/// to find which hub to send `federation.revoke` to.
+pub(crate) fn realm_from_agent_uri(uri: &str) -> Option<&str> {
+    let rest = uri.strip_prefix("easynet:///r/")?;
+    rest.split_once('/').map(|(realm, _)| realm)
 }
 
 /// Load credentials and verify against Hub. Returns error on revoked/missing credentials.
@@ -907,5 +911,55 @@ mod tests {
         let _g = HomeGuard::new();
         let err = load_and_verify_credentials().expect_err("missing credentials must fail");
         assert!(err.to_string().contains("no credentials"));
+    }
+
+    #[test]
+    fn build_bootstrap_plan_threads_credentials_into_plan() {
+        let _g = HomeGuard::new();
+        // Empty registry: load_agents returns Default. The plan
+        // should still build with consent=true (default-on per
+        // plan §1) and an empty llm list.
+        let creds = test_creds();
+        let plan = build_bootstrap_plan(&creds).expect("plan must build");
+        assert_eq!(plan.realm, "tenant-test");
+        assert_eq!(plan.host_device_uri, "node-test");
+        assert!(plan.consent, "consent default-on per plan §1");
+        assert!(!plan.policy);
+        assert!(!plan.mcp);
+        assert!(plan.llm_sub_agents.is_empty());
+    }
+
+    #[test]
+    fn build_bootstrap_plan_from_separates_inputs_for_callers_with_existing_creds() {
+        let _g = HomeGuard::new();
+        // build_bootstrap_plan_from is what agent.rs uses — it
+        // takes pre-extracted (tenant, node) pair so callers don't
+        // re-load credentials. Behavior must match build_bootstrap_plan
+        // for the same inputs.
+        let plan = build_bootstrap_plan_from("tenant-test", "node-test")
+            .expect("plan must build");
+        assert_eq!(plan.realm, "tenant-test");
+        assert_eq!(plan.host_device_uri, "node-test");
+    }
+
+    #[test]
+    fn realm_from_agent_uri_extracts_segment() {
+        assert_eq!(
+            realm_from_agent_uri("easynet:///r/acme/agent/01HUB"),
+            Some("acme")
+        );
+        assert_eq!(
+            realm_from_agent_uri("easynet:///r/contoso/agent/01-blah-blah"),
+            Some("contoso")
+        );
+    }
+
+    #[test]
+    fn realm_from_agent_uri_returns_none_for_malformed_uris() {
+        assert_eq!(realm_from_agent_uri(""), None);
+        assert_eq!(realm_from_agent_uri("not-an-uri"), None);
+        assert_eq!(realm_from_agent_uri("easynet:///r/"), None);
+        assert_eq!(realm_from_agent_uri("easynet:///r/acme"), None);
+        assert_eq!(realm_from_agent_uri("http://example.com/r/acme/agent/X"), None);
     }
 }
