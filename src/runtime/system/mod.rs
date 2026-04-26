@@ -144,6 +144,110 @@ pub fn published_ability_names() -> Vec<String> {
     build_registry().list_abilities()
 }
 
+/// One row of a system ability's discovery + registration metadata.
+///
+/// Centralises (name, description, input_schema) so every consumer —
+/// the federation label builder (`registry::a2a_labels`), the
+/// runtime-local register publisher (`runtime::publish`), and any
+/// future `easynet ability list --system` surface — pulls from one
+/// table. Adding a new system ability now requires updating exactly
+/// one match arm in `metadata_for`; previously the same name lived
+/// in three places that could (and did) drift.
+#[derive(Debug, Clone)]
+pub struct SystemAbilityMetadata {
+    pub name: String,
+    pub description: &'static str,
+    pub input_schema: serde_json::Value,
+}
+
+/// Every published system ability's metadata, in the deterministic
+/// order `published_ability_names()` returns.
+///
+/// `<agent>.chat` is **excluded** even when the live registry would
+/// include it: those entries are already published to the
+/// axon-runtime via `runtime::publish::publish_agent_to_local_runtime`
+/// off the on-disk `chat.ability.toml` manifest, and re-publishing
+/// them through the system path would double-register with a
+/// different (synthesised) schema. Filter is by suffix because the
+/// agent name varies per install.
+pub fn published_abilities() -> Vec<SystemAbilityMetadata> {
+    published_ability_names()
+        .into_iter()
+        .filter(|name| !name.ends_with(".chat"))
+        .map(|name| SystemAbilityMetadata {
+            description: description_for(&name),
+            input_schema: input_schema_for(&name),
+            name,
+        })
+        .collect()
+}
+
+/// Human-readable description for a published system ability name.
+///
+/// Authoritative source for the description text. `registry::a2a_labels`
+/// re-exports through this so the wire payload and the runtime
+/// register call agree byte-for-byte. Falls back to a short generic
+/// blurb for unknown names; the `_ if name.ends_with(".chat")` arm
+/// exists because `published_ability_names()` includes per-agent chat
+/// handlers when called from the daemon registry (the `published_abilities`
+/// filter strips them, but other callers may not).
+pub fn description_for(name: &str) -> &'static str {
+    match name {
+        "system.ping" => ping::description(),
+        "system.session.list" => session_ability::list_description(),
+        "system.session.attach" => session_ability::attach_description(),
+        "system.permission.subscribe" => permission_ability::subscribe_description(),
+        "system.permission.decide" => permission_ability::decide_description(),
+        "system.discuss.create" => discuss_ability::create_description(),
+        "system.discuss.post" => discuss_ability::post_description(),
+        "system.discuss.subscribe" => discuss_ability::subscribe_description(),
+        "system.schedule.add" => schedule_ability::add_description(),
+        "system.schedule.list" => schedule_ability::list_description(),
+        "system.schedule.remove" => schedule_ability::remove_description(),
+        "system.schedule.enable" => schedule_ability::enable_description(),
+        "system.loop.create" => loop_ability::create_description(),
+        "system.loop.status" => loop_ability::status_description(),
+        "system.loop.subscribe" => loop_ability::subscribe_description(),
+        "system.loop.cancel" => loop_ability::cancel_description(),
+        "system.skill.list" => skill_ability::list_description(),
+        _ if name.ends_with(".chat") => "Send a chat prompt to the locally-installed agent.",
+        _ => "(system ability)",
+    }
+}
+
+/// JSON Schema for a published system ability's input. Mirrors
+/// `description_for` — adding an arm here is the second half of
+/// landing a new system ability so it can register against
+/// axon-runtime with a real schema (not the empty-object default).
+///
+/// Unknown names fall back to `{"type":"object"}` — the most
+/// permissive shape that still validates as a JSON Schema. A future
+/// ability that lands without an arm here is callable but appears
+/// as schema-less in MCP `ListTools`; a CI test pins the table
+/// against the live registry to surface that drift.
+pub fn input_schema_for(name: &str) -> serde_json::Value {
+    match name {
+        "system.ping" => ping::input_schema(),
+        "system.session.list" => session_ability::list_input_schema(),
+        "system.session.attach" => session_ability::attach_input_schema(),
+        "system.permission.subscribe" => permission_ability::subscribe_input_schema(),
+        "system.permission.decide" => permission_ability::decide_input_schema(),
+        "system.discuss.create" => discuss_ability::create_input_schema(),
+        "system.discuss.post" => discuss_ability::post_input_schema(),
+        "system.discuss.subscribe" => discuss_ability::subscribe_input_schema(),
+        "system.schedule.add" => schedule_ability::add_input_schema(),
+        "system.schedule.list" => schedule_ability::list_input_schema(),
+        "system.schedule.remove" => schedule_ability::remove_input_schema(),
+        "system.schedule.enable" => schedule_ability::enable_input_schema(),
+        "system.loop.create" => loop_ability::create_input_schema(),
+        "system.loop.status" => loop_ability::status_input_schema(),
+        "system.loop.subscribe" => loop_ability::subscribe_input_schema(),
+        "system.loop.cancel" => loop_ability::cancel_input_schema(),
+        "system.skill.list" => skill_ability::list_input_schema(),
+        _ => serde_json::json!({ "type": "object" }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,6 +275,122 @@ mod tests {
         let live = build_registry().list_abilities();
         let advertised = published_ability_names();
         assert_eq!(live, advertised);
+    }
+
+    #[test]
+    fn published_abilities_includes_skill_list_with_real_metadata() {
+        // Load-bearing for the EasyNet frontend's Skills page: the
+        // backend invokes `system.skill.list` via Hub-mediated
+        // CallMcpTool, which in turn looks up the runtime-local tool
+        // registry on the target node. That registry is populated from
+        // exactly this list (see `runtime::publish::
+        // publish_system_abilities_to_local_runtime`). A regression
+        // that dropped skill.list from `published_abilities()` would
+        // silently empty the Skills page across the fleet.
+        let metas = published_abilities();
+        let skill = metas
+            .iter()
+            .find(|m| m.name == "system.skill.list")
+            .expect("system.skill.list must be in published_abilities");
+        // Description must NOT be the unknown-name fallback.
+        // `(system ability)` is what `description_for` returns when
+        // an ability is added without an arm here; pin against it so
+        // a future ability that lands without metadata trips the
+        // test instead of shipping a generic blurb to the frontend.
+        assert_ne!(
+            skill.description, "(system ability)",
+            "skill.list must have a real description, not the fallback"
+        );
+        // Input schema must be a JSON Schema object (the wire shape
+        // axon-runtime stores). Empty `{}` would also pass `is_object`,
+        // so additionally pin the `type` field.
+        assert_eq!(
+            skill.input_schema.get("type").and_then(|v| v.as_str()),
+            Some("object"),
+            "input schema must declare type:object; got {:?}",
+            skill.input_schema
+        );
+    }
+
+    #[test]
+    fn published_abilities_excludes_per_agent_chat_handlers() {
+        // `<agent>.chat` is published via the per-agent manifest path
+        // (`runtime::publish::publish_agent_to_local_runtime`) off the
+        // on-disk `chat.ability.toml`. Re-publishing it through the
+        // system path would double-register with a synthesised schema
+        // that shadows the manifest's real one. The filter in
+        // `published_abilities()` enforces this; pin it.
+        use crate::registry::agents::{AgentEntry, AgentType};
+        let mut agents = AgentRegistry::default();
+        agents
+            .agents
+            .insert("alice".into(), AgentEntry::new(AgentType::ClaudeCode, None));
+        let reg = build_registry_with_services(
+            Arc::new(SessionService::new()),
+            Arc::new(PermissionService::new()),
+            Arc::new(DiscussService::new()),
+            Arc::new(ScheduleService::new()),
+            Arc::new(LoopService::new()),
+            &agents,
+            Arc::new(Vec::new()),
+        );
+        // Sanity: the registry itself does include alice.chat.
+        assert!(reg.list_abilities().iter().any(|n| n == "alice.chat"));
+        // But the system publisher's view excludes it. We can't call
+        // published_abilities() with this custom registry directly
+        // (it goes through build_registry()), so instead assert the
+        // filter property: every entry's name does NOT end with .chat.
+        for meta in published_abilities() {
+            assert!(
+                !meta.name.ends_with(".chat"),
+                "published_abilities must filter out *.chat (came in via per-agent manifest); \
+                 found {} which would double-register",
+                meta.name
+            );
+        }
+    }
+
+    #[test]
+    fn description_for_and_input_schema_for_cover_every_published_name() {
+        // Adding a new ability to build_registry without also adding
+        // arms to `description_for`/`input_schema_for` would let it
+        // ship with the unknown-name fallback ("(system ability)" and
+        // empty `{type: object}` schema). Pin the contract that every
+        // published name has real metadata.
+        for name in published_ability_names() {
+            // `<agent>.chat` is the documented exception — its
+            // description lives in the manifest, not the table — so
+            // skip it here. (The `published_abilities` filter already
+            // strips it from the publisher's view.)
+            if name.ends_with(".chat") {
+                continue;
+            }
+            let desc = description_for(&name);
+            assert_ne!(
+                desc, "(system ability)",
+                "{name} is missing a description_for arm — add one in runtime::system::mod"
+            );
+            let schema = input_schema_for(&name);
+            // The default fallback returns `{"type":"object"}` with
+            // NO other keys. A real arm always pins something more —
+            // `properties`, `additionalProperties`, `oneOf`, etc. —
+            // even for genuinely-no-arg abilities (e.g.
+            // `system.permission.subscribe` declares
+            // `additionalProperties: false`). Distinguishing the
+            // fallback from an authored "no-arg" schema by structure
+            // (does the object have any key besides `type`?) is
+            // strictly stronger than a name allowlist.
+            let obj = schema
+                .as_object()
+                .unwrap_or_else(|| panic!("{name} schema must be a JSON object"));
+            let has_only_type = obj.len() == 1 && obj.contains_key("type");
+            assert!(
+                !has_only_type,
+                "{name} fell through to the default `{{type: object}}` schema; \
+                 add an input_schema_for arm (declare additionalProperties: false \
+                 even if the ability is genuinely no-arg)"
+            );
+        }
     }
 
     #[test]

@@ -247,6 +247,17 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     // `easynet agent add` against a healthy runtime fixes it.
     republish_all_agents_best_effort(&bridge, &creds);
 
+    // Publish device-level system abilities (system.ping,
+    // system.skill.list, system.session.*, system.permission.*, etc.)
+    // to the same axon-runtime. Per-agent abilities and system
+    // abilities use the same `register_runtime_local_mcp_tool` slot;
+    // without this call the system abilities live only in the daemon's
+    // in-memory LocalAbilityRegistry — a Hub-mediated CallMcpTool can
+    // never reach them, and the EasyNet frontend's Skills page
+    // silently shows zero installs because backend listInstalledLogic
+    // degrades a missing-ability response to an empty list.
+    republish_system_abilities_best_effort(&bridge, &creds);
+
     if args.foreground {
         run_foreground_with_heartbeat(srv, &bridge, &creds, &endpoint, heartbeat_ms, args.no_mcp)
     } else {
@@ -325,6 +336,50 @@ fn republish_all_agents_best_effort(
             "abilities",
             &format!(
                 "{}/{} re-published — visible in EasyNet Abilities",
+                total_ok, total_published
+            ),
+        );
+    }
+}
+
+/// Re-publish every `system.*` ability to the freshly started
+/// axon-runtime. Mirrors `republish_all_agents_best_effort` but for
+/// the device-level handlers that have no on-disk manifest — they
+/// live in the daemon's `LocalAbilityRegistry` and would otherwise be
+/// invisible to the Hub-mediated `CallMcpTool` path.
+///
+/// Same best-effort policy: per-tool failures are warned but never
+/// abort startup. The runtime is up regardless; the federation
+/// discovery surface for system abilities just degrades until a
+/// healthy daemon restart catches up.
+fn republish_system_abilities_best_effort(
+    bridge: &easynet_axon::dendrite_bridge::DendriteBridge,
+    creds: &config::Credentials,
+) {
+    let socket_path = config::state_dir().join("control.sock");
+    let dispatch_endpoint = format!("ipc://{}", socket_path.display());
+
+    let outcomes = crate::runtime::publish::publish_system_abilities_to_local_runtime(
+        bridge,
+        &creds.tenant_id,
+        &creds.node_id,
+        &dispatch_endpoint,
+    );
+    let total_published = outcomes.len();
+    let mut total_ok = 0usize;
+    for o in &outcomes {
+        match &o.result {
+            Ok(_) => total_ok += 1,
+            Err(msg) => {
+                output::warn(&format!("re-publish {} failed: {msg}", o.tool_name));
+            }
+        }
+    }
+    if total_published > 0 {
+        output::detail(
+            "system abilities",
+            &format!(
+                "{}/{} re-published — Skills + system.* visible to backend",
                 total_ok, total_published
             ),
         );
