@@ -316,7 +316,7 @@ mod tests {
         client.read_exact(&mut resp_buf).await.unwrap();
 
         // PR-INVOCATION-EXEC-UNITY: Invoke now dispatches through the
-        // unified registry, so `system.ping` returns a Result envelope
+        // unified registry, so `observe.health` returns a Result envelope
         // (not the v1 skeleton Error). The exact value shape is owned
         // by the ping handler; here we only pin the request_id round-
         // trip + the envelope variant.
@@ -325,7 +325,7 @@ mod tests {
             OutgoingFrame::Result { request_id, .. } => {
                 assert_eq!(request_id, "smoke-1");
             }
-            other => panic!("expected Result frame for system.ping, got {other:?}"),
+            other => panic!("expected Result frame for observe.health, got {other:?}"),
         }
 
         // Close the client side; the server's read loop sees EOF
@@ -394,7 +394,7 @@ mod tests {
         client.read_exact(&mut resp_buf).await.unwrap();
 
         // PR-INVOCATION-EXEC-UNITY: the recovered second frame is a
-        // valid `system.ping` Invoke, so the response is a Result
+        // valid `observe.health` Invoke, so the response is a Result
         // envelope. The point of the test is that the connection
         // survived the bad frame and is still serving real requests.
         let resp: OutgoingFrame = serde_json::from_slice(&resp_buf).unwrap();

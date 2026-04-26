@@ -5,10 +5,10 @@
 // Description: The two device-level abilities a Client uses to
 //              discover and observe agent runs:
 //
-//   * `system.session.list`   (RPC)    — return every session known
+//   * `fleet.list_sessions`   (RPC)    — return every session known
 //                                        to this daemon (active +
 //                                        recently terminated).
-//   * `system.session.attach` (Stream) — stream TimelineEvent frames
+//   * `fleet.attach_session` (Stream) — stream TimelineEvent frames
 //                                        from one session, optionally
 //                                        replaying from a `since_seq`
 //                                        offset before tailing live.
@@ -65,7 +65,7 @@ pub fn register(reg: &mut LocalAbilityRegistry, sessions: Arc<SessionService>) {
     );
 }
 
-/// `system.session.list` RPC handler.
+/// `fleet.list_sessions` RPC handler.
 ///
 /// Args: `{ "include_terminated": bool? = true }`
 /// Returns: `{ "sessions": [Session, ...] }` where each Session
@@ -87,7 +87,7 @@ fn list_handler(svc: &SessionService, args: Value) -> anyhow::Result<Value> {
     Ok(json!({ "sessions": json_sessions }))
 }
 
-/// `system.session.attach` stream handler.
+/// `fleet.attach_session` stream handler.
 ///
 /// Args: `{ "session_id": string, "since_seq": int? = 0 }`
 /// Returns a SnapshotThenLive stream:
@@ -121,7 +121,7 @@ fn attach_handler(svc: &SessionService, args: Value) -> anyhow::Result<StreamSou
     Ok(StreamSource::SnapshotThenLive(snapshot, rx))
 }
 
-/// Discovery JSON for `system.session.list`. Mirrors the shape
+/// Discovery JSON for `fleet.list_sessions`. Mirrors the shape
 /// used inside `a2a.system_skills_json`.
 pub fn list_input_schema() -> Value {
     json!({
@@ -133,7 +133,7 @@ pub fn list_input_schema() -> Value {
     })
 }
 
-/// Discovery JSON for `system.session.attach`.
+/// Discovery JSON for `fleet.attach_session`.
 pub fn attach_input_schema() -> Value {
     json!({
         "type": "object",

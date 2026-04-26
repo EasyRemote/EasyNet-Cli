@@ -1,13 +1,13 @@
-// EasyNet CLI — system.discuss.{create,post,subscribe} (PR-DISCUSS)
+// EasyNet CLI — discuss.{create,post,subscribe} (PR-DISCUSS)
 // ===================================================================
 //
 // File: src/runtime/system/discuss_ability.rs
 // Description: Three abilities for hosting an asynchronous multi-
 //              agent chat room over the IPC plane:
 //
-//   * `system.discuss.create`    (RPC) — spin up a new room.
-//   * `system.discuss.post`      (RPC) — append one turn.
-//   * `system.discuss.subscribe` (Stream) — read turns ≥ since_seq.
+//   * `discuss.create`    (RPC) — spin up a new room.
+//   * `discuss.post`      (RPC) — append one turn.
+//   * `discuss.subscribe` (Stream) — read turns ≥ since_seq.
 //
 // Why three abilities, not one
 // ----------------------------

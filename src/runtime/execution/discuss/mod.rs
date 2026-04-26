@@ -4,7 +4,7 @@
 // File: src/runtime/execution/discuss/mod.rs
 // Description: Multi-agent room registry + per-room turn broadcast.
 //              PR-DISCUSS surfaces this as the
-//              `system.discuss.{create,post,subscribe}` ability
+//              `discuss.{create,post,subscribe}` ability
 //              triple so a Client can host an asynchronous chat
 //              between any mix of agents (local + remote).
 //
@@ -13,7 +13,7 @@
 // - In-memory room registry keyed by RoomId; metadata (origin
 //   node, tenant, participants, topic).
 // - Per-room broadcast channel of `DiscussTurn` events. Each
-//   `system.discuss.post` call appends a turn (the speaker,
+//   `discuss.post` call appends a turn (the speaker,
 //   message, timestamp); subscribers see live turns; the
 //   broadcast channel is the v1 "stream".
 //
@@ -44,7 +44,7 @@ use uuid::Uuid;
 use crate::runtime::domain::{AgentId, DiscussRoom, NodeId, RoomId, TenantId};
 
 /// One turn posted into a discuss room. Mirrors the wire shape
-/// the IPC layer fans out for `system.discuss.subscribe`.
+/// the IPC layer fans out for `discuss.subscribe`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscussTurn {
     pub sequence: i64,
@@ -159,7 +159,7 @@ impl DiscussService {
     /// a fresh `broadcast::Receiver`; subscribers obtained AFTER a
     /// turn was posted do not see that turn — combine with
     /// `turns_from(room, since_seq)` for the "replay then tail"
-    /// pattern. The system.discuss.subscribe ability handler does
+    /// pattern. The discuss.subscribe ability handler does
     /// this composition via `StreamSource::SnapshotThenLive`.
     pub fn subscribe_room(
         &self,

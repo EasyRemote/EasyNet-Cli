@@ -85,7 +85,7 @@ impl Kernel {
     /// — every Kernel::invoke admission auto-allows. Daemons that
     /// want interactive approval should use
     /// `new_with_subscriber_broker` instead so a Client subscribed
-    /// to system.permission.subscribe sees pending requests.
+    /// to consent.subscribe sees pending requests.
     pub fn new(gateway: Arc<dyn GatewayApi>) -> Self {
         Self {
             session: Arc::new(SessionService::new()),
@@ -102,7 +102,7 @@ impl Kernel {
     /// variant installed — every Kernel::invoke admission against
     /// a non-system ability publishes a PermissionRequest on the
     /// broker's broadcast channel, then blocks waiting for the
-    /// matching `system.permission.decide` decision.
+    /// matching `consent.decide` decision.
     ///
     /// When no subscriber is connected the broker auto-allows
     /// (per docs/rfc/permission-broker-v1.md §4 cross-machine
@@ -164,14 +164,14 @@ impl Kernel {
     /// Permission admission gate. Asks the broker; emits a
     /// `permission_pending` event before the call and a
     /// `permission_decided` event after, so a Client subscribed to
-    /// system.session.attach for this invocation_id sees admission
+    /// fleet.attach_session for this invocation_id sees admission
     /// was gated even when the broker auto-allows.
     ///
     /// AllowAllBroker returns immediately. SubscriberBroker
     /// publishes a PermissionRequest on its broadcast channel
-    /// (which a Client connected to system.permission.subscribe
+    /// (which a Client connected to consent.subscribe
     /// receives live) and blocks `ask` until a matching
-    /// `system.permission.decide` lands or the broker's internal
+    /// `consent.decide` lands or the broker's internal
     /// timeout fires.
     ///
     /// v1 sensitivity is hardcoded to `Medium`. A future config
@@ -341,7 +341,7 @@ impl Kernel {
 /// Decide whether an ability name should be routed through the
 /// permission gate. Today the rule is "agent abilities gate; system
 /// abilities don't" — preserving the pre-refactor behaviour where
-/// `<agent>.chat` triggered the broker but `system.ping` did not.
+/// `<agent>.chat` triggered the broker but `observe.health` did not.
 ///
 /// A future per-ability sensitivity config (`runtime::abilities` or
 /// the manifest layer) would replace this name-prefix check with a
@@ -643,7 +643,7 @@ mod tests {
         // readable ("alice did X" rather than "alice.chat did X").
         assert_eq!(agent_portion("alice.chat"), "alice");
         assert_eq!(agent_portion("a.b.chat"), "a.b");
-        // RFC-001 P2.2: "system.ping" is now "observe.health" — the
+        // RFC-001 P2.2: "observe.health" is now "observe.health" — the
         // head namespace is `observe`. Previous test asserted "system"
         // which was wrong even pre-rename (rsplit_once gives the head,
         // which was always "system" not "observe"); now the value is

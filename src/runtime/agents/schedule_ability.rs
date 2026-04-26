@@ -1,14 +1,14 @@
-// EasyNet CLI — system.schedule.{add,list,remove,enable} (PR-SCHED)
+// EasyNet CLI — schedule.{add,list,remove,enable} (PR-SCHED)
 // ===================================================================
 //
 // File: src/runtime/system/schedule_ability.rs
 // Description: Four RPC abilities exposing the cron-driven
 //              `ScheduleService` over the IPC plane.
 //
-//   * `system.schedule.add`     — register a new cron schedule.
-//   * `system.schedule.list`    — snapshot every schedule.
-//   * `system.schedule.remove`  — delete by id.
-//   * `system.schedule.enable`  — toggle the enabled flag.
+//   * `schedule.add`     — register a new cron schedule.
+//   * `schedule.list`    — snapshot every schedule.
+//   * `schedule.remove`  — delete by id.
+//   * `schedule.enable`  — toggle the enabled flag.
 //
 // The tick runner that actually fires schedules at their
 // next-fire instant lives in

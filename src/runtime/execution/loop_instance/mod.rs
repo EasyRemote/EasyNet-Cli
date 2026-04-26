@@ -3,7 +3,7 @@
 //
 // File: src/runtime/execution/loop_instance/mod.rs
 // Description: Loop-instance registry + status store + controller
-//              runner. `system.loop.create` persists a loop
+//              runner. `loop.create` persists a loop
 //              instance; the daemon-side controller drives it from
 //              `pending` through bounded body/verify iterations until
 //              one terminal state is reached.

@@ -71,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
     // v1: a Kernel wrapping a NoopGateway is sufficient for the
     // proxy to construct Receipts. The daemon installs the
     // SubscriberBroker permission variant so a Client UI
-    // connected to system.permission.subscribe sees real pending
+    // connected to consent.subscribe sees real pending
     // requests when an agent dispatch is gated. (When no Client
     // is subscribed the broker auto-allows — a daemon running
     // headless does not freeze on permission gates.)
@@ -199,7 +199,7 @@ async fn main() -> anyhow::Result<()> {
     // by constructing a real Invocation per fire and routing it
     // through Kernel::invoke. The Kernel admits the Session,
     // dispatches the agent, and terminates — Clients subscribed
-    // to system.session.attach see the same lifecycle they would
+    // to fleet.attach_session see the same lifecycle they would
     // see for a Client-initiated invoke.
     spawn_schedule_tick(kernel_for_tick, schedule_for_tick);
 
@@ -222,7 +222,7 @@ async fn main() -> anyhow::Result<()> {
 ///
 /// Kernel::invoke admits a Session keyed by invocation_id and
 /// emits the lifecycle events Clients subscribe to via
-/// system.session.attach. Failed agent dispatches surface as
+/// fleet.attach_session. Failed agent dispatches surface as
 /// `Failed(reason)` Receipts — operators see the same diagnostic
 /// they would see if they dispatched the agent manually.
 ///

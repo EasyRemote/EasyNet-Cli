@@ -13,7 +13,7 @@
 // Naming
 // ------
 // All system abilities are named `system.<feature>[.<verb>]`. Today
-// only `system.ping` exists; PR-ATTACH onwards extends the namespace.
+// only `observe.health` exists; PR-ATTACH onwards extends the namespace.
 //
 // Per-feature module layout
 // -------------------------
@@ -255,7 +255,7 @@ mod tests {
 
     #[test]
     fn build_registry_is_non_empty_and_includes_ping() {
-        // Every v1 daemon publishes at least `system.ping` so a
+        // Every v1 daemon publishes at least `observe.health` so a
         // peer wanting to test reachability has a known ability.
         // A regression that emptied this list would silently break
         // discovery + smoke tests.
@@ -281,7 +281,7 @@ mod tests {
     #[test]
     fn published_abilities_includes_skill_list_with_real_metadata() {
         // Load-bearing for the EasyNet frontend's Skills page: the
-        // backend invokes `system.skill.list` via Hub-mediated
+        // backend invokes `fleet.list_abilities` via Hub-mediated
         // CallMcpTool, which in turn looks up the runtime-local tool
         // registry on the target node. That registry is populated from
         // exactly this list (see `runtime::publish::
@@ -376,7 +376,7 @@ mod tests {
             // NO other keys. A real arm always pins something more —
             // `properties`, `additionalProperties`, `oneOf`, etc. —
             // even for genuinely-no-arg abilities (e.g.
-            // `system.permission.subscribe` declares
+            // `consent.subscribe` declares
             // `additionalProperties: false`). Distinguishing the
             // fallback from an authored "no-arg" schema by structure
             // (does the object have any key besides `type`?) is

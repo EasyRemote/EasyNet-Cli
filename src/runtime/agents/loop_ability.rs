@@ -1,13 +1,13 @@
-// EasyNet CLI — system.loop.{create,status,subscribe,cancel} (PR-LOOP)
+// EasyNet CLI — loop.{create,status,subscribe,cancel} (PR-LOOP)
 // =====================================================================
 //
 // File: src/runtime/system/loop_ability.rs
 // Description: Four abilities surfacing the loop primitive:
 //
-//   * `system.loop.create`    (RPC)    — register a new loop instance.
-//   * `system.loop.status`    (RPC)    — fetch current state.
-//   * `system.loop.subscribe` (Stream) — replay status snapshots.
-//   * `system.loop.cancel`    (RPC)    — cancel an in-flight loop.
+//   * `loop.create`    (RPC)    — register a new loop instance.
+//   * `loop.status`    (RPC)    — fetch current state.
+//   * `loop.subscribe` (Stream) — replay status snapshots.
+//   * `loop.cancel`    (RPC)    — cancel an in-flight loop.
 //
 // Why suffix `_ability` and the file name `loop_ability.rs`
 // ---------------------------------------------------------
