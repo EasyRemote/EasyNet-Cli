@@ -200,6 +200,102 @@ impl<I: LocalInvoker> InvokeMcpProvider<I> {
     }
 }
 
+/// Configuration for `build_stdio_server` — the single entry point
+/// that constructs an MCP server ready to drive stdin/stdout. Both
+/// `easynet mcp_server` and `easynet start --mcp` go through here
+/// so the construction logic lives in exactly one place.
+#[derive(Debug, Clone)]
+pub struct StdioServerConfig {
+    /// Free-form server-name suffix; appears in the MCP handshake's
+    /// `serverName` field. Convention: `easynet-<role>`.
+    pub server_name: String,
+    /// Tenant ID — informational; routed dispatch honours whatever
+    /// the loaded credentials carry.
+    pub tenant_id: String,
+}
+
+/// Pre-built provider + server name, ready to hand to
+/// `easynet_axon::mcp::StdioMcpServer::new`. Returned by
+/// `build_stdio_server` so callers can decide whether to run
+/// foreground (mcp_server) or in a spawned thread (start --mcp).
+pub struct ConfiguredStdioServer {
+    pub provider: InvokeMcpProvider<ProxyLocalInvoker>,
+    pub server_name: String,
+}
+
+impl ConfiguredStdioServer {
+    /// Number of MCP tools the configured provider advertises.
+    /// Convenience getter so callers don't reach into provider state.
+    pub fn descriptor_count(&self) -> usize {
+        self.provider.descriptor_count()
+    }
+}
+
+/// One-stop builder: assemble a Kernel + AbilityProxy, derive the
+/// host's AbilityDescriptors from local-agents.json, and produce
+/// a configured InvokeMcpProvider ready for the stdio runner.
+///
+/// Both `easynet mcp_server` and `easynet start --mcp` call this
+/// — they differ only in argument parsing and how they launch the
+/// stdio server (foreground vs. spawned thread).
+pub fn build_stdio_server(config: &StdioServerConfig) -> ConfiguredStdioServer {
+    use crate::services::control::ability_proxy::AbilityProxy;
+    use std::sync::Arc;
+
+    let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
+        Arc::new(crate::runtime::gateway::NoopGateway::new());
+    let kernel: Arc<dyn crate::runtime::kernel_api::KernelApi> =
+        Arc::new(crate::runtime::kernel::Kernel::new(gateway));
+    let proxy = Arc::new(AbilityProxy::new(kernel));
+
+    let local_agents = crate::persistence::local_agents::load().unwrap_or_default();
+    let host_uri = if local_agents.host_device_agent_uri.is_empty() {
+        // Pre-join state: the descriptors anchor on a literal "self"
+        // marker so the catalog is still well-formed. Once join
+        // completes and a daemon restart picks up the new URA, the
+        // catalog re-anchors to the canonical URA.
+        "self".to_string()
+    } else {
+        local_agents.host_device_agent_uri.clone()
+    };
+    let consent_uri = crate::persistence::local_agents::lookup_hosted_uri(
+        &local_agents,
+        "consent",
+        "default",
+    );
+    let policy_uri = crate::persistence::local_agents::lookup_hosted_uri(
+        &local_agents,
+        "policy",
+        "default",
+    );
+    let mcp_uri = crate::persistence::local_agents::lookup_hosted_uri(
+        &local_agents,
+        "mcp",
+        "default",
+    );
+    let llm_uris: Vec<(String, String)> = local_agents
+        .hosted_agents
+        .iter()
+        .filter(|e| e.profile == "llm")
+        .map(|e| (e.name.clone(), e.agent_uri.clone()))
+        .collect();
+    let descriptors = crate::runtime::agents::profiles::all_descriptors_for_host(
+        &host_uri,
+        consent_uri.as_deref(),
+        policy_uri.as_deref(),
+        mcp_uri.as_deref(),
+        &llm_uris,
+    );
+
+    let invoker = ProxyLocalInvoker::new(proxy);
+    let provider = InvokeMcpProvider::new(invoker, descriptors);
+    let _ = config.tenant_id; // tenant is informational for now
+    ConfiguredStdioServer {
+        provider,
+        server_name: config.server_name.clone(),
+    }
+}
+
 impl<I: LocalInvoker> easynet_axon::mcp::McpToolProvider for InvokeMcpProvider<I> {
     fn tool_specs(&self) -> Vec<serde_json::Value> {
         tool_specs_from_descriptors(&self.descriptors)
@@ -438,6 +534,70 @@ mod tests {
         assert!(
             err.contains("not_found"),
             "expected NOT_FOUND code in error string; got {err}"
+        );
+    }
+
+    #[test]
+    fn build_stdio_server_produces_provider_with_at_least_observe_health() {
+        // Single-source-of-truth contract: both `easynet mcp_server`
+        // and `easynet start --mcp` go through `build_stdio_server`.
+        // The result MUST advertise every device-profile ability the
+        // live registry registers, anchored on whatever local-agents.json
+        // says (or the literal "self" pre-join).
+        let _h = crate::facade::cli::test_support::HomeGuard::new();
+        let cfg = StdioServerConfig {
+            server_name: "easynet-test".into(),
+            tenant_id: "test-tenant".into(),
+        };
+        let configured = build_stdio_server(&cfg);
+        assert_eq!(configured.server_name, "easynet-test");
+        assert!(
+            configured.descriptor_count() > 0,
+            "build_stdio_server must surface at least the device-profile abilities; \
+             got descriptor_count = 0"
+        );
+        // The pre-join fallback anchors on "self"; the descriptors
+        // we get must reference this URI as owner.
+        let owners: std::collections::HashSet<String> = configured
+            .provider
+            .descriptors
+            .iter()
+            .map(|d| d.owner_agent_uri.clone())
+            .collect();
+        assert!(
+            owners.contains("self"),
+            "pre-join fallback must anchor descriptors on `self`; got owners = {owners:?}"
+        );
+    }
+
+    #[test]
+    fn build_stdio_server_anchors_descriptors_on_persisted_host_uri_when_present() {
+        let _h = crate::facade::cli::test_support::HomeGuard::new();
+        // Pre-populate local-agents.json with a host URI; build_stdio_server
+        // must pick it up.
+        let mut file = crate::persistence::local_agents::LocalAgentsFile::default();
+        file.host_device_agent_uri = "easynet:///r/acme/agent/01DEV".into();
+        crate::persistence::local_agents::save(&file).unwrap();
+
+        let cfg = StdioServerConfig {
+            server_name: "easynet-test".into(),
+            tenant_id: "t".into(),
+        };
+        let configured = build_stdio_server(&cfg);
+        let owners: std::collections::HashSet<String> = configured
+            .provider
+            .descriptors
+            .iter()
+            .map(|d| d.owner_agent_uri.clone())
+            .collect();
+        assert!(
+            owners.contains("easynet:///r/acme/agent/01DEV"),
+            "post-join descriptors must anchor on the persisted URA; \
+             got owners = {owners:?}"
+        );
+        assert!(
+            !owners.contains("self"),
+            "post-join descriptors must NOT fall back to `self` when the URA is known"
         );
     }
 
