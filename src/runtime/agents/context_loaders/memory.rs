@@ -30,7 +30,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use crate::runtime::system::chat_ability::ContextLoader;
+use crate::runtime::agents::chat_ability::ContextLoader;
 
 /// Default cap on rendered memory entries. Below the chat handler's
 /// "context block stays focused" budget; an operator with hundreds

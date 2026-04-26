@@ -111,7 +111,7 @@ impl AbilityProxy {
     /// alongside the syscall-boundary modules. The gate's rationale
     /// is documented at the top of that script.
     pub fn new(kernel: Arc<dyn KernelApi>) -> Self {
-        let registry = crate::runtime::system::build_registry();
+        let registry = crate::runtime::agents::build_registry();
         let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
             Arc::new(crate::runtime::gateway::NoopGateway::new());
         let dispatcher = AbilityDispatcher::new(registry, gateway);

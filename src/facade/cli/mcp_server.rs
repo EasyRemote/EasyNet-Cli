@@ -61,7 +61,7 @@ pub fn run(args: McpServerArgs) -> anyhow::Result<()> {
             // dispatch routes through the unified handler (same code
             // path the daemon uses for its own ability registry).
             let mut local = crate::runtime::ability_dispatch::LocalAbilityRegistry::new();
-            crate::runtime::system::chat_ability::register(
+            crate::runtime::agents::chat_ability::register(
                 &mut local,
                 &registry,
                 std::sync::Arc::new(Vec::new()),

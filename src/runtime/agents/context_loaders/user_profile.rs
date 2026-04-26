@@ -44,7 +44,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::system::chat_ability::ContextLoader;
+use crate::runtime::agents::chat_ability::ContextLoader;
 
 /// Resolved per call so an operator who edits the file mid-session
 /// sees the change on the next chat invocation. Cheap enough — one

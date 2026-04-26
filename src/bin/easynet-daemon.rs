@@ -56,7 +56,7 @@ use easynet_cli::runtime::invocation::{
 use easynet_cli::runtime::invocation_target::{LocalNodeResolver, TargetResolver};
 use easynet_cli::runtime::kernel::Kernel;
 use easynet_cli::runtime::kernel_api::KernelApi;
-use easynet_cli::runtime::system;
+use easynet_cli::runtime::agents;
 use easynet_cli::services::control::ability_proxy::AbilityProxy;
 use easynet_cli::services::control::server;
 
@@ -141,12 +141,12 @@ async fn main() -> anyhow::Result<()> {
     // schedule (agent-scoped) + memory (agent-scoped). Tests and the
     // standalone MCP server pass an empty Vec when they want chat
     // without any context injection.
-    let chat_loaders: Arc<Vec<Arc<dyn system::chat_ability::ContextLoader>>> =
-        Arc::new(system::context_loaders::default_loaders(
+    let chat_loaders: Arc<Vec<Arc<dyn agents::chat_ability::ContextLoader>>> =
+        Arc::new(agents::context_loaders::default_loaders(
             kernel.schedule_service(),
         ));
 
-    let registry = system::build_registry_for_daemon(
+    let registry = agents::build_registry_for_daemon(
         kernel.session_service(),
         kernel.permission_service(),
         kernel.discuss_service(),
