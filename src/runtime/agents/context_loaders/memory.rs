@@ -34,7 +34,7 @@ use crate::runtime::agents::chat_ability::ContextLoader;
 
 /// Default cap on rendered memory entries. Below the chat handler's
 /// "context block stays focused" budget; an operator with hundreds
-/// of memories should call `system.memory.list` (a future ability)
+/// of memories should call a dedicated `meta.list_memories` ability
 /// rather than expect chat to dump them all.
 pub const MAX_ENTRIES_RENDERED: usize = 5;
 

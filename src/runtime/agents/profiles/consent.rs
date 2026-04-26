@@ -1,8 +1,8 @@
 //! consent profile — RFC-001 §1.
 //!
 //! An Agent advertising consent.* abilities. Replaces the old
-//! permission_broker side-channel (formerly registered under the
-//! retired system.permission.* namespace).
+//! permission_broker side-channel (formerly registered under a
+//! retired pre-RFC-001 namespace).
 //! Per RFC §A6: human-in-the-loop approval flow goes through this
 //! Agent's abilities, never through a side-channel.
 //!
