@@ -85,7 +85,7 @@ struct AdvertiseAbilitiesArgs<'a> {
 }
 
 /// Bridge handle abstraction. Sized to what advertise.rs needs;
-/// production callers pass `DendriteBridge`, tests pass a fake.
+/// production callers pass `BridgeAbilityInvoker`, tests pass a fake.
 pub trait AbilityInvoker {
     /// Invoke the named ability. Returns the JSON receipt body on
     /// success, or a string-form error on any failure (transport,
@@ -97,6 +97,50 @@ pub trait AbilityInvoker {
         resource_uri: &str,
         payload_json: Value,
     ) -> Result<Value, String>;
+}
+
+/// Production adapter wrapping the SDK's `DendriteBridge`. Sits in
+/// this module so the daemon-boot wiring imports a single trait
+/// implementer instead of having to hand-roll the
+/// `ability_call_raw` invocation per call site.
+pub struct BridgeAbilityInvoker<'a> {
+    bridge: &'a easynet_axon::dendrite_bridge::DendriteBridge,
+    /// Per-call timeout. Boot-time advertise must not block
+    /// indefinitely if the runtime is wedged — operators see a
+    /// failed advertise in logs and re-run later.
+    pub timeout_ms: u64,
+}
+
+impl<'a> BridgeAbilityInvoker<'a> {
+    pub fn new(bridge: &'a easynet_axon::dendrite_bridge::DendriteBridge) -> Self {
+        Self {
+            bridge,
+            // Generous default for advertise — runtime IPC is local
+            // and a 5-second budget covers ordinary cold-start
+            // latency without making startup hang.
+            timeout_ms: 5_000,
+        }
+    }
+}
+
+impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
+    fn invoke_ability(
+        &self,
+        tenant_id: &str,
+        resource_uri: &str,
+        payload_json: Value,
+    ) -> Result<Value, String> {
+        self.bridge
+            .ability_call_raw(
+                tenant_id,
+                resource_uri,
+                payload_json,
+                None,
+                None,
+                self.timeout_ms,
+            )
+            .map_err(|e| format!("{e}"))
+    }
 }
 
 /// Build the `federation.advertise_agent` payload + invoke it.
