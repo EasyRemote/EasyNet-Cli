@@ -454,77 +454,21 @@ fn run_foreground_with_heartbeat(
     no_mcp: bool,
 ) -> anyhow::Result<()> {
     if !no_mcp {
-        // RFC-001 §A3 quarantine (P4.8d): the MCP server is an edge
-        // adapter that translates every tool call into in-process
-        // Invoke against the AbilityProxy. Catalog comes from the
-        // host's AbilityDescriptors (single source of truth, shared
-        // with federation.advertise_abilities).
+        // RFC-001 §A3 quarantine (P4.8d + P4.9): every MCP tool call
+        // routes through the in-process AbilityProxy. Construction
+        // lives in `runtime::agents::profiles::mcp::build_stdio_server`,
+        // shared with `easynet mcp_server`.
         let _ = endpoint;
-        let proxy = std::sync::Arc::new(
-            crate::services::control::ability_proxy::AbilityProxy::new(
-                std::sync::Arc::new(crate::runtime::kernel::Kernel::new(
-                    std::sync::Arc::new(crate::runtime::gateway::NoopGateway::new()),
-                ))
-                    as std::sync::Arc<dyn crate::runtime::kernel_api::KernelApi>,
-            ),
-        );
-        let plan = build_bootstrap_plan(creds).unwrap_or_else(|e| {
-            output::warn(&format!(
-                "MCP server: bootstrap plan failed ({e}); using minimal fallback"
-            ));
-            // Fallback plan: still produce the MCP server (operators
-            // expect it to come up) but with no hosted profiles.
-            // The descriptor list will be limited to whatever the
-            // device-profile registers under host="self".
-            crate::runtime::agents::profiles::bootstrap::BootstrapPlan {
-                realm: String::new(),
-                host_device_uri: "self".into(),
-                consent: false,
-                policy: false,
-                mcp: false,
-                llm_sub_agents: Vec::new(),
-            }
-        });
-        // Use the local-agents.json snapshot directly so the MCP
-        // catalog matches what federation.advertise_abilities just
-        // published.
-        let local_agents =
-            crate::persistence::local_agents::load().unwrap_or_default();
-        let consent_uri = crate::persistence::local_agents::lookup_hosted_uri(
-            &local_agents,
-            "consent",
-            "default",
-        );
-        let policy_uri = crate::persistence::local_agents::lookup_hosted_uri(
-            &local_agents,
-            "policy",
-            "default",
-        );
-        let mcp_uri = crate::persistence::local_agents::lookup_hosted_uri(
-            &local_agents,
-            "mcp",
-            "default",
-        );
-        let llm_uris: Vec<(String, String)> = local_agents
-            .hosted_agents
-            .iter()
-            .filter(|e| e.profile == "llm")
-            .map(|e| (e.name.clone(), e.agent_uri.clone()))
-            .collect();
-        let descriptors = crate::runtime::agents::profiles::all_descriptors_for_host(
-            &plan.host_device_uri,
-            consent_uri.as_deref(),
-            policy_uri.as_deref(),
-            mcp_uri.as_deref(),
-            &llm_uris,
-        );
-        let invoker = crate::runtime::agents::profiles::mcp::ProxyLocalInvoker::new(proxy);
-        let provider =
-            crate::runtime::agents::profiles::mcp::InvokeMcpProvider::new(invoker, descriptors);
-        let descriptor_count = provider.descriptor_count();
+        let config = crate::runtime::agents::profiles::mcp::StdioServerConfig {
+            server_name: "easynet-device".into(),
+            tenant_id: creds.tenant_id.clone(),
+        };
+        let configured =
+            crate::runtime::agents::profiles::mcp::build_stdio_server(&config);
+        let descriptor_count = configured.descriptor_count();
         std::thread::spawn(move || {
-            let server = easynet_axon::mcp::StdioMcpServer::new(provider)
-                .with_server_name("easynet-device")
+            let server = easynet_axon::mcp::StdioMcpServer::new(configured.provider)
+                .with_server_name(configured.server_name)
                 .with_server_version(env!("CARGO_PKG_VERSION"));
             if let Err(e) = server.run(std::io::stdin().lock(), &mut std::io::stdout()) {
                 eprintln!("mcp server exited: {e}");
