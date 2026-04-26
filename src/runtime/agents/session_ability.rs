@@ -1,7 +1,7 @@
-// EasyNet CLI — system.session.{list,attach} handlers (PR-ATTACH)
+// EasyNet CLI — fleet.{list_sessions,attach_session} handlers
 // =================================================================
 //
-// File: src/runtime/system/session_ability.rs
+// File: src/runtime/agents/session_ability.rs
 // Description: The two device-level abilities a Client uses to
 //              discover and observe agent runs:
 //

@@ -16,7 +16,7 @@ Rule 3 — MCP only inside mcp-profile module (P4)
   [WARN] facade/mcp/ legacy directory (delete in P4)                  exists
 
 Rule 4 — system.* ability namespace retired
-  [WARN] system.skill.* / system.session.* / system.permission.* / etc. 3
+  [ ok ] system.skill.* / system.session.* / system.permission.* / etc. 0
   [ ok ] src/runtime/system/ directory presence (delete in P4)        absent
 
 Rule 5 — No legacy SSH/exec compatibility env var
@@ -36,7 +36,7 @@ Rule 10 — AbilityDescriptor scope metadata (deferred to P4)
   [info] AbilityDescriptor lands in P4
 
 ===================================================================
-Total flagged occurrences: 490
+Total flagged occurrences: 487
 
 Phase: baseline (P0). Counts recorded; CI does not fail.
 Set RFC001_PHASE=enforce to fail on any non-zero count.
