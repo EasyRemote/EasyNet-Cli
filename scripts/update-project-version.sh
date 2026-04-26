@@ -34,9 +34,28 @@ export NEW_VERSION
 printf '%s\n' "${NEW_VERSION}" > "${VERSION_FILE}"
 
 # ── Helper: update `version = "..."` in TOML files ──────────────────
+#
+# Only the version field inside the [package] section is rewritten.
+# Naive `^version = "..."` substitution would also clobber dependency
+# pins like:
+#
+#   [dependencies.prost]
+#   version = "0.13"
+#
+# turning them into the package version (e.g. 1.19.11) and breaking
+# the build with "no candidate matches `prost = ^1.19.11`". Pin the
+# scope by anchoring on the [package] header and stopping at the
+# next [section] header.
 update_toml_version() {
   local file="$1"
-  perl -0pi -e 's/(^[[:space:]]*version[[:space:]]*=[[:space:]]*")[^"]*(")/$1$ENV{"NEW_VERSION"}$2/m' "${file}"
+  perl -0pi -e '
+    s{
+      ( ^ \[ package \] [^\[]*?       # the [package] block
+        ^ \s* version \s* = \s* " )
+      [^"]*                             # the old version literal
+      ( " )
+    }{$1$ENV{NEW_VERSION}$2}msx
+  ' "${file}"
 }
 
 # ── Helper: update `"version": "..."` in JSON files ─────────────────
@@ -84,8 +103,9 @@ if command -v cargo >/dev/null 2>&1; then
     lock_dir="$(dirname "${file}")"
     if [[ -f "${lock_dir}/Cargo.lock" ]]; then
       echo "  ↻ cargo: ${lock_dir}/Cargo.lock"
-      (cd "${lock_dir}" && cargo generate-lockfile --quiet 2>/dev/null) || \
+      if ! (cd "${lock_dir}" && cargo generate-lockfile --quiet); then
         echo "  ⚠ cargo generate-lockfile failed in ${lock_dir}" >&2
+      fi
     fi
   done
 else
