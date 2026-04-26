@@ -258,7 +258,131 @@ fn run_add(args: AddArgs) -> anyhow::Result<()> {
         output::detail("model", m);
     }
     output::detail("root", &directory.root().display().to_string());
+
+    // Publish the new agent's manifests to the local axon-runtime so
+    // they appear in `ListMCPTools` (and therefore the EasyNet
+    // frontend's Abilities catalog) immediately. Best-effort — see
+    // `runtime::publish` doc for the failure model. The most common
+    // miss is "operator hasn't started the runtime yet"; we surface a
+    // hint so they know what to do, but don't fail `agent add`.
+    publish_to_local_runtime_best_effort(&args.name, &directory);
+
     Ok(())
+}
+
+/// Best-effort publish of a freshly-added (or re-added) agent's
+/// manifests. Logs every outcome via `output::detail` / `output::warn`;
+/// never propagates an error.
+///
+/// The dispatch_endpoint passed to register is the EasyNet-CLI
+/// daemon's IPC socket. Step 3 of the cross-repo plan adds the
+/// runtime-side dispatch hook that uses it; until then the runtime
+/// stores it without acting on it. The frontend Abilities surface
+/// only needs the registration to be visible in `ListMCPTools` —
+/// dispatch is a follow-up.
+fn publish_to_local_runtime_best_effort(agent_name: &str, directory: &AgentDirectory) {
+    let (bridge, state) = match crate::persistence::config::load_and_connect() {
+        Ok(p) => p,
+        Err(e) => {
+            output::warn(&format!(
+                "could not reach local axon-runtime to publish manifests: {e}"
+            ));
+            output::warn(
+                "  → run `easynet runtime start` to start it; then `easynet agent add ...` \
+                 again will publish, or restart the daemon to re-register every agent",
+            );
+            return;
+        }
+    };
+    let creds = match crate::persistence::config::load_credentials() {
+        Ok(c) => c,
+        Err(e) => {
+            output::warn(&format!(
+                "could not load device credentials for publish: {e}"
+            ));
+            return;
+        }
+    };
+    let tenant_id = state.tenant.as_deref().unwrap_or(&creds.tenant_id);
+    let socket_path = crate::persistence::config::state_dir().join("control.sock");
+    let dispatch_endpoint = format!("ipc://{}", socket_path.display());
+
+    let outcomes = crate::runtime::publish::publish_agent_to_local_runtime(
+        &bridge,
+        tenant_id,
+        &creds.node_id,
+        agent_name,
+        directory,
+        &dispatch_endpoint,
+    );
+
+    if outcomes.is_empty() {
+        return;
+    }
+    let mut ok_count = 0usize;
+    for o in &outcomes {
+        match &o.result {
+            Ok(replaced) => {
+                ok_count += 1;
+                let suffix = if *replaced { " (replaced prior)" } else { "" };
+                output::detail("published", &format!("{}{suffix}", o.tool_name));
+            }
+            Err(msg) => {
+                output::warn(&format!("publish {} failed: {msg}", o.tool_name));
+            }
+        }
+    }
+    if ok_count > 0 {
+        output::detail(
+            "abilities",
+            &format!(
+                "{}/{} registered with local runtime — visible in EasyNet Abilities",
+                ok_count,
+                outcomes.len()
+            ),
+        );
+    }
+}
+
+/// Best-effort unpublish for `easynet agent remove`. Mirror of
+/// `publish_to_local_runtime_best_effort` — same connect-and-loop
+/// pattern, calls unregister instead of register. Keeps the local
+/// runtime's MCP tool catalog in sync with the registry.
+fn unpublish_from_local_runtime_best_effort(agent_name: &str, directory: &AgentDirectory) {
+    let (bridge, state) = match crate::persistence::config::load_and_connect() {
+        Ok(p) => p,
+        Err(_) => {
+            // Runtime not running → nothing to unpublish from. Silent;
+            // operator already saw "Removed agent" and the catalog
+            // will refresh on the next runtime restart anyway.
+            return;
+        }
+    };
+    let creds = match crate::persistence::config::load_credentials() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let tenant_id = state.tenant.as_deref().unwrap_or(&creds.tenant_id);
+
+    let outcomes = crate::runtime::publish::unpublish_agent_from_local_runtime(
+        &bridge,
+        tenant_id,
+        &creds.node_id,
+        agent_name,
+        directory,
+    );
+    for o in &outcomes {
+        match &o.result {
+            Ok(was_registered) => {
+                if *was_registered {
+                    output::detail("unpublished", &o.tool_name);
+                }
+            }
+            Err(msg) => {
+                output::warn(&format!("unpublish {} failed: {msg}", o.tool_name));
+            }
+        }
+    }
 }
 
 /// Map the legacy `AgentType` tag onto the `RuntimeKind` used
@@ -399,6 +523,18 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
 
     agents::save_agents(&registry)?;
     output::success(&format!("Removed agent '{}'", args.name));
+
+    // Unpublish from the local axon-runtime so this agent's tools
+    // disappear from `ListMCPTools` (and the EasyNet frontend's
+    // Abilities catalog). Done BEFORE purge so we can still read the
+    // abilities directory; best-effort — see runtime::publish doc.
+    // The unpublish must happen before --purge wipes the abilities
+    // dir, otherwise we'd have nothing to enumerate from.
+    if let Some(root) = removed.root_path.as_ref() {
+        if let Ok(directory) = AgentDirectory::open(root) {
+            unpublish_from_local_runtime_best_effort(&args.name, &directory);
+        }
+    }
 
     // Root deletion is opt-in. This is the purge branch: we
     // only reach it when the operator explicitly asked for it.
