@@ -45,6 +45,28 @@ pub fn owns(ability_name: &str) -> bool {
 pub fn descriptors_for(
     owner_agent_uri: &str,
 ) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
+    descriptors_for_with_metadata(owner_agent_uri, None)
+}
+
+/// Same as `descriptors_for`, but stamps each emitted descriptor's
+/// `metadata["agent_type"]` with the given string when supplied.
+///
+/// Per RFC §A4 the wire-level Agent envelope has no `kind` /
+/// `type` field. The legacy `registry::AgentType` Rust enum
+/// (claude-code | codex | codex-app-server) is intentionally kept
+/// as an internal type — refactoring 28+ files to delete it is
+/// out of scope here — but its display string is surfaced through
+/// the descriptor's open-ended `metadata` bag so downstream
+/// consumers (Frontend Agents page, `meta.describe`) can render
+/// it without a protocol-level discriminator.
+///
+/// Callers that don't know the agent type pass `None`; only the
+/// fleet-level dispatcher (which loads `registry::agents`) has
+/// the type in hand at advertise time.
+pub fn descriptors_for_with_metadata(
+    owner_agent_uri: &str,
+    agent_type_display: Option<&str>,
+) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
     use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
     crate::runtime::agents::published_abilities()
         .into_iter()
@@ -55,10 +77,15 @@ pub fn descriptors_for(
             } else {
                 Visibility::Scoped
             };
-            AbilityDescriptor::new(m.name.clone(), owner_agent_uri, visibility)
-                .expect("registry-derived names satisfy descriptor invariants")
-                .with_input_schema(m.input_schema.clone())
-                .with_source("kernel:built-in")
+            let mut desc =
+                AbilityDescriptor::new(m.name.clone(), owner_agent_uri, visibility)
+                    .expect("registry-derived names satisfy descriptor invariants")
+                    .with_input_schema(m.input_schema.clone())
+                    .with_source("kernel:built-in");
+            if let Some(t) = agent_type_display {
+                desc = desc.with_metadata_entry("agent_type", t);
+            }
+            desc
         })
         .collect()
 }
@@ -96,6 +123,37 @@ mod tests {
             } else {
                 assert_eq!(d.visibility, Visibility::Scoped, "{} must be SCOPED", d.name);
             }
+        }
+    }
+
+    #[test]
+    fn descriptors_for_with_metadata_stamps_agent_type_when_provided() {
+        let descriptors = descriptors_for_with_metadata(
+            "easynet:///r/acme/agent/01LLM",
+            Some("claude-code"),
+        );
+        for d in &descriptors {
+            assert_eq!(
+                d.metadata.get("agent_type").map(String::as_str),
+                Some("claude-code"),
+                "{} must carry agent_type metadata when caller knows it",
+                d.name,
+            );
+        }
+    }
+
+    #[test]
+    fn descriptors_for_with_metadata_omits_agent_type_when_absent() {
+        let descriptors = descriptors_for_with_metadata(
+            "easynet:///r/acme/agent/01LLM",
+            None,
+        );
+        for d in &descriptors {
+            assert!(
+                !d.metadata.contains_key("agent_type"),
+                "{} must NOT fabricate agent_type when caller didn't supply one",
+                d.name,
+            );
         }
     }
 }
