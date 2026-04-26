@@ -143,19 +143,47 @@ echo
 # ─────────────────────────────────────────────────────────────────
 echo "Rule 3 — MCP only inside mcp-profile module (P4)"
 
+# MCP keyword scan. Allowed locations:
+#   * runtime/agents/profiles/mcp.rs          — owns InvokeMcpProvider
+#                                                 + tool spec projection
+#   * facade/cli/mcp_server.rs                — `easynet mcp_server`
+#                                                 user-facing edge entry
+#   * facade/cli/start.rs                     — `easynet start --mcp`
+#                                                 user-facing edge entry
+#   * facade/mcp/mod.rs                        — quarantine anchor (doc only)
 count_pattern "MCP keyword in CLI src (case-insensitive)" \
   '(?i)\bmcp\b' \
   "$SRC" \
-  "**/runtime/agents/mcp.rs" \
-  "**/runtime/agents/mcp_bridge.rs" \
-  "**/runtime/agents/mcp_client.rs" \
-  "**/runtime/agents/profiles/mcp.rs"
+  "**/runtime/agents/profiles/mcp.rs" \
+  "**/facade/cli/mcp_server.rs" \
+  "**/facade/cli/start.rs" \
+  "**/facade/mcp/mod.rs"
 
+# P4.8d quarantine check: facade/mcp may exist iff
+#   (a) it contains only mod.rs (no submodule files), AND
+#   (b) mod.rs imports nothing — it's a pure documentation anchor.
+# Independent dispatch / tool catalog / handlers in this directory
+# are violations of plan §A3 + §A5.
 if [[ -d "$SRC/facade/mcp" ]]; then
-  printf "  [WARN] %-60s exists\n" "facade/mcp/ legacy directory (delete in P4)"
-  total_violations=$((total_violations + 1))
+  unexpected_files=$(find "$SRC/facade/mcp" -type f -name '*.rs' ! -name 'mod.rs' 2>/dev/null)
+  if [[ -n "$unexpected_files" ]]; then
+    printf "  [WARN] %-60s present\n" "facade/mcp/ submodule files (must be in mcp-profile)"
+    total_violations=$((total_violations + 1))
+    if [[ "$PHASE" == "enforce" ]]; then
+      echo "    Unexpected files:"
+      while IFS= read -r f; do echo "      $f"; done <<< "$unexpected_files"
+    fi
+  else
+    printf "  [ ok ] %-60s quarantine anchor only\n" "facade/mcp/ contains only mod.rs"
+  fi
+  if grep -qE "^use|extern crate" "$SRC/facade/mcp/mod.rs" 2>/dev/null; then
+    printf "  [WARN] %-60s present\n" "facade/mcp/mod.rs imports (must be doc-only)"
+    total_violations=$((total_violations + 1))
+  else
+    printf "  [ ok ] %-60s no imports\n" "facade/mcp/mod.rs is doc-only"
+  fi
 else
-  printf "  [ ok ] %-60s absent\n" "facade/mcp/ legacy directory (delete in P4)"
+  printf "  [ ok ] %-60s absent\n" "facade/mcp/ directory"
 fi
 
 echo
