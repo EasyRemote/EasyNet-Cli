@@ -230,10 +230,104 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
         creds.node_id, heartbeat_ms
     ));
 
+    // Re-publish every registered agent's manifests to the freshly
+    // started axon-runtime. The runtime-local tool registry is
+    // in-memory by design (see EasyNet-Axon
+    // core/runtime-rs/src/state/runtime_tool.rs); a runtime restart
+    // drops every register-tool entry. Without this re-publish step
+    // the EasyNet frontend's Abilities catalog goes empty on every
+    // `easynet runtime stop && start` even though the agent registry
+    // (~/.easynet/agents.json) and the on-disk manifests are
+    // unchanged.
+    //
+    // Best-effort: per-agent failures are logged but never abort
+    // runtime startup. The runtime is up and serving — federation
+    // discovery just degrades to "this node has no abilities yet"
+    // until a successful re-publish lands. A subsequent
+    // `easynet agent add` against a healthy runtime fixes it.
+    republish_all_agents_best_effort(&bridge, &creds);
+
     if args.foreground {
         run_foreground_with_heartbeat(srv, &bridge, &creds, &endpoint, heartbeat_ms, args.no_mcp)
     } else {
         run_background_with_heartbeat(srv, &endpoint, heartbeat_ms)
+    }
+}
+
+/// Re-publish every registered agent's ability manifests to the freshly
+/// started axon-runtime. The runtime-local tool registry is in-memory
+/// by design (see EasyNet-Axon `core/runtime-rs/src/state/runtime_tool.rs`),
+/// so a runtime restart drops every register-tool entry. Without this
+/// step the EasyNet frontend's Abilities catalog goes empty after every
+/// `easynet runtime stop && start` even though the agent registry and
+/// the on-disk manifests are unchanged.
+///
+/// Best-effort. We log per-agent outcomes but do not propagate errors —
+/// runtime startup must complete so other surfaces (heartbeat,
+/// federation join) keep working. A registry that is briefly missing
+/// abilities is recoverable; a runtime that refused to start because
+/// one agent's directory is unreadable is not.
+fn republish_all_agents_best_effort(
+    bridge: &easynet_axon::dendrite_bridge::DendriteBridge,
+    creds: &config::Credentials,
+) {
+    let registry = match crate::registry::agents::load_agents() {
+        Ok(r) => r,
+        Err(e) => {
+            output::warn(&format!(
+                "could not load agent registry for re-publish: {e}"
+            ));
+            return;
+        }
+    };
+    if registry.agents.is_empty() {
+        // Brand-new install with no agents yet — nothing to re-publish.
+        return;
+    }
+    let socket_path = config::state_dir().join("control.sock");
+    let dispatch_endpoint = format!("ipc://{}", socket_path.display());
+
+    let mut total_ok = 0usize;
+    let mut total_published = 0usize;
+    for (agent_name, entry) in &registry.agents {
+        let Some(root) = entry.root_path.as_ref() else {
+            continue;
+        };
+        let directory = match crate::runtime::directory::AgentDirectory::open(root) {
+            Ok(d) => d,
+            Err(e) => {
+                output::warn(&format!(
+                    "re-publish {agent_name}: open agent directory failed: {e}"
+                ));
+                continue;
+            }
+        };
+        let outcomes = crate::runtime::publish::publish_agent_to_local_runtime(
+            bridge,
+            &creds.tenant_id,
+            &creds.node_id,
+            agent_name,
+            &directory,
+            &dispatch_endpoint,
+        );
+        for o in &outcomes {
+            total_published += 1;
+            match &o.result {
+                Ok(_) => total_ok += 1,
+                Err(msg) => {
+                    output::warn(&format!("re-publish {} failed: {msg}", o.tool_name));
+                }
+            }
+        }
+    }
+    if total_published > 0 {
+        output::detail(
+            "abilities",
+            &format!(
+                "{}/{} re-published — visible in EasyNet Abilities",
+                total_ok, total_published
+            ),
+        );
     }
 }
 
