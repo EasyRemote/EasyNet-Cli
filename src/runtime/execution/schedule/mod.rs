@@ -329,7 +329,7 @@ impl std::fmt::Debug for ScheduleService {
 
 /// Convenience constructor for tests + the daemon bin's setup
 /// path: build a fully-formed `ScheduleEntry` from the args
-/// `system.schedule.add` accepts.
+/// `schedule.add` accepts.
 pub fn make_entry(
     target_node: &str,
     target_agent: &str,

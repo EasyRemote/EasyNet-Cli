@@ -99,7 +99,7 @@ impl TenantId {
 /// A live agent run. v1 equivalent of the handle the existing
 /// `runtime::session::Session` already owns; the domain object here
 /// is the public face that KernelApi hands to a subscriber (or to
-/// PR-ATTACH's `system.session.attach` ability handler).
+/// PR-ATTACH's `fleet.attach_session` ability handler).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: SessionId,
@@ -210,7 +210,7 @@ pub enum MisfirePolicy {
     CatchUpWindowed,
 }
 
-/// A live Loop instance spawned via PR-LOOP's `system.loop.create`.
+/// A live Loop instance spawned via PR-LOOP's `loop.create`.
 /// The EAL Stage 3 loop executor stays the underlying engine; this
 /// handle is the Client-facing identity.
 #[derive(Debug, Clone, Serialize, Deserialize)]

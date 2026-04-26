@@ -46,7 +46,7 @@ pub const DEFAULT_HORIZON_SECS: u64 = 24 * 60 * 60;
 /// block. A long-tail of low-priority cron jobs would otherwise
 /// blow up the prompt. The cap is intentionally low — chat
 /// callers wanting the full list should call
-/// `system.schedule.list` directly.
+/// `schedule.list` directly.
 pub const MAX_ENTRIES_RENDERED: usize = 10;
 
 pub struct ScheduleLoader {

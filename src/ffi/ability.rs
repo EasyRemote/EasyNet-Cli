@@ -15,7 +15,7 @@
 // result (RPC)" or "name + JSON args → stream of JSON frames
 // (Subscribe)". Keeping the ABI at two functions means:
 //
-//   (a) Adding `system.session.attach` doesn't bump the ABI.
+//   (a) Adding `fleet.attach_session` doesn't bump the ABI.
 //   (b) Client bindings can be auto-generated from `.proto` files
 //       without a per-ability C wrapper layer.
 //   (c) The ABI stability contract has exactly two functions to

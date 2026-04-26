@@ -598,7 +598,7 @@ mod tests {
     }
 
     fn proxy_with_empty_registry() -> AbilityProxy {
-        // Some tests want a clean slate (no system.ping etc.) so they
+        // Some tests want a clean slate (no observe.health etc.) so they
         // can assert the unregistered-ability path; build an empty
         // registry + a NoopGateway here.
         let registry = Arc::new(LocalAbilityRegistry::new());
@@ -612,7 +612,7 @@ mod tests {
 
     #[test]
     fn invoke_system_ping_returns_result_frame_with_request_id_preserved() {
-        // The cdylib + smoke scripts depend on `system.ping` returning
+        // The cdylib + smoke scripts depend on `observe.health` returning
         // a Result envelope (not the v1 skeleton Error). This test
         // pins that contract end-to-end through the live registry.
         let p = proxy_with_live_registry();
@@ -685,7 +685,7 @@ mod tests {
 
     #[test]
     fn subscribe_to_session_attach_returns_terminal_at_minimum() {
-        // The system.session.attach handler is registered as a stream
+        // The fleet.attach_session handler is registered as a stream
         // handler. With no active session, v1 emits zero data Frames
         // and exactly one Terminal — pin that the proxy threads the
         // Terminal through.

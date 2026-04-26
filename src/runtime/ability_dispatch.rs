@@ -25,7 +25,7 @@
 // v1 scope
 // --------
 // `LocalAbility` registry is keyed by full ability name
-// (`system.ping`, future `system.session.attach`, etc.). The
+// (`observe.health`, future `fleet.attach_session`, etc.). The
 // remote path delegates to `GatewayApi::invoke_remote_ability`
 // which already exists. Streaming abilities (`subscribe`-mode
 // invocations) follow in PR-ATTACH/PR-PERM/PR-DISCUSS/PR-LOOP;
@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn unregistered_local_ability_returns_clear_error() {
         // The error must name the ability so an operator can grep
-        // "is system.ping registered?" against the daemon log.
+        // "is observe.health registered?" against the daemon log.
         let dispatcher =
             AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
         let err = dispatcher

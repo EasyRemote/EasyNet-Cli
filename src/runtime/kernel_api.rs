@@ -69,7 +69,7 @@ pub trait KernelApi: Send + Sync {
     // ── Session (PR-ATTACH) ──────────────────────────────────────────
 
     /// List active sessions. v1 returns only sessions hosted on the
-    /// local node; cross-node listing goes through a `system.session.list`
+    /// local node; cross-node listing goes through a `fleet.list_sessions`
     /// ability invocation that itself calls back into `invoke`.
     fn list_active_sessions(&self) -> anyhow::Result<Vec<Session>>;
 

@@ -1,4 +1,4 @@
-// EasyNet CLI — system.skill.* (skill enumeration as a system ability)
+// EasyNet CLI — fleet.* (skill enumeration as a system ability)
 // =====================================================================
 //
 // File: src/runtime/system/skill_ability.rs
@@ -17,9 +17,9 @@
 //
 //   ListMCPTools (federation discovery) → CallMCPTool (execution)
 //
-// MCP tools, sessions (`system.session.list`), schedules
-// (`system.schedule.list`), discuss rooms (`system.discuss.create`),
-// permission requests (`system.permission.subscribe`), and now
+// MCP tools, sessions (`fleet.list_sessions`), schedules
+// (`schedule.list`), discuss rooms (`discuss.create`),
+// permission requests (`consent.subscribe`), and now
 // skills all use this single pattern. A fresh RPC per resource type
 // would force the proto, the FFI bridge, the SDK, and the backend to
 // each grow a parallel parser; routing through abilities reuses the
@@ -27,7 +27,7 @@
 //
 // v1 verbs
 // --------
-// Only `system.skill.list` lands in this commit — that is the verb
+// Only `fleet.list_abilities` lands in this commit — that is the verb
 // the EasyNet frontend's Skills page needs. Future verbs (`install`,
 // `remove`, `upgrade`) will be wired in subsequent commits and reuse
 // the same registration template; the CLI commands
@@ -72,7 +72,7 @@ pub fn register(reg: &mut LocalAbilityRegistry) {
     reg.register_rpc(ABILITY_LIST, Arc::new(list_handler));
 }
 
-/// `system.skill.list` RPC handler.
+/// `fleet.list_abilities` RPC handler.
 ///
 /// Args: `{ "agent_id": "<name>"? }` — when present, filter to skills
 /// owned by that agent; absent or empty = list across every

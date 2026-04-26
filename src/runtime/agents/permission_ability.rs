@@ -1,11 +1,11 @@
-// EasyNet CLI — system.permission.{subscribe,decide} (PR-PERM)
+// EasyNet CLI — consent.{subscribe,decide} (PR-PERM)
 // =============================================================
 //
 // File: src/runtime/system/permission_ability.rs
 // Description: Two abilities that surface the approval-broker queue
 //              over the IPC plane:
 //
-//   * `system.permission.subscribe` (Stream) — emits a snapshot of
+//   * `consent.subscribe` (Stream) — emits a snapshot of
 //                                              the current pending
 //                                              queue, then live
 //                                              updates as new asks
@@ -15,7 +15,7 @@
 //                                              lands at PR-INVOCATION-
 //                                              EXEC-UNITY when the
 //                                              IPC fan-out wires up.
-//   * `system.permission.decide`    (RPC)    — deliver a decision
+//   * `consent.decide`    (RPC)    — deliver a decision
 //                                              for a pending id.
 //
 // Cross-machine semantics
@@ -52,7 +52,7 @@ pub fn register(reg: &mut LocalAbilityRegistry, perms: Arc<PermissionService>) {
     );
 }
 
-/// `system.permission.subscribe` stream handler.
+/// `consent.subscribe` stream handler.
 ///
 /// Args: `{ }` — no parameters in v1.
 ///
@@ -102,7 +102,7 @@ fn subscribe_handler(svc: &PermissionService, _args: Value) -> anyhow::Result<St
     }
 }
 
-/// `system.permission.decide` RPC handler.
+/// `consent.decide` RPC handler.
 ///
 /// Args: `{ "id": string, "decision": "allow" | "deny" | "allow_once" }`
 /// Returns: `{ "ok": true }` on success; structured error otherwise.

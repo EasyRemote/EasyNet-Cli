@@ -288,7 +288,7 @@ mod tests {
             .expect("round_trip");
 
         // PR-INVOCATION-EXEC-UNITY: Invoke now reaches the real
-        // dispatcher; system.ping returns a Result envelope. The
+        // dispatcher; observe.health returns a Result envelope. The
         // request_id round-trip is the load-bearing assertion (Client
         // bindings correlate by it); the value shape is owned by the
         // ping handler.
@@ -296,7 +296,7 @@ mod tests {
             OutgoingFrame::Result { request_id, .. } => {
                 assert_eq!(request_id, "ffi-1");
             }
-            other => panic!("expected Result frame for system.ping, got {other:?}"),
+            other => panic!("expected Result frame for observe.health, got {other:?}"),
         }
 
         // Drop the client to close its side; server task exits via EOF.
