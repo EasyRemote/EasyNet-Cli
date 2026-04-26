@@ -39,6 +39,45 @@ pub fn owns(ability_name: &str) -> bool {
         .any(|p| ability_name.starts_with(p))
 }
 
+/// Build AbilityDescriptors for every ability the live registry
+/// flags as owned by the device profile, with the visibility +
+/// scope defaults from RFC plan §18.
+///
+/// Wire shape — for each name in the registry that `owns(name)`
+/// returns true for:
+///   * observe.*  → PUBLIC
+///   * everything else (fleet/admin/schedule/loop/discuss/meta) →
+///     SCOPED with scope_subjects/scope_agents = Any (P4.1 default).
+///     P4.7 narrows the SCOPED axes to the host operator URA on
+///     daemon boot.
+///
+/// `owner_agent_uri` is the device-profile Agent's canonical URA,
+/// minted at first `federation.join` and persisted via
+/// `local-agents.json`. Caller passes it in so this module stays
+/// pure (no daemon-state coupling).
+pub fn descriptors_for(
+    owner_agent_uri: &str,
+) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
+    use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
+    let mut out = Vec::new();
+    for meta in crate::runtime::agents::published_abilities() {
+        if !owns(&meta.name) {
+            continue;
+        }
+        let visibility = if meta.name.starts_with("observe.") {
+            Visibility::Public
+        } else {
+            Visibility::Scoped
+        };
+        let descriptor = AbilityDescriptor::new(meta.name.clone(), owner_agent_uri, visibility)
+            .expect("registry-derived names satisfy descriptor invariants")
+            .with_input_schema(meta.input_schema.clone())
+            .with_source("kernel:built-in");
+        out.push(descriptor);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,5 +100,34 @@ mod tests {
         assert!(!owns("mcp.bridge.call_tool"));
         assert!(!owns("conversation.send"));
         assert!(!owns("federation.join"));
+    }
+
+    #[test]
+    fn descriptors_for_emit_only_owned_names() {
+        let owner = "easynet:///r/acme/agent/01DEV";
+        let descriptors = descriptors_for(owner);
+        assert!(!descriptors.is_empty(), "device profile must own at least observe.health");
+        for d in &descriptors {
+            assert!(
+                owns(&d.name),
+                "device::descriptors_for emitted '{}' which it does not own",
+                d.name
+            );
+            assert_eq!(d.owner_agent_uri, owner);
+            assert_eq!(d.source, "kernel:built-in");
+        }
+    }
+
+    #[test]
+    fn descriptors_for_marks_observe_as_public_and_others_scoped() {
+        use crate::runtime::ability_descriptor::Visibility;
+        let descriptors = descriptors_for("easynet:///r/acme/agent/01DEV");
+        for d in descriptors {
+            if d.name.starts_with("observe.") {
+                assert_eq!(d.visibility, Visibility::Public, "{} must be PUBLIC", d.name);
+            } else {
+                assert_eq!(d.visibility, Visibility::Scoped, "{} must be SCOPED", d.name);
+            }
+        }
     }
 }

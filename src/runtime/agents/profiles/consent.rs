@@ -29,6 +29,28 @@ pub fn owns(ability_name: &str) -> bool {
         .any(|p| ability_name.starts_with(p))
 }
 
+/// AbilityDescriptors for every consent.* in the live registry,
+/// anchored to the consent-profile's canonical URA. Per RFC §18,
+/// every consent.* defaults to SCOPED — the kernel is the only
+/// expected consumer of `consent.request`, and UI clients are
+/// the only expected consumers of `consent.subscribe` / `decide`.
+/// P4.7 narrows scope_subjects/scope_agents.
+pub fn descriptors_for(
+    owner_agent_uri: &str,
+) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
+    use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
+    crate::runtime::agents::published_abilities()
+        .into_iter()
+        .filter(|m| owns(&m.name))
+        .map(|m| {
+            AbilityDescriptor::new(m.name.clone(), owner_agent_uri, Visibility::Scoped)
+                .expect("registry-derived names satisfy descriptor invariants")
+                .with_input_schema(m.input_schema.clone())
+                .with_source("kernel:built-in")
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
