@@ -507,7 +507,7 @@ mod tests {
         let tenant = "tenant-x".to_string();
         let registry = registry_with_claude();
         let mut local = crate::runtime::ability_dispatch::LocalAbilityRegistry::new();
-        crate::runtime::system::chat_ability::register(
+        crate::runtime::agents::chat_ability::register(
             &mut local,
             &registry,
             std::sync::Arc::new(Vec::new()),
@@ -559,7 +559,7 @@ mod tests {
         // cannot have been exercised.
         let registry = registry_with_claude();
         let mut local = crate::runtime::ability_dispatch::LocalAbilityRegistry::new();
-        crate::runtime::system::chat_ability::register(
+        crate::runtime::agents::chat_ability::register(
             &mut local,
             &registry,
             std::sync::Arc::new(Vec::new()),

@@ -472,7 +472,7 @@ fn run_foreground_with_heartbeat(
                 // adapter would have nothing to dispatch to and surface
                 // an Internal "boot ordering" error on every chat call.
                 let mut local = crate::runtime::ability_dispatch::LocalAbilityRegistry::new();
-                crate::runtime::system::chat_ability::register(
+                crate::runtime::agents::chat_ability::register(
                     &mut local,
                     &registry,
                     std::sync::Arc::new(Vec::new()),

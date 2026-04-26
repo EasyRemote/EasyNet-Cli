@@ -45,7 +45,7 @@ pub const ABILITY_LIST: &str = "fleet.list_sessions";
 pub const ABILITY_ATTACH: &str = "fleet.attach_session";
 
 /// Register the two session abilities on the registry. Called from
-/// `runtime::system::build_registry`.
+/// `runtime::agents::build_registry`.
 ///
 /// `attach` is a Stream-mode ability — its handler is a stream
 /// producer rather than a single response. v1 ships the RPC handler

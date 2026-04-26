@@ -296,7 +296,7 @@ mod tests {
     use super::*;
     use crate::registry::agents::{AgentEntry, AgentRegistry, AgentType};
     use crate::runtime::ability_dispatch::LocalAbilityRegistry;
-    use crate::runtime::system::chat_ability;
+    use crate::runtime::agents::chat_ability;
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

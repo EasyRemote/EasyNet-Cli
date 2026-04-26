@@ -38,7 +38,7 @@ use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 pub const ABILITY_NAME: &str = "observe.health";
 
 /// Register the `system.ping` handler on the supplied registry.
-/// Called from `runtime::system::build_registry`.
+/// Called from `runtime::agents::build_registry`.
 pub fn register(reg: &mut LocalAbilityRegistry) {
     reg.register_rpc(ABILITY_NAME, Arc::new(handler));
 }

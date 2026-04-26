@@ -213,12 +213,12 @@ pub fn build(registry: &AgentRegistry, hostname: &str) -> Option<HashMap<String,
 /// agent entries so downstream tooling can reuse the same parser.
 ///
 /// Iteration order follows
-/// `runtime::system::published_ability_names()` which is built from
+/// `runtime::agents::published_ability_names()` which is built from
 /// a `BTreeMap` and therefore deterministic. A regression that
 /// switched the underlying registry to a `HashMap` would silently
 /// break golden-fixture byte-stability.
 fn system_skills_json() -> String {
-    let names = crate::runtime::system::published_ability_names();
+    let names = crate::runtime::agents::published_ability_names();
     if names.is_empty() {
         return String::new();
     }
@@ -267,7 +267,7 @@ fn system_skills_json() -> String {
 /// Look up the human-readable description for a published system
 /// ability name.
 ///
-/// Authoritative source lives in `runtime::system::description_for` —
+/// Authoritative source lives in `runtime::agents::description_for` —
 /// kept there so the federation label and the runtime-local register
 /// publisher (`runtime::publish::publish_system_abilities_to_local_runtime`)
 /// pull from one table. This function exists as a thin local alias so
@@ -275,7 +275,7 @@ fn system_skills_json() -> String {
 /// second match here, that's exactly the drift the centralisation
 /// removed.
 fn description_for(name: &str) -> &'static str {
-    crate::runtime::system::description_for(name)
+    crate::runtime::agents::description_for(name)
 }
 
 #[cfg(test)]

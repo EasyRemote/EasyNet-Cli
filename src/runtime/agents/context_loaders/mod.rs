@@ -12,7 +12,7 @@
 // ----------------
 // Each loader is < 100 lines on its own but pulls in distinct
 // dependencies (ScheduleService, filesystem walks, TOML parsing).
-// Grouping them under `system::context_loaders` keeps `system::mod`
+// Grouping them under `agents::context_loaders` keeps `system::mod`
 // short and gives a future "list all loaders" introspection a
 // single import to walk.
 //
@@ -40,7 +40,7 @@ pub mod user_profile;
 
 use std::sync::Arc;
 
-use crate::runtime::system::chat_ability::ContextLoader;
+use crate::runtime::agents::chat_ability::ContextLoader;
 
 /// Build the v1 default context-loader chain in canonical order.
 /// The order matters because each loader's output is concatenated

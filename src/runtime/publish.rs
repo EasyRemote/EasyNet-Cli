@@ -171,7 +171,7 @@ pub fn publish_one(
 ///
 /// What gets published
 /// -------------------
-/// Whatever `runtime::system::published_abilities()` returns — today
+/// Whatever `runtime::agents::published_abilities()` returns — today
 /// 17 entries (ping + session + permission + discuss + schedule + loop
 /// + skill). `<agent>.chat` is filtered there because those tools
 /// already publish via the per-agent path off `chat.ability.toml`;
@@ -193,7 +193,7 @@ pub fn publish_system_abilities_to_local_runtime(
     node_id: &str,
     dispatch_endpoint: &str,
 ) -> Vec<PublishOutcome> {
-    crate::runtime::system::published_abilities()
+    crate::runtime::agents::published_abilities()
         .into_iter()
         .map(|meta| {
             let result = bridge
