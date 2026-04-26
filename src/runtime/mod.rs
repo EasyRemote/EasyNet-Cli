@@ -111,6 +111,7 @@ pub mod execution;
 // PR-ATTACH onwards extends this).
 pub mod ability_descriptor;
 pub mod ability_dispatch;
+pub mod advertise;
 pub mod federation_client;
 pub mod hosted_receipt;
 pub mod provisional_ura;
