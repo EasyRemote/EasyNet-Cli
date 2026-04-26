@@ -110,4 +110,5 @@ pub mod execution;
 // device-level ability the daemon publishes (today: `system.ping`;
 // PR-ATTACH onwards extends this).
 pub mod ability_dispatch;
+pub mod publish;
 pub mod system;
