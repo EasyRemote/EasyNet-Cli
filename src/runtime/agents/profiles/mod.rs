@@ -27,6 +27,7 @@
 //!   docs/rfc/AXON-RFC-001-plan-v4.1.2.md §18 — standard ability registry
 //!   docs/rfc/AXON-RFC-001-restatement-mapping.md — old → new mapping
 
+pub mod bootstrap;
 pub mod device;
 pub mod consent;
 pub mod policy;

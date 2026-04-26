@@ -9,10 +9,10 @@ Rule 1 — No CLI call sites to deleted axon RPCs
 Rule 2 — Agent has no kind/role/type discriminator
   [ ok ] enum AgentRole / AgentKind in CLI                            0
   [ ok ] agent.kind / agent.role branches                             0
-  [WARN] AgentType internal enum (kept by P4.4 decision; no wire impact) 118
+  [WARN] AgentType internal enum (kept by P4.4 decision; no wire impact) 119
 
 Rule 3 — MCP only inside mcp-profile module (P4)
-  [WARN] MCP keyword in CLI src (case-insensitive)                    328
+  [WARN] MCP keyword in CLI src (case-insensitive)                    336
   [WARN] facade/mcp/ legacy directory (delete in P4)                  exists
 
 Rule 4 — system.* ability namespace retired
@@ -36,7 +36,7 @@ Rule 10 — AbilityDescriptor scope metadata (deferred to P4)
   [info] AbilityDescriptor lands in P4
 
 ===================================================================
-Total flagged occurrences: 491
+Total flagged occurrences: 500
 
 Phase: baseline (P0). Counts recorded; CI does not fail.
 Set RFC001_PHASE=enforce to fail on any non-zero count.
