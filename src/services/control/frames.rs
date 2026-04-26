@@ -66,7 +66,20 @@ pub enum IncomingFrame {
 pub enum OutgoingFrame {
     /// Single-shot RPC response. Matches an `Invoke` frame's
     /// `request_id`.
-    Result { request_id: String, value: Value },
+    ///
+    /// `receipt_header` is the §A12 / §1.3 staging shape carrying
+    /// `callee_agent_uri` / `signer_agent_uri` / signing model.
+    /// Optional on the wire so older Clients that don't decode it
+    /// tolerate the addition; present whenever the dispatch path
+    /// can determine which Agent owned the ability (P4.8c onwards).
+    /// When absent, callers default to "Selfsigned by the device-
+    /// profile" — the historical behaviour pre-RFC.
+    Result {
+        request_id: String,
+        value: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        receipt_header: Option<crate::runtime::hosted_receipt::HostedAgentReceiptHeader>,
+    },
     /// One streaming frame. Matches a `Subscribe` frame's
     /// `subscription_id`.
     Frame {
@@ -159,8 +172,44 @@ mod tests {
         let f = OutgoingFrame::Result {
             request_id: "Req-42-XYZ".into(),
             value: serde_json::Value::Null,
+            receipt_header: None,
         };
         let s = serde_json::to_string(&f).unwrap();
         assert!(s.contains("\"request_id\":\"Req-42-XYZ\""));
+    }
+
+    #[test]
+    fn outgoing_result_frame_omits_receipt_header_field_when_none() {
+        // Wire-shape contract: when the dispatch path can't resolve
+        // the owner Agent (e.g. pre-join state), the Result frame
+        // must NOT emit a receipt_header field — older Clients that
+        // don't decode the field stay compatible.
+        let f = OutgoingFrame::Result {
+            request_id: "x".into(),
+            value: serde_json::Value::Null,
+            receipt_header: None,
+        };
+        let s = serde_json::to_string(&f).unwrap();
+        assert!(
+            !s.contains("receipt_header"),
+            "absent header must not serialize; got {s}"
+        );
+    }
+
+    #[test]
+    fn outgoing_result_frame_emits_receipt_header_field_when_present() {
+        let header =
+            crate::runtime::hosted_receipt::HostedAgentReceiptHeader::new_selfsigned(
+                "easynet:///r/acme/agent/01DEV",
+            )
+            .unwrap();
+        let f = OutgoingFrame::Result {
+            request_id: "x".into(),
+            value: serde_json::Value::Null,
+            receipt_header: Some(header),
+        };
+        let s = serde_json::to_string(&f).unwrap();
+        assert!(s.contains("receipt_header"));
+        assert!(s.contains("01DEV"));
     }
 }
