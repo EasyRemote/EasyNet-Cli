@@ -407,10 +407,8 @@ AbilityDescriptor {
   name                  // e.g. "fleet.list_abilities", "skill.alive-video"
   owner_agent_uri       // the Agent that hosts this Ability (always callee in invoke)
   visibility            // PRIVATE | SCOPED | PUBLIC
-  scope_subjects[]      // when SCOPED: list of subject URAs (or URA prefixes) allowed to invoke
-  scope_agents[]        // when SCOPED: list of caller URAs allowed (in addition to scope_subjects check)
-                        //   both lists are checked; subject must match scope_subjects (or be empty/unrestricted)
-                        //   AND caller must match scope_agents (or be empty/unrestricted)
+  scope_subjects        // ScopeRule  — which subjects may invoke
+  scope_agents          // ScopeRule  — which callers may invoke
   source                // free-form provenance, e.g. "skill_md:~/.claude/skills/alive-video/SKILL.md"
                         //   or "manifest:<agent-root>/abilities/foo.ability.toml"
                         //   or "kernel:built-in"
@@ -427,21 +425,132 @@ AbilityDescriptor {
 }
 ```
 
+**ScopeRule (M3).** Each scope axis is one of:
+
+```
+ScopeRule = Any                                   // no restriction on this axis
+          | OnlyMatching(uri_or_prefix[])         // allow listed URAs / prefixes
+                                                  //   prefix matching follows the
+                                                  //   path-boundary rule from §1.5 M2
+          | None                                  // explicit deny-all on this axis
+```
+
+`Any` and `None` are distinct. `Any` means "this axis does not restrict
+access"; `None` means "no caller / no subject is allowed via this axis"
+— useful for owner-only abilities (PRIVATE) modelled as
+`scope_subjects: OnlyMatching([host_operator_uri]),
+scope_agents: OnlyMatching([host_device_uri])`. An empty
+`OnlyMatching([])` is equivalent to `None` and SHOULD be normalised
+to `None` by the descriptor builder.
+
 Visibility filter at `federation.resolve` and `meta.list_abilities`:
 
 ```
 PUBLIC      → always returned
-SCOPED      → returned iff (subject ∈ scope_subjects OR scope_subjects empty)
-                       AND (caller ∈ scope_agents   OR scope_agents   empty)
-              with empty meaning "no restriction on that axis"
+SCOPED      → returned iff matches_scope(scope_subjects, envelope.subject)
+                       AND matches_scope(scope_agents, envelope.caller)
 PRIVATE     → returned iff caller is the owner_agent_uri's signing authority
                           (i.e. the device-profile that hosts the owning Agent)
               OR subject is the operator who owns the host
               Otherwise omitted from response
+
+matches_scope(rule, uri) =
+  rule == Any                       → true
+  rule == OnlyMatching(list)        → uri ∈ list (with prefix path-boundary rule)
+  rule == None                      → false
 ```
 
 PRIVATE Abilities are functionally a degenerate SCOPED case: scope =
-{the host's own operator}. This unifies the model.
+{the host's own operator and the host device}. This unifies the model.
+PRIVATE remains a distinct visibility tag because it carries an
+additional rule: NEVER auto-surfaced via remote `federation.resolve`,
+only projected by mcp-profile under `project_local_private_for_owner`
+for local connections (§A5).
+
+### §1.7 — Operator URA provisioning [R1]
+
+Operators (humans) are subjects, not Agents. They have URAs of shape
+`easynet:///r/<realm>/agent/01USR-<ulid>` and a `RealmDirectory` entry
+recording the binding from external auth identity to URA. They do NOT
+host abilities and they are NEVER `caller` in an envelope — they are
+ALWAYS `subject`, with caller being a hosting Agent
+(backend-profile, device-profile) and a DelegationProof attesting
+authority.
+
+**Where the URA lives.**
+
+```
+RealmDirectory entry {
+  agent_uri:        easynet:///r/<realm>/agent/01USR-<ulid>
+  identity: {
+    signing_authority:  "external:<auth_provider_id>"
+                        // e.g. "external:auth0:<tenant>", "external:local-pair", "external:keycloak"
+    external_subject:   <stable identifier from auth provider; e.g. JWT.sub>
+    public_key:         null
+                        // operators have no daemon-resident key;
+                        // delegation always flows via a trusted issuer
+                        // (backend-profile or local device-profile)
+    host_attestation:   null
+  }
+  abilities:        []        // operators host no abilities
+  endpoints:        []
+  metadata:         { display_name?, contact?, ... }   // optional, opaque to kernel
+  status:           active | suspended | revoked
+}
+```
+
+**Who mints.** Hub-profile is the sole minting authority for operator
+URAs. Two paths:
+
+1. **Backend-mediated mint** — `identity.register_operator` invoked by
+   backend-profile after backend has verified a JWT (or equivalent
+   external auth credential):
+
+   ```
+   caller          = backend-profile Agent
+   subject         = backend-profile Agent
+   delegation      = (none; subject == caller; this is an
+                      identity-bootstrap call, not yet
+                      operator-attributed)
+   callee          = hub-profile Agent
+   ability         = identity.register_operator
+   args            = { auth_provider_id, external_subject,
+                       display_name? }
+   causal_context  = Null with reason="operator_bootstrap"
+   ```
+
+   Hub looks up `(auth_provider_id, external_subject)` in
+   RealmDirectory. Cache hit → return existing URA with status. Miss
+   → mint fresh ULID-based URA, persist entry, return URA.
+
+2. **Local-pair mint** — `easynet pair --as-hub` and the first
+   `easynet join` from a fresh device implicitly call
+   `identity.register_operator` with
+   `auth_provider_id = "local-pair"` and
+   `external_subject = <pairing-secret-hash>`. The minted URA is
+   recorded as `host_owner_operator_uri` for that device-profile (see
+   §3 Step C/D for R2).
+
+**Who looks up.** Backend-profile maintains a cache
+`(auth_provider_id, jwt.sub) → operator_uri`. Cache miss → invoke
+`identity.resolve_operator` (read-only) on hub. If the operator does
+not exist yet, backend invokes `identity.register_operator` to mint.
+Hub-profile is the source of truth; the cache exists only to avoid
+hub round-trips on the JWT-validation hot path.
+
+**Status transitions.** `status: suspended` blocks all envelopes with
+this URA as subject (admission gate rejects with
+`SUBJECT_SUSPENDED`); `status: revoked` is permanent and forbids
+re-mint of the same `(auth_provider_id, external_subject)` pair. Hub
+admins manage transitions via `identity.revoke_operator` (admin-scoped,
+see §18).
+
+**Multi-host operators.** A single operator URA may be the
+`host_owner_operator_uri` of multiple device-profiles. Each
+device-profile's `federation.join` records its host_owner separately
+in its own RealmDirectory metadata; the same URA appearing in two
+devices' `host_owner_operator_uri` slots means "same human owns both
+hosts" and is the basis for §16 cross-device authority checks.
 
 ---
 
@@ -593,7 +702,15 @@ Step B.  CLI sends bootstrap invocation:
            callee              = hub-profile Agent (URA from token)
            ability             = federation.join
            args                = { realm, pairing_secret, public_key,
-                                   host_descriptor, profiles_summary }
+                                   host_descriptor, profiles_summary,
+                                   host_owner_hint  // NEW (R2): one of:
+                                                    //   - { auth_provider_id, external_subject }
+                                                    //     when the joining operator already
+                                                    //     has an external auth identity
+                                                    //   - { local_pair: true } when joining
+                                                    //     via direct CLI pairing — hub will
+                                                    //     mint a "local-pair" operator URA
+                                 }
            causal_context      = Null (genesis exception)
            nonce               = fresh
            caller_signature    = self-sign with new private key
@@ -614,15 +731,39 @@ Step D.  Hub federation.join handler:
               "regenerate keypair and retry"}. Hub does NOT rotate the
              device's key.
            Bind public_key to URA in RealmDirectory.
+
+           [R2] Resolve host_owner_operator_uri:
+             - host_owner_hint = { auth_provider_id, external_subject }
+                 → invoke identity.resolve_operator; mint via
+                   identity.register_operator if missing.
+             - host_owner_hint = { local_pair: true }
+                 → mint via identity.register_operator with
+                   auth_provider_id = "local-pair",
+                   external_subject = sha256(pairing_secret +
+                                             canonical_agent_uri).
+             Record host_owner_operator_uri in this device's
+             RealmDirectory entry under metadata.
+
            Persist membership.
            Sign Receipt:
              { Ok, body: { canonical_agent_uri, membership_token,
                            hub_endpoints, heartbeat_ms,
-                           realm_trust_root_pubkey, join_receipt_hash } }
+                           realm_trust_root_pubkey, join_receipt_hash,
+                           host_owner_operator_uri  // NEW (R1+R2):
+                                                    // operator URA
+                                                    // bound to this
+                                                    // device
+                         } }
            Publish receipt hash to realm transparency log.
 
 Step E.  CLI receives Receipt.
-         Writes ~/.easynet/credentials.json with canonical_agent_uri.
+         Writes ~/.easynet/credentials.json with:
+           - canonical_agent_uri      (this device's URA)
+           - host_owner_operator_uri  (R2; cached locally so admission
+                                       gate can verify rule 2.5
+                                       without a hub round-trip)
+           - join_receipt_hash, hub_endpoints, membership_token,
+             heartbeat_ms, realm_trust_root_pubkey
          Writes ~/.easynet/local-agents.json with this URA as
          host_device_agent_uri.
 
@@ -680,8 +821,10 @@ Step B.  device-profile fleet.start_agent handler:
               Record in ~/.easynet/local-agents.json.
            2. Create workspace ~/.easynet/workspaces/claude/.
            3. Scan ~/.claude/skills, build PRIVATE AbilityDescriptors
-              with owner = new llm Agent URA, scope_subjects =
-              [operator URA].
+              with owner = new llm Agent URA,
+              scope_subjects = OnlyMatching([operator URA]),
+              scope_agents   = OnlyMatching([device-profile URA])
+              (per §1.6 ScopeRule, M3).
            4. Spawn handler. Register in LocalAgentCatalog with
               signing_authority = "hosted_by:device-profile-URA".
            5. federation.advertise_agent for the new llm Agent
@@ -777,9 +920,11 @@ Same shape as §7, ability = `conversation.send`. For streaming variant,
 daemon uses InvokeStream.
 
 Note: per [P8], `conversation.send` and `conversation.stream` default
-visibility is **SCOPED**, with scope_subjects = [host operator's URA].
-A remote caller without the operator in scope cannot invoke them
-unless `meta.publish` has changed visibility to PUBLIC.
+visibility is **SCOPED**, with
+`scope_subjects = OnlyMatching([host operator's URA])` (per §1.6 M3).
+A remote caller whose subject does not match the host operator cannot
+invoke them unless `meta.publish` has changed visibility to PUBLIC or
+extended `scope_subjects`.
 
 ---
 
@@ -1077,11 +1222,23 @@ $ easynet ability invoke easynet:///r/acme/agent/01LLM-host-B-claude.skill.desig
       host-B's RealmDirectory).
     Membership: host-A is realm member.
     Delegation: per §1.5 — DelegationProof's caller=host-A device,
-      subject=operator, scopes include "skill.*". Pass.
+      subject=operator URA, scopes include "skill.*". Apply rule 2.5
+      (R2): host-A's implicit-issuer trust covers
+      audience=host-A-or-its-hosted-agents-or-hub. host-B is NEITHER.
+      So host-A is NOT acting under the local-host exception here;
+      the DelegationProof MUST instead chain through a backend-profile
+      issuer OR an explicit cross-device delegation. If the
+      DelegationProof carries only host-A's local-scope signature
+      with audience covering host-B, REJECT with
+      DELEGATION_AUDIENCE_OUT_OF_SCOPE.
     Policy: visibility check — skill.design is PRIVATE on host-B's
-      claude Agent, scope_subjects = [host-B operator]. Operator URA
-      from host-A is the SAME operator (assuming single tenancy) →
-      pass. Otherwise → DENY.
+      claude Agent, scope_subjects = OnlyMatching([host-B's
+      host_owner_operator_uri]). Pass iff envelope.subject equals
+      host-B's host_owner_operator_uri (URA equality, not by tenancy).
+      Same-operator-on-multiple-hosts is the natural case (operator's
+      URA is recorded as host_owner on both devices); two distinct
+      operators sharing a realm fail this check by URA inequality.
+      Otherwise → DENY with VISIBILITY_DENIED.
   Dispatch via host-B LocalAgentCatalog.
   Receipt back to host-A.
 
@@ -1092,10 +1249,25 @@ $ easynet ability invoke easynet:///r/acme/agent/01LLM-host-B-claude.skill.desig
   Prints result.
 ```
 
+**Practical implication of R2.** A naive `easynet ability invoke
+<host-B-URA>...` from host-A's CLI does NOT succeed if it relies only
+on host-A's local-socket DelegationProof. Either:
+- The user invokes via the frontend (backend-profile issues a
+  cross-device-scoped DelegationProof under JWT), or
+- The user has authorised the cross-device path explicitly via a
+  delegation-rotation flow (future work; out of scope for v4.1.2).
+
+Local CLI cross-device invocation is therefore restricted to abilities
+whose visibility is PUBLIC, or SCOPED with `scope_subjects: Any`. This
+is the deliberate consequence of R2's "no implicit cross-device
+authority for local sockets" rule.
+
 **Hub-down resilience clause (§A11):** after a successful prior
 `federation.resolve` for the target and while the cached RealmDirectory
-entry is unexpired, cross-device invocation MUST proceed with hub
-stopped. Without cached entry → cross-device discovery requires hub.
+entry is unexpired (per §1.2 cache TTL — default
+`max(heartbeat_ms × 6, 60s)`), cross-device invocation MUST proceed
+with hub stopped. Without a cached entry → cross-device discovery
+requires hub.
 
 ---
 
@@ -1138,6 +1310,9 @@ Visibility column reflects [P8] correction for conversation.*.)
 | identity | rotate_key | hub | SCOPED (subject auth required) | `{agent_uri, new_pubkey, attestation}` | `{rotated_at, prior_key_id}` |
 | identity | revoke_key | hub | SCOPED | `{key_id, reason}` | `{ack}` |
 | identity | issue_token | hub | SCOPED | `{purpose, ttl}` | `{token}` |
+| identity | register_operator [R1] | hub | SCOPED to trusted-issuer callers (backend-profile, device-profile during pair/join) | `{auth_provider_id, external_subject, display_name?}` | `{operator_uri, status, was_existing}` |
+| identity | resolve_operator [R1] | hub | SCOPED to trusted-issuer callers | `{auth_provider_id, external_subject}` | `{operator_uri?, status?}` (absent fields = not registered) |
+| identity | revoke_operator [R1] | hub | SCOPED (admin) | `{operator_uri, reason, permanent: bool}` | `{ack, prior_status}` |
 | fleet | list_agents | device | SCOPED to local operator | `{}` | `{agents[]}` |
 | fleet | list_abilities | device | SCOPED | `{visibility_filter?, name_prefix?}` | `{abilities[]}` |
 | fleet | list_sessions | device | SCOPED | `{agent_uri?}` | `{sessions[]}` |
@@ -1161,7 +1336,7 @@ Visibility column reflects [P8] correction for conversation.*.)
 | meta | publish | any | SCOPED to owner | `{ability_name, new_visibility, scope?}` | `{ack}` |
 | meta | compose | any | SCOPED to owner | `{component_abilities[], new_name}` | `{composed_ability_name}` |
 | meta | cancel | any | SCOPED | `{invocation_id}` | `{ack, prior_state}` |
-| consent | request | consent | SCOPED to admission callers | `{original_invocation, risk_class, ui_hint, timeout}` | `{decision: Allowed\|Denied\|Timeout, request_id}` |
+| consent | request | consent | SCOPED to admission callers | `{original_invocation, risk_class, ui_hint, timeout}` | `{decision: Allowed\|Denied\|Timeout, request_id}` — **blocks the calling task until `consent.decide` resolves the request_id, or until `timeout` fires (returns Timeout)**. Non-streaming. |
 | consent | subscribe | consent | SCOPED to UI | `{}` | streaming pending requests |
 | consent | decide | consent | SCOPED to UI | `{request_id, decision, justification}` | `{ack}` |
 | consent | list_pending | consent | SCOPED to UI | `{}` | `{requests[]}` |
@@ -1195,7 +1370,7 @@ Visibility column reflects [P8] correction for conversation.*.)
 
 ## §19 — Function-to-mechanism mapping (inlined; was omitted in v4.1) [P7]
 
-For each current EasyNet function, the v4.1.1 invocation chain that
+For each current EasyNet function, the v4.1.2 invocation chain that
 implements it:
 
 | Function | Caller | Subject | Delegation | Callee | Ability | Section |
@@ -1203,7 +1378,8 @@ implements it:
 | `easynet runtime start` (joined-device) | device-profile | device-profile | none | hub-profile | `federation.heartbeat` (initial=true) | §2.A Step 5 |
 | `easynet runtime start` (joined-device) | device-profile | each hosted Agent | none (self-attest) | hub-profile | `federation.advertise_agent` + `federation.advertise_abilities` | §2.A Step 6 |
 | `easynet runtime start` (hub-genesis) | (no network call; instantiate locally) | — | — | — | — | §2.B |
-| `easynet runtime stop` | device-profile | device-profile | none | hub-profile | `federation.leave` | (analogous to §15) |
+| `easynet runtime stop` (drain hosted Agents) [M6] | device-profile | device-profile | none | each hosted Agent (self) | `meta.cancel` for in-flight invocations, then `fleet.stop_agent` per llm Agent | local |
+| `easynet runtime stop` (deregister) [M6] | device-profile | device-profile | none | hub-profile | `federation.leave` | (analogous to §15) |
 | `easynet join <token>` | provisional:fingerprint | provisional:fingerprint | none | hub-profile | `federation.join` | §3 |
 | `easynet pair --as-hub` | (no network call; writes config + keys) | — | — | — | — | §4 |
 | `easynet agent add <name>` | device-profile | operator | local-socket DelegationProof | device-profile (self) | `fleet.start_agent` | §5 |
@@ -1220,6 +1396,7 @@ implements it:
 | `easynet schedule add` | device-profile | operator | local-socket DelegationProof | device-profile (self) | `schedule.add` | (analogous) |
 | `easynet loop create` | device-profile | operator | local-socket DelegationProof | device-profile (self) | `loop.create` | (analogous) |
 | `easynet permission ...` | device-profile | operator | local-socket DelegationProof | consent-profile | `consent.list_pending` / `consent.decide` | §14 |
+| Frontend login → operator URA resolution [R1] | backend-profile | backend-profile | none (identity bootstrap) | hub-profile | `identity.resolve_operator` (cache miss → `identity.register_operator`) | §1.7 |
 | Frontend Skills page | backend-profile | operator | JWT-derived DelegationProof | hub-profile | `federation.resolve` (filter `skill.`) | §9 |
 | Frontend Abilities page | backend-profile | operator | JWT-derived DelegationProof | hub-profile | `federation.resolve` (no filter) | §10 |
 | Frontend Devices page | backend-profile | operator | JWT-derived DelegationProof | hub-profile | `federation.resolve` (filter `fleet.*`) | (analogous to §10) |
@@ -1256,6 +1433,11 @@ This table, combined with §18, is the binding contract.
 | Hosted Agent URI churn across restarts | Smoke test: stop daemon → start daemon → `easynet ability list` shows same URAs |
 | `admission_internal=true` from network | Transport layer rejects inbound envelopes with this flag set; verified by negative test |
 | Old client silent success | Cross-version negative test |
+| Cross-device CLI bypasses operator URA check | E2E negative: host-A CLI invokes host-B private skill with mismatched `host_owner_operator_uri` → host-B rejects with `VISIBILITY_DENIED` [R2, M6] |
+| Local device-profile claims authority outside its host | E2E negative: device-profile issues DelegationProof targeting non-local audience → admission gate rejects with `DELEGATION_AUDIENCE_OUT_OF_SCOPE` [R2] |
+| Operator URA double-mint | Smoke test: register_operator with same `(auth_provider, external_subject)` twice returns same URA with `was_existing: true` [R1] |
+| Local-agents.json lost without re-mint churn | Smoke test: delete local-agents.json with credentials.json intact + hub up → daemon reboot recovers prior URAs via `federation.resolve { hosted_by: self }` [M4] |
+| Cache entry served past TTL | Smoke test: warm cache, advance clock past TTL, attempt cross-device invoke → daemon re-resolves before dispatch [M5] |
 
 ---
 
@@ -1275,41 +1457,66 @@ Future revisions MUST satisfy every item below.
 | A8 | causal_context ∈ {Null, Scalar, Vector, DAG}. Genesis (federation.join, operator-initiated commands) MAY be Null with explicit reason. Periodic activity (heartbeats) MAY be Null with reason. **join_receipt_hash is the membership lineage root, not a globally-required causal_context for every invocation.** [P3] | §2.A Step 7, §3 Step E, §15 |
 | A9 | Old RPC negative behavior requires UNIMPLEMENTED / unknown method / parse error. Custom migration message text best-effort. | §17 |
 | A10 | Every ability referenced anywhere in this document appears in the §18 Standard Ability Registry. | §18 |
-| A11 | "Hub down → cross-device invocation works" requires prior cache warmup. Without cached RealmDirectory entry for the target, hub is required for resolve. | §16 |
-| A12 | **Hosted child Agents (Model B) sign receipts via the hosting device-profile, with `signer_agent_uri` distinct from `callee_agent_uri` and a `host_attestation` field. Self-signing Agents (Model A) sign their own receipts. The choice is recorded in DirectoryEntry.identity.signing_authority.** [P1] | §1.3, §7 Step E |
-| A13 | **Hosted Agent URIs are minted by the hosting device-profile, persisted to ~/.easynet/local-agents.json, and reused across daemon restarts. Hub accepts them only via `federation.advertise_agent` from the hosting device-profile.** [P2] | §1.4 |
-| A14 | **DelegationProof schema (issuer, subject, caller, audience, scopes, issued_at, expires_at, signature). Verification at admission gate per §1.5 rules. JWT verification is not hardcoded against operator public key — it goes through the DelegationProof model.** [P5] | §1.5, §9, §11 |
-| A15 | **AbilityDescriptor includes owner_agent_uri, visibility, scope_subjects[], scope_agents[], source, schema_summary, hints. PRIVATE is a degenerate SCOPED case: scope = {host operator}.** [P9] | §1.6, §6, §18 |
+| A11 | "Hub down → cross-device invocation works" requires prior cache warmup. Cache entries expire per §1.2 TTL (default `max(heartbeat_ms × 6, 60s)`). Without an unexpired cached entry for the target, hub is required for resolve. [M5] | §1.2, §16 |
+| A12 | **Hosted child Agents (Model B) sign receipts via the hosting device-profile, with `signer_agent_uri` distinct from `callee_agent_uri` and a `host_attestation` field. Self-signing Agents (Model A) sign their own receipts: `signer_agent_uri == callee_agent_uri`, `host_attestation` absent. Receipts whose `signer_agent_uri` is `hosted_by:`-attested in RealmDirectory MUST carry `host_attestation`. [P1, M1]** | §1.3, §7 Step E |
+| A13 | **Hosted Agent URIs are minted by the hosting device-profile, persisted to ~/.easynet/local-agents.json, and reused across daemon restarts. Hub accepts them only via `federation.advertise_agent` from the hosting device-profile. On boot with credentials but no local-agents.json, daemon SHOULD attempt hub-side recovery before re-mint. [P2, M4]** | §1.4 |
+| A14 | **DelegationProof schema (issuer, subject, caller, audience, scopes, issued_at, expires_at, signature). Verification at admission gate per §1.5 rules INCLUDING rule 2.5 local-host issuer exception. AudiencePattern is `Exact \| Prefix \| Any` with prefix-path-boundary rule (M2). JWT verification is not hardcoded against operator public key — it goes through the DelegationProof model. [P5, R2, M2]** | §1.5, §9, §11, §16 |
+| A15 | **AbilityDescriptor includes owner_agent_uri, visibility, scope_subjects, scope_agents, source, schema_summary, hints. scope_subjects/scope_agents are `ScopeRule = Any \| OnlyMatching(uris[]) \| None` (M3). PRIVATE is a degenerate SCOPED case: scope = {host operator}. [P9, M3]** | §1.6, §6, §18 |
+| A16 | **Operator URAs are minted by hub-profile via `identity.register_operator`. They have shape `easynet:///r/<realm>/agent/01USR-<ulid>`, no public key, signing_authority `external:<auth_provider>`. Backend-profile maintains the (auth_provider, external_subject) → URA cache. Each device-profile records its `host_owner_operator_uri` at federation.join time, and that URA is the basis for §1.5 rule 2.5 local-host issuer exception. [R1, R2]** | §1.7, §3 Step C/D, §16, §18 |
 
 ---
 
 ## §21 — Approval gate
 
-After your approval of v4.1.1, implementation may start. The
-implementation sequence is unchanged from v3:
+v4.1.2 is the binding contract. Implementation phase progress:
 
 ```
-P0  Conformance lock           — CI guards, no functional change
-P1  Axon protocol cut          — Invoke + InvokeStream only; old RPCs deleted
-P2  Agent catalog + dispatch   — single agents table; node-to-node Invocation routing
-P3  Federation bootstrap       — federation.join + advertise + resolve;
-                                  three-layer admission with admission_internal=true
-                                  enforcement at transport layer
-P4  CLI agent profiles         — device, hub, consent, policy, mcp-profile,
-                                  llm-profile; local-agents.json persistence;
-                                  hosted Agent receipt signing model;
-                                  system.* deleted
-P5  Backend node-to-node       — backend.axon.Client collapses to
-                                  Invoke + InvokeStream + Close; DelegationProof
-                                  construction for JWT-bearing requests;
-                                  listInstalledLogic + pty_driver rewritten
-P6  Frontend & negative        — Frontend stays HTTP; verify end-to-end Skills,
-                                  conformance grep zero, old-client cross-version
-                                  negative test, admission_internal=true negative test
+P0  Conformance lock           — DONE (commits 3b407fc, 2358901);
+                                  CI guards live, baseline locked at 475.
+P1  Axon protocol cut          — DONE (rolled into P0 + P1 commits);
+                                  Invoke + InvokeStream only; old RPCs deleted.
+P2  Agent catalog + dispatch   — DONE (commits 5530265 .. 46e8435);
+                                  single agents table; node-to-node routing;
+                                  src/runtime/agents/ + profiles/ skeleton in.
+P3  Federation bootstrap       — IN FLIGHT
+                                  federation.join + advertise + resolve;
+                                  three-layer admission with
+                                  admission_internal=true enforcement at the
+                                  transport layer (closes baseline rule 8);
+                                  DelegationProof type + verifier
+                                  including R2 rule 2.5 local-host exception;
+                                  identity.register_operator/resolve_operator
+                                  on hub.
+P4  CLI agent profiles         — PENDING
+                                  device, hub, consent, policy, mcp-profile,
+                                  llm-profile; local-agents.json persistence
+                                  including M4 hub-side recovery;
+                                  hosted Agent receipt signing (M1 explicit
+                                  schema for both Models A and B);
+                                  AbilityDescriptor with ScopeRule (M3);
+                                  system.* fully deleted (closes baseline
+                                  rules 2, 3, 4, 6, 7, 10).
+P5  Backend node-to-node       — PENDING
+                                  backend.axon.Client collapses to
+                                  Invoke + InvokeStream + Close;
+                                  DelegationProof construction for
+                                  JWT-bearing requests (R1 cache +
+                                  identity.resolve_operator path);
+                                  listInstalledLogic + pty_driver rewritten.
+P6  Frontend & negative        — PENDING
+                                  Frontend stays HTTP; verify end-to-end
+                                  Skills, conformance grep zero,
+                                  old-client cross-version negative test,
+                                  admission_internal=true negative test,
+                                  R2 cross-device-deny negative test (§20),
+                                  M5 cache-TTL expiry test.
 ```
 
-The conformance scripts from P0 enforce every §A constraint.
+The conformance scripts from P0 enforce every §A constraint, including
+A11 (cache TTL), A12 (Model A/B receipt schema), A14 (DelegationProof +
+rule 2.5), A15 (ScopeRule), and A16 (operator URA provisioning) added
+in v4.1.2.
 
-If you confirm v4.1.1 as the binding contract, please reply with
-"approved" or specify which section needs further revision (will become
-v4.1.2). After approval, I begin P0.
+v4.1.2 is binding. P3 implementation has begun on branch
+`rfc-001-impl`. Subsequent revisions, if any, become v4.1.3 and must
+preserve every invariant in §A.

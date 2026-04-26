@@ -110,5 +110,7 @@ pub mod execution;
 // device-level ability the daemon publishes (today: `observe.health`;
 // PR-ATTACH onwards extends this).
 pub mod ability_dispatch;
+pub mod federation_client;
+pub mod provisional_ura;
 pub mod publish;
 pub mod agents;
