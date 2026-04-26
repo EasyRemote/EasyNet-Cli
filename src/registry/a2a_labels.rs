@@ -222,161 +222,36 @@ fn system_skills_json() -> String {
     if names.is_empty() {
         return String::new();
     }
-    // Map each name to the per-skill JSON. v1 hardcodes the
-    // mapping inline because the only ability is `system.ping`;
-    // PR-ATTACH onwards adds a per-ability `to_discovery_json()`
-    // helper next to each handler so this match becomes obsolete.
+    // Each system skill emits a thin discovery payload identical in
+    // shape to `AgentAbilitySpec::to_discovery_json` —
+    // `{name, description, has_input_schema}` only.
+    //
+    // Why thin (and not full input_schema): the Hub caps each
+    // `a2a.*` label value at 4 KiB. A node publishes ~15 system
+    // abilities (ping, session.*, permission.*, discuss.*,
+    // schedule.*, loop.*) plus `<agent>.chat` for every registered
+    // agent — embedding the full JSON Schema for each one blows
+    // past 4 KB on the second agent. Discovery callers only need
+    // "this skill exists, here's a one-liner"; the full schema is
+    // available on demand via:
+    //   * MCP `ListTools` over the local IPC socket
+    //   * a future `system.<feature>.describe` ability
+    //   * the on-disk manifest at
+    //     `<agent-root>/abilities/<verb>.ability.toml`
+    //
+    // The description fallback (the `_ => "(system ability)"` arm)
+    // exists so an unknown name lands with a non-empty description
+    // rather than the empty string the v1 fallback produced — the
+    // cost is < 30 bytes per unknown skill, well within budget.
     let skills: Vec<serde_json::Value> = names
         .iter()
-        .map(|name| match name.as_str() {
-            "system.ping" => json!({
-                "name": "system.ping",
-                "description": crate::runtime::system::ping::description(),
-                "input_schema": crate::runtime::system::ping::input_schema(),
-                "output_schema": serde_json::Value::Null,
-                "timeout_seconds": serde_json::Value::Null,
-            }),
-            "system.session.list" => json!({
-                "name": "system.session.list",
-                "description": crate::runtime::system::session_ability::list_description(),
-                "input_schema":
-                    crate::runtime::system::session_ability::list_input_schema(),
-                "output_schema": serde_json::Value::Null,
-                "timeout_seconds": serde_json::Value::Null,
-            }),
-            "system.session.attach" => json!({
-                "name": "system.session.attach",
-                "description":
-                    crate::runtime::system::session_ability::attach_description(),
-                "input_schema":
-                    crate::runtime::system::session_ability::attach_input_schema(),
-                "output_schema": serde_json::Value::Null,
-                "timeout_seconds": serde_json::Value::Null,
-            }),
-            "system.permission.subscribe" => json!({
-                "name": "system.permission.subscribe",
-                "description":
-                    crate::runtime::system::permission_ability::subscribe_description(),
-                "input_schema":
-                    crate::runtime::system::permission_ability::subscribe_input_schema(),
-                "output_schema": serde_json::Value::Null,
-                "timeout_seconds": serde_json::Value::Null,
-            }),
-            "system.permission.decide" => json!({
-                "name": "system.permission.decide",
-                "description":
-                    crate::runtime::system::permission_ability::decide_description(),
-                "input_schema":
-                    crate::runtime::system::permission_ability::decide_input_schema(),
-                "output_schema": serde_json::Value::Null,
-                "timeout_seconds": serde_json::Value::Null,
-            }),
-            "system.discuss.create" => json!({
-                "name": "system.discuss.create",
-                "description":
-                    crate::runtime::system::discuss_ability::create_description(),
-                "input_schema":
-                    crate::runtime::system::discuss_ability::create_input_schema(),
-                "output_schema": serde_json::Value::Null,
-                "timeout_seconds": serde_json::Value::Null,
-            }),
-            "system.discuss.post" => json!({
-                "name": "system.discuss.post",
-                "description":
-                    crate::runtime::system::discuss_ability::post_description(),
-                "input_schema":
-                    crate::runtime::system::discuss_ability::post_input_schema(),
-                "output_schema": serde_json::Value::Null,
-                "timeout_seconds": serde_json::Value::Null,
-            }),
-            "system.discuss.subscribe" => json!({
-                "name": "system.discuss.subscribe",
-                "description":
-                    crate::runtime::system::discuss_ability::subscribe_description(),
-                "input_schema":
-                    crate::runtime::system::discuss_ability::subscribe_input_schema(),
-                "output_schema": serde_json::Value::Null,
-                "timeout_seconds": serde_json::Value::Null,
-            }),
-            "system.schedule.add" => json!({
-                "name": "system.schedule.add",
-                "description":
-                    crate::runtime::system::schedule_ability::add_description(),
-                "input_schema":
-                    crate::runtime::system::schedule_ability::add_input_schema(),
-                "output_schema": serde_json::Value::Null,
-                "timeout_seconds": serde_json::Value::Null,
-            }),
-            "system.schedule.list" => json!({
-                "name": "system.schedule.list",
-                "description":
-                    crate::runtime::system::schedule_ability::list_description(),
-                "input_schema":
-                    crate::runtime::system::schedule_ability::list_input_schema(),
-                "output_schema": serde_json::Value::Null,
-                "timeout_seconds": serde_json::Value::Null,
-            }),
-            "system.schedule.remove" => json!({
-                "name": "system.schedule.remove",
-                "description":
-                    crate::runtime::system::schedule_ability::remove_description(),
-                "input_schema":
-                    crate::runtime::system::schedule_ability::remove_input_schema(),
-                "output_schema": serde_json::Value::Null,
-                "timeout_seconds": serde_json::Value::Null,
-            }),
-            "system.schedule.enable" => json!({
-                "name": "system.schedule.enable",
-                "description":
-                    crate::runtime::system::schedule_ability::enable_description(),
-                "input_schema":
-                    crate::runtime::system::schedule_ability::enable_input_schema(),
-                "output_schema": serde_json::Value::Null,
-                "timeout_seconds": serde_json::Value::Null,
-            }),
-            "system.loop.create" => json!({
-                "name": "system.loop.create",
-                "description":
-                    crate::runtime::system::loop_ability::create_description(),
-                "input_schema":
-                    crate::runtime::system::loop_ability::create_input_schema(),
-                "output_schema": serde_json::Value::Null,
-                "timeout_seconds": serde_json::Value::Null,
-            }),
-            "system.loop.status" => json!({
-                "name": "system.loop.status",
-                "description":
-                    crate::runtime::system::loop_ability::status_description(),
-                "input_schema":
-                    crate::runtime::system::loop_ability::status_input_schema(),
-                "output_schema": serde_json::Value::Null,
-                "timeout_seconds": serde_json::Value::Null,
-            }),
-            "system.loop.subscribe" => json!({
-                "name": "system.loop.subscribe",
-                "description":
-                    crate::runtime::system::loop_ability::subscribe_description(),
-                "input_schema":
-                    crate::runtime::system::loop_ability::subscribe_input_schema(),
-                "output_schema": serde_json::Value::Null,
-                "timeout_seconds": serde_json::Value::Null,
-            }),
-            "system.loop.cancel" => json!({
-                "name": "system.loop.cancel",
-                "description":
-                    crate::runtime::system::loop_ability::cancel_description(),
-                "input_schema":
-                    crate::runtime::system::loop_ability::cancel_input_schema(),
-                "output_schema": serde_json::Value::Null,
-                "timeout_seconds": serde_json::Value::Null,
-            }),
-            other => json!({
-                "name": other,
-                "description": "",
-                "input_schema": {"type": "object", "additionalProperties": true},
-                "output_schema": serde_json::Value::Null,
-                "timeout_seconds": serde_json::Value::Null,
-            }),
+        .map(|name| {
+            let description = description_for(name);
+            json!({
+                "name": name,
+                "description": description,
+                "has_input_schema": true,
+            })
         })
         .collect();
     let envelope = json!({ "system_skills": skills });
@@ -387,6 +262,20 @@ fn system_skills_json() -> String {
             String::new()
         }
     }
+}
+
+/// Look up the human-readable description for a published system
+/// ability name.
+///
+/// Authoritative source lives in `runtime::system::description_for` —
+/// kept there so the federation label and the runtime-local register
+/// publisher (`runtime::publish::publish_system_abilities_to_local_runtime`)
+/// pull from one table. This function exists as a thin local alias so
+/// the call sites in this module read naturally; do NOT inline a
+/// second match here, that's exactly the drift the centralisation
+/// removed.
+fn description_for(name: &str) -> &'static str {
+    crate::runtime::system::description_for(name)
 }
 
 #[cfg(test)]
@@ -540,12 +429,17 @@ mod tests {
 
     #[test]
     fn skills_entry_shape_matches_v2_discovery_contract() {
-        // Pin the exact keys on every skill object per spec
-        // §"Agent entry" — `name`, `description`, `input_schema`,
-        // `output_schema`, `timeout_seconds`. A rename here is a
-        // wire break that the backend companion parser would catch
-        // first, but pinning here surfaces the break at the CLI's
-        // own test run rather than only at cross-repo CI.
+        // Pin the v2 thin discovery shape: `{name, description,
+        // has_input_schema}`. Earlier drafts shipped the full
+        // input_schema / output_schema / timeout_seconds inline,
+        // but the chat-as-ability collapse ballooned per-skill JSON
+        // past the Hub's 4 KiB label cap and forced the trim — see
+        // `AgentAbilitySpec::to_discovery_json`'s doc.
+        //
+        // The full input_schema is still available on demand via
+        // MCP `ListTools` over the local IPC and via the on-disk
+        // `<agent-root>/abilities/<verb>.ability.toml`. Discovery
+        // labels carry only the fingerprint.
         let mut registry = AgentRegistry::default();
         registry
             .agents
@@ -556,21 +450,21 @@ mod tests {
         let skill = &parsed["agents"][0]["skills"][0];
         assert!(skill["name"].is_string(), "skill.name must be string");
         assert!(skill["description"].is_string(), "skill.description must be string");
-        assert!(
-            skill["input_schema"].is_object(),
-            "skill.input_schema must be a JSON schema object"
+        assert_eq!(
+            skill["has_input_schema"],
+            serde_json::Value::Bool(true),
+            "every v1 ability declares an input_schema; flag must be true"
         );
-        assert_eq!(skill["input_schema"]["type"], "object");
-        // output_schema and timeout_seconds are present as explicit
-        // `null` on the seeded chat ability, per the writer rule in
-        // spec §"null vs absent".
-        assert!(skill["output_schema"].is_null(), "output_schema is null on chat");
-        assert!(skill["timeout_seconds"].is_null(), "timeout_seconds is null on chat");
-        // v1 `parameters` key must be gone.
-        assert!(
-            skill.get("parameters").is_none(),
-            "v1 `parameters` key must not appear in v2 output"
-        );
+        // The bytes-cost fields must NOT be re-introduced — that
+        // would re-trigger the 4 KiB Hub cap regression. A future
+        // PR that wants to ship full schemas to peers should add a
+        // separate federation API, not re-inflate the label.
+        for forbidden in ["input_schema", "output_schema", "timeout_seconds", "parameters"] {
+            assert!(
+                skill.get(forbidden).is_none(),
+                "v2 thin payload must not carry `{forbidden}` (would blow the 4 KiB Hub label cap)"
+            );
+        }
     }
 
     #[test]
@@ -663,6 +557,67 @@ mod tests {
                 validate_agent_name(bad).is_err(),
                 "agent name {bad:?} must be rejected by the registry — \
                  skill-name construction depends on that guarantee"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod label_size_guard {
+    //! Hub-side guard: every value in the labels map this module
+    //! produces must fit the gRPC-side 4 KiB cap on a `RegisterNode`
+    //! label value. A regression here means a node will fail to
+    //! register with `InvalidArgument: invalid labels: label value
+    //! for key "X" exceeds 4096 bytes` and the device drops off the
+    //! federation. We pin a tighter 3 KiB target so a small future
+    //! bump (one more system ability, a slightly longer description)
+    //! doesn't drive us into the actual ceiling.
+    //!
+    //! If you legitimately need a label > 3 KiB, the right answer
+    //! is to thin the payload further (drop input_schema, drop
+    //! verbose descriptions) — not to raise this constant. The
+    //! Hub's 4 KiB ceiling is a wire-level invariant that won't
+    //! move just because we want it to.
+
+    use super::*;
+    use crate::registry::agents::{AgentEntry, AgentRegistry, AgentType};
+
+    /// Self-imposed budget. Stays under the Hub's 4 KiB cap with
+    /// headroom for one or two more agents / system abilities.
+    /// Set at 3700 (≈90% of the 4096 ceiling): the system_skills_json
+    /// label measures ~3.3 KB today after the chat-as-ability
+    /// collapse landed (~16 system abilities, each carrying a
+    /// one-sentence description). 3700 leaves room for ~3 more
+    /// system abilities or 4 longer descriptions; tighter would
+    /// leave no room to grow, looser stops catching the next
+    /// ability that adds a multi-paragraph description.
+    const MAX_LABEL_BYTES: usize = 3700;
+
+    fn registry_with_two_agents() -> AgentRegistry {
+        let mut r = AgentRegistry::default();
+        r.agents
+            .insert("claude".into(), AgentEntry::new(AgentType::ClaudeCode, Some("sonnet".into())));
+        r.agents
+            .insert("codex".into(), AgentEntry::new(AgentType::Codex, Some("gpt-5.2".into())));
+        r
+    }
+
+    #[test]
+    fn each_label_value_fits_under_budget_for_two_agents() {
+        // Two agents is the smallest realistic non-trivial node
+        // shape — one agent doesn't exercise the agents_json growth
+        // axis, three+ agents would overshoot a budget chosen for a
+        // typical install. Pin the two-agent shape so any new
+        // ability or schema addition is checked against the same
+        // baseline.
+        let labels = build(&registry_with_two_agents(), "host")
+            .expect("non-empty registry must yield Some");
+        for (k, v) in &labels {
+            assert!(
+                v.len() <= MAX_LABEL_BYTES,
+                "label `{k}` is {} bytes; budget is {MAX_LABEL_BYTES} (Hub ceiling 4096). \
+                 Trim payload — see fn to_discovery_json / system_skills_json doc.",
+                v.len()
             );
         }
     }
