@@ -167,25 +167,17 @@ pub fn build(registry: &AgentRegistry, hostname: &str) -> Option<HashMap<String,
     }
     labels.insert("a2a.agents_json".into(), agents_json_str);
 
-    // PR-SYS: device-level system abilities published as a separate
-    // label key so v2-only parsers (which read `a2a.agents_json` and
-    // ignore unknown labels) keep working unchanged. v3-aware
-    // parsers will look for `a2a.system_skills_json` and merge into
-    // their discovery view.
+    // RFC-001 P2.4: a2a.system_skills_json label retired.
     //
-    // Why a separate label rather than a new envelope field on
-    // a2a.agents_json:
-    //   * tests/fixtures/a2a-v2/golden.json byte-stability is a
-    //     CI invariant; introducing a new field at the envelope
-    //     level would force a coordinated backend release.
-    //   * The 32 KiB per-label limit is enforced per key. With
-    //     two separate labels each gets its own budget.
-    //   * Disambiguates "agent abilities" from "device abilities"
-    //     in label-grep tooling.
-    let system_skills_json = system_skills_json();
-    if !system_skills_json.is_empty() {
-        labels.insert("a2a.system_skills_json".into(), system_skills_json);
-    }
+    // Per RFC §A4 + restatement-mapping: there is no separate "system
+    // ability" discovery surface. The realm directory enumerates
+    // every Agent's abilities via `federation.resolve` (and per-Agent
+    // `meta.list_abilities`). The discovery view that consumed this
+    // label folds into the standard ability listing.
+    //
+    // Removed in P2.4. The full body of `system_skills_json()` and
+    // its supporting `description_for` table are kept compiled but
+    // unused for now — they get GC'd in a follow-up cleanup.
 
     labels.insert(
         "a2a.description".into(),
