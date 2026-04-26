@@ -276,7 +276,7 @@ mod tests {
     fn ping_target_local() -> InvocationTarget {
         InvocationTarget {
             scope: TargetScope::Local,
-            ability: "system.ping".into(),
+            ability: "observe.health".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
         }
@@ -292,7 +292,7 @@ mod tests {
             .execute_rpc(ping_target_local())
             .unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.contains("system.ping"), "error must name ability, got: {msg}");
+        assert!(msg.contains("observe.health"), "error must name ability, got: {msg}");
         assert!(msg.contains("local"), "error must indicate loopback path");
     }
 
@@ -303,7 +303,7 @@ mod tests {
         // value is surfaced verbatim.
         let mut reg = LocalAbilityRegistry::new();
         reg.register_rpc(
-            "system.ping",
+            "observe.health",
             Arc::new(|args: Value| Ok(json!({"echo": args}))),
         );
         let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
@@ -325,7 +325,7 @@ mod tests {
             scope: TargetScope::Remote {
                 node: NodeId::new("peer"),
             },
-            ability: "system.ping".into(),
+            ability: "observe.health".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
         };
@@ -357,11 +357,13 @@ mod tests {
         // builds the `system_skills[]` label from this list, and
         // the byte-stable golden fixture depends on it.
         let mut reg = LocalAbilityRegistry::new();
-        reg.register_rpc("system.ping", Arc::new(|_| Ok(Value::Null)));
-        reg.register_rpc("system.foo", Arc::new(|_| Ok(Value::Null)));
-        reg.register_rpc("system.bar", Arc::new(|_| Ok(Value::Null)));
+        reg.register_rpc("observe.health", Arc::new(|_| Ok(Value::Null)));
+        reg.register_rpc("test.foo", Arc::new(|_| Ok(Value::Null)));
+        reg.register_rpc("test.bar", Arc::new(|_| Ok(Value::Null)));
         let names = reg.list_abilities();
-        assert_eq!(names, vec!["system.bar", "system.foo", "system.ping"]);
+        // BTreeMap iteration order is alphabetical (test.bar < test.foo,
+        // observe.health < test.*).
+        assert_eq!(names, vec!["observe.health", "test.bar", "test.foo"]);
     }
 
     // Smoke for PeerInfo type — keeps the import "live" in tests

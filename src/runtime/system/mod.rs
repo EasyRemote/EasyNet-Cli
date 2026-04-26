@@ -193,23 +193,23 @@ pub fn published_abilities() -> Vec<SystemAbilityMetadata> {
 /// filter strips them, but other callers may not).
 pub fn description_for(name: &str) -> &'static str {
     match name {
-        "system.ping" => ping::description(),
-        "system.session.list" => session_ability::list_description(),
-        "system.session.attach" => session_ability::attach_description(),
-        "system.permission.subscribe" => permission_ability::subscribe_description(),
-        "system.permission.decide" => permission_ability::decide_description(),
-        "system.discuss.create" => discuss_ability::create_description(),
-        "system.discuss.post" => discuss_ability::post_description(),
-        "system.discuss.subscribe" => discuss_ability::subscribe_description(),
-        "system.schedule.add" => schedule_ability::add_description(),
-        "system.schedule.list" => schedule_ability::list_description(),
-        "system.schedule.remove" => schedule_ability::remove_description(),
-        "system.schedule.enable" => schedule_ability::enable_description(),
-        "system.loop.create" => loop_ability::create_description(),
-        "system.loop.status" => loop_ability::status_description(),
-        "system.loop.subscribe" => loop_ability::subscribe_description(),
-        "system.loop.cancel" => loop_ability::cancel_description(),
-        "system.skill.list" => skill_ability::list_description(),
+        "observe.health" => ping::description(),
+        "fleet.list_sessions" => session_ability::list_description(),
+        "fleet.attach_session" => session_ability::attach_description(),
+        "consent.subscribe" => permission_ability::subscribe_description(),
+        "consent.decide" => permission_ability::decide_description(),
+        "discuss.create" => discuss_ability::create_description(),
+        "discuss.post" => discuss_ability::post_description(),
+        "discuss.subscribe" => discuss_ability::subscribe_description(),
+        "schedule.add" => schedule_ability::add_description(),
+        "schedule.list" => schedule_ability::list_description(),
+        "schedule.remove" => schedule_ability::remove_description(),
+        "schedule.enable" => schedule_ability::enable_description(),
+        "loop.create" => loop_ability::create_description(),
+        "loop.status" => loop_ability::status_description(),
+        "loop.subscribe" => loop_ability::subscribe_description(),
+        "loop.cancel" => loop_ability::cancel_description(),
+        "fleet.list_abilities" => skill_ability::list_description(),
         _ if name.ends_with(".chat") => "Send a chat prompt to the locally-installed agent.",
         _ => "(system ability)",
     }
@@ -227,23 +227,23 @@ pub fn description_for(name: &str) -> &'static str {
 /// against the live registry to surface that drift.
 pub fn input_schema_for(name: &str) -> serde_json::Value {
     match name {
-        "system.ping" => ping::input_schema(),
-        "system.session.list" => session_ability::list_input_schema(),
-        "system.session.attach" => session_ability::attach_input_schema(),
-        "system.permission.subscribe" => permission_ability::subscribe_input_schema(),
-        "system.permission.decide" => permission_ability::decide_input_schema(),
-        "system.discuss.create" => discuss_ability::create_input_schema(),
-        "system.discuss.post" => discuss_ability::post_input_schema(),
-        "system.discuss.subscribe" => discuss_ability::subscribe_input_schema(),
-        "system.schedule.add" => schedule_ability::add_input_schema(),
-        "system.schedule.list" => schedule_ability::list_input_schema(),
-        "system.schedule.remove" => schedule_ability::remove_input_schema(),
-        "system.schedule.enable" => schedule_ability::enable_input_schema(),
-        "system.loop.create" => loop_ability::create_input_schema(),
-        "system.loop.status" => loop_ability::status_input_schema(),
-        "system.loop.subscribe" => loop_ability::subscribe_input_schema(),
-        "system.loop.cancel" => loop_ability::cancel_input_schema(),
-        "system.skill.list" => skill_ability::list_input_schema(),
+        "observe.health" => ping::input_schema(),
+        "fleet.list_sessions" => session_ability::list_input_schema(),
+        "fleet.attach_session" => session_ability::attach_input_schema(),
+        "consent.subscribe" => permission_ability::subscribe_input_schema(),
+        "consent.decide" => permission_ability::decide_input_schema(),
+        "discuss.create" => discuss_ability::create_input_schema(),
+        "discuss.post" => discuss_ability::post_input_schema(),
+        "discuss.subscribe" => discuss_ability::subscribe_input_schema(),
+        "schedule.add" => schedule_ability::add_input_schema(),
+        "schedule.list" => schedule_ability::list_input_schema(),
+        "schedule.remove" => schedule_ability::remove_input_schema(),
+        "schedule.enable" => schedule_ability::enable_input_schema(),
+        "loop.create" => loop_ability::create_input_schema(),
+        "loop.status" => loop_ability::status_input_schema(),
+        "loop.subscribe" => loop_ability::subscribe_input_schema(),
+        "loop.cancel" => loop_ability::cancel_input_schema(),
+        "fleet.list_abilities" => skill_ability::list_input_schema(),
         _ => serde_json::json!({ "type": "object" }),
     }
 }
@@ -261,8 +261,8 @@ mod tests {
         let reg = build_registry();
         let names = reg.list_abilities();
         assert!(
-            names.iter().any(|n| n == "system.ping"),
-            "system.ping must be in the v1 registry; got {names:?}"
+            names.iter().any(|n| n == "observe.health"),
+            "observe.health must be in the v1 registry; got {names:?}"
         );
     }
 
@@ -290,8 +290,8 @@ mod tests {
         let metas = published_abilities();
         let skill = metas
             .iter()
-            .find(|m| m.name == "system.skill.list")
-            .expect("system.skill.list must be in published_abilities");
+            .find(|m| m.name == "fleet.list_abilities")
+            .expect("fleet.list_abilities must be in published_abilities");
         // Description must NOT be the unknown-name fallback.
         // `(system ability)` is what `description_for` returns when
         // an ability is added without an arm here; pin against it so

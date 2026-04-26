@@ -163,7 +163,7 @@ mod tests {
 
     fn plan(hint: Option<&str>) -> InvocationPlan {
         InvocationPlan {
-            ability: "system.ping".into(),
+            ability: "observe.health".into(),
             args: json!({}),
             target_node_hint: hint.map(NodeId::new),
             call_mode: CallMode::Rpc,
@@ -178,7 +178,7 @@ mod tests {
         let r = LocalNodeResolver::new(NodeId::new("self"));
         let t = r.resolve(plan(None)).unwrap();
         assert_eq!(t.scope, TargetScope::Local);
-        assert_eq!(t.ability, "system.ping");
+        assert_eq!(t.ability, "observe.health");
     }
 
     #[test]

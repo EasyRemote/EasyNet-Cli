@@ -26,10 +26,10 @@ use crate::runtime::ability_dispatch::{LocalAbilityRegistry, StreamSource};
 use crate::runtime::domain::{AgentId, LoopId};
 use crate::runtime::execution::loop_instance::LoopService;
 
-pub const ABILITY_CREATE: &str = "system.loop.create";
-pub const ABILITY_STATUS: &str = "system.loop.status";
-pub const ABILITY_SUBSCRIBE: &str = "system.loop.subscribe";
-pub const ABILITY_CANCEL: &str = "system.loop.cancel";
+pub const ABILITY_CREATE: &str = "loop.create";
+pub const ABILITY_STATUS: &str = "loop.status";
+pub const ABILITY_SUBSCRIBE: &str = "loop.subscribe";
+pub const ABILITY_CANCEL: &str = "loop.cancel";
 
 pub fn register(reg: &mut LocalAbilityRegistry, svc: Arc<LoopService>) {
     let a = Arc::clone(&svc);
