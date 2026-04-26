@@ -130,11 +130,13 @@ pub fn publish_one(
     dispatch_endpoint: &str,
 ) -> PublishOutcome {
     let tool_name = manifest.qualified_name(agent_name);
-    // RFC-001 P2.4: register_runtime_local_mcp_tool removed by P1.2.a.
-    // Real publishing happens via Invoke against hub-agent's
-    // `federation.advertise_agent` + `federation.advertise_abilities`,
-    // wired in P3 once the hub-profile Agent ships. For P2 this stub
-    // returns Ok(false) so daemon boot does not error.
+    // RFC-001: register_runtime_local_mcp_tool was removed by P1.2.a.
+    // The real federation advertise path now lives in
+    // `runtime::advertise` (P4.6). The boot wiring that calls into
+    // it lands in P4.7 — that step replaces this Ok(false) stub
+    // with a typed advertise call. Keeping the stub here for now
+    // preserves the existing daemon-boot return shape so callers'
+    // progress reporting doesn't change in an intermediate commit.
     PublishOutcome {
         tool_name,
         result: Ok(false),
