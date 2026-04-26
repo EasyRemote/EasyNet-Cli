@@ -120,6 +120,7 @@ pub fn publish_agent_to_local_runtime(
 /// Publish a single manifest. Factored out so callers that already
 /// know the manifest (e.g. a future `agent ability add`) can reuse the
 /// register call without re-walking the directory.
+#[allow(unused_variables)]
 pub fn publish_one(
     bridge: &DendriteBridge,
     tenant_id: &str,
@@ -129,26 +130,15 @@ pub fn publish_one(
     dispatch_endpoint: &str,
 ) -> PublishOutcome {
     let tool_name = manifest.qualified_name(agent_name);
-    let input_schema: &Value = manifest.input_schema();
-    let output_schema: Option<&Value> = manifest.output_schema();
-    let result = bridge
-        .register_runtime_local_mcp_tool(
-            tenant_id,
-            node_id,
-            &tool_name,
-            manifest.description(),
-            Some(input_schema),
-            output_schema,
-            dispatch_endpoint,
-        )
-        .map(|response| {
-            response
-                .get("replaced_prior")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-        })
-        .map_err(|e| format!("{e}"));
-    PublishOutcome { tool_name, result }
+    // RFC-001 P2.4: register_runtime_local_mcp_tool removed by P1.2.a.
+    // Real publishing happens via Invoke against hub-agent's
+    // `federation.advertise_agent` + `federation.advertise_abilities`,
+    // wired in P3 once the hub-profile Agent ships. For P2 this stub
+    // returns Ok(false) so daemon boot does not error.
+    PublishOutcome {
+        tool_name,
+        result: Ok(false),
+    }
 }
 
 /// Publish every `system.*` ability (ping, session.*, permission.*,
@@ -187,36 +177,24 @@ pub fn publish_one(
 /// callable through the local IPC proxy regardless — only the
 /// federation discovery + Hub-mediated CallMcpTool path depends on
 /// this register completing.
+#[allow(unused_variables)]
 pub fn publish_system_abilities_to_local_runtime(
     bridge: &DendriteBridge,
     tenant_id: &str,
     node_id: &str,
     dispatch_endpoint: &str,
 ) -> Vec<PublishOutcome> {
+    // RFC-001 P2.4: register_runtime_local_mcp_tool removed by P1.2.a.
+    // Per RFC §A4, "system abilities" are now advertised as the
+    // device-profile Agent's fleet.* / observe.* / etc. abilities via
+    // `federation.advertise_abilities` Invoke (wired in P3). For P2
+    // this returns one synthetic Ok(false) per published_abilities()
+    // entry so callers' progress reporting keeps working.
     crate::runtime::agents::published_abilities()
         .into_iter()
-        .map(|meta| {
-            let result = bridge
-                .register_runtime_local_mcp_tool(
-                    tenant_id,
-                    node_id,
-                    &meta.name,
-                    meta.description,
-                    Some(&meta.input_schema),
-                    None,
-                    dispatch_endpoint,
-                )
-                .map(|response| {
-                    response
-                        .get("replaced_prior")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                })
-                .map_err(|e| format!("{e}"));
-            PublishOutcome {
-                tool_name: meta.name,
-                result,
-            }
+        .map(|meta| PublishOutcome {
+            tool_name: meta.name,
+            result: Ok(false),
         })
         .collect()
 }
@@ -231,6 +209,7 @@ pub fn publish_system_abilities_to_local_runtime(
 /// returned, not propagated. A removed agent always succeeds in the
 /// registry-row + directory sense; the catalog cleanup is the
 /// "everything else" half.
+#[allow(unused_variables)]
 pub fn unpublish_agent_from_local_runtime(
     bridge: &DendriteBridge,
     tenant_id: &str,
@@ -238,6 +217,9 @@ pub fn unpublish_agent_from_local_runtime(
     agent_name: &str,
     directory: &AgentDirectory,
 ) -> Vec<PublishOutcome> {
+    // RFC-001 P2.4: unregister_runtime_local_mcp_tool removed by
+    // P1.2.a. Real unregister becomes Invoke against
+    // `federation.revoke` (with the per-Agent URA), wired in P3.
     let manifests = match directory.list_ability_manifests() {
         Ok(m) => m,
         Err(e) => {
@@ -249,18 +231,9 @@ pub fn unpublish_agent_from_local_runtime(
     };
     manifests
         .into_iter()
-        .map(|manifest| {
-            let tool_name = manifest.qualified_name(agent_name);
-            let result = bridge
-                .unregister_runtime_local_mcp_tool(tenant_id, node_id, &tool_name)
-                .map(|response| {
-                    response
-                        .get("was_registered")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                })
-                .map_err(|e| format!("{e}"));
-            PublishOutcome { tool_name, result }
+        .map(|manifest| PublishOutcome {
+            tool_name: manifest.qualified_name(agent_name),
+            result: Ok(false),
         })
         .collect()
 }

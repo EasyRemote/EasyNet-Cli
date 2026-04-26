@@ -247,15 +247,11 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     // `easynet agent add` against a healthy runtime fixes it.
     republish_all_agents_best_effort(&bridge, &creds);
 
-    // Publish device-level system abilities (system.ping,
-    // system.skill.list, system.session.*, system.permission.*, etc.)
-    // to the same axon-runtime. Per-agent abilities and system
-    // abilities use the same `register_runtime_local_mcp_tool` slot;
-    // without this call the system abilities live only in the daemon's
-    // in-memory LocalAbilityRegistry — a Hub-mediated CallMcpTool can
-    // never reach them, and the EasyNet frontend's Skills page
-    // silently shows zero installs because backend listInstalledLogic
-    // degrades a missing-ability response to an empty list.
+    // RFC-001 P2.4: republish_system_abilities_best_effort is a stub
+    // (publish.rs::publish_system_abilities_to_local_runtime returns
+    // synthetic success per ability now that register_runtime_local_mcp_tool
+    // is removed). The real device-profile Agent advertise via
+    // federation.advertise_abilities lands in P3.
     republish_system_abilities_best_effort(&bridge, &creds);
 
     if args.foreground {
