@@ -135,7 +135,8 @@ count_pattern "MCP keyword in CLI src (case-insensitive)" \
   "$SRC" \
   "**/runtime/agents/mcp.rs" \
   "**/runtime/agents/mcp_bridge.rs" \
-  "**/runtime/agents/mcp_client.rs"
+  "**/runtime/agents/mcp_client.rs" \
+  "**/runtime/agents/profiles/mcp.rs"
 
 if [[ -d "$SRC/facade/mcp" ]]; then
   printf "  [WARN] %-60s exists\n" "facade/mcp/ legacy directory (delete in P4)"

@@ -39,6 +39,7 @@ pub mod discuss_ability;
 pub mod loop_ability;
 pub mod permission_ability;
 pub mod ping;
+pub mod profiles;
 pub mod schedule_ability;
 pub mod session_ability;
 pub mod skill_ability;
