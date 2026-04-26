@@ -430,26 +430,43 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
                 continue;
             }
         }
+        // Source 1 — EasyNet-managed skills under <agent-root>/skills/.
+        // These are the ones `easynet skill install ...` writes;
+        // each carries an `.easynet/install.json` metadata file.
         let root = entry
             .root_path
             .clone()
             .unwrap_or_else(|| config::agents_root().join(name));
         let skills_dir = root.join("skills");
-        if !skills_dir.exists() {
-            continue;
+        if skills_dir.exists() {
+            for dir_entry in fs::read_dir(&skills_dir)?.flatten() {
+                let record_path = dir_entry.path().join(".easynet").join("install.json");
+                if !record_path.exists() {
+                    continue;
+                }
+                match read_install_record(&record_path) {
+                    Ok(r) => rows.push(r),
+                    Err(e) => eprintln!(
+                        "[warn] skill {}: failed to read install record: {e}",
+                        dir_entry.path().display()
+                    ),
+                }
+            }
         }
-        for entry in fs::read_dir(&skills_dir)?.flatten() {
-            let record_path = entry.path().join(".easynet").join("install.json");
-            if !record_path.exists() {
-                continue;
-            }
-            match read_install_record(&record_path) {
-                Ok(r) => rows.push(r),
-                Err(e) => eprintln!(
-                    "[warn] skill {}: failed to read install record: {e}",
-                    entry.path().display()
-                ),
-            }
+
+        // Source 2 — agent-native global skill pools. Claude Code
+        // keeps user-level skills under `~/.claude/skills/`; Codex
+        // keeps them under `~/.agents/skills/`. These pools are
+        // populated by external tooling (the agent CLI itself, the
+        // user's own scripts, marketplace installers other than
+        // EasyNet's), so they have no `.easynet/install.json`. We
+        // synthesise an InstallRecord from each skill directory's
+        // `SKILL.md` YAML frontmatter — the canonical metadata
+        // location for both Claude Code and Codex. The synthetic
+        // record's `source.kind = "global"` so the listing tells
+        // an operator at a glance which pool a row came from.
+        for (label, pool_dir) in global_skill_pools_for(entry.agent_type) {
+            scan_global_pool_into(name, label, &pool_dir, &mut rows);
         }
     }
 
@@ -483,6 +500,159 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
     }
     eprintln!();
     Ok(())
+}
+
+/// Per-agent-kind global skill pool roots. Mirrors the install-side
+/// mapping in `skill_install.rs` so the lister and the installer
+/// can never disagree about where each agent kind keeps its global
+/// skills. Empty Vec for kinds without a known global pool.
+///
+/// `~/.claude/skills/` and `~/.agents/skills/` are populated by the
+/// agent CLIs themselves and by external tooling — EasyNet does not
+/// own these directories, only reads them.
+fn global_skill_pools_for(agent_type: agents::AgentType) -> Vec<(&'static str, std::path::PathBuf)> {
+    let home = config::home_dir();
+    match agent_type {
+        agents::AgentType::ClaudeCode => {
+            vec![("claude-global", home.join(".claude").join("skills"))]
+        }
+        agents::AgentType::Codex | agents::AgentType::CodexAppServer => {
+            vec![("codex-global", home.join(".agents").join("skills"))]
+        }
+    }
+}
+
+/// Walk a global skill pool and append one synthetic InstallRecord
+/// per skill directory it contains. Skips directories that don't
+/// look like a skill (no `SKILL.md` and no nested `skill.json`).
+///
+/// We do not propagate IO errors from the walk: a global pool that
+/// is missing or unreadable should not fail the whole listing —
+/// the EasyNet-managed half (Source 1) can still surface.
+fn scan_global_pool_into(
+    agent_name: &str,
+    pool_label: &str,
+    pool_dir: &std::path::Path,
+    rows: &mut Vec<InstallRecord>,
+) {
+    if !pool_dir.is_dir() {
+        return;
+    }
+    let entries = match fs::read_dir(pool_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!(
+                "[warn] global skill pool {} unreadable: {e}",
+                pool_dir.display()
+            );
+            return;
+        }
+    };
+    for dir_entry in entries.flatten() {
+        let path = dir_entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let dir_name = match path.file_name().and_then(|s| s.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        // Skip dotfiles / hidden dirs.
+        if dir_name.starts_with('.') {
+            continue;
+        }
+        let skill_md = path.join("SKILL.md");
+        let skill_json = path.join("skill.json");
+        if !skill_md.exists() && !skill_json.exists() {
+            // Not a skill directory shape — could be an unrelated
+            // user folder under ~/.claude. Silent skip.
+            continue;
+        }
+        // Best-effort metadata extraction. Frontmatter `name` wins
+        // when present; otherwise the directory name is the fallback.
+        let parsed_name = parse_skill_md_name(&skill_md).unwrap_or_else(|| dir_name.clone());
+        let size_bytes = directory_size_bytes(&path);
+        let installed_at = file_mtime_iso(&path).unwrap_or_default();
+
+        rows.push(InstallRecord {
+            name: parsed_name,
+            agent_id: agent_name.to_string(),
+            source: SkillSource {
+                // `kind = "global"` distinguishes these from the
+                // `github`-kind records that `easynet skill install`
+                // writes. The to_url() rendering becomes
+                // "global:claude-global" — visible in the SOURCE
+                // column so an operator can tell which pool a row
+                // came from.
+                kind: "global".to_string(),
+                identifier: pool_label.to_string(),
+                ref_: None,
+                subpath: Some(dir_name),
+            },
+            // No tree hash for global skills — they're not pinned by
+            // EasyNet and the file set may change without us
+            // observing. Empty string is the documented "unknown"
+            // sentinel.
+            skill_tree_hash: String::new(),
+            size_bytes,
+            installed_at,
+            last_checked_at: None,
+            upgrade_available: false,
+        });
+    }
+}
+
+/// Extract the `name:` field from a SKILL.md YAML frontmatter
+/// block. Returns None on any parse failure — the caller falls back
+/// to the directory name. We do a minimal hand parse rather than
+/// pulling in a YAML crate because the frontmatter shape we care
+/// about is one line: `name: <value>`.
+fn parse_skill_md_name(skill_md: &std::path::Path) -> Option<String> {
+    let content = fs::read_to_string(skill_md).ok()?;
+    // Frontmatter is delimited by `---` lines at the top.
+    let body = content.strip_prefix("---")?.strip_prefix('\n')?;
+    let end = body.find("\n---")?;
+    let frontmatter = &body[..end];
+    for line in frontmatter.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("name:") {
+            let value = rest.trim().trim_matches('"').trim_matches('\'').to_string();
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+/// Recursive byte size of a directory, best-effort. A symlink loop
+/// or an unreadable child silently skips that subtree rather than
+/// failing the whole listing; the result is approximate but the
+/// listing's SIZE column has always been advisory.
+fn directory_size_bytes(dir: &std::path::Path) -> u64 {
+    let mut total: u64 = 0;
+    let walker = match fs::read_dir(dir) {
+        Ok(w) => w,
+        Err(_) => return 0,
+    };
+    for entry in walker.flatten() {
+        let p = entry.path();
+        match entry.metadata() {
+            Ok(m) if m.is_file() => total = total.saturating_add(m.len()),
+            Ok(m) if m.is_dir() => total = total.saturating_add(directory_size_bytes(&p)),
+            _ => {}
+        }
+    }
+    total
+}
+
+/// ISO-8601 mtime of a path, best-effort. Returns None if the
+/// metadata read fails.
+fn file_mtime_iso(path: &std::path::Path) -> Option<String> {
+    let meta = fs::metadata(path).ok()?;
+    let modified = meta.modified().ok()?;
+    let dt: chrono::DateTime<chrono::Utc> = modified.into();
+    Some(dt.to_rfc3339())
 }
 
 // ─── upgrade ─────────────────────────────────────────────────────
