@@ -9,11 +9,12 @@ Rule 1 — No CLI call sites to deleted axon RPCs
 Rule 2 — Agent has no kind/role/type discriminator
   [ ok ] enum AgentRole / AgentKind in CLI                            0
   [ ok ] agent.kind / agent.role branches                             0
-  [WARN] AgentType internal enum (kept by P4.4 decision; no wire impact) 119
+  [WARN] AgentType internal enum (kept by P4.4 decision; no wire impact) 106
 
 Rule 3 — MCP only inside mcp-profile module (P4)
-  [WARN] MCP keyword in CLI src (case-insensitive)                    348
-  [WARN] facade/mcp/ legacy directory (delete in P4)                  exists
+  [WARN] MCP keyword in CLI src (case-insensitive)                    215
+  [ ok ] facade/mcp/ contains only mod.rs                             quarantine anchor only
+  [ ok ] facade/mcp/mod.rs is doc-only                                no imports
 
 Rule 4 — system.* ability namespace retired
   [ ok ] system.skill.* / system.session.* / system.permission.* / etc. 0
@@ -21,7 +22,7 @@ Rule 4 — system.* ability namespace retired
 
 Rule 5 — No legacy SSH/exec compatibility env var
   [WARN] EASYNET_SESSION_BRIDGE_EXEC_ENABLED                          3
-  [WARN] session_bridge legacy tool name                              18
+  [WARN] session_bridge legacy tool name                              17
 
 Rule 6 — Hosted Agent receipt schema (deferred to P4)
   [info] receipt schema lands in P4
@@ -36,7 +37,7 @@ Rule 10 — AbilityDescriptor scope metadata (deferred to P4)
   [info] AbilityDescriptor lands in P4
 
 ===================================================================
-Total flagged occurrences: 499
+Total flagged occurrences: 351
 
 Phase: baseline (P0). Counts recorded; CI does not fail.
 Set RFC001_PHASE=enforce to fail on any non-zero count.
