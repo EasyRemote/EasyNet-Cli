@@ -510,7 +510,7 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
 /// `~/.claude/skills/` and `~/.agents/skills/` are populated by the
 /// agent CLIs themselves and by external tooling — EasyNet does not
 /// own these directories, only reads them.
-fn global_skill_pools_for(agent_type: agents::AgentType) -> Vec<(&'static str, std::path::PathBuf)> {
+pub(crate) fn global_skill_pools_for(agent_type: agents::AgentType) -> Vec<(&'static str, std::path::PathBuf)> {
     let home = config::home_dir();
     match agent_type {
         agents::AgentType::ClaudeCode => {
@@ -529,7 +529,7 @@ fn global_skill_pools_for(agent_type: agents::AgentType) -> Vec<(&'static str, s
 /// We do not propagate IO errors from the walk: a global pool that
 /// is missing or unreadable should not fail the whole listing —
 /// the EasyNet-managed half (Source 1) can still surface.
-fn scan_global_pool_into(
+pub(crate) fn scan_global_pool_into(
     agent_name: &str,
     pool_label: &str,
     pool_dir: &std::path::Path,
@@ -796,7 +796,7 @@ fn parse_source_url(url: &str) -> anyhow::Result<SkillSource> {
     })
 }
 
-fn read_install_record(path: &Path) -> anyhow::Result<InstallRecord> {
+pub(crate) fn read_install_record(path: &Path) -> anyhow::Result<InstallRecord> {
     let text = fs::read_to_string(path)
         .map_err(|e| anyhow::anyhow!("read {}: {e}", path.display()))?;
     Ok(serde_json::from_str(&text)?)

@@ -41,6 +41,7 @@ pub mod permission_ability;
 pub mod ping;
 pub mod schedule_ability;
 pub mod session_ability;
+pub mod skill_ability;
 
 use std::sync::Arc;
 
@@ -96,6 +97,7 @@ pub fn build_registry_with_services(
     schedule_ability::register(&mut reg, schedule);
     loop_ability::register(&mut reg, loop_svc);
     chat_ability::register(&mut reg, agents, loaders);
+    skill_ability::register(&mut reg);
     Arc::new(reg)
 }
 
