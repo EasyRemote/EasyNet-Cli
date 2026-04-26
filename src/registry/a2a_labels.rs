@@ -265,40 +265,17 @@ fn system_skills_json() -> String {
 }
 
 /// Look up the human-readable description for a published system
-/// ability name. Falls back to a short generic blurb for unknown
-/// names (e.g. `<agent>.chat` entries that flow through the
-/// system registry after the chat-as-ability collapse, but whose
-/// per-name description lives in the manifest, not in this match).
+/// ability name.
+///
+/// Authoritative source lives in `runtime::system::description_for` —
+/// kept there so the federation label and the runtime-local register
+/// publisher (`runtime::publish::publish_system_abilities_to_local_runtime`)
+/// pull from one table. This function exists as a thin local alias so
+/// the call sites in this module read naturally; do NOT inline a
+/// second match here, that's exactly the drift the centralisation
+/// removed.
 fn description_for(name: &str) -> &'static str {
-    match name {
-        "system.ping" => crate::runtime::system::ping::description(),
-        "system.session.list" => crate::runtime::system::session_ability::list_description(),
-        "system.session.attach" => crate::runtime::system::session_ability::attach_description(),
-        "system.permission.subscribe" => {
-            crate::runtime::system::permission_ability::subscribe_description()
-        }
-        "system.permission.decide" => {
-            crate::runtime::system::permission_ability::decide_description()
-        }
-        "system.discuss.create" => crate::runtime::system::discuss_ability::create_description(),
-        "system.discuss.post" => crate::runtime::system::discuss_ability::post_description(),
-        "system.discuss.subscribe" => {
-            crate::runtime::system::discuss_ability::subscribe_description()
-        }
-        "system.schedule.add" => crate::runtime::system::schedule_ability::add_description(),
-        "system.schedule.list" => crate::runtime::system::schedule_ability::list_description(),
-        "system.schedule.remove" => crate::runtime::system::schedule_ability::remove_description(),
-        "system.schedule.enable" => crate::runtime::system::schedule_ability::enable_description(),
-        "system.loop.create" => crate::runtime::system::loop_ability::create_description(),
-        "system.loop.status" => crate::runtime::system::loop_ability::status_description(),
-        "system.loop.subscribe" => crate::runtime::system::loop_ability::subscribe_description(),
-        "system.loop.cancel" => crate::runtime::system::loop_ability::cancel_description(),
-        // Falls through for `<agent>.chat` and any future
-        // additions. Keep terse — the per-name detail is already
-        // available via MCP ListTools.
-        _ if name.ends_with(".chat") => "Send a chat prompt to the locally-installed agent.",
-        _ => "(system ability)",
-    }
+    crate::runtime::system::description_for(name)
 }
 
 #[cfg(test)]
