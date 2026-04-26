@@ -151,6 +151,76 @@ pub fn publish_one(
     PublishOutcome { tool_name, result }
 }
 
+/// Publish every `system.*` ability (ping, session.*, permission.*,
+/// discuss.*, schedule.*, loop.*, skill.*, …) to the local
+/// axon-runtime as runtime-local MCP tools.
+///
+/// Why this exists
+/// ---------------
+/// `publish_agent_to_local_runtime` only walks per-agent manifests
+/// under `<agent-root>/abilities/`. System abilities have no on-disk
+/// manifest — they are registered in the daemon's in-memory
+/// `LocalAbilityRegistry` (see `runtime::system::build_registry_for_daemon`).
+/// Without this function, the axon-runtime's MCP catalog never learns
+/// the names: a Hub-mediated `CallMcpTool("system.skill.list", node)`
+/// returns "tool not found" and the EasyNet frontend's Skills page
+/// silently shows zero installs (the backend's listInstalledLogic
+/// degrades a missing-ability response to an empty list, by design).
+/// The same gap blocked every other `system.*` discoverability
+/// surface; surfacing skill.list incidentally fixes the rest.
+///
+/// What gets published
+/// -------------------
+/// Whatever `runtime::system::published_abilities()` returns — today
+/// 17 entries (ping + session + permission + discuss + schedule + loop
+/// + skill). `<agent>.chat` is filtered there because those tools
+/// already publish via the per-agent path off `chat.ability.toml`;
+/// double-registering with a synthesised schema would silently
+/// shadow the manifest's real schema.
+///
+/// Failure model
+/// -------------
+/// Best-effort, identical to the per-agent publisher. A runtime that
+/// is not reachable (operator paired but not started runtime) returns
+/// `Err(...)` per outcome; the caller logs and continues so daemon
+/// startup never blocks on the discovery surface. The handlers stay
+/// callable through the local IPC proxy regardless — only the
+/// federation discovery + Hub-mediated CallMcpTool path depends on
+/// this register completing.
+pub fn publish_system_abilities_to_local_runtime(
+    bridge: &DendriteBridge,
+    tenant_id: &str,
+    node_id: &str,
+    dispatch_endpoint: &str,
+) -> Vec<PublishOutcome> {
+    crate::runtime::system::published_abilities()
+        .into_iter()
+        .map(|meta| {
+            let result = bridge
+                .register_runtime_local_mcp_tool(
+                    tenant_id,
+                    node_id,
+                    &meta.name,
+                    meta.description,
+                    Some(&meta.input_schema),
+                    None,
+                    dispatch_endpoint,
+                )
+                .map(|response| {
+                    response
+                        .get("replaced_prior")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                })
+                .map_err(|e| format!("{e}"));
+            PublishOutcome {
+                tool_name: meta.name,
+                result,
+            }
+        })
+        .collect()
+}
+
 /// Unregister every manifest under `<agent-root>/abilities/` from the
 /// local axon-runtime. Used by `easynet agent remove` to keep the
 /// catalog in sync with the registry — without this, removed agents
