@@ -1,6 +1,6 @@
 //! Agent profile registry — RFC-001 §1 implementation profiles.
 //!
-//! Per AXON-RFC-001 plan v4.1.1 §A4: "profile" is documentation
+//! Per AXON-RFC-001 plan v4.1.2 §A4: "profile" is documentation
 //! shorthand for "an Agent advertising the corresponding ability
 //! namespace". These are NOT protocol-level types or kind values.
 //! They are implementation modules that group ability handlers by
@@ -23,8 +23,8 @@
 //! `register_*` functions are imported from the feature modules.
 //!
 //! See:
-//!   docs/rfc/AXON-RFC-001-plan-v4.1.1.md §1 — profile catalogue
-//!   docs/rfc/AXON-RFC-001-plan-v4.1.1.md §18 — standard ability registry
+//!   docs/rfc/AXON-RFC-001-plan-v4.1.2.md §1 — profile catalogue
+//!   docs/rfc/AXON-RFC-001-plan-v4.1.2.md §18 — standard ability registry
 //!   docs/rfc/AXON-RFC-001-restatement-mapping.md — old → new mapping
 
 pub mod device;
