@@ -32,3 +32,71 @@ pub mod consent;
 pub mod policy;
 pub mod mcp;
 pub mod llm;
+
+/// Aggregate every profile's descriptors into one list, anchored to
+/// the same host's URAs. Used by P4.6's `federation.advertise_abilities`
+/// publisher: the daemon advertises the union of every profile it hosts.
+///
+/// `device_uri` is the host device-profile Agent URA. The other URAs
+/// are looked up from `local-agents.json` (P3.4 / P4.7).
+pub fn all_descriptors_for_host(
+    device_uri: &str,
+    consent_uri: Option<&str>,
+    policy_uri: Option<&str>,
+    mcp_uri: Option<&str>,
+    llm_uris: &[(String, String)], // (sub_agent_name, ura)
+) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
+    let mut out = Vec::new();
+    out.extend(device::descriptors_for(device_uri));
+    if let Some(uri) = consent_uri {
+        out.extend(consent::descriptors_for(uri));
+    }
+    if let Some(uri) = policy_uri {
+        out.extend(policy::descriptors_for(uri));
+    }
+    if let Some(uri) = mcp_uri {
+        out.extend(mcp::descriptors_for(uri));
+    }
+    for (_name, uri) in llm_uris {
+        out.extend(llm::descriptors_for(uri));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aggregator_with_only_device_returns_device_descriptors_only() {
+        let device_uri = "easynet:///r/acme/agent/01DEV";
+        let all = all_descriptors_for_host(device_uri, None, None, None, &[]);
+        assert!(!all.is_empty());
+        for d in &all {
+            assert_eq!(d.owner_agent_uri, device_uri);
+            assert!(device::owns(&d.name));
+        }
+    }
+
+    #[test]
+    fn aggregator_includes_each_provided_profile_owner() {
+        // We only assert profiles whose namespace is reliably present
+        // in the default `build_registry()` (which skips per-agent
+        // chat handlers because no AgentRegistry is loaded). Device
+        // and consent are guaranteed; llm/policy/mcp depend on
+        // optional sub-systems and are exercised in their own tests.
+        let device_uri = "easynet:///r/acme/agent/01DEV";
+        let consent_uri = "easynet:///r/acme/agent/01CON";
+        let all = all_descriptors_for_host(
+            device_uri,
+            Some(consent_uri),
+            None,
+            None,
+            &[],
+        );
+        let owners: std::collections::HashSet<&str> =
+            all.iter().map(|d| d.owner_agent_uri.as_str()).collect();
+        assert!(owners.contains(device_uri));
+        assert!(owners.contains(consent_uri));
+    }
+}

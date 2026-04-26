@@ -29,6 +29,26 @@ pub fn owns(ability_name: &str) -> bool {
         .any(|p| ability_name.starts_with(p))
 }
 
+/// AbilityDescriptors for every mcp.bridge.* + mcp.client.* in the
+/// live registry, anchored to the mcp-profile's canonical URA. All
+/// SCOPED per §18 — local MCP clients only for bridge.*; the daemon
+/// itself + selected internal callers for client.*. P4.7 narrows.
+pub fn descriptors_for(
+    owner_agent_uri: &str,
+) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
+    use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
+    crate::runtime::agents::published_abilities()
+        .into_iter()
+        .filter(|m| owns(&m.name))
+        .map(|m| {
+            AbilityDescriptor::new(m.name.clone(), owner_agent_uri, Visibility::Scoped)
+                .expect("registry-derived names satisfy descriptor invariants")
+                .with_input_schema(m.input_schema.clone())
+                .with_source("kernel:built-in")
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

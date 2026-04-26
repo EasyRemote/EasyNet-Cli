@@ -31,6 +31,38 @@ pub fn owns(ability_name: &str) -> bool {
         .any(|p| ability_name.starts_with(p))
 }
 
+/// AbilityDescriptors for every conversation.* / session.* / meta.*
+/// / skill.* in the live registry, anchored to the LLM-profile
+/// Agent's URA. Per RFC §1.1 + §18:
+///   * skill.*         → PRIVATE (per-skill, owner-only by default)
+///   * conversation.*  → SCOPED  (default per [P8] correction)
+///   * session.*       → SCOPED
+///   * meta.*          → SCOPED  (callable PUBLIC, results filtered)
+///
+/// `meta.describe` is technically PUBLIC per §18, but we mark it
+/// SCOPED here for safety; the higher-level dispatcher upgrades to
+/// PUBLIC when it lands. P4.7 narrows the SCOPED axes.
+pub fn descriptors_for(
+    owner_agent_uri: &str,
+) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
+    use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
+    crate::runtime::agents::published_abilities()
+        .into_iter()
+        .filter(|m| owns(&m.name))
+        .map(|m| {
+            let visibility = if m.name.starts_with("skill.") {
+                Visibility::Private
+            } else {
+                Visibility::Scoped
+            };
+            AbilityDescriptor::new(m.name.clone(), owner_agent_uri, visibility)
+                .expect("registry-derived names satisfy descriptor invariants")
+                .with_input_schema(m.input_schema.clone())
+                .with_source("kernel:built-in")
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -52,5 +84,18 @@ mod tests {
         assert!(!owns("fleet.list_abilities"));
         assert!(!owns("consent.subscribe"));
         assert!(!owns("policy.evaluate"));
+    }
+
+    #[test]
+    fn descriptors_for_marks_skill_namespace_as_private() {
+        use crate::runtime::ability_descriptor::Visibility;
+        let descriptors = descriptors_for("easynet:///r/acme/agent/01LLM");
+        for d in descriptors {
+            if d.name.starts_with("skill.") {
+                assert_eq!(d.visibility, Visibility::Private, "{} must be PRIVATE", d.name);
+            } else {
+                assert_eq!(d.visibility, Visibility::Scoped, "{} must be SCOPED", d.name);
+            }
+        }
     }
 }
