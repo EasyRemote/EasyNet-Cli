@@ -14,7 +14,12 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Allow self-test to override the scan root via env var.
+if [[ -n "${RFC001_FIXTURE_ROOT:-}" ]]; then
+  ROOT="$RFC001_FIXTURE_ROOT"
+else
+  ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+fi
 SRC="$ROOT/src"
 
 PHASE="${RFC001_PHASE:-baseline}"
