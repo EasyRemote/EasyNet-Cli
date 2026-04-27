@@ -59,6 +59,14 @@ pub mod process_exec_ability;
 /// `support/shellguard/`, this module is the thin
 /// agent-dispatch wiring on top.
 pub mod shell_run_ability;
+/// http.request — outbound HTTP client. Last member of the
+/// Baseline Locomotion Profile. Issues one request per call,
+/// captures status / headers / body up to a cap, redacts
+/// auth-bearing headers (Authorization, Cookie, X-API-Key, …)
+/// from every receipt the auditor may persist. Schemes
+/// restricted to http / https; CR/LF in header values
+/// rejected; redirect / timeout / body caps enforced.
+pub mod http_request_ability;
 pub mod context_loaders;
 pub mod discuss_ability;
 pub mod fleet_list_agents_ability;
@@ -144,6 +152,12 @@ pub fn build_registry_with_services(
     // permissions → pathconstraints → readonly → destructive)
     // gates every dispatch.
     shell_run_ability::register(&mut reg);
+    // AXIOM §"Tier 2.5" Baseline Locomotion — HTTP client.
+    // Last member of the seven-ability profile; first-class
+    // surface for outbound network so receivers can audit
+    // every external call uniformly instead of going through
+    // a shell.run-wrapped curl.
+    http_request_ability::register(&mut reg);
     // policy.{evaluate,simulate} — admission-gate consumer surface
     // pinned to the §A6 contract. v1 is allow-all; the gate's
     // rewiring to actually call this ability lands in a follow-up
@@ -387,6 +401,7 @@ pub fn description_for(name: &str) -> &'static str {
         "fs.list" => fs_ability::description_list(),
         "process.exec" => process_exec_ability::description(),
         "shell.run" => shell_run_ability::description(),
+        "http.request" => http_request_ability::description(),
         _ if name.ends_with(".chat") => "Send a chat prompt to the locally-installed agent.",
         _ => "(system ability)",
     }
@@ -444,6 +459,7 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "fs.list" => fs_ability::input_schema_list(),
         "process.exec" => process_exec_ability::input_schema(),
         "shell.run" => shell_run_ability::input_schema(),
+        "http.request" => http_request_ability::input_schema(),
         _ => serde_json::json!({ "type": "object" }),
     }
 }
@@ -555,7 +571,8 @@ mod tests {
             // shell.run dispatch, the layer classification
             // tracks privilege not invocation safety.
             | "process.exec"
-            | "shell.run" => Some(AbilityLayer::Operational),
+            | "shell.run"
+            | "http.request" => Some(AbilityLayer::Operational),
             _ => None,
         }
     }
