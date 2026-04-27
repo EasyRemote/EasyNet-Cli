@@ -122,6 +122,12 @@ pub mod pty_lifecycle_ability;
 /// reader thread takes one fd dup, attach takes another, and two
 /// readers on the same PTY race for incoming bytes.
 pub mod pty_io_ability;
+/// fleet.file_transfer — bidirectional chunked file upload /
+/// download. Pairs with the EasyNet backend's
+/// /api/v1/files/{upload,download} HTTP routes; one signed
+/// InvokeBidi session per transfer. Atomic write (staging +
+/// rename), SHA-256 over content, 1 GiB byte cap.
+pub mod file_transfer_ability;
 pub mod schedule_ability;
 pub mod session_ability;
 pub mod skill_ability;
@@ -229,6 +235,12 @@ pub fn build_registry_with_services(
     // …_create is reachable through all three surfaces (unary,
     // bidi, lifecycle) — operators choose one mode per session.
     pty_io_ability::register(&mut reg, pty, pty_io);
+    // fleet.file_transfer — bidi chunked file upload/download.
+    // Pairs with the EasyNet backend's /api/v1/files/{upload,
+    // download} routes. No shared service state needed; the
+    // handler opens its own per-session FS handle on each
+    // OpenBidi.
+    file_transfer_ability::register(&mut reg);
     // fleet.start_agent / fleet.stop_agent — Invoke-side mirror
     // of `easynet agent add/remove`. LLM sub-agents are registry
     // rows (not resident processes), so start ≡ insert into
@@ -513,6 +525,7 @@ pub fn description_for(name: &str) -> &'static str {
         "fleet.pty_session_input" => pty_io_ability::input_description(),
         "fleet.pty_session_read" => pty_io_ability::read_description(),
         "fleet.pty_session_resize" => pty_io_ability::resize_description(),
+        "fleet.file_transfer" => file_transfer_ability::description(),
         "fleet.start_agent" => fleet_lifecycle_ability::start_agent_description(),
         "fleet.stop_agent" => fleet_lifecycle_ability::stop_agent_description(),
         "admin.status" => admin_status_ability::description(),
@@ -581,11 +594,23 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "fleet.pty_session_input" => pty_io_ability::input_input_schema(),
         "fleet.pty_session_read" => pty_io_ability::read_input_schema(),
         "fleet.pty_session_resize" => pty_io_ability::resize_input_schema(),
+        "fleet.file_transfer" => file_transfer_ability::input_schema(),
         "fleet.start_agent" => fleet_lifecycle_ability::start_agent_input_schema(),
         "fleet.stop_agent" => fleet_lifecycle_ability::stop_agent_input_schema(),
         "admin.status" => admin_status_ability::input_schema(),
         _ => serde_json::json!({ "type": "object" }),
     }
+}
+
+/// RFC-006 metadata for a published ability. Returns `None` for
+/// every existing ability — they emit unchanged TOMLs and on-wire
+/// descriptors. PR2 (#196) adds `Some(...)` arms for the eight
+/// physical-channel abilities + meta.list_resources, declaring
+/// their RFC-006 class (Stream / Query). No Transition consumer
+/// exists yet; the renderer + descriptor schema support it but
+/// no name returns a Transition variant in v1.
+pub fn rfc006_for(_name: &str) -> Option<ability_toml::Rfc006Metadata> {
+    None
 }
 
 #[cfg(test)]
@@ -703,7 +728,8 @@ mod tests {
             | "fleet.pty_session_attach"
             | "fleet.pty_session_input"
             | "fleet.pty_session_read"
-            | "fleet.pty_session_resize" => Some(AbilityLayer::Operational),
+            | "fleet.pty_session_resize"
+            | "fleet.file_transfer" => Some(AbilityLayer::Operational),
             _ => None,
         }
     }
@@ -796,6 +822,7 @@ mod tests {
                 &meta.name,
                 meta.description,
                 &meta.input_schema,
+                rfc006_for(&meta.name).as_ref(),
             );
             if on_disk != expected {
                 drift.push(meta.name.clone());

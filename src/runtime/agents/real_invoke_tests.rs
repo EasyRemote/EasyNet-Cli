@@ -1377,3 +1377,63 @@ async fn real_fleet_pty_session_attach_returns_a_bidi_source() {
         json!({"session_id": sid}),
     ));
 }
+
+// fleet.file_transfer is a bidi ability — open it with mode=upload
+// against a temp path, push a chunk + eof, drain the complete frame,
+// then verify the file landed with the right content. The
+// structural guard `every_published_ability_has_a_real_invoke_test`
+// requires a token-grep match for the ability name in this file.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_fleet_file_transfer_uploads_a_round_trip_through_dispatcher() {
+    use base64::Engine;
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let mut reg = LocalAbilityRegistry::new();
+    super::file_transfer_ability::register(&mut reg);
+    let d = dispatcher_for(Arc::new(reg));
+
+    let path = std::env::temp_dir().join(format!(
+        "easynet-real-ft-{}-{}.bin",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0)
+    ));
+
+    let mut t = target(
+        "fleet.file_transfer",
+        json!({"mode": "upload", "path": path.to_string_lossy()}),
+    );
+    t.call_mode = CallMode::Bidi;
+    let bidi = d.execute_bidi(t).expect("file_transfer bidi");
+
+    let bytes = b"real-invoke-fleet-file-transfer";
+    let chunk_b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+    bidi.to_client
+        .send(json!({"type": "chunk", "data": chunk_b64}))
+        .await
+        .unwrap();
+    bidi.to_client
+        .send(json!({"type": "eof"}))
+        .await
+        .unwrap();
+
+    // Drain frames until we see complete or timeout.
+    let mut from = bidi.from_client;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let mut got_complete = false;
+    while std::time::Instant::now() < deadline {
+        match tokio::time::timeout(std::time::Duration::from_millis(500), from.recv()).await {
+            Ok(Some(f)) => {
+                if f["type"] == "complete" {
+                    got_complete = true;
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+    assert!(got_complete, "expected `complete` frame from fleet.file_transfer");
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    let _ = std::fs::remove_file(&path);
+}
