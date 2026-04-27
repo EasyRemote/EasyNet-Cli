@@ -235,6 +235,30 @@ pub fn send_external_with_overrides(
     send_to_agent_with_depth(agent_name, entry, prompt, context, None, Some(0), overrides)
 }
 
+/// Same as `send_external_with_overrides` but threads a
+/// per-token progress callback through to the driver. Used by
+/// the chat ability's stream_handler to forward live LLM
+/// progress to its broadcast channel.
+pub fn send_external_with_overrides_and_progress(
+    agent_name: &str,
+    entry: &AgentEntry,
+    prompt: &str,
+    context: Option<&str>,
+    overrides: Option<&DriverOverrides>,
+    progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
+) -> anyhow::Result<AgentResponse> {
+    send_to_agent_with_depth_and_progress(
+        agent_name,
+        entry,
+        prompt,
+        context,
+        None,
+        Some(0),
+        overrides,
+        progress_tx,
+    )
+}
+
 /// Same as `send_to_agent` but accepts an explicit `depth_override`. When
 /// `depth_override` is `Some(d)`, that value is used as the current
 /// recursion depth instead of consulting the typed dispatch context. This
@@ -270,6 +294,37 @@ pub fn send_to_agent_with_depth(
     extra_trace_path: Option<&Path>,
     depth_override: Option<u32>,
     overrides: Option<&DriverOverrides>,
+) -> anyhow::Result<AgentResponse> {
+    send_to_agent_with_depth_and_progress(
+        agent_name,
+        entry,
+        prompt,
+        context,
+        extra_trace_path,
+        depth_override,
+        overrides,
+        None,
+    )
+}
+
+/// Same as `send_to_agent_with_depth` but threads through an
+/// optional per-token progress callback. Pre-fix the chat
+/// ability's stream surface emitted only {session, loaded?,
+/// done|error} — three frames per call regardless of LLM
+/// response length, despite calling itself \"streaming\".
+/// Threading a callback in here is what makes the stream a
+/// real per-token stream: the driver invokes `progress_tx`
+/// once per stdout line in stream-json mode, and chat's
+/// stream_handler forwards that into its broadcast channel.
+pub fn send_to_agent_with_depth_and_progress(
+    agent_name: &str,
+    entry: &AgentEntry,
+    prompt: &str,
+    context: Option<&str>,
+    extra_trace_path: Option<&Path>,
+    depth_override: Option<u32>,
+    overrides: Option<&DriverOverrides>,
+    progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
 ) -> anyhow::Result<AgentResponse> {
     // Mission context invariant — only enforced in production, skipped
     // when a test passes `depth_override` to exercise the recursion
@@ -554,6 +609,7 @@ pub fn send_to_agent_with_depth(
             // progress events interleave between them in
             // sequence order.
             timeline: Some(session.writer_arc()),
+            progress_tx: progress_tx.clone(),
             // Honor the operator-supplied binary override. Each
             // driver substitutes its own default when this is
             // empty (see `ClaudeOptions::resolved_command` and
@@ -1300,6 +1356,7 @@ mod tests {
             cwd: std::path::PathBuf::from("."),
             run_dir: None,
             timeline: None,
+            progress_tx: None,
             command: String::new(),
         };
         let out = adapter
@@ -1330,6 +1387,7 @@ mod tests {
             cwd: std::path::PathBuf::from("."),
             run_dir: None,
             timeline: None,
+            progress_tx: None,
             command: String::new(),
         };
         let out = adapter.invoke(&entry, "p", opts).unwrap();
@@ -1367,6 +1425,7 @@ mod tests {
             cwd: std::path::PathBuf::from("."),
             run_dir: None,
             timeline: None,
+            progress_tx: None,
             command: String::new(),
         };
         let out = adapter.invoke(&entry, "p", opts).unwrap();

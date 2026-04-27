@@ -103,6 +103,13 @@ pub struct ClaudeOptions {
     /// the driver's stat accumulator only — the legacy
     /// `runs/trace.jsonl` write path is gone.
     pub timeline: Option<Arc<crate::runtime::timeline::TimelineWriter>>,
+    /// Optional live-progress callback. When `Some`, the
+    /// stdout-line callback invokes it once per streamed line
+    /// (in addition to the durable `timeline` emit). The chat
+    /// ability's stream_handler uses this to forward per-token
+    /// progress to its broadcast channel; without it the
+    /// stream surface was effectively snapshot+done.
+    pub progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
     /// Binary to spawn. Empty string means "use the driver
     /// default" (`DEFAULT_CLAUDE_BINARY`). Dispatch fills this
     /// from `AgentEntry::command` so operators who have a
@@ -128,6 +135,7 @@ impl Default for ClaudeOptions {
             cwd: None,
             run_dir: None,
             timeline: None,
+            progress_tx: None,
             command: String::new(),
         }
     }
@@ -242,39 +250,45 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
     let final_text_cb = Arc::clone(&final_text);
     let stats_cb = Arc::clone(&stats);
     let timeline_cb = opts.timeline.clone();
+    let progress_tx_cb = opts.progress_tx.clone();
 
     let callback = Arc::new(move |line: &str| {
-        // PR-7 Commit 2: emit each streamed line as a `progress`
-        // event on the Timeline. The payload carries the raw
-        // JSONL line from the driver (driver-specific shape);
-        // downstream consumers (PR-10 services/chat, Frontend
-        // resume) parse the shape they expect and ignore the
-        // rest. The fsync on each emit is what gives us P2
-        // (disk durable before broadcast wake); the cost per
-        // chunk is bounded by LLM streaming rate, which is
-        // slower than fsync on any reasonable disk.
+        // Build the progress payload once; reuse it for both
+        // timeline emit and the live-broadcast callback so a
+        // subscriber's view matches what's on disk.
+        let payload = match serde_json::from_str::<serde_json::Value>(line) {
+            // Structured driver JSON — store the parsed value
+            // so subscribers get a typed payload instead of
+            // an opaque string.
+            Ok(v) => serde_json::json!({"driver": "claude-code", "chunk": v}),
+            // Non-JSON line (driver warning, stderr leak) —
+            // store verbatim under `raw` so it's still
+            // observable, just not typed.
+            Err(_) => serde_json::json!({"driver": "claude-code", "raw": line}),
+        };
+
+        // PR-7 Commit 2: durable timeline first. The fsync gives
+        // us P2 (disk durable before broadcast wake); the cost
+        // per chunk is bounded by the LLM streaming rate, which
+        // is slower than fsync on any reasonable disk.
         if let Some(tl) = &timeline_cb {
-            let payload = match serde_json::from_str::<serde_json::Value>(line) {
-                // Structured driver JSON — store the parsed
-                // value so subscribers get a typed payload
-                // instead of an opaque string.
-                Ok(v) => serde_json::json!({"driver": "claude-code", "chunk": v}),
-                // Non-JSON line (driver warning, stderr leak) —
-                // store verbatim under `raw` so it's still
-                // observable, just not typed.
-                Err(_) => serde_json::json!({"driver": "claude-code", "raw": line}),
-            };
-            if let Err(e) = tl.emit("progress", Some(payload)) {
-                // A sustained emit failure means the disk is
-                // unreachable. One stderr line is the compromise
-                // between surfacing the problem and not flooding
-                // when the LLM is streaming tokens at high rate.
+            if let Err(e) = tl.emit("progress", Some(payload.clone())) {
                 eprintln!(
                     "[easynet warn] timeline progress emit failed ({e}); \
                      subsequent lines for this run may be lost"
                 );
             }
         }
+
+        // Live-progress fan-out: forward the same payload to the
+        // chat stream's broadcast channel so an InvokeBidi/Stream
+        // subscriber sees per-token progress. Without this the
+        // \"stream\" was effectively snapshot+done — the audit
+        // conversation caught this in slice 32.
+        if let Some(tx) = &progress_tx_cb {
+            tx(payload);
+        }
+
         handle_stream_line(line, &final_text_cb, &stats_cb, run_start);
     });
 
@@ -529,6 +543,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
                 cwd: Some(opts.cwd),
                 run_dir: opts.run_dir,
                 timeline: opts.timeline,
+                progress_tx: opts.progress_tx,
                 // Honor `InvokeOpts::command` — dispatch filled
                 // it from `AgentEntry::command`. Empty string
                 // falls through to the driver default inside
