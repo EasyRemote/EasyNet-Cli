@@ -5,5 +5,3 @@ description = "List the host's local abilities projected to the MCP tools/list s
 [input_schema]
 type = "object"
 additionalProperties = false
-
-[input_schema.properties]

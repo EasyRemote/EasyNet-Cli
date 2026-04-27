@@ -5,5 +5,3 @@ description = "Return the full local AbilityDescriptor catalogue. Canonical Invo
 [input_schema]
 type = "object"
 additionalProperties = false
-
-[input_schema.properties]

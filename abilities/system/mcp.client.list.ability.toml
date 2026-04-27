@@ -5,5 +5,3 @@ description = "Aggregate tools/list across every configured upstream MCP server 
 [input_schema]
 type = "object"
 additionalProperties = false
-
-[input_schema.properties]

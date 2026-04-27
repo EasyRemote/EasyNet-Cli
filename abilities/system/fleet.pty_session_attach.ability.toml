@@ -1,7 +1,6 @@
 schema_version = "1"
 name = "fleet.pty_session_attach"
-description = "Attach to an existing PTY session over InvokeBidi: pump stdin from the wire to the PTY master, stream stdout/stderr back as base64-encoded `stdout` frames, surface child exit as a final `exit` frame. Pair with fleet.pty_session_create (open the session) and fleet.pty_session_close (terminate it). Inbound frames after the initial args: {type:\"stdin\", data:<base64>} and {type:\"resize\", cols, rows}. Outbound frames: {type:\"stdout\", data:<base64>} and {type:\"exit\", status:<int|null>}. The data-plane half of the baseline-locomotion-v1 PTY trio."
-invocation = "bidi"
+description = "Attach to an existing PTY session over InvokeBidi: pump stdin from the wire to the PTY master, stream stdout / stderr back as base64-encoded `stdout` frames, surface child exit as a final `exit` frame. Pair with fleet.pty_session_create (open the session) and fleet.pty_session_close (terminate it). Part of the baseline-locomotion-v1 profile (AXIOM Tier 2.5)."
 
 [input_schema]
 type = "object"
@@ -11,4 +10,3 @@ additionalProperties = false
 [input_schema.properties.session_id]
 type = "string"
 minLength = 1
-description = "Opaque session id returned by fleet.pty_session_create."

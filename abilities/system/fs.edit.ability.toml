@@ -1,29 +1,29 @@
 schema_version = "1"
 name = "fs.edit"
-description = "Surgical string-replace edit on a single text file. Default contract: old_string MUST occur exactly once; ambiguous matches reject with the count (AmbiguousMatch) rather than silently rewriting all occurrences. Pass replace_all=true to opt into bulk replacement. Empty old_string + missing target = create-new-file with new_string as content. Atomic write (tempfile + fdatasync + rename) shared with fs.write so the crash-resilience story is uniform. File size capped at 1 GiB; larger targets reject with FileTooLarge. Part of the baseline-locomotion-v1 profile (AXIOM §Tier 2.5)."
+description = "Surgical string-replace edit on a single text file. Default contract: old_string MUST occur exactly once; ambiguous matches reject with the count rather than silently rewriting all occurrences. Pass replace_all=true to opt into bulk replacement. File size capped at 1 GiB. Atomic write via tempfile + fdatasync + rename. Part of the baseline-locomotion-v1 profile (AXIOM §Tier 2.5)."
 
 [input_schema]
 type = "object"
 required = ["path", "old_string", "new_string"]
 additionalProperties = false
 
-[input_schema.properties.path]
-type = "string"
-minLength = 1
-
-[input_schema.properties.old_string]
-type = "string"
-description = "Exact substring to find. Empty string + non-existent file is the create-new-file primitive (new_string becomes the file body). Empty string against an existing file rejects with AmbiguousEmptyOldString."
+[input_schema.properties.expected_mtime_ms]
+type = "integer"
+description = "Optional staleness guard. Caller asserts the target's mtime (ms since UNIX epoch) matches the value last seen. Receiver stats the file before editing and rejects with StaleMtime if the actual mtime differs."
+minimum = 0
 
 [input_schema.properties.new_string]
 type = "string"
 description = "Replacement substring."
 
+[input_schema.properties.old_string]
+type = "string"
+description = "Exact substring to find. Empty string + non-existent file = create-new-file with new_string as content."
+
+[input_schema.properties.path]
+type = "string"
+minLength = 1
+
 [input_schema.properties.replace_all]
 type = "boolean"
-description = "When true, replace every occurrence; receipt records match_count. When false (default), the call rejects with AmbiguousMatch if old_string occurs more than once. Either pass replace_all=true or include enough surrounding context in old_string to make the match unique."
-
-[input_schema.properties.expected_mtime_ms]
-type = "integer"
-minimum = 0
-description = "Optional staleness guard. Caller asserts the target's mtime (ms since UNIX epoch) matches the value last seen — typically captured from a prior fs.read response's mtime_ms field. Receiver stats the file before editing and rejects with StaleMtime if the actual mtime differs."
+description = "When true, replace every occurrence; receipt records match_count. When false (default), the call rejects with AmbiguousMatch unless old_string occurs exactly once."

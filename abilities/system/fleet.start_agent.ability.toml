@@ -7,13 +7,13 @@ type = "object"
 required = ["name", "agent_type"]
 additionalProperties = false
 
-[input_schema.properties.name]
-type = "string"
-minLength = 1
-
 [input_schema.properties.agent_type]
 type = "string"
 enum = ["claude-code", "claude", "codex", "codex-app-server", "codex-appserver"]
 
 [input_schema.properties.model]
 type = "string"
+
+[input_schema.properties.name]
+type = "string"
+minLength = 1

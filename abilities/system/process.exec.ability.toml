@@ -1,56 +1,46 @@
 schema_version = "1"
 name = "process.exec"
-description = "Run a process via OS-level argv (no shell interpretation). Part of the baseline-locomotion-v1 profile (AXIOM §Tier 2.5). For pipes / redirects / glob, use shell.run. Destructive commands (rm/dd/mkfs/fdisk family) require destructive_acknowledged=true."
+description = "Run a process via OS-level argv (no shell interpretation). Part of the baseline-locomotion-v1 profile (AXIOM §Tier 2.5). For pipe/redirect/glob, use shell.run instead. Destructive commands (rm/dd/mkfs/fdisk family) require destructive_acknowledged=true."
 
 [input_schema]
 type = "object"
 required = ["command"]
 additionalProperties = false
 
+[input_schema.properties.args]
+type = "array"
+items = { type = "string" }
+
 [input_schema.properties.command]
 type = "string"
 minLength = 1
-description = "Executable name or path. Resolved via PATH if relative; verbatim if absolute."
-
-[input_schema.properties.args]
-type = "array"
-description = "Argv tail. Each element passed independently; no shell interpolation."
-
-[input_schema.properties.args.items]
-type = "string"
 
 [input_schema.properties.cwd]
 type = "string"
-description = "Working directory for the child."
+
+[input_schema.properties.destructive_acknowledged]
+type = "boolean"
 
 [input_schema.properties.env]
 type = "object"
-description = "Environment for the child. None means inherit; map means replace (with runner defaults layered for missing keys)."
 additionalProperties = { type = "string" }
-
-[input_schema.properties.timeout_ms]
-type = "integer"
-minimum = 0
-maximum = 3600000
-description = "Wallclock budget. Default 30 000 ms. Hard cap 1 hour."
-
-[input_schema.properties.stdin]
-description = "Bytes to feed the child's stdin. Base64 string (default), UTF-8 string with stdin_encoding=\"utf8\", array of bytes, or null."
-
-[input_schema.properties.stdin_encoding]
-type = "string"
-enum = ["base64", "utf8"]
 
 [input_schema.properties.output_max_bytes]
 type = "integer"
 minimum = 0
 maximum = 104857600
-description = "Per-stream output cap. Default 1 MiB. Hard cap 100 MiB."
 
 [input_schema.properties.sandbox]
 type = "boolean"
-description = "Request platform sandbox. v1: returns sandbox_unavailable rather than silently downgrading."
 
-[input_schema.properties.destructive_acknowledged]
-type = "boolean"
-description = "Caller acknowledges this command is on the AXIOM Tier 2.5 destructive list (rm, dd, mkfs*, fdisk family). Required for those commands."
+[input_schema.properties.stdin]
+oneOf = [{ description = "base64 (default) or UTF-8 with stdin_encoding=\"utf8\"", type = "string" }, { items = { maximum = 255, minimum = 0, type = "integer" }, type = "array" }, { type = "null" }]
+
+[input_schema.properties.stdin_encoding]
+type = "string"
+enum = ["base64", "utf8"]
+
+[input_schema.properties.timeout_ms]
+type = "integer"
+minimum = 0
+maximum = 3600000

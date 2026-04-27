@@ -7,11 +7,13 @@ type = "object"
 required = ["room_id", "speaker", "message"]
 additionalProperties = false
 
+[input_schema.properties.message]
+type = "string"
+
+[input_schema.properties.payload]
+
 [input_schema.properties.room_id]
 type = "string"
 
 [input_schema.properties.speaker]
-type = "string"
-
-[input_schema.properties.message]
 type = "string"

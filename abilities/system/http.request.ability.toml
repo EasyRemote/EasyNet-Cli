@@ -1,52 +1,45 @@
 schema_version = "1"
 name = "http.request"
-description = "Issue one outbound HTTP request (http/https only). Captures status, response headers, and body up to body_max_bytes. Auth-bearing headers (Authorization, Cookie, X-API-Key, Proxy-Authorization, X-Auth-Token, X-Access-Token, Set-Cookie) are REDACTED from receipts: the name appears in the receipt's request_header_names_redacted and response_header_names_redacted fields, the value never does. Part of the baseline-locomotion-v1 profile."
+description = "Issue one outbound HTTP request (http/https only). Captures status, response headers, and body up to body_max_bytes. Auth-bearing headers (Authorization, Cookie, X-API-Key, …) are REDACTED from receipts: the name appears, the value never does. Part of the baseline-locomotion-v1 profile."
 
 [input_schema]
 type = "object"
 required = ["url"]
 additionalProperties = false
 
-[input_schema.properties.url]
-type = "string"
-minLength = 1
-description = "Absolute URL. Scheme MUST be http or https; file://, data:, ftp://, gopher://, javascript: reject."
-
-[input_schema.properties.method]
-type = "string"
-enum = ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
-description = "HTTP method. Case-insensitive on input; uppercased internally. Default GET."
-
-[input_schema.properties.headers]
-type = "object"
-description = "Request headers. CR / LF in values reject (header injection guard). Token-format header names only."
-additionalProperties = { type = "string" }
-
 [input_schema.properties.body]
-description = "Request body. Base64 string (default), UTF-8 string with body_encoding=\"utf8\", array of bytes, or null."
+oneOf = [{ type = "string" }, { items = { maximum = 255, minimum = 0, type = "integer" }, type = "array" }, { type = "null" }]
 
 [input_schema.properties.body_encoding]
 type = "string"
 enum = ["base64", "utf8"]
 
-[input_schema.properties.timeout_ms]
-type = "integer"
-minimum = 0
-maximum = 600000
-description = "Wallclock budget. Default 30 000 ms. Hard cap 10 minutes. Connect + read budget combined."
-
 [input_schema.properties.body_max_bytes]
 type = "integer"
 minimum = 0
 maximum = 104857600
-description = "Response body cap. Default 1 MiB. Hard cap 100 MiB. Truncation flagged in receipt as body_truncated=true."
 
 [input_schema.properties.follow_redirects]
 type = "boolean"
-description = "When false, the receiver returns the first redirect status without following. Default true."
+
+[input_schema.properties.headers]
+type = "object"
+additionalProperties = { type = "string" }
+
+[input_schema.properties.method]
+type = "string"
+enum = ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
 
 [input_schema.properties.redirect_max]
 type = "integer"
 minimum = 0
 maximum = 10
-description = "Maximum redirects to follow. Default 5. Hard cap 10 (chains beyond that are usually loops)."
+
+[input_schema.properties.timeout_ms]
+type = "integer"
+minimum = 0
+maximum = 600000
+
+[input_schema.properties.url]
+type = "string"
+minLength = 1

@@ -7,13 +7,13 @@ type = "object"
 required = ["server", "name"]
 additionalProperties = false
 
-[input_schema.properties.server]
-type = "string"
-minLength = 1
+[input_schema.properties.arguments]
+description = "Per-tool args; shape per the upstream tool's input schema."
 
 [input_schema.properties.name]
 type = "string"
 minLength = 1
 
-[input_schema.properties.arguments]
-description = "Per-tool args; shape per the upstream tool's input schema."
+[input_schema.properties.server]
+type = "string"
+minLength = 1

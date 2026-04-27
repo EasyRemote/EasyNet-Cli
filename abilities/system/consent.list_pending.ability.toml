@@ -5,5 +5,3 @@ description = "Snapshot the approval-broker's pending queue. Unary sibling of co
 [input_schema]
 type = "object"
 additionalProperties = false
-
-[input_schema.properties]

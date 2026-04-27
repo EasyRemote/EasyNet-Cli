@@ -33,6 +33,14 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+/// Generator for the `abilities/system/<name>.ability.toml`
+/// files. Single source of truth: every TOML descriptor on
+/// disk is the output of `render_ability_toml(name,
+/// description_for(name), input_schema_for(name))`. The drift
+/// test in this module's `tests` block enforces the equality;
+/// the `gen-ability-tomls` binary regenerates after any code
+/// change to the metadata.
+pub mod ability_toml;
 pub mod a2a_bridge_ability;
 pub mod a2a_client_ability;
 pub mod chat_ability;
@@ -714,6 +722,98 @@ mod tests {
         let live = build_registry().list_abilities();
         let advertised = published_ability_names();
         assert_eq!(live, advertised);
+    }
+
+    #[test]
+    fn every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer() {
+        // The TOML descriptors in abilities/system/ are the
+        // source of truth for external discovery tools. They are
+        // GENERATED from `render_ability_toml(name,
+        // description_for(name), input_schema_for(name))`. This
+        // test enforces that the on-disk file is byte-for-byte
+        // identical to what the renderer produces; if the
+        // dispatcher's metadata changed and a maintainer forgot
+        // to regenerate, this test names every drifted ability
+        // and tells them how to fix it.
+        let mut missing: Vec<String> = Vec::new();
+        let mut drift: Vec<String> = Vec::new();
+        for meta in published_abilities() {
+            let toml_path = format!("abilities/system/{}.ability.toml", meta.name);
+            let on_disk = match std::fs::read_to_string(&toml_path) {
+                Ok(body) => body,
+                Err(_) => {
+                    missing.push(meta.name.clone());
+                    continue;
+                }
+            };
+            let expected = ability_toml::render_ability_toml(
+                &meta.name,
+                meta.description,
+                &meta.input_schema,
+            );
+            if on_disk != expected {
+                drift.push(meta.name.clone());
+            }
+        }
+        let mut errors: Vec<String> = Vec::new();
+        if !missing.is_empty() {
+            errors.push(format!(
+                "no TOML on disk for: {missing:?}\n\
+                 -> run `cargo run --bin gen-ability-tomls` to create them"
+            ));
+        }
+        if !drift.is_empty() {
+            errors.push(format!(
+                "TOML on disk differs from renderer output for: {drift:?}\n\
+                 -> run `cargo run --bin gen-ability-tomls` to regenerate"
+            ));
+        }
+        assert!(
+            errors.is_empty(),
+            "abilities/system TOML descriptor drift:\n  {}",
+            errors.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn build_registry_actually_contains_every_baseline_locomotion_ability() {
+        // Pin the AXIOM Tier 2.5 surface: every member of the
+        // Baseline Locomotion Profile MUST be registered in the
+        // live registry. A regression that adds a `pub mod` but
+        // forgets the `register(&mut reg)` call would leave the
+        // ability invisible to the dispatcher even though the
+        // module compiles. This test catches that.
+        let reg = build_registry();
+        let names: std::collections::BTreeSet<String> =
+            reg.list_abilities().into_iter().collect();
+        let must_have = [
+            // Filesystem half
+            "fs.read", "fs.write", "fs.list", "fs.edit",
+            // Execution half
+            "process.exec", "shell.run",
+            // Outbound network
+            "http.request",
+            // Interactive PTY trio
+            "fleet.pty_session_create",
+            "fleet.pty_session_close",
+            "fleet.pty_session_attach",
+            // Operator surface added in slice 16
+            "admin.status",
+            "fleet.start_agent",
+            "fleet.stop_agent",
+        ];
+        let missing: Vec<&str> = must_have
+            .iter()
+            .filter(|n| !names.contains(**n))
+            .copied()
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "Baseline Locomotion abilities NOT registered: {missing:?}.\n\
+             Live registry has {} abilities: {:?}",
+            names.len(),
+            names
+        );
     }
 
     #[test]
