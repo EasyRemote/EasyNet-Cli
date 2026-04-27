@@ -137,22 +137,18 @@ async fn main() -> anyhow::Result<()> {
     // briefly disagrees about agents should not take down
     // ping/session/permission alongside it.
     //
-    // The v1 default context-loader chain: user_profile (global) +
-    // schedule (agent-scoped) + memory (agent-scoped). Tests and the
-    // standalone MCP server pass an empty Vec when they want chat
-    // without any context injection.
-    let chat_loaders: Arc<Vec<Arc<dyn agents::chat_ability::ContextLoader>>> =
-        Arc::new(agents::context_loaders::default_loaders(
-            kernel.schedule_service(),
-        ));
-
+    // Default v1 context-loader chain (user_profile + schedule +
+    // memory) is auto-attached by build_registry_for_daemon when
+    // we pass None. A test or the standalone MCP server that
+    // wants chat without any context injection passes
+    // Some(Arc::new(Vec::new())) instead.
     let registry = agents::build_registry_for_daemon(
         kernel.session_service(),
         kernel.permission_service(),
         kernel.discuss_service(),
         kernel.schedule_service(),
         kernel.loop_service(),
-        chat_loaders,
+        None,
     );
 
     // Stage-2 dispatcher (executor). Wired with the unified registry

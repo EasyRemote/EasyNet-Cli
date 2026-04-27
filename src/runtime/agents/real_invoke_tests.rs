@@ -86,7 +86,7 @@ fn registry_with_temp_home() -> (Arc<LocalAbilityRegistry>, crate::facade::cli::
         Arc::new(crate::runtime::execution::discuss::DiscussService::new()),
         Arc::new(crate::runtime::execution::schedule::ScheduleService::new()),
         Arc::new(crate::runtime::execution::loop_instance::LoopService::new()),
-        Arc::new(Vec::new()),
+        Some(Arc::new(Vec::new())),
     );
     (reg, guard)
 }
