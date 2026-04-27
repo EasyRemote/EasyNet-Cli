@@ -87,6 +87,18 @@ pub mod policy_ability;
 pub mod permission_ability;
 pub mod ping;
 pub mod profiles;
+/// fleet.pty_session_attach — interactive bidirectional terminal
+/// stream over InvokeBidi. The seventh and final member of the
+/// AXIOM Tier 2.5 Baseline Locomotion Profile (the streaming
+/// counterpart to process.exec / shell.run). See
+/// `runtime/execution/pty/` for the underlying PtyService.
+pub mod admin_status_ability;
+pub mod fleet_lifecycle_ability;
+pub mod pty_attach_ability;
+/// fleet.pty_session_create / fleet.pty_session_close — control-
+/// plane lifecycle for PtyService sessions. attach (above) is
+/// the data-plane sibling.
+pub mod pty_lifecycle_ability;
 pub mod schedule_ability;
 pub mod session_ability;
 pub mod skill_ability;
@@ -99,6 +111,7 @@ use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 use crate::runtime::execution::discuss::DiscussService;
 use crate::runtime::execution::loop_instance::LoopService;
 use crate::runtime::execution::permission::PermissionService;
+use crate::runtime::execution::pty::PtyService;
 use crate::runtime::execution::schedule::ScheduleService;
 use crate::runtime::execution::session::SessionService;
 
@@ -171,6 +184,25 @@ pub fn build_registry_with_services(
     // every external call uniformly instead of going through
     // a shell.run-wrapped curl.
     http_request_ability::register(&mut reg);
+    // AXIOM §"Tier 2.5" Baseline Locomotion — PTY data-plane and
+    // its lifecycle control-plane. fleet.pty_session_create /
+    // fleet.pty_session_close manage the session catalog;
+    // fleet.pty_session_attach pumps stdin/stdout bidirectionally
+    // over InvokeBidi for interactive workloads (REPLs, editors,
+    // text-mode TUI). All three share one process-wide PtyService
+    // (single Arc, lazy init): a session created by …_create
+    // is the same session …_attach pumps and …_close tears down,
+    // so the three abilities cohere even though they're three
+    // separate handlers.
+    let pty = Arc::new(PtyService::new());
+    pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty));
+    pty_attach_ability::register(&mut reg, pty);
+    // fleet.start_agent / fleet.stop_agent — Invoke-side mirror
+    // of `easynet agent add/remove`. LLM sub-agents are registry
+    // rows (not resident processes), so start ≡ insert into
+    // ~/.easynet/agents.json and return the canonical URA;
+    // stop ≡ delete the row (idempotent).
+    fleet_lifecycle_ability::register(&mut reg);
     // policy.{evaluate,simulate} — admission-gate consumer surface
     // pinned to the §A6 contract. v1 is allow-all; the gate's
     // rewiring to actually call this ability lands in a follow-up
@@ -273,6 +305,20 @@ pub fn build_registry_with_services(
     // for the protocol agent-card view see a2a.bridge.list_skills.
     let agents_for_fleet = agents.clone();
     fleet_list_agents_ability::register(&mut reg, move || agents_for_fleet.clone());
+    // admin.status — operator-facing component snapshot. The
+    // ability-count provider reads through the same OnceLock the
+    // bridge handlers use, so the count is accurate at call time
+    // (post-Arc-wrap; pre-set the OnceLock returns 0 which only
+    // happens during the brief window before `.set()` below).
+    {
+        let handle_for_admin = Arc::clone(&local_registry_handle);
+        admin_status_ability::register(&mut reg, move || {
+            handle_for_admin
+                .get()
+                .map(|r| r.list_abilities().len())
+                .unwrap_or(0)
+        });
+    }
     let arc = Arc::new(reg);
     // Populate the shared OnceLock now that the registry is wrapped.
     // Both mcp.bridge.call_tool and a2a.bridge.send_task read through
@@ -416,6 +462,12 @@ pub fn description_for(name: &str) -> &'static str {
         "process.exec" => process_exec_ability::description(),
         "shell.run" => shell_run_ability::description(),
         "http.request" => http_request_ability::description(),
+        "fleet.pty_session_create" => pty_lifecycle_ability::description_create(),
+        "fleet.pty_session_close" => pty_lifecycle_ability::description_close(),
+        "fleet.pty_session_attach" => pty_attach_ability::description(),
+        "fleet.start_agent" => fleet_lifecycle_ability::start_agent_description(),
+        "fleet.stop_agent" => fleet_lifecycle_ability::stop_agent_description(),
+        "admin.status" => admin_status_ability::description(),
         _ if name.ends_with(".chat") => "Send a chat prompt to the locally-installed agent.",
         _ => "(system ability)",
     }
@@ -475,6 +527,12 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "process.exec" => process_exec_ability::input_schema(),
         "shell.run" => shell_run_ability::input_schema(),
         "http.request" => http_request_ability::input_schema(),
+        "fleet.pty_session_create" => pty_lifecycle_ability::input_schema_create(),
+        "fleet.pty_session_close" => pty_lifecycle_ability::input_schema_close(),
+        "fleet.pty_session_attach" => pty_attach_ability::input_schema(),
+        "fleet.start_agent" => fleet_lifecycle_ability::start_agent_input_schema(),
+        "fleet.stop_agent" => fleet_lifecycle_ability::stop_agent_input_schema(),
+        "admin.status" => admin_status_ability::input_schema(),
         _ => serde_json::json!({ "type": "object" }),
     }
 }
@@ -588,7 +646,10 @@ mod tests {
             // tracks privilege not invocation safety.
             | "process.exec"
             | "shell.run"
-            | "http.request" => Some(AbilityLayer::Operational),
+            | "http.request"
+            | "fleet.pty_session_create"
+            | "fleet.pty_session_close"
+            | "fleet.pty_session_attach" => Some(AbilityLayer::Operational),
             _ => None,
         }
     }

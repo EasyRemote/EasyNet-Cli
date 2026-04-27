@@ -85,6 +85,36 @@ use crate::runtime::execution::pty::{PtyService, PtySessionId};
 
 pub const ABILITY_PTY_SESSION_ATTACH: &str = "fleet.pty_session_attach";
 
+/// Description published by the dispatcher's `description_for`
+/// arm. Sibling of fleet.pty_session_create / close — those are
+/// the control plane, this is the data plane.
+pub fn description() -> &'static str {
+    "Attach to an existing PTY session over InvokeBidi: pump \
+     stdin from the wire to the PTY master, stream stdout / \
+     stderr back as base64-encoded `stdout` frames, surface \
+     child exit as a final `exit` frame. Pair with \
+     fleet.pty_session_create (open the session) and \
+     fleet.pty_session_close (terminate it). Part of the \
+     baseline-locomotion-v1 profile (AXIOM Tier 2.5)."
+}
+
+/// JSON Schema for the attach input. The InvokeBidi initial
+/// frame carries `session_id`; subsequent inbound frames are
+/// `{type:\"stdin\", data: <base64>}` and `{type:\"resize\", \
+/// cols, rows}` — those are stream-payload schemas, not
+/// initial-args schemas, so they sit in the
+/// runtime/execution/pty module's docs rather than here.
+pub fn input_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["session_id"],
+        "additionalProperties": false,
+        "properties": {
+            "session_id": { "type": "string", "minLength": 1 }
+        }
+    })
+}
+
 /// Read chunk size for the PTY → wire path. 4 KiB matches the
 /// default pipe buffer on macOS + Linux; smaller chunks hurt
 /// throughput, larger ones add latency to single-keystroke echo.
