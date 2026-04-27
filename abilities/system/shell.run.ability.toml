@@ -1,0 +1,101 @@
+schema_version = "1"
+name = "shell.run"
+description = "Run a bash command STRING through the AXIOM Tier 2.5 8-stage security pipeline (empty / pre-checks / AST / security catalogue / permission rules / path constraints / read-only classifier / destructive list) before dispatching to bash -c. Part of the baseline-locomotion-v1 profile. For argv-only execution (no shell interpretation) use process.exec instead."
+
+[input_schema]
+type = "object"
+required = ["command"]
+additionalProperties = false
+
+[input_schema.properties.command]
+type = "string"
+minLength = 1
+description = "Bash command. Pipes / redirects / glob / variable expansion permitted; the 8-stage pipeline enforces safety. Tree-sitter-bash AST extraction means a syntactically-malformed command rejects deterministically before dispatch."
+
+[input_schema.properties.cwd]
+type = "string"
+description = "Working directory for the bash child. Used both as the spawn cwd and as the reference for relative redirect targets in the path-constraints stage."
+
+[input_schema.properties.env]
+type = "object"
+description = "Environment for the bash child. None means inherit; map means replace with runner defaults layered for missing keys (GIT_EDITOR=true, PAGER=cat, LESS=-FRX)."
+additionalProperties = { type = "string" }
+
+[input_schema.properties.timeout_ms]
+type = "integer"
+minimum = 0
+maximum = 3600000
+description = "Wallclock budget. Default 30 000 ms. Hard cap 1 hour. Tree-kill on timeout via setpgid + killpg."
+
+[input_schema.properties.stdin]
+description = "Bytes to feed bash's stdin. Base64 string (default), UTF-8 string with stdin_encoding=\"utf8\", array of bytes, or null."
+
+[input_schema.properties.stdin_encoding]
+type = "string"
+enum = ["base64", "utf8"]
+
+[input_schema.properties.output_max_bytes]
+type = "integer"
+minimum = 0
+maximum = 104857600
+description = "Per-stream output cap. Default 1 MiB. Hard cap 100 MiB. Tempfile-backed (O_APPEND + O_NOFOLLOW)."
+
+[input_schema.properties.sandbox]
+type = "boolean"
+description = "Request platform sandbox. v1: returns sandbox_unavailable rather than silently downgrading."
+
+[input_schema.properties.destructive_acknowledged]
+type = "boolean"
+description = "Caller acknowledges the command may invoke base commands on the AXIOM Tier 2.5 destructive list (rm, dd, mkfs*, fdisk family). Required when any extracted SimpleCommand's argv[0] is on the list."
+
+[input_schema.properties.read_only_only]
+type = "boolean"
+description = "When true, every extracted SimpleCommand must come from the read-only allowlist (ls/cat/grep/find/head/tail/wc/jq/git status/git log/etc.) AND carry no write redirects. Useful for inspector agents."
+
+[input_schema.properties.allow_rules]
+type = "array"
+description = "Permission allow rules. Each rule matches argv[0] (exact|prefix) plus an optional flag allowlist. A command must match at least one allow rule (default-deny). Empty allow_rules with no deny_rules disables the permission stage entirely."
+
+[input_schema.properties.allow_rules.items]
+type = "object"
+required = ["argv0"]
+additionalProperties = false
+
+[input_schema.properties.allow_rules.items.properties.argv0]
+type = "string"
+description = "Bare command name to match. Token-aware (no substring match)."
+
+[input_schema.properties.allow_rules.items.properties.match]
+type = "string"
+enum = ["exact", "prefix"]
+description = "Match mode. Default exact. Prefix is currently equivalent to exact; reserved for future multi-segment prefixes."
+
+[input_schema.properties.allow_rules.items.properties.flags]
+type = "array"
+description = "Optional flag allowlist. None means any flag accepted. Some(set) means every flag-shaped argv element must be in the set; non-flag positional args are unaffected."
+items = { type = "string" }
+
+[input_schema.properties.deny_rules]
+type = "array"
+description = "Permission deny rules. Same shape as allow_rules. Deny wins over allow."
+
+[input_schema.properties.deny_rules.items]
+type = "object"
+required = ["argv0"]
+additionalProperties = false
+
+[input_schema.properties.deny_rules.items.properties.argv0]
+type = "string"
+
+[input_schema.properties.deny_rules.items.properties.match]
+type = "string"
+enum = ["exact", "prefix"]
+
+[input_schema.properties.deny_rules.items.properties.flags]
+type = "array"
+items = { type = "string" }
+
+[input_schema.properties.write_allowed_roots]
+type = "array"
+description = "Caller-declared write-allowed roots. Each entry is treated as an absolute path (relative entries normalise against cwd). Every write redirect (>, >>, >|, &>, &>>) must resolve under at least one root. Empty list means deny all writes; omitting the field means no path constraint."
+items = { type = "string" }

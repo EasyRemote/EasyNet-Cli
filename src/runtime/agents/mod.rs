@@ -48,6 +48,17 @@ pub mod fs_ability;
 /// The eight-stage shell pipeline is NOT run here; the
 /// structured input shape is the security boundary.
 pub mod process_exec_ability;
+/// shell.run — the shell-interpreted member of the Baseline
+/// Locomotion Profile. Takes a bash command STRING (with pipes
+/// / redirects / glob), runs it through the AXIOM Tier 2.5
+/// 8-stage pipeline (ast → security → permissions →
+/// pathconstraints → readonly → destructive), and on full pass
+/// dispatches to `bash -c <command>` via the SAME runner
+/// process.exec uses. See AXIOM Tier 2.5 §"shell.run / 8-stage
+/// pipeline" for the normative spec; the pipeline lives in
+/// `support/shellguard/`, this module is the thin
+/// agent-dispatch wiring on top.
+pub mod shell_run_ability;
 pub mod context_loaders;
 pub mod discuss_ability;
 pub mod fleet_list_agents_ability;
@@ -123,9 +134,16 @@ pub fn build_registry_with_services(
     // structured execution. `process.exec` shares the
     // destructive command list and process-execution
     // hardening (tempfile-backed output, tree-kill on
-    // timeout, env defaults) with the future `shell.run`
-    // ability via the `support::shellguard` subsystem.
+    // timeout, env defaults) with `shell.run` via the
+    // `support::shellguard` subsystem.
     process_exec_ability::register(&mut reg);
+    // AXIOM §"Tier 2.5" Baseline Locomotion Profile —
+    // shell-interpreted execution. `shell.run` is the only
+    // member of the profile that takes a bash command STRING;
+    // the 8-stage shellguard pipeline (ast → security →
+    // permissions → pathconstraints → readonly → destructive)
+    // gates every dispatch.
+    shell_run_ability::register(&mut reg);
     // policy.{evaluate,simulate} — admission-gate consumer surface
     // pinned to the §A6 contract. v1 is allow-all; the gate's
     // rewiring to actually call this ability lands in a follow-up
@@ -368,6 +386,7 @@ pub fn description_for(name: &str) -> &'static str {
         "fs.write" => fs_ability::description_write(),
         "fs.list" => fs_ability::description_list(),
         "process.exec" => process_exec_ability::description(),
+        "shell.run" => shell_run_ability::description(),
         _ if name.ends_with(".chat") => "Send a chat prompt to the locally-installed agent.",
         _ => "(system ability)",
     }
@@ -424,6 +443,7 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "fs.write" => fs_ability::input_schema_write(),
         "fs.list" => fs_ability::input_schema_list(),
         "process.exec" => process_exec_ability::input_schema(),
+        "shell.run" => shell_run_ability::input_schema(),
         _ => serde_json::json!({ "type": "object" }),
     }
 }
@@ -528,12 +548,14 @@ mod tests {
             | "fs.read"
             | "fs.write"
             | "fs.list"
-            // AXIOM Tier 2.5 structured-execution member.
-            // process.exec is unconditionally Operational —
-            // it spawns a process that may do anything.
-            // shell.run will be classified Operational
-            // alongside it when its slice lands.
-            | "process.exec" => Some(AbilityLayer::Operational),
+            // AXIOM Tier 2.5 execution members. process.exec
+            // and shell.run are unconditionally Operational —
+            // they spawn processes that may do anything; even
+            // with the 8-stage shellguard pipeline gating
+            // shell.run dispatch, the layer classification
+            // tracks privilege not invocation safety.
+            | "process.exec"
+            | "shell.run" => Some(AbilityLayer::Operational),
             _ => None,
         }
     }
