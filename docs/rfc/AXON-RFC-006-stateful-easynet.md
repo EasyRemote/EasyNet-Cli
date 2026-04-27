@@ -507,6 +507,156 @@ from hub requests. This forms the trust boundary: the hub may
 introduce anonymous principals into the system, but it cannot
 impersonate agents.
 
+### B.7.0.1  Caller-context translation
+
+`envelope.caller` carries identity. Hub-translated requests also
+carry **observation context** — where the visitor came from, what
+client they used, whether they look like a crawler. That context
+is structurally separate: it lives in `envelope.caller_context`,
+NOT in the caller URI. Two HTTP requests from the same IP and
+session arriving via different referrers produce identical caller
+URIs (same identity) and different caller_context maps (different
+observations).
+
+```
+envelope.caller_context = {
+
+  origin: {
+    referer_url:   string|null,       // raw HTTP Referer (or null);
+                                       //   hubs MAY truncate to host
+                                       //   only via deployment policy
+    referer_realm: string|null,       // origin extracted from
+                                       //   referer_url (scheme://host[:port]);
+                                       //   safe to group on without
+                                       //   leaking the visitor's path
+    direct: bool                      // true when no Referer header
+                                       //   AND Sec-Fetch-Site:none
+  },
+
+  agent_class: {
+    kind:           "browser" | "bot" | "agent" | "unknown",
+                                       //   browser : real browser
+                                       //             (Chrome/Safari/Firefox
+                                       //             UA + heuristic)
+                                       //   bot     : crawler (Googlebot,
+                                       //             GPTBot, ClaudeBot, …)
+                                       //   agent   : MCP / EasyNet client
+                                       //             with explicit UA
+                                       //             marker
+                                       //   unknown : curl, scripts, UA
+                                       //             missing
+    user_agent_raw:  string|null,     // truncated to 256 bytes
+    user_agent_hash: string,           // stable hash for group-by without
+                                       //   storing originals
+    bot_id:          string|null      // when kind=bot, identifies the
+                                       //   crawler ("googlebot" /
+                                       //   "gptbot" / "claudebot" / …);
+                                       //   "unknown-bot" when kind=bot
+                                       //   but the specific crawler is
+                                       //   not in the hub's recognition
+                                       //   table.
+  },
+
+  headers: {
+    accept_language:      string|null, // first 64 bytes
+    sec_fetch_site:       string|null, // none|same-origin|same-site|cross-site
+    sec_fetch_mode:       string|null, // navigate|cors|no-cors|...
+    sec_fetch_dest:       string|null, // document|image|script|...
+    x_forwarded_for_hash: string|null  // hash of the upstream proxy
+                                       //   chain when one is present;
+                                       //   never plaintext IPs
+  }
+}
+```
+
+Properties this structure must preserve:
+
+```
+CCX-1  Identity stability
+       Two requests from the same (ip, session) MUST yield identical
+       caller URIs. caller_context MAY differ between them. Hub
+       implementations that fold any caller_context field into the
+       caller URI break TR-INV-11's audit chain.
+
+CCX-2  Untrusted source
+       caller_context fields originate in HTTP headers the visitor
+       (or visitor's intermediary) controls. Receipts that record
+       caller_context record what was claimed, not what was true.
+       agent_class.kind specifically is a hub heuristic — it is the
+       hub's best guess, not a verifiable assertion.
+
+CCX-3  Privacy default
+       referer_url and user_agent_raw MAY be elided by deployment
+       policy; referer_realm and user_agent_hash MUST always be
+       computable. Hubs in privacy-sensitive deployments record
+       the hashes alone; hubs in audit-heavy deployments record
+       both. The schema accommodates both stances.
+
+CCX-4  Bot identity is observation, not authority
+       agent_class.kind="bot" does NOT change the caller URI prefix.
+       A GPTBot caller is still principal/human-anon/<ip>/<sid> at
+       the identity layer; "this is a bot" is recorded only in
+       caller_context. A future authenticated-crawler scheme would
+       upgrade to principal/bot-auth/<provider>/<id>, parallel to
+       human-auth, NOT replace human-anon.
+```
+
+The caller_context map flows alongside `envelope.caller` into every
+OperationalReceipt the translated invocation emits. CanonicalReceipts
+MUST NOT carry caller_context — the canonical chain is replayable
+and signature-bearing, and embedding observation noise into it
+would let a hostile client influence canonical_state_hash by
+manipulating its own request headers. See TR-INV-13.
+
+Concrete example: a `pages.get` invoked through the hub for a
+shopping page records the read in an OperationalReceipt of the
+form:
+
+```
+{
+  receipt_class: "operational",
+  state_key: ("default", "alice", "shop-123"),
+  transition_id: "pages.get@v1",
+  attempt_id: "att-7f3a...",
+  envelope: {
+    caller: "easynet:///principal/human-anon/9c4e.../sess-abc",
+    caller_context: {
+      origin:      { referer_realm: "https://news.ycombinator.com",
+                     referer_url:   "https://news.ycombinator.com/item?id=...",
+                     direct:        false },
+      agent_class: { kind: "browser",
+                     user_agent_raw: "Mozilla/5.0 ...",
+                     user_agent_hash: "a1b2c3d4...",
+                     bot_id: null },
+      headers:     { accept_language: "en-US,en;q=0.9",
+                     sec_fetch_site:  "cross-site",
+                     sec_fetch_mode:  "navigate",
+                     sec_fetch_dest:  "document",
+                     x_forwarded_for_hash: null }
+    }
+  },
+  observed_at: "2026-04-28T10:14:32Z"
+}
+```
+
+A peer agent verifying the page's audit log can now answer
+questions previously unanswerable on the traditional web:
+
+* "How many of the version-7 reads came from cross-site referrers?"
+  → group OperationalReceipts by caller_context.headers.sec_fetch_site.
+* "Did any LLM crawler observe version-7 before owner reverted to
+  version-6?" → filter agent_class.bot_id ∈ {gptbot, claudebot, …}
+  intersected with version range.
+* "Two browser users on the same IP — same person or family?"
+  → distinguishable by session-id within the caller URI.
+
+The view-projection layer (TR-INV-7) MAY consult caller_context to
+adapt agent_view output (e.g. omit runtime endpoint details for
+crawlers; surface session-aware affordances for browsers). The
+projection MUST remain a deterministic function of (canonical,
+runtime, caller_context) — caller_context is the third deterministic
+input, not a side channel.
+
 For each `(canonical, runtime)` admissible pair from B.4.3:
 
 ```
@@ -864,6 +1014,55 @@ TR-INV-12  Hub-translated caller identity
            invariant (empty caller). All three corrupt audit;
            the third also breaks scope-check. RFC-006 main MUST
            give one answer the whole protocol uses.
+
+TR-INV-13  Caller-context as observability channel
+           Hub-translated invocations MAY carry an
+           envelope.caller_context map, alongside (NOT replacing)
+           envelope.caller. The map records observations the hub
+           made about the request — referer, user-agent class,
+           selected security headers, bot identity if heuristically
+           detected.
+           caller_context MUST satisfy:
+             (a) Identity stability: two requests from the same
+                 (ip, session) yield identical caller URIs even
+                 when their caller_context maps differ. Hubs MUST
+                 NOT fold any caller_context field into the caller
+                 URI.
+             (b) Operational only: caller_context MAY appear in
+                 OperationalReceipts; it MUST NOT appear in
+                 CanonicalReceipts and MUST NOT participate in
+                 canonical_state_hash. A hostile client controls
+                 its own headers; permitting them to influence
+                 canonical state would let an attacker mutate
+                 canonical hash by manipulating Referer.
+             (c) Replay independence: a verifier with caller_context
+                 stripped from every OperationalReceipt MUST
+                 reconstruct the same canonical state. Removing
+                 the entire context channel is a privacy
+                 preserving redaction, not a correctness break.
+             (d) View input, not view side channel: view
+                 projections (TR-INV-7) MAY consult caller_context;
+                 the projection then becomes a deterministic
+                 function of (canonical, runtime, caller_context).
+                 No view MAY consult caller_context partially or
+                 ambiently — the dependency is explicit in the
+                 view's declared input set.
+             (e) Untrusted source: caller_context records what
+                 the client claimed, not what was true.
+                 agent_class.kind in particular is a hub
+                 heuristic, not a verifiable assertion. RFC-006
+                 main MUST NOT attach trust semantics to any
+                 caller_context field; trust attaches to the
+                 caller URI alone.
+           Why surfaced: TR-INV-12 fixed identity at the public-web
+           boundary. Identity is necessary but insufficient: a
+           shopping page wants to know whether reads came from a
+           crawler or a real visitor; an audit wants to know which
+           referer drove a spike in version-7 reads. Conflating
+           identity and observation either pollutes identity
+           (caller drifts per request) or buries observation (hub
+           silently discards what could have been audited). Two
+           envelope fields, two responsibilities.
 ```
 
 ---
