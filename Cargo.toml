@@ -60,6 +60,10 @@ path = "src/bin/gen-ability-tomls.rs"
 name = "real-user-smoke"
 path = "src/bin/real-user-smoke.rs"
 
+[[bin]]
+name = "real-publish-smoke"
+path = "src/bin/real-publish-smoke.rs"
+
 [dependencies]
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
