@@ -81,6 +81,16 @@ pub mod destructive;
 /// command).
 pub mod runner;
 
+/// Stage-4 of the shell.run 8-stage pipeline: post-AST argv-level
+/// dangerous-pattern detectors. Operates on the `SimpleCommand`
+/// records the AST stage produces. Catches the things the AST
+/// stage can't see — argv[0] being an eval-like / zsh-module
+/// builtin, an interpreter `-c` flag carrying inline code,
+/// content patterns like `/proc/self/environ` access or
+/// `jq 'system(...)'`. Mirrors AliveCode's
+/// `tools/BashTool/bashSecurity.ts` validators.
+pub mod security;
+
 /// Tree-sitter-bash AST stage of the shell.run 8-stage pipeline.
 /// Produces a `ParseForSecurityResult` with either a flat list of
 /// `SimpleCommand` records (one per leaf `command` node in the
