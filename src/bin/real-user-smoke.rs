@@ -242,8 +242,10 @@ fn main() -> anyhow::Result<()> {
         println!("Will invoke: {chat_ability}");
         let dispatcher = AbilityDispatcher::new(reg, Arc::new(NoopGateway::new()));
 
-        let prompt = "Reply with EXACTLY the three-word phrase: hello easynet smoke. \
-                      No other words. No punctuation. No explanation.";
+        // Minimal prompt — the interesting fields in this run
+        // are skills_loaded and tool_calls in the response, NOT
+        // claude's reply text.
+        let prompt = "Reply with the single word: ok";
         println!("Prompt: {prompt:?}");
         println!("Calling {chat_ability} (this will spawn the real CLI)...");
 

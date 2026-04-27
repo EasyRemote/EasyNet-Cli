@@ -501,6 +501,20 @@ mod tests {
         // the backend's companion fixture must be updated in the
         // same release window (spec §"Contract test (golden
         // fixture)").
+        //
+        // HomeGuard isolates this test from the developer's real
+        // ~/.easynet/. abilities_from_manifests falls back to
+        // agents_root().join(name) when an entry has no root_path —
+        // on a developer's machine that already has
+        // ~/.easynet/workspaces/alice (left over from a previous
+        // session), the fallback would return THAT workspace's
+        // real manifests, drifting from the canonical synth-fallback
+        // description this fixture was authored against. The guard
+        // ensures the test sees a freshly-empty home so the fallback
+        // hits the synth path every time, restoring cross-host
+        // stability.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+
         let mut registry = AgentRegistry::default();
         let mut alice = entry(AgentType::ClaudeCode, Some("claude-opus-4-7"));
         alice.label = Some("code-review assistant".into());
