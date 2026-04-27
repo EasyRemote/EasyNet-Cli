@@ -272,6 +272,146 @@ fn real_admin_status_reports_components_under_temp_home() {
     assert!(names.contains(&"hosted_agents"));
 }
 
+/// User-perspective fs.write: write into a directory under
+/// `target/` (a real path on the developer's disk, persisted
+/// across the test run; not under tempdir), read it back via
+/// std::fs, assert the bytes round-trip exactly. Cleans up
+/// after itself.
+#[test]
+fn real_fs_write_round_trips_through_real_disk() {
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let scratch = manifest
+        .join("target")
+        .join("real-user-fs-write")
+        .join(format!("p{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&scratch);
+    let path = scratch.join("greeting.txt");
+    let _ = std::fs::remove_file(&path);
+
+    let payload = "Hello from a real fs.write call.\nLine 2 of the file.\n";
+    let resp = invoke(
+        "fs.write",
+        json!({
+            "path": path.to_str().unwrap(),
+            "content": payload,
+            "encoding": "utf8",
+        }),
+    );
+    assert_eq!(resp["bytes_written"].as_u64().unwrap(), payload.len() as u64);
+    assert!(resp["content_sha256"].as_str().unwrap().len() == 64);
+
+    // Read directly via std::fs, not via fs.read — proves the
+    // file actually landed on disk and is readable to any tool
+    // the user might use (cat, vim, less, ...).
+    let on_disk = std::fs::read_to_string(&path).expect("read the file the user would see");
+    assert_eq!(on_disk, payload);
+
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+/// User-perspective process.exec: run /bin/cat against a real
+/// OS file, check the stdout actually contains content the
+/// user would see if they ran the command at a shell prompt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_process_exec_cats_etc_hosts() {
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+    use base64::Engine as _;
+
+    if !std::path::Path::new("/etc/hosts").exists() {
+        eprintln!("real_process_exec_cats_etc_hosts: /etc/hosts missing on this host, skipping");
+        return;
+    }
+    let resp = tokio::task::spawn_blocking(|| {
+        let (reg, _g) = registry_with_temp_home();
+        dispatcher_for(reg)
+            .execute_rpc(target(
+                "process.exec",
+                json!({"command": "/bin/cat", "args": ["/etc/hosts"]}),
+            ))
+            .expect("process.exec /bin/cat /etc/hosts")
+    })
+    .await
+    .expect("join");
+    assert_eq!(resp["ok"], json!(true));
+    assert_eq!(resp["exit_code"], json!(0));
+    let stdout = BASE64_STANDARD
+        .decode(resp["stdout"].as_str().unwrap())
+        .unwrap();
+    let text = String::from_utf8(stdout).unwrap();
+    // /etc/hosts on every macOS / Linux box has localhost mapped.
+    assert!(
+        text.contains("localhost") || text.contains("127.0.0.1"),
+        "/etc/hosts via process.exec did not contain `localhost`: {text:?}"
+    );
+}
+
+/// User-perspective shell.run: real bash piping with `git
+/// rev-parse --short HEAD` against this repo. The handler
+/// has to honor cwd, dispatch through bash -c, capture stdout.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_shell_run_executes_git_command_in_repo() {
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+    use base64::Engine as _;
+
+    if !["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"]
+        .iter()
+        .any(|p| std::path::Path::new(p).exists())
+    {
+        eprintln!("real_shell_run_executes_git_command_in_repo: no bash, skipping");
+        return;
+    }
+    if !std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(".git")
+        .exists()
+    {
+        eprintln!("real_shell_run_executes_git_command_in_repo: not a git checkout, skipping");
+        return;
+    }
+
+    let manifest = env!("CARGO_MANIFEST_DIR").to_string();
+    let resp = tokio::task::spawn_blocking(move || {
+        let (reg, _g) = registry_with_temp_home();
+        dispatcher_for(reg)
+            .execute_rpc(target(
+                "shell.run",
+                json!({
+                    "command": "git rev-parse --short HEAD",
+                    "cwd": manifest,
+                }),
+            ))
+            .expect("shell.run git rev-parse")
+    })
+    .await
+    .expect("join");
+    assert_eq!(resp["ok"], json!(true));
+    assert_eq!(resp["exit_code"], json!(0));
+    let stdout = BASE64_STANDARD
+        .decode(resp["stdout"].as_str().unwrap())
+        .unwrap();
+    let sha = String::from_utf8(stdout).unwrap().trim().to_string();
+    // git's --short SHA is 7+ hex chars.
+    assert!(
+        sha.len() >= 7 && sha.chars().all(|c| c.is_ascii_hexdigit()),
+        "git rev-parse via shell.run did not return a SHA: {sha:?}"
+    );
+}
+
+/// User-perspective security gate: shell.run MUST refuse to
+/// run `rm` without `destructive_acknowledged: true`. We're
+/// asserting the safety mechanism actually fires, with the
+/// specific stage + code an operator's audit log would see.
+#[test]
+fn real_shell_run_destructive_rejection_visible_in_response() {
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target("shell.run", json!({"command": "rm /tmp/x"})))
+        .expect("shell.run handler must not error; rejection is in the body");
+    assert_eq!(resp["ok"], json!(false));
+    assert_eq!(resp["code"], json!("DESTRUCTIVE_REJECTED"));
+    assert_eq!(resp["pipeline_stage"], json!("destructive"));
+    assert_eq!(resp["detail"]["argv0"], json!("rm"));
+}
+
 /// User-perspective smoke: read this crate's own Cargo.toml
 /// — a real file the developer can `cat` to see the same
 /// bytes — through the ability dispatcher. Asserts the
