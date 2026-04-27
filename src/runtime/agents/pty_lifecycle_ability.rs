@@ -42,6 +42,53 @@ use crate::runtime::execution::pty::{PtyCreateSpec, PtyService, PtySessionId};
 pub const ABILITY_PTY_SESSION_CREATE: &str = "fleet.pty_session_create";
 pub const ABILITY_PTY_SESSION_CLOSE: &str = "fleet.pty_session_close";
 
+/// Description published by the dispatcher's `description_for`
+/// arm. Mirrors AXIOM Tier 2.5 §"Baseline Locomotion / pty"
+/// summary semantics so a discovery client sees the same blurb
+/// here as in `meta.list_abilities`.
+pub fn description_create() -> &'static str {
+    "Create an interactive PTY session and return its opaque \
+     session_id. Pair with fleet.pty_session_attach (data plane) \
+     and fleet.pty_session_close (lifecycle teardown). Part of \
+     the baseline-locomotion-v1 profile."
+}
+
+pub fn description_close() -> &'static str {
+    "Tear down an interactive PTY session. Idempotent — passing \
+     an unknown session_id returns ack=false rather than an \
+     error so callers can poll without special-casing already- \
+     gone sessions."
+}
+
+/// JSON Schema for fleet.pty_session_create input. All fields
+/// optional; the service fills VT100 defaults (80×24, no env,
+/// host shell).
+pub fn input_schema_create() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "cols": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "rows": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "command": { "type": "string", "minLength": 1 },
+            "command_args": { "type": "array", "items": { "type": "string" } },
+            "cwd": { "type": "string" },
+            "env": { "type": "object", "additionalProperties": { "type": "string" } }
+        }
+    })
+}
+
+pub fn input_schema_close() -> Value {
+    json!({
+        "type": "object",
+        "required": ["session_id"],
+        "additionalProperties": false,
+        "properties": {
+            "session_id": { "type": "string", "minLength": 1 }
+        }
+    })
+}
+
 /// Default PTY size when the caller doesn't specify. 80×24 is the
 /// classic VT100; matches what most terminal emulators open with so
 /// shells render readably even before a `_resize` lands.

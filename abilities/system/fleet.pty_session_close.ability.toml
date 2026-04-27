@@ -1,0 +1,13 @@
+schema_version = "1"
+name = "fleet.pty_session_close"
+description = "Tear down an interactive PTY session. Idempotent: passing an unknown session_id returns ack=false rather than an error so callers can poll without special-casing already-gone sessions. Returns exit_status when the child was waitable; absent when the child was killed before the OS published a status OR when ack=false. Part of the baseline-locomotion-v1 profile."
+
+[input_schema]
+type = "object"
+required = ["session_id"]
+additionalProperties = false
+
+[input_schema.properties.session_id]
+type = "string"
+minLength = 1
+description = "Opaque session id returned by fleet.pty_session_create."
