@@ -91,6 +91,15 @@ pub mod runner;
 /// `tools/BashTool/bashSecurity.ts` validators.
 pub mod security;
 
+/// Stage-5 permission rule matcher. After the security stage
+/// has rejected the categorically-dangerous shapes, the
+/// permission stage answers the policy question: "is this
+/// caller allowed to run THIS command?". Caller-provided
+/// allow / deny rule lists; deny wins; default-deny if no
+/// allow rule matches. Rules match on argv[0] prefix plus an
+/// optional flag allowlist.
+pub mod permissions;
+
 /// Tree-sitter-bash AST stage of the shell.run 8-stage pipeline.
 /// Produces a `ParseForSecurityResult` with either a flat list of
 /// `SimpleCommand` records (one per leaf `command` node in the
