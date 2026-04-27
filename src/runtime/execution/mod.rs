@@ -46,5 +46,6 @@
 pub mod discuss;
 pub mod loop_instance;
 pub mod permission;
+pub mod pty;
 pub mod schedule;
 pub mod session;

@@ -90,6 +90,19 @@ uuid = { version = "1", features = ["v4"] }
 # next-fire instant in a given timezone — minimum surface needed
 # for the daemon's tick runner.
 cron = "0.12"
+# PTY support for fleet.pty_session_* abilities (C-M3b/c). Wraps
+# openpty(3) on unix and the ConPTY API on Windows behind one
+# trait. Used by the PtyService to spawn child processes attached
+# to a real terminal so interactive workloads (REPLs, editors)
+# work over the InvokeBidi attach surface. Stays light: portable-pty
+# pulls only winapi-rs on Windows and nothing extra on unix beyond
+# what tokio already drags in.
+portable-pty = "0.8"
+# Base64 encoding for binary frame payloads (PTY stdin/stdout).
+# JSON can't carry raw bytes, so the bidi attach handler base64-
+# encodes both directions. Using base64 (not hex) saves ~33% of
+# wire bytes for the throughput-bound terminal output path.
+base64 = "0.22"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
