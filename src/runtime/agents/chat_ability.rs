@@ -65,10 +65,9 @@
 //     / MemoryLoader / UserProfileLoader. `context_used` reports
 //     which loaders contributed and how many bytes each.
 //   * driver overrides: `driver.model` flows through dispatch via
-//     send_external_with_overrides. `temperature` and `max_tokens`
-//     are accepted by the schema and recorded but not piped to the
-//     v1 claude-code / codex CLI drivers (see warn_unhonored_driver_knobs_once
-//     in dispatch.rs).
+//     send_external_with_overrides. `driver.temperature` and
+//     `driver.max_tokens` are rejected at parse time (no v1 CLI
+//     driver exposes either knob; see parse_driver_overrides).
 //   * stream: register_for_agent mounts both an RPC and a Stream
 //     handler; the stream variant emits typed frames. `stream:true`
 //     under the RPC entry point is rejected with a clear error.
@@ -371,8 +370,9 @@ fn handler(
     // The dispatch call. `send_external_with_overrides` is the
     // overrides-aware variant — when `parsed.driver` is the default
     // it behaves identically to `send_external`; when the caller set
-    // `driver.model` (or temperature / max_tokens, see warn-once in
-    // dispatch.rs) those values flow into model resolution.
+    // `driver.model` that value flows into model resolution.
+    // `driver.temperature` / `driver.max_tokens` cannot reach this
+    // point (parse_driver_overrides rejects them).
     //
     // Synchronous (subprocess + wait); when invoked from a tokio
     // worker thread we yield the worker via `block_in_place` to
@@ -907,18 +907,26 @@ impl Selection {
 /// inherent impl) because `DriverOverrides` is a foreign type to
 /// this module — Rust's coherence rules require either-or.
 ///
-/// `model` is honored by the dispatch layer today; `temperature` and
-/// `max_tokens` are accepted by the schema and recorded but not
-/// piped through (the v1 claude-code / codex CLI drivers do not
-/// expose either knob — see warn_unhonored_driver_knobs_once in
-/// dispatch.rs). Validation still happens here so a malformed
-/// `temperature: "hot"` surfaces at the API boundary instead of
-/// dispatch time.
+/// `model` is honored by the dispatch layer today.
+///
+/// `temperature` and `max_tokens` are part of the chat schema for
+/// forward compatibility but no v1 driver can pipe them through:
+/// neither the claude-code CLI nor the codex CLI exposes those
+/// knobs, and silently accepting them would leave a caller who
+/// wrote `temperature: 0.3` thinking the value took effect. We
+/// therefore validate the shape here AND reject loudly at the API
+/// boundary — the alternative (warn-once on stderr) was tried in
+/// the previous slice and audit caught it as a silent surprise.
+/// A future driver that supports these knobs can drop the rejection
+/// here and forward through DriverOverrides without re-shaping the
+/// dispatch surface.
 fn parse_driver_overrides(value: &Value) -> anyhow::Result<DriverOverrides> {
     let obj = value
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("chat: `driver` must be an object"))?;
     let model = obj.get("model").and_then(Value::as_str).map(str::to_string);
+    // Validate temperature shape first (so a malformed value still
+    // surfaces a precise error) before the unsupported-knob rejection.
     let temperature = match obj.get("temperature") {
         None => None,
         Some(v) => Some(
@@ -936,6 +944,21 @@ fn parse_driver_overrides(value: &Value) -> anyhow::Result<DriverOverrides> {
                 })?,
         ),
     };
+    let mut unsupported: Vec<&'static str> = Vec::new();
+    if temperature.is_some() {
+        unsupported.push("temperature");
+    }
+    if max_tokens.is_some() {
+        unsupported.push("max_tokens");
+    }
+    if !unsupported.is_empty() {
+        anyhow::bail!(
+            "chat: driver.{} not supported by the v1 claude-code / codex CLI drivers \
+             (the underlying CLIs do not expose this knob). Remove the field, or set \
+             it via the agent's CLI-side configuration if that runtime supports it.",
+            unsupported.join(", driver."),
+        );
+    }
     Ok(DriverOverrides {
         model,
         temperature,
@@ -1107,13 +1130,17 @@ mod tests {
 
     #[test]
     fn parse_full_extended_schema_round_trip() {
+        // The extended schema accepts model, skills, context_loaders,
+        // session_id, stream — temperature/max_tokens are rejected at
+        // parse time (no v1 driver supports them; see the dedicated
+        // rejection tests below).
         let args = ChatArgs::parse(&json!({
             "prompt": "hi",
             "context": "bg",
             "session_id": "s-1",
             "skills": {"mode": "explicit", "include": ["alice.voice"], "exclude": ["alice.exec"]},
             "context_loaders": {"mode": "none"},
-            "driver": {"model": "claude-opus-4-7", "temperature": 0.3, "max_tokens": 1024},
+            "driver": {"model": "claude-opus-4-7"},
             "stream": false,
         }))
         .unwrap();
@@ -1123,8 +1150,49 @@ mod tests {
         assert_eq!(args.skills.exclude, vec!["alice.exec"]);
         assert_eq!(args.context_loaders.mode, SelectionMode::None);
         assert_eq!(args.driver.model.as_deref(), Some("claude-opus-4-7"));
-        assert_eq!(args.driver.temperature, Some(0.3));
-        assert_eq!(args.driver.max_tokens, Some(1024));
+        assert_eq!(args.driver.temperature, None);
+        assert_eq!(args.driver.max_tokens, None);
+    }
+
+    #[test]
+    fn parse_rejects_driver_temperature_as_unsupported() {
+        // No v1 CLI driver pipes temperature through; the previous
+        // warn-once-and-continue treatment was a silent surprise.
+        let err = ChatArgs::parse(&json!({
+            "prompt": "hi",
+            "driver": {"temperature": 0.3}
+        }))
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("temperature"), "msg should name the knob: {msg}");
+        assert!(msg.contains("not supported"), "msg should explain: {msg}");
+    }
+
+    #[test]
+    fn parse_rejects_driver_max_tokens_as_unsupported() {
+        let err = ChatArgs::parse(&json!({
+            "prompt": "hi",
+            "driver": {"max_tokens": 1024}
+        }))
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("max_tokens"), "msg should name the knob: {msg}");
+        assert!(msg.contains("not supported"), "msg should explain: {msg}");
+    }
+
+    #[test]
+    fn parse_rejects_both_unsupported_knobs_in_one_error() {
+        // When the caller sets both, the error must name both — not
+        // just the first one we happened to check — so they fix the
+        // payload in one round-trip.
+        let err = ChatArgs::parse(&json!({
+            "prompt": "hi",
+            "driver": {"temperature": 0.3, "max_tokens": 1024}
+        }))
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("temperature"));
+        assert!(msg.contains("max_tokens"));
     }
 
     #[test]
