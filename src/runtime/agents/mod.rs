@@ -37,6 +37,7 @@ pub mod chat_ability;
 pub mod context_loaders;
 pub mod discuss_ability;
 pub mod loop_ability;
+pub mod mcp_bridge_ability;
 pub mod permission_ability;
 pub mod ping;
 pub mod profiles;
@@ -101,6 +102,15 @@ pub fn build_registry_with_services(
     chat_ability::register(&mut reg, agents, loaders);
     skill_ability::register(&mut reg);
     skill_install_ability::register(&mut reg);
+    // mcp.bridge.list_tools — projects local AbilityDescriptors to the
+    // MCP tools/list shape. The provider closure is the seam where a
+    // future descriptor catalog (e.g. once the publish path holds one
+    // centrally) plugs in. v1 hands an empty snapshot: the daemon does
+    // not yet retain its descriptor list past the publish call, and
+    // wiring that retention is a separate change. The handler is still
+    // dispatchable, so the IPC + admission paths can be exercised end
+    // to end before the catalog arrives.
+    mcp_bridge_ability::register(&mut reg, Vec::new);
     Arc::new(reg)
 }
 
@@ -216,6 +226,7 @@ pub fn description_for(name: &str) -> &'static str {
         "fleet.skill_install" => skill_install_ability::install_description(),
         "fleet.skill_remove" => skill_install_ability::remove_description(),
         "fleet.skill_upgrade" => skill_install_ability::upgrade_description(),
+        "mcp.bridge.list_tools" => mcp_bridge_ability::list_tools_description(),
         _ if name.ends_with(".chat") => "Send a chat prompt to the locally-installed agent.",
         _ => "(system ability)",
     }
@@ -253,6 +264,7 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "fleet.skill_install" => skill_install_ability::install_input_schema(),
         "fleet.skill_remove" => skill_install_ability::remove_input_schema(),
         "fleet.skill_upgrade" => skill_install_ability::upgrade_input_schema(),
+        "mcp.bridge.list_tools" => mcp_bridge_ability::list_tools_input_schema(),
         _ => serde_json::json!({ "type": "object" }),
     }
 }
