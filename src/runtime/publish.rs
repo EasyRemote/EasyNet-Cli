@@ -179,13 +179,77 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
     // Step 5: advertise descriptors per Agent. We use the
     // profiles aggregator so each Agent's descriptor list is
     // computed once from the live registry.
-    let descriptors = profiles_mod::all_descriptors_for_host(
+    let mut descriptors = profiles_mod::all_descriptors_for_host(
         &plan.host_device_uri,
         consent_uri.as_deref(),
         policy_uri.as_deref(),
         mcp_uri.as_deref(),
         &llm_uris,
     );
+
+    // Step 5b: advertise the abilities OWNED by each user-installed
+    // agent (e.g. `alice.chat` and any per-agent verbs declared in
+    // `<workspace>/abilities/*.ability.toml`). The `llm` profile's
+    // descriptors_for() only emits the generic conversation/session/
+    // meta/skill prefixes — without this step the realm directory
+    // never learns that `alice.chat` exists, so the EasyNet
+    // frontend's Abilities catalog cannot list it and the user
+    // cannot invoke per-agent abilities through the UI.
+    //
+    // Read the live registry once, look up each user agent's URA
+    // in `llm_uris` (bootstrap minted these earlier), call
+    // `abilities_for(name, entry)` to get the per-agent specs, and
+    // convert to AbilityDescriptors owned by the user-agent URA.
+    // A registry-load failure degrades to "no per-agent advertise
+    // this cycle" rather than blocking the rest of publish — the
+    // outcome row surfaces the reason.
+    match crate::registry::agents::load_agents() {
+        Ok(reg) => {
+            for (name, entry) in &reg.agents {
+                let owner_uri = match llm_uris
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .map(|(_, u)| u.clone())
+                {
+                    Some(u) => u,
+                    None => continue, // bootstrap didn't mint a URA for this agent
+                };
+                let specs = crate::runtime::abilities::abilities_for(name, entry);
+                for spec in specs {
+                    let desc = crate::runtime::ability_descriptor::AbilityDescriptor::new(
+                        spec.name(),
+                        &owner_uri,
+                        crate::runtime::ability_descriptor::Visibility::Scoped,
+                    );
+                    match desc {
+                        Ok(d) => {
+                            let d = d
+                                .with_description(spec.description())
+                                .with_input_schema(spec.parameters().clone())
+                                .with_source(format!("agent:{name}"));
+                            descriptors.push(d);
+                        }
+                        Err(e) => {
+                            outcomes.push(PublishOutcome {
+                                agent_uri: owner_uri.clone(),
+                                label: format!("agent-ability/{}", spec.name()),
+                                result: Err(format!("descriptor build failed: {e}")),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            outcomes.push(PublishOutcome {
+                agent_uri: String::new(),
+                label: "user-agent-abilities".into(),
+                result: Err(format!(
+                    "load agent registry failed; per-agent abilities not advertised this cycle: {e}"
+                )),
+            });
+        }
+    }
 
     // Group descriptors by owner Agent and advertise each group.
     let mut by_owner: std::collections::HashMap<String, Vec<_>> = std::collections::HashMap::new();
@@ -419,6 +483,151 @@ mod tests {
             .filter(|o| o.result.is_err() && o.label != "local-agents.json")
             .count();
         assert!(failed > 0, "at least one advertise failure expected");
+    }
+
+    #[test]
+    fn republish_advertises_user_agent_chat_ability_under_user_agent_owner() {
+        // Reproduces the gap caught by an end-to-end audit: when a
+        // user installs a claude-code agent named `alice`, the daemon
+        // must advertise `alice.chat` (and any other per-agent
+        // verbs from <workspace>/abilities/*.ability.toml) so the
+        // EasyNet frontend's Abilities catalog can list it AND the
+        // backend can route invokes back to alice. Pre-fix the LLM
+        // profile only published the generic conversation/session/
+        // meta/skill prefixes, so `alice.chat` never reached the
+        // realm directory and the UI could not see it.
+        let _h = HomeGuard::new();
+
+        // Persist an `alice` AgentEntry into the registry so that
+        // `load_agents()` inside republish_with_minter sees it.
+        let mut reg = crate::registry::agents::AgentRegistry::default();
+        reg.agents.insert(
+            "alice".to_string(),
+            crate::registry::agents::AgentEntry::new(
+                crate::registry::agents::AgentType::ClaudeCode,
+                None,
+            ),
+        );
+        crate::registry::agents::save_agents(&reg).expect("save alice into registry");
+
+        // Plan: realm joined, alice listed as an LLM sub-agent so
+        // bootstrap mints a URA for her.
+        let plan = BootstrapPlan {
+            realm: "acme".into(),
+            host_device_uri: "easynet:///r/acme/agent/01DEV".into(),
+            consent: false,
+            policy: false,
+            mcp: false,
+            llm_sub_agents: vec![LlmSubAgent {
+                name: "alice".into(),
+                agent_type_display: "claude-code".into(),
+            }],
+        };
+        let invoker = CountingInvoker::new(good_reply());
+        let outcomes = republish_with_minter(&invoker, "tenant", &plan, &CountingMinter::new());
+
+        // Locate the `alice` URA via the persisted local-agents file.
+        let file_back = local_agents::load().expect("load local-agents.json");
+        let alice_uri = &file_back
+            .hosted_agents
+            .iter()
+            .find(|e| e.profile == "llm" && e.name == "alice")
+            .expect("bootstrap must have minted a URA for alice")
+            .agent_uri;
+
+        // Find the advertise_abilities call whose payload's
+        // `agent_uri` is alice's URA, and assert `alice.chat`
+        // appears in its abilities list. The daemon may pack
+        // multiple abilities per call; we scan, not require the
+        // first match.
+        let calls = invoker.calls();
+        let alice_advert = calls
+            .iter()
+            .find(|(u, p)| {
+                u.contains("federation.advertise_abilities@1")
+                    && p["agent_uri"].as_str() == Some(alice_uri.as_str())
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected an advertise_abilities call owned by {alice_uri:?}; \
+                     resource_seq = {:?}",
+                    calls.iter().map(|(u, _)| u).collect::<Vec<_>>()
+                )
+            });
+        let abilities = alice_advert.1["abilities"]
+            .as_array()
+            .expect("abilities array on advertise_abilities payload");
+        let names: Vec<&str> = abilities
+            .iter()
+            .filter_map(|a| a["name"].as_str())
+            .collect();
+        assert!(
+            names.iter().any(|n| *n == "alice.chat"),
+            "alice.chat must appear in advertised abilities for {alice_uri:?}; got names = {names:?}"
+        );
+
+        // Sanity: outcomes carry one row per advertise_abilities
+        // group; alice's row must be Ok.
+        let alice_row = outcomes
+            .iter()
+            .find(|o| o.agent_uri == *alice_uri && o.label.starts_with("abilities/"))
+            .expect("alice's abilities-advertise outcome row must exist");
+        assert!(alice_row.result.is_ok(), "alice abilities advertise: {alice_row:?}");
+    }
+
+    #[test]
+    fn republish_does_not_lose_device_descriptors_when_user_agent_added() {
+        // Regression guard: stitching per-agent descriptors into the
+        // existing list must not displace device-level ones. If a
+        // refactor accidentally replaces (rather than appends) the
+        // descriptors Vec, the device-profile abilities (fs.read,
+        // shell.run, …) would silently drop off the wire.
+        let _h = HomeGuard::new();
+        let mut reg = crate::registry::agents::AgentRegistry::default();
+        reg.agents.insert(
+            "alice".into(),
+            crate::registry::agents::AgentEntry::new(
+                crate::registry::agents::AgentType::ClaudeCode,
+                None,
+            ),
+        );
+        crate::registry::agents::save_agents(&reg).unwrap();
+        let plan = BootstrapPlan {
+            realm: "acme".into(),
+            host_device_uri: "easynet:///r/acme/agent/01DEV".into(),
+            consent: false,
+            policy: false,
+            mcp: false,
+            llm_sub_agents: vec![LlmSubAgent {
+                name: "alice".into(),
+                agent_type_display: "claude-code".into(),
+            }],
+        };
+        let invoker = CountingInvoker::new(good_reply());
+        let _ = republish_with_minter(&invoker, "tenant", &plan, &CountingMinter::new());
+
+        // The device-owner advertise must still carry at least one
+        // device-level ability (fs.read is the canary — it has been
+        // in the device profile since Tier 2.5 baseline locomotion).
+        let calls = invoker.calls();
+        let device_advert = calls
+            .iter()
+            .find(|(u, p)| {
+                u.contains("federation.advertise_abilities@1")
+                    && p["agent_uri"].as_str() == Some("easynet:///r/acme/agent/01DEV")
+            })
+            .expect("device-owner advertise_abilities call must still exist");
+        let abilities = device_advert.1["abilities"]
+            .as_array()
+            .expect("abilities array on device advertise");
+        let names: Vec<&str> = abilities
+            .iter()
+            .filter_map(|a| a["name"].as_str())
+            .collect();
+        assert!(
+            names.iter().any(|n| *n == "fs.read"),
+            "device descriptors must survive per-agent stitch; got names = {names:?}"
+        );
     }
 
     #[test]
