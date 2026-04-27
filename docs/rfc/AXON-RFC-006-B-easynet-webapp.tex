@@ -2,8 +2,11 @@
 
 % ──────────────────────────────────────────────────────────────────────────
 % AXON-RFC-006 Appendix B (impl) — easynet.web_app
-% Status: Draft v0.2 (introduces actions.* ability namespace,
-%                     fixes project home, adds agent skill seed)
+% Status: Draft v0.3 (HTML/EAL dual-canonical: each web_app
+%                     carries an EAL source whose hash is in
+%                     canonical state; HTML and api_surface are
+%                     deterministic projections of the EAL.
+%                     Mirrors Appendix A v0.3.)
 % Build:  xelatex AXON-RFC-006-B-easynet-webapp.tex
 % Companion (normative core):    AXON-RFC-006-stateful-easynet.tex
 % Companion (pressure test md):  AXON-RFC-006-stateful-easynet.md (§B)
@@ -126,7 +129,7 @@
 \author{
     Silan Hu \\ \small National University of Singapore
 }
-\date{Draft v0.2, \today}
+\date{Draft v0.3, \today}
 
 \begin{document}
 \maketitle
@@ -545,7 +548,19 @@ by content hash:
 canonical_fields(web_app) = {
     manifest_hash:        bytes(32),  // [manifest] section
     build_config_hash:    bytes(32),  // [build] section
-    api_surface_hash:     bytes(32),  // [api].abilities (sorted)
+    eal_hash:             bytes(32),  // SHA-256 of the web_app's
+                                      // EAL source (markdown
+                                      // documentation in `// ...`
+                                      // comments + mission decls).
+                                      // Per Appendix A PA-INV-2,
+                                      // EAL is the canonical
+                                      // agent-facing artifact;
+                                      // api_surface_hash is derived
+                                      // from EAL at update_config
+                                      // time, not separately authored.
+    api_surface_hash:     bytes(32),  // [api].abilities (sorted);
+                                      // recomputed from EAL by the
+                                      // daemon, not written by hand
     actions_surface_hash: bytes(32),  // [actions].abilities (sorted)
     routes_manifest_hash: bytes(32),  // [routes].rules (in order)
     csp_hash:             bytes(32),  // [csp] section
@@ -613,6 +628,7 @@ exactly these keys.
 \texttt{webapp.serve@v1}       & operational & Stopped/Crashed $\to$ Starting $\to$ Running. Requires canonical = Built. \\
 \texttt{webapp.stop@v1}        & operational & Starting/Running/Crashed $\to$ Stopped. \\
 \texttt{webapp.get@v1}         & query       & Returns canonical + runtime snapshot. \\
+\texttt{webapp.get\_eal@v1}    & query       & Mandatory. Returns the UTF-8 EAL source whose SHA-256 equals \texttt{eal\_hash}. HTTP mirror: \texttt{GET /\_\_easynet/eal}. Mirrors Appendix A PA-INV-2. \\
 \texttt{webapp.list@v1}        & query       & Lists web\_apps owned by an agent. \\
 \bottomrule
 \end{tabularx}

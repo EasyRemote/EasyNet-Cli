@@ -2,7 +2,8 @@
 
 % ──────────────────────────────────────────────────────────────────────────
 % AXON-RFC-006 附录 A —— easynet.pages（中文版）
-% Status: 草稿 v0.2（与 B v0.2 对齐：actions.* 命名空间、项目位置、共享 skill）
+% Status: 草稿 v0.3（HTML/EAL 双 canonical：EAL 是真值来源；
+%                   HTML 与 API 表面是派生投影；pages.get_eal 强制）
 % Build:  xelatex AXON-RFC-006-A-easynet-pages.zh-CN.tex
 % Companion: AXON-RFC-006-stateful-easynet.tex（最小规范核）
 % ──────────────────────────────────────────────────────────────────────────
@@ -121,7 +122,7 @@
 \author{
     胡思蓝 \\ \small 新加坡国立大学
 }
-\date{草稿 v0.2，\today}
+\date{草稿 v0.3，\today}
 
 \begin{document}
 \maketitle
@@ -269,7 +270,15 @@ canonical_fields(page) = {
                                     // (title, description,
                                     //  content_type, visibility)；
                                     //  见 §3.3
-    content_hash:     bytes(32),    // body 字节的 SHA-256；
+    eal_hash:         bytes(32),    // page EAL 源代码的 SHA-256
+                                    // (见 §3.6, PA-INV-2)。agent
+                                    // 面向的 canonical artifact：
+                                    // 含 `// ...` 注释中的 markdown
+                                    // 文档与零或多个 mission 声明。
+                                    // 在 Draft 与 archive/delete
+                                    // 之后为 null/zero
+    content_hash:     bytes(32),    // 渲染后的 HTML body 的 SHA-256
+                                    // (即 EAL 源的 human 投影)。
                                     // 在 Draft 与 archive/delete
                                     // 之后为 null/zero
     state_value:      string,       // "Draft" | "Published"
@@ -340,8 +349,9 @@ pages 没有像 \texttt{web\_app} 那样的长期运行 serve 进程）：
 \toprule
 \textbf{能力} & \textbf{返回} \\
 \midrule
-\texttt{pages.get@v1}  & 完整 canonical projection + content blob 句柄 \\
-\texttt{pages.list@v1} & 单 owner 的 (slug, state\_value, version) 列表 \\
+\texttt{pages.get@v1}     & 完整 canonical projection + content blob 句柄 \\
+\texttt{pages.list@v1}    & 单 owner 的 (slug, state\_value, version) 列表 \\
+\texttt{pages.get\_eal@v1}& page 的 UTF-8 EAL 源代码（见 §3.6，PA-INV-2）。强制实现。 \\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -356,6 +366,123 @@ Published 起把关作用。
 \textbf{为什么有 PA-INV-1。} draft 按定义就是未完成的；仅因 visibility
 是 \texttt{public} 就服务它，会把进行中的工作当成已发布内容暴露。
 Archived page 是有意不被服务的——它们存在是为了历史，而不是访问。
+
+\subsection{EAL 是 canonical；HTML 与 API 表面是派生}
+\label{sec:eal-canonical-cn}
+
+\normsv{} 落在 page 上的邻居 EasyNet agent 想要两件事：理解 page
+的内容，以及（当 page 有任何动作时）调用它的 actions。上一稿用两套
+机制处理（强制的 \texttt{pages.get\_markdown} 提供内容；
+\texttt{actions.*} 命名空间提供调用）。v0.3 把它们统一：
+\emph{page 的 agent 面向 canonical artifact 是单一的 EAL 源文件}。
+
+\begin{invariant}[PA-INV-2]
+每个 \texttt{easynet.page} \textbf{必须}把一份 EAL 源作为 canonical
+artifact 携带，哈希进 \texttt{eal\_hash}。该 EAL 源结构为：
+\texttt{// \ldots} 行注释中的 markdown 文档块，后接零或多个
+\texttt{mission} 声明，对应 page 的交互元素。对于 \texttt{state\_value
+= Published} 的 page，owner \textbf{必须}注册并实现
+\texttt{<owner>.pages.get\_eal@v1}，返回 SHA-256 等于当前
+\texttt{eal\_hash} 的 UTF-8 EAL 文本。Hub \textbf{必须}暴露 HTTP
+镜像 \texttt{GET /<\ldots>/easynet-for-agents/eal}，把它翻译为
+\texttt{pages.get\_eal@v1} 调用；响应体是 \texttt{Content-Type:
+text/eal}（或 \texttt{text/plain; charset=utf-8} 作 fallback）。
+\end{invariant}
+
+\textbf{规范的撰写方向是 EAL → HTML。} owner 写 EAL 源。HTML body
+由确定性渲染器从 EAL 生成（markdown 注释变成渲染过的 HTML；每个
+\texttt{mission} 声明绑定到对应 ability 调用的 HTML form / button）。
+\texttt{content\_hash}（HTML body）与 \texttt{eal\_hash}（EAL 源）
+都是 canonical 字段，但依赖关系是非对称的：渲染器是 EAL 加 page
+manifest 的纯函数，所以验证者拿到 EAL 与渲染器版本就能独立重构
+\texttt{content\_hash} 并与 receipt 对账。
+
+\textbf{这是 v0.3 的核心断言。} page 上的许多 API 与 UI 元素都可以
+\emph{从同一份 EAL 源生成}——表单的 action 属性、按钮的
+\texttt{onclick} handler、跳转到 action 的 \texttt{<a>} href、page
+的 agent 面向摘要全部从同一段 EAL 文本派生。owner 维护一份 canonical
+artifact；协议保证每个投影都是字节确定性、按内容哈希锚定的。
+
+\textbf{EAL 源的结构。}
+
+\begin{lstlisting}
+// # 陶瓷马克杯，12oz
+//
+// **价格：** $19.99
+// **发货：** 周二
+//
+// 要购买这个杯子，提交 HTML 表单，或运行 `buy` mission（EAL）。
+
+mission "buy" {
+  let order = call "shop.checkout" on "alice" with {
+    item_id = "mug-12oz",
+    address = "<由 owner 端具体化填入>",
+    qty     = 1
+  } timeout 30
+}
+\end{lstlisting}
+
+纯文档 page（无任何交互元素）携带一个空体 trivial mission：
+
+\begin{lstlisting}
+// # 关于本站
+//
+// 这是一个静态信息 page。这里没有任何动作可做，只有内容供阅读。
+
+mission "view" { }
+\end{lstlisting}
+
+trivial \texttt{mission "view" \{ \}} 满足 EAL parser 当前
+"每个程序恰好一个 mission" 的要求（\texttt{src/eal/parser.rs}，
+\texttt{program = mission\_decl}）。未来 EAL 放宽以接受零 mission
+程序；本附录的契约不依赖此放宽。
+
+\textbf{HTML/EAL 对应（提示性，非严格不变量）。} 期望 HTML 与 EAL
+之间\emph{大致}信息对等的邻居 agent 能得到很好的服务：
+
+\begin{itemize}[leftmargin=2em,itemsep=0.15em]
+    \item EAL 注释中的每个 markdown 标题/段落对应到 HTML 中渲染出的
+    同一段内容。
+    \item 每个 \texttt{mission} 声明对应 HTML page 上的一个交互元素
+    （form / button / 动作链接）；mission 内的 \texttt{call} 与该
+    form 的 \texttt{POST /api/<verb>} 调用同一个 ability。
+    \item EAL mission 体内引用的每个出站 ability 自动有资格成为
+    \texttt{api\_surface}（web\_app，附录 B）；page 声明的 API 由
+    EAL 派生，不另行枚举。
+\end{itemize}
+
+协议\emph{不}强制严格对应（owner 可以渲染与 EAL 暗示不同的 HTML），
+因为 v1 无法机械验证"这些 HTML 字节是这些 EAL 字节的 canonical
+投影"。协议\emph{确实}强制：两份字节都作为 canonical 字段存在、都
+由 owner 签名、两者之间的任何漂移可被对比 EAL 描述行为与 HTML
+渲染行为的 peer 检测到。
+
+\textbf{为什么用单一 EAL 源而非分立 markdown + actions blob。}
+
+\begin{enumerate}[leftmargin=2em,itemsep=0.15em]
+    \item 一份 artifact、一次签名、一个 publish 时刻——markdown
+    内容与 actions 不能漂移，因为它们物理上是同一段字节。
+    \item 简单 page 不需要 \texttt{markdown\_hash} 字段、不需要单独
+    的 \texttt{actions.list\_for\_page} 往返：\texttt{pages.get\_eal}
+    一次调用就返回 peer 需要的一切。
+    \item EAL 已经是 EasyNet 中的 first-class artifact
+    （\texttt{src/eal/}）；为 agent 面向 page 表示复用它，避免发明
+    平行格式。
+    \item EAL 语法与 peer agent 经 \texttt{easynet mission run}
+    \emph{执行}的语法一致，因此"读关于这个 page" 与"在这个 page 上
+    做点什么"之间的边界塌缩为单一文本 artifact。读取免费；执行 mission
+    需要 \texttt{mission run}。
+\end{enumerate}
+
+\textbf{与 \texttt{actions.*}（附录 B）的关系。} 纯静态 page（除
+trivial \texttt{view} 外无 mission）由其 EAL +
+\texttt{pages.get\_eal} 完全描述；不需要注册 \texttt{actions.*}。
+有多个交互元素的 page 或 web\_app 同时注册
+\texttt{pages.get\_eal@v1}（完整 canonical EAL）\emph{与}相关的
+\texttt{actions.*} verb（用于带参数具体化的细粒度按 mission 查询）。
+两者并存：\texttt{pages.get\_eal} 是一次性视图；
+\texttt{actions.list\_for\_page} + \texttt{actions.get(name, params)}
+是按需视图。
 
 \subsection{生命周期图}
 
@@ -531,14 +658,16 @@ returns:
 \subsection{Canonical projection $\pi$}
 
 \normsv{} 按主文 \S2.1，$\pi$ 是 schema 驱动的，不能手写。pages 的
-schema 列出恰好五个 \texttt{canonical:true} 字段：\texttt{manifest\_hash}、
-\texttt{content\_hash}、\texttt{state\_value}、\texttt{visibility}、
-\texttt{version}。$\pi(v)$ 把 $v$ 投影到这些 key，按 schema 声明顺序。
+schema 列出六个 \texttt{canonical:true} 字段：\texttt{manifest\_hash}、
+\texttt{eal\_hash}、\texttt{content\_hash}、\texttt{state\_value}、
+\texttt{visibility}、\texttt{version}。$\pi(v)$ 把 $v$ 投影到这些 key，
+按 schema 声明顺序。
 
 \begin{lstlisting}
 fn project_pages(state: &PageState) -> Map<String, Value> {
     let mut out = BTreeMap::new();
     out.insert("manifest_hash".into(), bytes_to_hex(&state.manifest_hash));
+    out.insert("eal_hash".into(),      bytes_to_hex(&state.eal_hash));
     out.insert("content_hash".into(),  bytes_to_hex(&state.content_hash));
     out.insert("state_value".into(),   state.state_value.clone().into());
     out.insert("visibility".into(),    state.visibility.clone().into());
@@ -547,7 +676,7 @@ fn project_pages(state: &PageState) -> Map<String, Value> {
 }
 \end{lstlisting}
 
-\textbf{开销。} 时间与空间均 $O(1)$（五个字段、固定大小）。
+\textbf{开销。} 时间与空间均 $O(1)$（六个字段、固定大小）。
 
 \subsection{Canonical 序列化 $\sigma$（JCS）}
 
@@ -567,6 +696,7 @@ projection 的 JCS 因此是已投影 JSON 的确定性紧凑形式。
 \begin{lstlisting}
 {
   "content_hash":  "abf0c1...c8f3",   // 32 字节十六进制
+  "eal_hash":      "6b21d3...49e0",
   "manifest_hash": "1d4a7e...09e2",
   "state_value":   "Published",
   "version":       3,
@@ -577,7 +707,7 @@ projection 的 JCS 因此是已投影 JSON 的确定性紧凑形式。
 JCS 后：
 
 \begin{lstlisting}
-{"content_hash":"abf0c1...c8f3","manifest_hash":"1d4a7e...09e2","state_value":"Published","version":3,"visibility":"public"}
+{"content_hash":"abf0c1...c8f3","eal_hash":"6b21d3...49e0","manifest_hash":"1d4a7e...09e2","state_value":"Published","version":3,"visibility":"public"}
 \end{lstlisting}
 
 \noindent
