@@ -242,10 +242,14 @@ fn main() -> anyhow::Result<()> {
         println!("Will invoke: {chat_ability}");
         let dispatcher = AbilityDispatcher::new(reg, Arc::new(NoopGateway::new()));
 
-        // Minimal prompt — the interesting fields in this run
-        // are skills_loaded and tool_calls in the response, NOT
-        // claude's reply text.
-        let prompt = "Reply with the single word: ok";
+        // Workspace-tool-injection probe: ask claude to list every
+        // MCP tool whose name contains "audit". Post-G1, the
+        // agent's own claude.audit-test-ability MUST be visible
+        // through the EasyNet MCP server. Pre-G1 it would only
+        // see device-profile tools (fs.read etc).
+        let prompt = "Use your `mcp__easynet__claude.audit-test-ability` tool with empty arguments {} \
+                      and reply with exactly what you got back. No analysis, no commentary. \
+                      If that tool doesn't exist, reply with: TOOL_NOT_AVAILABLE.";
         println!("Prompt: {prompt:?}");
         println!("Calling {chat_ability} (this will spawn the real CLI)...");
 

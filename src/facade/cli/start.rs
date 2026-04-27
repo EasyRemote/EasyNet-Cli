@@ -462,6 +462,12 @@ fn run_foreground_with_heartbeat(
         let config = crate::runtime::agents::profiles::mcp::StdioServerConfig {
             server_name: "easynet-device".into(),
             tenant_id: creds.tenant_id.clone(),
+            // `easynet start --mcp` is the device-level MCP path.
+            // No specific agent identity here, so per-agent
+            // abilities are not folded in. The dedicated workspace
+            // MCP path (`easynet mcp serve --agent <name>`) is
+            // where the per-agent catalog gets exposed.
+            agent_name: None,
         };
         let configured =
             crate::runtime::agents::profiles::mcp::build_stdio_server(&config);

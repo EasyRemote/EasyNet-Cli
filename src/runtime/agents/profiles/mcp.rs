@@ -212,6 +212,22 @@ pub struct StdioServerConfig {
     /// Tenant ID — informational; routed dispatch honours whatever
     /// the loaded credentials carry.
     pub tenant_id: String,
+    /// Optional: when this MCP server is the workspace MCP for a
+    /// specific agent (the daemon spawned it as
+    /// `easynet mcp serve --agent <name>`), set this to that
+    /// agent's name. The descriptor list will then include the
+    /// agent's per-workspace ability TOMLs from
+    /// `<agent_root>/abilities/*.toml` IN ADDITION to the
+    /// host-wide profile descriptors. None = host-only catalog
+    /// (the operator-installed `easynet mcp install` path).
+    ///
+    /// Why this matters: every claude.chat / codex.chat call
+    /// spawns a workspace MCP server with --agent set. Without
+    /// this field, agents could only see the device-profile
+    /// abilities through MCP — never their own abilities, which
+    /// is the whole point of letting an agent expose abilities
+    /// per the EasyNet ontology.
+    pub agent_name: Option<String>,
 }
 
 /// Pre-built provider + server name, ready to hand to
@@ -248,7 +264,21 @@ pub fn build_stdio_server(config: &StdioServerConfig) -> ConfiguredStdioServer {
         Arc::new(crate::runtime::kernel::Kernel::new(gateway));
     let proxy = Arc::new(AbilityProxy::new(kernel));
 
-    let descriptors = crate::runtime::agents::profiles::load_host_descriptors();
+    let mut descriptors = crate::runtime::agents::profiles::load_host_descriptors();
+
+    // Workspace MCP: when --agent <name> is set, append that
+    // agent's per-workspace ability descriptors. Read straight
+    // from the agent's on-disk manifests (the same path
+    // `easynet agent abilities <name>` walks). This is what makes
+    // an agent's own abilities (e.g. `claude.audit-test-ability`
+    // declared at <workspace>/abilities/...) visible to the
+    // spawned LLM CLI as MCP tools — without this, the EasyNet
+    // ontology's "agent exposes abilities" promise was just
+    // metadata: agents could declare abilities but the LLM
+    // running inside them couldn't call them.
+    if let Some(agent_name) = config.agent_name.as_deref() {
+        descriptors.extend(per_agent_workspace_descriptors(agent_name));
+    }
 
     let invoker = ProxyLocalInvoker::new(proxy);
     let provider = InvokeMcpProvider::new(invoker, descriptors);
@@ -257,6 +287,66 @@ pub fn build_stdio_server(config: &StdioServerConfig) -> ConfiguredStdioServer {
         provider,
         server_name: config.server_name.clone(),
     }
+}
+
+/// Build AbilityDescriptors for one agent's per-workspace
+/// ability TOMLs. Reads from the canonical disk path that
+/// `easynet agent abilities <name>` reads from. Returns an
+/// empty Vec when the agent isn't registered or its workspace
+/// has no ability manifests; the MCP server proceeds with the
+/// host-wide catalog only.
+fn per_agent_workspace_descriptors(
+    agent_name: &str,
+) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
+    use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
+
+    // Resolve the agent entry. If unregistered, no per-agent
+    // catalog to add — the workspace MCP server is still useful
+    // for the host catalog alone.
+    let registry = match crate::registry::agents::load_agents() {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+    let entry = match registry.agents.get(agent_name) {
+        Some(e) => e,
+        None => return Vec::new(),
+    };
+
+    // Walk the workspace's abilities/*.toml. abilities_for has
+    // the fallback fix from slice 25 baked in (root_path None →
+    // agents_root().join(name)).
+    let specs = crate::runtime::abilities::abilities_for(agent_name, entry);
+
+    // Owner URI: the agent itself, addressed by name. We don't
+    // try to resolve a federation URA here — pre-join the agent
+    // is local-only, and post-join the daemon publishes its real
+    // URA via federation.advertise; this side just needs an owner
+    // string the descriptor type accepts.
+    let owner_uri = format!("agent://{agent_name}");
+
+    let self_chat = format!("{agent_name}.chat");
+    specs
+        .into_iter()
+        // The agent's own chat ability is its outgoing surface,
+        // not something to expose AS a tool to the LLM running
+        // INSIDE it (that would invite infinite recursion: the
+        // agent calls its own chat tool, which spawns itself,
+        // which calls its own chat tool…). Mirror the same
+        // exclusion enumerate_skills applies in chat_ability.rs.
+        .filter(|s| s.name() != self_chat)
+        .filter_map(|s| {
+            AbilityDescriptor::new(s.name().to_string(), &owner_uri, Visibility::Scoped)
+                .ok()
+                .map(|d| {
+                    // AgentAbilitySpec calls its JSON-Schema field
+                    // `parameters()` (carrying the input schema in
+                    // the chat-style "parameters" shape) — that
+                    // IS the input schema for the descriptor.
+                    d.with_input_schema(s.parameters().clone())
+                        .with_source(format!("agent:{agent_name}"))
+                })
+        })
+        .collect()
 }
 
 impl<I: LocalInvoker> easynet_axon::mcp::McpToolProvider for InvokeMcpProvider<I> {
@@ -511,6 +601,7 @@ mod tests {
         let cfg = StdioServerConfig {
             server_name: "easynet-test".into(),
             tenant_id: "test-tenant".into(),
+            agent_name: None,
         };
         let configured = build_stdio_server(&cfg);
         assert_eq!(configured.server_name, "easynet-test");
@@ -545,6 +636,7 @@ mod tests {
         let cfg = StdioServerConfig {
             server_name: "easynet-test".into(),
             tenant_id: "t".into(),
+            agent_name: None,
         };
         let configured = build_stdio_server(&cfg);
         let owners: std::collections::HashSet<String> = configured
@@ -561,6 +653,98 @@ mod tests {
         assert!(
             !owners.contains("self"),
             "post-join descriptors must NOT fall back to `self` when the URA is known"
+        );
+    }
+
+    #[test]
+    fn build_stdio_server_with_agent_name_includes_per_workspace_abilities() {
+        // The G1 fix: when --agent <name> is set on `easynet mcp serve`,
+        // the descriptor list MUST include the agent's own
+        // ability TOMLs from <agent_root>/abilities/. Without this
+        // the agent's own abilities are invisible to the LLM
+        // running inside that agent's workspace, which breaks
+        // the EasyNet ontology's "agent exposes abilities"
+        // promise: agents could declare abilities but the LLM
+        // they wrap couldn't call them.
+        use crate::registry::agents::{AgentEntry, AgentType};
+        use crate::facade::cli::test_support::HomeGuard;
+
+        let _g = HomeGuard::new();
+
+        // Set up an agent + a custom ability under its workspace.
+        // Use a name unlikely to collide with the developer's
+        // real ~/.easynet/workspaces/* contents. HomeGuard already
+        // isolates HOME, but multiple in-process tests can still
+        // race on the same per-test tempdir if they all pick
+        // generic names like "alice" or "bob".
+        let agent = "g1-test-agent";
+
+        let mut registry = crate::registry::agents::AgentRegistry::default();
+        let entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        registry.agents.insert(agent.into(), entry);
+        crate::registry::agents::save_agents(&registry).unwrap();
+
+        let workspace_root =
+            crate::persistence::config::agents_root().join(agent);
+        std::fs::create_dir_all(workspace_root.join("abilities")).unwrap();
+        std::fs::write(
+            workspace_root.join("agent.toml"),
+            &format!("name = \"{agent}\"\nruntime = \"claude-code\"\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            workspace_root.join("abilities/code-review.ability.toml"),
+            "schema_version = \"1\"\n\
+             name = \"code-review\"\n\
+             description = \"Custom workspace ability.\"\n\
+             [input_schema]\n\
+             type = \"object\"\n\
+             additionalProperties = false\n",
+        )
+        .unwrap();
+
+        // Build with agent_name = Some("alice").
+        let cfg = StdioServerConfig {
+            server_name: "easynet-test".into(),
+            tenant_id: "t".into(),
+            agent_name: Some(agent.to_string()),
+        };
+        let configured = build_stdio_server(&cfg);
+        let names: Vec<String> = configured
+            .provider
+            .descriptors
+            .iter()
+            .map(|d| d.name.clone())
+            .collect();
+        assert!(
+            names.iter().any(|n| n == &format!("{agent}.code-review")),
+            "build_stdio_server with agent_name={agent} MUST include \
+             the {agent}.code-review ability from its workspace; got {names:?}"
+        );
+        // The agent's own .chat ability is excluded — exposing it
+        // to the LLM running INSIDE alice would invite recursion.
+        assert!(
+            !names.iter().any(|n| n == &format!("{agent}.chat")),
+            "{agent}.chat must be excluded from its own MCP tool catalog \
+             to prevent the agent from calling itself recursively; got {names:?}"
+        );
+
+        // Same build with agent_name = None must NOT include alice's abilities.
+        let cfg_no_agent = StdioServerConfig {
+            server_name: "easynet-test".into(),
+            tenant_id: "t".into(),
+            agent_name: None,
+        };
+        let no_agent = build_stdio_server(&cfg_no_agent);
+        let no_agent_names: Vec<String> = no_agent
+            .provider
+            .descriptors
+            .iter()
+            .map(|d| d.name.clone())
+            .collect();
+        assert!(
+            !no_agent_names.iter().any(|n| n == &format!("{agent}.code-review")),
+            "agent_name=None must NOT include any per-agent abilities; got {no_agent_names:?}"
         );
     }
 
