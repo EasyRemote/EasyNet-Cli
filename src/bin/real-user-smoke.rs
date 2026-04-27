@@ -321,7 +321,79 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        // ── streaming reality check ───────────────────────────
+        // ── codex.chat streaming check ─────────────────────────
+        // If codex.chat is registered, run the same streaming
+        // probe against it. Pre-fix slice 33, codex's driver
+        // didn't fan out per-line progress to the broadcast
+        // channel — only claude_code.rs did. This block proves
+        // codex now streams too (separate code path through
+        // CodexExecAdapter::invoke).
+        if advertised.iter().any(|n| n == "codex.chat") {
+            println!("\n=== codex.chat STREAM mode (frame-by-frame) ===");
+            let dispatcher_for_codex = AbilityDispatcher::new(
+                build_registry_for_daemon(
+                    Arc::new(easynet_cli::runtime::execution::session::SessionService::new()),
+                    Arc::new(easynet_cli::runtime::execution::permission::PermissionService::new()),
+                    Arc::new(easynet_cli::runtime::execution::discuss::DiscussService::new()),
+                    Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new()),
+                    Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
+                    Arc::new(Vec::new()),
+                ),
+                Arc::new(NoopGateway::new()),
+            );
+            let codex_target = InvocationTarget {
+                scope: TargetScope::Local,
+                ability: "codex.chat".to_string(),
+                normalized_args: json!({
+                    "prompt": "Count from 1 to 5, one number per line.",
+                    "stream": true,
+                }),
+                call_mode: CallMode::Stream,
+            };
+            match dispatcher_for_codex.execute_stream(codex_target) {
+                Ok(stream_source) => {
+                    use easynet_cli::runtime::ability_dispatch::StreamSource;
+                    let stream_start = std::time::Instant::now();
+                    let mut frame_seq: u64 = 0;
+                    match stream_source {
+                        StreamSource::SnapshotThenLive(snapshot, mut rx) => {
+                            for v in &snapshot {
+                                frame_seq += 1;
+                                let kind = v.get("type").and_then(|t| t.as_str()).unwrap_or("?");
+                                let elapsed = stream_start.elapsed().as_millis();
+                                println!("  [t+{elapsed:>5}ms #{frame_seq:>2}] type={kind}");
+                            }
+                            rt.block_on(async {
+                                loop {
+                                    match rx.recv().await {
+                                        Ok(frame) => {
+                                            frame_seq += 1;
+                                            let kind = frame.get("type").and_then(|t| t.as_str()).unwrap_or("?");
+                                            let elapsed = stream_start.elapsed().as_millis();
+                                            println!("  [t+{elapsed:>5}ms #{frame_seq:>2}] type={kind}");
+                                        }
+                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                                    }
+                                }
+                            });
+                        }
+                        other => {
+                            println!("  unexpected StreamSource variant: {other:?}", other = std::any::type_name_of_val(&other));
+                        }
+                    }
+                    println!("Codex stream finished after {} frames in {}ms",
+                        frame_seq, stream_start.elapsed().as_millis());
+                }
+                Err(e) => {
+                    println!("codex.chat stream failed: {e}");
+                }
+            }
+        } else {
+            println!("\n=== codex.chat STREAM mode: SKIPPED (no codex agent registered) ===");
+        }
+
+        // ── streaming reality check (claude) ──────────────────
         println!("\n=== claude.chat STREAM mode (frame-by-frame) ===");
         let dispatcher_for_stream = AbilityDispatcher::new(
             build_registry_for_daemon(
