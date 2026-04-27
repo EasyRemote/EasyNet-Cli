@@ -87,6 +87,18 @@ pub struct CodexOptions {
     /// `ClaudeOptions::timeline` — each streamed stdout line
     /// emits a `progress` event on the P1-P6 event log.
     pub timeline: Option<Arc<crate::runtime::timeline::TimelineWriter>>,
+    /// Optional live-progress callback. Mirrors
+    /// `ClaudeOptions::progress_tx`: when set, the driver
+    /// invokes it once per stdout line (in addition to the
+    /// durable timeline emit). The chat ability's
+    /// stream_handler installs this so InvokeBidi/Stream
+    /// subscribers see per-token progress, not just the
+    /// terminal frame. Pre-fix this hook didn't exist on the
+    /// codex side, so claude.chat streamed but codex.chat did
+    /// not — a wire-shape inconsistency between drivers
+    /// caught in the audit conversation right after the
+    /// claude streaming was fixed.
+    pub progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
     /// Binary to spawn. Empty string means "use the driver
     /// default" (`DEFAULT_CODEX_BINARY`). Mirrors the behaviour
     /// of `ClaudeOptions::command`; see that field's rustdoc
@@ -108,6 +120,7 @@ impl Default for CodexOptions {
             cwd: None,
             run_dir: None,
             timeline: None,
+            progress_tx: None,
             command: String::new(),
         }
     }
@@ -212,24 +225,37 @@ pub fn invoke_exec(prompt: &str, opts: CodexOptions) -> anyhow::Result<(String, 
     let final_text_cb = Arc::clone(&final_text);
     let stats_cb = Arc::clone(&stats);
     let timeline_cb = opts.timeline.clone();
+    let progress_tx_cb = opts.progress_tx.clone();
 
     let callback = Arc::new(move |line: &str| {
-        // PR-7 Commit 2 — same pattern as claude_code.rs. Driver
-        // stream lines emit as `progress` events through the
-        // Timeline; shape-aware consumers parse `chunk` (JSON)
-        // or `raw` (non-JSON leak) from the payload.
+        // Build the progress payload once; reuse for both the
+        // durable timeline emit and the live broadcast tx so
+        // subscribers see the same chunk shape that lands on
+        // disk. Same ordering discipline as claude_code: write
+        // timeline first (P2 fsync barrier), then fan out live.
+        let payload = match serde_json::from_str::<serde_json::Value>(line) {
+            Ok(v) => serde_json::json!({"driver": "codex", "chunk": v}),
+            Err(_) => serde_json::json!({"driver": "codex", "raw": line}),
+        };
+
         if let Some(tl) = &timeline_cb {
-            let payload = match serde_json::from_str::<serde_json::Value>(line) {
-                Ok(v) => serde_json::json!({"driver": "codex", "chunk": v}),
-                Err(_) => serde_json::json!({"driver": "codex", "raw": line}),
-            };
-            if let Err(e) = tl.emit("progress", Some(payload)) {
+            if let Err(e) = tl.emit("progress", Some(payload.clone())) {
                 eprintln!(
                     "[easynet warn] timeline progress emit failed ({e}); \
                      subsequent lines for this run may be lost"
                 );
             }
         }
+
+        // Live-progress fan-out — same hook the claude_code
+        // driver got in slice 32. Without this codex.chat's
+        // stream surface was effectively snapshot+done while
+        // claude.chat streamed properly, a wire-shape
+        // inconsistency the user-real audit caught.
+        if let Some(tx) = &progress_tx_cb {
+            tx(payload);
+        }
+
         handle_stream_line(line, &final_text_cb, &stats_cb, run_start);
     });
 
@@ -466,6 +492,8 @@ pub fn invoke_app_server(prompt: &str, opts: CodexOptions) -> anyhow::Result<Str
     // hits EOF) and keeps the function fully synchronous from the
     // caller's perspective.
     let (tx, rx) = mpsc::channel::<serde_json::Value>();
+    let timeline_for_reader = opts.timeline.clone();
+    let progress_tx_for_reader = opts.progress_tx.clone();
     let reader_handle = std::thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
@@ -476,6 +504,28 @@ pub fn invoke_app_server(prompt: &str, opts: CodexOptions) -> anyhow::Result<Str
             let trimmed = line.trim();
             if !trimmed.is_empty() {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    // Live-progress fan-out for the app-server
+                    // mode. Pre-fix the JSON-RPC framed stream
+                    // went only to the rpc dispatcher inside
+                    // this function — never to a chat
+                    // subscriber. Same payload shape as the
+                    // exec path so consumers don't need to
+                    // distinguish.
+                    let payload = serde_json::json!({
+                        "driver": "codex-app-server",
+                        "chunk": v.clone(),
+                    });
+                    if let Some(tl) = &timeline_for_reader {
+                        if let Err(e) = tl.emit("progress", Some(payload.clone())) {
+                            eprintln!(
+                                "[easynet warn] timeline progress emit failed ({e}); \
+                                 subsequent lines for this run may be lost"
+                            );
+                        }
+                    }
+                    if let Some(p_tx) = &progress_tx_for_reader {
+                        p_tx(payload);
+                    }
                     if tx.send(v).is_err() {
                         break;
                     }
@@ -683,6 +733,7 @@ impl AgentAdapter for CodexExecAdapter {
                 cwd: Some(opts.cwd),
                 run_dir: opts.run_dir,
                 timeline: opts.timeline,
+                progress_tx: opts.progress_tx,
                 // Honor the operator-supplied binary; empty
                 // falls back to `DEFAULT_CODEX_BINARY`.
                 command: opts.command,
@@ -732,6 +783,7 @@ impl AgentAdapter for CodexAppServerAdapter {
                 cwd: Some(opts.cwd),
                 run_dir: opts.run_dir,
                 timeline: opts.timeline,
+                progress_tx: opts.progress_tx,
                 // Honor the operator-supplied binary; empty
                 // falls back to `DEFAULT_CODEX_BINARY`.
                 command: opts.command,
