@@ -225,7 +225,7 @@ fn main() -> anyhow::Result<()> {
             Arc::new(easynet_cli::runtime::execution::discuss::DiscussService::new()),
             Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new()),
             Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
-            Arc::new(Vec::new()),
+            Some(Arc::new(Vec::new())),
         );
         let advertised = reg.list_abilities();
         let chat_ability = advertised
@@ -307,7 +307,7 @@ fn main() -> anyhow::Result<()> {
                 Arc::new(easynet_cli::runtime::execution::discuss::DiscussService::new()),
                 schedule_svc,
                 Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
-                default_loaders,
+                Some(default_loaders),
             ),
             Arc::new(NoopGateway::new()),
         );
@@ -357,7 +357,7 @@ fn main() -> anyhow::Result<()> {
                 Arc::new(easynet_cli::runtime::execution::discuss::DiscussService::new()),
                 Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new()),
                 Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
-                Arc::new(Vec::new()),
+                Some(Arc::new(Vec::new())),
             ),
             Arc::new(NoopGateway::new()),
         );
@@ -399,7 +399,7 @@ fn main() -> anyhow::Result<()> {
                     Arc::new(easynet_cli::runtime::execution::discuss::DiscussService::new()),
                     Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new()),
                     Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
-                    Arc::new(Vec::new()),
+                    Some(Arc::new(Vec::new())),
                 ),
                 Arc::new(NoopGateway::new()),
             );
@@ -464,7 +464,7 @@ fn main() -> anyhow::Result<()> {
                 Arc::new(easynet_cli::runtime::execution::discuss::DiscussService::new()),
                 Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new()),
                 Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
-                Arc::new(Vec::new()),
+                Some(Arc::new(Vec::new())),
             ),
             Arc::new(NoopGateway::new()),
         );
@@ -558,7 +558,7 @@ fn main() -> anyhow::Result<()> {
         Arc::new(easynet_cli::runtime::execution::discuss::DiscussService::new()),
         Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new()),
         Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
-        Arc::new(Vec::new()),
+        Some(Arc::new(Vec::new())),
     );
     let registered_names: std::collections::BTreeSet<String> =
         reg.list_abilities().into_iter().collect();

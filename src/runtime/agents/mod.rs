@@ -349,6 +349,16 @@ pub fn build_registry_with_services(
 /// load failure into the empty-registry case (so a brand-new install
 /// without `~/.easynet/agents.json` still boots).
 ///
+/// `loaders`:
+/// * `Some(vec)` — caller-provided context-loader chain. Tests
+///   pass `Some(Arc::new(Vec::new()))` to get no loaders attached.
+/// * `None` — auto-attach the daemon's default chain
+///   (`user_profile` + `schedule` + `memory`). This is the path
+///   `easynet-daemon` boots through: it called the explicit
+///   variant before slice 35, which made every library / smoke
+///   caller hand-build the chain or get silently empty
+///   `context_used`.
+///
 /// Exists so `bin/easynet-daemon.rs` does not have to reach into the
 /// `pub(crate) registry::agents` module — that module's visibility is
 /// intentionally crate-private.
@@ -358,7 +368,7 @@ pub fn build_registry_for_daemon(
     discuss: Arc<DiscussService>,
     schedule: Arc<ScheduleService>,
     loop_svc: Arc<LoopService>,
-    loaders: Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>,
+    loaders: Option<Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>>,
 ) -> Arc<LocalAbilityRegistry> {
     let agents = match crate::registry::agents::load_agents() {
         Ok(r) => r,
@@ -370,6 +380,9 @@ pub fn build_registry_for_daemon(
             AgentRegistry::default()
         }
     };
+    let loaders = loaders.unwrap_or_else(|| {
+        Arc::new(context_loaders::default_loaders(Arc::clone(&schedule)))
+    });
     build_registry_with_services(
         sessions, perms, discuss, schedule, loop_svc, &agents, loaders,
     )
