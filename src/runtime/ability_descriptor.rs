@@ -188,6 +188,16 @@ pub struct AbilityDescriptor {
     pub visibility: Visibility,
     pub scope_subjects: ScopeRule,
     pub scope_agents: ScopeRule,
+    /// Human-readable description, surfaced as the MCP tool's
+    /// `description` field and on `meta.list_abilities`. Empty
+    /// when unknown — the projection layer falls back to the name
+    /// in that case rather than fabricating one.
+    ///
+    /// Marked `#[serde(default)]` so a descriptor persisted before
+    /// this field existed deserialises to an empty string instead
+    /// of failing the whole load.
+    #[serde(default)]
+    pub description: String,
     /// Free-form provenance string, e.g.
     /// `skill_md:~/.claude/skills/alive-video/SKILL.md`,
     /// `manifest:<agent-root>/abilities/foo.ability.toml`, or
@@ -257,11 +267,20 @@ impl AbilityDescriptor {
             // from any subject. Builders narrow as needed.
             scope_subjects: ScopeRule::Any,
             scope_agents: ScopeRule::Any,
+            description: String::new(),
             source: String::new(),
             schema_summary: AbilitySchemaSummary::default(),
             hints: AbilityHints::default(),
             metadata: HashMap::new(),
         })
+    }
+
+    /// Builder: set the human-readable description in one call.
+    /// Trims surrounding whitespace; the projection layer treats
+    /// an empty string as "fall back to name".
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into().trim().to_string();
+        self
     }
 
     /// Builder: set the source string in one call without exposing
@@ -447,6 +466,7 @@ mod tests {
             visibility: Visibility::Scoped,
             scope_subjects: ScopeRule::OnlyMatching(vec!["operator".into()]),
             scope_agents: ScopeRule::Any,
+            description: "render alive video clips".into(),
             source: "skill_md:/path/to/SKILL.md".into(),
             schema_summary: AbilitySchemaSummary {
                 input: serde_json::json!({"type":"object"}),

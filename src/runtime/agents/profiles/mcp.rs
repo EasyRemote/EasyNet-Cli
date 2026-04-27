@@ -63,6 +63,7 @@ pub fn descriptors_for(
                 .expect("registry-derived names satisfy descriptor invariants")
                 .with_input_schema(m.input_schema.clone())
                 .with_source("kernel:built-in")
+                .with_description(m.description)
         })
         .collect()
 }
@@ -72,14 +73,22 @@ pub fn descriptors_for(
 /// `{name, description, inputSchema}`; we map:
 ///
 ///   name         ← descriptor.name
-///   description  ← first non-empty source / metadata hint, falling
-///                  back to a generic "<namespace> ability" string
+///   description  ← descriptor.description (the real human blurb
+///                  from the registry's metadata table); when empty,
+///                  fall back to the qualified name. The pre-fix
+///                  behaviour stuffed `"<name> (source: <source>)"`
+///                  into description, which made every tool look
+///                  like its description was its provenance string —
+///                  the LLM had to infer purpose from the name
+///                  alone. Surfaced in the audit conversation when
+///                  the MCP probe showed every tool's description as
+///                  `"fs.read (source: kernel:built-in)"`.
 ///   inputSchema  ← descriptor.schema_summary.input (JSON Schema)
 pub fn tool_spec_from_descriptor(
     descriptor: &crate::runtime::ability_descriptor::AbilityDescriptor,
 ) -> serde_json::Value {
-    let description = if !descriptor.source.is_empty() {
-        format!("{} (source: {})", descriptor.name, descriptor.source)
+    let description = if !descriptor.description.is_empty() {
+        descriptor.description.clone()
     } else {
         descriptor.name.clone()
     };
@@ -344,6 +353,7 @@ fn per_agent_workspace_descriptors(
                     // IS the input schema for the descriptor.
                     d.with_input_schema(s.parameters().clone())
                         .with_source(format!("agent:{agent_name}"))
+                        .with_description(s.description())
                 })
         })
         .collect()
@@ -411,14 +421,38 @@ mod tests {
             .unwrap()
             .with_source("kernel:built-in")
             .with_input_schema(serde_json::json!({"type":"object"}))
+            .with_description("List every registered agent on this host.")
     }
 
     #[test]
     fn tool_spec_from_descriptor_emits_mcp_shape() {
         let spec = tool_spec_from_descriptor(&d("fleet.list_agents"));
         assert_eq!(spec["name"], "fleet.list_agents");
-        assert!(spec["description"].as_str().unwrap().contains("kernel:built-in"));
+        // The MCP description is the human blurb from the registry,
+        // NOT the provenance string. Pre-fix this asserted the
+        // opposite — bug pinned upside-down. Updated when the
+        // transform started reading descriptor.description.
+        assert_eq!(
+            spec["description"].as_str().unwrap(),
+            "List every registered agent on this host."
+        );
+        assert!(
+            !spec["description"].as_str().unwrap().contains("kernel:built-in"),
+            "description must not leak the source/provenance string"
+        );
         assert_eq!(spec["inputSchema"]["type"], "object");
+    }
+
+    #[test]
+    fn tool_spec_falls_back_to_name_when_description_is_empty() {
+        // No `.with_description(...)` → empty string → fall back to
+        // qualified name so the MCP wire never carries an empty
+        // description (which Claude Code's tool list rejects).
+        let desc = AbilityDescriptor::new("a.b", "u", Visibility::Public)
+            .unwrap()
+            .with_input_schema(serde_json::json!({"type":"object"}));
+        let spec = tool_spec_from_descriptor(&desc);
+        assert_eq!(spec["description"], "a.b");
     }
 
     #[test]
