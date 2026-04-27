@@ -34,6 +34,48 @@ pub mod policy;
 pub mod mcp;
 pub mod llm;
 
+/// Read `~/.easynet/local-agents.json` and project it into the full
+/// host descriptor catalog. Returns an empty catalog when the file is
+/// missing or malformed (pre-join state, brand-new install) — callers
+/// that need a strict error path should call `local_agents::load`
+/// directly. Pre-join, descriptors anchor on a literal "self" URA
+/// marker so the catalog is still well-formed; once join completes
+/// and a daemon restart picks up the canonical URA, the catalog
+/// re-anchors automatically on the next call.
+///
+/// Single source of truth for the recipe used by both the MCP stdio
+/// server (advertised tool surface) and the in-process
+/// `mcp.bridge.list_tools` ability handler — keeping them on one
+/// helper is what guarantees external and internal MCP callers see
+/// the same catalog.
+pub fn load_host_descriptors() -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
+    let local = crate::persistence::local_agents::load().unwrap_or_default();
+    let host_uri = if local.host_device_agent_uri.is_empty() {
+        "self".to_string()
+    } else {
+        local.host_device_agent_uri.clone()
+    };
+    let consent_uri =
+        crate::persistence::local_agents::lookup_hosted_uri(&local, "consent", "default");
+    let policy_uri =
+        crate::persistence::local_agents::lookup_hosted_uri(&local, "policy", "default");
+    let mcp_uri =
+        crate::persistence::local_agents::lookup_hosted_uri(&local, "mcp", "default");
+    let llm_uris: Vec<(String, String)> = local
+        .hosted_agents
+        .iter()
+        .filter(|e| e.profile == "llm")
+        .map(|e| (e.name.clone(), e.agent_uri.clone()))
+        .collect();
+    all_descriptors_for_host(
+        &host_uri,
+        consent_uri.as_deref(),
+        policy_uri.as_deref(),
+        mcp_uri.as_deref(),
+        &llm_uris,
+    )
+}
+
 /// Aggregate every profile's descriptors into one list, anchored to
 /// the same host's URAs. Used by P4.6's `federation.advertise_abilities`
 /// publisher: the daemon advertises the union of every profile it hosts.

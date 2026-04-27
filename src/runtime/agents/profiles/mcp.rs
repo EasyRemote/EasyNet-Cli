@@ -248,44 +248,7 @@ pub fn build_stdio_server(config: &StdioServerConfig) -> ConfiguredStdioServer {
         Arc::new(crate::runtime::kernel::Kernel::new(gateway));
     let proxy = Arc::new(AbilityProxy::new(kernel));
 
-    let local_agents = crate::persistence::local_agents::load().unwrap_or_default();
-    let host_uri = if local_agents.host_device_agent_uri.is_empty() {
-        // Pre-join state: the descriptors anchor on a literal "self"
-        // marker so the catalog is still well-formed. Once join
-        // completes and a daemon restart picks up the new URA, the
-        // catalog re-anchors to the canonical URA.
-        "self".to_string()
-    } else {
-        local_agents.host_device_agent_uri.clone()
-    };
-    let consent_uri = crate::persistence::local_agents::lookup_hosted_uri(
-        &local_agents,
-        "consent",
-        "default",
-    );
-    let policy_uri = crate::persistence::local_agents::lookup_hosted_uri(
-        &local_agents,
-        "policy",
-        "default",
-    );
-    let mcp_uri = crate::persistence::local_agents::lookup_hosted_uri(
-        &local_agents,
-        "mcp",
-        "default",
-    );
-    let llm_uris: Vec<(String, String)> = local_agents
-        .hosted_agents
-        .iter()
-        .filter(|e| e.profile == "llm")
-        .map(|e| (e.name.clone(), e.agent_uri.clone()))
-        .collect();
-    let descriptors = crate::runtime::agents::profiles::all_descriptors_for_host(
-        &host_uri,
-        consent_uri.as_deref(),
-        policy_uri.as_deref(),
-        mcp_uri.as_deref(),
-        &llm_uris,
-    );
+    let descriptors = crate::runtime::agents::profiles::load_host_descriptors();
 
     let invoker = ProxyLocalInvoker::new(proxy);
     let provider = InvokeMcpProvider::new(invoker, descriptors);
