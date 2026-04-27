@@ -43,6 +43,7 @@ pub mod profiles;
 pub mod schedule_ability;
 pub mod session_ability;
 pub mod skill_ability;
+pub mod skill_install_ability;
 
 use std::sync::Arc;
 
@@ -99,6 +100,7 @@ pub fn build_registry_with_services(
     loop_ability::register(&mut reg, loop_svc);
     chat_ability::register(&mut reg, agents, loaders);
     skill_ability::register(&mut reg);
+    skill_install_ability::register(&mut reg);
     Arc::new(reg)
 }
 
@@ -211,6 +213,9 @@ pub fn description_for(name: &str) -> &'static str {
         "loop.subscribe" => loop_ability::subscribe_description(),
         "loop.cancel" => loop_ability::cancel_description(),
         "fleet.list_abilities" => skill_ability::list_description(),
+        "fleet.skill_install" => skill_install_ability::install_description(),
+        "fleet.skill_remove" => skill_install_ability::remove_description(),
+        "fleet.skill_upgrade" => skill_install_ability::upgrade_description(),
         _ if name.ends_with(".chat") => "Send a chat prompt to the locally-installed agent.",
         _ => "(system ability)",
     }
@@ -245,6 +250,9 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "loop.subscribe" => loop_ability::subscribe_input_schema(),
         "loop.cancel" => loop_ability::cancel_input_schema(),
         "fleet.list_abilities" => skill_ability::list_input_schema(),
+        "fleet.skill_install" => skill_install_ability::install_input_schema(),
+        "fleet.skill_remove" => skill_install_ability::remove_input_schema(),
+        "fleet.skill_upgrade" => skill_install_ability::upgrade_input_schema(),
         _ => serde_json::json!({ "type": "object" }),
     }
 }

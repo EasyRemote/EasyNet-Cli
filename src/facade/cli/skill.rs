@@ -234,31 +234,60 @@ impl SkillSource {
 // ─── install ─────────────────────────────────────────────────────
 
 fn run_install(args: InstallArgs) -> anyhow::Result<()> {
-    let parsed = parse_source_url(&args.source)?;
+    // Thin CLI wrapper around the pure `install_skill` helper so the
+    // ability handler (skill_install_ability.rs / fleet.skill_install)
+    // can call the same code path the operator-facing `easynet skill
+    // install` runs. Keeping `run_install` as a stdout-emitter and
+    // `install_skill` as the typed-result helper means the ability
+    // surface and the CLI surface diverge in I/O only — never in
+    // logic.
+    let record = install_skill(&args.source, &args.agent, args.pin.as_deref())?;
+    emit_install_result(&args, &record)?;
+    Ok(())
+}
+
+/// Pure install helper: fetches the source, atomically moves into
+/// the agent's skills/ dir, writes the install record, and returns
+/// it. No stdout, no CLI dep. Used by `run_install` (CLI) and
+/// `fleet.skill_install` ability (daemon ability dispatch).
+///
+/// Errors:
+///   * agent not registered
+///   * skill already installed (caller should run upgrade/remove first)
+///   * fetch / unpack failures from `fetch_github`
+///
+/// Atomicity: fs::rename within the same filesystem is atomic; if
+/// the temp dir is on a different FS the fall-back copy+remove is
+/// not atomic but is at least all-or-nothing at the directory level.
+pub fn install_skill(
+    source: &str,
+    agent: &str,
+    pin: Option<&str>,
+) -> anyhow::Result<InstallRecord> {
+    let parsed = parse_source_url(source)?;
     let effective = SkillSource {
-        ref_: args.pin.clone().or(parsed.ref_.clone()),
+        ref_: pin.map(|s| s.to_string()).or(parsed.ref_.clone()),
         ..parsed
     };
 
-    // Resolve the agent → its root directory.
     let registry = agents::load_agents()?;
     let entry = registry
         .agents
-        .get(&args.agent)
+        .get(agent)
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "agent '{}' not registered; run `easynet agent list`",
-                args.agent
+                agent
             )
         })?;
     let agent_root = entry
         .root_path
         .clone()
-        .unwrap_or_else(|| config::agents_root().join(&args.agent));
+        .unwrap_or_else(|| config::agents_root().join(agent));
     if !agent_root.exists() {
         anyhow::bail!(
             "agent '{}' has no on-disk root at {}",
-            args.agent,
+            agent,
             agent_root.display()
         );
     }
@@ -266,8 +295,6 @@ fn run_install(args: InstallArgs) -> anyhow::Result<()> {
     let skills_dir = agent_root.join("skills");
     fs::create_dir_all(&skills_dir)?;
 
-    // v1: GitHub source only. Download a tarball for the resolved
-    // ref and extract to a temp dir, then atomically move into place.
     let workdir = std::env::temp_dir().join(format!(
         "easynet-skill-install-{}-{}",
         std::process::id(),
@@ -278,6 +305,7 @@ fn run_install(args: InstallArgs) -> anyhow::Result<()> {
 
     let target_dir = skills_dir.join(&fetch_result.name);
     if target_dir.exists() {
+        let _ = fs::remove_dir_all(&workdir);
         anyhow::bail!(
             "skill '{}' is already installed at {}; run `skill upgrade` or `skill remove` first",
             fetch_result.name,
@@ -285,25 +313,18 @@ fn run_install(args: InstallArgs) -> anyhow::Result<()> {
         );
     }
 
-    // Atomic move — fs::rename within the same filesystem is
-    // atomic; if the temp dir is on a different FS (rare in
-    // practice), fall back to a copy+remove.
     if let Err(_e) = fs::rename(&fetch_result.unpacked, &target_dir) {
         copy_tree(&fetch_result.unpacked, &target_dir)?;
         let _ = fs::remove_dir_all(&fetch_result.unpacked);
     }
     let _ = fs::remove_dir_all(&workdir);
 
-    // Compute the skill tree hash over the installed skill dir
-    // (excluding our own .easynet/ metadata). See
-    // `InstallRecord::skill_tree_hash` for why this is not the Q6
-    // `ability_snapshot.content_hash`.
     let tree_digest = hash_tree(&target_dir, &[".easynet"])?;
     let size_bytes = tree_size(&target_dir, &[".easynet"])?;
 
     let record = InstallRecord {
         name: fetch_result.name.clone(),
-        agent_id: args.agent.clone(),
+        agent_id: agent.to_string(),
         source: SkillSource {
             kind: effective.kind.clone(),
             identifier: effective.identifier.clone(),
@@ -317,9 +338,7 @@ fn run_install(args: InstallArgs) -> anyhow::Result<()> {
         upgrade_available: false,
     };
     write_install_record(&target_dir, &record)?;
-
-    emit_install_result(&args, &record)?;
-    Ok(())
+    Ok(record)
 }
 
 /// Filled by a source adapter (`fetch_github`) after successful
@@ -658,25 +677,42 @@ fn file_mtime_iso(path: &std::path::Path) -> Option<String> {
 // ─── upgrade ─────────────────────────────────────────────────────
 
 fn run_upgrade(args: UpgradeArgs) -> anyhow::Result<()> {
+    let record = upgrade_skill(&args.name, &args.agent, args.to.as_deref())?;
+    emit_upgrade_result(&args, &record)?;
+    Ok(())
+}
+
+/// Pure upgrade helper: backs up the current skill dir, installs the
+/// new ref into place, and returns the new InstallRecord on success.
+/// On failure the backup is restored — the caller never observes a
+/// half-upgraded state. No stdout, no CLI dep. Used by `run_upgrade`
+/// (CLI) and `fleet.skill_upgrade` ability.
+///
+/// `target_ref`:
+///   * `Some("v1.2.3")` — pin to a specific tag/SHA/branch
+///   * `None` — track upstream HEAD (whatever fetch_github resolves)
+pub fn upgrade_skill(
+    name: &str,
+    agent: &str,
+    target_ref: Option<&str>,
+) -> anyhow::Result<InstallRecord> {
     let registry = agents::load_agents()?;
     let entry = registry
         .agents
-        .get(&args.agent)
-        .ok_or_else(|| anyhow::anyhow!("agent '{}' not registered", args.agent))?;
+        .get(agent)
+        .ok_or_else(|| anyhow::anyhow!("agent '{}' not registered", agent))?;
     let agent_root = entry
         .root_path
         .clone()
-        .unwrap_or_else(|| config::agents_root().join(&args.agent));
-    let skill_dir = agent_root.join("skills").join(&args.name);
+        .unwrap_or_else(|| config::agents_root().join(agent));
+    let skill_dir = agent_root.join("skills").join(name);
     let record_path = skill_dir.join(".easynet").join("install.json");
     let existing = read_install_record(&record_path)?;
 
-    let target_ref = args.to.clone().or_else(|| existing.source.ref_.clone());
+    let resolved_target_ref = target_ref
+        .map(|s| s.to_string())
+        .or_else(|| existing.source.ref_.clone());
 
-    // Simplest correct upgrade: remove + re-install. Atomicity of
-    // the overall operation (no corrupted state after a
-    // mid-upgrade crash) is achieved by installing into a temp
-    // location first then swapping.
     let workdir = std::env::temp_dir().join(format!(
         "easynet-skill-upgrade-{}-{}",
         std::process::id(),
@@ -684,13 +720,12 @@ fn run_upgrade(args: UpgradeArgs) -> anyhow::Result<()> {
     ));
     fs::create_dir_all(&workdir)?;
     let mut new_source = existing.source.clone();
-    new_source.ref_ = target_ref.clone();
+    new_source.ref_ = resolved_target_ref.clone();
     let fetch = fetch_github(&new_source, &workdir)?;
 
-    // Move old out of the way, move new into place.
     let backup = agent_root.join("skills").join(format!(
         ".{}-backup-{}",
-        &args.name,
+        name,
         rand_suffix()
     ));
     fs::rename(&skill_dir, &backup)?;
@@ -703,7 +738,7 @@ fn run_upgrade(args: UpgradeArgs) -> anyhow::Result<()> {
         let size_bytes = tree_size(&skill_dir, &[".easynet"])?;
         let rec = InstallRecord {
             name: existing.name.clone(),
-            agent_id: args.agent.clone(),
+            agent_id: agent.to_string(),
             source: SkillSource {
                 kind: existing.source.kind.clone(),
                 identifier: existing.source.identifier.clone(),
@@ -720,13 +755,11 @@ fn run_upgrade(args: UpgradeArgs) -> anyhow::Result<()> {
         Ok(rec)
     })();
 
-    // Commit or rollback.
     match result {
         Ok(rec) => {
             let _ = fs::remove_dir_all(&backup);
             let _ = fs::remove_dir_all(&workdir);
-            emit_upgrade_result(&args, &rec)?;
-            Ok(())
+            Ok(rec)
         }
         Err(e) => {
             let _ = fs::remove_dir_all(&skill_dir);
@@ -740,28 +773,43 @@ fn run_upgrade(args: UpgradeArgs) -> anyhow::Result<()> {
 // ─── remove ──────────────────────────────────────────────────────
 
 fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
-    let registry = agents::load_agents()?;
-    let entry = registry
-        .agents
-        .get(&args.agent)
-        .ok_or_else(|| anyhow::anyhow!("agent '{}' not registered", args.agent))?;
-    let agent_root = entry
-        .root_path
-        .clone()
-        .unwrap_or_else(|| config::agents_root().join(&args.agent));
-    let skill_dir = agent_root.join("skills").join(&args.name);
-    if !skill_dir.exists() {
-        anyhow::bail!(
-            "skill '{}' is not installed on agent '{}'",
-            args.name,
-            args.agent
-        );
-    }
-    fs::remove_dir_all(&skill_dir)?;
+    remove_skill(&args.name, &args.agent)?;
     output::success(&format!(
         "Removed skill '{}' from agent '{}'",
         args.name, args.agent
     ));
+    Ok(())
+}
+
+/// Pure remove helper: deletes the skill directory and returns Ok
+/// when the skill was present and the delete succeeded. No stdout,
+/// no CLI dep. Used by `run_remove` (CLI) and `fleet.skill_remove`
+/// ability.
+///
+/// Errors:
+///   * agent not registered
+///   * skill not installed (caller can choose to treat this as
+///     idempotent at the ability layer if desired; we surface the
+///     distinction here)
+pub fn remove_skill(name: &str, agent: &str) -> anyhow::Result<()> {
+    let registry = agents::load_agents()?;
+    let entry = registry
+        .agents
+        .get(agent)
+        .ok_or_else(|| anyhow::anyhow!("agent '{}' not registered", agent))?;
+    let agent_root = entry
+        .root_path
+        .clone()
+        .unwrap_or_else(|| config::agents_root().join(agent));
+    let skill_dir = agent_root.join("skills").join(name);
+    if !skill_dir.exists() {
+        anyhow::bail!(
+            "skill '{}' is not installed on agent '{}'",
+            name,
+            agent
+        );
+    }
+    fs::remove_dir_all(&skill_dir)?;
     Ok(())
 }
 
