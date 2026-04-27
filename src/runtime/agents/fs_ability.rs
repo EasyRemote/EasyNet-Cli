@@ -240,6 +240,11 @@ fn handler_read(args: Value) -> Result<Value> {
         "size": total_size,
         "truncated": truncated,
         "content_sha256": hex::encode(Sha256::digest(&content)),
+        // Surface mtime so a caller doing a read → modify → write
+        // round trip can pass it as `expected_mtime_ms` to fs.write
+        // / fs.edit and detect concurrent modifications. None when
+        // the underlying filesystem doesn't track mtime.
+        "mtime_ms": file_mtime_ms(&metadata),
         "ability_profile_version": PROFILE_VERSION,
     }))
 }
@@ -298,7 +303,10 @@ fn handler_write(args: Value) -> Result<Value> {
         .get("create_parents")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let mode = args.get("mode").and_then(Value::as_u64).map(|m| m as u32);
+    let explicit_mode = args.get("mode").and_then(Value::as_u64).map(|m| m as u32);
+    let expected_mtime_ms = args
+        .get("expected_mtime_ms")
+        .and_then(Value::as_u64);
 
     let raw = decode_content(&args)?;
 
@@ -311,16 +319,80 @@ fn handler_write(args: Value) -> Result<Value> {
         }
     }
 
-    // Atomic write: write to a temp file in the same directory,
-    // fsync it, then rename. A crash mid-write leaves the prior
-    // content intact. The fsync is the load-bearing step often
-    // missed in "tempfile + rename = atomic" lore: ext4/XFS
-    // are within their rights to present a zero-byte file on
-    // power loss between rename and the deferred data flush.
-    // `sync_data()` issues fdatasync(2) before we hand the
-    // tempfile name to rename(2), closing that window.
+    // Resolve a single layer of symlink so that:
+    //
+    //   1. The temp file lives next to the REAL file (so
+    //      rename(2) stays on one filesystem). Otherwise a
+    //      cross-device rename fails with EXDEV.
+    //   2. We replace the symlink's TARGET, not the symlink
+    //      itself — so `rename(tmp, /etc/foo)` where `/etc/foo`
+    //      is a symlink to `/real/foo` ends up updating
+    //      `/real/foo`'s inode and leaves the symlink at
+    //      `/etc/foo` pointing where it always did.
+    //
+    // We deliberately resolve only ONE level. Recursive
+    // resolution would be a different (and surprising) write
+    // semantics; tests need to match what the operator sees with
+    // `ls -l`. POSIX rename(2) on a symlink path replaces the
+    // symlink itself — not what we want when an agent writes to
+    // a config that happens to be a symlink.
+    let written_path = resolve_symlink_one_level(Path::new(path));
+    let dst: &Path = &written_path;
+
+    // Inspect the existing target to capture its mode (for
+    // permission preservation) and its mtime (for the
+    // expected_mtime_ms guard). One stat covers both.
+    let existing_meta = std::fs::symlink_metadata(dst).ok();
+    // Note: symlink_metadata on a regular file behaves the same
+    // as metadata — it only differs when the path itself IS a
+    // symlink, which we've already resolved away above.
+    if let Some(expected) = expected_mtime_ms {
+        match &existing_meta {
+            Some(m) => {
+                let actual = file_mtime_ms(m);
+                if actual != Some(expected) {
+                    return Err(anyhow!(
+                        "fs.write: expected_mtime_ms {expected} != actual {actual:?} \
+                         (file modified since the caller's last read; refuse rather \
+                         than clobber concurrent edits)"
+                    ));
+                }
+            }
+            None => {
+                // Caller passed expected_mtime_ms against a file
+                // that doesn't exist. Treat as a strict
+                // staleness assertion: no existing file means
+                // the caller's mental model is wrong.
+                return Err(anyhow!(
+                    "fs.write: expected_mtime_ms set but file does not exist"
+                ));
+            }
+        }
+    }
+
+    // Permission decision (Unix only):
+    //   * Caller passed `mode` → use it (caller wins).
+    //   * Otherwise, target exists → preserve its mode.
+    //   * Otherwise, fall back to umask default.
+    #[cfg(unix)]
+    let target_mode: Option<u32> = explicit_mode.or_else(|| {
+        use std::os::unix::fs::PermissionsExt;
+        existing_meta.as_ref().map(|m| m.permissions().mode() & 0o7777)
+    });
+    #[cfg(not(unix))]
+    let target_mode: Option<u32> = explicit_mode;
+
+    // Atomic write: write to a temp file in the same directory
+    // as the resolved target, fsync it, set its mode, then
+    // rename. A crash mid-write leaves the prior content intact.
+    // The fsync before rename is the load-bearing step often
+    // missed in "tempfile + rename = atomic" lore: ext4/XFS are
+    // within their rights to present a zero-byte file on power
+    // loss between rename(2) and the deferred data flush. The
+    // chmod-before-rename means the published file has its
+    // final permissions atomically — there is no instant when
+    // the file exists with a wrong mode.
     use std::io::Write as _;
-    let dst = Path::new(path);
     let parent = dst.parent().unwrap_or_else(|| Path::new("."));
     let file_stem = dst
         .file_name()
@@ -338,7 +410,7 @@ fn handler_write(args: Value) -> Result<Value> {
     }
 
     #[cfg(unix)]
-    if let Some(m) = mode {
+    if let Some(m) = target_mode {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::Permissions::from_mode(m);
         std::fs::set_permissions(&tmp, perms).map_err(|e| {
@@ -349,18 +421,64 @@ fn handler_write(args: Value) -> Result<Value> {
         })?;
     }
     #[cfg(not(unix))]
-    let _ = mode;
+    let _ = target_mode;
 
     std::fs::rename(&tmp, dst).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         anyhow!("fs.write: rename {tmp:?} -> {dst:?}: {e}")
     })?;
 
-    Ok(json!({
+    let mode_preserved = explicit_mode.is_none() && existing_meta.is_some();
+    let mut resp = json!({
         "bytes_written": raw.len(),
         "content_sha256": hex::encode(Sha256::digest(&raw)),
+        "mode_preserved": mode_preserved,
         "ability_profile_version": PROFILE_VERSION,
-    }))
+    });
+    if path != dst.to_string_lossy() {
+        // We followed a symlink. Surface the resolved path so
+        // the caller (and the receipt) record what was actually
+        // written. The original symlink path is implicit in the
+        // request.
+        resp["resolved_target"] = json!(dst.to_string_lossy());
+    }
+    Ok(resp)
+}
+
+/// If `path` is a symlink, return the absolute path of its
+/// immediate target; otherwise return `path` unchanged. Only
+/// one level — recursive resolution would be a different
+/// semantics (matches `readlink`, not `realpath`).
+///
+/// `pub(super)` so the sibling fs.edit ability gets the same
+/// symlink-aware atomic-write semantics without re-implementing
+/// the helper.
+pub(super) fn resolve_symlink_one_level(path: &Path) -> std::path::PathBuf {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.file_type().is_symlink() => {
+            match std::fs::read_link(path) {
+                Ok(link) if link.is_absolute() => link,
+                Ok(link) => {
+                    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+                    parent.join(link)
+                }
+                Err(_) => path.to_path_buf(),
+            }
+        }
+        _ => path.to_path_buf(),
+    }
+}
+
+/// Convert `Metadata::modified()` to milliseconds-since-epoch.
+/// Returns None for filesystems that don't track mtime.
+/// Shared with the fs.edit ability for the expected_mtime_ms
+/// staleness guard.
+pub(super) fn file_mtime_ms(m: &std::fs::Metadata) -> Option<u64> {
+    let modified = m.modified().ok()?;
+    let dur = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    Some(dur.as_millis() as u64)
 }
 
 fn decode_content(args: &Value) -> Result<Vec<u8>> {
@@ -544,8 +662,17 @@ pub fn input_schema_write() -> Value {
                 ]
             },
             "encoding": { "type": "string", "enum": ["base64", "utf8"] },
-            "mode": { "type": "integer", "minimum": 0 },
-            "create_parents": { "type": "boolean" }
+            "mode": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Unix permission bits. When set, the caller wins. When unset and the target file already exists, the receiver preserves the target's existing mode. When unset and the target is new, falls back to umask default."
+            },
+            "create_parents": { "type": "boolean" },
+            "expected_mtime_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Optional staleness guard. Caller asserts the target's mtime (milliseconds since UNIX epoch) matches the value last seen. Receiver stats the file before writing and rejects if the actual mtime differs (or the file does not exist). Stateless equivalent of FileWriteTool's read-before-write check; the caller passes the mtime they captured from the most recent fs.read of the same path."
+            }
         }
     })
 }
@@ -1069,5 +1196,228 @@ mod tests {
         // AXIOM §"Tier 2.5" defines this exact string. A rename
         // here is a protocol break.
         assert_eq!(PROFILE_VERSION, "baseline-locomotion-v1");
+    }
+
+    // ─── fs.write hardening (post-AliveCode audit) ──────────
+
+    #[cfg(unix)]
+    #[test]
+    fn write_preserves_existing_file_mode() {
+        // Caller does NOT pass `mode`. Existing file is 0o600.
+        // After overwrite, mode must STILL be 0o600 — overwriting
+        // a chmod-600 secret with default-umask 0o644 is the
+        // bug we're fixing.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir();
+        let path = dir.join("secret.key");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let resp = handler_write(json!({
+            "path": path.to_str().unwrap(),
+            "content": "new",
+            "encoding": "utf8",
+        }))
+        .unwrap();
+        assert_eq!(resp["mode_preserved"], json!(true));
+
+        let final_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(
+            final_mode, 0o600,
+            "expected 0o600 preserved, got 0o{final_mode:o}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_explicit_mode_wins_over_existing() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir();
+        let path = dir.join("file");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let resp = handler_write(json!({
+            "path": path.to_str().unwrap(),
+            "content": "new",
+            "encoding": "utf8",
+            "mode": 0o644,
+        }))
+        .unwrap();
+        assert_eq!(resp["mode_preserved"], json!(false));
+
+        let final_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(final_mode, 0o644);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn write_through_symlink_keeps_link_intact() {
+        // Setup: real file + symlink pointing at it. Write
+        // through the symlink path. The symlink must SURVIVE,
+        // and its target file must be the one updated.
+        let dir = temp_dir();
+        let real = dir.join("real.txt");
+        let link = dir.join("link.txt");
+        std::fs::write(&real, "old").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            // Non-Unix: skip the symlink test — symlink creation
+            // requires elevated privileges on Windows.
+            std::fs::remove_dir_all(&dir).ok();
+            return;
+        }
+
+        let resp = handler_write(json!({
+            "path": link.to_str().unwrap(),
+            "content": "new",
+            "encoding": "utf8",
+        }))
+        .unwrap();
+
+        // Receipt should report the resolved target.
+        assert!(resp["resolved_target"].is_string());
+
+        // Real file got the new content.
+        let real_content = std::fs::read_to_string(&real).unwrap();
+        assert_eq!(real_content, "new");
+
+        // Symlink still exists and still points at real.
+        let link_meta = std::fs::symlink_metadata(&link).unwrap();
+        assert!(
+            link_meta.file_type().is_symlink(),
+            "link.txt must remain a symlink after write-through"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn write_with_matching_expected_mtime_succeeds() {
+        let dir = temp_dir();
+        let path = dir.join("file.txt");
+        std::fs::write(&path, "first").unwrap();
+        let mtime = file_mtime_ms(&std::fs::metadata(&path).unwrap()).unwrap();
+
+        let resp = handler_write(json!({
+            "path": path.to_str().unwrap(),
+            "content": "second",
+            "encoding": "utf8",
+            "expected_mtime_ms": mtime,
+        }))
+        .unwrap();
+        assert_eq!(resp["bytes_written"], json!(6));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "second");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn write_with_stale_expected_mtime_rejects() {
+        let dir = temp_dir();
+        let path = dir.join("file.txt");
+        std::fs::write(&path, "first").unwrap();
+
+        let err = handler_write(json!({
+            "path": path.to_str().unwrap(),
+            "content": "second",
+            "encoding": "utf8",
+            "expected_mtime_ms": 1u64, // far in the past, will not match
+        }))
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("expected_mtime_ms"),
+            "expected staleness error, got: {err}"
+        );
+        // File MUST be unchanged.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "first");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn write_with_expected_mtime_on_missing_file_rejects() {
+        let dir = temp_dir();
+        let path = dir.join("nope.txt");
+        let err = handler_write(json!({
+            "path": path.to_str().unwrap(),
+            "content": "x",
+            "encoding": "utf8",
+            "expected_mtime_ms": 12345u64,
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("does not exist"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_response_carries_mtime_ms() {
+        let dir = temp_dir();
+        let path = dir.join("file.txt");
+        std::fs::write(&path, "x").unwrap();
+        let resp = handler_read(json!({
+            "path": path.to_str().unwrap(),
+            "encoding": "utf8",
+        }))
+        .unwrap();
+        // mtime_ms is a non-null integer on every filesystem we
+        // run tests on.
+        let mtime = resp["mtime_ms"].as_u64();
+        assert!(mtime.is_some(), "fs.read should expose mtime_ms");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_then_write_mtime_round_trip() {
+        // End-to-end: fs.read captures mtime, fs.write asserts
+        // it. The captured value must be the one that satisfies
+        // the guard.
+        let dir = temp_dir();
+        let path = dir.join("file.txt");
+        std::fs::write(&path, "v1").unwrap();
+
+        let read = handler_read(json!({
+            "path": path.to_str().unwrap(),
+            "encoding": "utf8",
+        }))
+        .unwrap();
+        let mtime = read["mtime_ms"].as_u64().expect("mtime present");
+
+        let write = handler_write(json!({
+            "path": path.to_str().unwrap(),
+            "content": "v2",
+            "encoding": "utf8",
+            "expected_mtime_ms": mtime,
+        }))
+        .unwrap();
+        assert_eq!(write["bytes_written"], json!(2));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ─── helper ────────────────────────────────────────
+
+    #[test]
+    fn resolve_symlink_one_level_returns_target_for_symlink() {
+        let dir = temp_dir();
+        let real = dir.join("r");
+        let link = dir.join("l");
+        std::fs::write(&real, "x").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+            let resolved = resolve_symlink_one_level(&link);
+            assert_eq!(resolved, real);
+        }
+        let resolved_real = resolve_symlink_one_level(&real);
+        assert_eq!(resolved_real, real);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_symlink_one_level_passes_through_non_symlink() {
+        let p = std::path::PathBuf::from("/nonexistent/path/x");
+        assert_eq!(resolve_symlink_one_level(&p), p);
     }
 }

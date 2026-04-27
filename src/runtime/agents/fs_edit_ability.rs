@@ -135,9 +135,50 @@ fn handler(args: Value) -> Result<Value> {
         .get("replace_all")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let expected_mtime_ms = args
+        .get("expected_mtime_ms")
+        .and_then(Value::as_u64);
 
-    let dst = Path::new(&path);
+    // Resolve a single layer of symlink so the tempfile lives
+    // next to the REAL file (rename(2) stays on one filesystem)
+    // and the symlink at `path` keeps pointing to its original
+    // target (we replace the inode the symlink points at, not
+    // the symlink itself). See fs_ability::resolve_symlink_one_level
+    // for the same semantics.
+    let resolved = super::fs_ability::resolve_symlink_one_level(Path::new(&path));
+    let dst: &Path = &resolved;
     let exists = dst.exists();
+
+    // expected_mtime_ms guard — caller asserts the file's mtime
+    // matches what they last saw. If not, refuse rather than
+    // clobber concurrent edits. Same shape as fs.write.
+    if let Some(expected) = expected_mtime_ms {
+        match std::fs::metadata(dst) {
+            Ok(m) => {
+                let actual = super::fs_ability::file_mtime_ms(&m);
+                if actual != Some(expected) {
+                    return Ok(rejection(
+                        "StaleMtime",
+                        "expected_mtime_ms does not match file's current mtime; \
+                         refuse rather than clobber concurrent edits",
+                        Some(json!({
+                            "expected_mtime_ms": expected,
+                            "actual_mtime_ms": actual,
+                        })),
+                        &path,
+                    ));
+                }
+            }
+            Err(_) => {
+                return Ok(rejection(
+                    "StaleMtime",
+                    "expected_mtime_ms set but file does not exist",
+                    None,
+                    &path,
+                ));
+            }
+        }
+    }
 
     // Empty old_string is the create-new-file primitive AND the
     // disallowed empty-search on an existing file. Branch on
@@ -296,10 +337,29 @@ fn rejection(
     })
 }
 
-/// Atomic write: tempfile in the same dir, fdatasync, rename.
-/// Mirrors fs_ability::handler_write so the durability story
-/// is uniform across the two write-bearing abilities.
+/// Atomic write: tempfile in the same dir, fdatasync, mode-
+/// preserve, rename. Mirrors fs_ability::handler_write so the
+/// durability story is uniform across the two write-bearing
+/// abilities. Permissions are preserved when the target file
+/// already exists — overwriting `chmod 600 secret.key` must
+/// not silently downgrade the mode to umask default.
+///
+/// `dst` is expected to be the symlink-resolved final path
+/// (caller does this via fs_ability::resolve_symlink_one_level).
 fn write_atomic(dst: &Path, raw: &[u8]) -> Result<()> {
+    let existing_mode: Option<u32> = {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::metadata(dst)
+                .ok()
+                .map(|m| m.permissions().mode() & 0o7777)
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    };
     let parent = dst.parent().unwrap_or_else(|| Path::new("."));
     let stem = dst
         .file_name()
@@ -314,6 +374,18 @@ fn write_atomic(dst: &Path, raw: &[u8]) -> Result<()> {
         f.sync_data()
             .map_err(|e| anyhow!("fs.edit: fdatasync {tmp:?}: {e}"))?;
     }
+    #[cfg(unix)]
+    if let Some(m) = existing_mode {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(m);
+        std::fs::set_permissions(&tmp, perms).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            anyhow!("fs.edit: chmod tmp {tmp:?}: {e}")
+        })?;
+    }
+    #[cfg(not(unix))]
+    let _ = existing_mode;
+
     std::fs::rename(&tmp, dst).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         anyhow!("fs.edit: rename {tmp:?} -> {dst:?}: {e}")
@@ -355,6 +427,11 @@ pub fn input_schema() -> Value {
             "replace_all": {
                 "type": "boolean",
                 "description": "When true, replace every occurrence; receipt records match_count. When false (default), the call rejects with AmbiguousMatch unless old_string occurs exactly once."
+            },
+            "expected_mtime_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Optional staleness guard. Caller asserts the target's mtime (ms since UNIX epoch) matches the value last seen. Receiver stats the file before editing and rejects with StaleMtime if the actual mtime differs."
             }
         }
     })
@@ -633,6 +710,113 @@ mod tests {
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
         assert_eq!(entries, vec!["a.txt".to_string()]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ─── post-AliveCode-audit hardening ──────────────────────
+
+    #[cfg(unix)]
+    #[test]
+    fn edit_preserves_existing_file_mode() {
+        // chmod 600 → fs.edit replaces a string → mode stays 600.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir();
+        let path = dir.join("secret.conf");
+        std::fs::write(&path, "key=old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let resp = handler(json!({
+            "path": path.to_str().unwrap(),
+            "old_string": "old",
+            "new_string": "new",
+        }))
+        .unwrap();
+        assert_eq!(resp["ok"], json!(true));
+        let final_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(final_mode, 0o600);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn edit_through_symlink_keeps_link_intact() {
+        let dir = temp_dir();
+        let real = dir.join("real.txt");
+        let link = dir.join("link.txt");
+        std::fs::write(&real, "first").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::remove_dir_all(&dir).ok();
+            return;
+        }
+        let resp = handler(json!({
+            "path": link.to_str().unwrap(),
+            "old_string": "first",
+            "new_string": "second",
+        }))
+        .unwrap();
+        assert_eq!(resp["ok"], json!(true));
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "second");
+        let link_meta = std::fs::symlink_metadata(&link).unwrap();
+        assert!(link_meta.file_type().is_symlink());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn edit_with_matching_expected_mtime_succeeds() {
+        let dir = temp_dir();
+        let path = dir.join("a.txt");
+        std::fs::write(&path, "old").unwrap();
+        let mtime = super::super::fs_ability::file_mtime_ms(
+            &std::fs::metadata(&path).unwrap(),
+        )
+        .unwrap();
+        let resp = handler(json!({
+            "path": path.to_str().unwrap(),
+            "old_string": "old",
+            "new_string": "new",
+            "expected_mtime_ms": mtime,
+        }))
+        .unwrap();
+        assert_eq!(resp["ok"], json!(true));
+        assert_eq!(read_file(&path), "new");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn edit_with_stale_expected_mtime_rejects() {
+        let dir = temp_dir();
+        let path = dir.join("a.txt");
+        std::fs::write(&path, "old").unwrap();
+        let resp = handler(json!({
+            "path": path.to_str().unwrap(),
+            "old_string": "old",
+            "new_string": "new",
+            "expected_mtime_ms": 1u64,
+        }))
+        .unwrap();
+        assert_eq!(resp["ok"], json!(false));
+        assert_eq!(resp["code"], json!("StaleMtime"));
+        // File MUST be unchanged.
+        assert_eq!(read_file(&path), "old");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn edit_with_expected_mtime_on_missing_file_rejects() {
+        let dir = temp_dir();
+        let path = dir.join("nope.txt");
+        let resp = handler(json!({
+            "path": path.to_str().unwrap(),
+            "old_string": "x",
+            "new_string": "y",
+            "expected_mtime_ms": 12345u64,
+        }))
+        .unwrap();
+        assert_eq!(resp["code"], json!("StaleMtime"));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

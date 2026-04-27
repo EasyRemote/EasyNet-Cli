@@ -22,3 +22,8 @@ description = "Replacement substring."
 [input_schema.properties.replace_all]
 type = "boolean"
 description = "When true, replace every occurrence; receipt records match_count. When false (default), the call rejects with AmbiguousMatch if old_string occurs more than once. Either pass replace_all=true or include enough surrounding context in old_string to make the match unique."
+
+[input_schema.properties.expected_mtime_ms]
+type = "integer"
+minimum = 0
+description = "Optional staleness guard. Caller asserts the target's mtime (ms since UNIX epoch) matches the value last seen — typically captured from a prior fs.read response's mtime_ms field. Receiver stats the file before editing and rejects with StaleMtime if the actual mtime differs."
