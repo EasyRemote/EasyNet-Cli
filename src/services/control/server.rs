@@ -371,8 +371,7 @@ mod tests {
             AbilityDispatcher, BidiSource, LocalAbilityRegistry, LocalBidiHandler,
             BIDI_CHANNEL_BOUND,
         };
-        use crate::runtime::invocation_target::TargetResolver;
-        use crate::runtime::resolver::LocalNodeResolver;
+        use crate::runtime::invocation_target::{LocalNodeResolver, TargetResolver};
         use crate::runtime::domain::NodeId;
 
         let dir = unique_tmp();
