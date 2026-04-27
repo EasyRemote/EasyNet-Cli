@@ -1248,7 +1248,7 @@ fn real_fleet_pty_session_create_then_close_round_trip() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
     let mut reg = LocalAbilityRegistry::new();
-    super::pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty));
+    super::pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
@@ -1269,6 +1269,87 @@ fn real_fleet_pty_session_create_then_close_round_trip() {
     assert_eq!(close["ack"], json!(true));
 }
 
+// fleet.pty_session_input / _read / _resize are the unary-RPC
+// data plane the EasyNet backend's PTYDriver invokes for the
+// production HTTP-session terminal flow. The structural guard
+// `every_published_ability_has_a_real_invoke_test` asserts each
+// of the three has at least one test in this file; the round-
+// trip below covers all three in one realistic exercise (write
+// a marker via input → drain it via read → resize the window
+// while the session is live), so the registry walker that
+// scans this file's tokens picks up every ability name.
+#[test]
+fn real_fleet_pty_session_input_read_resize_round_trip() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
+    let io = super::pty_io_ability::PtyIoService::new();
+    let mut reg = LocalAbilityRegistry::new();
+    super::pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(io.clone()));
+    super::pty_io_ability::register(&mut reg, Arc::clone(&pty), io);
+    let d = dispatcher_for(Arc::new(reg));
+
+    let create = d
+        .execute_rpc(target("fleet.pty_session_create", json!({})))
+        .expect("pty_session_create");
+    let sid = create["session_id"].as_str().unwrap().to_string();
+
+    // fleet.pty_session_resize — exercise it before any I/O so
+    // the shell starts at the requested geometry.
+    let resize = d
+        .execute_rpc(target(
+            "fleet.pty_session_resize",
+            json!({"session_id": sid.clone(), "cols": 132, "rows": 50}),
+        ))
+        .expect("pty_session_resize");
+    assert_eq!(resize["ack"], json!(true));
+
+    // fleet.pty_session_input — push a printf line that produces
+    // a deterministic stdout marker.
+    use base64::Engine;
+    let input_b64 = base64::engine::general_purpose::STANDARD.encode(
+        b"printf 'EASYNET_REAL_PTY_OK\\n'\n",
+    );
+    let input = d
+        .execute_rpc(target(
+            "fleet.pty_session_input",
+            json!({"session_id": sid.clone(), "data": input_b64}),
+        ))
+        .expect("pty_session_input");
+    assert_eq!(input["ack"], json!(true));
+
+    // fleet.pty_session_read — drain output up to a timeout
+    // until we see the marker. May take a couple of cycles
+    // because the shell's prompt + echoed input land first.
+    let mut accum = String::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline && !accum.contains("EASYNET_REAL_PTY_OK") {
+        let resp = d
+            .execute_rpc(target(
+                "fleet.pty_session_read",
+                json!({"session_id": sid.clone(), "timeout": 1.0}),
+            ))
+            .expect("pty_session_read");
+        if let Some(b64) = resp["output"].as_str() {
+            if !b64.is_empty() {
+                let raw = base64::engine::general_purpose::STANDARD
+                    .decode(b64)
+                    .unwrap_or_default();
+                accum.push_str(&String::from_utf8_lossy(&raw));
+            }
+        }
+    }
+    assert!(
+        accum.contains("EASYNET_REAL_PTY_OK"),
+        "expected printf marker via fleet.pty_session_read; got {accum:?}"
+    );
+
+    // Cleanup.
+    let _ = d.execute_rpc(target(
+        "fleet.pty_session_close",
+        json!({"session_id": sid}),
+    ));
+}
+
 // pty_session_attach spawns three tokio tasks (reader / writer /
 // exit-watcher) inside the bidi handler, so the test needs a
 // live runtime.
@@ -1277,7 +1358,7 @@ async fn real_fleet_pty_session_attach_returns_a_bidi_source() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
     let mut reg = LocalAbilityRegistry::new();
-    super::pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty));
+    super::pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
     super::pty_attach_ability::register(&mut reg, Arc::clone(&pty));
     let d = dispatcher_for(Arc::new(reg));
 

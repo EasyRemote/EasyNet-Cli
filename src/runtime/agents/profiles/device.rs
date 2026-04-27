@@ -136,12 +136,18 @@ mod tests {
         for name in [
             "fs.read", "fs.write", "fs.list", "fs.edit",
             "process.exec", "shell.run", "http.request",
-            // PTY trio — inhabits fleet.* prefix already, but
+            // PTY family — inhabits fleet.* prefix already, but
             // let's pin them here so a future renamer trips this
-            // test instead of silently breaking the catalog.
+            // test instead of silently breaking the catalog. The
+            // unary I/O trio (input/read/resize) lives alongside
+            // attach (bidi) so the backend's PTYDriver — which
+            // talks unary RPC — sees a fully-served wire surface.
             "fleet.pty_session_create",
             "fleet.pty_session_close",
             "fleet.pty_session_attach",
+            "fleet.pty_session_input",
+            "fleet.pty_session_read",
+            "fleet.pty_session_resize",
         ] {
             assert!(
                 owns(name),
