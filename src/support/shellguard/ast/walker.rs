@@ -153,6 +153,9 @@ fn pre_check(cmd: &str) -> Option<&'static str> {
     if has_zsh_equals_expansion(cmd) {
         return Some("Contains zsh =cmd equals expansion");
     }
+    if has_brace_with_quote(cmd) {
+        return Some("Contains brace with quote character (expansion obfuscation)");
+    }
     None
 }
 
@@ -206,6 +209,111 @@ fn has_backslash_whitespace(cmd: &str) -> bool {
 
 fn has_zsh_tilde_bracket(cmd: &str) -> bool {
     cmd.contains("~[")
+}
+
+/// Brace expansion combined with a quote character inside. Bash
+/// constructions like `{a'}',b}` use quoted braces inside brace
+/// expansion context to obfuscate the expansion from regex-based
+/// detection. They expand at runtime to non-trivial token sets
+/// and have no legitimate use in commands a receiver would want
+/// to auto-allow. This detector runs against a quote-masked copy
+/// of the command (so JSON like `'{"k":"v"}'` does NOT trigger),
+/// then looks for `{...quote...}` patterns where the opening `{`
+/// is at unquoted position.
+///
+/// Two-step:
+///   1. mask_braces_in_quoted_contexts replaces `{` characters
+///      that appear inside single- or double-quoted spans with
+///      a space, leaving the surrounding quote chars in place.
+///   2. Search the masked string for `\{[^}]*['"]` — an opening
+///      brace, any non-`}` chars, then a quote. Brace expansion
+///      is impossible inside any quote in bash, so a `{` that
+///      reaches a quote within the same `{...}` span is the
+///      tell.
+fn has_brace_with_quote(cmd: &str) -> bool {
+    if !cmd.contains('{') {
+        return false;
+    }
+    let masked = mask_braces_in_quoted_contexts(cmd);
+    let bytes = masked.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'{' {
+            i += 1;
+            continue;
+        }
+        // Scan from `{` looking for a quote before the matching `}`.
+        let mut j = i + 1;
+        while j < bytes.len() && bytes[j] != b'}' {
+            if bytes[j] == b'\'' || bytes[j] == b'"' {
+                return true;
+            }
+            j += 1;
+        }
+        i = j + 1;
+    }
+    false
+}
+
+/// Replace every `{` byte inside a single- or double-quoted span
+/// with a space, leaving every other character (including the
+/// surrounding quote chars) untouched. Quote-state scanner so
+/// JSON payloads like `curl -d '{"k":"v"}'` don't false-trigger
+/// the brace-with-quote check while still letting truly unquoted
+/// `{a'}',b}` patterns reach it. Mirrors AliveCode's
+/// `maskBracesInQuotedContexts`.
+fn mask_braces_in_quoted_contexts(cmd: &str) -> String {
+    if !cmd.contains('{') {
+        return cmd.to_string();
+    }
+    let mut out = String::with_capacity(cmd.len());
+    let bytes = cmd.as_bytes();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if in_single {
+            // Bash single-quote: no escapes, `'` always closes.
+            if c == b'\'' {
+                in_single = false;
+            }
+            out.push(if c == b'{' { ' ' } else { c as char });
+            i += 1;
+        } else if in_double {
+            // Bash double-quote: `\` escapes `"` and `\\`.
+            if c == b'\\' && i + 1 < bytes.len() {
+                let next = bytes[i + 1];
+                if next == b'"' || next == b'\\' {
+                    out.push(c as char);
+                    out.push(next as char);
+                    i += 2;
+                    continue;
+                }
+            }
+            if c == b'"' {
+                in_double = false;
+            }
+            out.push(if c == b'{' { ' ' } else { c as char });
+            i += 1;
+        } else {
+            // Unquoted: `\` escapes any single next char.
+            if c == b'\\' && i + 1 < bytes.len() {
+                out.push(c as char);
+                out.push(bytes[i + 1] as char);
+                i += 2;
+                continue;
+            }
+            if c == b'\'' {
+                in_single = true;
+            } else if c == b'"' {
+                in_double = true;
+            }
+            out.push(c as char);
+            i += 1;
+        }
+    }
+    out
 }
 
 /// Word-initial `=` followed by an ASCII letter or `_`. "Word-
@@ -1215,5 +1323,71 @@ mod tests {
         // string AliveCode uses, so cross-impl audit events
         // correlate.
         assert_eq!(CMDSUB_PLACEHOLDER, "__CMDSUB_OUTPUT__");
+    }
+
+    // ---- brace-with-quote pre-check (slice 4c) -------------------------
+
+    #[test]
+    fn brace_with_single_quote_inside_rejects() {
+        // Classic obfuscation: `{a'}',b}` — bash expands to
+        // `a} b`. tree-sitter parses inconsistently; the pre-
+        // check catches it.
+        let (reason, _) = must_too_complex("echo {a'}',b}");
+        assert!(reason.contains("brace with quote"));
+    }
+
+    #[test]
+    fn brace_with_double_quote_inside_rejects() {
+        let (reason, _) = must_too_complex(r#"echo {a"}",b}"#);
+        assert!(reason.contains("brace with quote"));
+    }
+
+    #[test]
+    fn json_payload_in_single_quotes_does_not_false_trigger() {
+        // The brace `{` is inside a single-quoted span; the
+        // masker hides it from the detector. The command still
+        // hits Simple-or-TooComplex on other grounds (curl is
+        // fine), but it must NOT be rejected for brace-with-quote.
+        let r = parse_for_security(r#"curl -d '{"k":"v"}'"#);
+        match r {
+            ParseForSecurityResult::Simple { .. } => {}
+            ParseForSecurityResult::TooComplex { reason, .. } => {
+                assert!(
+                    !reason.contains("brace with quote"),
+                    "JSON in single quotes should not trip brace-with-quote: {reason}"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn json_payload_in_double_quotes_does_not_false_trigger() {
+        let r = parse_for_security(r#"curl -d "{\"k\":\"v\"}""#);
+        if let ParseForSecurityResult::TooComplex { reason, .. } = &r {
+            assert!(
+                !reason.contains("brace with quote"),
+                "JSON in double quotes should not trip brace-with-quote: {reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_brace_no_check() {
+        // Fast path: no `{` in the command at all.
+        let cmds = must_simple("ls -la");
+        assert_eq!(cmds[0].argv, vec!["ls", "-la"]);
+    }
+
+    #[test]
+    fn legitimate_brace_expansion_passes_pre_check_but_walker_rejects() {
+        // `{a,b,c}` has no quote chars — pre-check passes. The
+        // tree-sitter walker rejects via brace_expression /
+        // word-with-brace later. Either way, not a brace-with-
+        // quote rejection.
+        let r = parse_for_security("echo {a,b,c}");
+        if let ParseForSecurityResult::TooComplex { reason, .. } = &r {
+            assert!(!reason.contains("brace with quote"));
+        }
     }
 }
