@@ -342,11 +342,64 @@ fn write_codex_skill(ws: &Path) -> anyhow::Result<()> {
 
 // ── Shared ───────────────────────────────────────────────────────────────────
 
+/// Resolve the path of the `easynet` binary that the spawned
+/// MCP server child should run.
+///
+/// Resolution order:
+///   1. `current_exe()` IF the executable is named `easynet`
+///      / `easynet-daemon` (the two binaries that actually
+///      implement `mcp-server`). This is the production case:
+///      the daemon spawned the call, so its own path is the
+///      correct subprocess to relaunch.
+///   2. Else, search `PATH` for a binary literally named
+///      `easynet`. This catches the dev-time scenario where a
+///      maintainer runs `cargo run --bin gen-ability-tomls` or
+///      a smoke binary; current_exe() returns that test
+///      binary's path, but we want claude's `.mcp.json` to
+///      point at the real `easynet` install on the developer's
+///      PATH (typically `/usr/local/bin/easynet` from
+///      `cargo install easynet`).
+///   3. Last resort: the literal string `"easynet"` and let
+///      the spawn-time PATH search find it.
+///
+/// Why we don't use current_exe unconditionally
+/// --------------------------------------------
+/// During this audit conversation, `cargo run --bin
+/// real-user-smoke` corrupted the developer's
+/// `~/.easynet/workspaces/claude/.mcp.json` to point at the
+/// smoke binary. The smoke binary doesn't implement
+/// `mcp-server`, so the next claude.chat invocation that tries
+/// to use an EasyNet MCP tool would fail silently. The check
+/// against the binary's filename eliminates that whole class
+/// of test-side-effect.
 fn resolve_easynet_binary() -> String {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.to_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "easynet".to_string())
+    let current = std::env::current_exe().ok();
+
+    // Step 1: current_exe is `easynet` or `easynet-daemon`.
+    if let Some(p) = current.as_ref() {
+        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+            if stem == "easynet" || stem == "easynet-daemon" {
+                if let Some(s) = p.to_str() {
+                    return s.to_string();
+                }
+            }
+        }
+    }
+
+    // Step 2: search PATH for `easynet`.
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join("easynet");
+            if candidate.is_file() {
+                if let Some(s) = candidate.to_str() {
+                    return s.to_string();
+                }
+            }
+        }
+    }
+
+    // Step 3: last resort — let spawn-time PATH search find it.
+    "easynet".to_string()
 }
 
 /// Build the (command, args, env) tuple for launching the EasyNet MCP
@@ -646,6 +699,38 @@ mod tests {
     /// workspace must launch its MCP server with `--enable-agent-dispatch`
     /// and `--agent <name>` so cross-agent dispatch is always available
     /// from inside an agent.
+    #[test]
+    fn resolve_easynet_binary_does_not_use_test_runner_path() {
+        // During `cargo test`, `current_exe()` returns the path of
+        // the test runner binary (e.g.
+        // `target/debug/deps/easynet_cli-<hash>`), NOT `easynet`.
+        // Pre-fix this leaked into the developer's `.mcp.json`
+        // and broke claude.chat's MCP discovery for any subsequent
+        // call. The resolver must return either an actual
+        // `easynet` path on PATH, or the bare string "easynet"
+        // — never the test runner's path.
+        let resolved = resolve_easynet_binary();
+        let runner = std::env::current_exe().ok();
+        if let Some(r) = runner {
+            let r_str = r.to_string_lossy().to_string();
+            assert_ne!(
+                resolved, r_str,
+                "resolve_easynet_binary returned the test runner's path: {r_str}; \
+                 fix the resolver, see the slice-24 commit message"
+            );
+        }
+        // The resolved path either ends in /easynet or is the
+        // literal "easynet" fallback.
+        let stem = std::path::Path::new(&resolved)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        assert!(
+            stem == "easynet" || stem == "easynet-daemon" || resolved == "easynet",
+            "resolved binary path has unexpected name: {resolved}"
+        );
+    }
+
     #[test]
     fn build_mcp_entry_enables_agent_dispatch_with_name() {
         let (cmd, args, _env) = build_mcp_entry("claude");
