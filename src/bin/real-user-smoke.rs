@@ -281,6 +281,136 @@ fn main() -> anyhow::Result<()> {
             Err(e) => println!("chat errored: {e}"),
         }
 
+        // ── G1-handler reality check ──────────────────────────
+        println!("\n=== claude.audit-test-ability direct invocation ===");
+        // Call the agent's own declared ability THROUGH the dispatcher.
+        // Pre-fix this returned NOT_FOUND. Post-fix the chat
+        // fallback handler dispatches to claude.chat with a
+        // synthesised prompt; the reply comes back as
+        // {result: <agent reply>, fulfilled_by: "agent_chat", ...}.
+        let dispatcher_for_ability = AbilityDispatcher::new(
+            build_registry_for_daemon(
+                Arc::new(easynet_cli::runtime::execution::session::SessionService::new()),
+                Arc::new(easynet_cli::runtime::execution::permission::PermissionService::new()),
+                Arc::new(easynet_cli::runtime::execution::discuss::DiscussService::new()),
+                Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new()),
+                Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
+                Arc::new(Vec::new()),
+            ),
+            Arc::new(NoopGateway::new()),
+        );
+        let direct_result = rt.block_on(async {
+            tokio::task::spawn_blocking(move || {
+                dispatcher_for_ability.execute_rpc(InvocationTarget {
+                    scope: TargetScope::Local,
+                    ability: "claude.audit-test-ability".to_string(),
+                    normalized_args: json!({}),
+                    call_mode: CallMode::Rpc,
+                })
+            })
+            .await
+            .unwrap()
+        });
+        match direct_result {
+            Ok(v) => {
+                println!("Direct ability call SUCCESS:");
+                println!("{}", serde_json::to_string_pretty(&v)?);
+            }
+            Err(e) => {
+                println!("Direct ability call FAILED: {e}");
+            }
+        }
+
+        // ── streaming reality check ───────────────────────────
+        println!("\n=== claude.chat STREAM mode (frame-by-frame) ===");
+        let dispatcher_for_stream = AbilityDispatcher::new(
+            build_registry_for_daemon(
+                Arc::new(easynet_cli::runtime::execution::session::SessionService::new()),
+                Arc::new(easynet_cli::runtime::execution::permission::PermissionService::new()),
+                Arc::new(easynet_cli::runtime::execution::discuss::DiscussService::new()),
+                Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new()),
+                Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
+                Arc::new(Vec::new()),
+            ),
+            Arc::new(NoopGateway::new()),
+        );
+        let stream_target = InvocationTarget {
+            scope: TargetScope::Local,
+            ability: chat_ability.clone(),
+            normalized_args: json!({
+                "prompt": "Count from 1 to 5, one number per line.",
+                "stream": true,
+            }),
+            call_mode: CallMode::Stream,
+        };
+        let stream_source = dispatcher_for_stream
+            .execute_stream(stream_target)
+            .expect("execute_stream");
+
+        // The StreamSource enum has SnapshotThenLive(snapshot, rx)
+        // and Live(rx). Pull frames in order, print each with a
+        // wallclock delta from start.
+        use easynet_cli::runtime::ability_dispatch::StreamSource;
+        let stream_start = std::time::Instant::now();
+        let mut frame_seq: u64 = 0;
+        match stream_source {
+            StreamSource::SnapshotThenLive(snapshot, mut rx) => {
+                println!("Mode: SnapshotThenLive");
+                println!("Snapshot frames ({}):", snapshot.len());
+                for v in &snapshot {
+                    let elapsed = stream_start.elapsed().as_millis();
+                    frame_seq += 1;
+                    let kind = v.get("type").and_then(|t| t.as_str()).unwrap_or("?");
+                    println!("  [t+{elapsed:>5}ms #{frame_seq:>2}] type={kind}");
+                }
+                println!("Live frames (subscribing to broadcast channel):");
+                rt.block_on(async {
+                    loop {
+                        match rx.recv().await {
+                            Ok(frame) => {
+                                let elapsed = stream_start.elapsed().as_millis();
+                                frame_seq += 1;
+                                let kind = frame
+                                    .get("type")
+                                    .and_then(|t| t.as_str())
+                                    .unwrap_or("?");
+                                let preview = match kind {
+                                    "done" => {
+                                        let reply = frame
+                                            .get("reply")
+                                            .and_then(|r| r.as_str())
+                                            .unwrap_or("");
+                                        format!(
+                                            "type=done reply={:?} ({}b)",
+                                            &reply.chars().take(40).collect::<String>(),
+                                            reply.len()
+                                        )
+                                    }
+                                    other => format!("type={other}"),
+                                };
+                                println!("  [t+{elapsed:>5}ms #{frame_seq:>2}] {preview}");
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                println!("  (channel closed)");
+                                break;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                println!("  (lagged: missed {n} frames)");
+                            }
+                        }
+                    }
+                });
+            }
+            StreamSource::Live(_rx) => {
+                println!("Mode: Live (no snapshot)");
+            }
+            StreamSource::Snapshot(snap) => {
+                println!("Mode: Snapshot-only ({} frames)", snap.len());
+            }
+        }
+        println!("Stream finished after {} frames in {}ms",
+            frame_seq, stream_start.elapsed().as_millis());
+
         // Cleanup the mission dir. We did NOT mutate agents.json
         // (we used the developer's existing agent row), so nothing
         // to undo there.

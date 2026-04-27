@@ -177,6 +177,85 @@ pub fn register_for_agent(
         Arc::new(move |args: Value| handler(&rpc_agent, &rpc_entry, &rpc_loaders, args)),
     );
 
+    // For every OTHER ability the agent declares via its
+    // workspace `<root>/abilities/*.toml`, register a fallback
+    // handler that dispatches back to this agent's chat with a
+    // synthesised prompt instructing it to fulfill the named
+    // ability with the given args. Without this, an agent could
+    // declare abilities (which surface in MCP catalog and
+    // skills_loaded) but the LLM running inside has no way to
+    // invoke them: the dispatcher returns NOT_FOUND for every
+    // <agent>.<ability> name that isn't `<agent>.chat`.
+    //
+    // The fallback handler is intentionally simple: \"act as
+    // ability X with args Y\" — the agent's own CLAUDE.md /
+    // SKILL.md define what fulfilling the ability means; this
+    // function just routes the call.
+    let other_abilities = crate::runtime::abilities::abilities_for(&agent_name, &entry);
+    let chat_name = ability.clone();
+    for spec in other_abilities {
+        if spec.name() == chat_name {
+            continue;
+        }
+        let ability_name = spec.name().to_string();
+        let agent_for_handler = agent_name.clone();
+        let entry_for_handler = entry.clone();
+        let loaders_for_handler = Arc::clone(&loaders);
+        let bare_ability = ability_name
+            .strip_prefix(&format!("{agent_name}."))
+            .unwrap_or(&ability_name)
+            .to_string();
+        reg.register_rpc(
+            &ability_name,
+            Arc::new(move |args: Value| {
+                let prompt = format!(
+                    "Fulfill your declared ability `{bare}` with the following arguments \
+                     (JSON, may be empty object): {args}\n\n\
+                     Reply with the ability's result as plain text — no preamble, no markdown \
+                     fence, no commentary. If the arguments are invalid for this ability, \
+                     reply with a single line starting with `error: `.",
+                    bare = bare_ability,
+                    args = serde_json::to_string(&args).unwrap_or_else(|_| "{}".to_string()),
+                );
+                let chat_args = serde_json::json!({
+                    "prompt": prompt,
+                    "stream": false,
+                });
+                handler(
+                    &agent_for_handler,
+                    &entry_for_handler,
+                    &loaders_for_handler,
+                    chat_args,
+                )
+                .map(|chat_resp| {
+                    // Pull the reply text out of the chat
+                    // response and return it as the ability's
+                    // result. The MCP bridge expects the result
+                    // value verbatim; wrapping in {result: ...}
+                    // keeps it inspectable. Keep usage so the
+                    // caller can see this WAS an LLM
+                    // fulfillment, not a synchronous handler.
+                    let reply = chat_resp
+                        .get("reply")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    let usage = chat_resp.get("usage").cloned().unwrap_or(serde_json::Value::Null);
+                    let elapsed_ms = chat_resp
+                        .get("elapsed_ms")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    serde_json::json!({
+                        "result": reply,
+                        "fulfilled_by": "agent_chat",
+                        "agent": agent_for_handler,
+                        "usage": usage,
+                        "elapsed_ms": elapsed_ms,
+                    })
+                })
+            }),
+        );
+    }
+
     // Stream: emit framed events. v1 ships a Snapshot variant
     // (eagerly materialised list) because the underlying LLM driver
     // is synchronous; once the driver gains an async token stream
