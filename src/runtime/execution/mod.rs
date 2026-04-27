@@ -45,6 +45,7 @@
 
 pub mod discuss;
 pub mod loop_instance;
+pub mod mcp_client;
 pub mod permission;
 pub mod pty;
 pub mod schedule;

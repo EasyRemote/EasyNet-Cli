@@ -46,6 +46,7 @@ pub mod discuss_ability;
 pub mod fleet_list_agents_ability;
 pub mod loop_ability;
 pub mod mcp_bridge_ability;
+pub mod mcp_client_ability;
 pub mod meta_ability;
 pub mod network_health_ability;
 pub mod policy_ability;
@@ -140,14 +141,13 @@ pub fn build_registry_with_services(
     // registry being built, but the registry isn't yet wrapped in
     // an `Arc` at registration time. Set the lock once after
     // `Arc::new(reg)` completes; the closure's `get()` returns
-    // the populated handle on every subsequent call. Same shape
-    // admin_status_ability uses elsewhere in this file.
-    // Shared OnceLock that both edge bridges (mcp.bridge.call_tool
-    // and a2a.bridge.send_task) read through to dispatch back into
-    // the local registry. Built here, populated post-Arc::new(reg)
-    // below. One lock is enough — both bridges target the same
-    // local registry; doubling up would waste an allocation per
-    // boot for no gain.
+    // the populated handle on every subsequent call.
+    //
+    // One shared lock is enough — both mcp.bridge.call_tool and
+    // a2a.bridge.send_task target the same local registry;
+    // doubling up would waste an allocation per boot for no gain.
+    // Same OnceLock shape admin_status_ability uses elsewhere in
+    // this file.
     let local_registry_handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>> =
         Arc::new(std::sync::OnceLock::new());
     mcp_bridge_ability::register(
@@ -178,6 +178,37 @@ pub fn build_registry_with_services(
     // unset; the handler returns ok:false on every call, which is
     // what the unit tests verify.
     a2a_client_ability::register(&mut reg);
+    // mcp.client.{list,call} — outbound MCP. Boots an
+    // McpClientService from ~/.easynet/mcp_clients.json (missing
+    // file → empty service, no upstreams). Each upstream MCP
+    // server is spawned lazily on first call; subsequent calls
+    // reuse the live connection. Parse errors at boot bubble up
+    // because a malformed file is an operator typo, not a "no
+    // upstreams" condition.
+    let mcp_clients_path = std::env::var("EASYNET_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::var("HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                .join(".easynet")
+        })
+        .join("mcp_clients.json");
+    let mcp_client_svc = match crate::runtime::execution::mcp_client::McpClientService::from_path(
+        &mcp_clients_path,
+    ) {
+        Ok(svc) => Arc::new(svc),
+        Err(e) => {
+            eprintln!(
+                "system::build_registry_with_services: failed to load {}: {e}; \
+                 falling back to empty MCP client service (no outbound MCP \
+                 servers configured)",
+                mcp_clients_path.display()
+            );
+            Arc::new(crate::runtime::execution::mcp_client::McpClientService::new())
+        }
+    };
+    mcp_client_ability::register(&mut reg, mcp_client_svc);
     // fleet.list_agents — operational view of registered LLM
     // sub-agents. Cheap-row projection (name, runtime, model, label);
     // for the protocol agent-card view see a2a.bridge.list_skills.
@@ -313,6 +344,8 @@ pub fn description_for(name: &str) -> &'static str {
         "a2a.bridge.list_skills" => a2a_bridge_ability::list_skills_description(),
         "a2a.bridge.send_task" => a2a_bridge_ability::send_task_description(),
         "a2a.client.send_task" => a2a_client_ability::send_task_description(),
+        "mcp.client.list" => mcp_client_ability::list_description(),
+        "mcp.client.call" => mcp_client_ability::call_description(),
         "fleet.list_agents" => fleet_list_agents_ability::list_agents_description(),
         "meta.describe" => meta_ability::describe_description(),
         "meta.list_abilities" => meta_ability::list_abilities_description(),
@@ -366,6 +399,8 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "a2a.bridge.list_skills" => a2a_bridge_ability::list_skills_input_schema(),
         "a2a.bridge.send_task" => a2a_bridge_ability::send_task_input_schema(),
         "a2a.client.send_task" => a2a_client_ability::send_task_input_schema(),
+        "mcp.client.list" => mcp_client_ability::list_input_schema(),
+        "mcp.client.call" => mcp_client_ability::call_input_schema(),
         "fleet.list_agents" => fleet_list_agents_ability::list_agents_input_schema(),
         "meta.describe" => meta_ability::describe_input_schema(),
         "meta.list_abilities" => meta_ability::list_abilities_input_schema(),
@@ -416,6 +451,10 @@ mod tests {
             "meta.describe"
             | "meta.list_abilities"
             | "mcp.bridge.list_tools"
+            // mcp.client.list — aggregate read of every configured
+            // upstream MCP server's tools/list. No mutation;
+            // belongs with the introspection-layer reads.
+            | "mcp.client.list"
             | "a2a.bridge.list_skills"
             | "fleet.list_agents"
             | "fleet.list_abilities"
@@ -445,6 +484,10 @@ mod tests {
             // with the operational verbs because the call surface
             // IS the work.
             | "mcp.bridge.call_tool"
+            // mcp.client.call — outbound mirror of bridge.call_tool.
+            // Same operational classification: dispatching
+            // delegates side effects to the upstream tool.
+            | "mcp.client.call"
             | "a2a.bridge.send_task"
             // a2a.client.send_task — outbound mirror of bridge.send_task.
             // Same operational classification: dispatching crosses
