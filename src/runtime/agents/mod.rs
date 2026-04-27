@@ -316,6 +316,114 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
 mod tests {
     use super::*;
 
+    /// Semantic layer for an ability. See
+    /// docs/rfc/AXON-RFC-001-ability-layers.md for the contract each
+    /// layer enforces. The classifier below + the
+    /// `ability_layer_classification_is_complete` test together
+    /// guarantee every published name lands in exactly one layer.
+    #[derive(Debug, PartialEq, Eq)]
+    enum AbilityLayer {
+        /// Pure, side-effect free, deterministic for a catalog snapshot.
+        Introspection,
+        /// Pure decision functions (no mutation of catalog state).
+        /// `consent.decide` is the documented exception: write-only-
+        /// after-decision.
+        Control,
+        /// Derived state only; never triggers behaviour elsewhere.
+        Observation,
+        /// Per-feature business verbs (chat, schedule, loop, discuss,
+        /// session, skill management). Not subject to the
+        /// layer-purity rules; they ARE the work.
+        Operational,
+    }
+
+    /// Classify a published ability name by the §"three layers"
+    /// model. A name with no match returns `None` and the
+    /// completeness test below fails — forcing the author of any
+    /// new ability to either pick a layer or update this table.
+    fn classify_ability(name: &str) -> Option<AbilityLayer> {
+        // Per-agent chat handlers are operational by definition.
+        if name.ends_with(".chat") {
+            return Some(AbilityLayer::Operational);
+        }
+        match name {
+            // ── Introspection ───────────────────────────────────
+            "meta.describe"
+            | "meta.list_abilities"
+            | "mcp.bridge.list_tools"
+            | "a2a.bridge.list_skills"
+            | "fleet.list_agents"
+            | "fleet.list_abilities"
+            | "fleet.list_sessions"
+            | "consent.list_pending"
+            | "schedule.list"
+            | "loop.status" => Some(AbilityLayer::Introspection),
+            // ── Control / decision ──────────────────────────────
+            "policy.evaluate"
+            | "policy.simulate"
+            | "consent.decide"
+            | "consent.subscribe" => Some(AbilityLayer::Control),
+            // ── Observation ─────────────────────────────────────
+            "observe.health"
+            | "observe.network_health"
+            | "admin.status" => Some(AbilityLayer::Observation),
+            // ── Operational (per-feature business verbs) ────────
+            "fleet.attach_session"
+            | "fleet.start_agent"
+            | "fleet.stop_agent"
+            | "fleet.skill_install"
+            | "fleet.skill_remove"
+            | "fleet.skill_upgrade"
+            | "discuss.create"
+            | "discuss.post"
+            | "discuss.subscribe"
+            | "schedule.add"
+            | "schedule.remove"
+            | "schedule.enable"
+            | "loop.create"
+            | "loop.subscribe"
+            | "loop.cancel" => Some(AbilityLayer::Operational),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn ability_layer_classification_is_complete() {
+        // The audit story (RFC docs/AXON-RFC-001-ability-layers.md)
+        // says every published ability MUST belong to exactly one
+        // semantic layer. A new ability that lands without a
+        // classify_ability arm trips this test, forcing the author
+        // to either pick a layer or amend the layer doc.
+        let names = published_ability_names();
+        let unclassified: Vec<String> = names
+            .iter()
+            .filter(|n| classify_ability(n).is_none())
+            .cloned()
+            .collect();
+        assert!(
+            unclassified.is_empty(),
+            "abilities missing a layer classification: {unclassified:?}\n\
+             Add an arm to classify_ability() in src/runtime/agents/mod.rs \
+             and update docs/rfc/AXON-RFC-001-ability-layers.md."
+        );
+    }
+
+    #[test]
+    fn introspection_layer_includes_all_three_discovery_planes() {
+        // The discovery-planes invariant from
+        // docs/rfc/AXON-RFC-001-discovery-planes.md: meta.list_abilities,
+        // mcp.bridge.list_tools, and a2a.bridge.list_skills MUST all
+        // classify as Introspection. A regression that moved one of
+        // them to a different layer would fragment the discovery story.
+        for name in ["meta.list_abilities", "mcp.bridge.list_tools", "a2a.bridge.list_skills"] {
+            assert_eq!(
+                classify_ability(name),
+                Some(AbilityLayer::Introspection),
+                "{name} must classify as Introspection (discovery plane)"
+            );
+        }
+    }
+
     #[test]
     fn build_registry_is_non_empty_and_includes_ping() {
         // Every v1 daemon publishes at least `observe.health` so a
