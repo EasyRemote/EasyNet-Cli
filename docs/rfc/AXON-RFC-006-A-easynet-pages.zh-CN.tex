@@ -1,0 +1,1206 @@
+\documentclass[11pt,a4paper]{article}
+
+% ──────────────────────────────────────────────────────────────────────────
+% AXON-RFC-006 附录 A —— easynet.pages（中文版）
+% Status: 草稿 v0.1（技术设计 + 实现计划）
+% Build:  xelatex AXON-RFC-006-A-easynet-pages.zh-CN.tex
+% Companion: AXON-RFC-006-stateful-easynet.tex（最小规范核）
+% ──────────────────────────────────────────────────────────────────────────
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{xltabular}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{tcolorbox}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{parskip}
+\usepackage{xspace}
+
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setCJKmainfont{PingFang SC}[
+    BoldFont={PingFang SC Semibold},
+    ItalicFont={PingFang SC Light}
+]
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small AXON-RFC-006 附录 A}
+\fancyhead[R]{\small easynet.pages —— 技术设计}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\titleformat{\section}{\Large\bfseries\color{black!85}}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\large\bfseries\color{black!75}}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{black!70}}{\thesubsubsection}{0.5em}{}
+
+\definecolor{normativecolor}{RGB}{180,30,30}
+\definecolor{derivedcolor}{RGB}{30,90,180}
+\definecolor{deferredcolor}{RGB}{120,90,30}
+\definecolor{codebg}{RGB}{245,245,248}
+\definecolor{codeborder}{RGB}{210,210,220}
+
+\newcommand{\normsv}{\textcolor{normativecolor}{\textbf{[规范性]}}\xspace}
+\newcommand{\derived}{\textcolor{derivedcolor}{\textbf{[推论]}}\xspace}
+\newcommand{\deferred}{\textcolor{deferredcolor}{\textbf{[暂缓]}}\xspace}
+
+\lstdefinestyle{ealstyle}{
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small,
+    frame=single,
+    rulecolor=\color{codeborder},
+    breaklines=true,
+    showstringspaces=false,
+    keywordstyle=\color{blue!70!black}\bfseries,
+    commentstyle=\color{green!40!black}\itshape,
+    stringstyle=\color{red!60!black},
+    morekeywords={state_type,state_key,canonical,operational,transition,receipt,view,principal,agent,owner_signature,attempt_id,transition_id,fn,let,struct,impl,pub,async,await},
+    columns=fullflexible,
+    keepspaces=true,
+    aboveskip=0.6em,
+    belowskip=0.6em,
+}
+\lstset{style=ealstyle}
+
+\newtheorem{theorem}{定理}
+\newtheorem{lemma}[theorem]{引理}
+\newtheorem{corollary}[theorem]{推论}
+\theoremstyle{definition}
+\newtheorem{definition}{定义}
+
+\newtcolorbox{invariant}[1][不变量]{
+    colback=red!4!white,
+    colframe=red!50!black,
+    fonttitle=\bfseries,
+    title={不变量 --- #1},
+    sharp corners=south,
+    boxrule=0.6pt,
+}
+\newtcolorbox{notebox}[1][]{
+    colback=blue!4!white,
+    colframe=blue!50!black,
+    fonttitle=\bfseries,
+    title={说明},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+\newtcolorbox{warningbox}[1][]{
+    colback=orange!6!white,
+    colframe=orange!70!black,
+    fonttitle=\bfseries,
+    title={过渡期偏差},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+\newtcolorbox{decisionbox}[1][]{
+    colback=purple!4!white,
+    colframe=purple!60!black,
+    fonttitle=\bfseries,
+    title={待决策},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+
+\title{
+    \vspace{-2em}
+    \textbf{\Large AXON-RFC-006 附录 A：easynet.pages}\\[0.3em]
+    \large 有状态 EasyNet 第一个参考状态机的技术设计、算法与实现计划
+}
+\author{
+    胡思蓝 \\ \small 新加坡国立大学
+}
+\date{草稿 v0.1，\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+本附录规定 \texttt{easynet.pages} —— 这是能完整调用 AXON-RFC-006 主文
+所定义全部规范原语的最简单 \texttt{state\_type}。一个 page 是一个
+\emph{双视图状态对象}：它在主文 \S1--7 的规则下承载身份、规范内容
+与版本号，并通过 \texttt{human\_view}（面向浏览器的 HTML 渲染）与
+\texttt{agent\_view}（包含能力面、EAL 提示与回执历史指针的结构化、
+机器可执行渲染）同时暴露其状态。本附录覆盖四层细节。第一，状态机：
+字段集、四种状态以及七个 transition。第二，每个 transition 参数与
+回执体的 wire schema。第三，算法：canonical projection、JCS 规范化、
+hash、ETag、乐观并发与视图投影，每条都附字节级 worked example。
+第四，实现计划：在 \texttt{EasyNet-Cli} 内的模块拓扑、五个 PR 切片
+（P-A1 至 P-A5），以及一个端到端的 worked example——跟踪一个 page
+从首次 \texttt{pages.create}，经 Hub 渲染的 HTML 响应，直到 agent 通过
+URA 拉取的全过程。附录 B（\texttt{easynet.web\_app} 压力测试）以及主文
+13 条 \texttt{TR-INV-*} 不变量在文中被引用但不被重新定义；本文是一份
+\emph{参考实现规约}，不是协议的再推导。
+\end{abstract}
+
+\tableofcontents
+\vspace{1em}
+\hrule
+\vspace{1em}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{目标与非目标}
+\label{sec:goals}
+
+\subsection{目标}
+
+\normsv{} 本附录规定的 \texttt{easynet.pages} 实现需要：
+
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.25em]
+    \item 满足 AXON-RFC-006 主文（\S1--\S7）所有 \normsv{} 条款，
+    并完全支撑配套附录 B 中适用的每一条 \texttt{TR-INV-*}。
+    \item 提供四个规范 transition（\texttt{create}、\texttt{publish}、
+    \texttt{update}、\texttt{archive}、\texttt{delete}）以及两个查询能力
+    （\texttt{get}、\texttt{list}）。
+    \item 将 page 内容存为内容寻址的 blob，以 SHA-256 为键，
+    永远不嵌入规范状态（CSH-INV-2）。
+    \item 为每一个 Published page 同时暴露 \texttt{human\_view}
+    （从内容 blob 渲染的 HTML）与 \texttt{agent\_view}（包含规范字段、
+    能力面、EAL 提示与回执历史指针的类型化 JSON 文档）。
+    \item 可以以五个 PR 大小的切片（\S\ref{sec:impl-plan}）端到端落地。
+\end{enumerate}
+
+\subsection{非目标}
+
+\derived{} 以下事项明确不在本附录范围内：
+
+\begin{itemize}[leftmargin=2.2em,itemsep=0.2em]
+    \item \textbf{webapp}（长任务、运行时叠加压力测试），由附录 B 覆盖。
+    \item \textbf{跨 realm 或跨节点的 Hub}。Phase 1 仅交付一个
+    单节点 Hub，反向代理同一守护进程拥有的 pages。多 realm Hub
+    暂缓至 RFC-006-A v2。
+    \item \textbf{已认证人类调用方}（\texttt{principal/human-auth}）。
+    Phase 1 仅支持 \texttt{principal/human-anon}。
+    \item \textbf{超出固定默认值的 HTML 净化管线与 CSP 策略}。Phase 1
+    完全信任 owner 编写的 HTML，Hub 用单一硬编码 CSP。净化/模板层留给
+    RFC-006-A v2。
+    \item \textbf{TLS 终结、限流、多实例 Hub 集群}。Hub 是绑定单端口
+    的 axum 进程；生产级硬化属于运维工作，不属于协议工作。
+\end{itemize}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{与规范核的关系}
+\label{sec:relation}
+
+本附录是 AXON-RFC-006 主文规范核的一个\emph{参考实现}。它不重新定义
+任何原语。映射如下：
+
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\linewidth}{l X}
+\toprule
+\textbf{主文条款} & \textbf{本附录的实例化} \\
+\midrule
+\S1 状态对象               & \S\ref{sec:state-machine}：pages 的 state\_type、key、生命周期。 \\
+\S1.5 SO-INV-1 不可变      & state\_key (realm, owner, slug) 在 create 之后不可变。 \\
+\S2 规范状态哈希           & \S\ref{sec:algorithms}：显式 projection $\pi$、JCS、SHA-256 例子。 \\
+\S2 CSH-INV-2 内容外置     & \S\ref{sec:storage}：blob 布局；规范状态只持 \texttt{content\_hash}。 \\
+\S3 回执类                 & \S\ref{sec:wire-schemas}：每个 transition 的回执体。 \\
+\S3 RC-INV-2 乐观并发      & \S\ref{sec:algo-concurrency}：\texttt{ETag} = 规范哈希前 16 字节。 \\
+\S4 Transition Ability     & \S\ref{sec:wire-schemas}：每个 page transition 的 \texttt{transition\_id}。 \\
+\S5 权限 + 委托            & Phase 1：owner\_agent 本地签名；pages 不需要委托执行。 \\
+\S5 principal/ caller      & \S\ref{sec:hub}：Hub 按请求铸造 \texttt{human-anon} URI。 \\
+\S6 视图投影               & \S\ref{sec:algo-views}：human\_view 与 agent\_view 算法。 \\
+\S7 回执索引               & \S\ref{sec:storage}：除 receipt\_id 之外的 state\_key 索引。 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textbf{阅读约定。} 本附录中带 \normsv{} 标签的语句仅对 \texttt{pages}
+实现有约束力；它不提议新的协议级规则。本文看似在扩展协议时，是在
+对主文中已经 \normsv{} 的条款做实例化。
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{状态机}
+\label{sec:state-machine}
+
+\subsection{state\_type 与 state\_key}
+
+\normsv{}
+
+\begin{lstlisting}
+state_type:  easynet.page
+
+state_key:
+    (realm: string, owner_agent_uri: string, slug: string)
+
+  realm           逻辑命名空间。Phase 1：每个守护进程一个 realm，
+                  在配置中命名（默认 "default"）。
+  owner_agent_uri 规范权限。即为本 page 每个 CanonicalReceipt
+                  签名的 agent。按主文 §1.3 嵌在 key 内（不是字段）。
+  slug            owner 命名空间内的 kebab-case 标识符
+                  (^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$)。
+
+URA 形态：
+  easynet:///r/<realm>/agent/<owner>/page/<slug>
+
+ABNF (slug):
+  slug      = head [ *body tail ]
+  head      = ALPHA / DIGIT
+  body      = ALPHA / DIGIT / "-"
+  tail      = ALPHA / DIGIT
+  ALPHA     = %x61-7A         ; 仅小写 ASCII 字母
+\end{lstlisting}
+
+slug 语法刻意拒绝大写、点、斜杠以及国际化字符。两条理由：slug 出现
+在不再做转义的 URL 中；大小写敏感的冲突（\texttt{Hello} 与
+\texttt{hello}）是行政混乱的常见来源。RFC-006-A v2 可以放宽这条。
+
+\subsection{规范字段}
+
+\normsv{} 按 CSH-INV-2（主文 \S2.5），大体积内容以哈希持有。
+所以一个 page 的规范状态是一张小映射：
+
+\begin{lstlisting}
+canonical_fields(page) = {
+    manifest_hash:    bytes(32),    // manifest 子文档的 SHA-256
+                                    // (title, description,
+                                    //  content_type, visibility)；
+                                    //  见 §3.3
+    content_hash:     bytes(32),    // body 字节的 SHA-256；
+                                    // 在 Draft 与 archive/delete
+                                    // 之后为 null/zero
+    state_value:      string,       // "Draft" | "Published"
+                                    //   | "Archived" | "Deleted"
+    visibility:       string,       // "private" | "realm" | "public"
+    version:          uint64        // 单调；每个 CanonicalReceipt +1
+}
+\end{lstlisting}
+
+schema 为每个字段标 \texttt{canonical:true}。以下\emph{操作性}字段
+在 Phase 1 存在但\emph{绝不}进入 canonical projection $\pi$
+（\S\ref{sec:algorithms}）：
+
+\begin{lstlisting}
+operational_fields(page) = {
+    last_view_at:        timestamp,    // 仅观测
+    view_count_estimate: uint64,       // 尽力而为
+    last_caller_class:   string|null   // "browser" | "bot" | ...
+}
+\end{lstlisting}
+
+这些字段从 Hub 在视图投影（\S\ref{sec:algo-views}）期间发出的
+\texttt{OperationalReceipt} 中聚合得到；它们对 agent\_view 的审计摘要
+有用，但永远不进入 \texttt{canonical\_state\_hash}。
+
+\subsection{状态空间}
+\label{sec:state-space}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\linewidth}{l X}
+\toprule
+\textbf{state\_value} & \textbf{含义} \\
+\midrule
+\texttt{Draft}       & 已创建但尚未发布。content\_hash 可为空或已设；不被 Hub 服务。 \\
+\texttt{Published}   & 已发布。content\_hash 非空。若 visibility 允许则被 Hub 服务。 \\
+\texttt{Archived}    & 曾被 Published；不再被 Hub 服务。content\_hash 保留以备历史审阅。 \\
+\texttt{Deleted}     & 终态。content\_hash 清零。不接受任何后续 transition。 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\noindent 允许的规范 transition（单一规范状态空间，无 runtime 叠加——
+pages 没有像 \texttt{web\_app} 那样的长期运行 serve 进程）：
+
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\linewidth}{l l X}
+\toprule
+\textbf{Transition} & \textbf{Pre $\to$ Post} & \textbf{说明} \\
+\midrule
+\texttt{pages.create@v1}   & $\emptyset \to$ Draft     & 铸造 state key。 \\
+\texttt{pages.publish@v1}  & Draft $\to$ Published     & 要求 content\_hash 非空。 \\
+\texttt{pages.update@v1}   & Published $\to$ Published & version+1；content\_hash 与/或 manifest\_hash 改变。 \\
+\texttt{pages.archive@v1}  & Published $\to$ Archived  & 可通过重新发布逆转。 \\
+\texttt{pages.unpublish@v1}& Archived $\to$ Draft      & 允许恢复编辑。 \\
+\texttt{pages.delete@v1}   & * $\to$ Deleted (终态)    & 清空 content\_hash。 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\noindent 查询能力（不改状态、不发 \texttt{CanonicalReceipt}，
+仅产生用于审计的 \texttt{OperationalReceipt}）：
+
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\linewidth}{l l}
+\toprule
+\textbf{能力} & \textbf{返回} \\
+\midrule
+\texttt{pages.get@v1}  & 完整 canonical projection + content blob 句柄 \\
+\texttt{pages.list@v1} & 单 owner 的 (slug, state\_value, version) 列表 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\begin{invariant}[PA-INV-1]
+处于 \texttt{Draft} 或 \texttt{Archived} 的 page \textbf{不允许}
+被任何 Hub 提供，无论 visibility 为何。Hub 在查 visibility
+\emph{之前}先按 \texttt{state\_value} 判别；visibility 仅对
+Published 起把关作用。
+\end{invariant}
+
+\textbf{为什么有 PA-INV-1。} draft 按定义就是未完成的；仅因 visibility
+是 \texttt{public} 就服务它，会把进行中的工作当成已发布内容暴露。
+Archived page 是有意不被服务的——它们存在是为了历史，而不是访问。
+
+\subsection{生命周期图}
+
+\begin{lstlisting}
+                       pages.create
+                            |
+                            v
+            ┌─────────────[Draft]─────────────┐
+            |                                 |
+   pages.publish                       pages.delete
+            |                                 |
+            v                                 v
+        [Published] ──── pages.update ──> [Published]
+            |                                 |
+   pages.archive                       pages.delete
+            |                                 |
+            v                                 v
+        [Archived] ── pages.unpublish → [Draft]
+            |
+   pages.delete
+            |
+            v
+         [Deleted]   (终态)
+\end{lstlisting}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Wire schemas}
+\label{sec:wire-schemas}
+
+每个 transition 的 \texttt{ability} 输入 schema 与其
+\texttt{CanonicalReceipt} 的 \texttt{receipt\_schema} 列在下面。
+JSON Schema 简写（仅类型与 required key）；规范 schema 落在
+\texttt{abilities/pages.<verb>.ability.toml}。
+
+\subsection{pages.create@v1}
+
+\begin{lstlisting}
+args:
+{
+  slug:         string (匹配 §3.1 slug ABNF, required)
+  manifest:     {
+    title:        string,         required
+    description:  string|null,
+    content_type: "text/html" | "text/markdown",
+                                  required
+    visibility:   "private" | "realm" | "public",
+                                  required
+  }
+  initial_body: bytes|null        // 按 content_type 用 utf8 或 base64；
+                                  // null 留为空草稿
+}
+
+CanonicalReceipt 体扩展自主文 §3.1 基底，新增：
+{
+  page_state_key:    (realm, owner, slug),
+  pre_state_hash:    zero(32),    // 创建：pre 为空
+  post_state_hash:   sha256(jcs(canonical_fields)),
+  state_version:     1,
+  manifest_hash:     sha256(jcs(manifest)),
+  content_hash:      sha256(initial_body) if initial_body else zero(32),
+  blob_handles:      [content_hash] if content_hash != 0 else []
+}
+\end{lstlisting}
+
+\subsection{pages.publish@v1}
+
+\begin{lstlisting}
+args:
+{
+  slug:    string,
+  // 可选：在发布前替换 body
+  body:    bytes|null,
+  reason:  string|null   // 自由文本，记录在 receipt 中
+}
+
+precondition: state_value == Draft AND content_hash != 0
+              (或 `body` 已提供且非空)
+
+CanonicalReceipt 体：
+{
+  page_state_key:    ...,
+  pre_state_hash:    canonical_state_hash(Draft 快照),
+  post_state_hash:   canonical_state_hash(Published 快照),
+  state_version:     prev+1,
+  content_hash:      sha256(new body),
+  blob_handles:      [content_hash],
+  reason:            args.reason
+}
+\end{lstlisting}
+
+\subsection{pages.update@v1}
+
+\begin{lstlisting}
+args:
+{
+  slug:        string,
+  manifest:    manifest|null,    // 允许部分更新；
+                                 //   null = 不变
+  body:        bytes|null,       // null = 不变
+  reason:      string|null
+}
+precondition: state_value == Published AND
+              (manifest != null OR body != null)
+
+CanonicalReceipt 体：
+{
+  page_state_key:    ...,
+  pre_state_hash:    h_prev,
+  post_state_hash:   h_next,
+  state_version:     prev+1,
+  manifest_hash:     unchanged or new,
+  content_hash:      unchanged or new,
+  changed_fields:    ["manifest_hash"|"content_hash", ...],
+  reason:            args.reason
+}
+\end{lstlisting}
+
+\subsection{pages.archive@v1, pages.unpublish@v1, pages.delete@v1}
+
+这三个遵循相同模板：小 \texttt{args}（$\texttt{slug}, \texttt{reason}$），
+带正确 \texttt{pre\_state\_hash} / \texttt{post\_state\_hash} /
+\texttt{state\_version} 的 CanonicalReceipt。\texttt{pages.delete@v1}
+另外清空 \texttt{content\_hash} 并\emph{递减}该 blob 的引用计数
+（Phase 1 的引用计数是 stub；见 RFC-007）。
+
+\subsection{pages.get@v1（查询）}
+
+\begin{lstlisting}
+args:
+{
+  slug:    string,
+  version: uint64|null      // null = current
+}
+returns:
+{
+  state_key:    ...,
+  state_value:  string,
+  canonical:    canonical_fields,
+  body:         bytes|null,           // 当 caller 无权时
+                                      //   Deleted/Archived 返 null；
+                                      // 当 visibility 拦下 caller 时
+                                      //   完全省略
+  version:      uint64,
+  canonical_state_hash: bytes(32),
+  etag:         bytes(16)             // §5.4
+}
+\end{lstlisting}
+
+\texttt{pages.get@v1} 产生一个 \texttt{OperationalReceipt}，记录此次读、
+caller URI 以及（来自 Hub 时）\texttt{caller\_context}（主文 \S3.6）。
+
+\subsection{pages.list@v1（查询）}
+
+\begin{lstlisting}
+args:
+{
+  owner:        string,
+  state_filter: ["Draft"|"Published"|...] | null,
+  limit:        uint <= 1000,
+  cursor:       string|null
+}
+returns:
+{
+  pages:        [{slug, state_value, version, etag, last_modified}],
+  next_cursor:  string|null
+}
+\end{lstlisting}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{算法}
+\label{sec:algorithms}
+
+\subsection{Canonical projection $\pi$}
+
+\normsv{} 按主文 \S2.1，$\pi$ 是 schema 驱动的，不能手写。pages 的
+schema 列出恰好五个 \texttt{canonical:true} 字段：\texttt{manifest\_hash}、
+\texttt{content\_hash}、\texttt{state\_value}、\texttt{visibility}、
+\texttt{version}。$\pi(v)$ 把 $v$ 投影到这些 key，按 schema 声明顺序。
+
+\begin{lstlisting}
+fn project_pages(state: &PageState) -> Map<String, Value> {
+    let mut out = BTreeMap::new();
+    out.insert("manifest_hash".into(), bytes_to_hex(&state.manifest_hash));
+    out.insert("content_hash".into(),  bytes_to_hex(&state.content_hash));
+    out.insert("state_value".into(),   state.state_value.clone().into());
+    out.insert("visibility".into(),    state.visibility.clone().into());
+    out.insert("version".into(),       state.version.into());
+    out  // BTreeMap 按字典序迭代——确定性
+}
+\end{lstlisting}
+
+\textbf{开销。} 时间与空间均 $O(1)$（五个字段、固定大小）。
+
+\subsection{Canonical 序列化 $\sigma$（JCS）}
+
+\normsv{} $\sigma$ 是 RFC 8785（JSON Canonicalization Scheme）。对
+pages 这是直接子集：对象 key 字典序排序（已被 \texttt{BTreeMap} 保证）、
+无多余空白、字节字段用十六进制串、整数无前导零、不出现浮点。pages
+projection 的 JCS 因此是已投影 JSON 的确定性紧凑形式。
+
+\subsection{canonical\_state\_hash $h$}
+
+\normsv{} $h(b) = \mathrm{SHA256}(b)$，Phase 1 固定。
+
+\subsection{字节级 worked example}
+
+一个处于 Published 状态的 page，其 canonical projection 如下：
+
+\begin{lstlisting}
+{
+  "content_hash":  "abf0c1...c8f3",   // 32 字节十六进制
+  "manifest_hash": "1d4a7e...09e2",
+  "state_value":   "Published",
+  "version":       3,
+  "visibility":    "public"
+}
+\end{lstlisting}
+
+JCS 后：
+
+\begin{lstlisting}
+{"content_hash":"abf0c1...c8f3","manifest_hash":"1d4a7e...09e2","state_value":"Published","version":3,"visibility":"public"}
+\end{lstlisting}
+
+\noindent
+$\texttt{canonical\_state\_hash} = \mathrm{SHA256}(\text{上述字节})$
+$= \texttt{0xa3b91f7e...8d04}$（32 字节）。前 16 字节作为 ETag
+（\S\ref{sec:algo-concurrency}）。
+
+\subsection{乐观并发：ETag}
+\label{sec:algo-concurrency}
+
+\normsv{} 按 RC-INV-2（主文 \S3.7）每次规范 transition 必须声明其期望
+的 \texttt{pre\_state\_hash}。Hub 与 HTTP 客户端使用 16 字节 ETag 比 32
+字节十六进制串方便，所以定义：
+
+\[
+    \texttt{ETag}(p) = \mathrm{Base64Url}\bigl(\texttt{canonical\_state\_hash}(p)[0..16]\bigr)
+\]
+
+128 位前缀在单 realm Hub 服务的群体规模下抗碰撞安全（生日界
+$\approx 2^{64}$ 个 page 才会发生碰撞）。每次 \texttt{pages.update}，
+caller 提供 \texttt{If-Match} 头（或在 EasyNet ability 路径中提供
+\texttt{expected\_etag} 字段）。回执验证层：
+
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.2em]
+    \item 计算 page 当前的 \texttt{ETag}。
+    \item 与 \texttt{expected\_etag} 对比。
+    \item 不一致：用 \texttt{ConcurrencyConflict} 拒绝该 transition，
+    并在 \texttt{OperationalReceipt} 里记录这次冲突（这样审计日志
+    保留了被尝试但未提交的内容）。
+\end{enumerate}
+
+\begin{notebox}
+\texttt{ETag} 是 \texttt{canonical\_state\_hash} 的展示形式，而非替代品。
+内部协议逻辑使用完整 32 字节哈希（RC-INV-2 引用 \texttt{pre\_state\_hash}）；
+16 字节 ETag 仅在外部 HTTP 边界出现。
+\end{notebox}
+
+\subsection{视图投影算法}
+\label{sec:algo-views}
+
+\subsubsection{human\_view（HTML）}
+
+\normsv{}
+
+\begin{lstlisting}
+fn human_view(p: &PageState, blob: &BlobStore) -> HttpResponse {
+    if p.state_value != "Published" {
+        return http_404();
+    }
+    if !visibility_allows(p.visibility, request.caller) {
+        return http_404();   // 永远不返 403——会泄漏存在性
+    }
+    let body = blob.get(&p.content_hash)?;
+    let csp = "default-src 'self'; script-src 'none'; \
+               style-src 'unsafe-inline' 'self'; img-src 'self' data:; \
+               object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
+    HttpResponse::ok()
+        .content_type(p.manifest.content_type)
+        .header("ETag", etag(p))
+        .header("Cache-Control", "public, max-age=60, must-revalidate")
+        .header("Content-Security-Policy", csp)
+        .header("Referrer-Policy", "no-referrer")
+        .header("X-Content-Type-Options", "nosniff")
+        .body(body)
+}
+\end{lstlisting}
+
+\textbf{确定性。} 按主文 TR-INV-6，\texttt{human\_view} 是
+$(p, \text{blob})$ 的确定性函数。CSP、缓存头与响应码都是
+\texttt{p} 与请求 principal 的纯函数，与挂钟时间或负载无关。
+
+\textbf{为什么 visibility 不通过时返 404 而非 403。} 403 会确认 page
+存在。对 \texttt{visibility=private} 这是泄漏。该折中（私有 page
+与不存在的 page 不可区分）是有意为之。
+
+\subsubsection{agent\_view（结构化）}
+
+\normsv{}
+
+\begin{lstlisting}
+fn agent_view(p: &PageState) -> Value {
+    let surface = derive_ability_surface(p);  // VP-INV-1
+    let history = receipt_history_pointer(p); // §6.3
+    json!({
+        "state_type":  "easynet.page",
+        "state_key":   { "realm": p.realm,
+                         "owner": p.owner,
+                         "slug":  p.slug },
+        "ura":          p.ura(),
+        "canonical": {
+            "state":        p.state_value,
+            "manifest":     p.manifest,         // 小，可内联
+            "content_hash": hex(p.content_hash),
+            "visibility":   p.visibility,
+            "version":      p.version,
+            "etag":         etag(p)
+        },
+        "ability_surface":  surface,
+        "history":  {
+            "versions":                p.version,
+            "latest_canonical_receipt_id": p.last_receipt_id,
+            "receipt_log_ura":         history
+        },
+        "eal_hint": eal_hint_for(p),  // §5.6.3
+        "view_meta": {
+            "generated_from": "(canonical, runtime=∅, caller_context)"
+        }
+    })
+}
+
+fn derive_ability_surface(p: &PageState) -> Vec<&'static str> {
+    match p.state_value.as_str() {
+        "Draft"      => vec!["pages.publish@v1", "pages.update@v1",
+                             "pages.delete@v1"],
+        "Published"  => vec!["pages.update@v1", "pages.archive@v1",
+                             "pages.delete@v1"],
+        "Archived"   => vec!["pages.unpublish@v1", "pages.delete@v1"],
+        "Deleted"    => vec![],
+        _            => vec![],
+    }
+}
+\end{lstlisting}
+
+\textbf{符合 VP-INV-1。} \texttt{ability\_surface} 严格从
+\texttt{p.state\_value} 与静态 transition schema（match 块）派生。
+它不是能力注册表的快照；某个能力虽然已注册但其 \texttt{pre\_state}
+不包括 \texttt{p.state\_value}，则在此处不可见。
+
+\subsubsection{eal\_hint}
+
+\normsv{} \texttt{eal\_hint} 是单行 EAL 片段，邻居 agent 可复制粘贴
+来推进 page 从当前状态出发。例：
+
+\begin{lstlisting}
+Draft     -> "call pages.publish on <owner> with { slug: \"<s>\" } timeout 30"
+Published -> "call pages.update on <owner> with { slug: \"<s>\", body: <new> } timeout 60"
+Archived  -> "call pages.unpublish on <owner> with { slug: \"<s>\" } timeout 30"
+Deleted   -> ""    // 无 EAL 提示；surface 为空
+\end{lstlisting}
+
+提示生成器是确定性的；agent 在没有任何 transition 介入的情况下
+两次读取 URA，得到的提示字节完全一致。
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{架构}
+\label{sec:architecture}
+
+\subsection{模块拓扑（EasyNet-Cli）}
+\label{sec:module-map}
+
+\begin{lstlisting}
+src/runtime/state/                   ← 新增（P-A1, P-A2）
+  mod.rs                             pub use 下面的类型
+  store.rs                           StateStore trait + sled 实现
+  hash.rs                            project / canonicalize_jcs / sha256
+  receipt.rs                         CanonicalReceipt, OperationalReceipt
+
+src/runtime/blob_store/              ← 新增（P-A1）
+  mod.rs                             BlobStore trait
+  fs.rs                              FsBlobStore（内容寻址目录树，
+                                     sha256 为 key）
+
+src/runtime/agents/pages_ability.rs  ← 新增（P-A2）
+                                     register: create/publish/update/
+                                     archive/unpublish/delete/get/list
+
+src/runtime/views/                   ← 新增（P-A3）
+  mod.rs                             View trait
+  human.rs                           human_view（CSP，blob 拉取）
+  agent.rs                           agent_view（JSON 投影）
+
+src/bin/easynet-hub.rs               ← 新增（P-A4）
+                                     axum 二进制；path → URA → view
+src/runtime/hub/                     ← 新增（P-A4）
+  mod.rs
+  router.rs                          path 解析、view 选择
+  caller.rs                          principal/human-anon URI 铸造
+                                     + caller_context 抽取
+
+src/runtime/eal_hint.rs              ← 新增（P-A5）
+                                     确定性 EAL 模板
+\end{lstlisting}
+
+\textbf{设计选择：state 与 receipt 索引用 \texttt{sled}。} sled
+已经是相邻代码的依赖；它支持范围查询（满足主文 \S7.1 要求的
+\texttt{state\_key} 前缀扫描）以及原子批写（用于把 canonical receipt
+与 state mutation 同时落盘）。RFC-006 主文不绑定后端；如果将来 sled
+被替换（例如换成 SQLite），\texttt{StateStore} trait 不变。
+
+\textbf{设计选择：文件系统 blob store。} Phase 1 把 blob 存在
+\texttt{<state-root>/blobs/<aa>/<bb>/<full-hash>}，其中 \texttt{aa}
+与 \texttt{bb} 是 SHA-256 的前两个十六进制字节。两层 fan-out
+让任一目录在大规模下也保持在几千个条目以内。RFC-007 会用引用计数
+与 GC 扫描细化它；Phase 1 两者都 stub（Phase 1 永不删除 blob）。
+
+\subsection{守护进程接线}
+
+启动时守护进程：
+
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.2em]
+    \item 在 \texttt{\$EASYNET\_HOME/state.sled} 打开 state store。
+    \item 在 \texttt{\$EASYNET\_HOME/blobs/} 打开 blob store。
+    \item 对注册表中每个 agent 调用 \texttt{pages\_ability::register}；
+    注册把 \texttt{(state\_store, blob\_store, agent\_name)} 捕获到
+    handler 闭包内。
+    \item 启动 receipt 索引（基于同一 sled tree 的 state\_key 前缀索引）。
+    \item 恢复任何在途 transition（pages 没有：每个 transition 都是
+    单步的，没有 \texttt{Building} 这种中间态）。
+\end{enumerate}
+
+\subsection{Hub 接线}
+
+独立二进制 \texttt{easynet-hub}，内嵌 axum 路由：
+
+\begin{lstlisting}
+GET  /<realm>/<owner>/<slug>           -> human_view
+GET  /<realm>/<owner>/<slug>/.agent    -> agent_view (JSON)
+GET  /<realm>/<owner>/<slug>/.receipts -> 回执历史 (JSON)
+GET  /healthz                          -> 200 "ok"
+\end{lstlisting}
+
+Hub 是守护进程的客户端：它不直接访问 state store。每次视图拉取
+都是一个对守护进程的 \texttt{pages.get@v1} 调用，envelope 按主文
+\S5.4 填（caller URI 为 \texttt{principal/human-anon/...}，
+caller\_context 按主文 \S3.6 填）。
+
+\textbf{信任边界。} Hub 被允许铸造 \texttt{principal/human-anon}
+caller，但不能铸造任意 \texttt{agent/} caller。守护进程在准入时
+校验 caller URI；如果一个 \texttt{agent/} URI 来自 Hub 但不匹配
+Hub 的授权令牌（Phase 1 是带外共享 secret；RFC-008 会替换为正规签名），
+则拒绝。
+
+\subsection{存储布局}
+\label{sec:storage}
+
+\begin{lstlisting}
+$EASYNET_HOME/
+├── state.sled/                  sled 数据库
+│   trees:
+│     "page::canonical"          key: jcs((realm,owner,slug))
+│                                value: bincode(PageState)
+│     "page::receipts"           key: (jcs((realm,owner,slug)),
+│                                      version_be_u64,
+│                                      receipt_id)
+│                                value: bincode(CanonicalReceipt)
+│     "page::idx_owner"          key: (owner, slug)
+│                                value: state_key（反向指针）
+│     "page::idx_receipt_id"     key: receipt_id
+│                                value: state_key
+└── blobs/
+    ├── ab/
+    │   ├── f0/
+    │   │   └── abf0c1...c8f3    原始字节
+    └── ...
+\end{lstlisting}
+
+两个索引（\texttt{idx\_owner}、\texttt{idx\_receipt\_id}）满足主文
+\S7.1 的双轴枚举要求：回执日志按 \texttt{receipt\_id}（保留原 EasyNet
+invocation 可追踪性）与按 \texttt{state\_key}（新的对象粒度可追踪性）
+都可枚举。
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{实现计划}
+\label{sec:impl-plan}
+
+五个 PR 切片。每个切片可独立审阅与验证；先合并第一个不会阻塞其余切片
+在并行分支上推进。
+
+\subsection{P-A1：BlobStore + StateStore 骨架}
+
+\textbf{新增文件。} \texttt{src/runtime/blob\_store/}（\texttt{mod.rs}
++ \texttt{fs.rs}）；\texttt{src/runtime/state/}（\texttt{mod.rs} +
+\texttt{store.rs} + \texttt{hash.rs} + \texttt{receipt.rs}）。
+
+\textbf{公开 API。}
+\begin{lstlisting}
+pub trait BlobStore: Send + Sync {
+    fn put(&self, bytes: &[u8]) -> Result<[u8; 32]>;       // 返回 sha256
+    fn get(&self, hash: &[u8; 32]) -> Result<Vec<u8>>;
+    fn exists(&self, hash: &[u8; 32]) -> Result<bool>;
+}
+
+pub trait StateStore<S: StateObject>: Send + Sync {
+    fn read(&self, key: &S::Key) -> Result<Option<S>>;
+    fn apply(
+        &self,
+        receipt: &CanonicalReceipt,
+        post_state: &S,
+    ) -> Result<()>;     // 原子：state mutation + receipt append
+    fn list_by_owner(...) -> Result<Vec<S::Key>>;
+    fn enumerate_receipts(&self, key: &S::Key)
+        -> Result<Vec<CanonicalReceipt>>;
+}
+
+pub fn project(state: &dyn StateObject) -> BTreeMap<String, Value>;
+pub fn canonicalize_jcs(map: &BTreeMap<String, Value>) -> Vec<u8>;
+pub fn canonical_state_hash(state: &dyn StateObject) -> [u8; 32];
+\end{lstlisting}
+
+\textbf{测试。} JCS 一致性（一组 RFC 8785 测试向量）；SHA-256
+往返；并发尝试下 \texttt{StateStore::apply} 的原子性（钉住
+RC-INV-2 不变量）。
+
+\textbf{验收。} \texttt{cargo test -p easynet --lib state} 通过；
+基准测试在普通硬件上 $\geq$ 50k 次/秒规范哈希（合理性下界，
+不是严格要求）。
+
+\subsection{P-A2：pages.* 能力注册 + 回执}
+
+\textbf{新增文件。} \texttt{src/runtime/agents/pages\_ability.rs}。
+触及 \texttt{src/runtime/agents/mod.rs} 来注册 namespace。
+
+\textbf{行为。} \S\ref{sec:wire-schemas} 列出的每个 transition 都实现：
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.15em]
+    \item 用 ability schema 校验 args。
+    \item 通过 \texttt{StateStore} 读当前 state。
+    \item 校验 \texttt{pre\_state\_hash}（RC-INV-2）。
+    \item 计算 \texttt{post\_state} 与 \texttt{post\_state\_hash}。
+    \item 构建 \texttt{CanonicalReceipt}；用 owner 私钥签名（Phase 1：
+    用每个 agent 的硬编码 keypair stub Ed25519 签名；密钥管理推迟
+    至 RFC-008）。
+    \item \texttt{StateStore::apply}（原子）。
+    \item 返回结果。
+\end{enumerate}
+
+\textbf{测试。}
+\begin{itemize}[leftmargin=2.2em,itemsep=0.1em]
+    \item 每个 transition 往返。
+    \item 拒绝从 \texttt{Archived} 出发的 \texttt{publish}（必须先
+    \texttt{unpublish}）。
+    \item 拒绝带不合规 slug 的 \texttt{create}。
+    \item 拒绝在 \texttt{Deleted} 上的任何 transition（终态）。
+    \item 乐观并发：两个针对同一 page \texttt{slug} 并发的 \texttt{update}；
+    一个赢，一个被 \texttt{ConcurrencyConflict} 拒绝。
+\end{itemize}
+
+\textbf{验收。} 该 ability 可经 \texttt{easynet ability invoke}
+调用；回执经现有回执日志面可见。
+
+\subsection{P-A3：视图投影 + EAL 提示}
+
+\textbf{新增文件。} \texttt{src/runtime/views/} +
+\texttt{src/runtime/eal\_hint.rs}。
+
+\textbf{行为。} 纯函数：一个 \texttt{PageState} 映射到
+\texttt{(human\_view\_response, agent\_view\_json)} 二元组加 EAL 提示
+字符串。无网络、无 state 改动。
+
+\textbf{测试。} 确定性（同一输入 1000 次产出相同字节）；
+\texttt{ability\_surface} 在每个状态下匹配 \S\ref{sec:state-space}；
+CSP 头恒定。
+
+\subsection{P-A4：Hub 二进制}
+
+\textbf{新增文件。} \texttt{src/bin/easynet-hub.rs} +
+\texttt{src/runtime/hub/}。
+
+\textbf{行为。} axum 路由，三个 GET 路由，每条：
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.1em]
+    \item 解析 path $\to$ \texttt{(realm, owner, slug)} $\to$
+    \texttt{state\_key}。
+    \item 构 envelope：caller URI 为
+    \texttt{principal/human-anon/<ip-hash>/<session-id>}
+    （\S\ref{sec:hub}）；\texttt{caller\_context} 从 HTTP 头填。
+    \item 调用守护进程的 \texttt{pages.get@v1}。
+    \item 应用视图投影（P-A3）。
+    \item 返回 HTTP 响应。
+\end{enumerate}
+
+\textbf{测试。} 集成：在临时目录里启动一个守护进程 + 一个 Hub，
+\texttt{create+publish} 一个 page，\texttt{curl} 经 Hub 访问，断言
+HTML 响应 + 正确 ETag + 正确 CSP。\texttt{curl} 后缀 \texttt{/.agent}，
+断言 JSON 形态匹配 \S\ref{sec:algo-views}。
+
+\subsection{P-A5：agent\_view 增强 + 回执历史 endpoint}
+
+\textbf{行为。} 实现 \texttt{/.receipts} 路由：返回某 page 的回执历史
+（仅 canonical receipts，按 version 顺序）作为 JSON 数组。给
+\texttt{agent\_view} 加上 \texttt{eal\_hint} 字段（在 P-A3 中已规定但
+仅 stub）。
+
+\textbf{测试。} 客户端用 \texttt{canonical\_state\_hash} 重构来重放
+回执历史；断言最终 hash 等于 page 当前 hash。
+
+\subsection{Hub envelope 铸造}
+\label{sec:hub}
+
+\begin{lstlisting}
+fn build_envelope(req: &HttpRequest) -> Envelope {
+    let ip   = client_ip(req);
+    let salt = HUB_LOCAL_SALT.read();
+    let ip_hash = hmac_sha256(&salt, ip.to_string().as_bytes())
+        .iter().take(8)
+        .flat_map(|b| format!("{:02x}", b).chars().collect::<Vec<_>>())
+        .collect::<String>();
+    let sid = req.cookie("easynet_session")
+        .or_else(|| req.header("X-EasyNet-Session"))
+        .or_else(|| req.query("session"))
+        .unwrap_or_else(|| "-".to_string());
+
+    let caller = format!(
+        "easynet:///principal/human-anon/{ip_hash}/{sid}"
+    );
+    let caller_context = json!({
+        "origin": {
+            "referer_url":   req.header("Referer"),
+            "referer_realm": referer_origin(req.header("Referer")),
+            "direct":        is_direct_navigation(req)
+        },
+        "agent_class": classify_user_agent(req.header("User-Agent")),
+        "headers": {
+            "accept_language":      req.header("Accept-Language"),
+            "sec_fetch_site":       req.header("Sec-Fetch-Site"),
+            "sec_fetch_mode":       req.header("Sec-Fetch-Mode"),
+            "sec_fetch_dest":       req.header("Sec-Fetch-Dest"),
+            "x_forwarded_for_hash": xff_hash(req)
+        }
+    });
+    Envelope { caller, caller_context, ... }
+}
+\end{lstlisting}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{端到端 worked example}
+\label{sec:e2e}
+
+从 \texttt{pages.create} 开始，经 Hub 渲染的 HTML 访问与 agent URA
+拉取，完整跟踪。
+
+\subsection{准备}
+
+\begin{lstlisting}
+$ easynet agent add alice --type claude-code
+$ easynet-daemon &       # 在 $EASYNET_HOME ipc 上监听
+$ easynet-hub --bind 127.0.0.1:8787 &
+\end{lstlisting}
+
+\subsection{编辑与发布}
+
+\begin{lstlisting}
+$ easynet ability invoke alice.pages.create --args '{
+    "slug": "shop-001",
+    "manifest": {
+        "title": "陶瓷马克杯，12oz",
+        "content_type": "text/html",
+        "visibility": "public"
+    },
+    "initial_body": "<h1>Mug</h1><p>$19.99 — 周二发货。</p>"
+}'
+
+response:
+  receipt_id:           "r_a1b2..."
+  state_value:          "Draft"
+  canonical_state_hash: "0xa3b91f7e..."
+  version:              1
+
+$ easynet ability invoke alice.pages.publish --args '{ "slug": "shop-001" }'
+
+response:
+  receipt_id:           "r_c3d4..."
+  state_value:          "Published"
+  canonical_state_hash: "0x4d28ee17..."
+  version:              2
+  etag:                 "TSjuFw0pAvjpAQ=="
+\end{lstlisting}
+
+\subsection{浏览器经 Hub 拉取}
+
+\begin{lstlisting}
+$ curl -i http://127.0.0.1:8787/default/alice/shop-001
+
+HTTP/1.1 200 OK
+ETag: "TSjuFw0pAvjpAQ=="
+Cache-Control: public, max-age=60, must-revalidate
+Content-Security-Policy: default-src 'self'; script-src 'none'; ...
+Content-Type: text/html
+Content-Length: 49
+
+<h1>Mug</h1><p>$19.99 — 周二发货。</p>
+\end{lstlisting}
+
+\noindent Hub 为该读发出一条 \texttt{OperationalReceipt}：
+
+\begin{lstlisting}
+{
+  "receipt_class":  "operational",
+  "state_key":      ["default","alice","shop-001"],
+  "transition_id":  "pages.get@v1",
+  "attempt_id":     "att_e5f6...",
+  "envelope": {
+    "caller": "easynet:///principal/human-anon/9c4e.../sess-abc",
+    "caller_context": {
+      "origin":      { "referer_url":   null,
+                       "referer_realm": null,
+                       "direct":        true },
+      "agent_class": { "kind":          "browser",
+                       "user_agent_hash": "a1b2..." },
+      "headers":     { "accept_language": "zh-CN",
+                       "sec_fetch_site":  "none",
+                       "sec_fetch_mode":  "navigate",
+                       "sec_fetch_dest":  "document" }
+    }
+  },
+  "observed_at": "2026-04-28T10:14:32Z"
+}
+\end{lstlisting}
+
+\subsection{邻居 agent 经 URA 拉取}
+
+\begin{lstlisting}
+$ curl http://127.0.0.1:8787/default/alice/shop-001/.agent | jq
+
+{
+  "state_type":  "easynet.page",
+  "state_key":   { "realm": "default",
+                   "owner": "alice",
+                   "slug":  "shop-001" },
+  "ura":         "easynet:///r/default/agent/alice/page/shop-001",
+  "canonical": {
+    "state":        "Published",
+    "manifest":     { "title":         "陶瓷马克杯，12oz",
+                      "content_type":  "text/html",
+                      "visibility":    "public" },
+    "content_hash": "0x4d28ee17...",
+    "visibility":   "public",
+    "version":      2,
+    "etag":         "TSjuFw0pAvjpAQ=="
+  },
+  "ability_surface": ["pages.update@v1", "pages.archive@v1",
+                      "pages.delete@v1"],
+  "history": {
+    "versions": 2,
+    "latest_canonical_receipt_id": "r_c3d4...",
+    "receipt_log_ura":
+      "easynet:///r/default/agent/alice/page/shop-001/receipts"
+  },
+  "eal_hint":
+    "call pages.update on alice with { slug: \"shop-001\", body: <new> } timeout 60"
+}
+\end{lstlisting}
+
+\subsection{审计重放}
+
+邻居拉取回执历史并在本地重放：
+
+\begin{lstlisting}
+$ curl http://127.0.0.1:8787/default/alice/shop-001/.receipts | jq -r '.[].post_state_hash'
+0xa3b91f7e...   # version 1，create 之后
+0x4d28ee17...   # version 2，publish 之后
+\end{lstlisting}
+
+\noindent 邻居：
+\begin{enumerate}[leftmargin=2em,itemsep=0.15em]
+    \item 按顺序从每个回执重构 canonical state。
+    \item 为每次重构计算 \texttt{canonical\_state\_hash}。
+    \item 断言每次计算的 hash 等于回执的 \texttt{post\_state\_hash}。
+    \item 断言最终 hash 等于 agent\_view 的
+    \texttt{canonical.content\_hash}（严格说不直接如此——比对在
+    \texttt{canonical\_state\_hash} 上做，不过 \texttt{content\_hash}
+    是它的输入之一）。
+    \item 用 alice 公开的密钥校验每条回执的 \texttt{owner\_signature}。
+\end{enumerate}
+
+\noindent 审计成功的含义：邻居有密码学证据证明这个 page 在 version 2
+所呈现的内容正是这些字节，由 Alice 签名，时间不晚于最终回执的时间戳。
+这是传统 web 讲不出的审计故事。
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{暂缓至 RFC-006-A v2 的开放问题}
+\label{sec:open}
+
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.2em]
+    \item \textbf{HTML 净化。} Phase 1 完全信任 owner 写的 HTML
+    （CSP \texttt{script-src 'none'} 覆盖最坏情况，但 \texttt{onerror=}
+    式属性注入仍可穿透）。v2 应规定 \texttt{publish} 时运行的安全子集
+    净化器并对其输出 hash 进行钉死。
+    \item \textbf{多 realm Hub。} 服务多于一个 realm 的 Hub 需要路由表；
+    路径方案 \texttt{/<realm>/...} 已经容纳，但 Phase 1 在启动时绑定单
+    realm。
+    \item \textbf{Page 模板 / 槽位填充。} 常见 page（产品目录、博客文章）
+    结构重复。模板层可让 owner 填 manifest + 槽位数据，使
+    \texttt{content\_hash} 覆盖渲染输出。
+    \item \textbf{已认证人类
+    （\texttt{principal/human-auth}）。} 对需要真实用户身份的 private/realm
+    page，必须规定 \texttt{principal/human-auth/<provider>/<user-id>}
+    子命名空间及其签名机制。
+    \item \textbf{联邦读取。} 由节点 A 拥有的 page 经节点 B 上的 Hub 被读取。
+    Hub 由守护进程客户端升级为联邦客户端。RFC-006-A v2。
+\end{enumerate}
+
+\subsection{覆盖检查}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\linewidth}{l X l}
+\toprule
+\textbf{主文规则} & \textbf{由谁兑现} & \textbf{位置} \\
+\midrule
+SO-INV-1（key 不可变）                   & state\_key 解析器拒绝 key 更新                          & \S\ref{sec:state-machine} \\
+CSH-INV-1（hash 取自 projection）       & \texttt{project\_pages} + JCS only                        & \S\ref{sec:algorithms} \\
+CSH-INV-2（内容外置为 blob）             & FsBlobStore；规范状态只持哈希                            & \S\ref{sec:storage} \\
+RC-INV-1（receipt 绑定）                 & 每条回执均带 (state\_key, transition\_id, attempt\_id)   & \S\ref{sec:wire-schemas} \\
+RC-INV-2（乐观并发）                    & 在回执校验时间检查 ETag                                  & \S\ref{sec:algo-concurrency} \\
+TA-INV-1（必须带 transition\_id）        & 每个 \texttt{pages.<verb>@v1} 字符串均被校验             & \S\ref{sec:wire-schemas} \\
+VP-INV-1（ability\_surface 来自 state）  & \texttt{derive\_ability\_surface} match 块               & \S\ref{sec:algo-views} \\
+TR-INV-7（multi-view 一等公民）          & \texttt{human\_view} + \texttt{agent\_view} 均已实现     & \S\ref{sec:algo-views} \\
+TR-INV-11（URA-receipt 可追踪）          & \texttt{/.receipts} endpoint + idx\_owner 索引           & \S\ref{sec:storage}, \S\ref{sec:e2e} \\
+TR-INV-12（principal/human-anon）        & \texttt{build\_envelope} 铸造该 URI                      & \S\ref{sec:hub} \\
+TR-INV-13（caller\_context）             & 由 \texttt{build\_envelope} 填充；进入 operational receipt & \S\ref{sec:hub}, \S\ref{sec:e2e} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\paragraph{结语。} pages 是触发有状态 EasyNet 完整规范核的最简单参考状态机。
+落地上述五个 PR 完成有状态 EasyNet 的 Phase 1，并解锁压力测试状态机
+（\texttt{webapp}，附录 B）以及之后的 agent-native web 层。
+
+\vfill
+\hrule
+\vspace{0.4em}
+\noindent\small
+\textit{本文档是一份 Phase 1 实现规约。与 AXON-RFC-006 主文不一致的地方
+是本文档的 bug；与附录 B 压力测试不一致的地方可能是本文档或主文的 bug，
+需在对齐轮中调和。}
+
+\end{document}
