@@ -80,3 +80,13 @@ pub mod destructive;
 /// invocation, after the 8-stage security pipeline accepts the
 /// command).
 pub mod runner;
+
+/// Tree-sitter-bash AST stage of the shell.run 8-stage pipeline.
+/// Produces a `ParseForSecurityResult` with either a flat list of
+/// `SimpleCommand` records (one per leaf `command` node in the
+/// AST) or a `too-complex` verdict naming the offending node /
+/// pre-check. Fail-closed: any node type not on the explicit
+/// allowlist triggers `too-complex`. Mirrors AliveCode's
+/// `src/utils/bash/ast.ts` so audit events from the two
+/// implementations correlate.
+pub mod ast;
