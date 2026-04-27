@@ -454,20 +454,15 @@ pub fn send_to_agent_with_depth_and_progress(
         entry.model.clone(),
     );
 
-    // The other DriverOverrides fields (temperature, max_tokens) are
-    // accepted by the schema and parsed by ChatArgs, but the v1
-    // claude-code / codex CLI drivers do not expose either knob. Log
-    // a one-shot warning the first time they are set so an operator
-    // experimenting with these knobs in chat args knows they aren't
-    // wired through yet (rather than silently being dropped). A
-    // future driver (or a remote-API path) can pick them up by
-    // reading `overrides` here without re-shaping the dispatch
-    // surface.
-    if let Some(o) = overrides {
-        if o.temperature.is_some() || o.max_tokens.is_some() {
-            warn_unhonored_driver_knobs_once(o);
-        }
-    }
+    // The other DriverOverrides fields (temperature, max_tokens)
+    // are rejected at the chat-ability parse boundary — by the time
+    // dispatch sees overrides, only `model` can be set. See
+    // chat_ability::parse_driver_overrides for the rationale.
+    debug_assert!(
+        overrides.map(|o| o.temperature.is_none() && o.max_tokens.is_none()).unwrap_or(true),
+        "DriverOverrides reached dispatch with unsupported fields set; chat_ability \
+         parse_driver_overrides should have rejected this earlier"
+    );
 
     // Build env for the child subprocess. The env vars are how the typed
     // context crosses the process boundary into the spawned agent CLI —
@@ -749,35 +744,6 @@ pub fn send_to_agent_with_depth_and_progress(
 ///   parse on these tokens reliably.
 const CONTEXT_OPEN: &str = "<!-- easynet:context-start -->";
 const CONTEXT_CLOSE: &str = "<!-- easynet:context-end -->";
-
-/// One-shot warning helper for driver knobs that the v1 CLI drivers
-/// (claude-code, codex) accept in the chat args schema but cannot
-/// pass through to the underlying subprocess. We warn instead of
-/// silently dropping so an operator who set `temperature: 0.3` in a
-/// chat call sees that the value is ignored — and once per process,
-/// not on every dispatch, so the log noise is bounded.
-fn warn_unhonored_driver_knobs_once(o: &DriverOverrides) {
-    use std::sync::OnceLock;
-    static WARNED: OnceLock<()> = OnceLock::new();
-    if WARNED.set(()).is_ok() {
-        let mut knobs: Vec<&'static str> = Vec::new();
-        if o.temperature.is_some() {
-            knobs.push("temperature");
-        }
-        if o.max_tokens.is_some() {
-            knobs.push("max_tokens");
-        }
-        eprintln!(
-            "dispatch: chat `driver.{}` set but the current claude-code / codex CLI \
-             drivers do not expose this knob; values are accepted by the schema and \
-             recorded in DriverOverrides but not piped through to the subprocess. \
-             A future driver layer that supports them can read overrides from \
-             send_to_agent_with_depth without re-shaping the dispatch surface. \
-             (warned once per process)",
-            knobs.join(", driver."),
-        );
-    }
-}
 
 fn compose_prompt(prompt: &str, context: Option<&str>) -> String {
     match context.map(str::trim).filter(|s| !s.is_empty()) {
