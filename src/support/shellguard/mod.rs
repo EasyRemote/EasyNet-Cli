@@ -100,6 +100,21 @@ pub mod security;
 /// optional flag allowlist.
 pub mod permissions;
 
+/// Stage-6 path-constraint matcher for write redirects.
+/// Caller declares one or more "write-allowed roots"; every
+/// redirect target whose canonical path is not under at least
+/// one allowed root rejects the call. Stops a permitted
+/// command from writing outside the caller's project tree
+/// via `> /etc/passwd` or `>> ~/.ssh/authorized_keys`.
+pub mod pathconstraints;
+
+/// Stage-7 read-only classifier. Used when the caller passes
+/// `read_only_only: true`: every command must come from a
+/// known-read-only set AND carry no write redirects. Mirrors
+/// AliveCode's read-only validation for the shell.run mode
+/// where agents can inspect but not mutate.
+pub mod readonly;
+
 /// Tree-sitter-bash AST stage of the shell.run 8-stage pipeline.
 /// Produces a `ParseForSecurityResult` with either a flat list of
 /// `SimpleCommand` records (one per leaf `command` node in the
