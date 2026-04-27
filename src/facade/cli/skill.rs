@@ -251,6 +251,12 @@ fn run_install(args: InstallArgs) -> anyhow::Result<()> {
 /// it. No stdout, no CLI dep. Used by `run_install` (CLI) and
 /// `fleet.skill_install` ability (daemon ability dispatch).
 ///
+/// `pub(crate)` because the only callers are in this crate
+/// (run_install in this file + skill_install_ability handler in
+/// runtime/agents). Public visibility would invite external
+/// callers to bind to a helper that exists for in-tree wiring,
+/// not as a stable downstream API.
+///
 /// Errors:
 ///   * agent not registered
 ///   * skill already installed (caller should run upgrade/remove first)
@@ -259,7 +265,7 @@ fn run_install(args: InstallArgs) -> anyhow::Result<()> {
 /// Atomicity: fs::rename within the same filesystem is atomic; if
 /// the temp dir is on a different FS the fall-back copy+remove is
 /// not atomic but is at least all-or-nothing at the directory level.
-pub fn install_skill(
+pub(crate) fn install_skill(
     source: &str,
     agent: &str,
     pin: Option<&str>,
@@ -295,17 +301,16 @@ pub fn install_skill(
     let skills_dir = agent_root.join("skills");
     fs::create_dir_all(&skills_dir)?;
 
-    let workdir = std::env::temp_dir().join(format!(
-        "easynet-skill-install-{}-{}",
-        std::process::id(),
-        rand_suffix()
-    ));
-    fs::create_dir_all(&workdir)?;
-    let fetch_result = fetch_github(&effective, &workdir)?;
+    // Workdir wrapped in an RAII guard so it's removed on every
+    // exit path — including the early-return cases below
+    // (target_dir-already-exists, fetch_github failure surfaced
+    // via `?`). Pre-fix, fetch_github failures leaked the temp
+    // dir; the guard makes cleanup unconditional.
+    let workdir = TempDirGuard::create("easynet-skill-install")?;
+    let fetch_result = fetch_github(&effective, workdir.path())?;
 
     let target_dir = skills_dir.join(&fetch_result.name);
     if target_dir.exists() {
-        let _ = fs::remove_dir_all(&workdir);
         anyhow::bail!(
             "skill '{}' is already installed at {}; run `skill upgrade` or `skill remove` first",
             fetch_result.name,
@@ -317,7 +322,7 @@ pub fn install_skill(
         copy_tree(&fetch_result.unpacked, &target_dir)?;
         let _ = fs::remove_dir_all(&fetch_result.unpacked);
     }
-    let _ = fs::remove_dir_all(&workdir);
+    // workdir cleanup happens in TempDirGuard's Drop.
 
     let tree_digest = hash_tree(&target_dir, &[".easynet"])?;
     let size_bytes = tree_size(&target_dir, &[".easynet"])?;
@@ -688,10 +693,12 @@ fn run_upgrade(args: UpgradeArgs) -> anyhow::Result<()> {
 /// half-upgraded state. No stdout, no CLI dep. Used by `run_upgrade`
 /// (CLI) and `fleet.skill_upgrade` ability.
 ///
+/// `pub(crate)` for the same reason as install_skill.
+///
 /// `target_ref`:
 ///   * `Some("v1.2.3")` — pin to a specific tag/SHA/branch
 ///   * `None` — track upstream HEAD (whatever fetch_github resolves)
-pub fn upgrade_skill(
+pub(crate) fn upgrade_skill(
     name: &str,
     agent: &str,
     target_ref: Option<&str>,
@@ -713,15 +720,13 @@ pub fn upgrade_skill(
         .map(|s| s.to_string())
         .or_else(|| existing.source.ref_.clone());
 
-    let workdir = std::env::temp_dir().join(format!(
-        "easynet-skill-upgrade-{}-{}",
-        std::process::id(),
-        rand_suffix()
-    ));
-    fs::create_dir_all(&workdir)?;
+    // Workdir wrapped in TempDirGuard so cleanup happens on every
+    // exit — including the early-return inside fetch_github (which
+    // pre-fix leaked the temp dir on network failure).
+    let workdir = TempDirGuard::create("easynet-skill-upgrade")?;
     let mut new_source = existing.source.clone();
     new_source.ref_ = resolved_target_ref.clone();
-    let fetch = fetch_github(&new_source, &workdir)?;
+    let fetch = fetch_github(&new_source, workdir.path())?;
 
     let backup = agent_root.join("skills").join(format!(
         ".{}-backup-{}",
@@ -758,13 +763,13 @@ pub fn upgrade_skill(
     match result {
         Ok(rec) => {
             let _ = fs::remove_dir_all(&backup);
-            let _ = fs::remove_dir_all(&workdir);
+            // workdir cleanup happens in TempDirGuard's Drop.
             Ok(rec)
         }
         Err(e) => {
             let _ = fs::remove_dir_all(&skill_dir);
             let _ = fs::rename(&backup, &skill_dir);
-            let _ = fs::remove_dir_all(&workdir);
+            // workdir cleanup happens in TempDirGuard's Drop.
             Err(anyhow::anyhow!("upgrade failed, rolled back: {e}"))
         }
     }
@@ -786,12 +791,14 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
 /// no CLI dep. Used by `run_remove` (CLI) and `fleet.skill_remove`
 /// ability.
 ///
+/// `pub(crate)` for the same reason as install_skill.
+///
 /// Errors:
 ///   * agent not registered
 ///   * skill not installed (caller can choose to treat this as
 ///     idempotent at the ability layer if desired; we surface the
 ///     distinction here)
-pub fn remove_skill(name: &str, agent: &str) -> anyhow::Result<()> {
+pub(crate) fn remove_skill(name: &str, agent: &str) -> anyhow::Result<()> {
     let registry = agents::load_agents()?;
     let entry = registry
         .agents
@@ -938,6 +945,49 @@ fn rand_suffix() -> String {
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
     format!("{nanos:08x}")
+}
+
+/// RAII wrapper around a temp directory used for fetch+stage of a
+/// skill. Removal happens in `Drop` so every exit path from
+/// install_skill / upgrade_skill — including `?` short-circuits
+/// from fetch_github — runs the cleanup.
+///
+/// Pre-fix the temp dir was created with `fs::create_dir_all` and
+/// removed manually at the end, so a failure inside fetch_github
+/// (network error / bad ref / etc.) leaked the directory on every
+/// failed install attempt. The guard makes that impossible.
+///
+/// Drop deliberately ignores the remove result: a temp dir that
+/// can't be removed (rare; fs full / permission change mid-flight)
+/// is a separate ops problem and should not panic in a `Drop`.
+struct TempDirGuard {
+    path: std::path::PathBuf,
+}
+
+impl TempDirGuard {
+    /// Create a fresh temp dir under std::env::temp_dir() with a
+    /// caller-supplied prefix. The full directory name is
+    /// `<prefix>-<pid>-<rand>` so concurrent installs of the same
+    /// skill don't collide.
+    fn create(prefix: &str) -> std::io::Result<Self> {
+        let path = std::env::temp_dir().join(format!(
+            "{prefix}-{}-{}",
+            std::process::id(),
+            rand_suffix()
+        ));
+        fs::create_dir_all(&path)?;
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
 }
 
 fn format_bytes(n: u64) -> String {
@@ -1213,5 +1263,63 @@ mod tests {
         }"#;
         let rec: InstallRecord = serde_json::from_str(wire).unwrap();
         assert_eq!(rec.skill_tree_hash, "sha256:wire");
+    }
+
+    // ─── TempDirGuard ─────────────────────────────────────────────
+
+    #[test]
+    fn temp_dir_guard_creates_directory() {
+        let guard = TempDirGuard::create("test-creates").unwrap();
+        assert!(guard.path().exists(), "guard must create the directory");
+        assert!(
+            guard.path().is_dir(),
+            "guard's path must be a directory, not a file"
+        );
+    }
+
+    #[test]
+    fn temp_dir_guard_removes_on_drop() {
+        let path = {
+            let guard = TempDirGuard::create("test-cleanup").unwrap();
+            guard.path().to_path_buf()
+        };
+        // Exited the scope → guard dropped → directory must be gone.
+        assert!(
+            !path.exists(),
+            "TempDirGuard.drop must remove the directory; still present at {}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn temp_dir_guard_drop_tolerates_non_empty_directory() {
+        // The guard is used to wrap a fetch+stage workdir that
+        // contains files; drop must remove the whole tree, not
+        // fail because the dir is non-empty.
+        let path = {
+            let guard = TempDirGuard::create("test-recursive").unwrap();
+            std::fs::write(guard.path().join("a-file"), b"content").unwrap();
+            std::fs::create_dir(guard.path().join("a-subdir")).unwrap();
+            std::fs::write(guard.path().join("a-subdir/nested"), b"more").unwrap();
+            guard.path().to_path_buf()
+        };
+        assert!(
+            !path.exists(),
+            "drop must remove the entire tree, not bail on non-empty"
+        );
+    }
+
+    #[test]
+    fn temp_dir_guard_concurrent_creates_dont_collide() {
+        // The guard's name template includes pid + a per-call
+        // random suffix; two creates with the same prefix must
+        // produce distinct paths.
+        let g1 = TempDirGuard::create("test-collide").unwrap();
+        let g2 = TempDirGuard::create("test-collide").unwrap();
+        assert_ne!(
+            g1.path(),
+            g2.path(),
+            "two same-prefix creates must yield distinct paths"
+        );
     }
 }

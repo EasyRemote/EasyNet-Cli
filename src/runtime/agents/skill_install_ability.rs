@@ -87,11 +87,11 @@ fn install_handler(args: Value) -> anyhow::Result<Value> {
     let source = args
         .get("source")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("fleet.skill_install: `source` is required"))?;
+        .ok_or_else(|| anyhow::anyhow!("`source` is required"))?;
     let agent = args
         .get("agent")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("fleet.skill_install: `agent` is required"))?;
+        .ok_or_else(|| anyhow::anyhow!("`agent` is required"))?;
     let pin = args.get("pin").and_then(Value::as_str);
 
     let record = install_skill(source, agent, pin)?;
@@ -106,11 +106,11 @@ fn remove_handler(args: Value) -> anyhow::Result<Value> {
     let name = args
         .get("name")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("fleet.skill_remove: `name` is required"))?;
+        .ok_or_else(|| anyhow::anyhow!("`name` is required"))?;
     let agent = args
         .get("agent")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("fleet.skill_remove: `agent` is required"))?;
+        .ok_or_else(|| anyhow::anyhow!("`agent` is required"))?;
 
     remove_skill(name, agent)?;
     Ok(json!({
@@ -130,11 +130,11 @@ fn upgrade_handler(args: Value) -> anyhow::Result<Value> {
     let name = args
         .get("name")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("fleet.skill_upgrade: `name` is required"))?;
+        .ok_or_else(|| anyhow::anyhow!("`name` is required"))?;
     let agent = args
         .get("agent")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("fleet.skill_upgrade: `agent` is required"))?;
+        .ok_or_else(|| anyhow::anyhow!("`agent` is required"))?;
     let to = args.get("to").and_then(Value::as_str);
 
     let record = upgrade_skill(name, agent, to)?;
