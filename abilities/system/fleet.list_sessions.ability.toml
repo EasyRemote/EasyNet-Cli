@@ -1,5 +1,5 @@
 schema_version = "1"
-name = "session.list"
+name = "fleet.list_sessions"
 description = "List sessions known to this daemon. Default returns active and recently-terminated runs; pass `include_terminated: false` to filter to active only."
 
 [input_schema]
