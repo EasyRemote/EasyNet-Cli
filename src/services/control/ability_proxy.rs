@@ -331,7 +331,7 @@ impl AbilityProxy {
                 // graceful exit, and letting the handler drain its
                 // pending output before EOF is part of the contract.
                 let mut g = bidi.lock().expect("bidi registry lock");
-                let _ = g.remove(&session_id);
+                g.remove(&session_id);
             }
         }
     }
@@ -1524,7 +1524,7 @@ mod tests {
             .await;
         // Registry MUST be empty for this session_id (§I3).
         {
-            let g = bidi.lock().expect("bidi lock");
+            let g = bidi.lock().expect("bidi registry lock");
             assert!(
                 !g.contains_key("sess-ghost"),
                 "§I3 violation: failed OpenBidi left a registry row"
@@ -1654,7 +1654,7 @@ mod tests {
         // Fire the cancel token directly — same path serve_connection
         // takes on connection drop.
         {
-            let g = bidi.lock().expect("bidi lock");
+            let g = bidi.lock().expect("bidi registry lock");
             g.get("sess-cancel")
                 .expect("session installed")
                 .cancel

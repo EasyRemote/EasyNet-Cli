@@ -465,45 +465,59 @@ mod tests {
         )
         .await;
 
-        // Expect 3× RecvBidi in order, then 1× TerminalBidi{done}.
+        // Expect 3× RecvBidi in order then exactly 1× TerminalBidi{done}.
+        // Loop budget = 4 (the exact frame count); a regression that
+        // emits an extra Terminal trips the post-loop tail-check below.
         let mut recv_count = 0;
-        let mut saw_terminal = false;
-        // Read with a soft deadline so a regression that drops a
-        // frame fails fast instead of hanging the test runner.
+        // 2 s deadline per frame so a dropped-frame regression fails
+        // fast instead of hanging the runner.
         let read_deadline = std::time::Duration::from_secs(2);
-        let mut total_frames_seen: Vec<OutgoingFrame> = Vec::new();
-        for _ in 0..6 {
-            match tokio::time::timeout(read_deadline, recv_frame(&mut client)).await {
-                Ok(frame) => {
-                    match &frame {
-                        OutgoingFrame::RecvBidi { session_id, frame: f } => {
-                            assert_eq!(session_id, "e2e-1");
-                            assert_eq!(f, &serde_json::json!({"i": recv_count}),
-                                "§I1 violation at index {recv_count}: out-of-order frame");
-                            recv_count += 1;
-                        }
-                        OutgoingFrame::TerminalBidi { session_id, reason } => {
-                            assert_eq!(session_id, "e2e-1");
-                            assert_eq!(reason, "done", "graceful close must report `done`");
-                            saw_terminal = true;
-                            total_frames_seen.push(frame);
-                            break;
-                        }
-                        other => panic!("unexpected frame on bidi e2e: {other:?}"),
-                    }
-                    total_frames_seen.push(frame);
+        for _ in 0..4 {
+            let frame = tokio::time::timeout(read_deadline, recv_frame(&mut client))
+                .await
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "timeout reading bidi frame {} of 4 (got {recv_count} RecvBidi so far)",
+                        recv_count + 1
+                    )
+                });
+            match frame {
+                OutgoingFrame::RecvBidi { session_id, frame: f } => {
+                    assert_eq!(session_id, "e2e-1");
+                    assert_eq!(
+                        f,
+                        serde_json::json!({"i": recv_count}),
+                        "§I1 violation at index {recv_count}: out-of-order frame"
+                    );
+                    recv_count += 1;
                 }
-                Err(_) => panic!(
-                    "timeout reading bidi frames; got {recv_count} RecvBidi so far, terminal_seen={saw_terminal}"
-                ),
+                OutgoingFrame::TerminalBidi { session_id, reason } => {
+                    assert_eq!(session_id, "e2e-1");
+                    assert_eq!(reason, "done", "graceful close must report `done`");
+                    assert_eq!(recv_count, 3, "Terminal arrived before all RecvBidi");
+                    break;
+                }
+                other => panic!("unexpected frame on bidi e2e: {other:?}"),
             }
         }
-        assert_eq!(recv_count, 3, "expected exactly 3 RecvBidi frames");
-        assert!(saw_terminal, "§I2: TerminalBidi must arrive after CloseBidi");
+        assert_eq!(recv_count, 3, "expected exactly 3 RecvBidi before Terminal");
 
-        // Tail-check: NO additional TerminalBidi after the first.
-        // A short post-Terminal poll catches a regression that
-        // re-fires on the cancel-sweep path during connection drop.
+        // §I2 tail-check: poll briefly for a SECOND Terminal that
+        // shouldn't exist. A regression re-firing on the cancel-sweep
+        // path during connection drop would surface here. Short
+        // window (200 ms) is enough — the forwarder either fires
+        // immediately on the racing close path or not at all.
+        let stray = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            recv_frame(&mut client),
+        )
+        .await;
+        assert!(
+            stray.is_err(),
+            "§I2 violation: extra frame after TerminalBidi: {:?}",
+            stray.ok()
+        );
+
         drop(client);
         let _ = server_task.await;
     }
