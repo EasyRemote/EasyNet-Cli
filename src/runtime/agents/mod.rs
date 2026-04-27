@@ -42,6 +42,7 @@ pub mod loop_ability;
 pub mod mcp_bridge_ability;
 pub mod meta_ability;
 pub mod network_health_ability;
+pub mod policy_ability;
 pub mod permission_ability;
 pub mod ping;
 pub mod profiles;
@@ -99,6 +100,11 @@ pub fn build_registry_with_services(
     let mut reg = LocalAbilityRegistry::new();
     ping::register(&mut reg);
     network_health_ability::register(&mut reg);
+    // policy.{evaluate,simulate} — admission-gate consumer surface
+    // pinned to the §A6 contract. v1 is allow-all; the gate's
+    // rewiring to actually call this ability lands in a follow-up
+    // (see policy_ability module preamble).
+    policy_ability::register(&mut reg);
     session_ability::register(&mut reg, sessions);
     permission_ability::register(&mut reg, perms);
     discuss_ability::register(&mut reg, discuss);
@@ -229,6 +235,8 @@ pub fn description_for(name: &str) -> &'static str {
     match name {
         "observe.health" => ping::description(),
         "observe.network_health" => network_health_ability::description(),
+        "policy.evaluate" => policy_ability::evaluate_description(),
+        "policy.simulate" => policy_ability::simulate_description(),
         "fleet.list_sessions" => session_ability::list_description(),
         "fleet.attach_session" => session_ability::attach_description(),
         "consent.subscribe" => permission_ability::subscribe_description(),
@@ -273,6 +281,8 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
     match name {
         "observe.health" => ping::input_schema(),
         "observe.network_health" => network_health_ability::input_schema(),
+        "policy.evaluate" => policy_ability::evaluate_input_schema(),
+        "policy.simulate" => policy_ability::simulate_input_schema(),
         "fleet.list_sessions" => session_ability::list_input_schema(),
         "fleet.attach_session" => session_ability::attach_input_schema(),
         "consent.subscribe" => permission_ability::subscribe_input_schema(),
