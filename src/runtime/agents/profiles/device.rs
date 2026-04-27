@@ -43,6 +43,13 @@ pub const DEVICE_PROFILE_ABILITY_PREFIXES: &[&str] = &[
     "process.",
     "shell.",
     "http.",
+    // a2a.* edge adapters: the bridge is an inbound A2A server,
+    // the client is an outbound A2A caller. These are stateless
+    // host-level adapters (no separate hosted agent owns them,
+    // unlike mcp.* which is gated on the hosted mcp agent).
+    // Putting them under device matches their actual deployment
+    // model: every host that participates in A2A has them.
+    "a2a.",
 ];
 
 /// Returns true if `ability_name` is owned by the device profile.
@@ -112,6 +119,10 @@ mod tests {
         assert!(owns("process.exec"));
         assert!(owns("shell.run"));
         assert!(owns("http.request"));
+        // A2A edge adapters (bridge = inbound, client = outbound).
+        assert!(owns("a2a.bridge.list_skills"));
+        assert!(owns("a2a.bridge.send_task"));
+        assert!(owns("a2a.client.send_task"));
     }
 
     #[test]
