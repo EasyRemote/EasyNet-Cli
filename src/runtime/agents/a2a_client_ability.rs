@@ -61,18 +61,19 @@ use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope}
 
 pub const ABILITY_SEND_TASK: &str = "a2a.client.send_task";
 
-/// Process-wide dispatcher handle. Populated by the daemon bin after
-/// `AbilityDispatcher::new(...)` completes; left unset in tests
-/// (handler returns ok:false on call, which the unset-handle test
-/// pins). Static rather than per-`register` arg because the
+/// Process-wide dispatcher handle. Populated by the daemon bin
+/// after `AbilityDispatcher::new(...)` completes; left unset in
+/// tests, where the handler's not-initialised path is what we
+/// verify. Static rather than per-`register` arg because the
 /// dispatcher is built downstream of `build_registry_with_services`,
-/// so threading a per-call OnceLock through every caller would touch
-/// every test that builds a registry. The static seam isolates the
-/// concern to the daemon bin's boot sequence.
+/// so threading a per-call OnceLock through every caller would
+/// touch every test that builds a registry. The static seam
+/// isolates the concern to the daemon bin's boot sequence.
 ///
-/// Cleared on test runs (each test that wants the populated path
-/// can call `set_dispatcher_for_test`); production daemons set it
-/// exactly once during boot.
+/// Tests that want the populated path live as integration tests at
+/// the daemon level (where `set_dispatcher` runs after the boot
+/// sequence completes). Reaching the populated path from a unit
+/// test would race other tests through this same static OnceLock.
 static DISPATCHER_HANDLE: std::sync::OnceLock<Arc<AbilityDispatcher>> =
     std::sync::OnceLock::new();
 
@@ -114,29 +115,24 @@ pub fn register(reg: &mut LocalAbilityRegistry) {
 /// visible response; only programmer errors (lock poisoning,
 /// genuinely impossible states) bubble as `Err`.
 fn send_task_handler(args: Value) -> anyhow::Result<Value> {
-    let target_node = match args.get("target_node_uri").and_then(Value::as_str) {
-        Some(s) if !s.is_empty() => s.to_string(),
-        _ => return Ok(error_response(
-            "`target_node_uri` is required and must be a non-empty string",
-        )),
+    let target_node = match required_nonempty_string(&args, "target_node_uri") {
+        Ok(s) => s,
+        Err(msg) => return Ok(error_response(&msg)),
     };
-    let agent_name = match args.get("agent_name").and_then(Value::as_str) {
-        Some(s) if !s.is_empty() => s.to_string(),
-        _ => return Ok(error_response(
-            "`agent_name` is required and must be a non-empty string",
-        )),
+    let agent_name = match required_nonempty_string(&args, "agent_name") {
+        Ok(s) => s,
+        Err(msg) => return Ok(error_response(&msg)),
     };
-    let skill_name = match args.get("skill_name").and_then(Value::as_str) {
-        Some(s) if !s.is_empty() => s.to_string(),
-        _ => return Ok(error_response(
-            "`skill_name` is required and must be a non-empty string",
-        )),
+    let skill_name = match required_nonempty_string(&args, "skill_name") {
+        Ok(s) => s,
+        Err(msg) => return Ok(error_response(&msg)),
     };
     let task_args = args.get("args").cloned().unwrap_or(Value::Null);
 
     let Some(dispatcher) = DISPATCHER_HANDLE.get() else {
         return Ok(error_response(
-            "dispatcher handle not initialised (daemon-bin forgot to call set_dispatcher)",
+            "dispatcher not initialised (production: daemon-bin's set_dispatcher hook; \
+             tests deliberately leave this unset)",
         ));
     };
 
@@ -149,9 +145,24 @@ fn send_task_handler(args: Value) -> anyhow::Result<Value> {
         call_mode: CallMode::Rpc,
     };
 
+    // The dispatcher's error already names the failure (e.g. "no
+    // gateway", "remote node unreachable"); we forward verbatim
+    // rather than prefix "remote dispatch failed:" — that prefix
+    // would double up in the rendered message.
     match dispatcher.execute_rpc(target) {
         Ok(value) => Ok(json!({ "ok": true, "result": value })),
-        Err(e) => Ok(error_response(&format!("remote dispatch failed: {e}"))),
+        Err(e) => Ok(error_response(&format!("{e}"))),
+    }
+}
+
+/// Pull a required, non-empty string field out of `args`. Returns
+/// the string on success; returns the caller-visible error message
+/// on absence/wrong-type/empty so the call site can wrap it in an
+/// error_response without a separate format!.
+fn required_nonempty_string(args: &Value, key: &str) -> Result<String, String> {
+    match args.get(key).and_then(Value::as_str) {
+        Some(s) if !s.is_empty() => Ok(s.to_string()),
+        _ => Err(format!("`{key}` is required and must be a non-empty string")),
     }
 }
 

@@ -18,7 +18,16 @@
 //
 //   Handler → client (RecvBidi.frame):
 //     { "type": "stdout", "data": "<base64 bytes>" }
-//     { "type": "exit",   "status": <int|null> }
+//     { "type": "exit",   "status": <u32|null> }
+//     { "type": "warn",   "message": "<diagnostic>" }   // §D5
+//
+// `exit` is emitted exactly once per session, when the child
+// terminates. `status` is `null` when the wait surfaces no exit
+// code (extremely rare on unix; the OS reaper still claims the
+// child) OR when the master couldn't lend a reader at attach time
+// (PTY-side failure, no child to wait on). `warn` rides per-frame
+// diagnostics that don't terminate the session — e.g. a malformed
+// stdin frame; the session keeps running.
 //
 // The single TerminalBidi per session_id (§I2) is fired by the IPC
 // forwarder, not this handler. The handler signals "session over"
@@ -106,37 +115,29 @@ fn attach_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<BidiSour
         .get(&id)
         .ok_or_else(|| anyhow::anyhow!("pty_session_attach: unknown session_id `{session_id}`"))?;
 
-    // Build the four channel halves up front. Names are transport-
-    // axis per BidiSource's contract (transport's perspective):
-    //   xport_to_handler_tx  — IPC pushes here, handler reads
-    //   xport_to_handler_rx  — handler reads SendBidi frames
-    //   xport_from_handler_tx — handler pushes RecvBidi frames here
-    //   xport_from_handler_rx — IPC pulls here, emits RecvBidi
+    // Channel halves are transport-axis per BidiSource's contract:
+    //   xport_to_handler_tx  — IPC pushes here (SendBidi);
+    //                          handler reads via xport_to_handler_rx
+    //   xport_from_handler_tx — handler writes here;
+    //                           IPC reads via xport_from_handler_rx
+    //                           and emits RecvBidi
     let (xport_to_handler_tx, xport_to_handler_rx) =
         tokio::sync::mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
     let (xport_from_handler_tx, xport_from_handler_rx) =
         tokio::sync::mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
 
-    // Clone Arcs for the three tasks. Each task drops its clone on
-    // its own exit path; the to_client sender's drop quorum is what
-    // triggers the §I2 TerminalBidi.
-    let session_for_reader = Arc::clone(&session);
-    let session_for_writer = Arc::clone(&session);
-    let session_for_waiter = session;
-    let to_client_for_reader = xport_from_handler_tx.clone();
-    let to_client_for_waiter = xport_from_handler_tx.clone();
-    let to_client_for_writer = xport_from_handler_tx;
-    // Drop the original immediately so we don't hold a fourth clone
-    // here — only the three tasks own a sender.
-    drop(to_client_for_writer);
-    let to_client_for_writer = to_client_for_reader.clone();
-    // ↑ structure: rebind so writer also has a clone. Total clones:
-    // reader + waiter + writer + (the to_client_for_writer line we
-    // just dropped). Net: 3 live, matching the three tasks.
-
-    spawn_pty_reader(session_for_reader, to_client_for_reader);
-    spawn_pty_writer(session_for_writer, xport_to_handler_rx, to_client_for_writer);
-    spawn_exit_watcher(session_for_waiter, to_client_for_waiter, pty.clone(), id);
+    // Each of the three tasks (reader / writer / exit-watcher) owns
+    // one sender clone; the §I2 TerminalBidi fires only when the
+    // last sender drops. The original `xport_from_handler_tx` is
+    // moved into the writer below; the other two are clones.
+    spawn_pty_reader(Arc::clone(&session), xport_from_handler_tx.clone());
+    spawn_exit_watcher(
+        Arc::clone(&session),
+        xport_from_handler_tx.clone(),
+        Arc::clone(pty),
+        id,
+    );
+    spawn_pty_writer(session, xport_to_handler_rx, xport_from_handler_tx);
 
     Ok(BidiSource {
         to_client: xport_to_handler_tx,
@@ -167,11 +168,15 @@ fn spawn_pty_reader(
             }
         };
 
-        let res = tokio::task::spawn_blocking(move || {
-            // Move reader into the blocking task; loop until EOF or
-            // send-failure (forwarder gone). The async send happens
-            // via blocking_send because we're outside the tokio
-            // runtime here.
+        // Loop until EOF or send-failure (forwarder gone). The
+        // async send happens via blocking_send because we're outside
+        // the tokio runtime here. We discard the JoinError on the
+        // outer await: dropping our to_client clone is what the
+        // forwarder needs to fire §I2; the panic-vs-clean-exit
+        // distinction doesn't matter to that contract.
+        let _ = tokio::task::spawn_blocking(move || {
+            // Re-bind as mut: `move` doesn't add mutability, and
+            // `Read::read` needs `&mut self`.
             let mut reader = reader;
             let mut buf = vec![0u8; READ_CHUNK_SIZE];
             use std::io::Read;
@@ -191,10 +196,6 @@ fn spawn_pty_reader(
             }
         })
         .await;
-        // Discard JoinError: the spawn_blocking call's Result
-        // distinguishes panic vs clean exit; we don't care which —
-        // dropping our to_client clone is what the forwarder needs.
-        let _ = res;
     });
 }
 
@@ -228,34 +229,50 @@ fn spawn_pty_writer(
                 .unwrap_or("");
             match frame_type {
                 "stdin" => {
-                    let data_b64 = match frame.get("data").and_then(Value::as_str) {
-                        Some(s) => s.to_string(),
-                        None => {
-                            // Per §D5: per-frame error is a
-                            // diagnostic, not a session close. We
-                            // surface and continue.
+                    let Some(data_b64) = frame.get("data").and_then(Value::as_str) else {
+                        // §D5: per-frame error is a diagnostic, not
+                        // a session close. Use a `warn` frame type
+                        // so an MCP client doesn't accidentally print
+                        // an empty `stdout` to the user's terminal.
+                        let _ = to_client
+                            .send(json!({
+                                "type": "warn",
+                                "message": "stdin frame missing `data` field",
+                            }))
+                            .await;
+                        continue;
+                    };
+                    let bytes = match base64::engine::general_purpose::STANDARD.decode(data_b64) {
+                        Ok(b) => b,
+                        Err(e) => {
                             let _ = to_client
                                 .send(json!({
-                                    "type": "stdout",
-                                    "data": "",
-                                    "_error": "stdin frame missing `data` field"
+                                    "type": "warn",
+                                    "message": format!("stdin base64 decode failed: {e}"),
                                 }))
                                 .await;
                             continue;
                         }
                     };
-                    let bytes = match base64::engine::general_purpose::STANDARD.decode(data_b64) {
-                        Ok(b) => b,
-                        Err(_) => continue,
-                    };
                     let writer_clone = std::sync::Arc::clone(&writer);
-                    let _ = tokio::task::spawn_blocking(move || {
+                    // spawn_blocking returns the inner io::Result so
+                    // a closed PTY is observable. A repeated write
+                    // failure means the child is gone — break the
+                    // loop, drop our sender, let T3's exit frame +
+                    // §I2 quorum close the session cleanly.
+                    let write_outcome = tokio::task::spawn_blocking(move || {
                         use std::io::Write;
                         let mut w = writer_clone.lock().expect("pty writer lock");
-                        let _ = w.write_all(&bytes);
-                        let _ = w.flush();
+                        w.write_all(&bytes).and_then(|()| w.flush())
                     })
                     .await;
+                    match write_outcome {
+                        Ok(Ok(())) => {}
+                        // Either the spawn_blocking task panicked OR
+                        // write_all/flush returned Err — both mean
+                        // the PTY is no longer usable. Stop pumping.
+                        _ => break,
+                    }
                 }
                 "resize" => {
                     let cols = frame
@@ -270,17 +287,18 @@ fn spawn_pty_writer(
                         let _ = session.resize(c, r).await;
                     }
                 }
-                _other => {
+                _ => {
                     // Unknown frame type: drop silently. Forward-
                     // compat — a future stdin variant (e.g. paste-
                     // mode marker) shouldn't break old daemons.
                 }
             }
         }
-        // Receiver returned None → CloseBidi from client OR
-        // connection drop. Drop our to_client clone by falling out
-        // of scope; the §I2 TerminalBidi fires once the reader and
-        // waiter also drop their clones.
+        // Loop exit: receiver returned None (CloseBidi from client,
+        // or connection drop), or a write to the PTY failed. Drop
+        // our to_client clone by falling out of scope; the §I2
+        // TerminalBidi fires once the reader and waiter also drop
+        // their clones.
     });
 }
 
@@ -308,14 +326,24 @@ fn spawn_exit_watcher(
                     return;
                 };
                 match child.try_wait() {
-                    Ok(Some(s)) => Some(s.exit_code() as i32),
-                    Ok(None) => None,    // still alive
-                    Err(_) => Some(-1),  // wait error → treat as exit
+                    // Some(Some(code)) → child exited with `code`.
+                    // Some(None)       → wait error; treat as exited
+                    //                    with unknown status (null on
+                    //                    the wire, not a sentinel int
+                    //                    that collides with legal codes).
+                    // None             → still alive; keep polling.
+                    Ok(Some(s)) => Some(Some(s.exit_code())),
+                    Ok(None) => None,
+                    Err(_) => Some(None),
                 }
             };
             if let Some(code) = status {
+                let status_value = match code {
+                    Some(c) => json!(c),
+                    None => Value::Null,
+                };
                 let _ = to_client
-                    .send(json!({"type": "exit", "status": code}))
+                    .send(json!({"type": "exit", "status": status_value}))
                     .await;
                 // Best-effort cleanup: remove the session row so a
                 // future close sees ack=false (idempotent). Failure
@@ -358,11 +386,12 @@ mod tests {
         Arc::new(PtyService::new())
     }
 
-    fn shell_command() -> &'static str {
+    fn shell_command() -> String {
         // /bin/sh exists on every unix; using it (not /bin/bash)
         // keeps the test portable. The subset of POSIX sh we use is
-        // `echo` (printable ASCII echo).
-        "/bin/sh"
+        // `echo` (printable ASCII echo). Returns String (not &str)
+        // so callers don't need a `.to_string()` at every call site.
+        "/bin/sh".to_string()
     }
 
     /// Try to drain at most `n` RecvBidi frames from the bidi
@@ -426,7 +455,7 @@ mod tests {
         // the reader (T1) trips this.
         let svc = fresh_service();
         let mut spec = PtyCreateSpec::default();
-        spec.command = Some(shell_command().to_string());
+        spec.command = Some(shell_command());
         let id = svc.create(spec).expect("spawn /bin/sh");
 
         let source =
@@ -481,7 +510,7 @@ mod tests {
         // stdin still round-trips.
         let svc = fresh_service();
         let mut spec = PtyCreateSpec::default();
-        spec.command = Some(shell_command().to_string());
+        spec.command = Some(shell_command());
         let id = svc.create(spec).expect("spawn /bin/sh");
         let source =
             attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
@@ -572,7 +601,7 @@ mod tests {
         // Send junk, then a valid stdin, observe stdin still works.
         let svc = fresh_service();
         let mut spec = PtyCreateSpec::default();
-        spec.command = Some(shell_command().to_string());
+        spec.command = Some(shell_command());
         let id = svc.create(spec).expect("spawn /bin/sh");
         let source =
             attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");

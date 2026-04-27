@@ -151,11 +151,11 @@ fn call_tool_handler(
         )));
     }
 
-    // Now reach into the registry. The handle is populated post-
-    // registration; if it's empty we're being called from a test
-    // that registered without wiring the lock, which is a test bug
-    // — surface as an isError frame rather than panicking so the
-    // wire shape is still well-formed.
+    // Reach into the registry through the post-build OnceLock seam.
+    // If the lock is empty we surface as isError rather than panic
+    // so the MCP wire shape is still well-formed; in production the
+    // build site populates it before any call lands, so this branch
+    // only fires for misconfigured tests.
     let Some(registry) = registry_handle.get() else {
         return Ok(error_response(
             "registry handle not initialised (build-site forgot to set the OnceLock)",
@@ -183,7 +183,12 @@ fn call_tool_handler(
 /// JSON-encoded value. Future enhancement: detect string responses
 /// and emit them as raw text rather than JSON-quoted strings.
 fn success_response(value: Value) -> Value {
-    let text = serde_json::to_string(&value).unwrap_or_else(|_| "<unencodable>".into());
+    // `serde_json::to_string` on a Value cannot fail — Value is
+    // by construction always JSON-encodable (no NaN, no cycles).
+    // expect() makes the invariant explicit; a fallback string
+    // would just pretend to handle a case that doesn't exist.
+    let text = serde_json::to_string(&value)
+        .expect("serde_json::Value is always JSON-serializable");
     json!({
         "content": [{
             "type": "text",
