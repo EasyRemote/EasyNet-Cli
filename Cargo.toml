@@ -107,6 +107,14 @@ base64 = "0.22"
 # runner). std::error::Error trait derivation by hand is verbose; this
 # crate is the de-facto standard.
 thiserror = "1"
+# tree-sitter + tree-sitter-bash drive the AST stage of the shell.run
+# 8-stage pipeline (AXIOM Tier 2.5). Same parser AliveCode uses, so
+# the cross-implementation security semantics line up. The parser's
+# job is *only* to give shellguard a structured view of a command
+# string; everything else (allow/deny, dangerous-pattern detection,
+# permission rules) sits in plain Rust on top.
+tree-sitter = "0.25"
+tree-sitter-bash = "0.25"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
