@@ -1,0 +1,22 @@
+schema_version = "1"
+name = "fs.read"
+description = "Read a file from the host's filesystem. Part of the baseline-locomotion-v1 profile (AXIOM §Tier 2.5 — Baseline Locomotion Profile). Every operation goes through AXIOM admission, delegation, and emits a callee-signed receipt; this is not a backend escape hatch."
+
+[input_schema]
+type = "object"
+required = ["path"]
+additionalProperties = false
+
+[input_schema.properties.path]
+type = "string"
+minLength = 1
+
+[input_schema.properties.max_bytes]
+type = "integer"
+minimum = 0
+description = "Truncate the read at this many bytes. Default 8 MiB."
+
+[input_schema.properties.encoding]
+type = "string"
+enum = ["binary", "utf8"]
+description = "Output encoding. binary = base64-encoded bytes; utf8 = UTF-8 text (errors if the file is not valid UTF-8)."
