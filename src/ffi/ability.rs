@@ -557,6 +557,25 @@ async fn run_subscription_loop(
                             break;
                         }
                         OutgoingFrame::Result { .. } => continue,
+                        // Bidi-only outbound variants must never appear on a
+                        // Subscribe response stream — the server only emits
+                        // them in reply to OpenBidi, which this code path
+                        // never sends. Treat as a server protocol violation:
+                        // surface as an error to the dispatcher and end the
+                        // stream so a buggy server can't silently pump bidi
+                        // frames into a stream subscriber's queue.
+                        OutgoingFrame::RecvBidi { .. }
+                        | OutgoingFrame::TerminalBidi { .. }
+                        | OutgoingFrame::ErrorBidi { .. } => {
+                            let v = serde_json::json!({
+                                "kind": "error",
+                                "message": "server emitted a bidi frame on a Subscribe stream",
+                            });
+                            if let Ok(json) = serde_json::to_vec(&v) {
+                                let _ = tx.send(json);
+                            }
+                            break;
+                        }
                     }
                 }
             }

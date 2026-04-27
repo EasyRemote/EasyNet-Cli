@@ -101,8 +101,9 @@ SendBidi  { session_id: String, frame: Value }
 CloseBidi { session_id: String }
 
 // OutgoingFrame additions:
-RecvBidi  { session_id: String, frame: Value }
-// Terminal + Error are reused (already populated for stream).
+RecvBidi     { session_id: String, frame: Value }
+TerminalBidi { session_id: String, reason: String }
+ErrorBidi    { session_id: String, code: String, message: String }
 ```
 
 **No `Cancel` reuse**: `Cancel{subscription_id}` could route a cancel for a bidi session if `subscription_id == session_id`, but the wire variant name lies. Adding `CloseBidi` is cheaper than confusing future readers.
@@ -126,17 +127,54 @@ A new per-connection `BidiRegistry: HashMap<session_id, mpsc::Sender<Value>>` li
 
 ---
 
+## Invariants
+
+These three are load-bearing — every commit and test must hold them.
+
+### I1. Frame ordering
+
+Within a single `session_id`:
+- All `SendBidi` frames from client are delivered to the handler **in client emission order**.
+- All `RecvBidi` frames from handler are delivered to the client **in handler emission order**.
+- **No cross-direction ordering guarantee** — a `SendBidi` and a `RecvBidi` may interleave arbitrarily on the wire.
+
+Implementation: per-direction `mpsc` (FIFO by construction) gives intra-direction ordering for free. The IPC writer queue is a single `mpsc::Sender<OutgoingFrame>` per connection, so cross-session ordering on a connection is also FIFO at the wire — but that is **not** part of the contract; abilities must not rely on it.
+
+### I2. Terminal idempotency
+
+Each `session_id` emits **at most one** `Terminal` envelope, ever. Cancel paths race (D4: client close, handler drop, connection drop) — whichever wins fires `Terminal`; the others observe the session is already gone and no-op.
+
+Implementation: a `SessionState` (per-session) holds an `AtomicBool finalized`; the `Terminal` emit site does `compare_exchange(false, true)` and only sends on success. Test `client_close_emits_single_terminal` and a contention test (close + connection-drop simultaneous) pin this.
+
+### I3. `OpenBidi` atomicity
+
+`OpenBidi` either fully succeeds — registry lookup OK, both channels created, handler returned `BidiSource`, session registered in `BidiRegistry`, cancel token registered — or fully fails with one `Error` envelope and **no** session state visible to subsequent frames.
+
+A failed `OpenBidi` must NOT leave: a registered `session_id` in `BidiRegistry`, a registered cancel token, a spawned forwarder, or any handler-owned tokio task. Half-open sessions are the bug class this invariant prevents.
+
+Implementation: build everything in local variables first; only after all four steps succeed, take the registry lock and atomically install the session entries. Failure paths drop the local variables, which closes the channels and any spawned task observes the closure.
+
+---
+
 ## Test plan
 
-Inside `ability_dispatch.rs` and `services/control/`:
+Inside `ability_dispatch.rs` and `services/control/`. Tests bind to invariant numbers I1/I2/I3.
 
-1. **registration test** — `register_bidi` makes the ability dispatchable.
-2. **echo handler round-trip** — send 3 frames, observe 3 echoed `RecvBidi` frames.
-3. **client close** — drop client side mid-stream, observe `Terminal{done}`.
-4. **handler close** — handler drops `to_client` after 2 frames, observe `Terminal{done}` after 2 RecvBidi frames.
-5. **cancel-on-connection-drop** — drop the underlying UnixStream, observe `Terminal{cancelled}`.
-6. **per-frame error** — handler emits an `Error` envelope, session continues, then closes cleanly.
-7. **wire shape** — `OpenBidi/SendBidi/CloseBidi/RecvBidi` JSON round-trip.
+Required cases (from review):
+
+- `open_send_recv_close_success` — happy path; pins I1 ordering for both directions.
+- `client_close_emits_single_terminal` — pins I2; one Terminal exactly.
+- `handler_drop_to_client_emits_terminal` — handler-initiated close; pins I2.
+- `connection_drop_cleans_sessions` — drop UnixStream; pins I2 + cancel-path determinism.
+- `per_frame_error_does_not_close_session` — D5; session continues after Error envelope.
+- `backpressure_blocks_or_awaits_without_frame_loss` — saturate `from_client` to its 256-frame bound, observe `send().await` blocks; verify no frames dropped.
+
+Plus structural cases:
+
+- `register_bidi_makes_ability_dispatchable` — registry lookup.
+- `open_bidi_failure_leaves_no_half_open_session` — pins I3.
+- `terminal_idempotency_under_concurrent_cancel` — race client close + connection drop; exactly one Terminal.
+- `wire_shape_round_trip` — `OpenBidi/SendBidi/CloseBidi/RecvBidi` JSON round-trip.
 
 End-to-end smoke (extends the existing `end_to_end_invoke_round_trip_returns_result_for_system_ping`) using a registered echo bidi handler.
 
@@ -158,12 +196,12 @@ Matches the task's "≥500 LOC" estimate.
 
 ---
 
-## Open questions for review
+## Resolved (from review 2026-04-27)
 
-1. **D1 channel bound**: is 256 the right default? PTY scrollback could push much higher.
-2. **D5 error not closing session**: agree this matches PTY/SSE needs?
-3. **D8 BidiRegistry placement**: per-connection (proposed) or per-process? Per-connection is simpler; per-process would let one connection cancel another's session by id (not desired today, but federation later might).
-4. **Should `Subscribe` be deprecated** in favor of bidi-with-empty-from-client? No — keeps the simpler primitive available, and stream is more efficient on the wire (no session_id round trip per frame).
+1. **D1 channel bound**: fixed 256, no `capacity` parameter on `register_bidi`. Scrollback / history caching is an adapter-layer concern (PTY adapter, frontend), not a transport-protocol concern. Keeping the registration API free of tuning surface.
+2. **D5 error not closing session**: confirmed. `Error` is a data-plane diagnostic frame; only `CloseBidi` / channel drop / connection loss / fatal transport error fires `Terminal`.
+3. **D8 BidiRegistry placement**: connection-scoped. `session_id` uniqueness is per-connection; connection drop deterministically cleans every live session. Cross-connection cancel is a federation / durable-invocation problem, not an IPC bridge problem.
+4. **Subscribe retention**: keep. `Subscribe` is a cheaper one-way pipe; `Bidi` is a stateful session. Two primitives stay distinct.
 
 ---
 

@@ -58,6 +58,28 @@ pub enum IncomingFrame {
     /// Early-terminate an in-flight subscription. Server responds
     /// with a `Terminal` envelope on the matching subscription_id.
     Cancel { subscription_id: String },
+    /// Open a bidirectional session against a registered bidi
+    /// ability. The handler is invoked once with `args`; both
+    /// directions stay open until the client sends `CloseBidi`,
+    /// the handler ends, or the connection drops. Server emits zero
+    /// or more `RecvBidi` frames followed by exactly one `Terminal`
+    /// envelope.
+    OpenBidi {
+        session_id: String,
+        ability: String,
+        #[serde(default)]
+        args: Value,
+    },
+    /// Push one client→handler frame onto an opened bidi session.
+    /// Frames are delivered to the handler in client emission order
+    /// (per-session FIFO). No response envelope per `SendBidi` —
+    /// any reply rides on `RecvBidi`.
+    SendBidi { session_id: String, frame: Value },
+    /// Client-initiated close. Server drops the handler-input
+    /// channel; the handler observes EOF, ends, and the forwarder
+    /// emits `Terminal{done}`. Idempotent — a second `CloseBidi` for
+    /// the same `session_id` is a silent no-op.
+    CloseBidi { session_id: String },
 }
 
 /// One outbound envelope written back to the Client FFI.
@@ -93,14 +115,43 @@ pub enum OutgoingFrame {
         subscription_id: String,
         reason: String,
     },
-    /// Error envelope, used for both Invoke failures and Subscribe
-    /// failures. Exactly one of `request_id` / `subscription_id` is
-    /// populated depending on which inbound frame caused the error.
+    /// Bidi session terminated. Mirrors `Terminal` but carries
+    /// `session_id` instead of `subscription_id` so the wire shape
+    /// matches OpenBidi's correlation id and so the type system
+    /// rejects accidentally closing a stream as a bidi (and vice
+    /// versa). Per C-M3a §I2, **at most one TerminalBidi is ever
+    /// emitted per session_id** — the cancel-path that flips the
+    /// per-session `finalized` flag first wins.
+    TerminalBidi { session_id: String, reason: String },
+    /// Error envelope, used for Invoke and Subscribe failures.
+    /// Exactly one of `request_id` / `subscription_id` is populated
+    /// depending on which inbound frame caused the error.
     Error {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         request_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subscription_id: Option<String>,
+        code: String,
+        message: String,
+    },
+    /// One handler→client frame on a bidi session. Frames are
+    /// emitted in handler write order (per-session FIFO). No
+    /// cross-direction ordering guarantee with `SendBidi`.
+    RecvBidi { session_id: String, frame: Value },
+    /// Per-frame bidi diagnostic. Carries `session_id` so it
+    /// correlates with an open bidi session.
+    ///
+    /// Per C-M3a §D5: receiving `ErrorBidi` does NOT close the
+    /// session — it is a data-plane diagnostic, not a terminal
+    /// signal. Only `TerminalBidi` closes a session. The handler
+    /// decides whether to continue after surfacing diagnostics.
+    ///
+    /// Used both for OpenBidi failures (handler refused, registry
+    /// lookup miss) and for in-session per-frame errors. When the
+    /// open itself failed, no `TerminalBidi` follows — the failed
+    /// open never produced a half-open session per §I3.
+    ErrorBidi {
+        session_id: String,
         code: String,
         message: String,
     },
@@ -194,6 +245,89 @@ mod tests {
             !s.contains("receipt_header"),
             "absent header must not serialize; got {s}"
         );
+    }
+
+    #[test]
+    fn open_bidi_frame_round_trips_through_json() {
+        // Inbound bidi-open carries the same correlation-id triple
+        // the rest of the C-M3a machinery keys on. Pin the wire shape
+        // so a future schema generator producing protobuf-JSON sees
+        // the snake_case discriminator and field names this enum
+        // already commits to.
+        let f = IncomingFrame::OpenBidi {
+            session_id: "s-1".into(),
+            ability: "fleet.session_attach".into(),
+            args: serde_json::json!({"node":"01DEV"}),
+        };
+        let s = serde_json::to_string(&f).unwrap();
+        assert!(s.contains("\"type\":\"open_bidi\""), "discriminator: {s}");
+        assert!(s.contains("\"session_id\":\"s-1\""));
+        let back: IncomingFrame = serde_json::from_str(&s).unwrap();
+        match back {
+            IncomingFrame::OpenBidi { session_id, ability, .. } => {
+                assert_eq!(session_id, "s-1");
+                assert_eq!(ability, "fleet.session_attach");
+            }
+            _ => panic!("expected OpenBidi after round-trip"),
+        }
+    }
+
+    #[test]
+    fn send_bidi_and_close_bidi_round_trip_through_json() {
+        // Pinned together because both share the session_id key and
+        // a regression that swaps "session_id" for any other token
+        // would break the receiver's correlation lookup. One test,
+        // two frames, fewer redundant fixtures.
+        let send = IncomingFrame::SendBidi {
+            session_id: "s-2".into(),
+            frame: serde_json::json!({"data":"hello"}),
+        };
+        let send_json = serde_json::to_string(&send).unwrap();
+        assert!(send_json.contains("\"type\":\"send_bidi\""));
+        let _: IncomingFrame = serde_json::from_str(&send_json).unwrap();
+
+        let close = IncomingFrame::CloseBidi {
+            session_id: "s-2".into(),
+        };
+        let close_json = serde_json::to_string(&close).unwrap();
+        assert!(close_json.contains("\"type\":\"close_bidi\""));
+        let _: IncomingFrame = serde_json::from_str(&close_json).unwrap();
+    }
+
+    #[test]
+    fn recv_bidi_and_terminal_bidi_and_error_bidi_carry_session_id_only() {
+        // Per design D6, the bidi outbound trio uses `session_id`
+        // (not `subscription_id`). A regression that emits the wrong
+        // key here means clients correlate against an empty field —
+        // visible only at runtime under high load. Pin the field
+        // name explicitly.
+        let recv = OutgoingFrame::RecvBidi {
+            session_id: "s-3".into(),
+            frame: serde_json::json!({"k":"v"}),
+        };
+        let s = serde_json::to_string(&recv).unwrap();
+        assert!(s.contains("\"type\":\"recv_bidi\""));
+        assert!(s.contains("\"session_id\":\"s-3\""));
+        assert!(!s.contains("subscription_id"));
+
+        let term = OutgoingFrame::TerminalBidi {
+            session_id: "s-3".into(),
+            reason: "done".into(),
+        };
+        let s = serde_json::to_string(&term).unwrap();
+        assert!(s.contains("\"type\":\"terminal_bidi\""));
+        assert!(s.contains("\"session_id\":\"s-3\""));
+        assert!(!s.contains("subscription_id"));
+
+        let err = OutgoingFrame::ErrorBidi {
+            session_id: "s-3".into(),
+            code: codes::ABILITY_FAILED.into(),
+            message: "boom".into(),
+        };
+        let s = serde_json::to_string(&err).unwrap();
+        assert!(s.contains("\"type\":\"error_bidi\""));
+        assert!(s.contains("\"session_id\":\"s-3\""));
+        assert!(!s.contains("subscription_id"));
     }
 
     #[test]

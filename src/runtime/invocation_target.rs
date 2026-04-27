@@ -86,6 +86,10 @@ pub enum CallMode {
     /// Streaming: one request, multiple response frames, explicit
     /// terminal frame at the end.
     Stream,
+    /// Bidirectional session: long-lived, both ends may push frames
+    /// at any time until either closes. See C-M3a design doc and
+    /// `LocalBidiHandler` for the contract.
+    Bidi,
 }
 
 /// Trait for the resolver. Concrete impl: `LocalNodeResolver`.
