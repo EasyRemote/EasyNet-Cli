@@ -347,25 +347,26 @@ fn handler(
         }
     }
 
-    // Skills enumeration. `skills_loaded` reports what would be
-    // exposed to the LLM as tools for this call. Today the chat
-    // handler does NOT yet inject these into the driver's tool list
-    // — the driver adapters need a corresponding tools surface,
-    // which is a separate PR. Surfacing the names anyway lets a
-    // caller verify their `skills.{include,exclude}` filter works
-    // as expected before the wiring lands.
-    let skills_loaded = enumerate_skills(agent_name, entry, &parsed.skills);
+    // Skills enumeration. `skills_loaded` reports what is exposed to
+    // the LLM both as MCP tools (via the workspace `.mcp.json`) and
+    // as a textual "Available skills" hint inside the context block.
+    // The hint is what tells the LLM "you have a `voice` skill" —
+    // without it the names live in the MCP tool list but the model
+    // has no system-prompt-level reminder of which to reach for.
+    let skill_specs = enumerate_skill_specs(agent_name, entry, &parsed.skills);
+    let skills_loaded: Vec<String> = skill_specs.iter().map(|s| s.name().to_string()).collect();
+    let skills_hint = format_skills_hint(&skill_specs);
 
-    // Compose the literal context. Loader output goes first, then
-    // the caller's `context` arg, separated by blank lines so the
-    // LLM sees a coherent block. An empty composition yields `None`
-    // so `compose_prompt` does not insert a useless context wrapper.
-    let composed_context: Option<String> = match (loaded_chunks.is_empty(), &parsed.context) {
-        (true, None) => None,
-        (true, Some(c)) => Some(c.clone()),
-        (false, None) => Some(loaded_chunks.join("\n\n")),
-        (false, Some(c)) => Some(format!("{}\n\n{c}", loaded_chunks.join("\n\n"))),
-    };
+    // Compose the literal context. Order: skills hint, then loader
+    // output, then the caller's explicit `context` arg — each
+    // separated by blank lines so the LLM sees a coherent block. An
+    // empty composition yields `None` so `compose_prompt` does not
+    // insert a useless context wrapper.
+    let composed_context: Option<String> = compose_chat_context(
+        skills_hint.as_deref(),
+        &loaded_chunks,
+        parsed.context.as_deref(),
+    );
 
     // The dispatch call. `send_external_with_overrides` is the
     // overrides-aware variant — when `parsed.driver` is the default
@@ -549,7 +550,9 @@ fn stream_handler(
             }
         }
     }
-    let skills_loaded = enumerate_skills(agent_name, entry, &parsed.skills);
+    let skill_specs = enumerate_skill_specs(agent_name, entry, &parsed.skills);
+    let skills_loaded: Vec<String> = skill_specs.iter().map(|s| s.name().to_string()).collect();
+    let skills_hint = format_skills_hint(&skill_specs);
     if !skills_loaded.is_empty() || !context_used.is_empty() {
         snapshot.push(json!({
             "type": "loaded",
@@ -558,12 +561,11 @@ fn stream_handler(
         }));
     }
 
-    let composed_context: Option<String> = match (loaded_chunks.is_empty(), &parsed.context) {
-        (true, None) => None,
-        (true, Some(c)) => Some(c.clone()),
-        (false, None) => Some(loaded_chunks.join("\n\n")),
-        (false, Some(c)) => Some(format!("{}\n\n{c}", loaded_chunks.join("\n\n"))),
-    };
+    let composed_context: Option<String> = compose_chat_context(
+        skills_hint.as_deref(),
+        &loaded_chunks,
+        parsed.context.as_deref(),
+    );
 
     // ── Live half: spawn dispatch thread, return receiver ──────────────
     //
@@ -681,20 +683,94 @@ fn enumerate_skills(
     entry: &AgentEntry,
     selection: &Selection,
 ) -> Vec<String> {
+    enumerate_skill_specs(agent_name, entry, selection)
+        .into_iter()
+        .map(|s| s.name().to_string())
+        .collect()
+}
+
+/// Same selection logic as [`enumerate_skills`], but returns the full
+/// `AgentAbilitySpec` so callers (specifically the system-prompt
+/// hint builder) can read the description alongside the qualified
+/// name without re-walking the registry.
+fn enumerate_skill_specs(
+    agent_name: &str,
+    entry: &AgentEntry,
+    selection: &Selection,
+) -> Vec<crate::runtime::abilities::AgentAbilitySpec> {
     if matches!(selection.mode, SelectionMode::None) {
         return Vec::new();
     }
     let self_chat = format!("{agent_name}.{ABILITY_VERB}");
-    let candidates: Vec<String> =
-        crate::runtime::abilities::abilities_for(agent_name, entry)
-            .into_iter()
-            .map(|s| s.name().to_string())
-            .filter(|n| n != &self_chat)
-            .collect();
-    candidates
+    crate::runtime::abilities::abilities_for(agent_name, entry)
         .into_iter()
-        .filter(|name| selection.is_selected(name))
+        .filter(|s| s.name() != self_chat)
+        .filter(|s| selection.is_selected(s.name()))
         .collect()
+}
+
+/// Build the system-prompt-style "Available skills" hint that we
+/// prepend to the chat context. The block lists every selected
+/// ability as `- <qualified-name> — <description>` so the LLM can
+/// see the names + purposes alongside the rest of the context block.
+///
+/// Returns `None` when no skills are selected (so callers can
+/// short-circuit and avoid emitting an empty section header).
+///
+/// The block is intentionally terse and stable — one line per skill,
+/// description trimmed to a single line. The MCP tool surface still
+/// owns the canonical schemas; this hint exists only so prompts
+/// like "use your `voice` skill" resolve to a name the model has
+/// actually seen in-context.
+/// Glue together the three context fragments — skills hint, loader
+/// output, caller-supplied `context` — into a single block, with
+/// blank-line separators so the LLM reads them as discrete sections.
+/// Returns `None` when every fragment is empty so the downstream
+/// `compose_prompt` skips the wrapper entirely.
+fn compose_chat_context(
+    skills_hint: Option<&str>,
+    loaded_chunks: &[String],
+    caller_context: Option<&str>,
+) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(h) = skills_hint {
+        if !h.trim().is_empty() {
+            parts.push(h.trim_end().to_string());
+        }
+    }
+    if !loaded_chunks.is_empty() {
+        parts.push(loaded_chunks.join("\n\n"));
+    }
+    if let Some(c) = caller_context {
+        if !c.trim().is_empty() {
+            parts.push(c.to_string());
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
+    }
+}
+
+fn format_skills_hint(skills: &[crate::runtime::abilities::AgentAbilitySpec]) -> Option<String> {
+    if skills.is_empty() {
+        return None;
+    }
+    let mut out = String::from("## Available skills\n\n");
+    out.push_str(
+        "These abilities are exposed to you as MCP tools under the `easynet` server. \
+         Call them by their qualified name when the user's request matches.\n\n",
+    );
+    for s in skills {
+        let desc = s.description().lines().next().unwrap_or("").trim();
+        if desc.is_empty() {
+            out.push_str(&format!("- `{}`\n", s.name()));
+        } else {
+            out.push_str(&format!("- `{}` — {desc}\n", s.name()));
+        }
+    }
+    Some(out)
 }
 
 // ── Argument parsing ────────────────────────────────────────────────────────
@@ -1232,5 +1308,51 @@ mod tests {
             1,
             "kernel must have called the registered <agent>.chat handler exactly once"
         );
+    }
+
+    #[test]
+    fn format_skills_hint_returns_none_for_empty_input() {
+        assert!(format_skills_hint(&[]).is_none());
+    }
+
+    #[test]
+    fn format_skills_hint_lists_each_skill_with_one_line_description() {
+        let skills = vec![
+            crate::runtime::abilities::AgentAbilitySpec::new(
+                "alice.voice",
+                "Speak text via the local TTS engine.\nMore detail.",
+                json!({"type": "object"}),
+            )
+            .unwrap(),
+            crate::runtime::abilities::AgentAbilitySpec::new(
+                "alice.fs.read",
+                "Read a file from disk.",
+                json!({"type": "object"}),
+            )
+            .unwrap(),
+        ];
+        let hint = format_skills_hint(&skills).expect("non-empty");
+        assert!(hint.contains("Available skills"));
+        assert!(hint.contains("- `alice.voice` — Speak text via the local TTS engine."));
+        assert!(hint.contains("- `alice.fs.read` — Read a file from disk."));
+        // Multi-line descriptions get trimmed to first line.
+        assert!(!hint.contains("More detail"));
+    }
+
+    #[test]
+    fn compose_chat_context_returns_none_when_all_fragments_empty() {
+        assert!(compose_chat_context(None, &[], None).is_none());
+        assert!(compose_chat_context(Some("   "), &[], Some("   ")).is_none());
+    }
+
+    #[test]
+    fn compose_chat_context_orders_skills_then_loaders_then_caller() {
+        let chunks = vec!["LOADER".to_string()];
+        let out = compose_chat_context(Some("SKILLS"), &chunks, Some("CALLER")).unwrap();
+        let skills_at = out.find("SKILLS").unwrap();
+        let loader_at = out.find("LOADER").unwrap();
+        let caller_at = out.find("CALLER").unwrap();
+        assert!(skills_at < loader_at, "skills must precede loader output");
+        assert!(loader_at < caller_at, "loader output must precede caller context");
     }
 }
