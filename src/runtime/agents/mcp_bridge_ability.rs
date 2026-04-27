@@ -18,16 +18,22 @@
 //                             { tools: [{name, description,
 //                                        inputSchema}, ...] }
 //
+// What lives here (continued)
+// ---------------------------
+//   * mcp.bridge.call_tool — dispatches an in-process Invoke
+//                            against the named local ability and
+//                            wraps the response in MCP `tools/call`
+//                            shape. The §A5 visibility filter is
+//                            checked client-side BEFORE we hit the
+//                            registry: PRIVATE abilities never
+//                            leak through this surface (the
+//                            descriptors_provider's filter is what
+//                            advertises which tools are callable;
+//                            we re-check on call to defeat a stale-
+//                            client race).
+//
 // What does NOT live here yet
 // ---------------------------
-//   * mcp.bridge.call_tool — needs a registry self-reference so
-//     the handler can dispatch back into other local abilities.
-//     LocalAbilityRegistry is currently &mut-mutable (no interior
-//     mutability), and the registry-construction site can't yield
-//     an Arc<self> to a registered handler. Resolving that needs
-//     either (a) interior-mutable registry or (b) a separate
-//     dispatcher Arc the handler closes over. Tracked as
-//     C-M9a-ii; lands separately.
 //   * MCP **client** abilities (mcp.client.list / mcp.client.call) —
 //     blocked on a stdio MCP client library that doesn't yet
 //     exist in axon-sdk. Tracked as C-M9b.
@@ -50,23 +56,39 @@ use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 use crate::runtime::agents::profiles::mcp::tool_specs_from_descriptors;
 
 pub const ABILITY_LIST_TOOLS: &str = "mcp.bridge.list_tools";
+pub const ABILITY_CALL_TOOL: &str = "mcp.bridge.call_tool";
 
-/// Register mcp.bridge.list_tools on the registry.
+/// Register both bridge abilities on the registry.
 ///
 /// `descriptors_provider` is invoked at handler-call time so the
 /// list reflects the registry's current state (e.g. after a future
-/// hot-reload of skills). Today the daemon's registry is built
-/// once at boot and read-only thereafter, so the closure typically
-/// returns a static snapshot.
-pub fn register<F>(reg: &mut LocalAbilityRegistry, descriptors_provider: F)
-where
+/// hot-reload of skills) AND so call_tool can re-check visibility
+/// on each call against the same source of truth list_tools used.
+///
+/// `registry_handle` is a `OnceLock` that the build site populates
+/// AFTER `Arc::new(reg)`. The call_tool handler reads through it to
+/// look up the target ability's local handler. The build-time
+/// chicken-and-egg (registering a handler that needs a reference to
+/// the registry being built) is resolved by deferred initialisation:
+/// register first, set the lock once the registry is wrapped in an
+/// Arc. Same seam admin_status_ability uses.
+pub fn register<F>(
+    reg: &mut LocalAbilityRegistry,
+    descriptors_provider: F,
+    registry_handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+) where
     F: Fn() -> Vec<AbilityDescriptor> + Send + Sync + 'static,
 {
     let provider: Arc<dyn Fn() -> Vec<AbilityDescriptor> + Send + Sync> =
         Arc::new(descriptors_provider);
+    let provider_for_list = Arc::clone(&provider);
     reg.register_rpc(
         ABILITY_LIST_TOOLS,
-        Arc::new(move |_args: Value| list_tools_handler(&provider)),
+        Arc::new(move |_args: Value| list_tools_handler(&provider_for_list)),
+    );
+    reg.register_rpc(
+        ABILITY_CALL_TOOL,
+        Arc::new(move |args: Value| call_tool_handler(&provider, &registry_handle, args)),
     );
 }
 
@@ -86,6 +108,101 @@ fn list_tools_handler(
     Ok(json!({ "tools": tools }))
 }
 
+/// `mcp.bridge.call_tool` handler.
+///
+/// Args: `{ "name": "<ability-name>", "arguments": <json-value> }`
+/// Mirrors the MCP `tools/call` request shape; `arguments` is
+/// optional (some tools take none). Returns
+/// `{ "content": [<text|json blob>], "isError": bool }` per MCP's
+/// `tools/call` response convention.
+///
+/// Three failure paths, each surfaced with `isError: true` rather
+/// than an `Err` so the MCP client sees a structured response (per
+/// MCP spec, transport-level errors crash the connection — we
+/// reserve those for genuine bugs):
+///   1. `name` missing or non-string → input validation error.
+///   2. `name` not in the descriptors list (or filtered out by
+///      visibility) → "tool not found".
+///   3. Local handler returned `Err` → echo the error message.
+///
+/// The visibility re-check (#2) defends against a stale list_tools
+/// cache: if the descriptors_provider's filter changes between a
+/// list_tools and a follow-up call_tool, the call must obey the
+/// FRESH filter. The MCP-shaped projection is the source of truth
+/// for "which names are callable through this surface."
+fn call_tool_handler(
+    descriptors_provider: &Arc<dyn Fn() -> Vec<AbilityDescriptor> + Send + Sync>,
+    registry_handle: &Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+    args: Value,
+) -> anyhow::Result<Value> {
+    let name = match args.get("name").and_then(Value::as_str) {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => return Ok(error_response("`name` is required and must be a non-empty string")),
+    };
+    let arguments = args.get("arguments").cloned().unwrap_or(Value::Null);
+
+    // Visibility re-check: a stale list_tools client MUST NOT
+    // bypass the filter the bridge advertises. We compare against
+    // the same descriptors source list_tools projects from.
+    let descriptors = descriptors_provider();
+    if !descriptors.iter().any(|d| d.name == name) {
+        return Ok(error_response(&format!(
+            "tool `{name}` not found in the bridge's advertised catalogue"
+        )));
+    }
+
+    // Now reach into the registry. The handle is populated post-
+    // registration; if it's empty we're being called from a test
+    // that registered without wiring the lock, which is a test bug
+    // — surface as an isError frame rather than panicking so the
+    // wire shape is still well-formed.
+    let Some(registry) = registry_handle.get() else {
+        return Ok(error_response(
+            "registry handle not initialised (build-site forgot to set the OnceLock)",
+        ));
+    };
+    let Some(handler) = registry.get_rpc(&name) else {
+        // The descriptor said it exists but the registry doesn't
+        // have an RPC handler — likely a streaming-only or bidi
+        // ability advertised through the catalogue. MCP tools/call
+        // is unary; tell the caller honestly.
+        return Ok(error_response(&format!(
+            "tool `{name}` is not invocable as a unary RPC (may be a stream or bidi handler)"
+        )));
+    };
+
+    match handler(arguments) {
+        Ok(value) => Ok(success_response(value)),
+        Err(e) => Ok(error_response(&format!("tool `{name}` returned an error: {e}"))),
+    }
+}
+
+/// Build an MCP `tools/call` success response. The MCP spec
+/// expects `content` as an array of typed parts; we serialise the
+/// ability's JSON response into ONE `text` part containing the
+/// JSON-encoded value. Future enhancement: detect string responses
+/// and emit them as raw text rather than JSON-quoted strings.
+fn success_response(value: Value) -> Value {
+    let text = serde_json::to_string(&value).unwrap_or_else(|_| "<unencodable>".into());
+    json!({
+        "content": [{
+            "type": "text",
+            "text": text,
+        }],
+        "isError": false,
+    })
+}
+
+fn error_response(message: &str) -> Value {
+    json!({
+        "content": [{
+            "type": "text",
+            "text": message,
+        }],
+        "isError": true,
+    })
+}
+
 // ── Discovery surfaces ────────────────────────────────────────
 
 pub fn list_tools_input_schema() -> Value {
@@ -103,10 +220,33 @@ pub fn list_tools_description() -> &'static str {
      and internal callers see one catalog."
 }
 
+pub fn call_tool_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+            "name": {"type": "string", "minLength": 1},
+            "arguments": {
+                "description": "Free-form per-tool args; shape per the tool's own input_schema."
+            },
+        },
+        "additionalProperties": false,
+    })
+}
+
+pub fn call_tool_description() -> &'static str {
+    "Invoke a tool advertised by mcp.bridge.list_tools. Mirrors the \
+     MCP tools/call shape: returns {content:[{type:\"text\",text}], \
+     isError}. Visibility is re-checked against the live descriptor \
+     catalogue on each call, so a stale list_tools cache cannot \
+     bypass the bridge filter."
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
+    use std::sync::OnceLock;
 
     fn d(name: &str) -> AbilityDescriptor {
         AbilityDescriptor::new(
@@ -117,18 +257,38 @@ mod tests {
         .expect("test descriptor")
     }
 
-    #[test]
-    fn registration_makes_list_tools_dispatchable() {
+    /// Test fixture: register list_tools + call_tool against a
+    /// catalogue, then wire the OnceLock to the resulting Arc'd
+    /// registry. Mirrors the build-site OnceLock seam exactly.
+    fn build_bridge_registry<F>(provider: F) -> Arc<LocalAbilityRegistry>
+    where
+        F: Fn() -> Vec<AbilityDescriptor> + Send + Sync + 'static,
+    {
         let mut reg = LocalAbilityRegistry::new();
-        register(&mut reg, || vec![]);
-        assert!(reg.get_rpc(ABILITY_LIST_TOOLS).is_some());
+        let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
+        // Pre-register one trivial ability the bridge can dispatch
+        // into, so call_tool tests have something real to invoke.
+        reg.register_rpc(
+            "test.echo",
+            Arc::new(|args: Value| Ok(json!({"echoed": args}))),
+        );
+        register(&mut reg, provider, Arc::clone(&handle));
+        let arc = Arc::new(reg);
+        let _ = handle.set(arc.clone());
+        arc
+    }
+
+    #[test]
+    fn registration_makes_both_dispatchable() {
+        let arc = build_bridge_registry(|| vec![d("observe.health")]);
+        assert!(arc.get_rpc(ABILITY_LIST_TOOLS).is_some());
+        assert!(arc.get_rpc(ABILITY_CALL_TOOL).is_some());
     }
 
     #[test]
     fn list_tools_returns_projection_of_provider_descriptors() {
-        let mut reg = LocalAbilityRegistry::new();
-        register(&mut reg, || vec![d("observe.health"), d("fleet.list_agents")]);
-        let handler = reg.get_rpc(ABILITY_LIST_TOOLS).unwrap();
+        let arc = build_bridge_registry(|| vec![d("observe.health"), d("fleet.list_agents")]);
+        let handler = arc.get_rpc(ABILITY_LIST_TOOLS).unwrap();
         let resp = handler(json!({})).unwrap();
         let tools = resp["tools"].as_array().expect("tools array");
         assert_eq!(tools.len(), 2);
@@ -145,11 +305,8 @@ mod tests {
         use std::sync::Mutex;
         let snapshot: Arc<Mutex<Vec<AbilityDescriptor>>> = Arc::new(Mutex::new(vec![d("a.x")]));
         let snap_for_provider = Arc::clone(&snapshot);
-        let mut reg = LocalAbilityRegistry::new();
-        register(&mut reg, move || {
-            snap_for_provider.lock().unwrap().clone()
-        });
-        let handler = reg.get_rpc(ABILITY_LIST_TOOLS).unwrap();
+        let arc = build_bridge_registry(move || snap_for_provider.lock().unwrap().clone());
+        let handler = arc.get_rpc(ABILITY_LIST_TOOLS).unwrap();
 
         let first = handler(json!({})).unwrap();
         assert_eq!(first["tools"].as_array().unwrap().len(), 1);
@@ -170,10 +327,165 @@ mod tests {
 
     #[test]
     fn empty_provider_yields_empty_tools() {
-        let mut reg = LocalAbilityRegistry::new();
-        register(&mut reg, || vec![]);
-        let handler = reg.get_rpc(ABILITY_LIST_TOOLS).unwrap();
+        let arc = build_bridge_registry(|| vec![]);
+        let handler = arc.get_rpc(ABILITY_LIST_TOOLS).unwrap();
         let resp = handler(json!({})).unwrap();
         assert_eq!(resp["tools"].as_array().unwrap().len(), 0);
+    }
+
+    // ── call_tool ─────────────────────────────────────────────
+
+    #[test]
+    fn call_tool_round_trips_through_registered_ability() {
+        // Happy path: descriptor advertises `test.echo`, registry has
+        // a handler for it, call_tool forwards args and wraps the
+        // response in MCP tools/call shape.
+        let arc = build_bridge_registry(|| vec![d("test.echo")]);
+        let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
+        let resp = handler(json!({
+            "name": "test.echo",
+            "arguments": {"hello": "world"}
+        }))
+        .unwrap();
+        assert_eq!(resp["isError"], false);
+        let text = resp["content"][0]["text"].as_str().expect("text frame");
+        // Echo handler wraps args in {"echoed": ...}; the bridge
+        // serialises that JSON into the text part.
+        assert!(text.contains("hello"));
+        assert!(text.contains("world"));
+    }
+
+    #[test]
+    fn call_tool_visibility_filter_rejects_unadvertised_names() {
+        // §A5 enforcement: the descriptor list is the source of
+        // truth for which names are callable. test.echo IS in the
+        // registry but NOT in the catalogue → call_tool refuses.
+        let arc = build_bridge_registry(|| vec![d("observe.health")]); // no test.echo
+        let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
+        let resp = handler(json!({
+            "name": "test.echo",
+            "arguments": {}
+        }))
+        .unwrap();
+        assert_eq!(
+            resp["isError"], true,
+            "names absent from the descriptor list MUST surface as isError"
+        );
+        let text = resp["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("not found"),
+            "error must say `not found`, got {text:?}"
+        );
+    }
+
+    #[test]
+    fn call_tool_unknown_name_in_descriptors_but_not_in_registry_is_isError() {
+        // Descriptor advertises something with no matching RPC
+        // handler (e.g. a stream-only ability registered through
+        // the same descriptor catalogue). call_tool refuses cleanly.
+        let arc = build_bridge_registry(|| vec![d("nonexistent.ability")]);
+        let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
+        let resp = handler(json!({
+            "name": "nonexistent.ability",
+            "arguments": {}
+        }))
+        .unwrap();
+        assert_eq!(resp["isError"], true);
+        let text = resp["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("not invocable as a unary RPC"),
+            "should distinguish stream/bidi from unknown; got {text:?}"
+        );
+    }
+
+    #[test]
+    fn call_tool_missing_name_arg_returns_isError_not_panic() {
+        let arc = build_bridge_registry(|| vec![d("test.echo")]);
+        let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
+        let resp = handler(json!({})).unwrap();
+        assert_eq!(resp["isError"], true);
+        let text = resp["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("`name` is required"));
+    }
+
+    #[test]
+    fn call_tool_empty_name_string_returns_isError() {
+        let arc = build_bridge_registry(|| vec![d("test.echo")]);
+        let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
+        let resp = handler(json!({"name": "", "arguments": {}})).unwrap();
+        assert_eq!(resp["isError"], true);
+    }
+
+    #[test]
+    fn call_tool_handler_error_is_surfaced_as_isError_text() {
+        // A handler that returns Err must NOT crash the bridge —
+        // it surfaces the error message inside an isError frame so
+        // the MCP client sees a structured response.
+        let mut reg = LocalAbilityRegistry::new();
+        let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
+        reg.register_rpc(
+            "always.fails",
+            Arc::new(|_args: Value| anyhow::bail!("planned failure for the test")),
+        );
+        register(&mut reg, || vec![d("always.fails")], Arc::clone(&handle));
+        let arc = Arc::new(reg);
+        let _ = handle.set(arc.clone());
+
+        let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
+        let resp = handler(json!({"name": "always.fails", "arguments": {}})).unwrap();
+        assert_eq!(resp["isError"], true);
+        let text = resp["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("planned failure"));
+    }
+
+    #[test]
+    fn call_tool_tolerates_missing_arguments_field() {
+        // Some MCP tools take no args; a tools/call without an
+        // `arguments` key must still dispatch (we substitute Null).
+        let arc = build_bridge_registry(|| vec![d("test.echo")]);
+        let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
+        let resp = handler(json!({"name": "test.echo"})).unwrap();
+        assert_eq!(resp["isError"], false);
+    }
+
+    #[test]
+    fn call_tool_input_schema_requires_name() {
+        let s = call_tool_input_schema();
+        let req = s["required"].as_array().unwrap();
+        assert!(req.iter().any(|v| v == "name"));
+        assert_eq!(s["properties"]["name"]["minLength"], 1);
+    }
+
+    #[test]
+    fn call_tool_response_shape_is_mcp_tools_call_compliant() {
+        // Regression guard: the wire shape MUST be
+        // {content: [...], isError: bool}. A typo'd refactor that
+        // emitted {body: ...} would break every MCP client.
+        let arc = build_bridge_registry(|| vec![d("test.echo")]);
+        let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
+        let resp = handler(json!({"name": "test.echo", "arguments": null})).unwrap();
+        assert!(resp.get("content").is_some(), "missing `content` key");
+        assert!(resp.get("isError").is_some(), "missing `isError` key");
+        let content = resp["content"].as_array().expect("content is array");
+        assert_eq!(content[0]["type"], "text");
+        assert!(content[0].get("text").is_some());
+    }
+
+    #[test]
+    fn call_tool_with_unset_registry_handle_returns_isError() {
+        // Defensive: if the build site forgets to populate the
+        // OnceLock, surface as isError instead of panicking. This
+        // pins the "test bug not crash" contract from the comment
+        // in call_tool_handler.
+        let mut reg = LocalAbilityRegistry::new();
+        let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
+        register(&mut reg, || vec![d("test.echo")], Arc::clone(&handle));
+        let arc = Arc::new(reg);
+        // Deliberately do NOT set the handle.
+        let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
+        let resp = handler(json!({"name": "test.echo"})).unwrap();
+        assert_eq!(resp["isError"], true);
+        let text = resp["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("not initialised"));
     }
 }
