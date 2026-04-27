@@ -128,25 +128,34 @@ pub type LocalStreamHandler =
 /// cannot exceed the writer's own backlog.
 pub const BIDI_CHANNEL_BOUND: usize = 256;
 
-/// Both ends of one open bidi session. Per C-M3a §D1, two distinct
-/// `mpsc` channels (not `broadcast`) — bidi sessions are
-/// point-to-point, fan-out is wrong, and broadcast's lag-on-slow-
-/// consumer semantics would turn every backpressured frame into an
-/// error rather than a wait.
+/// Both ends of one open bidi session, **as seen by the transport
+/// layer** (the IPC server). Per C-M3a §D1, two distinct `mpsc`
+/// channels (not `broadcast`) — bidi sessions are point-to-point,
+/// fan-out is wrong, and broadcast's lag-on-slow-consumer semantics
+/// would turn every backpressured frame into an error rather than a
+/// wait.
 ///
-/// What each end owns
-/// ------------------
-///   * `from_client` (Receiver) — the **handler** reads frames the
-///     client pushed via `SendBidi`. Handler EOF on this receiver
-///     is the canonical "client side closed" signal.
-///   * `to_client` (Sender) — the **handler** writes frames the IPC
-///     forwarder will emit as `RecvBidi` envelopes. Dropping this
-///     sender (handler exit) signals "handler done"; the forwarder
-///     observes EOF on the corresponding receiver and emits a
-///     single `TerminalBidi{done}` per §I2.
+/// What each end owns (transport perspective)
+/// ------------------------------------------
+///   * `to_client` (Sender) — the **transport** pushes here when
+///     `SendBidi` arrives. The handler's matching `Receiver` is
+///     held by the spawned session loop; reading EOF is the
+///     canonical "client side closed" signal (§D4 path 1).
+///   * `from_client` (Receiver) — the **transport** reads here and
+///     emits each frame as a `RecvBidi` envelope. The handler's
+///     matching `Sender` is held by the spawned session loop;
+///     dropping it is the "handler done" signal (§D4 path 2).
+///
+/// Field names sit on the *transport's* axis: `to_client` = "what
+/// I (transport) write into; the client's words", `from_client` =
+/// "what I (transport) read out of; the client's words eventually
+/// echo here via the handler". Reading them as handler-perspective
+/// is the historical bug — the names are stable because the
+/// transport is the only consumer of this struct outside of test
+/// fixtures.
 ///
 /// Lifecycle invariants (cross-reference design §I3 / §I2):
-///   * `register_bidi` returning a `BidiSource` means the open
+///   * `execute_bidi` returning a `BidiSource` means the open
 ///     succeeded — the handler has already spawned its long-lived
 ///     task, both channels are live, and the IPC layer can install
 ///     the session row atomically.
@@ -155,11 +164,13 @@ pub const BIDI_CHANNEL_BOUND: usize = 256;
 ///     others observe EOF and no-op.
 #[derive(Debug)]
 pub struct BidiSource {
-    /// Frames pushed by the client; the handler reads.
-    pub from_client: mpsc::Receiver<Value>,
-    /// Frames pushed by the handler; the IPC forwarder reads and
-    /// emits as `RecvBidi`.
+    /// Transport WRITE end. `SendBidi` frames push here; the
+    /// handler's matching Receiver delivers them.
     pub to_client: mpsc::Sender<Value>,
+    /// Transport READ end. The forwarder reads here and emits each
+    /// value as `RecvBidi`; the handler's matching Sender is what
+    /// produces them.
+    pub from_client: mpsc::Receiver<Value>,
 }
 
 /// One in-process bidi handler. Per design §D2 the closure runs at

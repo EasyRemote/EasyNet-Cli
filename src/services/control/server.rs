@@ -47,7 +47,7 @@ use tokio::sync::mpsc;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 use crate::runtime::kernel_api::KernelApi;
-use crate::services::control::ability_proxy::{AbilityProxy, CancelRegistry};
+use crate::services::control::ability_proxy::{AbilityProxy, BidiRegistry, CancelRegistry};
 use crate::services::control::discovery::{
     self, flags, ControlDiscovery, IpcVersionRange, IPC_VERSION_V1,
 };
@@ -127,7 +127,7 @@ pub async fn accept_loop(listener: ControlListener, proxy: AbilityProxy) -> anyh
 /// Topology:
 ///
 ///   reader task     → `IncomingFrame` decode
-///                  → `proxy.handle_async(req, out_tx, cancel)`
+///                  → `proxy.handle_async(req, out_tx, cancel, bidi)`
 ///                       │
 ///                       ├── Invoke / Snapshot subscribe: pushes
 ///                       │    every frame onto `out_tx` synchronously
@@ -157,6 +157,13 @@ async fn serve_connection(stream: UnixStream, proxy: AbilityProxy) -> anyhow::Re
     // Per-connection cancel registry; subscriptions register their
     // CancellationToken here, Cancel frames look up by id.
     let cancel: CancelRegistry = Arc::new(Mutex::new(HashMap::new()));
+
+    // Per-connection bidi-session table; OpenBidi installs rows,
+    // SendBidi looks them up to push frames into the handler input,
+    // CloseBidi removes them. §D8 keeps this per-connection so a
+    // dropped connection deterministically tears every live session
+    // down via the cancel-token sweep below.
+    let bidi: BidiRegistry = Arc::new(Mutex::new(HashMap::new()));
 
     // Writer task: drains the queue, serialises each frame to JSON,
     // pushes over the codec.
@@ -193,15 +200,27 @@ async fn serve_connection(stream: UnixStream, proxy: AbilityProxy) -> anyhow::Re
                 continue;
             }
         };
-        proxy.handle_async(req, out_tx.clone(), &cancel).await;
+        proxy.handle_async(req, out_tx.clone(), &cancel, &bidi).await;
     }
 
     // Reader stopped → connection closing. Cancel every live
-    // subscription so forwarder tasks exit promptly.
+    // subscription so forwarder tasks exit promptly, then drain
+    // the bidi registry — dropping each `BidiSession` closes its
+    // `to_handler` sender (handler observes EOF) and fires its
+    // cancel token (the bidi forwarder breaks out of its select
+    // and emits its single TerminalBidi per §I2).
     {
         let mut g = cancel.lock().expect("cancel registry lock");
         for (_, tok) in g.drain() {
             tok.cancel();
+        }
+    }
+    {
+        let mut g = bidi.lock().expect("bidi registry lock");
+        for (_, sess) in g.drain() {
+            sess.cancel.cancel();
+            // Sender drops at end of scope when `sess` goes out of
+            // scope, signalling EOF to the handler in parallel.
         }
     }
     drop(out_tx); // forwarders + writer task observe sender close
@@ -330,6 +349,162 @@ mod tests {
 
         // Close the client side; the server's read loop sees EOF
         // and serve_connection returns; the server task finishes.
+        drop(client);
+        let _ = server_task.await;
+    }
+
+    /// E2E bidi: bind UDS, register an in-process echo bidi handler,
+    /// drive a full OpenBidi → 3× SendBidi → CloseBidi sequence over
+    /// the wire, observe 3× RecvBidi + 1× TerminalBidi back. Pins:
+    ///   * §I1 — frame ordering (the three RecvBidi arrive in the
+    ///           same order the SendBidi went out)
+    ///   * §I2 — exactly one TerminalBidi over the actual wire codec
+    ///   * §D8 — server-side BidiRegistry plumbed end-to-end
+    ///
+    /// Uses the same wire-format-by-hand pattern as the existing
+    /// observe.health smoke test so the codec is exercised byte for
+    /// byte, not stubbed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn end_to_end_bidi_round_trip_echoes_three_frames_then_terminal() {
+        use crate::runtime::ability_dispatch::{
+            AbilityDispatcher, BidiSource, LocalAbilityRegistry, LocalBidiHandler,
+            BIDI_CHANNEL_BOUND,
+        };
+        use crate::runtime::invocation_target::TargetResolver;
+        use crate::runtime::resolver::LocalNodeResolver;
+        use crate::runtime::domain::NodeId;
+
+        let dir = unique_tmp();
+        let path = dir.join("bidi.sock");
+
+        // Build a proxy whose registry has one bidi handler. Same
+        // pattern as the proxy-level tests in ability_proxy.rs but
+        // exercised here through the real serve_connection codec.
+        let mut reg = LocalAbilityRegistry::new();
+        let handler: LocalBidiHandler = Arc::new(|_args: serde_json::Value| {
+            let (xport_to_handler_tx, mut handler_rx) =
+                mpsc::channel::<serde_json::Value>(BIDI_CHANNEL_BOUND);
+            let (handler_tx, xport_from_handler_rx) =
+                mpsc::channel::<serde_json::Value>(BIDI_CHANNEL_BOUND);
+            tokio::spawn(async move {
+                while let Some(frame) = handler_rx.recv().await {
+                    if handler_tx.send(frame).await.is_err() {
+                        break;
+                    }
+                }
+            });
+            Ok(BidiSource {
+                to_client: xport_to_handler_tx,
+                from_client: xport_from_handler_rx,
+            })
+        });
+        reg.register_bidi("bidi.echo", handler);
+        let registry = Arc::new(reg);
+        let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
+            Arc::new(NoopGateway::new());
+        let dispatcher = AbilityDispatcher::new(registry, gateway);
+        let resolver: Arc<dyn TargetResolver> =
+            Arc::new(LocalNodeResolver::new(NodeId::new("self")));
+        let proxy = AbilityProxy::new_with_dispatcher(make_kernel(), dispatcher, resolver);
+
+        let (listener, _addr) = transport::bind_at(&path).expect("bind");
+        let server_task = tokio::spawn(async move {
+            #[cfg(unix)]
+            if let ControlListener::Uds(uds) = listener {
+                let (stream, _) = uds.accept().await.unwrap();
+                serve_connection(stream, proxy).await.unwrap();
+            }
+        });
+
+        let mut client = UnixStream::connect(&path).await.expect("connect");
+
+        // Helper to send one length-prefixed frame.
+        async fn send_frame(c: &mut UnixStream, f: &IncomingFrame) {
+            let payload = serde_json::to_vec(f).unwrap();
+            let len = u32::try_from(payload.len()).unwrap().to_le_bytes();
+            c.write_all(&len).await.unwrap();
+            c.write_all(&payload).await.unwrap();
+            c.flush().await.unwrap();
+        }
+
+        // Helper to receive one length-prefixed frame.
+        async fn recv_frame(c: &mut UnixStream) -> OutgoingFrame {
+            let mut len_buf = [0u8; 4];
+            c.read_exact(&mut len_buf).await.unwrap();
+            let n = u32::from_le_bytes(len_buf) as usize;
+            let mut buf = vec![0u8; n];
+            c.read_exact(&mut buf).await.unwrap();
+            serde_json::from_slice(&buf).unwrap()
+        }
+
+        // Open + send three frames + close.
+        send_frame(
+            &mut client,
+            &IncomingFrame::OpenBidi {
+                session_id: "e2e-1".into(),
+                ability: "bidi.echo".into(),
+                args: serde_json::json!({}),
+            },
+        )
+        .await;
+        for i in 0..3 {
+            send_frame(
+                &mut client,
+                &IncomingFrame::SendBidi {
+                    session_id: "e2e-1".into(),
+                    frame: serde_json::json!({"i": i}),
+                },
+            )
+            .await;
+        }
+        send_frame(
+            &mut client,
+            &IncomingFrame::CloseBidi {
+                session_id: "e2e-1".into(),
+            },
+        )
+        .await;
+
+        // Expect 3× RecvBidi in order, then 1× TerminalBidi{done}.
+        let mut recv_count = 0;
+        let mut saw_terminal = false;
+        // Read with a soft deadline so a regression that drops a
+        // frame fails fast instead of hanging the test runner.
+        let read_deadline = std::time::Duration::from_secs(2);
+        let mut total_frames_seen: Vec<OutgoingFrame> = Vec::new();
+        for _ in 0..6 {
+            match tokio::time::timeout(read_deadline, recv_frame(&mut client)).await {
+                Ok(frame) => {
+                    match &frame {
+                        OutgoingFrame::RecvBidi { session_id, frame: f } => {
+                            assert_eq!(session_id, "e2e-1");
+                            assert_eq!(f, &serde_json::json!({"i": recv_count}),
+                                "§I1 violation at index {recv_count}: out-of-order frame");
+                            recv_count += 1;
+                        }
+                        OutgoingFrame::TerminalBidi { session_id, reason } => {
+                            assert_eq!(session_id, "e2e-1");
+                            assert_eq!(reason, "done", "graceful close must report `done`");
+                            saw_terminal = true;
+                            total_frames_seen.push(frame);
+                            break;
+                        }
+                        other => panic!("unexpected frame on bidi e2e: {other:?}"),
+                    }
+                    total_frames_seen.push(frame);
+                }
+                Err(_) => panic!(
+                    "timeout reading bidi frames; got {recv_count} RecvBidi so far, terminal_seen={saw_terminal}"
+                ),
+            }
+        }
+        assert_eq!(recv_count, 3, "expected exactly 3 RecvBidi frames");
+        assert!(saw_terminal, "§I2: TerminalBidi must arrive after CloseBidi");
+
+        // Tail-check: NO additional TerminalBidi after the first.
+        // A short post-Terminal poll catches a regression that
+        // re-fires on the cancel-sweep path during connection drop.
         drop(client);
         let _ = server_task.await;
     }

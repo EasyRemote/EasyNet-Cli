@@ -47,11 +47,12 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 
-use crate::runtime::ability_dispatch::{AbilityDispatcher, StreamSource};
+use crate::runtime::ability_dispatch::{AbilityDispatcher, BidiSource, StreamSource};
 use crate::runtime::domain::NodeId;
 use crate::runtime::invocation_target::{
     CallMode, InvocationPlan, LocalNodeResolver, TargetResolver,
@@ -65,6 +66,42 @@ use crate::services::control::frames::{codes, IncomingFrame, OutgoingFrame};
 /// `cancel()` on the token; the forwarder task awaits the token in
 /// a `tokio::select!` and exits cleanly when triggered.
 pub type CancelRegistry = Arc<Mutex<HashMap<String, tokio_util::sync::CancellationToken>>>;
+
+/// Per-connection bidi-session table. Each open `OpenBidi` session
+/// installs one `BidiSession` row keyed by `session_id`; `SendBidi`
+/// frames look up the row to find the handler-input sender;
+/// `CloseBidi` removes the row, which drops the sender and lets the
+/// handler observe EOF.
+///
+/// Per design §D8 the registry is **per-connection**, never per-
+/// process. `session_id` uniqueness only needs to hold within a
+/// single connection, and connection drop deterministically cleans
+/// every live session because the table is owned by `serve_connection`
+/// and its drop closes every sender simultaneously.
+pub type BidiRegistry = Arc<Mutex<HashMap<String, BidiSession>>>;
+
+/// One row in the per-connection [`BidiRegistry`].
+///
+/// Holds the three handles `serve_connection` needs to manage a
+/// session's lifecycle:
+///
+///   * `to_handler` — `SendBidi` frames push here. Dropping it (via
+///     `CloseBidi` removing the row) is the canonical "client side
+///     closed" signal observed as EOF on the handler's receiver.
+///   * `cancel` — fired by `serve_connection` on connection drop.
+///     The forwarder selects on this and exits cleanly per §D4
+///     path 3.
+///   * `finalized` — §I2 idempotency flag. The forwarder flips it
+///     `false → true` via `compare_exchange` before emitting the one
+///     `TerminalBidi`; any racing path that observes `true` no-ops.
+///     `Arc<AtomicBool>` rather than parked-Mutex because the
+///     contention shape is "one writer, occasional contended read"
+///     and atomics are cheaper.
+pub struct BidiSession {
+    pub to_handler: mpsc::Sender<serde_json::Value>,
+    pub cancel: tokio_util::sync::CancellationToken,
+    pub finalized: Arc<AtomicBool>,
+}
 
 /// Stateless-on-construction adapter. Holds a dispatcher (the
 /// stage-2 executor), a resolver (stage-1), and a Kernel handle for
@@ -181,6 +218,7 @@ impl AbilityProxy {
         req: IncomingFrame,
         out: mpsc::Sender<OutgoingFrame>,
         cancel: &CancelRegistry,
+        bidi: &BidiRegistry,
     ) {
         match req {
             IncomingFrame::Invoke {
@@ -227,26 +265,73 @@ impl AbilityProxy {
                     }
                 }
             }
-            // C-M3a commit 1 boundary: the wire variants exist but the
-            // session machinery (BidiRegistry, forwarder, handler
-            // dispatch) lands in commit 3. Until then, every inbound
-            // bidi frame is rejected with ErrorBidi so a client that
-            // races ahead of the rollout gets a clean error rather
-            // than silent dropping. Per §I3, OpenBidi failure leaves
-            // no half-open session — there is nothing to clean up
-            // here because nothing was created.
-            IncomingFrame::OpenBidi { session_id, .. }
-            | IncomingFrame::SendBidi { session_id, .. }
-            | IncomingFrame::CloseBidi { session_id } => {
-                let _ = out
-                    .send(OutgoingFrame::ErrorBidi {
-                        session_id,
-                        code: codes::ABILITY_FAILED.into(),
-                        message: "bidi sessions not yet wired in this daemon \
-                                  (C-M3a commit 1; full handler lands in commit 3)"
-                            .into(),
-                    })
+            IncomingFrame::OpenBidi {
+                session_id,
+                ability,
+                args,
+            } => {
+                self.handle_bidi_open_async(session_id, ability, args, out, bidi)
                     .await;
+            }
+            IncomingFrame::SendBidi { session_id, frame } => {
+                // Lookup the per-connection session row and push the
+                // frame onto the handler-input channel. send().await
+                // is the §D3 backpressure path — if the handler is
+                // slow and the channel is full we await rather than
+                // drop. The reader loop in serve_connection blocks
+                // here, which propagates backpressure to the wire.
+                //
+                // Cloning the sender out of the lock keeps the
+                // critical section short; the actual send awaits
+                // outside the lock so a slow handler can't stall
+                // unrelated sessions on the same connection.
+                let to_handler = {
+                    let g = bidi.lock().expect("bidi registry lock");
+                    g.get(&session_id).map(|s| s.to_handler.clone())
+                };
+                match to_handler {
+                    Some(tx) => {
+                        if tx.send(frame).await.is_err() {
+                            // Handler exited between our lookup and
+                            // send. Surface as a per-frame
+                            // diagnostic; per §D5 this does NOT
+                            // close the session — the forwarder
+                            // emits its own TerminalBidi when it
+                            // observes the handler-output EOF.
+                            let _ = out
+                                .send(OutgoingFrame::ErrorBidi {
+                                    session_id,
+                                    code: codes::ABILITY_FAILED.into(),
+                                    message: "handler closed before frame delivery".into(),
+                                })
+                                .await;
+                        }
+                    }
+                    None => {
+                        let _ = out
+                            .send(OutgoingFrame::ErrorBidi {
+                                session_id,
+                                code: codes::ABILITY_FAILED.into(),
+                                message: "SendBidi for unknown session_id".into(),
+                            })
+                            .await;
+                    }
+                }
+            }
+            IncomingFrame::CloseBidi { session_id } => {
+                // Per §D4 path 1: drop the handler-input sender so
+                // the handler observes EOF and exits. The forwarder
+                // sees its handler-output channel close and emits
+                // the single TerminalBidi (§I2). Idempotent — a
+                // second CloseBidi for the same session_id is a
+                // silent no-op (the row was already gone).
+                //
+                // We do NOT cancel the token here. Cancel is for
+                // connection-drop / abort paths; CloseBidi is the
+                // graceful exit, and letting the handler drain its
+                // pending output before EOF is part of the contract.
+                let mut g = bidi.lock().expect("bidi registry lock");
+                let _ = g.remove(&session_id);
             }
         }
     }
@@ -327,6 +412,121 @@ impl AbilityProxy {
                 spawn_forwarder(subscription_id, snap, rx, out, cancel.clone());
             }
         }
+    }
+
+    /// Open one bidi session: resolve plan → dispatch → install
+    /// session row + spawn forwarder. Per §I3 the install + spawn
+    /// pair is atomic from the client's perspective: either we end
+    /// up with a row in the registry AND a running forwarder, or
+    /// we emit one ErrorBidi and leave nothing behind.
+    ///
+    /// Failure paths (resolver, dispatcher, duplicate session_id)
+    /// emit ErrorBidi without TerminalBidi — per §D5 / §I3 a failed
+    /// open never produces a session-close envelope because no
+    /// session ever existed.
+    async fn handle_bidi_open_async(
+        &self,
+        session_id: String,
+        ability: String,
+        args: serde_json::Value,
+        out: mpsc::Sender<OutgoingFrame>,
+        bidi: &BidiRegistry,
+    ) {
+        // Duplicate-id guard: per-connection uniqueness (§D8). A
+        // client that reuses a live session_id is a bug; emit
+        // ErrorBidi rather than silently overwriting (which would
+        // orphan the prior handler with no Terminal).
+        //
+        // The lock is dropped before the await — holding a
+        // std::sync::MutexGuard across .await is unsound (the
+        // resulting future would be !Send and tokio::spawn rejects
+        // it). The bool extraction pattern keeps the critical
+        // section minimal.
+        let already_open = {
+            let g = bidi.lock().expect("bidi registry lock");
+            g.contains_key(&session_id)
+        };
+        if already_open {
+            let _ = out
+                .send(OutgoingFrame::ErrorBidi {
+                    session_id,
+                    code: codes::ABILITY_FAILED.into(),
+                    message: "OpenBidi session_id already in use on this connection".into(),
+                })
+                .await;
+            return;
+        }
+
+        let plan = InvocationPlan {
+            ability,
+            target_node_hint: extract_node_hint(&args),
+            args,
+            call_mode: CallMode::Bidi,
+        };
+        let target = match self.resolver.resolve(plan) {
+            Ok(t) => t,
+            Err(e) => {
+                let _ = out
+                    .send(OutgoingFrame::ErrorBidi {
+                        session_id,
+                        code: codes::ABILITY_FAILED.into(),
+                        message: format!("resolver: {e}"),
+                    })
+                    .await;
+                return;
+            }
+        };
+        let source: BidiSource = match self.dispatcher.execute_bidi(target) {
+            Ok(s) => s,
+            Err(e) => {
+                let msg = format!("{e}");
+                let code = if msg.contains("no local bidi handler") {
+                    codes::NOT_FOUND
+                } else {
+                    codes::ABILITY_FAILED
+                };
+                let _ = out
+                    .send(OutgoingFrame::ErrorBidi {
+                        session_id,
+                        code: code.into(),
+                        message: msg,
+                    })
+                    .await;
+                return;
+            }
+        };
+
+        // From here every component is built; install atomically.
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        let finalized = Arc::new(AtomicBool::new(false));
+        // BidiSource fields are transport-perspective (see
+        // ability_dispatch::BidiSource): `to_client` is the
+        // transport's WRITE end (SendBidi pushes here, the
+        // handler reads), `from_client` is the transport's READ
+        // end (the forwarder pulls and emits RecvBidi).
+        let to_handler = source.to_client;
+        let from_handler_rx = source.from_client;
+
+        {
+            let mut g = bidi.lock().expect("bidi registry lock");
+            g.insert(
+                session_id.clone(),
+                BidiSession {
+                    to_handler: to_handler.clone(),
+                    cancel: cancel_token.clone(),
+                    finalized: Arc::clone(&finalized),
+                },
+            );
+        }
+
+        spawn_bidi_forwarder(
+            session_id,
+            from_handler_rx,
+            out,
+            cancel_token,
+            finalized,
+            Arc::clone(bidi),
+        );
     }
 
     /// Route one incoming frame through the resolver + dispatcher.
@@ -586,6 +786,81 @@ fn spawn_forwarder(
             .await;
         let mut g = cancel.lock().expect("cancel registry lock");
         g.remove(&subscription_id);
+    });
+}
+
+/// Per-bidi-session forwarder. Runs as one tokio task per open
+/// session. Pumps frames from the handler-output channel into
+/// `RecvBidi` envelopes, observes both the cancel token and channel
+/// EOF as terminal signals, and emits **exactly one** `TerminalBidi`
+/// per §I2 — guarded by the per-session `finalized` AtomicBool.
+///
+/// The three close paths (per §D4) all funnel through here:
+///   1. Client `CloseBidi` → registry row removed → `to_handler`
+///      sender dropped → handler `recv()` returns None → handler
+///      drops its output sender → forwarder sees EOF → Terminal{done}.
+///   2. Handler exits on its own → drops output sender → forwarder
+///      sees EOF → Terminal{done}.
+///   3. Connection drop → cancel.cancel() fires → forwarder breaks
+///      out of select → Terminal{cancelled}.
+///
+/// Whichever path wins the `compare_exchange` on `finalized` emits;
+/// the others see `true` and no-op, so only one TerminalBidi
+/// envelope ever lands on the wire.
+fn spawn_bidi_forwarder(
+    session_id: String,
+    mut from_handler_rx: mpsc::Receiver<serde_json::Value>,
+    out: mpsc::Sender<OutgoingFrame>,
+    cancel: tokio_util::sync::CancellationToken,
+    finalized: Arc<AtomicBool>,
+    bidi_registry: BidiRegistry,
+) {
+    tokio::spawn(async move {
+        let reason = loop {
+            tokio::select! {
+                _ = cancel.cancelled() => break "cancelled",
+                recv = from_handler_rx.recv() => match recv {
+                    Some(v) => {
+                        if out
+                            .send(OutgoingFrame::RecvBidi {
+                                session_id: session_id.clone(),
+                                frame: v,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            // IPC writer task is gone — connection
+                            // collapsed. Stop pumping; the connection-
+                            // level cleanup will drain the registry.
+                            // Treat as cancelled-by-transport so the
+                            // wire reason matches reality.
+                            break "cancelled";
+                        }
+                    }
+                    None => break "done",
+                }
+            }
+        };
+
+        // §I2: at most one TerminalBidi per session_id. Any racing
+        // path that already flipped the flag observes `true` here
+        // and we silently exit without emitting.
+        if finalized
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            let _ = out
+                .send(OutgoingFrame::TerminalBidi {
+                    session_id: session_id.clone(),
+                    reason: reason.into(),
+                })
+                .await;
+        }
+        // Drop the registry row last. If a SendBidi raced with our
+        // exit it will see "unknown session_id" and surface an
+        // ErrorBidi (per §D5 a per-frame diagnostic, not a close).
+        let mut g = bidi_registry.lock().expect("bidi registry lock");
+        g.remove(&session_id);
     });
 }
 
@@ -956,6 +1231,452 @@ mod tests {
                  §A12 verifier would accept an attestation-less receipt"
             ),
         }
+    }
+
+    // ─── C-M3a (3/5): bidi proxy arms + spawn_bidi_forwarder ────
+    //
+    // Tests bind to the design's invariant numbers:
+    //   I1 — intra-direction frame ordering
+    //   I2 — exactly one TerminalBidi per session_id
+    //   I3 — failed OpenBidi leaves no half-open session state
+    //
+    // Plus the §D5 per-frame Error contract (errors are diagnostics,
+    // not session-close signals) and §D8 per-connection registry
+    // semantics (duplicate session_id rejection).
+
+    /// Build a proxy whose registry has one bidi ability `bidi.echo`
+    /// that echoes every frame back verbatim. Spawns a tokio task per
+    /// session per §D2; the closure returns immediately with a
+    /// transport-axis BidiSource.
+    fn proxy_with_echo_bidi() -> AbilityProxy {
+        use crate::runtime::ability_dispatch::{
+            BidiSource, LocalBidiHandler, BIDI_CHANNEL_BOUND,
+        };
+        let mut reg = LocalAbilityRegistry::new();
+        let handler: LocalBidiHandler = Arc::new(|_args: serde_json::Value| {
+            let (xport_to_handler_tx, mut handler_rx) =
+                tokio::sync::mpsc::channel::<serde_json::Value>(BIDI_CHANNEL_BOUND);
+            let (handler_tx, xport_from_handler_rx) =
+                tokio::sync::mpsc::channel::<serde_json::Value>(BIDI_CHANNEL_BOUND);
+            tokio::spawn(async move {
+                while let Some(frame) = handler_rx.recv().await {
+                    if handler_tx.send(frame).await.is_err() {
+                        // Forwarder gone; treat as graceful exit.
+                        break;
+                    }
+                }
+                // handler_rx returned None (CloseBidi or connection
+                // drop): drop handler_tx by falling out of scope.
+            });
+            Ok(BidiSource {
+                to_client: xport_to_handler_tx,
+                from_client: xport_from_handler_rx,
+            })
+        });
+        reg.register_bidi("bidi.echo", handler);
+        let registry = Arc::new(reg);
+        let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
+            Arc::new(NoopGateway::new());
+        let dispatcher = AbilityDispatcher::new(registry, gateway);
+        let resolver: Arc<dyn TargetResolver> =
+            Arc::new(LocalNodeResolver::new(NodeId::new("self")));
+        AbilityProxy::new_with_dispatcher(Arc::new(StubKernel), dispatcher, resolver)
+    }
+
+    /// Drain at most `n` frames from `rx` with a soft deadline, so a
+    /// missing-frame regression fails fast instead of hanging the
+    /// test runner. The deadline is generous enough that a green
+    /// path on an overloaded CI box doesn't false-fail.
+    async fn drain_n(
+        rx: &mut tokio::sync::mpsc::Receiver<OutgoingFrame>,
+        n: usize,
+    ) -> Vec<OutgoingFrame> {
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+                Ok(Some(f)) => out.push(f),
+                Ok(None) => break,
+                Err(_) => break, // timeout — return what we have
+            }
+        }
+        out
+    }
+
+    fn fresh_bidi_state() -> (
+        AbilityProxy,
+        tokio::sync::mpsc::Sender<OutgoingFrame>,
+        tokio::sync::mpsc::Receiver<OutgoingFrame>,
+        CancelRegistry,
+        BidiRegistry,
+    ) {
+        let proxy = proxy_with_echo_bidi();
+        let (tx, rx) = tokio::sync::mpsc::channel::<OutgoingFrame>(64);
+        let cancel: CancelRegistry =
+            Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let bidi: BidiRegistry =
+            Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        (proxy, tx, rx, cancel, bidi)
+    }
+
+    #[tokio::test]
+    async fn open_send_recv_close_emits_three_recv_then_one_terminal_in_order() {
+        // Pins §I1: intra-direction ordering. Three SendBidi frames
+        // come back as three RecvBidi in the SAME order, followed by
+        // exactly one TerminalBidi after CloseBidi.
+        let (proxy, tx, mut rx, cancel, bidi) = fresh_bidi_state();
+
+        proxy
+            .handle_async(
+                IncomingFrame::OpenBidi {
+                    session_id: "sess-1".into(),
+                    ability: "bidi.echo".into(),
+                    args: json!({}),
+                },
+                tx.clone(),
+                &cancel,
+                &bidi,
+            )
+            .await;
+
+        for i in 0..3 {
+            proxy
+                .handle_async(
+                    IncomingFrame::SendBidi {
+                        session_id: "sess-1".into(),
+                        frame: json!({"i": i}),
+                    },
+                    tx.clone(),
+                    &cancel,
+                    &bidi,
+                )
+                .await;
+        }
+
+        proxy
+            .handle_async(
+                IncomingFrame::CloseBidi {
+                    session_id: "sess-1".into(),
+                },
+                tx.clone(),
+                &cancel,
+                &bidi,
+            )
+            .await;
+        // Drop our local sender so the writer-queue receiver doesn't
+        // hang waiting for more frames after Terminal lands.
+        drop(tx);
+
+        let frames = drain_n(&mut rx, 4).await;
+        assert_eq!(frames.len(), 4, "expected 3 RecvBidi + 1 TerminalBidi");
+        for (idx, frame) in frames.iter().take(3).enumerate() {
+            match frame {
+                OutgoingFrame::RecvBidi { session_id, frame } => {
+                    assert_eq!(session_id, "sess-1");
+                    assert_eq!(frame, &json!({"i": idx}),
+                        "RecvBidi[{idx}] must preserve client emission order (§I1)");
+                }
+                other => panic!("frame {idx}: expected RecvBidi, got {other:?}"),
+            }
+        }
+        match &frames[3] {
+            OutgoingFrame::TerminalBidi { session_id, reason } => {
+                assert_eq!(session_id, "sess-1");
+                assert_eq!(reason, "done", "graceful close must report `done`");
+            }
+            other => panic!("expected TerminalBidi as 4th frame, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn close_bidi_emits_exactly_one_terminal() {
+        // Pins §I2 in the simplest path: one CloseBidi, one Terminal.
+        // A regression that fired Terminal twice (e.g. forgetting the
+        // compare_exchange guard) trips the "no extra frames" check.
+        let (proxy, tx, mut rx, cancel, bidi) = fresh_bidi_state();
+        proxy
+            .handle_async(
+                IncomingFrame::OpenBidi {
+                    session_id: "sess-once".into(),
+                    ability: "bidi.echo".into(),
+                    args: json!({}),
+                },
+                tx.clone(),
+                &cancel,
+                &bidi,
+            )
+            .await;
+        proxy
+            .handle_async(
+                IncomingFrame::CloseBidi {
+                    session_id: "sess-once".into(),
+                },
+                tx.clone(),
+                &cancel,
+                &bidi,
+            )
+            .await;
+        drop(tx);
+
+        let frames = drain_n(&mut rx, 4).await;
+        let terminals: Vec<&OutgoingFrame> = frames
+            .iter()
+            .filter(|f| matches!(f, OutgoingFrame::TerminalBidi { .. }))
+            .collect();
+        assert_eq!(
+            terminals.len(),
+            1,
+            "§I2 violation: expected exactly one TerminalBidi, got {} ({frames:?})",
+            terminals.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn duplicate_session_id_emits_error_bidi_without_displacing_first_session() {
+        // Pins §D8 + §I3: a second OpenBidi with a live session_id
+        // gets ErrorBidi, but the first session keeps working. A
+        // regression that overwrote the registry row would orphan
+        // the first handler with no Terminal.
+        let (proxy, tx, mut rx, cancel, bidi) = fresh_bidi_state();
+        proxy
+            .handle_async(
+                IncomingFrame::OpenBidi {
+                    session_id: "sess-dup".into(),
+                    ability: "bidi.echo".into(),
+                    args: json!({}),
+                },
+                tx.clone(),
+                &cancel,
+                &bidi,
+            )
+            .await;
+
+        // Second open with the same session_id MUST error.
+        proxy
+            .handle_async(
+                IncomingFrame::OpenBidi {
+                    session_id: "sess-dup".into(),
+                    ability: "bidi.echo".into(),
+                    args: json!({}),
+                },
+                tx.clone(),
+                &cancel,
+                &bidi,
+            )
+            .await;
+
+        // Send a probe frame; the FIRST session must still echo.
+        proxy
+            .handle_async(
+                IncomingFrame::SendBidi {
+                    session_id: "sess-dup".into(),
+                    frame: json!("probe"),
+                },
+                tx.clone(),
+                &cancel,
+                &bidi,
+            )
+            .await;
+
+        let frames = drain_n(&mut rx, 2).await;
+        let mut saw_error = false;
+        let mut saw_recv = false;
+        for f in &frames {
+            match f {
+                OutgoingFrame::ErrorBidi { session_id, message, .. } => {
+                    assert_eq!(session_id, "sess-dup");
+                    assert!(
+                        message.contains("already in use"),
+                        "duplicate-id error message should be self-explanatory; got {message:?}"
+                    );
+                    saw_error = true;
+                }
+                OutgoingFrame::RecvBidi { session_id, frame } => {
+                    assert_eq!(session_id, "sess-dup");
+                    assert_eq!(frame, &json!("probe"),
+                        "first session must keep echoing after duplicate-open rejection");
+                    saw_recv = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_error, "duplicate OpenBidi must produce ErrorBidi");
+        assert!(saw_recv, "first session must remain operational");
+    }
+
+    #[tokio::test]
+    async fn open_bidi_unknown_ability_leaves_no_session_state() {
+        // Pins §I3: failed OpenBidi (ability not found) MUST NOT
+        // install a registry row. A subsequent SendBidi for the
+        // same session_id should hit "unknown session_id" rather
+        // than racing into a half-open state.
+        let (proxy, tx, mut rx, cancel, bidi) = fresh_bidi_state();
+        proxy
+            .handle_async(
+                IncomingFrame::OpenBidi {
+                    session_id: "sess-ghost".into(),
+                    ability: "bidi.does-not-exist".into(),
+                    args: json!({}),
+                },
+                tx.clone(),
+                &cancel,
+                &bidi,
+            )
+            .await;
+        // Registry MUST be empty for this session_id (§I3).
+        {
+            let g = bidi.lock().expect("bidi lock");
+            assert!(
+                !g.contains_key("sess-ghost"),
+                "§I3 violation: failed OpenBidi left a registry row"
+            );
+        }
+
+        // Probe SendBidi — should surface "unknown session_id" not
+        // a panic / silent drop.
+        proxy
+            .handle_async(
+                IncomingFrame::SendBidi {
+                    session_id: "sess-ghost".into(),
+                    frame: json!("orphan"),
+                },
+                tx.clone(),
+                &cancel,
+                &bidi,
+            )
+            .await;
+        drop(tx);
+
+        let frames = drain_n(&mut rx, 4).await;
+        let mut saw_open_err = false;
+        let mut saw_send_err = false;
+        let mut saw_terminal = false;
+        for f in &frames {
+            match f {
+                OutgoingFrame::ErrorBidi { session_id, message, .. } if session_id == "sess-ghost" => {
+                    if message.contains("unknown session_id") {
+                        saw_send_err = true;
+                    } else {
+                        // The OpenBidi failure error.
+                        saw_open_err = true;
+                    }
+                }
+                OutgoingFrame::TerminalBidi { .. } => saw_terminal = true,
+                _ => {}
+            }
+        }
+        assert!(saw_open_err, "OpenBidi failure must surface ErrorBidi");
+        assert!(saw_send_err, "SendBidi for unknown session must surface ErrorBidi");
+        assert!(
+            !saw_terminal,
+            "§I3 / §D5: failed OpenBidi must NOT emit TerminalBidi (no session ever existed)"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_bidi_for_unknown_session_does_not_close_anything() {
+        // Pins §D5: a per-frame error is a diagnostic, not a session
+        // close. A SendBidi for a never-opened session yields ErrorBidi
+        // with NO TerminalBidi (no session existed to close).
+        let (proxy, tx, mut rx, cancel, bidi) = fresh_bidi_state();
+        proxy
+            .handle_async(
+                IncomingFrame::SendBidi {
+                    session_id: "never-was".into(),
+                    frame: json!("hello"),
+                },
+                tx.clone(),
+                &cancel,
+                &bidi,
+            )
+            .await;
+        drop(tx);
+
+        let frames = drain_n(&mut rx, 4).await;
+        assert!(
+            frames
+                .iter()
+                .any(|f| matches!(f, OutgoingFrame::ErrorBidi { .. })),
+            "expected ErrorBidi for unknown session"
+        );
+        assert!(
+            !frames
+                .iter()
+                .any(|f| matches!(f, OutgoingFrame::TerminalBidi { .. })),
+            "§D5: per-frame error must NOT trigger Terminal"
+        );
+    }
+
+    #[tokio::test]
+    async fn close_bidi_for_unknown_session_is_silent_noop() {
+        // Idempotency: a second CloseBidi (or a CloseBidi for a
+        // never-opened session) is a no-op. Pins the proxy comment's
+        // "second CloseBidi for the same session_id is a silent
+        // no-op" claim.
+        let (proxy, tx, mut rx, cancel, bidi) = fresh_bidi_state();
+        proxy
+            .handle_async(
+                IncomingFrame::CloseBidi {
+                    session_id: "ghost-close".into(),
+                },
+                tx.clone(),
+                &cancel,
+                &bidi,
+            )
+            .await;
+        drop(tx);
+
+        let frames = drain_n(&mut rx, 2).await;
+        assert!(
+            frames.is_empty(),
+            "CloseBidi for unknown session must emit no frames; got {frames:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_token_fires_terminal_with_cancelled_reason() {
+        // Pins §D4 path 3 (connection drop / explicit cancel): when
+        // the per-session cancel token fires, the forwarder breaks
+        // out of select and emits TerminalBidi{reason: "cancelled"}.
+        let (proxy, tx, mut rx, cancel, bidi) = fresh_bidi_state();
+        proxy
+            .handle_async(
+                IncomingFrame::OpenBidi {
+                    session_id: "sess-cancel".into(),
+                    ability: "bidi.echo".into(),
+                    args: json!({}),
+                },
+                tx.clone(),
+                &cancel,
+                &bidi,
+            )
+            .await;
+
+        // Fire the cancel token directly — same path serve_connection
+        // takes on connection drop.
+        {
+            let g = bidi.lock().expect("bidi lock");
+            g.get("sess-cancel")
+                .expect("session installed")
+                .cancel
+                .cancel();
+        }
+        drop(tx);
+
+        let frames = drain_n(&mut rx, 2).await;
+        let term = frames
+            .iter()
+            .find_map(|f| match f {
+                OutgoingFrame::TerminalBidi { session_id, reason } => {
+                    Some((session_id.clone(), reason.clone()))
+                }
+                _ => None,
+            })
+            .expect("forwarder must emit TerminalBidi after cancel");
+        assert_eq!(term.0, "sess-cancel");
+        assert_eq!(
+            term.1, "cancelled",
+            "cancel-path Terminal must report `cancelled` per §D4"
+        );
     }
 
     #[test]
