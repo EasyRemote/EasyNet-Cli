@@ -283,6 +283,53 @@ fn main() -> anyhow::Result<()> {
         let _ = std::fs::remove_dir_all(&mission_dir);
     }
 
+    println!("\n=== meta.list_abilities completeness audit ===");
+    let reg = build_registry_for_daemon(
+        Arc::new(easynet_cli::runtime::execution::session::SessionService::new()),
+        Arc::new(easynet_cli::runtime::execution::permission::PermissionService::new()),
+        Arc::new(easynet_cli::runtime::execution::discuss::DiscussService::new()),
+        Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new()),
+        Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
+        Arc::new(Vec::new()),
+    );
+    let registered_names: std::collections::BTreeSet<String> =
+        reg.list_abilities().into_iter().collect();
+    println!("LIVE registry has {} abilities (registered_rpc/stream/bidi):",
+        registered_names.len());
+
+    let dispatcher = AbilityDispatcher::new(Arc::clone(&reg), Arc::new(NoopGateway::new()));
+    let meta_resp = dispatcher
+        .execute_rpc(target("meta.list_abilities", json!({})))
+        .expect("meta.list_abilities");
+    let meta_names: std::collections::BTreeSet<String> = meta_resp["abilities"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.get("name").and_then(|n| n.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    println!("meta.list_abilities returned {} abilities:", meta_names.len());
+
+    println!("\nIn LIVE registry but NOT in meta.list_abilities:");
+    let only_registered: Vec<&String> = registered_names.difference(&meta_names).collect();
+    for n in &only_registered {
+        println!("  - {n}");
+    }
+    println!("\nIn meta.list_abilities but NOT in LIVE registry:");
+    let only_meta: Vec<&String> = meta_names.difference(&registered_names).collect();
+    for n in &only_meta {
+        println!("  + {n}");
+    }
+    if only_registered.is_empty() && only_meta.is_empty() {
+        println!("\n✓ meta.list_abilities matches the live registry exactly.");
+    } else {
+        println!(
+            "\n⚠ meta.list_abilities and the live registry disagree on {} entries.",
+            only_registered.len() + only_meta.len()
+        );
+    }
+
     let _ = std::fs::remove_dir_all(&scratch);
     Ok(())
 }

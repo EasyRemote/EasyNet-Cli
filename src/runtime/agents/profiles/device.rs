@@ -30,6 +30,19 @@ pub const DEVICE_PROFILE_ABILITY_PREFIXES: &[&str] = &[
     "discuss.",
     "meta.",
     "admin.",
+    // AXIOM Tier 2.5 Baseline Locomotion Profile members. Every
+    // host-embodied agent claiming `baseline-locomotion-v1`
+    // exposes these via the device profile, so meta.list_abilities
+    // / federation.advertise must surface them. Pre-fix the
+    // prefix table predated these and they were silently absent
+    // from the descriptor catalogue even though the dispatcher
+    // routed them — surfaced in a real-user audit when
+    // meta.list_abilities returned 31 entries while the live
+    // registry had 49.
+    "fs.",
+    "process.",
+    "shell.",
+    "http.",
 ];
 
 /// Returns true if `ability_name` is owned by the device profile.
@@ -91,6 +104,40 @@ mod tests {
         assert!(owns("discuss.create"));
         assert!(owns("meta.describe"));
         assert!(owns("admin.snapshot"));
+        // Tier 2.5 Baseline Locomotion Profile members.
+        assert!(owns("fs.read"));
+        assert!(owns("fs.write"));
+        assert!(owns("fs.list"));
+        assert!(owns("fs.edit"));
+        assert!(owns("process.exec"));
+        assert!(owns("shell.run"));
+        assert!(owns("http.request"));
+    }
+
+    #[test]
+    fn baseline_locomotion_seven_are_all_owned_by_device_profile() {
+        // Pin the AXIOM Tier 2.5 Baseline Locomotion contract.
+        // Every member of the seven-ability profile MUST be
+        // claimed by device::owns; otherwise meta.list_abilities
+        // and federation.advertise silently drop them on
+        // non-joined hosts.
+        for name in [
+            "fs.read", "fs.write", "fs.list", "fs.edit",
+            "process.exec", "shell.run", "http.request",
+            // PTY trio — inhabits fleet.* prefix already, but
+            // let's pin them here so a future renamer trips this
+            // test instead of silently breaking the catalog.
+            "fleet.pty_session_create",
+            "fleet.pty_session_close",
+            "fleet.pty_session_attach",
+        ] {
+            assert!(
+                owns(name),
+                "{name} is a Baseline Locomotion ability and MUST be \
+                 owned by the device profile; otherwise meta.list_abilities \
+                 / federation.advertise will not surface it"
+            );
+        }
     }
 
     #[test]
