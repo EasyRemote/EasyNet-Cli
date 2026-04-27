@@ -56,6 +56,10 @@ path = "src/bin/easynet-daemon.rs"
 name = "gen-ability-tomls"
 path = "src/bin/gen-ability-tomls.rs"
 
+[[bin]]
+name = "real-user-smoke"
+path = "src/bin/real-user-smoke.rs"
+
 [dependencies]
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
