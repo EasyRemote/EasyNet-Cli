@@ -60,6 +60,7 @@
 // Email: silan.hu@u.nus.edu
 // Copyright (c) 2026-2027 easynet. All rights reserved.
 
+use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -89,6 +90,48 @@ pub const PROFILE_VERSION: &str = "baseline-locomotion-v1";
 /// InvokeBidi.
 const DEFAULT_READ_MAX_BYTES: u64 = 8 * 1024 * 1024;
 
+/// Hard upper bound on `max_bytes` per call. 100 MiB matches the
+/// runner's hard cap for stdout/stderr so a single ability
+/// receipt cannot exceed any other Tier 2.5 ability's. Callers
+/// passing a larger value get a clear error rather than silently
+/// reading "as much as available" — and we never allocate the
+/// underlying `Vec<u8>` past this size, so a caller that asks
+/// for `max_bytes = u64::MAX` cannot OOM the daemon.
+const READ_MAX_BYTES_HARD_CAP: u64 = 100 * 1024 * 1024;
+
+/// Paths that block forever, return non-deterministic content,
+/// or alias the agent's own stdio. Each entry is matched against
+/// the LITERAL path string the caller passed, after `canonicalize`
+/// resolves symlinks and normalises `..`. Resolving to one of
+/// these returns `fs.read: blocked device path` instead of
+/// hanging the blocking-pool thread on `read(/dev/zero)`.
+///
+/// The list is intentionally narrow:
+///
+///   * Linux character-special devices that block on read or
+///     produce unbounded streams (`/dev/zero`, `/dev/random`,
+///     `/dev/urandom`, `/dev/null` excluded — null reads return
+///     EOF immediately, not a hazard).
+///   * Stdio aliases (`/dev/stdin`, `/dev/stdout`, `/dev/tty`,
+///     `/proc/self/fd/0`, `/proc/self/fd/1`, `/proc/self/fd/2`).
+///     Reading these would either steal the agent's own stdin
+///     or echo its own stdout back into the receipt.
+///
+/// Per-path ACLs ("read /etc but not /var") remain a higher-tier
+/// policy concern, NOT this list. This is purely the fail-closed
+/// "do not hang the receiver thread on a special device".
+const BLOCKED_READ_PATHS: &[&str] = &[
+    "/dev/zero",
+    "/dev/random",
+    "/dev/urandom",
+    "/dev/stdin",
+    "/dev/stdout",
+    "/dev/tty",
+    "/proc/self/fd/0",
+    "/proc/self/fd/1",
+    "/proc/self/fd/2",
+];
+
 /// Default cap on `fs.list` entry count. A directory with more
 /// entries than this is a misuse of `fs.list`; callers wanting
 /// pagination should use higher-tier indexed-storage abilities.
@@ -114,35 +157,76 @@ fn handler_read(args: Value) -> Result<Value> {
         .get("max_bytes")
         .and_then(Value::as_u64)
         .unwrap_or(DEFAULT_READ_MAX_BYTES);
+    if max_bytes > READ_MAX_BYTES_HARD_CAP {
+        return Err(anyhow!(
+            "fs.read: max_bytes {max_bytes} exceeds hard cap {READ_MAX_BYTES_HARD_CAP}"
+        ));
+    }
     let encoding = args
         .get("encoding")
         .and_then(Value::as_str)
         .unwrap_or("binary");
 
+    // Optional line-mode parameters. Both default to "no
+    // line-mode" (use byte cap only). When either is set we
+    // require encoding=utf8 — slicing UTF-8 bytes by lines is
+    // only well-defined on text content. Numbering is 1-based
+    // for `offset_lines` (matches `head -n N`, `tail +N`, and
+    // every editor's "go to line" prompt).
+    let offset_lines = args.get("offset_lines").and_then(Value::as_u64);
+    let limit_lines = args.get("limit_lines").and_then(Value::as_u64);
+    if (offset_lines.is_some() || limit_lines.is_some()) && encoding != "utf8" {
+        return Err(anyhow!(
+            "fs.read: offset_lines/limit_lines require encoding=\"utf8\""
+        ));
+    }
+
+    if is_blocked_read_path(path) {
+        return Err(anyhow!(
+            "fs.read: {path:?} is on the blocked-device path list"
+        ));
+    }
+
     let metadata = std::fs::metadata(Path::new(path))
         .map_err(|e| anyhow!("fs.read: stat {path:?}: {e}"))?;
     let total_size = metadata.len();
 
-    let mut content = std::fs::read(Path::new(path))
+    // Stream up to max_bytes + 1, so we can tell "exactly at the
+    // cap" from "the file is bigger than the cap" without ever
+    // allocating past the cap. `Read::take` enforces the bound
+    // at the syscall level — a multi-GB special file or a
+    // misreported metadata.len cannot OOM us.
+    let file = std::fs::File::open(Path::new(path))
         .map_err(|e| anyhow!("fs.read: open {path:?}: {e}"))?;
+    let mut limited = file.take(max_bytes.saturating_add(1));
+    let mut content: Vec<u8> = Vec::with_capacity((max_bytes.min(64 * 1024)) as usize);
+    limited
+        .read_to_end(&mut content)
+        .map_err(|e| anyhow!("fs.read: read {path:?}: {e}"))?;
     let truncated = content.len() as u64 > max_bytes;
     if truncated {
         content.truncate(max_bytes as usize);
     }
 
+    // Apply line-mode slicing on the captured bytes (already
+    // capped). Slicing AFTER the byte cap means a 50 MiB log
+    // file with offset_lines=9000 still reads 8 MiB and walks
+    // its lines once; we don't promise to find the offset past
+    // the byte cap (a future ranged-read variant could).
     let body = match encoding {
-        "utf8" => match String::from_utf8(content.clone()) {
-            Ok(s) => json!(s),
-            Err(_) => {
-                // Caller asked for utf8 but the file isn't valid
-                // UTF-8. Returning an error is the honest answer
-                // — silently downgrading to base64 would surprise
-                // a caller who expected text.
-                return Err(anyhow!(
+        "utf8" => {
+            let text = std::str::from_utf8(&content).map_err(|_| {
+                anyhow!(
                     "fs.read: file at {path:?} is not valid UTF-8; use encoding=\"binary\""
-                ));
+                )
+            })?;
+            if offset_lines.is_some() || limit_lines.is_some() {
+                let sliced = slice_lines(text, offset_lines.unwrap_or(1), limit_lines);
+                json!(sliced)
+            } else {
+                json!(text)
             }
-        },
+        }
         "binary" => json!(BASE64_STANDARD.encode(&content)),
         other => {
             return Err(anyhow!(
@@ -158,6 +242,52 @@ fn handler_read(args: Value) -> Result<Value> {
         "content_sha256": hex::encode(Sha256::digest(&content)),
         "ability_profile_version": PROFILE_VERSION,
     }))
+}
+
+/// Is `path` (as the caller passed it) on the blocked-device
+/// list, OR does its canonical resolution land on the list?
+/// The double check defends against `/proc/self/cwd/../dev/zero`
+/// or symlinks pointing at `/dev/zero`.
+fn is_blocked_read_path(path: &str) -> bool {
+    if BLOCKED_READ_PATHS.iter().any(|&b| b == path) {
+        return true;
+    }
+    if let Ok(canon) = std::fs::canonicalize(Path::new(path)) {
+        if let Some(s) = canon.to_str() {
+            return BLOCKED_READ_PATHS.iter().any(|&b| b == s);
+        }
+    }
+    false
+}
+
+/// Return the substring of `text` from line `offset_lines`
+/// (1-based) inclusive, capped at `limit_lines` lines if set.
+/// Trailing newline preserved when present in the source.
+/// Out-of-range `offset_lines` returns "".
+fn slice_lines(text: &str, offset_lines: u64, limit_lines: Option<u64>) -> String {
+    if offset_lines == 0 {
+        // 0-based callers are bugs, not "from the start" — bash
+        // tools (head -n, sed -n) all use 1-based, so a 0 is a
+        // clear caller error. Return "" deterministically rather
+        // than aliasing it to 1.
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut count_taken: u64 = 0;
+    for (idx_zero_based, line) in text.split_inclusive('\n').enumerate() {
+        let line_num = (idx_zero_based as u64).saturating_add(1);
+        if line_num < offset_lines {
+            continue;
+        }
+        if let Some(limit) = limit_lines {
+            if count_taken >= limit {
+                break;
+            }
+        }
+        out.push_str(line);
+        count_taken += 1;
+    }
+    out
 }
 
 // ── fs.write ─────────────────────────────────────────────────────
@@ -181,8 +311,15 @@ fn handler_write(args: Value) -> Result<Value> {
         }
     }
 
-    // Atomic write: write to a temp file in the same directory, then
-    // rename. A crash mid-write leaves the prior content intact.
+    // Atomic write: write to a temp file in the same directory,
+    // fsync it, then rename. A crash mid-write leaves the prior
+    // content intact. The fsync is the load-bearing step often
+    // missed in "tempfile + rename = atomic" lore: ext4/XFS
+    // are within their rights to present a zero-byte file on
+    // power loss between rename and the deferred data flush.
+    // `sync_data()` issues fdatasync(2) before we hand the
+    // tempfile name to rename(2), closing that window.
+    use std::io::Write as _;
     let dst = Path::new(path);
     let parent = dst.parent().unwrap_or_else(|| Path::new("."));
     let file_stem = dst
@@ -191,8 +328,14 @@ fn handler_write(args: Value) -> Result<Value> {
         .unwrap_or("__write");
     let tmp = parent.join(format!(".{file_stem}.tmp.{}", uuid_suffix()));
 
-    std::fs::write(&tmp, &raw)
-        .map_err(|e| anyhow!("fs.write: write tmp {tmp:?}: {e}"))?;
+    {
+        let mut f = std::fs::File::create(&tmp)
+            .map_err(|e| anyhow!("fs.write: create tmp {tmp:?}: {e}"))?;
+        f.write_all(&raw)
+            .map_err(|e| anyhow!("fs.write: write tmp {tmp:?}: {e}"))?;
+        f.sync_data()
+            .map_err(|e| anyhow!("fs.write: fdatasync {tmp:?}: {e}"))?;
+    }
 
     #[cfg(unix)]
     if let Some(m) = mode {
@@ -366,8 +509,23 @@ pub fn input_schema_read() -> Value {
         "additionalProperties": false,
         "properties": {
             "path": { "type": "string", "minLength": 1 },
-            "max_bytes": { "type": "integer", "minimum": 0 },
-            "encoding": { "type": "string", "enum": ["binary", "utf8"] }
+            "max_bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": READ_MAX_BYTES_HARD_CAP,
+                "description": "Per-call read cap. Default 8 MiB, hard cap 100 MiB. Read is streamed up to this cap; multi-GB paths cannot OOM the receiver."
+            },
+            "encoding": { "type": "string", "enum": ["binary", "utf8"] },
+            "offset_lines": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "1-based starting line. Requires encoding=\"utf8\". 0 returns empty deterministically."
+            },
+            "limit_lines": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Maximum lines to return after offset_lines. Requires encoding=\"utf8\"."
+            }
         }
     })
 }
@@ -406,7 +564,12 @@ pub fn input_schema_list() -> Value {
 }
 
 pub fn description_read() -> &'static str {
-    "Read a file from the host's filesystem. Part of the \
+    "Read a file from the host's filesystem (streamed up to \
+     max_bytes, default 8 MiB, hard cap 100 MiB). With \
+     encoding=\"utf8\" the optional offset_lines / limit_lines \
+     pair selects a 1-based line window. Blocked-device paths \
+     (/dev/{zero,random,urandom,stdin,stdout,tty}, \
+     /proc/self/fd/{0,1,2}) reject. Part of the \
      baseline-locomotion-v1 profile (AXIOM §Tier 2.5)."
 }
 
@@ -532,6 +695,157 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    // ─── fs.read hardening (slice 10a) ───────────────────────
+
+    #[test]
+    fn read_rejects_max_bytes_over_hard_cap() {
+        let dir = temp_dir();
+        let path = dir.join("x.txt");
+        std::fs::write(&path, "x").unwrap();
+
+        let err = handler_read(json!({
+            "path": path.to_str().unwrap(),
+            "max_bytes": READ_MAX_BYTES_HARD_CAP + 1,
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("hard cap"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_rejects_blocked_dev_zero() {
+        // /dev/zero would otherwise hang the blocking-pool thread.
+        if !std::path::Path::new("/dev/zero").exists() {
+            return; // Skip on hosts without /dev/zero (Windows).
+        }
+        let err = handler_read(json!({ "path": "/dev/zero" })).unwrap_err();
+        assert!(err.to_string().contains("blocked-device"));
+    }
+
+    #[test]
+    fn read_rejects_blocked_dev_random() {
+        if !std::path::Path::new("/dev/random").exists() {
+            return;
+        }
+        let err = handler_read(json!({ "path": "/dev/random" })).unwrap_err();
+        assert!(err.to_string().contains("blocked-device"));
+    }
+
+    #[test]
+    fn read_does_not_oom_on_overstated_max_bytes() {
+        // Pre-fix behavior: `fs::read(path)` then `truncate` would
+        // allocate a Vec sized to the file's actual length BEFORE
+        // truncating, ignoring max_bytes for the allocation step.
+        // After the fix, `Read::take(max_bytes + 1)` enforces the
+        // bound at the syscall level. Use a 10 KiB file with a
+        // generous max_bytes; the test passes if the read returns
+        // and the response shape is correct.
+        let dir = temp_dir();
+        let path = dir.join("ten_k.bin");
+        std::fs::write(&path, vec![b'.'; 10_240]).unwrap();
+        let resp = handler_read(json!({
+            "path": path.to_str().unwrap(),
+            "max_bytes": 1_000_000,
+        }))
+        .unwrap();
+        assert_eq!(resp["size"], json!(10_240));
+        assert_eq!(resp["truncated"], json!(false));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_line_offset_returns_specified_window() {
+        let dir = temp_dir();
+        let path = dir.join("lines.txt");
+        let body = (1..=10)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, &body).unwrap();
+
+        let resp = handler_read(json!({
+            "path": path.to_str().unwrap(),
+            "encoding": "utf8",
+            "offset_lines": 3,
+            "limit_lines": 2,
+        }))
+        .unwrap();
+        let content = resp["content"].as_str().unwrap();
+        assert!(content.contains("line 3"));
+        assert!(content.contains("line 4"));
+        assert!(!content.contains("line 5"));
+        assert!(!content.contains("line 1"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_line_offset_zero_returns_empty() {
+        let dir = temp_dir();
+        let path = dir.join("any.txt");
+        std::fs::write(&path, "x\ny\n").unwrap();
+        let resp = handler_read(json!({
+            "path": path.to_str().unwrap(),
+            "encoding": "utf8",
+            "offset_lines": 0,
+        }))
+        .unwrap();
+        assert_eq!(resp["content"].as_str().unwrap(), "");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_line_offset_past_eof_returns_empty() {
+        let dir = temp_dir();
+        let path = dir.join("two.txt");
+        std::fs::write(&path, "a\nb\n").unwrap();
+        let resp = handler_read(json!({
+            "path": path.to_str().unwrap(),
+            "encoding": "utf8",
+            "offset_lines": 100,
+        }))
+        .unwrap();
+        assert_eq!(resp["content"].as_str().unwrap(), "");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_line_mode_requires_utf8_encoding() {
+        let dir = temp_dir();
+        let path = dir.join("any.bin");
+        std::fs::write(&path, "x").unwrap();
+        let err = handler_read(json!({
+            "path": path.to_str().unwrap(),
+            "offset_lines": 1,
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("offset_lines"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn slice_lines_helper_basic() {
+        assert_eq!(slice_lines("a\nb\nc\n", 1, None), "a\nb\nc\n");
+        assert_eq!(slice_lines("a\nb\nc\n", 2, None), "b\nc\n");
+        assert_eq!(slice_lines("a\nb\nc\n", 1, Some(2)), "a\nb\n");
+        assert_eq!(slice_lines("a\nb\nc\n", 2, Some(1)), "b\n");
+        assert_eq!(slice_lines("a\nb\nc\n", 100, None), "");
+        assert_eq!(slice_lines("a\nb\nc\n", 0, None), "");
+    }
+
+    #[test]
+    fn is_blocked_read_path_recognises_known_devices() {
+        if std::path::Path::new("/dev/zero").exists() {
+            assert!(is_blocked_read_path("/dev/zero"));
+        }
+        // Not on the list — even if the file exists, it must
+        // not be flagged.
+        let dir = temp_dir();
+        let path = dir.join("safe.txt");
+        std::fs::write(&path, "x").unwrap();
+        assert!(!is_blocked_read_path(path.to_str().unwrap()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     // ─── fs.write ────────────────────────────────────────────
 
     #[test]
@@ -593,7 +907,16 @@ mod tests {
             "encoding": "utf8",
         }))
         .unwrap_err();
-        assert!(err.to_string().contains("write tmp"));
+        // The tmp file's parent dir doesn't exist, so File::create
+        // fails — error mentions either "create tmp" or the
+        // missing path. Either is fine; the test is about
+        // *some* error happening before the rename clobbers
+        // anything.
+        let msg = err.to_string();
+        assert!(
+            msg.contains("create tmp") || msg.contains("write tmp"),
+            "expected create/write tmp error, got: {msg}"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
