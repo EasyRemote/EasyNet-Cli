@@ -122,6 +122,19 @@ pub fn parse_for_security(cmd: &str) -> ParseForSecurityResult {
     ParseForSecurityResult::Simple { commands }
 }
 
+/// Placeholder string written into argv when a `$(inner)` is
+/// extracted out of a double-quoted string. Mirrors AliveCode's
+/// `__CMDSUB_OUTPUT__` so cross-implementation permission rules
+/// match the same argv shape.
+///
+/// The placeholder is intentionally noisy — three letters, three
+/// underscores, and an English word — so it cannot collide with
+/// a path or flag a caller would legitimately type. A literal
+/// occurrence in the *input* would still pass through, but later
+/// stages that look for this exact constant treat any presence
+/// as "this argv was synthesised, don't trust it as a path."
+pub const CMDSUB_PLACEHOLDER: &str = "__CMDSUB_OUTPUT__";
+
 // --- pre-checks -----------------------------------------------------------
 
 fn pre_check(cmd: &str) -> Option<&'static str> {
@@ -244,7 +257,7 @@ fn collect_commands<'a>(
             None
         }
 
-        "redirected_statement" => match walk_redirected_statement(node, src) {
+        "redirected_statement" => match walk_redirected_statement(node, src, commands) {
             Ok(cmd) => {
                 commands.push(cmd);
                 None
@@ -252,7 +265,7 @@ fn collect_commands<'a>(
             Err(err) => Some(err),
         },
 
-        "command" => match walk_command(node, src) {
+        "command" => match walk_command(node, src, commands) {
             Ok(cmd) => {
                 commands.push(cmd);
                 None
@@ -260,7 +273,7 @@ fn collect_commands<'a>(
             Err(err) => Some(err),
         },
 
-        "declaration_command" => match walk_declaration_command(node, src) {
+        "declaration_command" => match walk_declaration_command(node, src, commands) {
             Ok(cmd) => {
                 commands.push(cmd);
                 None
@@ -311,6 +324,7 @@ const SEPARATORS: &[&str] = &["&&", "||", "|", ";", "&", "|&", "\n"];
 fn walk_redirected_statement<'a>(
     node: Node<'a>,
     src: &str,
+    inner: &mut Vec<SimpleCommand>,
 ) -> Result<SimpleCommand, ParseForSecurityResult> {
     // Children: one `command` (or `declaration_command`) followed
     // by one or more redirect nodes. Comments and whitespace are
@@ -327,7 +341,7 @@ fn walk_redirected_statement<'a>(
                         "redirected_statement",
                     ));
                 }
-                inner_cmd = Some(walk_command(child, src)?);
+                inner_cmd = Some(walk_command(child, src, inner)?);
             }
             "declaration_command" => {
                 if inner_cmd.is_some() {
@@ -336,7 +350,7 @@ fn walk_redirected_statement<'a>(
                         "redirected_statement",
                     ));
                 }
-                inner_cmd = Some(walk_declaration_command(child, src)?);
+                inner_cmd = Some(walk_declaration_command(child, src, inner)?);
             }
             "file_redirect" => {
                 redirects.push(parse_file_redirect(child, src)?);
@@ -445,6 +459,7 @@ fn unquote_redirect_target(node: Node<'_>, src: &str) -> String {
 fn walk_command<'a>(
     node: Node<'a>,
     src: &str,
+    inner: &mut Vec<SimpleCommand>,
 ) -> Result<SimpleCommand, ParseForSecurityResult> {
     let mut argv: Vec<String> = Vec::new();
     let mut env_vars: Vec<EnvAssignment> = Vec::new();
@@ -452,7 +467,7 @@ fn walk_command<'a>(
     for child in node.named_children(&mut cursor) {
         match child.kind() {
             "variable_assignment" => {
-                env_vars.push(walk_variable_assignment(child, src)?);
+                env_vars.push(walk_variable_assignment(child, src, inner)?);
             }
             "command_name" => {
                 // command_name wraps a single `word` (or `string`,
@@ -460,7 +475,7 @@ fn walk_command<'a>(
                 let mut nc = child.walk();
                 let mut pushed = false;
                 for n in child.named_children(&mut nc) {
-                    let arg = walk_argument(n, src)?;
+                    let arg = walk_argument(n, src, inner)?;
                     argv.push(arg);
                     pushed = true;
                 }
@@ -472,7 +487,7 @@ fn walk_command<'a>(
                 }
             }
             "word" | "string" | "raw_string" | "number" | "concatenation" => {
-                argv.push(walk_argument(child, src)?);
+                argv.push(walk_argument(child, src, inner)?);
             }
             "comment" => {}
             other => {
@@ -500,6 +515,7 @@ fn walk_command<'a>(
 fn walk_variable_assignment<'a>(
     node: Node<'a>,
     src: &str,
+    inner: &mut Vec<SimpleCommand>,
 ) -> Result<EnvAssignment, ParseForSecurityResult> {
     // variable_assignment has children: `variable_name` `=` then
     // a value node (word / string / raw_string / concatenation).
@@ -512,7 +528,7 @@ fn walk_variable_assignment<'a>(
             "variable_name" => name = Some(node_text(child, src).to_string()),
             "=" => {}
             "word" | "string" | "raw_string" | "number" | "concatenation" => {
-                value = Some(walk_argument(child, src)?);
+                value = Some(walk_argument(child, src, inner)?);
             }
             "command_substitution" | "simple_expansion" | "expansion"
             | "process_substitution" | "arithmetic_expansion" => {
@@ -546,6 +562,7 @@ fn walk_variable_assignment<'a>(
 fn walk_argument<'a>(
     node: Node<'a>,
     src: &str,
+    inner: &mut Vec<SimpleCommand>,
 ) -> Result<String, ParseForSecurityResult> {
     match node.kind() {
         "word" | "number" => Ok(node_text(node, src).to_string()),
@@ -559,7 +576,7 @@ fn walk_argument<'a>(
                 Ok(raw.to_string())
             }
         }
-        "string" => walk_double_string(node, src),
+        "string" => walk_double_string(node, src, inner),
         "concatenation" => {
             // Concatenation of word + string + word + ...
             // tree-sitter splits at quote boundaries. We
@@ -568,10 +585,16 @@ fn walk_argument<'a>(
             let mut out = String::new();
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
-                out.push_str(&walk_argument(child, src)?);
+                out.push_str(&walk_argument(child, src, inner)?);
             }
             Ok(out)
         }
+        // BARE command_substitution at arg position is intentionally
+        // rejected — the output IS the entire argument and could
+        // be a path/flag (`rm $(echo /etc)`). Only `$()` *inside*
+        // a double-quoted string is extracted; that case is
+        // handled by walk_double_string which gates on the
+        // sawDynamicPlaceholder + sawLiteralContent invariant.
         "command_substitution" | "simple_expansion" | "expansion"
         | "process_substitution" | "arithmetic_expansion" | "subshell"
         | "brace_expression" | "ansi_c_string" | "translated_string" => {
@@ -590,24 +613,53 @@ fn walk_argument<'a>(
 fn walk_double_string<'a>(
     node: Node<'a>,
     src: &str,
+    inner: &mut Vec<SimpleCommand>,
 ) -> Result<String, ParseForSecurityResult> {
     // A `string` node wraps `"..."`. Children are `string_content`
-    // (raw text), and possibly expansions. For slice 3 we reject
-    // any expansion inside double-quoted strings; slice 4 will
-    // substitute placeholders.
+    // (raw text), expansions, and the surrounding `"` delimiters.
+    //
+    // SECURITY (ported from AliveCode walkString):
+    //
+    //   * `command_substitution` inside `"..."` recurses into the
+    //     inner command(s) — they get appended to `inner`, and
+    //     `__CMDSUB_OUTPUT__` is written into the outer argv.
+    //     Both outer + inner must pass downstream permission
+    //     checks. `simple_expansion` ($VAR) inside strings stays
+    //     rejected in slice 4a; slice 4b adds variable scope
+    //     substitution.
+    //
+    //   * Solo-placeholder strings reject. `cd "$(echo /etc)"`
+    //     would otherwise produce argv `["cd", "__CMDSUB_OUTPUT__"]`
+    //     which downstream path validation would resolve as a
+    //     relative filename within cwd, bypassing the real check.
+    //     Rule: `saw_dynamic_placeholder && !saw_literal_content`
+    //     → too_complex.
+    //
+    //   * Bash double-quote escape rules apply to `string_content`:
+    //     `\$`, `\``, `\"`, `\\` are unescaped; other backslash
+    //     sequences stay literal.
     let mut out = String::new();
     let mut cursor = node.walk();
-    let mut saw_content = false;
+    let mut saw_dynamic_placeholder = false;
+    let mut saw_literal_content = false;
     for child in node.children(&mut cursor) {
         let kind = child.kind();
         match kind {
             "\"" => {}
             "string_content" => {
-                out.push_str(node_text(child, src));
-                saw_content = true;
+                out.push_str(&unescape_double_quoted(node_text(child, src)));
+                saw_literal_content = true;
             }
-            "command_substitution" | "simple_expansion" | "expansion"
-            | "process_substitution" | "arithmetic_expansion" => {
+            "command_substitution" => {
+                let err = collect_command_substitution(child, src, inner);
+                if let Some(e) = err {
+                    return Err(e);
+                }
+                out.push_str(CMDSUB_PLACEHOLDER);
+                saw_dynamic_placeholder = true;
+            }
+            "simple_expansion" | "expansion" | "process_substitution"
+            | "arithmetic_expansion" => {
                 return Err(ParseForSecurityResult::too_complex_node(
                     format!("Double-quoted string uses `{kind}`"),
                     kind,
@@ -621,13 +673,76 @@ fn walk_double_string<'a>(
                 let txt = node_text(child, src);
                 if !txt.is_empty() {
                     out.push_str(txt);
+                    saw_literal_content = true;
                 }
             }
         }
     }
-    // Empty `""` is legal — `saw_content` may be false.
-    let _ = saw_content;
+    // Reject solo-placeholder strings (see SECURITY note above).
+    if saw_dynamic_placeholder && !saw_literal_content {
+        return Err(ParseForSecurityResult::too_complex_node(
+            "Double-quoted string contains only a $() placeholder",
+            "string",
+        ));
+    }
     Ok(out)
+}
+
+/// Unescape bash double-quoted string content. Inside `"..."`,
+/// only `\$`, `\``, `\"`, and `\\` are escapes; every other
+/// `\X` stays literal (so `"a\nb"` is six characters, not five).
+/// Mirrors AliveCode's `replace(/\\([$`"\\])/g, '$1')`.
+fn unescape_double_quoted(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            let next = bytes[i + 1];
+            if matches!(next, b'$' | b'`' | b'"' | b'\\') {
+                out.push(next as char);
+                i += 2;
+                continue;
+            }
+        }
+        // Push the byte (UTF-8 safe: we only special-case ASCII
+        // backslash and ASCII `$ ` ` " \\`; multi-byte chars pass
+        // through one byte at a time, reconstructed by `String`'s
+        // own `from_utf8_lossy`-style invariants — but since `s`
+        // is already valid UTF-8 and we only consume whole ASCII
+        // byte pairs above, the remaining bytes are valid).
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+/// Recurse into a `command_substitution` node — `$(inner)` or
+/// `` `inner` `` — and append every leaf command discovered to
+/// `inner_commands`. The outer caller writes `CMDSUB_PLACEHOLDER`
+/// into argv; this fn only exists to surface the inner
+/// SimpleCommands.
+///
+/// Returns `Some(err)` if the inner command is itself too-complex
+/// (`$(diff <(a) <(b))` for instance — process_substitution
+/// rejects). The error text propagates up unchanged so callers
+/// can show the operator the offending nested node.
+fn collect_command_substitution<'a>(
+    node: Node<'a>,
+    src: &str,
+    inner: &mut Vec<SimpleCommand>,
+) -> Option<ParseForSecurityResult> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        let kind = child.kind();
+        if matches!(kind, "$(" | "`" | ")") {
+            continue;
+        }
+        if let Some(err) = collect_commands(child, src, inner) {
+            return Some(err);
+        }
+    }
+    None
 }
 
 // --- declaration_command --------------------------------------------------
@@ -635,6 +750,7 @@ fn walk_double_string<'a>(
 fn walk_declaration_command<'a>(
     node: Node<'a>,
     src: &str,
+    inner: &mut Vec<SimpleCommand>,
 ) -> Result<SimpleCommand, ParseForSecurityResult> {
     // Children: builtin name (`export`/`local`/...), then a
     // sequence of `word`s and `variable_assignment`s.
@@ -648,10 +764,10 @@ fn walk_declaration_command<'a>(
                 argv.push(kind.to_string());
             }
             "word" | "number" | "string" | "raw_string" | "concatenation" => {
-                argv.push(walk_argument(child, src)?);
+                argv.push(walk_argument(child, src, inner)?);
             }
             "variable_assignment" => {
-                let assign = walk_variable_assignment(child, src)?;
+                let assign = walk_variable_assignment(child, src, inner)?;
                 argv.push(format!("{}={}", assign.name, assign.value));
                 env_vars.push(assign);
             }
@@ -1021,5 +1137,83 @@ mod tests {
     fn redirected_command_text_includes_redirect() {
         let cmds = must_simple("echo hi > out.txt");
         assert_eq!(cmds[0].text, "echo hi > out.txt");
+    }
+
+    // ---- $() inside double-quoted strings (slice 4a) -------------------
+
+    #[test]
+    fn cmdsub_inside_string_with_literal_extracts_inner() {
+        // Outer command + inner substitution both extracted; outer
+        // argv carries the placeholder concatenated with the prefix.
+        let cmds = must_simple(r#"echo "SHA: $(git rev-parse HEAD)""#);
+        assert_eq!(cmds.len(), 2, "outer + inner");
+        // Inner command pushed first (depth-first), outer pushed
+        // after it returns.
+        assert_eq!(cmds[0].argv, vec!["git", "rev-parse", "HEAD"]);
+        assert_eq!(cmds[1].argv[0], "echo");
+        assert!(
+            cmds[1].argv[1].contains(CMDSUB_PLACEHOLDER),
+            "outer argv must contain the placeholder, got {:?}",
+            cmds[1].argv[1]
+        );
+        assert!(cmds[1].argv[1].starts_with("SHA: "));
+    }
+
+    #[test]
+    fn solo_cmdsub_string_is_too_complex() {
+        // `cd "$(echo /etc)"` — placeholder alone in argv would
+        // bypass path validation. Reject.
+        let (_, nt) = must_too_complex(r#"cd "$(echo /etc)""#);
+        assert_eq!(nt.as_deref(), Some("string"));
+    }
+
+    #[test]
+    fn nested_cmdsub_too_complex_propagates_inner_node() {
+        // `$()` inside `$()` inside a string. The inner-inner is
+        // process_substitution, which is rejected.
+        let (_, nt) = must_too_complex(r#"echo "x: $(diff <(a) <(b))""#);
+        assert_eq!(nt.as_deref(), Some("process_substitution"));
+    }
+
+    #[test]
+    fn cmdsub_with_pipeline_inner_extracts_each_stage() {
+        let cmds = must_simple(r#"echo "result: $(ls | wc -l)""#);
+        // ls, wc, echo
+        assert_eq!(cmds.len(), 3);
+        assert_eq!(cmds[0].argv, vec!["ls"]);
+        assert_eq!(cmds[1].argv, vec!["wc", "-l"]);
+        assert_eq!(cmds[2].argv[0], "echo");
+    }
+
+    #[test]
+    fn bare_cmdsub_at_arg_position_still_rejects() {
+        // `rm $(echo /tmp/a)` — placeholder would BE the path arg.
+        // AliveCode policy: bare $() at arg position rejects even
+        // though inside-string $() recurses.
+        let (_, nt) = must_too_complex("rm $(echo /tmp/a)");
+        assert_eq!(nt.as_deref(), Some("command_substitution"));
+    }
+
+    #[test]
+    fn double_quoted_escape_sequences_unescaped() {
+        // `\$`, `\"`, `\\`, `\`` are escape sequences inside "...".
+        let cmds = must_simple(r#"echo "fix \"bug\"""#);
+        assert_eq!(cmds[0].argv[1], r#"fix "bug""#);
+    }
+
+    #[test]
+    fn double_quoted_other_backslash_kept_literal() {
+        // `\n` inside "..." is two characters in bash (backslash + n),
+        // NOT a newline. Mirror that exactly.
+        let cmds = must_simple(r#"echo "a\nb""#);
+        assert_eq!(cmds[0].argv[1], r"a\nb");
+    }
+
+    #[test]
+    fn cmdsub_placeholder_constant_value() {
+        // Sanity: CMDSUB_PLACEHOLDER constant must match the
+        // string AliveCode uses, so cross-impl audit events
+        // correlate.
+        assert_eq!(CMDSUB_PLACEHOLDER, "__CMDSUB_OUTPUT__");
     }
 }
