@@ -1,0 +1,29 @@
+schema_version = "1"
+name = "fs.write"
+description = "Atomically write a file (temp + rename) on the host's filesystem. Part of the baseline-locomotion-v1 profile (AXIOM §Tier 2.5). A crashed write leaves the prior content intact; the receipt records path, byte count, and content hash, but never the bytes themselves."
+
+[input_schema]
+type = "object"
+required = ["path", "content"]
+additionalProperties = false
+
+[input_schema.properties.path]
+type = "string"
+minLength = 1
+
+[input_schema.properties.content]
+description = "File content. base64 string (default) or UTF-8 text (with encoding=\"utf8\") or array of bytes."
+
+[input_schema.properties.encoding]
+type = "string"
+enum = ["base64", "utf8"]
+description = "How to interpret a string-shaped content. Default base64."
+
+[input_schema.properties.mode]
+type = "integer"
+minimum = 0
+description = "Unix permission bits (0o644, 0o755, etc.). Ignored on non-Unix hosts."
+
+[input_schema.properties.create_parents]
+type = "boolean"
+description = "Create missing parent directories. Default false."
