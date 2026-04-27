@@ -37,8 +37,10 @@ pub mod a2a_bridge_ability;
 pub mod chat_ability;
 pub mod context_loaders;
 pub mod discuss_ability;
+pub mod fleet_list_agents_ability;
 pub mod loop_ability;
 pub mod mcp_bridge_ability;
+pub mod meta_ability;
 pub mod permission_ability;
 pub mod ping;
 pub mod profiles;
@@ -111,13 +113,23 @@ pub fn build_registry_with_services(
     // stdio server uses, so an external MCP client and an in-process
     // Invoke caller see one catalog.
     mcp_bridge_ability::register(&mut reg, profiles::load_host_descriptors);
+    // meta.{describe,list_abilities} — Agent self-introspection on
+    // the same descriptor catalogue. describe is the lightweight
+    // identity+summary surface; list_abilities returns the full
+    // catalogue (visibility-filtered at the admission gate, not here).
+    meta_ability::register(&mut reg, profiles::load_host_descriptors);
     // a2a.bridge.list_skills — same edge-adapter pattern as the MCP
     // bridge above, but for the A2A agent-card surface. Closes over
     // a clone of the AgentRegistry passed in here. v1 has no
     // hot-reload of `agents.json`, so the snapshot stays accurate
     // for the daemon's lifetime; the closure is still cheap to call.
-    let agents_snapshot = agents.clone();
-    a2a_bridge_ability::register(&mut reg, move || agents_snapshot.clone());
+    let agents_for_a2a = agents.clone();
+    a2a_bridge_ability::register(&mut reg, move || agents_for_a2a.clone());
+    // fleet.list_agents — operational view of registered LLM
+    // sub-agents. Cheap-row projection (name, runtime, model, label);
+    // for the protocol agent-card view see a2a.bridge.list_skills.
+    let agents_for_fleet = agents.clone();
+    fleet_list_agents_ability::register(&mut reg, move || agents_for_fleet.clone());
     Arc::new(reg)
 }
 
@@ -218,6 +230,7 @@ pub fn description_for(name: &str) -> &'static str {
         "fleet.attach_session" => session_ability::attach_description(),
         "consent.subscribe" => permission_ability::subscribe_description(),
         "consent.decide" => permission_ability::decide_description(),
+        "consent.list_pending" => permission_ability::list_pending_description(),
         "discuss.create" => discuss_ability::create_description(),
         "discuss.post" => discuss_ability::post_description(),
         "discuss.subscribe" => discuss_ability::subscribe_description(),
@@ -235,6 +248,9 @@ pub fn description_for(name: &str) -> &'static str {
         "fleet.skill_upgrade" => skill_install_ability::upgrade_description(),
         "mcp.bridge.list_tools" => mcp_bridge_ability::list_tools_description(),
         "a2a.bridge.list_skills" => a2a_bridge_ability::list_skills_description(),
+        "fleet.list_agents" => fleet_list_agents_ability::list_agents_description(),
+        "meta.describe" => meta_ability::describe_description(),
+        "meta.list_abilities" => meta_ability::list_abilities_description(),
         _ if name.ends_with(".chat") => "Send a chat prompt to the locally-installed agent.",
         _ => "(system ability)",
     }
@@ -257,6 +273,7 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "fleet.attach_session" => session_ability::attach_input_schema(),
         "consent.subscribe" => permission_ability::subscribe_input_schema(),
         "consent.decide" => permission_ability::decide_input_schema(),
+        "consent.list_pending" => permission_ability::list_pending_input_schema(),
         "discuss.create" => discuss_ability::create_input_schema(),
         "discuss.post" => discuss_ability::post_input_schema(),
         "discuss.subscribe" => discuss_ability::subscribe_input_schema(),
@@ -274,6 +291,9 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "fleet.skill_upgrade" => skill_install_ability::upgrade_input_schema(),
         "mcp.bridge.list_tools" => mcp_bridge_ability::list_tools_input_schema(),
         "a2a.bridge.list_skills" => a2a_bridge_ability::list_skills_input_schema(),
+        "fleet.list_agents" => fleet_list_agents_ability::list_agents_input_schema(),
+        "meta.describe" => meta_ability::describe_input_schema(),
+        "meta.list_abilities" => meta_ability::list_abilities_input_schema(),
         _ => serde_json::json!({ "type": "object" }),
     }
 }
