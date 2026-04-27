@@ -352,6 +352,36 @@ mod tests {
     }
 
     #[test]
+    fn bidi_call_mode_rejected_at_rpc_path() {
+        // Symmetric to `stream_call_mode_rejected_at_rpc_path`. The
+        // bidi executor (lands in C-M3a commit 2) is the right
+        // surface for CallMode::Bidi; routing a bidi target into the
+        // RPC executor would silently swallow the session contract.
+        // Pin the rejection so a future refactor can't relax this
+        // check to `== Stream`.
+        let dispatcher =
+            AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
+        let mut t = ping_target_local();
+        t.call_mode = CallMode::Bidi;
+        let err = dispatcher.execute_rpc(t).unwrap_err();
+        assert!(format!("{err}").contains("Rpc"));
+    }
+
+    #[test]
+    fn bidi_call_mode_rejected_at_stream_path() {
+        // The stream executor accepts only CallMode::Stream. A bidi
+        // target arriving here means a wiring bug upstream; pin the
+        // bail so the misroute surfaces immediately rather than
+        // silently returning an empty StreamSource.
+        let dispatcher =
+            AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
+        let mut t = ping_target_local();
+        t.call_mode = CallMode::Bidi;
+        let err = dispatcher.execute_stream(t).unwrap_err();
+        assert!(format!("{err}").contains("Stream"));
+    }
+
+    #[test]
     fn list_abilities_returns_registered_keys_in_order() {
         // Deterministic iteration order matters because PR-SYS
         // builds the `system_skills[]` label from this list, and

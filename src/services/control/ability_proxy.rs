@@ -227,6 +227,27 @@ impl AbilityProxy {
                     }
                 }
             }
+            // C-M3a commit 1 boundary: the wire variants exist but the
+            // session machinery (BidiRegistry, forwarder, handler
+            // dispatch) lands in commit 3. Until then, every inbound
+            // bidi frame is rejected with ErrorBidi so a client that
+            // races ahead of the rollout gets a clean error rather
+            // than silent dropping. Per §I3, OpenBidi failure leaves
+            // no half-open session — there is nothing to clean up
+            // here because nothing was created.
+            IncomingFrame::OpenBidi { session_id, .. }
+            | IncomingFrame::SendBidi { session_id, .. }
+            | IncomingFrame::CloseBidi { session_id } => {
+                let _ = out
+                    .send(OutgoingFrame::ErrorBidi {
+                        session_id,
+                        code: codes::ABILITY_FAILED.into(),
+                        message: "bidi sessions not yet wired in this daemon \
+                                  (C-M3a commit 1; full handler lands in commit 3)"
+                            .into(),
+                    })
+                    .await;
+            }
         }
     }
 
@@ -345,6 +366,22 @@ impl AbilityProxy {
                     code: codes::ABILITY_FAILED.into(),
                     message: "Cancel for unknown subscription_id; \
                               streaming subscription registry lands in a follow-up PR"
+                        .into(),
+                }]
+            }
+            // Sync `handle` cannot host bidi sessions — there is no
+            // mpsc to push live frames through and no place to park
+            // a long-lived handler task. Tests that need bidi must
+            // use the async path. Returning ErrorBidi keeps the
+            // surface symmetric with `handle_async`.
+            IncomingFrame::OpenBidi { session_id, .. }
+            | IncomingFrame::SendBidi { session_id, .. }
+            | IncomingFrame::CloseBidi { session_id } => {
+                vec![OutgoingFrame::ErrorBidi {
+                    session_id,
+                    code: codes::ABILITY_FAILED.into(),
+                    message: "bidi requires the async dispatch surface; \
+                              `handle` is sync-only — use `handle_async`"
                         .into(),
                 }]
             }
