@@ -1,5 +1,9 @@
 # AXON-RFC-003 — InvokeBidi Data-Plane Protocol Specification
 
+**Version**: v0.1 (4 surgical patches applied for protocol
+closure — frame invariants, terminal-invalid semantics, FFI
+behavioral invariants, acceptance-as-MUST). Awaits sign-off to
+become v1.
 **Status**: protocol specification, no implementation required.
 **Date**: 2026-04-27
 **Author**: Claude (under Silan.Hu architectural authority)
@@ -156,7 +160,100 @@ protocol break.
 | `AXON_BIDI_DUPLICATE_OPEN` | second EnvelopeOpen frame mid-session |
 | `AXON_BIDI_CALLER_DISCONNECT` | up gRPC stream closed without `eof = true` |
 
-### §1.5 What this spec deliberately does NOT add
+### §1.5 Frame validity invariants (formal, normative)
+
+The role contract in §1.1 is the per-frame admissibility table.
+The following invariants extend it across the whole frame
+sequence; they are the **closure** of the per-frame rules under
+execution. A receiver MUST treat any sequence violating them as
+a protocol error and emit the terminal receipt with the relevant
+`AXON_BIDI_*` reason from §1.4.
+
+Notation: `up[i]` is the i-th frame on the up direction
+(0-indexed); `down[i]` likewise. `chain(d, i)` is the chain state
+on direction `d` after consuming `d[0..=i]`.
+
+**INV-1 (anchor establishment)**
+`up[0]` MUST be the FIRST frame consumed in either direction. No
+`down[i]` is emitted before `up[0]` is admitted. `down[0]` is
+the admission `InvocationReceipt` produced as a direct
+consequence of `up[0]`.
+
+**INV-2 (sequence monotonicity, per direction)**
+For all `i ≥ 0` on direction `d`: `d[i].sequence == i`. Equivalently,
+the i-th accepted frame on each direction has sequence exactly
+i. The two directions are independent counters; cross-direction
+interleaving on the wire is allowed.
+
+**INV-3 (chain pre-condition)**
+For all `i ≥ 1` on direction `d`: `d[i]` MAY be processed only if
+`chain(d, i-1)` exists (i.e. `d[0..i]` were all admitted in
+order). Frame i carries `mac` computed against the anchor
+embedded in `chain(d, i-1)`. A receiver that has not yet
+established `chain(d, i-1)` MUST NOT compute `chain(d, i)`.
+
+**INV-4 (anchor parity)**
+The 64-byte value placed in `up[0].mac` MUST equal the 64-byte
+`envelope.caller_signature.signature` byte-for-byte. The HMAC
+chain anchors on the value admission verified, never on a value
+admission did not see. (Already enforced by §1.4
+`AXON_BIDI_FRAME_ZERO_SIG_MISMATCH`.)
+
+**INV-5 (uniqueness of EnvelopeOpen)**
+Across the full session lifetime, exactly ONE frame in either
+direction carries `EnvelopeOpen`: `up[0]`. Any subsequent
+`up[i]` with `EnvelopeOpen` payload (including a re-sent `up[0]`
+on a reconnect attempt within the same RPC) is a protocol
+violation. The kernel emits `AXON_BIDI_DUPLICATE_OPEN`.
+
+**INV-6 (terminal closure)**
+A session has at most ONE terminal receipt frame. The terminal
+frame is the LAST frame the kernel emits on the down direction.
+After the terminal receipt:
+- the kernel MUST NOT emit any further `down[i]`;
+- the kernel MUST NOT process any further `up[i]` (per §3.5
+  terminal-invalid rejection rule);
+- both chain states are removed from runtime registries
+  (`bidi_state_remove`, per §4.4).
+
+A receiver that observes a frame after the terminal receipt MUST
+discard it without processing.
+
+**INV-7 (single anchor per session)**
+The HMAC keys `(up_key, down_key)` are derived ONCE from
+`up[0].mac` and `envelope.invocation_nonce`. They are never
+rotated mid-session. Any v1 implementation that re-derives keys
+mid-session is non-conformant.
+
+**INV-8 (no half-admission)**
+If `up[0]` admission fails (signature, membership, delegation,
+or any §3.2 check), no chain state is created and no `down[0]`
+is emitted. The gRPC stream is closed with a tonic `Status`
+error. A caller observing tonic `Status::permission_denied` /
+`invalid_argument` at open time MUST treat the stream as never
+having existed.
+
+**INV-9 (closure under timeout)**
+A recv-side timeout (no down frame within the configured
+window) does NOT mutate `chain(down, *)` and does NOT emit a
+terminal receipt. The session remains alive; the caller MAY
+retry recv. Timeout is the SOLE non-mutating Ok-shaped exit
+from a recv call.
+
+**INV-10 (causality: no down before signed up)**
+For every `down[i]` with `i ≥ 1` carrying a `BinaryChunk` that
+the ability handler produced from caller bytes: the caller bytes
+were carried in some `up[j]` with `j < i`'s admission already
+complete. The kernel guarantees this by serializing: `up[0]`
+admission → ability dispatch → ability outputs flow as
+`down[1..]`. Out-of-order admission is impossible because
+admission is a single synchronous gate at frame 0.
+
+These ten invariants close the frame schema. A receiver that
+enforces §1.1 + §1.4 + §1.5 is conformant; a receiver missing
+any single invariant is not.
+
+### §1.6 What this spec deliberately does NOT add
 
 The following appear in the round-1 review's "gap list" but are
 **explicitly out of scope for v1**:
@@ -297,6 +394,69 @@ stream never opens) and no chain state is created.
   would be 100× slower at video frame rates.
 - The HMAC chain (§4) provides integrity + ordering +
   anti-replay. Confidentiality is TLS's job.
+
+### §3.4 Terminal state (cryptographic, not just runtime)
+
+A session enters TERMINAL state at the FIRST occurrence of any
+of:
+
+(a) Kernel emits the terminal `InvocationReceipt` on the down
+    direction (state ∈ {Completed, Failed, Cancelled, TimedOut}).
+(b) Kernel observes a chain violation on the up direction
+    (any `AXON_BIDI_FRAME_*` reason from §1.4).
+(c) Caller observes a chain violation on the down direction
+    (`AXON_BIDI_DOWN_*` from §1.4).
+(d) Transport-level disconnect (gRPC `Status` carrying
+    Disconnected, or TCP RST surfaced as an mpsc Disconnected).
+(e) `up[i]` carries `BidiControl.eof = true` and is admitted.
+(f) Caller invokes the bridge close-FFI.
+
+TERMINAL is **monotonic and absorbing**: once a session is in
+TERMINAL, no transition out exists.
+
+### §3.5 Terminal-invalid rejection (closure of TERMINAL state)
+
+After a session enters TERMINAL:
+
+1. The kernel MUST NOT process any further `up[i]`. Any frame
+   arriving on the up gRPC stream after TERMINAL is **silently
+   discarded** (no MAC compute, no chain-state read, no
+   `down[i]` produced in response). The gRPC up stream is
+   drained by tonic and the transport socket closes.
+2. The kernel MUST NOT emit any further `down[i]`. The down
+   sender is dropped; tonic closes the down half of the gRPC
+   stream.
+3. Chain state for the session MUST be removed from the
+   per-process registries (`BIDI_CHAIN_STATES` on the bridge,
+   `SessionRegistry` lookup table on the kernel where
+   applicable). After removal, any later FFI call referencing
+   the same `stream_handle` MUST return `HANDLE_INVALID`
+   (§5.2) with the bridge-side message
+   `"stream_handle X is not a signed InvokeBidi stream"`.
+4. The HMAC keys derived from `up[0].mac || nonce` MUST be
+   considered **revoked** for cryptographic purposes. A
+   conformant SDK MUST NOT reuse `up_key` / `down_key` for any
+   subsequent operation. (Today's bridge does this implicitly
+   by dropping the `BidiChainState` struct, which moves the
+   key bytes into a heap allocation that gets dropped — there
+   is no API path to extract the keys outside the chain
+   state.)
+
+This makes TERMINAL a **cryptographic** terminal, not just a
+runtime convention. A frame tagged with the dead session's
+`up_key` is invalid not because the kernel chooses to reject
+it, but because the kernel has no representation of the chain
+under which it could be valid.
+
+**Why "silently discarded" not "rejected with code"**: a
+tampered or replayed frame arriving after TERMINAL has no chain
+state to anchor against; producing a fresh terminal receipt
+would require a fresh chain anchor, which by INV-7 cannot
+exist. The protocol's only conformant response is to drop. SDKs
+that observe `HANDLE_INVALID` on the next FFI call know the
+session is dead; they MUST NOT poll to extract a "what happened"
+detail post-TERMINAL — that detail rode the terminal receipt
+itself.
 
 ---
 
@@ -501,6 +661,107 @@ Every `*mut c_char` returned by the bridge MUST be released via
 permanently (round-2 audit P3-9). A future `cbindgen`-generated
 header will document this contract in the generated `.h`.
 
+### §5.8 FFI behavioral invariants (formal, normative)
+
+The §5.1 logical surface is the call shape. The following
+invariants extend it to behavioral requirements every conformant
+SDK MUST satisfy. They are the **closure of FFI semantics under
+execution** — without them, "all SDKs implement the same FFI" is
+true at the type level but false at the wire level.
+
+**FFI-INV-1 (frame ordering preservation, recv side)**
+`bidi_recv` MUST surface frames in the exact order the bridge's
+chain-verify accepted them. SDKs MUST NOT reorder, batch, or
+coalesce frames across `bidi_recv` calls. The k-th `bidi_recv`
+that returns a non-`Timeout` `kind` returns the k-th
+chain-verified down frame (counted from `down[0]`, the admission
+receipt).
+
+**FFI-INV-2 (frame ordering preservation, send side)**
+`bidi_send` MUST commit frames to the up direction in the
+order the FFI calls were issued. The bridge serializes
+sequence allocation under a per-stream mutex; SDKs MUST NOT
+reorder or merge sends. Two concurrent `bidi_send` calls on
+the same stream produce two distinct frames whose sequence
+ordering reflects mutex acquisition order — the SDK's caller
+sees a definite "this send happened before that send" outcome.
+
+**FFI-INV-3 (synchronous protocol-rejection surfacing)**
+A protocol-level rejection (signature failure, MAC verify fail,
+sequence skip, unknown stream id, …) MUST be surfaced
+**synchronously** with respect to the FFI call that triggered
+it. Specifically:
+- `bidi_open`: protocol failure surfaces as `ENVELOPE_INVALID`
+  status from the same call (no later "out of band" event).
+- `bidi_send`: chain-state-not-found (post-TERMINAL retry)
+  surfaces as `HANDLE_INVALID` from the same call. Transport-
+  level send failure surfaces as `INTERNAL` or
+  `CHANNEL_CLOSED` from the same call.
+- `bidi_recv`: chain-violation surfaces as a return-value
+  error (status code) on the recv that observed the violation,
+  NOT later. Per §3.5, after the violation, subsequent recvs
+  return `HANDLE_INVALID`.
+
+SDKs MUST NOT defer protocol errors to a later FFI call. SDKs
+MUST NOT silently swallow them and continue.
+
+**FFI-INV-4 (no implicit retry)**
+The FFI does NOT retry on the caller's behalf. A `bidi_send`
+that fails with `INTERNAL` does NOT secretly resend; a
+`bidi_recv` that times out does NOT re-poll. The caller decides
+whether to retry. This invariant exists because the chain state
+mutates on every commit; an implicit retry would mutate state
+twice for one logical call, breaking sequence monotonicity
+(INV-2).
+
+**FFI-INV-5 (blocking is the default)**
+v1 `bidi_send` and `bidi_recv` are blocking. A SDK that wraps
+them in non-blocking constructs (Go goroutines, Node async,
+Python asyncio) MUST do so by spawning a worker that calls the
+blocking FFI; it MUST NOT introduce intermediate buffering
+that decouples the caller's call site from the bridge's
+acknowledgement. Specifically: the SDK's "send returned" event
+MUST mean "the bridge committed the frame to the chain", not
+"the SDK queued the send for later". Similarly for recv.
+
+**FFI-INV-6 (status-code mapping is fixed)**
+The status codes in §5.2 are the cross-SDK contract. Every
+SDK MUST map them to language-idiomatic errors using a
+DOCUMENTED 1:1 mapping. SDKs MUST NOT collapse multiple
+status codes into one (e.g. mapping both `HANDLE_INVALID` and
+`CHANNEL_CLOSED` to a single "stream gone" exception): the
+caller's recovery action differs (`HANDLE_INVALID` ⇒ open new
+session immediately; `CHANNEL_CLOSED` ⇒ session is in normal
+TERMINAL state, drain receipt then open new). SDKs MAY add
+language-specific subclasses but the discrimination MUST be
+preserved.
+
+**FFI-INV-7 (idempotent close)**
+`bidi_close` MUST be idempotent. Calling it twice — or after
+a `done` recv has already removed chain state — MUST return
+without error. The second-call return value MAY differ
+(`eof_sent: false` if the first call already emitted the eof)
+but MUST be a successful return.
+
+**FFI-INV-8 (no cross-stream effects)**
+An FFI call against `stream_handle = X` MUST NOT mutate any
+state belonging to `stream_handle = Y, Y ≠ X`. The per-stream
+chain state isolation in the bridge enforces this; SDKs MUST
+NOT introduce cross-stream side effects in their wrapper layer
+(e.g. a shared retry queue that orders sends across streams).
+
+**FFI-INV-9 (post-TERMINAL FFI behavior)**
+After the session enters TERMINAL (§3.4), the next FFI call
+of any kind on that `stream_handle` MUST return
+`HANDLE_INVALID`. The SDK MUST NOT block waiting for a
+response that will never come. The bridge enforces this via
+`bidi_state_lookup` returning `BridgeBadRequest` immediately
+once chain state is removed.
+
+These nine invariants close the FFI contract. A new SDK that
+satisfies the §5.1 surface but violates any of FFI-INV-1..9 is
+non-conformant: cross-SDK determinism is broken.
+
 ---
 
 ## §6 — Backpressure semantics
@@ -576,7 +837,71 @@ turns the others into best-effort observation.
 - **Adaptive bitrate / FEC**. SDK consumers handle these in
   their codec layer, above the FFI.
 
-### §6.6 Producer-side flow control responsibility
+### §6.6 Behavior under back-pressure (formal, normative)
+
+The §6.4 guarantees describe the steady state. This section
+fixes the behavior of every layer **when its capacity is
+exhausted**, so that "v1 MUST hold rather than drop" has a
+single concrete meaning across implementations.
+
+**BP-INV-1 (Layer 1 HTTP/2 window full)**
+When the HTTP/2 stream window is exhausted, the sending side
+MUST block (the gRPC implementation handles this). It MUST
+NOT drop frames, MUST NOT reorder, and MUST NOT silently
+buffer past the window into a userland queue that bypasses the
+window's authority. tonic and grpc-go both honor this by
+default; v1 SDKs MUST NOT reconfigure HTTP/2 with `window_size
+= ∞` or equivalent disable.
+
+**BP-INV-2 (Layer 2 bridge mpsc full)**
+When `request_buffer_size` or `chunk_buffer_size` is exhausted,
+the side that produces (FFI for request, gRPC reader task for
+chunk) MUST block its calling thread/task. It MUST NOT drop
+frames and MUST NOT return a "would block" status to the
+caller (v1 has no non-blocking variant; FFI-INV-5).
+
+**BP-INV-3 (Layer 3 kernel handle mpsc full)**
+When `BIDI_HANDLE_CHANNEL_DEPTH` (32) is exhausted in either
+direction, the producer (`SessionProvider::send_chunk(...).await`
+or `bidi_handler` forwarding an up-frame to the provider) MUST
+await capacity. It MUST NOT drop frames and MUST NOT bypass
+the bounded channel.
+
+**BP-INV-4 (no cross-layer skip)**
+A bound exhausted at layer N MUST propagate back to layer N-1
+within bounded latency (the time for the calling thread to
+observe the block + wake the upstream). v1 SDKs MUST NOT
+introduce a side-channel between layers that lets data skip
+past a full layer (e.g. an unbounded retry queue at the SDK
+layer that drains the bridge's bounded mpsc into an unbounded
+SDK buffer).
+
+**BP-INV-5 (TERMINAL precedence over back-pressure)**
+If a session enters TERMINAL (§3.4) while a producer is
+blocked on a full layer, the block MUST be released within
+bounded time (transport closure → mpsc Disconnected →
+producer's `send.await` returns Err). The producer's `bidi_send`
+FFI call MUST then return `CHANNEL_CLOSED` (or
+`HANDLE_INVALID` if chain state has already been removed). It
+MUST NOT block forever waiting for capacity that will never
+appear.
+
+**BP-INV-6 (no implicit drop)**
+At no point in the v1 wire protocol does the kernel, the
+bridge, or any SDK have permission to drop a BinaryChunk or
+BidiControl frame to relieve back-pressure. Every frame
+admitted at the producer's chain commit point MUST eventually
+arrive at the consumer's chain verify point, OR the session
+MUST enter TERMINAL with the relevant `AXON_BIDI_*` reason.
+There is no third option.
+
+This forecloses the "lossy v1" failure mode: any
+implementation that silently drops to keep flowing under load
+is non-conformant. Lossy semantics arrive in v2 via
+`StreamDescriptor.ordering = "LOSS_TOLERANT"`, at which point
+specific drop rules become legal under that ordering only.
+
+### §6.7 Producer-side flow control responsibility
 
 When `bidi_send` blocks past a deadline the producer cares
 about, the SDK SHOULD:
@@ -638,26 +963,106 @@ Any new SDK or wire-compatible re-implementation MUST satisfy:
 
 ---
 
-## §9 — Acceptance gate
+## §9 — Acceptance gate (semantic, not advisory)
 
-This spec is ready for sign-off if:
+### §9.1 Conformance is binary
 
-1. The shipped code in `bidi_handler.rs`, `invoke_signed_bidi.rs`,
-   `bidi.rs`, and `session_provider.rs` matches every "MUST"
-   in §1–§6 verbatim. (Verified during round-1 + round-2 audits.)
+A v1 InvokeBidi implementation is **either conformant or
+non-conformant**. There is no partial conformance, no "mostly
+conformant", no graduated levels.
+
+A conformant implementation:
+
+- **MUST accept** any frame sequence satisfying ALL constraints
+  in §1.1, §1.4, and §1.5 (INV-1..INV-10), and produce the
+  corresponding wire-visible behavior described in those
+  sections.
+- **MUST reject** any frame sequence violating ANY constraint,
+  with the specific `AXON_BIDI_*` reason code from §1.4. The
+  reason code is part of the contract, not a debugging hint.
+- **MUST NOT accept** any frame sequence that violates a
+  constraint, even if "the result would be reasonable." There is
+  no implementation discretion to soften a MUST.
+- **MUST NOT reject** any frame sequence that satisfies the
+  constraints, even if "the result would be costly." There is
+  no implementation discretion to harden a MUST NOT.
+
+### §9.2 Acceptance is a semantic judgement
+
+The acceptance test is NOT "does this implementation produce
+the right output for these inputs?" — that is a unit-test
+question. The acceptance test is:
+
+> For every frame sequence S, does this implementation produce
+> the response defined by §1–§6 + the conformance checklist of
+> §8?
+
+A conformant implementation MUST produce identical observable
+behavior to every other conformant implementation, given
+identical inputs. This is the cross-SDK determinism guarantee:
+two conformant Go and Python SDKs MUST be wire-indistinguishable
+to a recording observer.
+
+### §9.3 Non-conformance is a protocol error
+
+An implementation that satisfies the §5.1 logical surface but
+violates any FFI-INV-1..9 (§5.8), or violates any BP-INV-1..6
+(§6.6), or fails any conformance checklist item (§8), is
+**non-conformant**. Non-conformance is not a quality issue, not
+a bug to file, not a deferred-improvement item: it is a
+**protocol violation**. The implementation is not a v1 InvokeBidi
+implementation; it is something else that resembles one.
+
+The correct remediation for non-conformance is to fix the
+implementation, not to relax the spec. If §1–§6 demand something
+infeasible for a given language or runtime, that is grounds for
+a v1.x amendment to this spec, NOT grounds for shipping a
+non-conformant SDK.
+
+### §9.4 Sign-off conditions for v1
+
+This spec is binding v1 when:
+
+1. The shipped Rust implementations (`bidi_handler.rs`,
+   `invoke_signed_bidi.rs`, `bidi.rs`, `session_provider.rs`)
+   satisfy every MUST in §1–§6 + every invariant in §1.5 / §3.5
+   / §5.8 / §6.6 verbatim. **Status: verified during round-1 +
+   round-2 audits + G-bundle.**
 2. The G-bundle (`dff7294`) is in place — chain-state lifetime
-   matches §4.4. (Verified: 148/148 dendrite-bridge tests pass,
-   263/263 axon-runtime tests pass.)
-3. The §1.5 / §4.5 / §6.5 / §7 deferral list is acceptable as
-   the v1 scope.
+   matches §4.4. **Status: verified, 148/148 dendrite-bridge
+   tests pass, 263/263 axon-runtime tests pass.**
+3. The deferral list (§1.6 / §4.5 / §6.5 / §7) is the accepted
+   v1 scope.
 
-If accepted: this becomes the binding C-M1b protocol document.
-Subsequent C-M1b execution items (cbindgen header, multimodal
-proto fields, stall detection, replay test) reference this doc
-and amend section-by-section rather than re-deriving.
+### §9.5 What "v1" means going forward
 
-If changes wanted: respond with section numbers to revise; this
-file becomes v0.1, the revision lands as v1.
+Once v1 is signed off:
+
+- Any code change touching §1–§6 semantics requires a v1.x
+  amendment to this document FIRST, then implementation. The
+  spec leads, code follows.
+- Any new SDK ships with the §8 conformance checklist filled
+  in (every item ✓ or rationale for omission with sign-off).
+- The cross-language hex anchors (HKDF, frame_mac) in
+  `bidi.rs` are part of the contract. Drift triggers a wire
+  break, not a "soft incompatibility."
+- The forward-compat reservations (§2.3 `args_root_hash` field
+  number, future `LOSS_TOLERANT` ordering, future `key_frame`
+  / `duration` / `dts` BinaryChunk fields, future `StreamReady`
+  control) are claimed; v1 producers MUST NOT use them, and v1
+  consumers MUST tolerate them as protobuf-default-ignore on
+  the wire.
+
+### §9.6 Revision protocol
+
+If revision is wanted on this v0.1: respond with section
+numbers + the specific "MUST that should be MUST NOT" or
+"missing invariant N for property P" critique. The revision
+lands as v1.
+
+If accepted as-is: this is binding v1, this file is renamed
+without the v0.1 marker, and downstream work proceeds on this
+contract.
 
 ---
 
