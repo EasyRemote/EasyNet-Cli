@@ -41,6 +41,13 @@ pub mod chat_ability;
 /// published by every host-embodied agent claiming the
 /// `baseline-locomotion-v1` profile.
 pub mod fs_ability;
+/// AXIOM §"Tier 2.5" Baseline Locomotion Profile,
+/// structured-execution member. `process.exec` spawns one
+/// process via OS-level argv (NO shell interpretation);
+/// for pipes / redirects / glob a caller uses `shell.run`.
+/// The eight-stage shell pipeline is NOT run here; the
+/// structured input shape is the security boundary.
+pub mod process_exec_ability;
 pub mod context_loaders;
 pub mod discuss_ability;
 pub mod fleet_list_agents_ability;
@@ -112,6 +119,13 @@ pub fn build_registry_with_services(
     // fs.list) — every host-embodied agent claiming
     // `baseline-locomotion-v1` MUST expose them.
     fs_ability::register(&mut reg);
+    // AXIOM §"Tier 2.5" Baseline Locomotion Profile —
+    // structured execution. `process.exec` shares the
+    // destructive command list and process-execution
+    // hardening (tempfile-backed output, tree-kill on
+    // timeout, env defaults) with the future `shell.run`
+    // ability via the `support::shellguard` subsystem.
+    process_exec_ability::register(&mut reg);
     // policy.{evaluate,simulate} — admission-gate consumer surface
     // pinned to the §A6 contract. v1 is allow-all; the gate's
     // rewiring to actually call this ability lands in a follow-up
@@ -353,6 +367,7 @@ pub fn description_for(name: &str) -> &'static str {
         "fs.read" => fs_ability::description_read(),
         "fs.write" => fs_ability::description_write(),
         "fs.list" => fs_ability::description_list(),
+        "process.exec" => process_exec_ability::description(),
         _ if name.ends_with(".chat") => "Send a chat prompt to the locally-installed agent.",
         _ => "(system ability)",
     }
@@ -408,6 +423,7 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "fs.read" => fs_ability::input_schema_read(),
         "fs.write" => fs_ability::input_schema_write(),
         "fs.list" => fs_ability::input_schema_list(),
+        "process.exec" => process_exec_ability::input_schema(),
         _ => serde_json::json!({ "type": "object" }),
     }
 }
@@ -511,7 +527,13 @@ mod tests {
             // fs.write — Operational by intent.
             | "fs.read"
             | "fs.write"
-            | "fs.list" => Some(AbilityLayer::Operational),
+            | "fs.list"
+            // AXIOM Tier 2.5 structured-execution member.
+            // process.exec is unconditionally Operational —
+            // it spawns a process that may do anything.
+            // shell.run will be classified Operational
+            // alongside it when its slice lands.
+            | "process.exec" => Some(AbilityLayer::Operational),
             _ => None,
         }
     }

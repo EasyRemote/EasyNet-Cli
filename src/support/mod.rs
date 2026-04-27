@@ -70,6 +70,13 @@ pub(crate) mod bridge_pool;
 pub(crate) mod net;
 pub(crate) mod node;
 pub(crate) mod output;
+/// AXIOM Tier 2.5 bash safety subsystem. Self-contained set
+/// of helpers (destructive command list, hardened process
+/// runner, AST + security pipeline added in later slices)
+/// shared between `process.exec`, `shell.run`, and any
+/// future ability that needs the same hardening surface.
+/// See `shellguard/mod.rs` for the design rationale.
+pub(crate) mod shellguard;
 pub(crate) mod shutdown;
 pub(crate) mod sysinfo;
 pub(crate) mod timeouts;
