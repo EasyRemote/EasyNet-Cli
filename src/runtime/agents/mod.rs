@@ -123,14 +123,37 @@ pub fn build_registry_with_services(
     chat_ability::register(&mut reg, agents, loaders);
     skill_ability::register(&mut reg);
     skill_install_ability::register(&mut reg);
-    // mcp.bridge.list_tools — projects local AbilityDescriptors to the
-    // MCP tools/list shape. Provider runs on every call so a daemon
-    // restart that picks up a freshly-canonicalised URA (or a future
-    // hot-add of a hosted Agent) is reflected without re-registering
-    // the handler. `load_host_descriptors` is the same recipe the MCP
-    // stdio server uses, so an external MCP client and an in-process
-    // Invoke caller see one catalog.
-    mcp_bridge_ability::register(&mut reg, profiles::load_host_descriptors);
+    // mcp.bridge.{list_tools, call_tool} — MCP edge adapter.
+    //
+    // list_tools projects local AbilityDescriptors to the MCP
+    // tools/list shape. Provider runs on every call so a daemon
+    // restart that picks up a freshly-canonicalised URA (or a
+    // future hot-add of a hosted Agent) is reflected without re-
+    // registering the handler. `load_host_descriptors` is the same
+    // recipe the MCP stdio server uses, so an external MCP client
+    // and an in-process Invoke caller see one catalog.
+    //
+    // call_tool dispatches an in-process Invoke against the named
+    // local ability. The OnceLock seam below is the
+    // chicken-and-egg fix: call_tool needs an `Arc` to the
+    // registry being built, but the registry isn't yet wrapped in
+    // an `Arc` at registration time. Set the lock once after
+    // `Arc::new(reg)` completes; the closure's `get()` returns
+    // the populated handle on every subsequent call. Same shape
+    // admin_status_ability uses elsewhere in this file.
+    // Shared OnceLock that both edge bridges (mcp.bridge.call_tool
+    // and a2a.bridge.send_task) read through to dispatch back into
+    // the local registry. Built here, populated post-Arc::new(reg)
+    // below. One lock is enough — both bridges target the same
+    // local registry; doubling up would waste an allocation per
+    // boot for no gain.
+    let local_registry_handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>> =
+        Arc::new(std::sync::OnceLock::new());
+    mcp_bridge_ability::register(
+        &mut reg,
+        profiles::load_host_descriptors,
+        Arc::clone(&local_registry_handle),
+    );
     // meta.{describe,list_abilities} — Agent self-introspection on
     // the same descriptor catalogue. describe is the lightweight
     // identity+summary surface; list_abilities returns the full
@@ -142,13 +165,23 @@ pub fn build_registry_with_services(
     // hot-reload of `agents.json`, so the snapshot stays accurate
     // for the daemon's lifetime; the closure is still cheap to call.
     let agents_for_a2a = agents.clone();
-    a2a_bridge_ability::register(&mut reg, move || agents_for_a2a.clone());
+    a2a_bridge_ability::register(
+        &mut reg,
+        move || agents_for_a2a.clone(),
+        Arc::clone(&local_registry_handle),
+    );
     // fleet.list_agents — operational view of registered LLM
     // sub-agents. Cheap-row projection (name, runtime, model, label);
     // for the protocol agent-card view see a2a.bridge.list_skills.
     let agents_for_fleet = agents.clone();
     fleet_list_agents_ability::register(&mut reg, move || agents_for_fleet.clone());
-    Arc::new(reg)
+    let arc = Arc::new(reg);
+    // Populate the shared OnceLock now that the registry is wrapped.
+    // Both mcp.bridge.call_tool and a2a.bridge.send_task read through
+    // it to dispatch into other local abilities; until this line runs
+    // they each return isError("not initialised") on every call.
+    let _ = local_registry_handle.set(Arc::clone(&arc));
+    arc
 }
 
 /// Daemon-side convenience wrapper. Loads the agent registry and
@@ -268,7 +301,9 @@ pub fn description_for(name: &str) -> &'static str {
         "fleet.skill_remove" => skill_install_ability::remove_description(),
         "fleet.skill_upgrade" => skill_install_ability::upgrade_description(),
         "mcp.bridge.list_tools" => mcp_bridge_ability::list_tools_description(),
+        "mcp.bridge.call_tool" => mcp_bridge_ability::call_tool_description(),
         "a2a.bridge.list_skills" => a2a_bridge_ability::list_skills_description(),
+        "a2a.bridge.send_task" => a2a_bridge_ability::send_task_description(),
         "fleet.list_agents" => fleet_list_agents_ability::list_agents_description(),
         "meta.describe" => meta_ability::describe_description(),
         "meta.list_abilities" => meta_ability::list_abilities_description(),
@@ -318,7 +353,9 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "fleet.skill_remove" => skill_install_ability::remove_input_schema(),
         "fleet.skill_upgrade" => skill_install_ability::upgrade_input_schema(),
         "mcp.bridge.list_tools" => mcp_bridge_ability::list_tools_input_schema(),
+        "mcp.bridge.call_tool" => mcp_bridge_ability::call_tool_input_schema(),
         "a2a.bridge.list_skills" => a2a_bridge_ability::list_skills_input_schema(),
+        "a2a.bridge.send_task" => a2a_bridge_ability::send_task_input_schema(),
         "fleet.list_agents" => fleet_list_agents_ability::list_agents_input_schema(),
         "meta.describe" => meta_ability::describe_input_schema(),
         "meta.list_abilities" => meta_ability::list_abilities_input_schema(),
@@ -392,6 +429,13 @@ mod tests {
             | "fleet.skill_install"
             | "fleet.skill_remove"
             | "fleet.skill_upgrade"
+            // mcp.bridge.call_tool / a2a.bridge.send_task — both
+            // dispatch into another local ability; the side effects
+            // come from that dispatch, not the bridge itself. Sit
+            // with the operational verbs because the call surface
+            // IS the work.
+            | "mcp.bridge.call_tool"
+            | "a2a.bridge.send_task"
             | "discuss.create"
             | "discuss.post"
             | "discuss.subscribe"
