@@ -41,6 +41,7 @@ pub mod fleet_list_agents_ability;
 pub mod loop_ability;
 pub mod mcp_bridge_ability;
 pub mod meta_ability;
+pub mod network_health_ability;
 pub mod permission_ability;
 pub mod ping;
 pub mod profiles;
@@ -97,6 +98,7 @@ pub fn build_registry_with_services(
 ) -> Arc<LocalAbilityRegistry> {
     let mut reg = LocalAbilityRegistry::new();
     ping::register(&mut reg);
+    network_health_ability::register(&mut reg);
     session_ability::register(&mut reg, sessions);
     permission_ability::register(&mut reg, perms);
     discuss_ability::register(&mut reg, discuss);
@@ -226,6 +228,7 @@ pub fn published_abilities() -> Vec<SystemAbilityMetadata> {
 pub fn description_for(name: &str) -> &'static str {
     match name {
         "observe.health" => ping::description(),
+        "observe.network_health" => network_health_ability::description(),
         "fleet.list_sessions" => session_ability::list_description(),
         "fleet.attach_session" => session_ability::attach_description(),
         "consent.subscribe" => permission_ability::subscribe_description(),
@@ -269,6 +272,7 @@ pub fn description_for(name: &str) -> &'static str {
 pub fn input_schema_for(name: &str) -> serde_json::Value {
     match name {
         "observe.health" => ping::input_schema(),
+        "observe.network_health" => network_health_ability::input_schema(),
         "fleet.list_sessions" => session_ability::list_input_schema(),
         "fleet.attach_session" => session_ability::attach_input_schema(),
         "consent.subscribe" => permission_ability::subscribe_input_schema(),
