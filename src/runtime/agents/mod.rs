@@ -41,6 +41,14 @@ pub mod chat_ability;
 /// published by every host-embodied agent claiming the
 /// `baseline-locomotion-v1` profile.
 pub mod fs_ability;
+/// fs.edit — surgical string-replace primitive over a single
+/// text file. Default contract: old_string MUST occur exactly
+/// once; ambiguous matches reject with the count rather than
+/// silently rewriting all occurrences. Pass replace_all=true
+/// to opt into bulk replacement. Empty old_string + missing
+/// target = create-new-file. Atomic write (tempfile +
+/// fdatasync + rename) shared with fs.write.
+pub mod fs_edit_ability;
 /// AXIOM §"Tier 2.5" Baseline Locomotion Profile,
 /// structured-execution member. `process.exec` spawns one
 /// process via OS-level argv (NO shell interpretation);
@@ -138,6 +146,11 @@ pub fn build_registry_with_services(
     // fs.list) — every host-embodied agent claiming
     // `baseline-locomotion-v1` MUST expose them.
     fs_ability::register(&mut reg);
+    // AXIOM §"Tier 2.5" Baseline Locomotion — surgical text
+    // edit. Sibling of fs.read / fs.write; uses the SAME
+    // atomic-write path (tempfile + fdatasync + rename) so
+    // the crash-resilience story is uniform.
+    fs_edit_ability::register(&mut reg);
     // AXIOM §"Tier 2.5" Baseline Locomotion Profile —
     // structured execution. `process.exec` shares the
     // destructive command list and process-execution
@@ -399,6 +412,7 @@ pub fn description_for(name: &str) -> &'static str {
         "fs.read" => fs_ability::description_read(),
         "fs.write" => fs_ability::description_write(),
         "fs.list" => fs_ability::description_list(),
+        "fs.edit" => fs_edit_ability::description(),
         "process.exec" => process_exec_ability::description(),
         "shell.run" => shell_run_ability::description(),
         "http.request" => http_request_ability::description(),
@@ -457,6 +471,7 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "fs.read" => fs_ability::input_schema_read(),
         "fs.write" => fs_ability::input_schema_write(),
         "fs.list" => fs_ability::input_schema_list(),
+        "fs.edit" => fs_edit_ability::input_schema(),
         "process.exec" => process_exec_ability::input_schema(),
         "shell.run" => shell_run_ability::input_schema(),
         "http.request" => http_request_ability::input_schema(),
@@ -564,6 +579,7 @@ mod tests {
             | "fs.read"
             | "fs.write"
             | "fs.list"
+            | "fs.edit"
             // AXIOM Tier 2.5 execution members. process.exec
             // and shell.run are unconditionally Operational —
             // they spawn processes that may do anything; even
