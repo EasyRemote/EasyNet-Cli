@@ -505,26 +505,262 @@ hardening + observability + ergonomics, not protocol correctness.
 
 ---
 
-## Recommended next action
+## Recommended next action (round 1)
 
 Pick one of:
+- **A** Fix P1-1+P1-2+P1-3 (production hardening bundle).
+- **B** Fix P1-1+P1-2 only.
+- **C** Document P2s only.
+- **D** Accept audit, defer fixes.
+- **E** Audit `sdk/rust/src/dendrite_bridge.rs` next pass.
 
-- **A**: Fix P1-1 + P1-2 + P1-3 as a "production hardening" bundle.
-  ~150 LOC + 3 negative tests. Closes the three real gaps. No new
-  features; same RFC-002 / aggregate.* semantics.
+---
 
-- **B**: Fix P1-1 + P1-2 only (defer P1-3 stall detection).
-  ~50 LOC + 2 negative tests. Hardening minimum.
+# Round 2 — bridge + chain math audit (option E executed)
 
-- **C**: Document all P2s with comments in the source (no code
-  change), defer all P1s to a later cycle. Pure-doc commit.
+**Date**: same day
+**Scope**: ~2650 additional LOC across 3 files where the actual
+HMAC chain emit / verify happens. This is the layer between the
+Go cgo and the kernel.
 
-- **D**: Accept the audit, file each issue as a tracked item,
-  proceed with other priorities (e.g. resume the rest of C-M1b
-  multimodal work).
+| File | LOC | Role |
+|---|---|---|
+| `EasyNet-Axon/core/runtime-rs/client-sdk/src/domain/bidi.rs` | 422 | Pure crypto primitives: HKDF derive, frame_mac, canonical_bidi_payload |
+| `EasyNet-Axon/core/runtime-rs/dendrite-bridge/src/invoke_signed_bidi.rs` | 1167 | Producer chain emit + consumer chain verify (caller side) |
+| `EasyNet-Axon/core/runtime-rs/dendrite-bridge/src/ffi_exports.rs` | 1060 (only bidi parts read) | C ABI exports for bidi open/send/recv/close |
 
-- **E**: Audit `sdk/rust/src/dendrite_bridge.rs` next pass before
-  any fix, since several P1/P2s touch the chain emit there.
+Total reviewed across both rounds: ~5500 LOC.
+
+## Round 2 findings
+
+### 🟢 P3-6 — `bidi.rs` is exemplary
+
+Pure functions, no I/O, no async. HKDF + frame_mac +
+canonical_bidi_payload all correct. Cross-language hex anchors
+(lines 252–266 + 369–380) pin HMAC outputs against fixed inputs
+— any future Python/Node port that drifts a single byte breaks
+the test. Multi-frame chain wedge test (387–421) demonstrates
+the chain property empirically. All `.expect("never fails")` are
+genuinely infallible (HKDF L=32 < 255×HashLen, HMAC any 32-byte
+key, prost encode into Vec). Nothing to change.
+
+---
+
+### 🔴 P0-A — `BIDI_CHAIN_STATES` map leaks on transport-level orphans
+
+**Where**: `invoke_signed_bidi.rs` lines 136–166.
+
+**What**: Process-global `Mutex<HashMap<u64, Arc<Mutex<BidiChainState>>>>`
+keyed on `stream_handle`. Entries are inserted in
+`bidi_open_signed_impl` (line 430). They are removed in only
+TWO places:
+
+1. `recv_signed_impl` line 647, when the **server** sends
+   `done=true` (clean EOF terminal frame).
+2. `close_signed_impl` line 825, when the caller explicitly
+   closes.
+
+**The leak**: any path where the underlying gRPC transport drops
+the stream WITHOUT either of those two events leaves the map
+entry forever. Realistic triggers:
+- TCP RST from the peer.
+- Caller process crash mid-session.
+- Caller code that opens, errors, and forgets to call `Close()`
+  in a panic recovery path.
+- Recv timing out with `kind=timeout` (line 651) and the caller
+  giving up — the chain state stays.
+
+The Go SDK's `eofSent` defect from P2-6 (SendEOF FFI failure
+prevents Close from ever calling close-FFI) makes this even
+easier to hit in production: SendEOF errors → `eofSent=true` →
+Close becomes no-op → bridge entry leaks.
+
+**Severity rationale (why P0)**:
+- Memory-bounded only by the count of historical sessions a
+  given bridge process has handled.
+- Each `BidiChainState` ≈ 200 bytes including key material; at
+  10K leaked sessions = ~2MB minimum + map overhead. At 100K =
+  significant.
+- More importantly: leaked state means `stream_handle` slot
+  collisions on u64 wrap could silently overwrite old state.
+
+**Today's mitigation**: bridge processes restart on deploy,
+which clears the map. Long-running unattended deploys would
+slowly accumulate.
+
+**Why round 1 missed this**: round 1 read the kernel side
+(tokio task lifetimes bounded by gRPC stream) and the Go cgo
+side (which doesn't own the chain state). This map lives in the
+*bridge crate*, not in the kernel.
+
+**Fix shape**: introduce a periodic sweep task or hook
+`raw_transport::stream_close` → `bidi_state_remove`. ~50 LOC +
+test.
+
+---
+
+### 🟠 P1-4 — `recv_signed_impl` chain mismatch error returns Err but doesn't drop chain state
+
+**Where**: `invoke_signed_bidi.rs` lines 686–725.
+
+**What**: When sequence or MAC verification fails (codes
+`AXON_BIDI_DOWN_SEQUENCE` / `_MAC_LEN` / `_MAC_INVALID`), the
+function returns Err. But `bidi_state_remove` is NOT called.
+A Go SDK that retries recv on error would re-attempt verification
+against the stale `last_down_mac` — chain is structurally dead,
+no recovery is possible, but the state stays around.
+
+**Why it matters**: chain mismatch = session poisoned. Right
+behaviour is to drop chain state immediately so subsequent recv
+returns BridgeBadRequest ("not a signed stream") forcing the
+caller to open a new session.
+
+**Fix shape**: on any chain-violation Err from recv, call
+`bidi_state_remove(stream_handle)` before returning. ~3 LOC.
+
+---
+
+### 🟠 P1-5 — Chain state mutex held across `prost::Message::encode_to_vec`
+
+**Where**: `invoke_signed_bidi.rs` lines 581–589 (inside
+`build_and_commit_up_frame`).
+
+**What**: Mutex held across `canonical_bidi_payload` (clone +
+encode), `frame_mac`, and `frame.encode_to_vec()`. Doc claims
+"microseconds for typical payload sizes." True for KB chunks.
+For a 1 MiB video frame: ~2-3ms mutex hold per frame. At 30 fps
+× 1 MiB × two-way = ~140ms/sec mutex hold = 14% of wall time
+serialized.
+
+**Why it matters today**: doesn't. PTY frames are sub-KB. If
+C-M5c (voice/video on InvokeBidi) actually ships, this becomes
+the bottleneck.
+
+**Fix shape**: move prost encode + canonical_bidi_payload out
+of the mutex. Mutex covers only: read + write seq/mac slots.
+~30 LOC refactor.
+
+**Trade-off**: more complex; current is bug-free if slow.
+Defer until media ships.
+
+---
+
+### 🟡 P2-9 — `ct_eq_bytes` reimplemented locally instead of `subtle`
+
+**Where**: `invoke_signed_bidi.rs` lines 793–806.
+
+Hand-rolled constant-time byte compare. Implementation is
+correct (XOR-OR all bytes, compare zero). Comment says adding
+`subtle` dep "for one call site would be heavier." But the
+kernel side (`bidi_handler.rs:610`) uses `subtle::ConstantTimeEq`
+— so the dep already exists in the workspace. Two different
+implementations risk divergence in future maintenance.
+
+**Fix shape**: depend on `subtle` in bridge Cargo.toml; use
+`ct_eq` for both. ~5 LOC.
+
+---
+
+### 🟡 P2-10 — `recv_signed_impl` validates MAC length AFTER protobuf decode
+
+**Where**: `invoke_signed_bidi.rs` lines 669 (decode) → 699
+(length check).
+
+A malicious peer could send protobuf with wildly inflated `mac`
+field, forcing a multi-MiB allocation in the decode before the
+length check fires. Mitigated by gRPC's 4 MiB default max
+message size, so worst case is one 4 MiB allocation per recv —
+annoying but bounded.
+
+**Fix shape**: pull `mac.len()` check out of chain-state lock,
+do it on proto-decoded frame BEFORE acquiring lock. ~5 LOC.
+
+---
+
+### 🟡 P2-11 — `bidi_state_lookup` Arc clone, registry mutex drop is implicit
+
+**Where**: `invoke_signed_bidi.rs` lines 146–159.
+
+The Arc clone correctly releases the registry mutex by dropping
+`map` at scope end. Doc claims "drop the registry lock
+immediately" but the drop is implicit, not explicit. A future
+maintainer adding code between lookup and return could hold the
+mutex longer than intended.
+
+**Fix shape**: optional — explicit `drop(map)` after `cloned()`.
+~1 LOC.
+
+---
+
+### 🟢 P3-7 — `bidi_state_remove` on done frame is unconditional
+
+When recv sees `done=true` chain state is removed, subsequent
+recv returns BridgeBadRequest. Could improve the error message
+to explicitly say "session ended; open a new session." ~5 LOC.
+
+---
+
+### 🟢 P3-8 — `invoke_bidi_close_signed_impl` removes chain state even on EOF send failure
+
+Lines 821–836. Deliberate design choice — explicit-close is
+leak-free even if EOF send fails. Doesn't help with crashes /
+TCP RST that never call close (that's P0-A's territory).
+
+---
+
+### 🟢 P3-9 — FFI string-free contract is documented but enforcement is by convention
+
+`ffi_exports.rs` lines 872–879. Every `*mut c_char` returned
+MUST be freed via `axon_dendrite_string_free`. Go SDK does this
+correctly (verified round 1). Future SDK in another language
+that forgets this leaks memory. Doc-only fix; cbindgen-generated
+header would make the contract self-documenting (gap E).
+
+---
+
+## Round 2 aggregate
+
+- **1 new P0** — `BIDI_CHAIN_STATES` leak on transport-level
+  orphans. Real production-affecting bug.
+- **2 new P1s** — chain state survives chain-mismatch Err
+  (P1-4); mutex held across prost encode at media bitrates
+  (P1-5).
+- **3 new P2s** — hand-rolled ct_eq vs subtle (P2-9); MAC length
+  check after decode (P2-10); explicit drop documentation (P2-11).
+- **4 new P3s** — observations.
+
+## Combined audit totals (round 1 + round 2)
+
+| Severity | Round 1 | Round 2 | Total |
+|---|---|---|---|
+| 🔴 P0 | 0 | 1 | **1** |
+| 🟠 P1 | 3 | 2 | **5** |
+| 🟡 P2 | 8 | 3 | **11** |
+| 🟢 P3 | 5 | 4 | **9** |
+
+**Total reviewed**: ~5500 LOC across 8 files. Round 2 found 1
+production bug (the bridge leak) that round 1 couldn't see
+because the relevant code lives in the bridge crate, not in the
+kernel or the Go SDK.
+
+## Recommended next action (revised after round 2)
+
+- **F**: Fix P0-A immediately (small commit, high payoff).
+  ~50 LOC + 1 negative test. The leak is the only finding
+  that's actively bad in production today.
+
+- **A'**: Fix P0-A + all 5 P1s as a hardening sprint.
+  ~250 LOC + 5 negative tests. Completes the production-
+  hardening pass for the data plane.
+
+- **G**: Fix P0-A + P1-4 only (leak + chain-mismatch state
+  cleanup). They are the same code area. ~80 LOC + 2 tests.
+  Tightest scope.
+
+My recommendation: **F first** (urgent), then evaluate which of
+the remaining P1s to do later. P1-3 (kernel stall) and P1-5
+(mutex hold across encode) are independent and neither is on
+fire today.
 
 I've not modified any code in this pass. The audit is complete;
 nothing was changed.
