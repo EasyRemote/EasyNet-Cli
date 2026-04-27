@@ -33,6 +33,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+pub mod a2a_bridge_ability;
 pub mod chat_ability;
 pub mod context_loaders;
 pub mod discuss_ability;
@@ -110,6 +111,13 @@ pub fn build_registry_with_services(
     // stdio server uses, so an external MCP client and an in-process
     // Invoke caller see one catalog.
     mcp_bridge_ability::register(&mut reg, profiles::load_host_descriptors);
+    // a2a.bridge.list_skills — same edge-adapter pattern as the MCP
+    // bridge above, but for the A2A agent-card surface. Closes over
+    // a clone of the AgentRegistry passed in here. v1 has no
+    // hot-reload of `agents.json`, so the snapshot stays accurate
+    // for the daemon's lifetime; the closure is still cheap to call.
+    let agents_snapshot = agents.clone();
+    a2a_bridge_ability::register(&mut reg, move || agents_snapshot.clone());
     Arc::new(reg)
 }
 
@@ -226,6 +234,7 @@ pub fn description_for(name: &str) -> &'static str {
         "fleet.skill_remove" => skill_install_ability::remove_description(),
         "fleet.skill_upgrade" => skill_install_ability::upgrade_description(),
         "mcp.bridge.list_tools" => mcp_bridge_ability::list_tools_description(),
+        "a2a.bridge.list_skills" => a2a_bridge_ability::list_skills_description(),
         _ if name.ends_with(".chat") => "Send a chat prompt to the locally-installed agent.",
         _ => "(system ability)",
     }
@@ -264,6 +273,7 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "fleet.skill_remove" => skill_install_ability::remove_input_schema(),
         "fleet.skill_upgrade" => skill_install_ability::upgrade_input_schema(),
         "mcp.bridge.list_tools" => mcp_bridge_ability::list_tools_input_schema(),
+        "a2a.bridge.list_skills" => a2a_bridge_ability::list_skills_input_schema(),
         _ => serde_json::json!({ "type": "object" }),
     }
 }
