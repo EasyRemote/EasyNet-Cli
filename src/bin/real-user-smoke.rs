@@ -247,9 +247,9 @@ fn main() -> anyhow::Result<()> {
         // agent's own claude.audit-test-ability MUST be visible
         // through the EasyNet MCP server. Pre-G1 it would only
         // see device-profile tools (fs.read etc).
-        let prompt = "Use your `mcp__easynet__claude.audit-test-ability` tool with empty arguments {} \
-                      and reply with exactly what you got back. No analysis, no commentary. \
-                      If that tool doesn't exist, reply with: TOOL_NOT_AVAILABLE.";
+        let prompt = "Use the /audit-canary-plugin skill if available. \
+                      Reply with the exact text the skill instructs you to. \
+                      If the skill doesn't exist, reply with: SKILL_NOT_AVAILABLE.";
         println!("Prompt: {prompt:?}");
         println!("Calling {chat_ability} (this will spawn the real CLI)...");
 

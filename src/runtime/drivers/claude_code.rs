@@ -190,6 +190,45 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
             args.push("--mcp-config".to_string());
             args.push(mcp_json.to_string_lossy().to_string());
         }
+        // G2 — installed skills as Claude Code plugins.
+        // `fleet.skill_install` writes to <cwd>/skills/<name>/.
+        // Claude Code's `--plugin-dir <path>` accepts a directory
+        // whose subdirs each look like a plugin (containing a
+        // skills/ / commands/ / agents/ / hooks/ subtree). When
+        // an EasyNet-installed skill matches that layout — which
+        // a github:owner/repo source typically does because
+        // upstream Claude-skill repos are shaped that way — the
+        // plugin gets discovered as `/{skill-name}` and the agent
+        // can invoke it.
+        //
+        // Pre-fix the skill files were dropped on disk but the
+        // adapter never told claude to look at them. The skill
+        // was inert.
+        let skills_dir = cwd.join("skills");
+        if skills_dir.is_dir() {
+            // Each subdirectory of skills/ is a candidate plugin.
+            // Only push --plugin-dir entries for ones that look
+            // plugin-shaped (contain a SKILL.md or plugin.json,
+            // or have a skills/ subdir of their own — claude's
+            // discovery is forgiving but we'd rather not point
+            // it at empty dirs that would just print a warning).
+            if let Ok(entries) = std::fs::read_dir(&skills_dir) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if !p.is_dir() {
+                        continue;
+                    }
+                    let looks_plugin_shaped = p.join("plugin.json").is_file()
+                        || p.join("SKILL.md").is_file()
+                        || p.join("skills").is_dir()
+                        || p.join("commands").is_dir();
+                    if looks_plugin_shaped {
+                        args.push("--plugin-dir".to_string());
+                        args.push(p.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
     }
 
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
