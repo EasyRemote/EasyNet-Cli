@@ -103,14 +103,13 @@ pub fn build_registry_with_services(
     skill_ability::register(&mut reg);
     skill_install_ability::register(&mut reg);
     // mcp.bridge.list_tools — projects local AbilityDescriptors to the
-    // MCP tools/list shape. The provider closure is the seam where a
-    // future descriptor catalog (e.g. once the publish path holds one
-    // centrally) plugs in. v1 hands an empty snapshot: the daemon does
-    // not yet retain its descriptor list past the publish call, and
-    // wiring that retention is a separate change. The handler is still
-    // dispatchable, so the IPC + admission paths can be exercised end
-    // to end before the catalog arrives.
-    mcp_bridge_ability::register(&mut reg, Vec::new);
+    // MCP tools/list shape. Provider runs on every call so a daemon
+    // restart that picks up a freshly-canonicalised URA (or a future
+    // hot-add of a hosted Agent) is reflected without re-registering
+    // the handler. `load_host_descriptors` is the same recipe the MCP
+    // stdio server uses, so an external MCP client and an in-process
+    // Invoke caller see one catalog.
+    mcp_bridge_ability::register(&mut reg, profiles::load_host_descriptors);
     Arc::new(reg)
 }
 
