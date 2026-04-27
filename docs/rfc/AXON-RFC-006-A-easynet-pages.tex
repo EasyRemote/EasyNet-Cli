@@ -2,9 +2,9 @@
 
 % ──────────────────────────────────────────────────────────────────────────
 % AXON-RFC-006 Appendix A — easynet.pages
-% Status: Draft v0.2 (aligned with B v0.2: actions.* namespace
-%                     mentioned; project home convention noted;
-%                     shared agent skill referenced)
+% Status: Draft v0.3 (HTML/EAL dual-canonical: EAL is the source
+%                     of truth; HTML and API surface are derived
+%                     projections; pages.get_eal mandatory)
 % Build:  xelatex AXON-RFC-006-A-easynet-pages.tex
 % Companion: AXON-RFC-006-stateful-easynet.tex (minimal normative core)
 % ──────────────────────────────────────────────────────────────────────────
@@ -124,7 +124,7 @@
 \author{
     Silan Hu \\ \small National University of Singapore
 }
-\date{Draft v0.2, \today}
+\date{Draft v0.3, \today}
 
 \begin{document}
 \maketitle
@@ -147,10 +147,21 @@ receipt-history pointer, and an optional pointer to the page's
 \texttt{agent\_view} as a static field. Instead, when a page's
 owner wishes to expose action-style discovery, they implement
 abilities in the \texttt{actions.*} namespace, exactly as
-described in Appendix B for web\_apps. Most pages are simple
-documents and do not need actions; agent\_view's
-\texttt{actions} block is then absent or empty. This brings
-pages and web\_app into a single agent-discovery convention.
+described in Appendix B for web\_apps.
+
+\textbf{What changed in v0.3.} EAL is promoted to the page's
+canonical agent-facing artifact. Every page carries a single
+EAL source file (markdown documentation in \texttt{//}
+comments + zero or more \texttt{mission} declarations) hashed
+into canonical state as \texttt{eal\_hash}. The HTML body, the
+page's API surface, and the form/button bindings are all
+deterministic projections of the EAL plus the page's manifest:
+one source, multiple derived views. \texttt{pages.get\_eal@v1}
+becomes a mandatory ability (PA-INV-2); the previous
+\texttt{pages.get\_markdown@v1} and the separate
+\texttt{markdown\_hash} field are removed --- agent-facing
+markdown is the EAL comments and is read by the same
+\texttt{pages.get\_eal} call that returns the missions.
 
 The appendix covers four layers of detail. First, the
 state machine: the field set, the four-state space, and the seven
@@ -320,9 +331,20 @@ canonical_fields(page) = {
                                     // sub-document (title,
                                     // description, content_type,
                                     // visibility); see §3.3
-    content_hash:     bytes(32),    // SHA-256 of the body bytes,
-                                    // null/zero in Draft and after
-                                    // archive/delete
+    eal_hash:         bytes(32),    // SHA-256 of the page's EAL
+                                    // source (see §3.6, PA-INV-2).
+                                    // The agent-facing canonical
+                                    // artifact: contains markdown
+                                    // documentation in `// ...`
+                                    // comments and zero or more
+                                    // mission declarations. null/
+                                    // zero in Draft and after
+                                    // archive/delete.
+    content_hash:     bytes(32),    // SHA-256 of the rendered HTML
+                                    // body (the human projection
+                                    // of the EAL source). null/
+                                    // zero in Draft and after
+                                    // archive/delete.
     state_value:      string,       // "Draft" | "Published"
                                     //   | "Archived" | "Deleted"
     visibility:       string,       // "private" | "realm" | "public"
@@ -396,8 +418,9 @@ audit):
 \toprule
 \textbf{Ability} & \textbf{Returns} \\
 \midrule
-\texttt{pages.get@v1}  & full canonical projection + content blob handle \\
-\texttt{pages.list@v1} & list of (slug, state\_value, version) for one owner \\
+\texttt{pages.get@v1}     & full canonical projection + content blob handle \\
+\texttt{pages.list@v1}    & list of (slug, state\_value, version) for one owner \\
+\texttt{pages.get\_eal@v1}& UTF-8 EAL source of the page (see §3.6, PA-INV-2). Mandatory. \\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -413,6 +436,156 @@ visibility; visibility gates only Published pages.
 it because visibility happened to be \texttt{public} would surface
 work-in-progress as published content. Archived pages are
 deliberately un-served --- they exist for history, not access.
+
+\subsection{EAL is canonical; HTML and API surface are derived}
+\label{sec:eal-canonical}
+
+\normsv{} A peer EasyNet agent that lands on a page wants two
+things: to understand the page's content, and (when the page
+has any) to invoke its actions. The previous draft addressed
+these with two separate mechanisms (a mandatory
+\texttt{pages.get\_markdown} ability for content; the
+\texttt{actions.*} namespace for invocations). v0.3 unifies
+them: a page's \emph{agent-facing canonical artifact is a
+single EAL source file}.
+
+\begin{invariant}[PA-INV-2]
+Every \texttt{easynet.page} \textbf{MUST} carry an EAL source
+as a canonical artifact, hashed into \texttt{eal\_hash}. The
+EAL source is structured as a markdown documentation block in
+\texttt{// \ldots} line comments, followed by zero or more
+\texttt{mission} declarations corresponding to the page's
+interactive elements. For a page in \texttt{state\_value =
+Published} the owner \textbf{MUST} register and implement
+\texttt{<owner>.pages.get\_eal@v1}, returning the UTF-8 EAL
+text whose SHA-256 equals the current \texttt{eal\_hash}. The
+Hub \textbf{MUST} expose the HTTP mirror
+\texttt{GET /<\ldots>/easynet-for-agents/eal} which translates
+to a \texttt{pages.get\_eal@v1} invocation; the response body
+is \texttt{Content-Type: text/eal} (or
+\texttt{text/plain; charset=utf-8} as fallback).
+\end{invariant}
+
+\textbf{The canonical authoring direction is EAL → HTML.} The
+owner writes the EAL source. The HTML body is a projection
+generated from the EAL by a deterministic renderer (the markdown
+comments become rendered HTML; each \texttt{mission} declaration
+becomes an HTML form / button bound to the corresponding ability
+call). \texttt{content\_hash} (the HTML body) and
+\texttt{eal\_hash} (the EAL source) are both canonical fields,
+but the dependency is asymmetric: the renderer is a pure
+function of the EAL plus the page's manifest, so a verifier
+given the EAL and the renderer's version can independently
+reconstruct \texttt{content\_hash} and check it against the
+receipt.
+
+\textbf{This is the key v0.3 claim.} Many APIs and UI elements
+on a page can be \emph{generated} from a single EAL source ---
+the form action attributes, the button \texttt{onclick}
+handlers, the \texttt{<a>} hrefs that link to actions, and
+the page's agent-facing summary all derive from the same EAL
+text. The owner maintains one canonical artifact; the protocol
+ensures every projection is byte-deterministic and
+content-hash-anchored.
+
+\textbf{Structure of the EAL source.}
+
+\begin{lstlisting}
+// # Ceramic mug, 12oz
+//
+// **Price:** $19.99
+// **Ships:** Tuesday
+//
+// To buy this mug, submit the form (HTML) or run the
+// `buy` mission (EAL).
+
+mission "buy" {
+  let order = call "shop.checkout" on "alice" with {
+    item_id = "mug-12oz",
+    address = "<filled by owner-side specialisation>",
+    qty     = 1
+  } timeout 30
+}
+\end{lstlisting}
+
+A purely-documentary page (one with no interactive elements)
+carries a trivial mission whose body is empty:
+
+\begin{lstlisting}
+// # About this site
+//
+// This is a static information page. There is nothing to do
+// here, only content to read.
+
+mission "view" { }
+\end{lstlisting}
+
+The trivial \texttt{mission "view" \{ \}} satisfies the EAL
+parser's current ``exactly one mission per program''
+requirement (\texttt{src/eal/parser.rs}, \texttt{program =
+mission\_decl}). A future EAL relaxation may admit zero-mission
+programs; this appendix's contract does not depend on it.
+
+\textbf{HTML/EAL correspondence (informational, not a strict
+invariant).} A peer agent expecting \emph{rough} information
+parity between HTML and EAL is well-served:
+
+\begin{itemize}[leftmargin=2em,itemsep=0.15em]
+    \item Each markdown heading / paragraph in the EAL comments
+    corresponds to the same content rendered as HTML.
+    \item Each \texttt{mission} declaration corresponds to one
+    interactive element (form / button / action link) on the
+    HTML page; the \texttt{call} inside the mission is the same
+    ability the form's \texttt{POST /api/<verb>} would invoke.
+    \item Each outbound ability the EAL references inside its
+    mission bodies is automatically eligible for the
+    \texttt{api\_surface} (web\_app, Appendix~B); the page's
+    declared API is derived from EAL, not separately
+    enumerated.
+\end{itemize}
+
+The protocol does \emph{not} enforce strict correspondence
+(an owner could render different HTML than the EAL implies)
+because v1 cannot mechanically verify ``these HTML bytes are
+the canonical projection of these EAL bytes.'' What the
+protocol does enforce is that both bytes exist as canonical
+fields, both are signed by the owner, and any drift between
+them is detectable by a peer comparing the EAL's described
+behaviour to the HTML's rendered behaviour.
+
+\textbf{Why a single EAL source rather than separate
+markdown + actions blobs.}
+
+\begin{enumerate}[leftmargin=2em,itemsep=0.15em]
+    \item One artifact, one signature, one publish moment ---
+    the markdown content and the actions cannot drift because
+    they are physically the same bytes.
+    \item No \texttt{markdown\_hash} field, no separate
+    \texttt{actions.list\_for\_page} round-trip for simple
+    pages: \texttt{pages.get\_eal} returns everything a peer
+    needs in one invocation.
+    \item EAL is already a first-class artifact in EasyNet
+    (\texttt{src/eal/}); reusing it for the agent-facing page
+    representation avoids inventing a parallel format.
+    \item The EAL syntax is the same one a peer agent would
+    \emph{execute} via \texttt{easynet mission run}, so the
+    boundary between ``read about this page'' and ``do
+    something on this page'' collapses to a single textual
+    artifact. Reading is free; executing the mission requires
+    \texttt{mission run}.
+\end{enumerate}
+
+\textbf{Relationship to \texttt{actions.*} (Appendix~B).} A
+purely-static page (no missions beyond the trivial
+\texttt{view}) is fully described by its EAL +
+\texttt{pages.get\_eal}; \texttt{actions.*} need not be
+registered. A page or web\_app with multiple interactive
+elements registers both \texttt{pages.get\_eal@v1} (the full
+canonical EAL) \emph{and} the \texttt{actions.*} verbs (for
+fine-grained per-mission queries with parameter
+specialisation). The two coexist: \texttt{pages.get\_eal}
+is the all-at-once view; \texttt{actions.list\_for\_page} +
+\texttt{actions.get(name, params)} is the on-demand view.
 
 \subsection{Lifecycle diagram}
 
@@ -591,16 +764,17 @@ returns:
 \subsection{Canonical projection $\pi$}
 
 \normsv{} Per main \S2.1, $\pi$ is schema-driven, not hand-rolled.
-The pages schema lists exactly five fields with
+The pages schema lists six fields with
 \texttt{canonical:true}: \texttt{manifest\_hash},
-\texttt{content\_hash}, \texttt{state\_value}, \texttt{visibility},
-\texttt{version}. $\pi(v)$ projects $v$ onto exactly those keys, in
-schema-declared order.
+\texttt{eal\_hash}, \texttt{content\_hash}, \texttt{state\_value},
+\texttt{visibility}, \texttt{version}. $\pi(v)$ projects $v$ onto
+exactly those keys, in schema-declared order.
 
 \begin{lstlisting}
 fn project_pages(state: &PageState) -> Map<String, Value> {
     let mut out = BTreeMap::new();
     out.insert("manifest_hash".into(), bytes_to_hex(&state.manifest_hash));
+    out.insert("eal_hash".into(),      bytes_to_hex(&state.eal_hash));
     out.insert("content_hash".into(),  bytes_to_hex(&state.content_hash));
     out.insert("state_value".into(),   state.state_value.clone().into());
     out.insert("visibility".into(),    state.visibility.clone().into());
@@ -609,7 +783,7 @@ fn project_pages(state: &PageState) -> Map<String, Value> {
 }
 \end{lstlisting}
 
-\textbf{Cost.} $O(1)$ time and space (five fields, fixed sizes).
+\textbf{Cost.} $O(1)$ time and space (six fields, fixed sizes).
 
 \subsection{Canonical serialisation $\sigma$ (JCS)}
 
@@ -631,6 +805,7 @@ A page in Published state with the following canonical projection:
 \begin{lstlisting}
 {
   "content_hash":  "abf0c1...c8f3",   // 32 bytes hex
+  "eal_hash":      "6b21d3...49e0",
   "manifest_hash": "1d4a7e...09e2",
   "state_value":   "Published",
   "version":       3,
@@ -641,7 +816,7 @@ A page in Published state with the following canonical projection:
 After JCS:
 
 \begin{lstlisting}
-{"content_hash":"abf0c1...c8f3","manifest_hash":"1d4a7e...09e2","state_value":"Published","version":3,"visibility":"public"}
+{"content_hash":"abf0c1...c8f3","eal_hash":"6b21d3...49e0","manifest_hash":"1d4a7e...09e2","state_value":"Published","version":3,"visibility":"public"}
 \end{lstlisting}
 
 \noindent

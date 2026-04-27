@@ -2,7 +2,9 @@
 
 % ──────────────────────────────────────────────────────────────────────────
 % AXON-RFC-006 附录 B（实现规约）—— easynet.web_app（中文版）
-% Status: 草稿 v0.2（引入 actions.* 命名空间、修正项目路径、加入 skill seed）
+% Status: 草稿 v0.3（HTML/EAL 双 canonical：每个 web_app 携带一份 EAL
+%                   源，其哈希入 canonical state；HTML 与 api_surface
+%                   是 EAL 的确定性投影。镜像附录 A v0.3。）
 % Build:  xelatex AXON-RFC-006-B-easynet-webapp.zh-CN.tex
 % ──────────────────────────────────────────────────────────────────────────
 
@@ -121,7 +123,7 @@
 \author{
     胡思蓝 \\ \small 新加坡国立大学
 }
-\date{草稿 v0.2，\today}
+\date{草稿 v0.3，\today}
 
 \begin{document}
 \maketitle
@@ -475,7 +477,17 @@ URA 形态：
 canonical_fields(web_app) = {
     manifest_hash:        bytes(32),  // [manifest] 段
     build_config_hash:    bytes(32),  // [build] 段
-    api_surface_hash:     bytes(32),  // [api].abilities（已排序）
+    eal_hash:             bytes(32),  // web_app 的 EAL 源的 SHA-256
+                                      //   （`// ...` 注释中的 markdown
+                                      //   文档 + mission 声明）。按
+                                      //   附录 A PA-INV-2，EAL 是
+                                      //   canonical 的 agent 面向
+                                      //   artifact；api_surface_hash
+                                      //   在 update_config 时由 daemon
+                                      //   从 EAL 派生，不另行手写。
+    api_surface_hash:     bytes(32),  // [api].abilities（已排序）；
+                                      //   由 daemon 从 EAL 重算，
+                                      //   不手写
     actions_surface_hash: bytes(32),  // [actions].abilities（已排序）
     routes_manifest_hash: bytes(32),  // [routes].rules（按声明顺序）
     csp_hash:             bytes(32),  // [csp] 段
@@ -541,6 +553,7 @@ $\pi$ 投影恰按这些 key 产出。
 \texttt{webapp.serve@v1}       & operational & Stopped/Crashed $\to$ Starting $\to$ Running。要求 canonical = Built。 \\
 \texttt{webapp.stop@v1}        & operational & Starting/Running/Crashed $\to$ Stopped。 \\
 \texttt{webapp.get@v1}         & query       & 返回 canonical + runtime 快照。 \\
+\texttt{webapp.get\_eal@v1}    & query       & 强制实现。返回 SHA-256 等于 \texttt{eal\_hash} 的 UTF-8 EAL 源代码。HTTP 镜像：\texttt{GET /\_\_easynet/eal}。镜像附录 A PA-INV-2。 \\
 \texttt{webapp.list@v1}        & query       & 列出某 agent 拥有的 web\_app。 \\
 \bottomrule
 \end{tabularx}
