@@ -2,7 +2,9 @@
 
 % ──────────────────────────────────────────────────────────────────────────
 % AXON-RFC-006 Appendix A — easynet.pages
-% Status: Draft v0.1 (technical design + implementation plan)
+% Status: Draft v0.2 (aligned with B v0.2: actions.* namespace
+%                     mentioned; project home convention noted;
+%                     shared agent skill referenced)
 % Build:  xelatex AXON-RFC-006-A-easynet-pages.tex
 % Companion: AXON-RFC-006-stateful-easynet.tex (minimal normative core)
 % ──────────────────────────────────────────────────────────────────────────
@@ -122,7 +124,7 @@
 \author{
     Silan Hu \\ \small National University of Singapore
 }
-\date{Draft v0.1, \today}
+\date{Draft v0.2, \today}
 
 \begin{document}
 \maketitle
@@ -131,14 +133,26 @@
 \noindent
 This appendix specifies \texttt{easynet.pages}, the simplest
 \texttt{state\_type} that exercises the full set of normative
-primitives defined in AXON-RFC-006 main. A page is a
-\emph{dual-view state object}: it carries identity, canonical
-content, and version under the rules of \S\S1--7 of the main
-body, and exposes that state simultaneously through
-\texttt{human\_view} (an HTML rendering for browsers) and
-\texttt{agent\_view} (a structured, machine-actionable rendering
-that includes ability surface, EAL hint, and receipt-history
-pointer). The appendix covers four layers of detail. First, the
+primitives defined in AXON-RFC-006 main. A page is a state
+object that carries identity, canonical content, and version
+under the rules of \S\S1--7 of the main body, and exposes that
+state through two views: \texttt{human\_view} (an HTML rendering
+for browsers) and \texttt{agent\_view} (a structured JSON
+metadata document --- canonical fields, ability surface,
+receipt-history pointer, and an optional pointer to the page's
+\texttt{actions.*} namespace if the owner exposed one).
+
+\textbf{What changed in v0.2.} The agent-actionable surface
+(EAL fragments, missions, form maps) is no longer embedded into
+\texttt{agent\_view} as a static field. Instead, when a page's
+owner wishes to expose action-style discovery, they implement
+abilities in the \texttt{actions.*} namespace, exactly as
+described in Appendix B for web\_apps. Most pages are simple
+documents and do not need actions; agent\_view's
+\texttt{actions} block is then absent or empty. This brings
+pages and web\_app into a single agent-discovery convention.
+
+The appendix covers four layers of detail. First, the
 state machine: the field set, the four-state space, and the seven
 transitions. Second, the wire schemas of every transition's
 arguments and receipt body. Third, the algorithms: canonical
@@ -183,9 +197,17 @@ protocol.
     (CSH-INV-2).
     \item Exposes both \texttt{human\_view} (HTML rendered from
     the content blob) and \texttt{agent\_view} (a typed JSON
-    document containing canonical fields, ability surface, EAL
-    hint, and receipt history pointer) for every published
-    page.
+    document containing canonical fields, ability surface,
+    receipt history pointer, and an optional pointer to the
+    page's \texttt{actions.*} namespace if the owner exposed one)
+    for every published page.
+    \item Reuses the same \texttt{easynet-pages-author} agent
+    skill that Appendix~B seeds. The skill teaches an agent how
+    to author both pages (this appendix) and web\_apps
+    (Appendix~B); the structural overlap on
+    \texttt{pages.create / publish / update / delete} makes one
+    bundled skill sufficient. The seeder lives in P-A5 and is
+    described in detail in Appendix~B \S3.4.
     \item Is implementable end-to-end in five PR-sized slices
     (\S\ref{sec:impl-plan}).
 \end{enumerate}
@@ -713,6 +735,7 @@ intentional.
 fn agent_view(p: &PageState) -> Value {
     let surface = derive_ability_surface(p);  // VP-INV-1
     let history = receipt_history_pointer(p); // §6.3
+    let actions = actions_pointer(p);         // see "actions" below
     json!({
         "state_type":  "easynet.page",
         "state_key":   { "realm": p.realm,
@@ -733,7 +756,7 @@ fn agent_view(p: &PageState) -> Value {
             "latest_canonical_receipt_id": p.last_receipt_id,
             "receipt_log_ura":         history
         },
-        "eal_hint": eal_hint_for(p),  // §5.6.3
+        "actions":  actions,            // see below; null for simple pages
         "view_meta": {
             "generated_from": "(canonical, runtime=∅, caller_context)"
         }
@@ -760,21 +783,48 @@ ability registry; an ability that is registered but whose
 \texttt{pre\_state} does not include \texttt{p.state\_value} is
 invisible here.
 
-\subsubsection{eal\_hint}
+\subsubsection{actions: optional pointer to a queryable namespace}
 
-\normsv{} The \texttt{eal\_hint} is a single-line EAL fragment that
-a peer agent can copy-paste to advance the page from its current
-state. Examples:
+\normsv{} A simple document does not need an agent-actionable
+surface beyond ``read me.'' Most pages therefore set
+\texttt{actions: null} and that is the end of the story.
+
+When a page DOES carry richer interaction --- a contact form, a
+subscribe button, a schedule-meeting flow embedded in HTML ---
+the owner exposes those actions through the \texttt{actions.*}
+ability namespace, exactly as web\_apps do (Appendix B \S6).
+\texttt{agent\_view.actions} is then a small pointer:
 
 \begin{lstlisting}
-Draft     -> "call pages.publish on <owner> with { slug: \"<s>\" } timeout 30"
-Published -> "call pages.update on <owner> with { slug: \"<s>\", body: <new> } timeout 60"
-Archived  -> "call pages.unpublish on <owner> with { slug: \"<s>\" } timeout 30"
-Deleted   -> ""    // no EAL hint; the surface is empty
+{
+  "namespace": "actions",
+  "registered_verbs": ["actions.list_for_page",
+                       "actions.get",
+                       "actions.search"],
+  "http_mirror_prefix": "/easynet-for-agents/",
+  "discovery_hint":
+     "POST /easynet-for-agents/list_for_page {\"page_path\":\"<path>\"}"
+}
 \end{lstlisting}
 
-The hint generator is deterministic; an agent reading the URA
-twice without intervening transitions sees byte-identical hints.
+A peer agent reading this pointer calls
+\texttt{<owner>.actions.list\_for\_page} (or its HTTP mirror) to
+discover what it can do; \texttt{agent\_view} itself never
+embeds the EAL/missions. The reasoning is identical to web\_app:
+embedding actions in a static view forces bulk download and
+breaks per-intent specialisation. Pages reuse web\_app's design
+to keep the agent-facing convention identical across the two
+state types.
+
+\textbf{Single-call short form.} For a page whose owner wants to
+expose exactly one action and prefers not to register any
+\texttt{actions.*} ability, an
+\texttt{eal\_hint: <single-line-string>} field MAY be included
+inline in \texttt{agent\_view} as a degenerate case --- the
+single-line analog of a one-verb \texttt{actions.list\_for\_page}
+response. This short form is informative only; if both
+\texttt{actions} and \texttt{eal\_hint} are present, \texttt{actions}
+is authoritative.
 
 % ──────────────────────────────────────────────────────────────────────────
 \section{Architecture}
@@ -1190,8 +1240,10 @@ $ curl http://127.0.0.1:8787/default/alice/shop-001/.agent | jq
     "receipt_log_ura":
       "easynet:///r/default/agent/alice/page/shop-001/receipts"
   },
-  "eal_hint":
-    "call pages.update on alice with { slug: \"shop-001\", body: <new> } timeout 60"
+  "actions": null    // simple HTML page; no actions.* namespace.
+                     // For an interactive page (form / subscribe / ...) the
+                     // owner registers actions.list_for_page etc. and this
+                     // becomes a pointer object — see §5.5 actions.
 }
 \end{lstlisting}
 
