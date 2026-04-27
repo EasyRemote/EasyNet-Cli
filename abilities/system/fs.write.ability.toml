@@ -22,8 +22,13 @@ description = "How to interpret a string-shaped content. Default base64."
 [input_schema.properties.mode]
 type = "integer"
 minimum = 0
-description = "Unix permission bits (0o644, 0o755, etc.). Ignored on non-Unix hosts."
+description = "Unix permission bits (0o644, 0o755, etc.). When set, the caller wins. When unset and the target file already exists, the receiver preserves the target's existing mode (so overwriting a chmod-600 secret keeps the 600). When unset and the target is new, falls back to umask default. Ignored on non-Unix hosts."
 
 [input_schema.properties.create_parents]
 type = "boolean"
 description = "Create missing parent directories. Default false."
+
+[input_schema.properties.expected_mtime_ms]
+type = "integer"
+minimum = 0
+description = "Optional staleness guard. Caller asserts the target's mtime (milliseconds since UNIX epoch) matches the value last seen — typically captured from a prior fs.read response's mtime_ms field. Receiver stats the file before writing and rejects if the actual mtime differs (or the file does not exist). Stateless equivalent of an editor's read-before-write check; protects against silently clobbering concurrent edits."
