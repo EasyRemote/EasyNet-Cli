@@ -214,23 +214,24 @@ fn build_install_spec(
     // path; this one is the operator-facing
     // `easynet mcp install` path that writes the same shape into
     // ~/.claude/settings.json or ~/.codex/config.toml.
+    // `easynet mcp serve` accepts only --tenant and --agent
+    // (see facade/cli/mcp_server.rs::McpServerArgs). The flags
+    // we used to write — --endpoint, --bound-node,
+    // --allow-node-override — were dropped in the P4.9
+    // quarantine. Keep accepting them as `easynet mcp install`
+    // CLI inputs for backwards compatibility (the operator's
+    // muscle memory still uses them) but DON'T write them into
+    // the spawn args; doing so causes claude/codex to spawn the
+    // MCP subprocess with "unexpected argument" failures.
     let mut cmd_args: Vec<String> = vec![
         "mcp".to_string(),
         "serve".to_string(),
         "--tenant".to_string(),
         tenant.to_string(),
     ];
-    if let Some(ep) = endpoint {
-        cmd_args.push("--endpoint".to_string());
-        cmd_args.push(ep.to_string());
-    }
-    if let Some(node) = args.bound_node.as_deref() {
-        cmd_args.push("--bound-node".to_string());
-        cmd_args.push(node.to_string());
-        if args.allow_node_override {
-            cmd_args.push("--allow-node-override".to_string());
-        }
-    }
+    let _ = endpoint; // accepted for back-compat, not written
+    let _ = &args.bound_node;
+    let _ = args.allow_node_override;
     if let Some(agent) = args.agent.as_deref() {
         cmd_args.push("--agent".to_string());
         cmd_args.push(agent.to_string());

@@ -39,6 +39,12 @@ pub fn run(args: McpServerArgs) -> anyhow::Result<()> {
     let config = crate::runtime::agents::profiles::mcp::StdioServerConfig {
         server_name: server_name.clone(),
         tenant_id: args.tenant.clone(),
+        // Thread --agent through so the workspace MCP server
+        // also exposes the agent's per-workspace abilities.
+        // Without this, an agent's own ability TOMLs (declared
+        // at <workspace>/abilities/) would be invisible to the
+        // LLM running inside that workspace.
+        agent_name: args.agent.clone(),
     };
     let configured =
         crate::runtime::agents::profiles::mcp::build_stdio_server(&config);

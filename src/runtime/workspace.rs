@@ -433,26 +433,30 @@ pub(super) fn build_mcp_entry(agent_name: &str) -> (String, Vec<String>, serde_j
     let mut args = vec!["mcp".to_string(), "serve".to_string()];
     let mut env = serde_json::Map::new();
 
+    // `easynet mcp serve` accepts only --tenant and --agent
+    // (see facade/cli/mcp_server.rs::McpServerArgs). Two flags
+    // we used to write — --endpoint and --enable-agent-dispatch
+    // — were dropped in the P4.9 quarantine when MCP server
+    // construction moved into the mcp profile. Writing them
+    // here today causes claude/codex to spawn the subprocess
+    // and immediately get "error: unexpected argument
+    // '--endpoint'", which surfaces in claude's debug as
+    // `mcp_servers: [{name: "easynet", status: "failed"}]`.
+    // The audit conversation surfaced this; the fix below
+    // matches the actual subcommand grammar.
     if let Ok(state) = config::load() {
-        if !state.endpoint.is_empty() {
-            args.push("--endpoint".to_string());
-            args.push(state.endpoint);
-        }
         if let Some(t) = &state.tenant {
             args.push("--tenant".to_string());
             args.push(t.clone());
         }
     }
 
-    // Identify the launching agent so the MCP server can label its
-    // audit lines with `from=<agent_name>`.
+    // Identify the launching agent. The mcp serve handler uses
+    // this to (a) label audit lines, (b) include the agent's
+    // per-workspace abilities in the tool catalogue (slice
+    // 28's G1 fix in profiles/mcp.rs::build_stdio_server).
     args.push("--agent".to_string());
     args.push(agent_name.to_string());
-
-    // Allow the MCP server to dispatch back to other agents via the
-    // mission runtime. Without this flag the workspace MCP can only
-    // expose local Hub tools — agent-to-agent calls would silently fail.
-    args.push("--enable-agent-dispatch".to_string());
 
     if let Ok(lib) = std::env::var("EASYNET_DENDRITE_BRIDGE_LIB") {
         env.insert(
@@ -763,13 +767,9 @@ mod tests {
     }
 
     #[test]
-    fn build_mcp_entry_enables_agent_dispatch_with_name() {
+    fn build_mcp_entry_passes_agent_name_via_two_arg_flag() {
         let (cmd, args, _env) = build_mcp_entry("claude");
         assert!(!cmd.is_empty(), "command must be set");
-        assert!(
-            args.iter().any(|a| a == "--enable-agent-dispatch"),
-            "args must contain --enable-agent-dispatch, got: {args:?}"
-        );
         // The agent name must be passed as `--agent <name>` (two adjacent
         // args, not a single `--agent=name`).
         let agent_idx = args
@@ -780,6 +780,20 @@ mod tests {
             args.get(agent_idx + 1).map(|s| s.as_str()),
             Some("claude"),
             "--agent must be followed by the agent name"
+        );
+        // Sanity: args must NOT contain flags that the current
+        // `mcp serve` subcommand doesn't accept. P4.9 dropped
+        // --endpoint and --enable-agent-dispatch; writing them
+        // here would cause every workspace MCP server to fail
+        // with "unexpected argument" the moment claude/codex
+        // spawned it.
+        assert!(
+            !args.iter().any(|a| a == "--endpoint"),
+            "args must NOT contain --endpoint (removed in P4.9): {args:?}"
+        );
+        assert!(
+            !args.iter().any(|a| a == "--enable-agent-dispatch"),
+            "args must NOT contain --enable-agent-dispatch (removed in P4.9): {args:?}"
         );
     }
 

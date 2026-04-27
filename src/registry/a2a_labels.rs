@@ -480,6 +480,17 @@ mod tests {
         // (e.g. a HashSet leaking into the build path) would produce
         // flaky Hub-side registrations when the daemon's re-register
         // hook fires.
+        //
+        // HomeGuard isolates this test from the developer's real
+        // ~/.easynet/. Without it, abilities_for's slice-25
+        // fallback can pick up real on-disk manifests under
+        // ~/.easynet/workspaces/{claude,codex}, and a parallel
+        // test that mutates those workspaces (e.g. the new G1
+        // build_stdio_server_with_agent_name test) would race
+        // and produce different bytes between the two build()
+        // calls. The HomeGuard pins the test to a fresh tempdir.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+
         let mut registry = AgentRegistry::default();
         registry
             .agents

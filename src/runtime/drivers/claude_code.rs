@@ -164,9 +164,17 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
         "acceptEdits".to_string(),
         // Pre-authorise common read-only / launch shell commands so the
         // agent doesn't stall waiting for approval on `open`, `ls`, etc.
+        // The trailing `mcp__easynet` (no parens, no glob) authorises
+        // every MCP tool exposed by the EasyNet workspace MCP server
+        // — i.e. fs.read / fs.write / process.exec / shell.run /
+        // http.request and the agent's own per-workspace abilities.
+        // Without this, the spawned `claude -p` runs in non-interactive
+        // mode and refuses to call MCP tools because no human is there
+        // to approve. Claude Code's CLI accepts `mcp__<server>` to
+        // mean "every tool from this MCP server is pre-allowed".
         "--allowedTools".to_string(),
         "Bash(open:*) Bash(ls:*) Bash(cat:*) Bash(pwd) Bash(mkdir:*) \
-         Read Write Edit Glob Grep"
+         Read Write Edit Glob Grep mcp__easynet"
             .to_string(),
     ];
 
