@@ -19,8 +19,25 @@
 //       {"target": "<hub-or-realm hint>", "status": "...", ...}
 //     ],
 //     "latency_ms":          null,         // §18 contract field; not yet probed
-//     "schema":              "v1"
+//     "schema":              "v1",
+//     "view":                "snapshot"    // observation-layer contract
 //   }
+//
+// Snapshot vs live (per AXON-RFC-001-ability-layers.md §3)
+// --------------------------------------------------------
+// `view: "snapshot"` is load-bearing: this ability returns a
+// per-call read of `~/.easynet/local-agents.json` and does NOT
+// subscribe to membership change events. A `federation.heartbeat`
+// in flight when the read happens may not be reflected. Callers
+// that need "currently joined" with bounded staleness MUST poll
+// or wait for the future `view: "live"` enrichment (which will
+// introduce a TTL field and surface the bound explicitly).
+//
+// Setting `view` per response — rather than baking it into the
+// ability's identity — lets the eventual live-probing variant ride
+// the same name without breaking existing parsers: they see
+// `view: "live"` and either keep using snapshot semantics
+// (under-treating fresh data, harmless) or switch on the field.
 //
 // What v1 does NOT do
 // -------------------
@@ -85,6 +102,10 @@ fn handler() -> anyhow::Result<Value> {
         "links": links,
         "latency_ms": Value::Null,
         "schema": "v1",
+        // Per AXON-RFC-001-ability-layers.md §3: observation-layer
+        // abilities MUST mark snapshot vs live so a downstream
+        // consumer can reason about staleness. v1 is snapshot only.
+        "view": "snapshot",
     }))
 }
 
@@ -121,13 +142,18 @@ mod tests {
         // null-ref on what should be a typed-null.
         let resp = handler().unwrap();
         for field in ["joined", "host_device_uri", "hosted_agent_count",
-                      "links", "latency_ms", "schema"] {
+                      "links", "latency_ms", "schema", "view"] {
             assert!(
                 resp.get(field).is_some(),
                 "response missing required field {field}"
             );
         }
         assert_eq!(resp["schema"], "v1");
+        assert_eq!(
+            resp["view"], "snapshot",
+            "v1 MUST be snapshot semantics per layers doc §3 — a future \
+             live-probing variant flips this to `live` and adds a TTL field"
+        );
         assert!(resp["links"].is_array(), "links must be an array even when empty");
         assert!(!resp["links"].as_array().unwrap().is_empty(),
                 "v1 always emits at least the realm-hub link entry");
