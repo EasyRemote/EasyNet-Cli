@@ -356,14 +356,20 @@ fn handler(
     let skills_loaded: Vec<String> = skill_specs.iter().map(|s| s.name().to_string()).collect();
     let skills_hint = format_skills_hint(&skill_specs);
 
-    // Compose the literal context. Order: skills hint, then loader
-    // output, then the caller's explicit `context` arg — each
-    // separated by blank lines so the LLM sees a coherent block. An
-    // empty composition yields `None` so `compose_prompt` does not
+    // Materialise attachments to a delimited block. Failures bail
+    // loud — attachments are explicit input, not best-effort
+    // context, so a missing path is the operator's bug to fix.
+    let attachments_block = materialize_attachments(&parsed.attachments)?;
+
+    // Compose the literal context. Order: skills hint, loader
+    // output, attachments block, caller's explicit `context` arg —
+    // each separated by blank lines so the LLM sees a coherent block.
+    // An empty composition yields `None` so `compose_prompt` does not
     // insert a useless context wrapper.
     let composed_context: Option<String> = compose_chat_context(
         skills_hint.as_deref(),
         &loaded_chunks,
+        attachments_block.as_deref(),
         parsed.context.as_deref(),
     );
 
@@ -553,6 +559,7 @@ fn stream_handler(
     let skill_specs = enumerate_skill_specs(agent_name, entry, &parsed.skills);
     let skills_loaded: Vec<String> = skill_specs.iter().map(|s| s.name().to_string()).collect();
     let skills_hint = format_skills_hint(&skill_specs);
+    let attachments_block = materialize_attachments(&parsed.attachments)?;
     if !skills_loaded.is_empty() || !context_used.is_empty() {
         snapshot.push(json!({
             "type": "loaded",
@@ -564,6 +571,7 @@ fn stream_handler(
     let composed_context: Option<String> = compose_chat_context(
         skills_hint.as_deref(),
         &loaded_chunks,
+        attachments_block.as_deref(),
         parsed.context.as_deref(),
     );
 
@@ -722,14 +730,15 @@ fn enumerate_skill_specs(
 /// owns the canonical schemas; this hint exists only so prompts
 /// like "use your `voice` skill" resolve to a name the model has
 /// actually seen in-context.
-/// Glue together the three context fragments — skills hint, loader
-/// output, caller-supplied `context` — into a single block, with
-/// blank-line separators so the LLM reads them as discrete sections.
-/// Returns `None` when every fragment is empty so the downstream
-/// `compose_prompt` skips the wrapper entirely.
+/// Glue together the four context fragments — skills hint, loader
+/// output, attachments block, caller-supplied `context` — into a
+/// single block, with blank-line separators so the LLM reads them as
+/// discrete sections. Returns `None` when every fragment is empty so
+/// the downstream `compose_prompt` skips the wrapper entirely.
 fn compose_chat_context(
     skills_hint: Option<&str>,
     loaded_chunks: &[String],
+    attachments_block: Option<&str>,
     caller_context: Option<&str>,
 ) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
@@ -741,6 +750,11 @@ fn compose_chat_context(
     if !loaded_chunks.is_empty() {
         parts.push(loaded_chunks.join("\n\n"));
     }
+    if let Some(a) = attachments_block {
+        if !a.trim().is_empty() {
+            parts.push(a.trim_end().to_string());
+        }
+    }
     if let Some(c) = caller_context {
         if !c.trim().is_empty() {
             parts.push(c.to_string());
@@ -751,6 +765,128 @@ fn compose_chat_context(
     } else {
         Some(parts.join("\n\n"))
     }
+}
+
+/// Total byte budget (across all attachments in one chat call) for
+/// the materialised file content embedded into the prompt context.
+/// Picked at 1 MiB to match the order of magnitude of fs.read's
+/// per-call cap; budgets a tens-of-pages context window without
+/// risking a runaway prompt.
+const ATTACHMENTS_BUDGET_BYTES: usize = 1024 * 1024;
+
+/// Read every attachment off disk and assemble a single delimited
+/// markdown block. Returns `Ok(None)` when the input list is empty
+/// so callers skip the wrapper.
+///
+/// Failure modes (all loud — chat does not silently swallow these):
+///   * any path on the fs.read blocked list (e.g. /dev/zero)
+///   * file open/read I/O failure
+///   * encoding=utf8 on a non-UTF-8 byte sequence
+///   * accumulated bytes exceed `ATTACHMENTS_BUDGET_BYTES`
+fn materialize_attachments(
+    specs: &[AttachmentSpec],
+) -> anyhow::Result<Option<String>> {
+    if specs.is_empty() {
+        return Ok(None);
+    }
+    use std::io::Read;
+    let mut out = String::from("## Attachments\n\n");
+    let mut budget = ATTACHMENTS_BUDGET_BYTES;
+    for (idx, spec) in specs.iter().enumerate() {
+        if super::fs_ability::is_blocked_read_path_for_chat(&spec.path) {
+            anyhow::bail!(
+                "chat: attachments[{idx}] {:?} is on the blocked-device path list",
+                spec.path
+            );
+        }
+        let path = std::path::Path::new(&spec.path);
+        let metadata = std::fs::metadata(path).map_err(|e| {
+            anyhow::anyhow!("chat: attachments[{idx}] stat {:?}: {e}", spec.path)
+        })?;
+        if metadata.len() as usize > budget {
+            anyhow::bail!(
+                "chat: attachments[{idx}] {:?} ({} bytes) would exceed the {} byte \
+                 attachments budget",
+                spec.path,
+                metadata.len(),
+                ATTACHMENTS_BUDGET_BYTES
+            );
+        }
+        let mut file = std::fs::File::open(path).map_err(|e| {
+            anyhow::anyhow!("chat: attachments[{idx}] open {:?}: {e}", spec.path)
+        })?;
+        // +1 over budget so an oversized file (e.g. one that grew
+        // between stat and open) still fails loud rather than
+        // truncating silently.
+        let mut limited = file.by_ref().take(budget as u64 + 1);
+        let mut bytes: Vec<u8> = Vec::with_capacity(metadata.len() as usize);
+        limited
+            .read_to_end(&mut bytes)
+            .map_err(|e| anyhow::anyhow!("chat: attachments[{idx}] read {:?}: {e}", spec.path))?;
+        if bytes.len() > budget {
+            anyhow::bail!(
+                "chat: attachments[{idx}] {:?} grew past the {} byte attachments budget \
+                 mid-read",
+                spec.path,
+                ATTACHMENTS_BUDGET_BYTES
+            );
+        }
+        budget = budget.saturating_sub(bytes.len());
+
+        let body = match spec.encoding {
+            AttachmentEncoding::Utf8 => {
+                let text = std::str::from_utf8(&bytes).map_err(|_| {
+                    anyhow::anyhow!(
+                        "chat: attachments[{idx}] {:?} is not valid UTF-8; \
+                         use encoding=\"base64\"",
+                        spec.path
+                    )
+                })?;
+                format!(
+                    "<file path={:?} encoding=\"utf8\">\n{text}\n</file>\n",
+                    spec.path
+                )
+            }
+            AttachmentEncoding::Base64 => {
+                let encoded = base64_encode(&bytes);
+                format!(
+                    "<file path={:?} encoding=\"base64\">\n{encoded}\n</file>\n",
+                    spec.path
+                )
+            }
+        };
+        out.push_str(&body);
+    }
+    Ok(Some(out))
+}
+
+/// Minimal base64 encoder (standard alphabet, with padding). Lifted
+/// here so chat_ability does not pull in a new dep just for the
+/// attachments path; the alphabet + padding are stable enough to
+/// inline. Mirrors RFC 4648 §4.
+fn base64_encode(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPHABET[((triple >> 18) & 0x3f) as usize] as char);
+        out.push(ALPHABET[((triple >> 12) & 0x3f) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[((triple >> 6) & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[(triple & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
 
 fn format_skills_hint(skills: &[crate::runtime::abilities::AgentAbilitySpec]) -> Option<String> {
@@ -790,6 +926,25 @@ struct ChatArgs {
     context_loaders: Selection,
     driver: DriverOverrides,
     stream: bool,
+    attachments: Vec<AttachmentSpec>,
+}
+
+#[derive(Debug, Clone)]
+struct AttachmentSpec {
+    path: String,
+    encoding: AttachmentEncoding,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttachmentEncoding {
+    Utf8,
+    Base64,
+}
+
+impl Default for AttachmentEncoding {
+    fn default() -> Self {
+        Self::Utf8
+    }
 }
 
 impl ChatArgs {
@@ -826,6 +981,7 @@ impl ChatArgs {
             .transpose()?
             .unwrap_or_default();
         let stream = obj.get("stream").and_then(Value::as_bool).unwrap_or(false);
+        let attachments = parse_attachments(obj.get("attachments"))?;
         Ok(Self {
             prompt,
             context,
@@ -834,8 +990,46 @@ impl ChatArgs {
             context_loaders,
             driver,
             stream,
+            attachments,
         })
     }
+}
+
+/// Parse the optional `attachments` array into typed AttachmentSpecs.
+/// Absent/null → empty Vec; present-but-not-an-array → loud error so
+/// the caller sees the typo at the API boundary.
+fn parse_attachments(value: Option<&Value>) -> anyhow::Result<Vec<AttachmentSpec>> {
+    let arr = match value {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(items)) => items,
+        Some(_) => anyhow::bail!("chat: `attachments` must be an array of objects"),
+    };
+    let mut out = Vec::with_capacity(arr.len());
+    for (idx, item) in arr.iter().enumerate() {
+        let obj = item.as_object().ok_or_else(|| {
+            anyhow::anyhow!("chat: attachments[{idx}] must be an object")
+        })?;
+        let path = obj
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                anyhow::anyhow!("chat: attachments[{idx}].path (string) required")
+            })?
+            .to_string();
+        if path.is_empty() {
+            anyhow::bail!("chat: attachments[{idx}].path must not be empty");
+        }
+        let encoding = match obj.get("encoding").and_then(Value::as_str) {
+            None => AttachmentEncoding::default(),
+            Some("utf8") => AttachmentEncoding::Utf8,
+            Some("base64") => AttachmentEncoding::Base64,
+            Some(other) => anyhow::bail!(
+                "chat: attachments[{idx}].encoding must be \"utf8\" or \"base64\" (got {other:?})"
+            ),
+        };
+        out.push(AttachmentSpec { path, encoding });
+    }
+    Ok(out)
 }
 
 /// Selection mode shared by `skills` and `context_loaders`. The
@@ -1409,18 +1603,174 @@ mod tests {
 
     #[test]
     fn compose_chat_context_returns_none_when_all_fragments_empty() {
-        assert!(compose_chat_context(None, &[], None).is_none());
-        assert!(compose_chat_context(Some("   "), &[], Some("   ")).is_none());
+        assert!(compose_chat_context(None, &[], None, None).is_none());
+        assert!(
+            compose_chat_context(Some("   "), &[], Some("   "), Some("   ")).is_none()
+        );
     }
 
     #[test]
-    fn compose_chat_context_orders_skills_then_loaders_then_caller() {
+    fn compose_chat_context_orders_skills_loaders_attachments_caller() {
         let chunks = vec!["LOADER".to_string()];
-        let out = compose_chat_context(Some("SKILLS"), &chunks, Some("CALLER")).unwrap();
+        let out = compose_chat_context(
+            Some("SKILLS"),
+            &chunks,
+            Some("ATTACH"),
+            Some("CALLER"),
+        )
+        .unwrap();
         let skills_at = out.find("SKILLS").unwrap();
         let loader_at = out.find("LOADER").unwrap();
+        let attach_at = out.find("ATTACH").unwrap();
         let caller_at = out.find("CALLER").unwrap();
         assert!(skills_at < loader_at, "skills must precede loader output");
-        assert!(loader_at < caller_at, "loader output must precede caller context");
+        assert!(loader_at < attach_at, "loader output must precede attachments");
+        assert!(attach_at < caller_at, "attachments must precede caller context");
+    }
+
+    // ── attachments ──────────────────────────────────────────────────
+
+    #[test]
+    fn parse_attachments_absent_yields_empty_vec() {
+        let args = ChatArgs::parse(&json!({"prompt": "hi"})).unwrap();
+        assert!(args.attachments.is_empty());
+    }
+
+    #[test]
+    fn parse_attachments_defaults_encoding_to_utf8() {
+        let args = ChatArgs::parse(&json!({
+            "prompt": "hi",
+            "attachments": [{"path": "/etc/hosts"}]
+        }))
+        .unwrap();
+        assert_eq!(args.attachments.len(), 1);
+        assert_eq!(args.attachments[0].path, "/etc/hosts");
+        assert_eq!(args.attachments[0].encoding, AttachmentEncoding::Utf8);
+    }
+
+    #[test]
+    fn parse_attachments_rejects_non_array() {
+        let err = ChatArgs::parse(&json!({
+            "prompt": "hi",
+            "attachments": "/etc/hosts"
+        }))
+        .unwrap_err();
+        assert!(format!("{err}").contains("array"));
+    }
+
+    #[test]
+    fn parse_attachments_rejects_missing_path() {
+        let err = ChatArgs::parse(&json!({
+            "prompt": "hi",
+            "attachments": [{"encoding": "utf8"}]
+        }))
+        .unwrap_err();
+        assert!(format!("{err}").contains("path"));
+    }
+
+    #[test]
+    fn parse_attachments_rejects_unknown_encoding() {
+        let err = ChatArgs::parse(&json!({
+            "prompt": "hi",
+            "attachments": [{"path": "/x", "encoding": "rot13"}]
+        }))
+        .unwrap_err();
+        assert!(format!("{err}").contains("encoding"));
+    }
+
+    #[test]
+    fn materialize_attachments_empty_returns_none() {
+        assert!(materialize_attachments(&[]).unwrap().is_none());
+    }
+
+    #[test]
+    fn materialize_attachments_reads_utf8_file_and_wraps_with_delimiters() {
+        let dir = std::env::temp_dir().join(format!(
+            "chat-attachments-{}-{}",
+            std::process::id(),
+            uuid_like()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hello.txt");
+        std::fs::write(&path, b"hello world").unwrap();
+        let specs = vec![AttachmentSpec {
+            path: path.to_string_lossy().to_string(),
+            encoding: AttachmentEncoding::Utf8,
+        }];
+        let block = materialize_attachments(&specs).unwrap().unwrap();
+        assert!(block.contains("## Attachments"));
+        assert!(block.contains("encoding=\"utf8\""));
+        assert!(block.contains("hello world"));
+        assert!(block.contains("</file>"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn materialize_attachments_reads_binary_as_base64() {
+        let dir = std::env::temp_dir().join(format!(
+            "chat-attachments-bin-{}-{}",
+            std::process::id(),
+            uuid_like()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("blob.bin");
+        // Bytes that are NOT valid UTF-8 — would panic on utf8 path.
+        std::fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
+        let specs = vec![AttachmentSpec {
+            path: path.to_string_lossy().to_string(),
+            encoding: AttachmentEncoding::Base64,
+        }];
+        let block = materialize_attachments(&specs).unwrap().unwrap();
+        assert!(block.contains("encoding=\"base64\""));
+        // base64("\xff\xfe\xfd") = "//79"
+        assert!(
+            block.contains("//79"),
+            "expected base64 of 0xff 0xfe 0xfd in block, got: {block}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn materialize_attachments_bails_on_non_utf8_under_utf8_encoding() {
+        let dir = std::env::temp_dir().join(format!(
+            "chat-attachments-bad-{}-{}",
+            std::process::id(),
+            uuid_like()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("blob.bin");
+        std::fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
+        let specs = vec![AttachmentSpec {
+            path: path.to_string_lossy().to_string(),
+            encoding: AttachmentEncoding::Utf8,
+        }];
+        let err = materialize_attachments(&specs).unwrap_err();
+        assert!(format!("{err}").contains("UTF-8"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn materialize_attachments_bails_on_missing_file() {
+        let specs = vec![AttachmentSpec {
+            path: "/nonexistent/really/not/here.txt".to_string(),
+            encoding: AttachmentEncoding::Utf8,
+        }];
+        let err = materialize_attachments(&specs).unwrap_err();
+        assert!(
+            format!("{err}").contains("stat") || format!("{err}").contains("open"),
+            "expected an I/O error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn base64_encode_round_trip_known_vectors() {
+        // RFC 4648 §10
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
     }
 }

@@ -265,6 +265,14 @@ fn is_blocked_read_path(path: &str) -> bool {
     false
 }
 
+/// Public wrapper exposing the blocked-path check for sibling
+/// abilities (chat attachments) that need the same defence in
+/// depth. Kept named distinctly so a search for `is_blocked_read_path`
+/// still surfaces only the in-module call site.
+pub(crate) fn is_blocked_read_path_for_chat(path: &str) -> bool {
+    is_blocked_read_path(path)
+}
+
 /// Return the substring of `text` from line `offset_lines`
 /// (1-based) inclusive, capped at `limit_lines` lines if set.
 /// Trailing newline preserved when present in the source.
