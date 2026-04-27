@@ -281,6 +281,68 @@ fn main() -> anyhow::Result<()> {
             Err(e) => println!("chat errored: {e}"),
         }
 
+        // ── context-injection probe ───────────────────────────
+        // Does the `context` field actually reach the LLM?
+        // Pass a unique string in `context`, ask the LLM to
+        // echo it back. If compose_prompt drops it the LLM
+        // can't possibly reply with the canary.
+        println!("\n=== chat `context` field reality check ===");
+        let canary = format!("CANARY-{}-CTX", std::process::id());
+        let chat_for_ctx = chat_ability.clone();
+        // Match the daemon's default loader chain so this test
+        // mirrors what an operator hitting `easynet agent send`
+        // would see — user_profile + schedule + memory loaders
+        // attached, instead of an empty Vec like the other
+        // smoke probes use.
+        let schedule_svc = Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new());
+        let default_loaders = Arc::new(
+            easynet_cli::runtime::agents::context_loaders::default_loaders(
+                Arc::clone(&schedule_svc),
+            ),
+        );
+        let ctx_dispatcher = AbilityDispatcher::new(
+            build_registry_for_daemon(
+                Arc::new(easynet_cli::runtime::execution::session::SessionService::new()),
+                Arc::new(easynet_cli::runtime::execution::permission::PermissionService::new()),
+                Arc::new(easynet_cli::runtime::execution::discuss::DiscussService::new()),
+                schedule_svc,
+                Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
+                default_loaders,
+            ),
+            Arc::new(NoopGateway::new()),
+        );
+        let canary_for_thread = canary.clone();
+        let ctx_result = rt.block_on(async {
+            tokio::task::spawn_blocking(move || {
+                ctx_dispatcher.execute_rpc(InvocationTarget {
+                    scope: TargetScope::Local,
+                    ability: chat_for_ctx,
+                    normalized_args: json!({
+                        "prompt": "What single all-caps token from the previous discussion contains the substring `CANARY-`? Reply with that token only, no other text.",
+                        "context": format!("In this session the agreed-upon canary token is `{canary_for_thread}`. Remember it for any future verification."),
+                        "stream": false,
+                    }),
+                    call_mode: CallMode::Rpc,
+                })
+            })
+            .await
+            .unwrap()
+        });
+        match ctx_result {
+            Ok(v) => {
+                let reply = v.get("reply").and_then(|r| r.as_str()).unwrap_or("(none)");
+                println!("Canary expected: {canary}");
+                println!("Canary in reply : {reply}");
+                if reply.contains(&canary) {
+                    println!("✓ context injection works: LLM read the `context` field");
+                } else {
+                    println!("✗ context injection FAILED: reply did not contain the canary");
+                }
+                println!("context_used: {}", v.get("context_used").map(|c| c.to_string()).unwrap_or_default());
+            }
+            Err(e) => println!("context probe failed: {e}"),
+        }
+
         // ── G1-handler reality check ──────────────────────────
         println!("\n=== claude.audit-test-ability direct invocation ===");
         // Call the agent's own declared ability THROUGH the dispatcher.
