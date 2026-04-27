@@ -38,13 +38,19 @@ use crate::runtime::execution::permission::PermissionService;
 
 pub const ABILITY_SUBSCRIBE: &str = "consent.subscribe";
 pub const ABILITY_DECIDE: &str = "consent.decide";
+pub const ABILITY_LIST_PENDING: &str = "consent.list_pending";
 
-/// Register the two permission abilities on the registry.
+/// Register the three permission abilities on the registry.
 pub fn register(reg: &mut LocalAbilityRegistry, perms: Arc<PermissionService>) {
     let p_for_sub = Arc::clone(&perms);
     reg.register_stream(
         ABILITY_SUBSCRIBE,
         Arc::new(move |args: Value| subscribe_handler(&p_for_sub, args)),
+    );
+    let p_for_list = Arc::clone(&perms);
+    reg.register_rpc(
+        ABILITY_LIST_PENDING,
+        Arc::new(move |_args: Value| list_pending_handler(&p_for_list)),
     );
     reg.register_rpc(
         ABILITY_DECIDE,
@@ -102,6 +108,24 @@ fn subscribe_handler(svc: &PermissionService, _args: Value) -> anyhow::Result<St
     }
 }
 
+/// `consent.list_pending` RPC handler.
+///
+/// Args: `{ }` — no parameters.
+///
+/// Returns: `{ "requests": [PermissionRequest, ...] }` — a one-shot
+/// snapshot of the broker's pending queue. This is the unary sibling
+/// of `consent.subscribe`: same data, no live tail. v1 callers that
+/// only want a poll (not a stream) should prefer this so they don't
+/// have to wire up StreamSource handling.
+fn list_pending_handler(svc: &PermissionService) -> anyhow::Result<Value> {
+    let snapshot: Vec<Value> = svc
+        .pending()
+        .into_iter()
+        .map(|r| serde_json::to_value(r).unwrap_or(Value::Null))
+        .collect();
+    Ok(json!({ "requests": snapshot }))
+}
+
 /// `consent.decide` RPC handler.
 ///
 /// Args: `{ "id": string, "decision": "allow" | "deny" | "allow_once" }`
@@ -129,6 +153,20 @@ fn decide_handler(svc: &PermissionService, args: Value) -> anyhow::Result<Value>
     };
     svc.decide(&PermissionId::new(id), decision)?;
     Ok(json!({ "ok": true }))
+}
+
+pub fn list_pending_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false,
+    })
+}
+
+pub fn list_pending_description() -> &'static str {
+    "Snapshot the approval-broker's pending queue. Unary sibling of \
+     consent.subscribe — same data, no live tail; suitable for poll \
+     callers that don't want to wire stream handling."
 }
 
 pub fn subscribe_input_schema() -> Value {
@@ -166,6 +204,19 @@ mod tests {
 
     fn fresh() -> Arc<PermissionService> {
         Arc::new(PermissionService::with_subscriber_broker())
+    }
+
+    #[test]
+    fn list_pending_returns_empty_requests_for_idle_queue() {
+        let svc = fresh();
+        let resp = list_pending_handler(&svc).unwrap();
+        assert!(
+            resp["requests"]
+                .as_array()
+                .expect("requests is an array")
+                .is_empty(),
+            "idle queue should yield empty requests array, not missing key"
+        );
     }
 
     #[tokio::test]
