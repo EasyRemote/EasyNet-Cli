@@ -115,6 +115,13 @@ pub mod pty_attach_ability;
 /// plane lifecycle for PtyService sessions. attach (above) is
 /// the data-plane sibling.
 pub mod pty_lifecycle_ability;
+/// fleet.pty_session_input / fleet.pty_session_read /
+/// fleet.pty_session_resize — unary-RPC data plane. Used by the
+/// EasyNet backend's PTYDriver before the WS bidi optimisation.
+/// Mutually exclusive with pty_attach_ability per session: the
+/// reader thread takes one fd dup, attach takes another, and two
+/// readers on the same PTY race for incoming bytes.
+pub mod pty_io_ability;
 pub mod schedule_ability;
 pub mod session_ability;
 pub mod skill_ability;
@@ -211,8 +218,17 @@ pub fn build_registry_with_services(
     // so the three abilities cohere even though they're three
     // separate handlers.
     let pty = Arc::new(PtyService::new());
-    pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty));
-    pty_attach_ability::register(&mut reg, pty);
+    let pty_io = pty_io_ability::PtyIoService::new();
+    pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(pty_io.clone()));
+    pty_attach_ability::register(&mut reg, Arc::clone(&pty));
+    // fleet.pty_session_input / _read / _resize — unary-RPC data
+    // plane. The backend's PTYDriver invokes these for the
+    // production HTTP-session terminal flow before the WebSocket
+    // bidi optimisation kicks in. Sharing the PtyService Arc with
+    // the lifecycle + attach handlers means a session created by
+    // …_create is reachable through all three surfaces (unary,
+    // bidi, lifecycle) — operators choose one mode per session.
+    pty_io_ability::register(&mut reg, pty, pty_io);
     // fleet.start_agent / fleet.stop_agent — Invoke-side mirror
     // of `easynet agent add/remove`. LLM sub-agents are registry
     // rows (not resident processes), so start ≡ insert into
@@ -494,6 +510,9 @@ pub fn description_for(name: &str) -> &'static str {
         "fleet.pty_session_create" => pty_lifecycle_ability::description_create(),
         "fleet.pty_session_close" => pty_lifecycle_ability::description_close(),
         "fleet.pty_session_attach" => pty_attach_ability::description(),
+        "fleet.pty_session_input" => pty_io_ability::input_description(),
+        "fleet.pty_session_read" => pty_io_ability::read_description(),
+        "fleet.pty_session_resize" => pty_io_ability::resize_description(),
         "fleet.start_agent" => fleet_lifecycle_ability::start_agent_description(),
         "fleet.stop_agent" => fleet_lifecycle_ability::stop_agent_description(),
         "admin.status" => admin_status_ability::description(),
@@ -559,6 +578,9 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "fleet.pty_session_create" => pty_lifecycle_ability::input_schema_create(),
         "fleet.pty_session_close" => pty_lifecycle_ability::input_schema_close(),
         "fleet.pty_session_attach" => pty_attach_ability::input_schema(),
+        "fleet.pty_session_input" => pty_io_ability::input_input_schema(),
+        "fleet.pty_session_read" => pty_io_ability::read_input_schema(),
+        "fleet.pty_session_resize" => pty_io_ability::resize_input_schema(),
         "fleet.start_agent" => fleet_lifecycle_ability::start_agent_input_schema(),
         "fleet.stop_agent" => fleet_lifecycle_ability::stop_agent_input_schema(),
         "admin.status" => admin_status_ability::input_schema(),
@@ -678,7 +700,10 @@ mod tests {
             | "http.request"
             | "fleet.pty_session_create"
             | "fleet.pty_session_close"
-            | "fleet.pty_session_attach" => Some(AbilityLayer::Operational),
+            | "fleet.pty_session_attach"
+            | "fleet.pty_session_input"
+            | "fleet.pty_session_read"
+            | "fleet.pty_session_resize" => Some(AbilityLayer::Operational),
             _ => None,
         }
     }

@@ -98,15 +98,26 @@ const DEFAULT_ROWS: u16 = 24;
 /// Register both PTY lifecycle abilities on the registry. The
 /// service handle is shared with the future `_attach` registration
 /// so the three handlers see the same session table.
-pub fn register(reg: &mut LocalAbilityRegistry, pty: Arc<PtyService>) {
+///
+/// `io` is the optional companion I/O service (`pty_io_ability::
+/// PtyIoService`). When `Some`, the close handler also drops the
+/// session's I/O row — releasing the cached writer fd and the
+/// reader thread. None is acceptable for tests / fixtures that
+/// don't exercise the unary I/O surface.
+pub fn register(
+    reg: &mut LocalAbilityRegistry,
+    pty: Arc<PtyService>,
+    io: Option<crate::runtime::agents::pty_io_ability::PtyIoService>,
+) {
     let svc_for_create = Arc::clone(&pty);
     reg.register_rpc(
         ABILITY_PTY_SESSION_CREATE,
         Arc::new(move |args: Value| create_handler(&svc_for_create, args)),
     );
+    let pty_for_close = pty;
     reg.register_rpc(
         ABILITY_PTY_SESSION_CLOSE,
-        Arc::new(move |args: Value| close_handler(&pty, args)),
+        Arc::new(move |args: Value| close_handler(&pty_for_close, io.as_ref(), args)),
     );
 }
 
@@ -137,12 +148,24 @@ fn create_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<Value> {
 ///   * exit_status is the child's exit code when waitable; absent
 ///     when the child was killed before the OS published a status
 ///     OR when ack=false (no child to wait on).
-fn close_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<Value> {
+fn close_handler(
+    pty: &Arc<PtyService>,
+    io: Option<&crate::runtime::agents::pty_io_ability::PtyIoService>,
+    args: Value,
+) -> anyhow::Result<Value> {
     let id = args
         .get("session_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("`session_id` required"))?;
-    let outcome = pty.close(&PtySessionId::new(id));
+    let session_id = PtySessionId::new(id);
+    let outcome = pty.close(&session_id);
+    // Drop the I/O row AFTER the lifecycle close so the reader
+    // thread sees the PTY EOF first (clean exit), then the
+    // dropped flag (cooperative stop). Reverse order would race
+    // with the reader thread on the master fd's last byte.
+    if let Some(io) = io {
+        io.drop_session(&session_id);
+    }
     match outcome.exit_status {
         Some(code) => Ok(json!({ "ack": outcome.ack, "exit_status": code })),
         None => Ok(json!({ "ack": outcome.ack })),
@@ -286,7 +309,7 @@ mod tests {
     #[test]
     fn registration_makes_both_dispatchable() {
         let mut reg = LocalAbilityRegistry::new();
-        register(&mut reg, fresh_service());
+        register(&mut reg, fresh_service(), None);
         assert!(reg.get_rpc(ABILITY_PTY_SESSION_CREATE).is_some());
         assert!(reg.get_rpc(ABILITY_PTY_SESSION_CLOSE).is_some());
     }
@@ -357,7 +380,7 @@ mod tests {
         let resp = create_handler(&svc, json!({"command": true_command()})).unwrap();
         let id = resp["session_id"].as_str().unwrap().to_string();
         let close_resp =
-            close_handler(&svc, json!({"session_id": id.clone()})).unwrap();
+            close_handler(&svc, None, json!({"session_id": id.clone()})).unwrap();
         assert_eq!(close_resp["ack"], true);
         assert_eq!(svc.live_count(), 0);
     }
@@ -366,7 +389,7 @@ mod tests {
     fn close_unknown_session_returns_ack_false_without_error() {
         let svc = fresh_service();
         let resp =
-            close_handler(&svc, json!({"session_id": "ghost-id"})).unwrap();
+            close_handler(&svc, None, json!({"session_id": "ghost-id"})).unwrap();
         assert_eq!(resp["ack"], false);
         // exit_status absent when ack=false (no child to wait on).
         assert!(resp.get("exit_status").is_none());
@@ -375,7 +398,7 @@ mod tests {
     #[test]
     fn close_rejects_missing_session_id() {
         let svc = fresh_service();
-        let err = close_handler(&svc, json!({})).unwrap_err();
+        let err = close_handler(&svc, None, json!({})).unwrap_err();
         assert!(format!("{err}").contains("session_id"));
     }
 
@@ -384,9 +407,9 @@ mod tests {
         let svc = fresh_service();
         let resp = create_handler(&svc, json!({"command": true_command()})).unwrap();
         let id = resp["session_id"].as_str().unwrap().to_string();
-        let first = close_handler(&svc, json!({"session_id": id.clone()})).unwrap();
+        let first = close_handler(&svc, None, json!({"session_id": id.clone()})).unwrap();
         assert_eq!(first["ack"], true);
-        let second = close_handler(&svc, json!({"session_id": id})).unwrap();
+        let second = close_handler(&svc, None, json!({"session_id": id})).unwrap();
         assert_eq!(
             second["ack"], false,
             "second close on same id must ack=false"
