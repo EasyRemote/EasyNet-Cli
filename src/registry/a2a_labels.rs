@@ -70,6 +70,59 @@ use super::agents::AgentRegistry;
 ///   `docs/spec/node-roster-label-v2.md`.
 pub const A2A_SCHEMA_VERSION: &str = "v2";
 
+/// Build the v2 `{"agents": [...]}` envelope as a structured Value.
+/// This is the lower-level half of `build`: it produces the JSON shape
+/// that downstream consumers (the `a2a.agents_json` label, the
+/// `a2a.bridge.list_skills` ability handler) parse, without the
+/// label-map wrapping or the size-limit warning that `build` adds for
+/// the on-the-wire label encoding.
+///
+/// Iteration order: agent-name (BTreeMap), then per-agent skills
+/// sorted by `name`. Both orderings feed the byte-stable
+/// `tests/fixtures/a2a-v2/golden.json` fixture; do not switch to a
+/// `HashMap` here.
+pub fn build_agents_envelope(registry: &AgentRegistry) -> serde_json::Value {
+    let agents_json: Vec<serde_json::Value> = registry
+        .agents
+        .iter()
+        .map(|(name, e)| {
+            let mut skills: Vec<serde_json::Value> =
+                crate::runtime::abilities::abilities_for(name, e)
+                    .iter()
+                    .map(|spec| spec.to_discovery_json())
+                    .collect();
+            skills.sort_by(|a, b| {
+                a.get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .cmp(b.get("name").and_then(|v| v.as_str()).unwrap_or(""))
+            });
+            // Optional fields carry explicit `null` rather than being
+            // omitted. Spec §"null vs absent" fixes the writer rule;
+            // fixture byte-stability depends on it.
+            let description: serde_json::Value = e
+                .label
+                .clone()
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null);
+            let model: serde_json::Value = e
+                .model
+                .clone()
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null);
+            json!({
+                "a2a_schema_version": A2A_SCHEMA_VERSION,
+                "description": description,
+                "model": model,
+                "name": name,
+                "runtime": e.agent_type.to_string(),
+                "skills": skills,
+            })
+        })
+        .collect();
+    json!({ "agents": agents_json })
+}
+
 /// Build the `a2a.*` label map for registering this node with the Axon
 /// runtime. Returns `None` — not an empty map — when the registry carries
 /// no agents, so the caller can feed the result straight into
@@ -105,45 +158,7 @@ pub fn build(registry: &AgentRegistry, hostname: &str) -> Option<HashMap<String,
     // `debug_assert!` to surface a regression in dev and fall back
     // to an empty envelope in release (the node stays registered
     // without the roster).
-    let agents_json: Vec<serde_json::Value> = registry
-        .agents
-        .iter()
-        .map(|(name, e)| {
-            let mut skills: Vec<serde_json::Value> =
-                crate::runtime::abilities::abilities_for(name, e)
-                    .iter()
-                    .map(|spec| spec.to_discovery_json())
-                    .collect();
-            skills.sort_by(|a, b| {
-                a.get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .cmp(b.get("name").and_then(|v| v.as_str()).unwrap_or(""))
-            });
-            // Optional fields carry explicit `null` rather than
-            // being omitted. Spec §"null vs absent" fixes the
-            // writer rule; fixture byte-stability depends on it.
-            let description: serde_json::Value = e
-                .label
-                .clone()
-                .map(serde_json::Value::String)
-                .unwrap_or(serde_json::Value::Null);
-            let model: serde_json::Value = e
-                .model
-                .clone()
-                .map(serde_json::Value::String)
-                .unwrap_or(serde_json::Value::Null);
-            json!({
-                "a2a_schema_version": A2A_SCHEMA_VERSION,
-                "description": description,
-                "model": model,
-                "name": name,
-                "runtime": e.agent_type.to_string(),
-                "skills": skills,
-            })
-        })
-        .collect();
-    let envelope = json!({ "agents": agents_json });
+    let envelope = build_agents_envelope(registry);
     let agents_json_str = match serde_json::to_string(&envelope) {
         Ok(s) => s,
         Err(_e) => {
