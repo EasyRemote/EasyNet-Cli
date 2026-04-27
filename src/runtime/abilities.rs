@@ -280,11 +280,27 @@ pub fn abilities_for(agent_name: &str, entry: &AgentEntry) -> Vec<AgentAbilitySp
 /// whole roster offline; the operator sees the manifest error in
 /// `agent abilities <name>` (which keeps fail-loud semantics).
 fn abilities_from_manifests(agent_name: &str, entry: &AgentEntry) -> Option<Vec<AgentAbilitySpec>> {
-    let root = entry.root_path.as_ref()?;
+    // Resolve the on-disk root with the SAME fallback the CLI's
+    // `easynet agent abilities` uses (see facade::cli::agent.rs
+    // `open_registered_agent`): if the entry's `root_path` field
+    // is None (a v2 row written without it, common for entries
+    // migrated from v1 that never got the field repopulated),
+    // fall back to `config::agents_root().join(agent_name)`.
+    //
+    // Pre-fix this discrepancy meant `agent abilities <name>`
+    // worked but `<name>.chat`'s skills_loaded was silently empty
+    // — the chat handler couldn't find the manifests the CLI
+    // could see. Surfaced during a real-user audit when an
+    // ability was added under the workspace's abilities/ dir but
+    // skills_loaded stayed [].
+    let root: std::path::PathBuf = entry
+        .root_path
+        .clone()
+        .unwrap_or_else(|| crate::persistence::config::agents_root().join(agent_name));
     if !root.is_dir() {
         return None;
     }
-    let dir = match AgentDirectory::open(root) {
+    let dir = match AgentDirectory::open(&root) {
         Ok(d) => d,
         Err(e) => {
             eprintln!(
@@ -391,6 +407,47 @@ mod tests {
 
     fn entry_of(t: AgentType) -> AgentEntry {
         AgentEntry::new(t, None)
+    }
+
+    #[test]
+    fn abilities_from_manifests_falls_back_to_agents_root_when_root_path_missing() {
+        // Regression: a v2 row without `root_path` populated must
+        // still find on-disk abilities under `agents_root().join(name)`.
+        // Pre-fix this returned the synth fallback even when the
+        // workspace had real manifests on disk; symptom was
+        // skills_loaded silently empty in chat responses.
+        use crate::facade::cli::test_support::HomeGuard;
+        let _g = HomeGuard::new();
+
+        // Set up a fake agent root at the conventional path,
+        // with one ability manifest.
+        let name = "ghost-agent";
+        let root = crate::persistence::config::agents_root().join(name);
+        std::fs::create_dir_all(root.join("abilities")).unwrap();
+        // Write the canonical agent.toml so AgentDirectory::open succeeds.
+        std::fs::write(
+            root.join("agent.toml"),
+            "name = \"ghost-agent\"\nruntime = \"claude-code\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("abilities/wave.ability.toml"),
+            "schema_version = \"1\"\nname = \"wave\"\ndescription = \"Smoke ability.\"\n\
+             [input_schema]\ntype = \"object\"\nadditionalProperties = false\n",
+        )
+        .unwrap();
+
+        // Build an entry WITH NO root_path.
+        let entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        assert!(entry.root_path.is_none());
+
+        let abilities = abilities_for(name, &entry);
+        // We expect at least chat + the wave ability we just wrote.
+        let names: Vec<String> = abilities.iter().map(|a| a.name().to_string()).collect();
+        assert!(
+            names.iter().any(|n| n.ends_with(".wave")),
+            "abilities_for did not pick up the on-disk wave manifest: {names:?}"
+        );
     }
 
     #[test]
