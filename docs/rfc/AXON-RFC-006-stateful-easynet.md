@@ -462,6 +462,51 @@ state. Two views computed from the same `(canonical_state,
 runtime_state)` pair are deterministic functions of that pair
 (TR-INV-6).
 
+### B.7.0  Caller-identity translation
+
+Before any view is computed, the hub translates the HTTP request
+into an EasyNet invocation. The resulting envelope.caller is NOT
+the hub's agent URI; it is the structured principal URI defined in
+TR-INV-12:
+
+```
+envelope.caller =
+    easynet:///principal/human-anon/<ip-hash>/<session-id|"-">
+
+  ip-hash      = HMAC(hub_local_salt, client_ip).hex[..16]
+  session-id   = first non-empty of:
+                   - cookie "easynet_session"
+                   - header "X-EasyNet-Session"
+                   - query-string "?session="
+                 fall back to "-" if all absent.
+```
+
+This caller flows into every receipt the translated invocation
+emits. Concretely:
+
+* a `pages.get` invoked through the hub records its read in the
+  page object's view-side log under
+  `principal/human-anon/<ip-hash>/<session-id>`;
+* a `webapp.serve` triggered by an authenticated human (future
+  TR-INV-12 extension) would record under
+  `principal/human-auth/<provider>/<user-id>`;
+* an EasyNet agent reading the same URA via direct RPC (no hub)
+  records under its own `agent/<id>` URI.
+
+The three caller classes are distinguishable in the receipt log
+without consulting any field other than caller. This is the
+foundation TR-INV-11's traceability invariant rests on at the
+public-web boundary: "this version of the page was read by
+ip-hash X with session Y" is provable from receipts alone.
+
+Hubs MUST forward the caller URI verbatim to the owner node;
+owner nodes MUST validate that hub-translated callers carry the
+human-anon prefix (or another principal/ prefix the hub is
+authorised to mint) and MUST NOT accept arbitrary caller URIs
+from hub requests. This forms the trust boundary: the hub may
+introduce anonymous principals into the system, but it cannot
+impersonate agents.
+
 For each `(canonical, runtime)` admissible pair from B.4.3:
 
 ```
@@ -759,6 +804,66 @@ TR-INV-11  URA-receipt traceability
            the property; it is the protocol's audit story, and it is
            the answer to "how do I prove this page said X at version
            N, and the change to Y was authored by owner Z at time T".
+
+TR-INV-12  Hub-translated caller identity
+           When a Hub translates an external (HTTP/WS) request into
+           an EasyNet invocation, the resulting envelope.caller MUST
+           be a structured principal URI in the form:
+
+             easynet:///principal/human-anon/<ip-hash>/<session-id|"-">
+
+           Fields:
+             human-anon    fixed literal. Marks this caller as a
+                           hub-translated anonymous visitor, NOT an
+                           EasyNet agent. scope-check, authz, and
+                           audit code MUST recognise the prefix and
+                           treat the caller as carrying NO EasyNet
+                           identity guarantees.
+             ip-hash       stable hash of the client IP, computed
+                           with a hub-local salt. MUST NOT be the
+                           plaintext IP — receipts persist and
+                           plaintext IPs in the log are a compliance
+                           liability. The hash is stable within a
+                           hub's lifetime so rate-limiting and abuse
+                           correlation work; it is intentionally
+                           NOT comparable across hubs.
+             session-id    a hub-issued or client-supplied opaque
+                           token (cookie, header, query-string).
+                           Present when the visitor has a stable
+                           session; literal "-" otherwise. Optional
+                           by design — fabricating a server-side
+                           session for first-time visitors would
+                           pollute the receipt log with orphan
+                           sessions that look distinct but aren't.
+
+           Hubs MUST NOT substitute their own agent URI as caller
+           for translated requests. Doing so would corrupt the
+           audit chain (every public reader would appear in
+           receipt logs as the hub itself), defeating TR-INV-11.
+
+           Hubs MUST NOT leave envelope.caller empty. Every
+           invocation EasyNet processes carries a caller — that is
+           a system-wide invariant. The principal/human-anon scheme
+           is the appendix's answer to "what caller does a public
+           browser request carry" so the invariant holds without
+           exception.
+
+           A future RFC may extend the principal/ namespace with
+           authenticated human callers (e.g.,
+           easynet:///principal/human-auth/<provider>/<user-id>).
+           That extension MUST NOT change the human-anon shape;
+           authenticated and anonymous principals coexist as
+           distinct sub-namespaces.
+
+           Why surfaced: B.7's hub view matrix translates HTTP
+           requests into pages.get / webapp ability invocations.
+           Without an explicit caller scheme for the resulting
+           envelope, implementers face three bad choices: lie
+           (use hub's agent URI), invent (each hub picks a
+           different placeholder, unbiddably), or break the
+           invariant (empty caller). All three corrupt audit;
+           the third also breaks scope-check. RFC-006 main MUST
+           give one answer the whole protocol uses.
 ```
 
 ---
