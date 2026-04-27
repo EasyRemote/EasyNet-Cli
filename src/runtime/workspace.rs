@@ -422,7 +422,15 @@ fn resolve_easynet_binary() -> String {
 /// MCP can spawn other agents.
 pub(super) fn build_mcp_entry(agent_name: &str) -> (String, Vec<String>, serde_json::Value) {
     let cmd = resolve_easynet_binary();
-    let mut args = vec!["mcp-server".to_string()];
+    // The CLI subcommand is `easynet mcp serve` (a two-token
+    // path, not a single hyphenated `mcp-server`). The earlier
+    // shape was renamed when the `mcp` group split into
+    // serve/status/install/skill-install — but the .mcp.json
+    // writer was never updated, so every agent's workspace got
+    // a broken MCP server config that fails with "unrecognized
+    // subcommand" the moment Claude Code / Codex tries to spawn
+    // it. Fixed in slice 27.
+    let mut args = vec!["mcp".to_string(), "serve".to_string()];
     let mut env = serde_json::Map::new();
 
     if let Ok(state) = config::load() {
@@ -729,6 +737,29 @@ mod tests {
             stem == "easynet" || stem == "easynet-daemon" || resolved == "easynet",
             "resolved binary path has unexpected name: {resolved}"
         );
+    }
+
+    #[test]
+    fn build_mcp_entry_uses_correct_two_token_subcommand() {
+        // `easynet mcp serve` is the actual CLI path. Pre-fix
+        // this wrote `["mcp-server", ...]` (a single hyphenated
+        // token that the CLI dispatcher does not recognise),
+        // which meant every agent's `.mcp.json` had a broken
+        // MCP server config that failed with "unrecognized
+        // subcommand" the moment Claude Code / Codex spawned
+        // it. Lock the correct two-token path so a future
+        // rename of the subcommand requires updating both this
+        // writer and this test in lockstep.
+        let (_, args, _) = build_mcp_entry("claude");
+        assert_eq!(args.first().map(|s| s.as_str()), Some("mcp"));
+        assert_eq!(args.get(1).map(|s| s.as_str()), Some("serve"));
+        // The hyphenated form must NEVER appear.
+        for a in &args {
+            assert!(
+                a != "mcp-server",
+                "args must not contain the legacy `mcp-server` token: {args:?}"
+            );
+        }
     }
 
     #[test]
