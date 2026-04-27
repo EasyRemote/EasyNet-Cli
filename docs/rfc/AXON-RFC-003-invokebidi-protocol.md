@@ -1,15 +1,27 @@
 # AXON-RFC-003 — InvokeBidi Data-Plane Protocol Specification
 
-**Version**: v0.1 (4 surgical patches applied for protocol
-closure — frame invariants, terminal-invalid semantics, FFI
-behavioral invariants, acceptance-as-MUST). Awaits sign-off to
-become v1.
-**Status**: protocol specification, no implementation required.
+**Version**: **v1 (binding)** — frozen 2026-04-27 under
+Silan.Hu sign-off. Three closure conditions verified:
+execution closure (INV-1..10 §1.5), termination closure
+(TERMINAL state §3.4 / §3.5), implementation closure
+(FFI-INV-1..9 §5.8 + BP-INV-1..6 §6.6). Conformance is binary
+and wire-indistinguishability is the cross-SDK acceptance test
+(§9).
+**Status**: binding protocol specification. No further semantic
+changes without a v1.x amendment.
 **Date**: 2026-04-27
 **Author**: Claude (under Silan.Hu architectural authority)
 **Scope**: task C-M1b — define the InvokeBidi data plane on top of
 the now-correct chain-state model (G-bundle landed in
 EasyNet-Axon `dff7294`).
+
+**Change protocol**: this document is frozen for semantic content.
+Errata (typos, broken cross-references, clarifying examples that
+do not change a MUST / MUST NOT / SHOULD) may land directly. Any
+change to §1–§6 normative text or to §1.5 / §3.4 / §3.5 / §5.8 /
+§6.6 invariants requires a v1.x amendment that is itself signed
+off by the authority before implementation may follow. Spec leads,
+code follows (§9.5).
 **Companion documents**:
 - `AXON-RFC-003-code-review.md` — the audit that produced this
 - The shipped HMAC primitives in
@@ -1053,16 +1065,38 @@ Once v1 is signed off:
   consumers MUST tolerate them as protobuf-default-ignore on
   the wire.
 
-### §9.6 Revision protocol
+### §9.6 Revision protocol (post-freeze)
 
-If revision is wanted on this v0.1: respond with section
-numbers + the specific "MUST that should be MUST NOT" or
-"missing invariant N for property P" critique. The revision
-lands as v1.
+This document is **frozen as v1** as of 2026-04-27. Two change
+classes are recognised:
 
-If accepted as-is: this is binding v1, this file is renamed
-without the v0.1 marker, and downstream work proceeds on this
-contract.
+1. **Errata** — typos, broken cross-references, clarifying
+   examples that do not change a MUST / MUST NOT / SHOULD.
+   These land directly without amendment ceremony.
+
+2. **v1.x amendments** — any change touching §1–§6 normative
+   text or any of the formal invariant blocks (§1.5 INV-1..10,
+   §3.4 TERMINAL state, §3.5 closure rule, §5.8 FFI-INV-1..9,
+   §6.6 BP-INV-1..6). These require:
+     - written rationale (single MUST or MUST NOT being
+       changed, with the protocol property the change preserves
+       or relaxes);
+     - sign-off by Silan.Hu before implementation;
+     - amendment lands as a separate document
+       `AXON-RFC-003-amendment-vN.md` referencing the section
+       and invariant being changed.
+
+The "spec leads, code follows" rule (§9.5) is binding from this
+freeze. Implementation patches that try to introduce a v1
+behavior change without an amendment are protocol violations
+and MUST be rejected at code review.
+
+Future v2 work (lossy ordering, stall detection, cross-language
+SDKs beyond Go, raw-byte FFI fast path, multimodal BinaryChunk
+fields, StreamReady control) lives in
+`AXON-RFC-004-invokebidi-v2.md` (not yet written) — v2 is a
+NEW document, not an in-place rewrite of this one. v1 wire
+remains binding for the lifetime of every v1 deployment.
 
 ---
 
