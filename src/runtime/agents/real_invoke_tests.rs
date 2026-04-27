@@ -272,6 +272,48 @@ fn real_admin_status_reports_components_under_temp_home() {
     assert!(names.contains(&"hosted_agents"));
 }
 
+/// User-perspective smoke: read this crate's own Cargo.toml
+/// — a real file the developer can `cat` to see the same
+/// bytes — through the ability dispatcher. Asserts the
+/// content fs.read returns is byte-equal to what
+/// std::fs::read_to_string returns for the same path. Not a
+/// tempfile-and-immediate-read; the file exists independent
+/// of the test fixture and the test only reads it.
+#[test]
+fn real_fs_read_reads_this_crates_cargo_toml() {
+    // CARGO_MANIFEST_DIR is set by cargo for every test run; it
+    // is the absolute path of the directory containing
+    // Cargo.toml. Using it makes this test work both when run
+    // from the crate root (`cargo test -p easynet`) and from a
+    // workspace top (`cargo test`) without depending on the
+    // current working directory.
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let cargo_toml = std::path::PathBuf::from(manifest_dir).join("Cargo.toml");
+    assert!(cargo_toml.exists(), "Cargo.toml must exist for this test");
+
+    let resp = invoke(
+        "fs.read",
+        json!({
+            "path": cargo_toml.to_str().unwrap(),
+            "encoding": "utf8",
+        }),
+    );
+
+    let content = resp["content"].as_str().expect("content is utf8");
+    let direct = std::fs::read_to_string(&cargo_toml).expect("direct read");
+    assert_eq!(
+        content, direct,
+        "fs.read content must equal direct std::fs::read_to_string for the same path"
+    );
+    assert_eq!(resp["size"].as_u64().unwrap(), direct.len() as u64);
+    assert_eq!(resp["truncated"], json!(false));
+    // Sanity that this is really our Cargo.toml.
+    assert!(content.contains("name = \"easynet\""));
+    // mtime_ms must be non-null and a real timestamp.
+    let mtime = resp["mtime_ms"].as_u64().expect("mtime_ms is integer");
+    assert!(mtime > 1_700_000_000_000, "mtime is post-2023: {mtime}");
+}
+
 #[test]
 fn real_fs_read_reads_an_actual_file() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
