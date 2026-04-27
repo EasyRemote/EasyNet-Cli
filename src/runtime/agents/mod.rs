@@ -775,6 +775,138 @@ mod tests {
         );
     }
 
+    /// Walk every published ability and confirm a handler is
+    /// registered under SOME invocation mode (RPC, Stream, or
+    /// Bidi). Distinguishes "ability advertised in
+    /// list_abilities() but dispatcher returns ABILITY_NOT_FOUND"
+    /// from "ability is callable". This is the bare minimum for
+    /// the question "is this ability really wired".
+    ///
+    /// What this DOES NOT verify:
+    ///   * the handler implementation is correct (most need
+    ///     valid args, services, real I/O — those have their
+    ///     own per-module tests),
+    ///   * the response shape matches the documented schema,
+    ///   * end-to-end behavior over the wire.
+    /// What it DOES verify:
+    ///   * `register(...)` was called for every published name
+    ///     (catches the slice-16 bug class: file present, never
+    ///     wired into build_registry_with_services),
+    ///   * the registration mode matches the dispatcher's
+    ///     expectation (catches "registered as Stream but
+    ///     get_rpc() returns None" type mismatches).
+    #[test]
+    fn every_published_ability_resolves_to_a_handler() {
+        let reg = build_registry();
+        let names: Vec<String> = reg.list_abilities();
+        let mut unresolved: Vec<String> = Vec::new();
+        for name in &names {
+            // <agent>.chat handlers register as Stream. Most
+            // system abilities register as RPC. Bidi is rare
+            // (PTY attach). We accept any of the three.
+            let has_rpc = reg.get_rpc(name).is_some();
+            let has_stream = reg.get_stream(name).is_some();
+            let has_bidi = reg.get_bidi(name).is_some();
+            if !(has_rpc || has_stream || has_bidi) {
+                unresolved.push(name.clone());
+            }
+        }
+        assert!(
+            unresolved.is_empty(),
+            "abilities listed by list_abilities() but with NO handler registered: {unresolved:?}"
+        );
+    }
+
+    /// For every RPC-mode ability with no-arg or empty-args
+    /// schema, actually invoke it through the dispatcher with
+    /// `{}` and confirm the call returns SOME result (Ok(value)
+    /// or a structured Err). The point is: we exercise the full
+    /// dispatch path for every ability we can — registry lookup,
+    /// handler invocation, response materialisation — not just
+    /// "the function pointer exists".
+    ///
+    /// Rationale for the empty-args scope:
+    ///   * Many RPC abilities have required fields (e.g.
+    ///     fs.read needs `path`). Calling them with `{}` will
+    ///     return Err(`missing required field`) which is the
+    ///     CORRECT response and proves the handler runs end-to-
+    ///     end. We accept Err here as PASS — the handler
+    ///     reached arg-validation.
+    ///   * What we reject is: panic (test framework catches),
+    ///     ABILITY_NOT_FOUND error (means dispatch never reached
+    ///     a handler), or a hang (test would time out).
+    #[test]
+    fn every_rpc_ability_actually_dispatches_through_to_its_handler() {
+        use crate::runtime::ability_dispatch::AbilityDispatcher;
+        use crate::runtime::gateway::NoopGateway;
+        use crate::runtime::invocation_target::{
+            CallMode, InvocationTarget, TargetScope,
+        };
+
+        let reg = build_registry();
+        let dispatcher = AbilityDispatcher::new(Arc::clone(&reg), Arc::new(NoopGateway::new()));
+        let names = reg.list_abilities();
+
+        let mut invoked_ok: Vec<String> = Vec::new();
+        let mut invoked_err: Vec<(String, String)> = Vec::new();
+        let mut not_found: Vec<String> = Vec::new();
+        let mut not_rpc: Vec<String> = Vec::new();
+
+        for name in &names {
+            // Only invoke things that ARE RPC. Stream / Bidi
+            // abilities skip this stage; the previous test
+            // confirmed they have a handler under their mode.
+            if reg.get_rpc(name).is_none() {
+                not_rpc.push(name.clone());
+                continue;
+            }
+            let target = InvocationTarget {
+                scope: TargetScope::Local,
+                ability: name.clone(),
+                normalized_args: serde_json::json!({}),
+                call_mode: CallMode::Rpc,
+            };
+            match dispatcher.execute_rpc(target) {
+                Ok(_) => invoked_ok.push(name.clone()),
+                Err(e) => {
+                    let msg = format!("{e}");
+                    if msg.to_ascii_lowercase().contains("no rpc handler")
+                        || msg.contains("ABILITY_NOT_FOUND")
+                    {
+                        not_found.push(name.clone());
+                    } else {
+                        invoked_err.push((name.clone(), msg));
+                    }
+                }
+            }
+        }
+
+        // Print a summary so a green run still shows what was
+        // actually exercised (visible with `cargo test ... --
+        // --nocapture`).
+        eprintln!(
+            "ability invoke smoke: {} OK, {} errored-but-reached-handler, {} skipped (non-RPC)",
+            invoked_ok.len(),
+            invoked_err.len(),
+            not_rpc.len()
+        );
+        if !invoked_err.is_empty() {
+            eprintln!("  errored (handler reached, normal):");
+            for (n, m) in &invoked_err {
+                let preview: String = m.chars().take(80).collect();
+                eprintln!("    {n}: {preview}");
+            }
+        }
+        if !not_rpc.is_empty() {
+            eprintln!("  skipped (registered as Stream/Bidi): {not_rpc:?}");
+        }
+
+        assert!(
+            not_found.is_empty(),
+            "abilities advertised but dispatcher could not find an RPC handler: {not_found:?}"
+        );
+    }
+
     #[test]
     fn build_registry_actually_contains_every_baseline_locomotion_ability() {
         // Pin the AXIOM Tier 2.5 surface: every member of the

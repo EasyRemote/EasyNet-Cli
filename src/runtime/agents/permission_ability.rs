@@ -138,17 +138,17 @@ fn decide_handler(svc: &PermissionService, args: Value) -> anyhow::Result<Value>
     let id = args
         .get("id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("permission.decide: `id` required"))?;
+        .ok_or_else(|| anyhow::anyhow!("consent.decide: `id` required"))?;
     let decision_str = args
         .get("decision")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("permission.decide: `decision` required"))?;
+        .ok_or_else(|| anyhow::anyhow!("consent.decide: `decision` required"))?;
     let decision = match decision_str {
         "allow" => PermissionDecision::Allow,
         "deny" => PermissionDecision::Deny,
         "allow_once" => PermissionDecision::AllowOnce,
         other => anyhow::bail!(
-            "permission.decide: `decision` must be allow|deny|allow_once, got {other:?}"
+            "consent.decide: `decision` must be allow|deny|allow_once, got {other:?}"
         ),
     };
     svc.decide(&PermissionId::new(id), decision)?;
