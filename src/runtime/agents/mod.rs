@@ -400,7 +400,17 @@ mod tests {
             | "schedule.enable"
             | "loop.create"
             | "loop.subscribe"
-            | "loop.cancel" => Some(AbilityLayer::Operational),
+            | "loop.cancel"
+            // AXIOM §"Tier 2.5" Baseline Locomotion Profile,
+            // filesystem half. fs.read is technically read-only
+            // but it returns business content, not just metadata
+            // — Operational rather than Observation. fs.write
+            // mutates state. fs.list returns directory metadata
+            // but its purpose is to enable subsequent fs.read /
+            // fs.write — Operational by intent.
+            | "fs.read"
+            | "fs.write"
+            | "fs.list" => Some(AbilityLayer::Operational),
             _ => None,
         }
     }
