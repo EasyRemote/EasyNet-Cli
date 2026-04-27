@@ -35,6 +35,11 @@
 
 pub mod a2a_bridge_ability;
 pub mod chat_ability;
+/// AXIOM §"Tier 2.5" Baseline Locomotion Profile, filesystem
+/// half. Three abilities (`fs.read`, `fs.write`, `fs.list`)
+/// published by every host-embodied agent claiming the
+/// `baseline-locomotion-v1` profile.
+pub mod fs_ability;
 pub mod context_loaders;
 pub mod discuss_ability;
 pub mod fleet_list_agents_ability;
@@ -100,6 +105,11 @@ pub fn build_registry_with_services(
     let mut reg = LocalAbilityRegistry::new();
     ping::register(&mut reg);
     network_health_ability::register(&mut reg);
+    // AXIOM §"Tier 2.5" Baseline Locomotion Profile, filesystem
+    // half. Three stateless handlers (fs.read / fs.write /
+    // fs.list) — every host-embodied agent claiming
+    // `baseline-locomotion-v1` MUST expose them.
+    fs_ability::register(&mut reg);
     // policy.{evaluate,simulate} — admission-gate consumer surface
     // pinned to the §A6 contract. v1 is allow-all; the gate's
     // rewiring to actually call this ability lands in a follow-up
@@ -262,6 +272,10 @@ pub fn description_for(name: &str) -> &'static str {
         "fleet.list_agents" => fleet_list_agents_ability::list_agents_description(),
         "meta.describe" => meta_ability::describe_description(),
         "meta.list_abilities" => meta_ability::list_abilities_description(),
+        // AXIOM §"Tier 2.5" Baseline Locomotion — filesystem half.
+        "fs.read" => fs_ability::description_read(),
+        "fs.write" => fs_ability::description_write(),
+        "fs.list" => fs_ability::description_list(),
         _ if name.ends_with(".chat") => "Send a chat prompt to the locally-installed agent.",
         _ => "(system ability)",
     }
@@ -308,6 +322,10 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "fleet.list_agents" => fleet_list_agents_ability::list_agents_input_schema(),
         "meta.describe" => meta_ability::describe_input_schema(),
         "meta.list_abilities" => meta_ability::list_abilities_input_schema(),
+        // AXIOM §"Tier 2.5" Baseline Locomotion — filesystem half.
+        "fs.read" => fs_ability::input_schema_read(),
+        "fs.write" => fs_ability::input_schema_write(),
+        "fs.list" => fs_ability::input_schema_list(),
         _ => serde_json::json!({ "type": "object" }),
     }
 }
