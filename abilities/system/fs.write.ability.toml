@@ -1,6 +1,6 @@
 schema_version = "1"
 name = "fs.write"
-description = "Atomically write a file (temp + rename) on the host's filesystem. Part of the baseline-locomotion-v1 profile (AXIOM §Tier 2.5). A crashed write leaves the prior content intact; the receipt records path, byte count, and content hash, but never the bytes themselves."
+description = "Atomically write a file (tempfile in the same directory, fdatasync, then rename) on the host's filesystem. Part of the baseline-locomotion-v1 profile (AXIOM §Tier 2.5). The fdatasync before rename closes the well-known crash-window where ext4/XFS may present a zero-byte file after power loss between rename and the deferred data flush. A crashed write thus leaves the prior content intact even on the bad-day filesystem path. The receipt records path, byte count, and content hash, but never the bytes themselves."
 
 [input_schema]
 type = "object"
