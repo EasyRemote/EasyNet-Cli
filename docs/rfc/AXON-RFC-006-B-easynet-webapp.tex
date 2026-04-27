@@ -1,0 +1,1358 @@
+\documentclass[11pt,a4paper]{article}
+
+% ──────────────────────────────────────────────────────────────────────────
+% AXON-RFC-006 Appendix B (impl) — easynet.web_app
+% Status: Draft v0.1 (technical design + implementation plan)
+% Build:  xelatex AXON-RFC-006-B-easynet-webapp.tex
+% Companion (normative core):    AXON-RFC-006-stateful-easynet.tex
+% Companion (pressure test md):  AXON-RFC-006-stateful-easynet.md (§B)
+% Companion (simpler appendix):  AXON-RFC-006-A-easynet-pages.tex
+% ──────────────────────────────────────────────────────────────────────────
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{xltabular}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{tcolorbox}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{parskip}
+\usepackage{xspace}
+
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setCJKmainfont{PingFang SC}[
+    BoldFont={PingFang SC Semibold},
+    ItalicFont={PingFang SC Light}
+]
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small AXON-RFC-006 Appendix B}
+\fancyhead[R]{\small easynet.web\_app --- Technical Design}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\titleformat{\section}{\Large\bfseries\color{black!85}}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\large\bfseries\color{black!75}}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{black!70}}{\thesubsubsection}{0.5em}{}
+
+\definecolor{normativecolor}{RGB}{180,30,30}
+\definecolor{derivedcolor}{RGB}{30,90,180}
+\definecolor{deferredcolor}{RGB}{120,90,30}
+\definecolor{codebg}{RGB}{245,245,248}
+\definecolor{codeborder}{RGB}{210,210,220}
+
+\newcommand{\normsv}{\textcolor{normativecolor}{\textbf{[normative]}}\xspace}
+\newcommand{\derived}{\textcolor{derivedcolor}{\textbf{[derived]}}\xspace}
+\newcommand{\deferred}{\textcolor{deferredcolor}{\textbf{[deferred]}}\xspace}
+
+\lstdefinestyle{ealstyle}{
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small,
+    frame=single,
+    rulecolor=\color{codeborder},
+    breaklines=true,
+    showstringspaces=false,
+    keywordstyle=\color{blue!70!black}\bfseries,
+    commentstyle=\color{green!40!black}\itshape,
+    stringstyle=\color{red!60!black},
+    morekeywords={state_type,state_key,canonical,operational,transition,receipt,view,principal,agent,owner_signature,attempt_id,transition_id,routes_manifest,api_abilities,fn,let,struct,impl,pub,async,await,location,server,proxy_pass},
+    columns=fullflexible,
+    keepspaces=true,
+    aboveskip=0.6em,
+    belowskip=0.6em,
+}
+\lstset{style=ealstyle}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+
+\newtcolorbox{invariant}[1][Invariant]{
+    colback=red!4!white,
+    colframe=red!50!black,
+    fonttitle=\bfseries,
+    title={Invariant --- #1},
+    sharp corners=south,
+    boxrule=0.6pt,
+}
+\newtcolorbox{notebox}[1][]{
+    colback=blue!4!white,
+    colframe=blue!50!black,
+    fonttitle=\bfseries,
+    title={Note},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+\newtcolorbox{warningbox}[1][]{
+    colback=orange!6!white,
+    colframe=orange!70!black,
+    fonttitle=\bfseries,
+    title={Transitional misalignment},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+\newtcolorbox{decisionbox}[1][]{
+    colback=purple!4!white,
+    colframe=purple!60!black,
+    fonttitle=\bfseries,
+    title={Open decision},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+
+\title{
+    \vspace{-2em}
+    \textbf{\Large AXON-RFC-006 Appendix B: easynet.web\_app}\\[0.3em]
+    \large Technical design, build pipeline, Hub routing, and
+    implementation plan for full-stack agent-deployed applications
+}
+\author{
+    Silan Hu \\ \small National University of Singapore
+}
+\date{Draft v0.1, \today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+This appendix specifies \texttt{easynet.web\_app}, the
+state\_type that supports a full modern web deployment:
+a real React/Vue/Next-style frontend project authored by an
+agent (typically Claude Code) inside its workspace, built into
+a static \texttt{dist/} bundle, and served alongside a
+backend whose endpoints are not pretend HTTP handlers but
+genuine EasyNet abilities. The Hub plays the role of a
+state-aware nginx: it serves the frontend bundle, translates
+\texttt{POST /api/<verb>} requests into ability invocations on
+the owner agent, proxies WebSocket subscriptions to ability
+streams, and exposes \texttt{/\_\_easynet/agent} as the
+machine-actionable view of the same application. The
+appendix covers the modern project model, the canonical /
+runtime state split, the long-running build pipeline, the API
+ability mapping, the Hub routing matrix (with worked CSP and
+caching rules suitable for SPAs), the agent\_view shape that
+makes the entire application discoverable to peer agents, the
+five PR slices required to land it in
+\texttt{EasyNet-Cli}, and an end-to-end worked example
+of an agent authoring a Vite + React shop, declaring its API
+abilities, building, publishing, serving, and being audited.
+\end{abstract}
+
+\tableofcontents
+\vspace{1em}
+\hrule
+\vspace{1em}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Position relative to pages and to the network history of the web}
+\label{sec:position}
+
+\derived{} The web evolved from a static-document medium into a
+full application platform. EasyNet's stateful web layer follows
+the same arc, in two appendices:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\linewidth}{l X}
+\toprule
+\textbf{Appendix} & \textbf{What it models} \\
+\midrule
+A (\texttt{easynet.page})    & A single document. Author writes HTML / Markdown; Hub serves it. The minimal reference --- one canonical state, no runtime overlay, no build step, no API surface. \\
+B (\texttt{easynet.web\_app})& A full application. Author writes a real frontend project, a build pipeline produces a static bundle, the application's API endpoints ARE EasyNet abilities. Hub serves frontend + API + WebSocket + agent\_view from a single URL space. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\noindent We keep both. Pages remains the simplest verification
+of the protocol's normative core; web\_app is the first state
+type that actually exercises the full pressure-test surface
+(\S B.1--B.8 of the markdown companion). An implementation that
+ships pages but not web\_app has solved the easy half of stateful
+EasyNet; this appendix specifies the hard half.
+
+\textbf{Why this is not nginx.} Nginx serves a static directory
+and reverse-proxies to a separately-deployed backend. The
+backend is a black box --- nginx neither understands its state,
+nor knows what endpoints it offers, nor can answer ``what can a
+caller do here'' to a peer asking through structured discovery.
+The Hub specified here serves the same kinds of bytes nginx
+would, but its routing decisions are derived from the
+state object's canonical state, its API endpoints are abilities
+introspectable through the same registry that backs every other
+EasyNet caller, and its dual-view contract means the same URL
+space carries both human content and an agent-actionable map of
+the entire application. Nginx is HTTP plumbing; the Hub is a
+state-projection layer that happens to speak HTTP at its outer
+boundary.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Goals and non-goals}
+\label{sec:goals}
+
+\subsection{Goals}
+
+\normsv{} An implementation conforming to this appendix:
+
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.2em]
+    \item Lets an agent author a real frontend project in its
+    workspace using whatever toolchain the agent prefers (Vite,
+    Next.js, Remix, etc.); EasyNet does not invent a project
+    structure.
+    \item Provides a long-running canonical transition,
+    \texttt{webapp.build}, that runs the project's declared
+    build command, captures the resulting \texttt{dist/} (or
+    equivalent) as an immutable content-addressed bundle, and
+    advances canonical state on success or failure.
+    \item Provides runtime overlay transitions
+    (\texttt{webapp.serve}, \texttt{webapp.stop}) that bind a
+    local port and start serving --- crucially, without changing
+    canonical state.
+    \item Translates HTTP requests on the Hub into EasyNet
+    operations along three orthogonal channels: static-bundle
+    fetch, API ability invocation, and WebSocket ability
+    subscription.
+    \item Exposes a single \texttt{agent\_view} URL
+    (\texttt{/\_\_easynet/agent}) that returns the application's
+    full discoverability surface: routes, API endpoints,
+    \texttt{ability\_surface} for transitions, build metadata,
+    receipt history pointer, and an EAL hint.
+    \item Implements all of the above in five PR slices
+    (\S\ref{sec:impl-plan}), each independently reviewable.
+\end{enumerate}
+
+\subsection{Non-goals}
+
+\derived{} Out of scope for this appendix:
+
+\begin{itemize}[leftmargin=2.2em,itemsep=0.18em]
+    \item \textbf{TLS termination, HTTP/2 negotiation, multi-instance
+    Hub clusters.} Operations work, not protocol work.
+    \item \textbf{Choice of frontend framework.} The appendix
+    references React/Vite as the worked example because Claude
+    Code defaults to it; the protocol is framework-agnostic.
+    \item \textbf{Server-side rendering with persistent process.}
+    Phase 1 supports static + Hub-routed API + WebSocket. SSR
+    that needs a Node.js process running per request is RFC-006-B v2.
+    \item \textbf{Cross-realm or cross-node application
+    federation.} A web\_app is owned by exactly one agent on
+    exactly one node in Phase 1.
+    \item \textbf{Authenticated humans
+    (\texttt{principal/human-auth}).} Phase 1 supports
+    \texttt{principal/human-anon} only; cookies set by the
+    application itself are passed through, but EasyNet does not
+    issue them.
+\end{itemize}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Modern project model}
+\label{sec:project}
+
+\subsection{What lives in the workspace}
+
+\normsv{} The state object's source-of-truth on disk is
+\emph{a normal project directory}, owned by the agent. Concretely:
+
+\begin{lstlisting}
+<workspace>/web_apps/<slug>/
+├── easynet.app.toml          # the EasyNet-side declaration
+├── package.json              # owned by the agent's toolchain
+├── package-lock.json         # ditto
+├── src/                      # framework-shaped source
+├── public/
+├── vite.config.ts            # or next.config.js, etc.
+└── (optionally) anything else the framework needs
+\end{lstlisting}
+
+EasyNet \textbf{owns} only \texttt{easynet.app.toml}; the rest is
+the framework's. When the agent runs \texttt{webapp.build}, the
+build command declared in \texttt{easynet.app.toml} executes in
+this directory; whatever it produces in the declared
+\texttt{dist\_dir} is captured as the build artifact.
+
+\subsection{easynet.app.toml}
+
+\normsv{} The single file EasyNet reads to understand a web\_app:
+
+\begin{lstlisting}
+# easynet.app.toml — the only file EasyNet authors and reads.
+# The rest of the project belongs to the framework.
+
+[manifest]
+name         = "shop"
+description  = "Tiny ceramic shop, agent-built."
+visibility   = "public"            # private | realm | public
+
+[build]
+command      = "npm install && npm run build"
+dist_dir     = "dist"              # relative to project root
+build_timeout_secs = 600
+node_version = "20"                # advisory; executor may pin
+                                   # via a stable images registry
+
+[serve]
+# When `webapp.serve` is invoked the runtime binds a port and
+# starts a process whose only job is to expose API+WS for the
+# Hub's reverse-proxy use; the static bundle is served from the
+# blob store, NOT from this process.
+mode         = "static-only"
+                # "static-only"          : no backend process; API
+                #                          is satisfied entirely by
+                #                          ability invocations from
+                #                          the Hub. The default and
+                #                          the Phase 1 production
+                #                          shape.
+                # "process"               : a backend process is
+                #                          started by the executor;
+                #                          its bound port appears in
+                #                          runtime overlay state.
+                #                          Reserved for v2.
+
+[api]
+# Abilities the FRONTEND is allowed to call through the Hub's
+# /api/<verb> route. Each entry is a fully-qualified ability name
+# the owner agent has registered. The Hub will refuse to translate
+# a /api/<verb> request whose verb is not on this list; this is
+# the explicit attack surface the agent has authorised.
+abilities = [
+  "shop.list_items",
+  "shop.checkout",
+  "shop.order_status"
+]
+
+[routes]
+# nginx-shaped routing rules. Order is significant.
+# Each rule has a `match` pattern and an `action`.
+rules = [
+  { match = "exact:/",                      action = "static:dist/index.html" },
+  { match = "prefix:/assets/",              action = "static:dist/assets/" },
+  { match = "regex:^/api/([a-z][a-z0-9_]*)$",
+    action = "api:$1",
+    methods = ["GET","POST"] },
+  { match = "prefix:/ws/",                  action = "ws:$path" },
+  { match = "exact:/__easynet/agent",       action = "agent_view" },
+  { match = "exact:/__easynet/health",      action = "health" },
+  { match = "exact:/__easynet/receipts",    action = "receipts" },
+  { match = "fallback",                     action = "spa:dist/index.html" }
+]
+
+[csp]
+# Tighten or loosen the default. The default is suitable for a
+# vanilla SPA; frameworks that need 'unsafe-inline' must opt in.
+extra_script_src = []   # e.g. ["'sha256-...'"] for inline bootstrap
+extra_style_src  = ["'unsafe-inline'"]
+extra_connect_src= ["self"]
+\end{lstlisting}
+
+The file is small, declarative, and the only thing whose hash
+participates in canonical state alongside the source-tree and
+build-artifact hashes. A minimal app gets by with three sections
+(\texttt{[manifest]}, \texttt{[build]}, \texttt{[api]}); routes
+default to the standard SPA layout shown above.
+
+\subsection{Why declared API surface, not auto-detected}
+
+\normsv{} A web\_app's API surface is declared, not discovered.
+The Hub will refuse to translate \texttt{/api/<verb>} when
+\texttt{<verb>} is not in \texttt{[api].abilities}. Two reasons:
+
+\begin{itemize}[leftmargin=2.2em,itemsep=0.18em]
+    \item \textbf{Audit clarity.} The receipt log records exactly
+    which abilities a public web\_app exposes. A peer auditing
+    the application sees the surface in canonical state, not as
+    a runtime introspection.
+    \item \textbf{Attack surface containment.} The owner agent
+    might host many abilities; only those explicitly listed are
+    reachable through the public Hub. An ability the agent
+    registered for internal use is invisible from the web.
+\end{itemize}
+
+\begin{invariant}[WB-INV-1]
+The Hub \textbf{MUST} refuse to translate \texttt{/api/<verb>}
+into an ability invocation unless \texttt{<verb>} appears in
+the web\_app's currently-Built canonical state's
+\texttt{api\_abilities} list. The refusal MUST be HTTP 404
+(not 403) to avoid confirming the existence of internal
+abilities. This is the application-layer instance of the
+trust-boundary discipline TR-INV-12 establishes at the
+identity layer.
+\end{invariant}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{State machine}
+\label{sec:state-machine}
+
+\subsection{state\_type and state\_key}
+
+\normsv{}
+
+\begin{lstlisting}
+state_type:  easynet.web_app
+
+state_key:
+    (realm: string, owner_agent_uri: string, app_slug: string)
+
+  realm           Logical namespace; same conventions as pages.
+  owner_agent_uri Canonical authority. The agent that signs every
+                  CanonicalReceipt for this app. Embedded in the
+                  key (not a field) per main §1.3.
+  app_slug        Owner-namespaced kebab-case identifier
+                  (^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$).
+
+URA form:
+  easynet:///r/<realm>/agent/<owner>/web_app/<slug>
+\end{lstlisting}
+
+\subsection{Canonical fields}
+
+\normsv{} Per CSH-INV-2 (main \S2.5) every large value is held by
+content hash:
+
+\begin{lstlisting}
+canonical_fields(web_app) = {
+    manifest_hash:       bytes(32),  // SHA-256 of canonicalised
+                                     // easynet.app.toml's [manifest]
+                                     // section (name, description,
+                                     // visibility)
+    build_config_hash:   bytes(32),  // canonicalised [build]
+                                     // section: command, dist_dir,
+                                     // build_timeout, node_version
+    api_surface_hash:    bytes(32),  // canonicalised
+                                     // [api].abilities (sorted)
+    routes_manifest_hash:bytes(32),  // canonicalised [routes].rules
+                                     // (in declared order)
+    csp_hash:            bytes(32),  // canonicalised [csp] section
+    source_snapshot_hash:bytes(32),  // hash of the source tree at
+                                     // the most recent build. Null
+                                     // before first build attempt.
+    build_artifact_hash: bytes(32),  // hash of the dist tree
+                                     // produced by the last
+                                     // successful build. Null until
+                                     // first Built. Cleared on
+                                     // delete.
+    state_value:         string,     // §4.3
+    visibility:          string,     // mirrors manifest.visibility
+                                     // for fast scope check
+    version:             uint64
+}
+\end{lstlisting}
+
+\textbf{Canonicality rule.} Every field above is tagged
+\texttt{canonical:true} in the schema; the schema-driven
+projection $\pi$ produces the projection over exactly these keys.
+
+\subsection{Canonical state space}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\linewidth}{l X}
+\toprule
+\textbf{state\_value} & \textbf{Meaning} \\
+\midrule
+\texttt{Created}   & easynet.app.toml registered; no build attempted yet. \\
+\texttt{Building}  & A \texttt{webapp.build} is in flight. Transient.
+                     Visible only via OperationalReceipts; never the
+                     terminal canonical state. \\
+\texttt{Built}     & At least one successful build exists.
+                     \texttt{build\_artifact\_hash} non-null.
+                     Web-app may be Served. \\
+\texttt{Failed}    & The most recent build failed. Owner can
+                     iterate and retry. \\
+\texttt{Deleted}   & Terminal; \texttt{build\_artifact\_hash}
+                     cleared, blob ref-count decremented. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Runtime overlay state space}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\linewidth}{l X}
+\toprule
+\textbf{runtime} & \textbf{Meaning} \\
+\midrule
+\texttt{Stopped}  & No serving overlay associated with this app. \\
+\texttt{Starting} & \texttt{webapp.serve} invoked; Hub is binding
+                    the slug into its router. \\
+\texttt{Running}  & Hub is actively translating
+                    \texttt{/<slug>/...} requests for this app. \\
+\texttt{Crashed}  & The Hub lost its mapping (process restart,
+                    config-reload error, etc.); canonical state
+                    untouched. Recoverable via \texttt{webapp.serve}. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The canonical $\times$ runtime cross-product matrix is identical
+in structure to the one shown in \S B.4.3 of the markdown
+companion: only \texttt{Built} admits non-Stopped runtime overlays.
+
+\subsection{Transition list}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\linewidth}{l l X}
+\toprule
+\textbf{Transition} & \textbf{Class} & \textbf{Notes} \\
+\midrule
+\texttt{webapp.create@v1}     & canonical   & $\emptyset \to$ Created. Mints state\_key, persists manifest/build\_config/routes/api/csp hashes. \\
+\texttt{webapp.update\_config@v1}
+                              & canonical   & Created/Built/Failed $\to$ same; replaces declared config (manifest, build, api, routes, csp). Does NOT trigger a build. \\
+\texttt{webapp.build@v1}      & canonical   & Created/Built/Failed $\to$ Building (transient) $\to$ Built|Failed. Long-running. See \S\ref{sec:build-pipeline}. \\
+\texttt{webapp.delete@v1}     & canonical   & * $\to$ Deleted. Implicit \texttt{webapp.stop} as side effect. \\
+\texttt{webapp.serve@v1}      & operational & Stopped/Crashed $\to$ Starting $\to$ Running. Requires canonical = Built. \\
+\texttt{webapp.stop@v1}       & operational & Starting/Running/Crashed $\to$ Stopped. \\
+\texttt{webapp.get@v1}        & query       & Returns canonical + runtime snapshot. \\
+\texttt{webapp.list@v1}       & query       & Lists web\_apps owned by an agent. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Build pipeline}
+\label{sec:build-pipeline}
+
+\subsection{Steps of webapp.build@v1}
+
+\normsv{} On \texttt{webapp.build} the executor:
+
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.2em]
+    \item Reads \texttt{easynet.app.toml}, validates it.
+    \item Computes \texttt{source\_snapshot\_hash}: a Merkle hash
+    over the project directory (excluding \texttt{node\_modules/},
+    \texttt{dist/}, \texttt{.git/}, and any path the framework's
+    \texttt{.gitignore} excludes). The hash is over a sorted
+    list of \texttt{(relative\_path, sha256(file\_bytes))} pairs,
+    JCS-canonicalised.
+    \item Emits \texttt{build.started} \emph{OperationalReceipt}
+    with the source-snapshot hash, declared command, expected
+    timeout. \emph{Not canonical.}
+    \item Spawns the build command in the project directory.
+    Stdout / stderr are tee'd to a streaming log; periodic
+    \texttt{build.progress} OperationalReceipts are emitted with
+    a hash of the cumulative log. Lossy.
+    \item On exit:
+    \begin{itemize}[leftmargin=1.5em]
+        \item Status 0 + \texttt{dist\_dir} non-empty: walk the
+        \texttt{dist\_dir} tree; compute \texttt{build\_artifact\_hash}
+        as a Merkle hash over
+        \texttt{(relative\_path, sha256(file\_bytes))} pairs;
+        write the entire tree to the blob store as one
+        \texttt{TreeBlob} (a JCS-canonical manifest of file paths
+        and individual blob hashes; the file blobs are stored as
+        ordinary content-addressed blobs).
+        \item Status non-zero or empty \texttt{dist\_dir}: prepare
+        a failure-reason payload (last 64KB of log + exit status)
+        and store its hash.
+    \end{itemize}
+    \item Emit one \emph{CanonicalReceipt}:
+    \texttt{build.completed} (success) or \texttt{build.failed}
+    (failure). This is the sole canonical advance for the
+    transition. \texttt{post\_state\_hash} reflects Built or
+    Failed; \texttt{state\_version} +1.
+\end{enumerate}
+
+\textbf{Canonicality discipline.} The transient
+\texttt{Building} state value, the streaming progress, and the
+build-tool stdout are all observability. They never enter the
+canonical hash. A verifier given only canonical receipts sees
+the application transition Created $\to$ Built (or Failed) in a
+single step --- which is correct: the canonical fact is the
+artifact, not the journey.
+
+\subsection{TreeBlob format}
+
+\normsv{} A TreeBlob is the content-addressed representation of a
+directory tree. It comprises:
+
+\begin{lstlisting}
+TreeBlob (JCS-canonical JSON)
+{
+  "version": 1,
+  "entries": [
+    { "path": "index.html",
+      "size": 2148,
+      "blob": "<sha256-of-file-bytes>",
+      "mode": "0644" },
+    { "path": "assets/index-DfX9k.js",
+      "size": 187321,
+      "blob": "<sha256>",
+      "mode": "0644" },
+    ...
+  ]
+}
+\end{lstlisting}
+
+The tree's hash is \texttt{sha256(jcs(TreeBlob))}; this is
+\texttt{build\_artifact\_hash}. Each individual file is also a
+content-addressed blob. The Hub fetches a file by computing
+\texttt{path lookup} in the TreeBlob and then \texttt{blob.get(<file-blob-hash>)};
+this is one indirection but lets the blob store dedupe identical
+asset bytes across builds and across applications.
+
+\textbf{Why not git tree hash directly.} Git's tree hash is also
+content-addressed but bakes mode bits and entry types in a
+git-specific way. We pick a JCS-flat format so the hash function
+is the same as everywhere else in EasyNet (SHA-256 over JCS
+bytes), avoiding a second canonicalisation regime.
+
+\subsection{Build executor}
+
+\normsv{} Phase 1 ships a \emph{local} build executor: the
+build runs in a subprocess of the EasyNet daemon owning the
+agent. The owner signs the resulting CanonicalReceipt directly.
+Delegated build (the source lives on agent A, build runs on
+agent B's hardware) is the future: the protocol is already
+shaped for it (main \S5.3) but the executor is not.
+
+\begin{decisionbox}
+\textbf{Open: build sandboxing.} The build subprocess has the
+EasyNet daemon's process privileges. A malicious build script
+could read the daemon's other agent state. Phase 1 mitigation:
+the build runs in the project directory with a restricted
+\texttt{PATH}, no inherited env vars except \texttt{NODE\_VERSION}
+and \texttt{HOME}, and a stricter \texttt{ulimit}. Full sandboxing
+(seccomp / pledge / Docker) is RFC-006-B v2.
+\end{decisionbox}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Hub routing model}
+\label{sec:hub-routing}
+
+The Hub is bound to a single port (Phase 1: \texttt{127.0.0.1:8787}
+by default). Every incoming HTTP request is processed in seven
+steps:
+
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.18em]
+    \item \textbf{Caller minting.} Build envelope per main \S5.4:
+    \texttt{caller = principal/human-anon/<ip-hash>/<sid>};
+    \texttt{caller\_context} per main \S3.6 / TR-INV-13.
+    \item \textbf{Path parsing.} Path is one of:
+    \begin{itemize}[leftmargin=1.5em]
+        \item \texttt{/<realm>/<owner>/<slug>/...}
+            --- canonical form.
+        \item Any path under a configured alias domain (e.g.
+            \texttt{shop.alice.example} mapping to one specific
+            (\texttt{realm, owner, slug}) tuple).
+    \end{itemize}
+    \item \textbf{State resolve.} Look up the web\_app in the
+    state store. If not Built, return per
+    \S\ref{sec:hub-by-state}. If \texttt{visibility} forbids the
+    caller, return 404.
+    \item \textbf{Route match.} Run the path tail through the
+    web\_app's \texttt{[routes].rules}, in declared order, until
+    one matches.
+    \item \textbf{Action dispatch.} Dispatch on the matching
+    rule's action (static / api / ws / agent\_view / health /
+    receipts / spa fallback). See \S\ref{sec:hub-actions}.
+    \item \textbf{Response build.} Set CSP, ETag, cache headers,
+    content-type per action.
+    \item \textbf{OperationalReceipt.} Emit one
+    OperationalReceipt with caller, caller\_context, matched
+    rule, action, response status. \emph{Not canonical.}
+\end{enumerate}
+
+\subsection{Hub behavior matrix per state}
+\label{sec:hub-by-state}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\linewidth}{l l X}
+\toprule
+\textbf{Canonical} & \textbf{Runtime} & \textbf{Hub response} \\
+\midrule
+\texttt{Created}   & *           & 503 ``not built''. \texttt{Retry-After: 60}. \\
+\texttt{Building}  & *           & 503 + small progress page that streams build.progress receipts via SSE. \\
+\texttt{Built}     & \texttt{Stopped}    & 503 ``not serving''. \\
+\texttt{Built}     & \texttt{Starting}   & 503 ``starting'', \texttt{Retry-After: 2}. \\
+\texttt{Built}     & \texttt{Running}    & Full routing matrix below. \\
+\texttt{Built}     & \texttt{Crashed}    & 503 ``recoverable failure'' + reason hash; \texttt{Retry-After: 5}. \\
+\texttt{Failed}    & *           & 503 ``last build failed'' + reason hash. \\
+\texttt{Deleted}   & *           & 404. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Action dispatch}
+\label{sec:hub-actions}
+
+\paragraph{static:<path>}
+Resolve \texttt{<path>} inside the web\_app's
+\texttt{build\_artifact\_hash} TreeBlob. Fetch the file blob.
+Reply with:
+\begin{lstlisting}
+HTTP/1.1 200 OK
+Content-Type: <inferred from extension; allow-list mapping>
+Content-Length: <size>
+ETag: "<base64url(blob_hash[..16])>"
+Cache-Control: public, max-age=31536000, immutable
+                                # only for /assets/* (hashed names)
+                                # otherwise: max-age=60, must-revalidate
+Content-Security-Policy: <built from app's csp_hash>
+Referrer-Policy: no-referrer
+X-Content-Type-Options: nosniff
+\end{lstlisting}
+
+The \texttt{immutable} cache policy is safe for hashed asset
+filenames (Vite/Webpack output a content hash in the filename
+itself); \texttt{index.html} and other un-hashed files use a
+short \texttt{must-revalidate} window.
+
+\paragraph{api:<verb>}
+\texttt{<verb>} is the regex capture from the route rule. The
+Hub:
+\begin{enumerate}[leftmargin=2em,itemsep=0.15em]
+    \item Validates that \texttt{<owner>.<verb>} is in
+    \texttt{api\_surface\_hash}'s expanded ability list.
+    Refusal: HTTP 404 (WB-INV-1).
+    \item Reads request body (size-capped at 1 MiB Phase 1) as
+    JSON. The JSON is the ability args directly --- no envelope
+    wrapping. \texttt{GET} requests use query string; the Hub
+    parses query string into an object.
+    \item Builds an EasyNet invocation with this caller,
+    caller\_context, and the parsed args.
+    \item Invokes \texttt{<owner>.<verb>}.
+    \item Maps result to HTTP:
+    \begin{itemize}[leftmargin=1.5em]
+        \item \texttt{Succeeded}: 200, body = receipt's result
+        body, content-type \texttt{application/json}.
+        \item \texttt{Failed} with a structured error ability
+        receipt: 400 if validation, 500 otherwise; body =
+        \texttt{\{ error\_code, error\_message,
+        receipt\_id \}}.
+        \item Timeout: 504; receipt\_id of the operational
+        timeout receipt.
+    \end{itemize}
+\end{enumerate}
+
+\textbf{Idempotency.} Both \texttt{GET} and \texttt{POST} are
+allowed; idempotency is the ability's responsibility, not the
+Hub's. The Hub does NOT enforce that GET produces no
+CanonicalReceipt; it is an EasyNet ability and may emit one if
+that's its intended semantics. The frontend chooses the verb;
+ability authors document idempotency in their schema.
+
+\paragraph{ws:<path>}
+The Hub upgrades the connection to WebSocket and binds it to an
+ability \emph{stream} (the existing EasyNet stream subscription
+mechanism). The first WebSocket message from the client MUST be a
+JSON \texttt{\{ "ability": "<verb>", "args": \{...\} \}}; the
+Hub then opens an \texttt{<owner>.<verb>} stream and forwards
+each emitted event as a WebSocket text frame. Client messages
+after the first are forwarded back to the stream's input
+channel. WebSocket close maps to stream close.
+
+\paragraph{agent\_view}
+Returns the JSON specified in \S\ref{sec:agent-view}.
+
+\paragraph{health}
+Returns \texttt{200 \{"state":"...","runtime":"..."\}}.
+
+\paragraph{receipts}
+Returns the canonical-receipt history for this state\_key,
+optionally bounded by \texttt{?from=<version>\&to=<version>}.
+
+\paragraph{spa:<fallback-path>}
+Used as the last \texttt{fallback} rule. Identical to
+\texttt{static:<fallback-path>} but with \texttt{Cache-Control:
+no-cache} so the SPA shell is always fresh while the hashed
+assets it loads are immutable.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{agent\_view: full-app discoverability}
+\label{sec:agent-view}
+
+\normsv{} The \texttt{agent\_view} of a Built/Running web\_app:
+
+\begin{lstlisting}
+GET /<realm>/<owner>/<slug>/__easynet/agent
+
+200 OK
+Content-Type: application/json
+
+{
+  "state_type":  "easynet.web_app",
+  "state_key":   { "realm":"default","owner":"alice","slug":"shop" },
+  "ura":         "easynet:///r/default/agent/alice/web_app/shop",
+
+  "canonical": {
+    "state":              "Built",
+    "manifest":           { "name":"shop",
+                            "description":"Tiny ceramic shop, agent-built.",
+                            "visibility":"public" },
+    "build_artifact_hash":"0x4d28ee17...",
+    "version":            7,
+    "etag":               "TSjuFw0pAvjpAQ=="
+  },
+
+  "runtime": {
+    "state":     "Running",
+    "started_at":"2026-04-28T09:11:02Z",
+    "host":      "https://shop.alice.example"
+                  // null if no alias domain is configured
+  },
+
+  "ability_surface": [   // transitions admissible RIGHT NOW
+    "webapp.update_config@v1",
+    "webapp.build@v1",
+    "webapp.stop@v1",
+    "webapp.delete@v1"
+  ],
+
+  "api": {               // what the FRONTEND can call via /api/*
+    "endpoints": [
+      { "verb":"shop.list_items",
+        "http": "GET  /api/list_items",
+        "schema_url": "/__easynet/schema/shop.list_items" },
+      { "verb":"shop.checkout",
+        "http": "POST /api/checkout",
+        "schema_url": "/__easynet/schema/shop.checkout" },
+      { "verb":"shop.order_status",
+        "http": "GET  /api/order_status",
+        "schema_url": "/__easynet/schema/shop.order_status" }
+    ]
+  },
+
+  "routes": [
+    { "match":"exact:/",         "action":"static:dist/index.html" },
+    { "match":"prefix:/assets/", "action":"static:dist/assets/" },
+    { "match":"regex:^/api/...","action":"api:$1" },
+    { "match":"prefix:/ws/",    "action":"ws:$path" },
+    { "match":"fallback",       "action":"spa:dist/index.html" }
+  ],
+
+  "build_meta": {
+    "command":          "npm install && npm run build",
+    "dist_dir":         "dist",
+    "node_version":     "20",
+    "last_build_at":    "2026-04-28T09:09:51Z",
+    "build_duration_s": 38.2,
+    "framework_hint":   "vite-react"   // best-effort sniff
+  },
+
+  "history": {
+    "versions":                    7,
+    "latest_canonical_receipt_id": "r_c3d4...",
+    "receipt_log_ura":
+       "easynet:///r/default/agent/alice/web_app/shop/receipts"
+  },
+
+  "eal_hint":
+    "call shop.checkout on alice with { item_id: \"mug-12oz\", qty: 1 } timeout 30"
+}
+\end{lstlisting}
+
+\textbf{Why this is the killer feature.} A peer agent reading this
+URL gets, in one document, everything it needs to:
+
+\begin{itemize}[leftmargin=2.2em,itemsep=0.15em]
+    \item know what application this is and what state it's in;
+    \item know exactly which API verbs it can call (with paths,
+    methods, and schema pointers);
+    \item know which transitions advance the application
+    (\texttt{ability\_surface});
+    \item invoke any of those verbs directly via EasyNet, OR
+    via the public \texttt{/api/<verb>} endpoint, since both
+    paths reach the same ability;
+    \item replay the application's history end-to-end and verify
+    cryptographic chain back to the owner.
+\end{itemize}
+
+This is the agent-native web. A traditional web app exposes its
+HTML to humans and its API to documented endpoints; a peer
+program needs the documentation, an OpenAPI spec, an SDK, and
+trust. This view collapses all four.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Architecture}
+\label{sec:architecture}
+
+\subsection{Module map (EasyNet-Cli)}
+
+\begin{lstlisting}
+src/runtime/state/                    [shared with pages, P-A1]
+
+src/runtime/blob_store/               [shared with pages, P-A1]
+  tree.rs                             ← NEW: TreeBlob put/get,
+                                       per-path lookup
+
+src/runtime/agents/webapp_ability.rs  ← NEW (P-B2)
+                                      register: create / build /
+                                      update_config / serve / stop /
+                                      delete / get / list
+
+src/runtime/build_executor/           ← NEW (P-B1)
+  mod.rs                              long-running canonical
+                                      transition driver
+  source_snapshot.rs                  Merkle hash of project dir
+  spawn.rs                            subprocess + log streaming
+  artifact_capture.rs                 dist tree -> TreeBlob
+
+src/runtime/views/webapp/             ← NEW (P-B5)
+  agent_view.rs                       JSON projection of §6
+  health.rs
+  receipts.rs
+
+src/runtime/hub/                      [extends pages Hub from P-A4]
+  router.rs                           ← extended for routes_manifest
+  static_handler.rs                   ← NEW (P-B3): TreeBlob fetch
+  api_handler.rs                      ← NEW (P-B3): /api/<verb>
+                                       translation
+  ws_handler.rs                       ← NEW (P-B4): /ws/* upgrade
+                                       and stream binding
+\end{lstlisting}
+
+\subsection{Daemon wiring}
+
+The daemon at boot adds, on top of the pages wiring:
+
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.15em]
+    \item Open the build executor's working directory at
+    \texttt{\$EASYNET\_HOME/build-cache/}.
+    \item Register \texttt{webapp\_ability} for each agent.
+    \item For every \texttt{web\_app} whose canonical state is
+    \texttt{Building} (i.e. a daemon-restart interrupted a
+    build): mark Failed with reason ``daemon restart during
+    build''. (TR-INV-1's discipline: only terminal canonical
+    receipts advance state; an interrupted build never reached
+    its terminal, so canonical state is rolled back to whatever
+    preceded Building --- \texttt{Created} or \texttt{Failed}.
+    The reset to Failed is a \emph{new} transition, not a
+    rollback.)
+\end{enumerate}
+
+\subsection{Hub wiring}
+
+The Hub binary, \texttt{easynet-hub}, gains in P-B3/P-B4 the
+\texttt{static\_handler} / \texttt{api\_handler} /
+\texttt{ws\_handler} alongside the page handler from P-A4. Its
+top-level dispatch is:
+
+\begin{lstlisting}
+fn handle(req: HttpRequest) -> HttpResponse {
+    let envelope = build_envelope(&req);                  // §5.7 PA
+    let (realm, owner, slug, tail) = parse_path(&req.uri)?;
+    let kind = state_store.classify(realm, owner, slug)?; // page or web_app
+
+    match kind {
+        Kind::Page    => pages_dispatch(envelope, owner, slug, tail),
+        Kind::WebApp  => webapp_dispatch(envelope, owner, slug, tail),
+        Kind::Unknown => http_404(),
+    }
+}
+\end{lstlisting}
+
+The Hub is single-binary even when serving both pages and
+web\_apps. The path scheme distinguishes them only by what's
+registered in the state store under \texttt{(owner, slug)} ---
+the URI form is identical because both are state objects under
+the same agent's namespace.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Implementation plan}
+\label{sec:impl-plan}
+
+Five PR slices, sequenceable. Slice P-B1 builds on P-A1 (the
+blob store and state store skeleton from the pages appendix);
+P-B3/B4 build on P-A4 (the basic Hub binary).
+
+\subsection{P-B1: build executor + TreeBlob}
+
+\textbf{New files.} \texttt{src/runtime/build\_executor/} (4
+modules), \texttt{src/runtime/blob\_store/tree.rs}.
+
+\textbf{Public API.}
+\begin{lstlisting}
+pub trait BuildExecutor: Send + Sync {
+    fn execute(
+        &self,
+        project_dir: &Path,
+        config: &BuildConfig,
+        progress: ProgressSink,    // SSE channel to OperationalReceipts
+    ) -> Result<BuildOutcome>;
+}
+pub enum BuildOutcome {
+    Success { artifact_hash: [u8; 32], tree_blob: TreeBlob, log_blob: [u8;32] },
+    Failure { reason_hash:   [u8; 32], log_blob:   [u8; 32], exit_status: i32 },
+}
+
+pub fn source_snapshot_hash(project_dir: &Path, ignore: &[Pattern])
+    -> Result<[u8; 32]>;
+
+pub fn capture_dist(dist_dir: &Path, blob: &dyn BlobStore)
+    -> Result<(TreeBlob, [u8; 32])>;
+\end{lstlisting}
+
+\textbf{Tests.}
+\begin{itemize}[leftmargin=2.2em,itemsep=0.1em]
+    \item Snapshot determinism: two snapshots of the same tree
+    yield identical hashes regardless of file walk order.
+    \item Build smoke: a tiny shell-script ``builder''
+    (\texttt{mkdir dist \&\& echo hi > dist/index.html}) drives
+    the executor end-to-end; assert TreeBlob round-trips and the
+    artifact hash recomputes deterministically.
+    \item Daemon-restart-during-build: launch a build that
+    sleeps; SIGKILL the daemon; on restart, assert the
+    web\_app's canonical state has been reset to Failed with
+    the documented reason.
+\end{itemize}
+
+\subsection{P-B2: webapp.* abilities}
+
+\textbf{New files.} \texttt{src/runtime/agents/webapp\_ability.rs}.
+
+\textbf{Behaviour.} Every transition in \S4.5 is implemented,
+including the long-running build (which streams progress
+OperationalReceipts and emits exactly one terminal
+CanonicalReceipt per attempt, per TR-INV-1).
+
+\textbf{Tests.}
+\begin{itemize}[leftmargin=2.2em,itemsep=0.1em]
+    \item Round-trip create/update\_config/build/serve/stop/delete.
+    \item Reject \texttt{webapp.serve} from \texttt{Created}
+    (canonical precondition: Built).
+    \item Reject \texttt{api/<verb>} translation when
+    \texttt{<verb>} not in \texttt{api\_surface}.
+    \item Optimistic concurrency: two
+    \texttt{webapp.update\_config} attempts racing on one
+    web\_app; one wins, one rejected with ETag mismatch.
+    \item Build progress receipts are loseable: drop a random
+    subset; replay still reaches the same terminal canonical
+    state.
+\end{itemize}
+
+\subsection{P-B3: Hub static + API routing}
+
+\textbf{New files.} \texttt{src/runtime/hub/static\_handler.rs},
+\texttt{src/runtime/hub/api\_handler.rs}; extend
+\texttt{src/runtime/hub/router.rs} to consult
+\texttt{routes\_manifest}.
+
+\textbf{Behaviour.}
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.1em]
+    \item Static handler: TreeBlob path lookup, blob fetch,
+    extension-based MIME detection (allow-list), CSP from
+    \texttt{csp\_hash}, immutable cache for \texttt{/assets/*}.
+    \item API handler: route regex captures the verb, validate
+    against \texttt{api\_surface}, parse JSON body or query
+    string into args, invoke
+    \texttt{<owner>.<verb>}, map result.
+\end{enumerate}
+
+\textbf{Tests.}
+\begin{itemize}[leftmargin=2.2em,itemsep=0.1em]
+    \item Integration: spin up daemon + Hub in a tempdir, build
+    a fixture web\_app whose \texttt{api}.abilities
+    contains a registered \texttt{shop.echo} that returns its
+    args; \texttt{POST /api/echo \{"x":1\}} yields
+    \texttt{200 \{"x":1\}}.
+    \item Unauthorised verb: \texttt{POST /api/secret} returns
+    404 even when \texttt{<owner>.secret} is registered (because
+    not in \texttt{api\_surface}).
+    \item Static immutable: GET an \texttt{/assets/} path twice
+    with \texttt{If-None-Match}; second response is 304.
+\end{itemize}
+
+\subsection{P-B4: WebSocket proxy + SPA fallback}
+
+\textbf{New files.} \texttt{src/runtime/hub/ws\_handler.rs}.
+
+\textbf{Behaviour.}
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.1em]
+    \item WS upgrade on \texttt{/ws/*}; first text message must
+    be a \texttt{\{ability,args\}} JSON; bind to
+    \texttt{ability stream}; forward subsequent text frames.
+    \item SPA fallback: if no \texttt{static} or other rule
+    matches, serve \texttt{dist/index.html} with
+    \texttt{no-cache}.
+\end{enumerate}
+
+\textbf{Tests.} WS streaming: a fixture \texttt{shop.tick}
+streams \texttt{\{tick:N\}} every 100ms; client subscribes via
+\texttt{/ws/tick}, asserts 5 frames received within 600ms;
+client closes WS, daemon's stream subscription closes within
+500ms.
+
+\subsection{P-B5: agent\_view + meta endpoints}
+
+\textbf{New files.} \texttt{src/runtime/views/webapp/} (3
+modules); minor router extensions for the
+\texttt{/\_\_easynet/*} prefix.
+
+\textbf{Behaviour.}
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.1em]
+    \item \texttt{/\_\_easynet/agent} returns the JSON of \S6.
+    \item \texttt{/\_\_easynet/health} returns canonical and
+    runtime states only.
+    \item \texttt{/\_\_easynet/receipts} returns canonical
+    receipts in version order, bounded by query params.
+    \item \texttt{/\_\_easynet/schema/<verb>} returns the
+    ability's input/output schemas as JSON.
+\end{enumerate}
+
+\textbf{Tests.}
+\begin{itemize}[leftmargin=2.2em,itemsep=0.1em]
+    \item Replay: client fetches \texttt{/\_\_easynet/receipts},
+    reconstructs canonical state per receipt, and computes
+    \texttt{canonical\_state\_hash} matching the
+    agent\_view's \texttt{etag}.
+    \item Schema: agent\_view's
+    \texttt{api.endpoints[*].schema\_url} resolves to a real
+    JSON schema, and that schema admits args that the API
+    handler does not reject.
+\end{itemize}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{End-to-end worked example}
+\label{sec:e2e}
+
+\subsection{Setup}
+
+\begin{lstlisting}
+$ easynet agent add alice --type claude-code
+$ easynet-daemon &
+$ easynet-hub --bind 127.0.0.1:8787 &
+\end{lstlisting}
+
+\subsection{Author the project}
+
+Claude Code, running as alice, in alice's workspace:
+
+\begin{lstlisting}
+$ cd $EASYNET_HOME/workspaces/alice
+$ npm create vite@latest web_apps/shop -- --template react-ts
+$ cd web_apps/shop
+$ # ... write src/App.tsx with a product list and checkout button
+$ # ... write easynet.app.toml as in §3.2
+\end{lstlisting}
+
+It also registers the API abilities through the EasyNet ability
+scaffolder (out of scope for this appendix; see Appendix
+``ability authoring''):
+
+\begin{lstlisting}
+$ easynet ability new shop.list_items --description "list items" --lang sh
+$ easynet ability new shop.checkout   --description "place an order" --lang sh
+$ easynet ability deploy abilities/shop.list_items --node alice
+$ easynet ability deploy abilities/shop.checkout   --node alice
+\end{lstlisting}
+
+\subsection{Create, build, serve}
+
+\begin{lstlisting}
+$ easynet ability invoke alice.webapp.create --args '{
+    "slug":"shop",
+    "config_dir":"web_apps/shop"
+}'
+{ "state":"Created", "version":1, "canonical_state_hash":"0xa3..." }
+
+$ easynet ability invoke alice.webapp.build --args '{ "slug":"shop" }' \
+   --stream
+[build.started   ] command="npm install && npm run build"
+[build.progress  ] log_hash=0x12... 8% installed
+[build.progress  ] log_hash=0x13... 47% bundled
+[build.progress  ] log_hash=0x14... 92% optimised
+[build.completed ] artifact_hash=0x4d28ee17... duration=38.2s
+{ "state":"Built", "version":2,
+  "build_artifact_hash":"0x4d28ee17..." }
+
+$ easynet ability invoke alice.webapp.serve --args '{ "slug":"shop" }'
+{ "runtime_state":"Running" }
+\end{lstlisting}
+
+\subsection{Browser fetch}
+
+\begin{lstlisting}
+$ curl -i http://127.0.0.1:8787/default/alice/shop/
+
+HTTP/1.1 200 OK
+Content-Type: text/html
+ETag: "TSjuFw0pAvjpAQ=="
+Cache-Control: max-age=60, must-revalidate
+Content-Security-Policy: default-src 'self'; script-src 'self'; ...
+Content-Length: 1247
+
+<!doctype html><html><head>...<script type="module" src="/assets/index-DfX9k.js">...
+\end{lstlisting}
+
+The browser then fetches \texttt{/assets/index-DfX9k.js} ---
+\texttt{public, max-age=31536000, immutable}, served from blob
+store. The SPA renders, lists products, the user clicks Buy.
+
+\subsection{API call from the browser}
+
+\begin{lstlisting}
+POST /default/alice/shop/api/checkout HTTP/1.1
+Content-Type: application/json
+Cookie: easynet_session=sess-abc
+
+{ "item_id":"mug-12oz", "qty":1 }
+
+────────────────────────────────────────────────────
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{ "order_id":"ord_77a3f", "eta":"2026-04-29" }
+\end{lstlisting}
+
+The Hub:
+\begin{enumerate}[leftmargin=2em,itemsep=0.1em]
+    \item Mints
+    \texttt{caller=easynet:///principal/human-anon/9c4e.../sess-abc}.
+    \item Validates \texttt{checkout} is in
+    \texttt{api\_surface} (yes).
+    \item Invokes \texttt{alice.shop.checkout} with the parsed
+    body as args.
+    \item Returns the receipt's result body to the browser.
+\end{enumerate}
+
+\subsection{Peer agent discovers the application}
+
+\begin{lstlisting}
+$ curl http://127.0.0.1:8787/default/alice/shop/__easynet/agent | jq .api
+{
+  "endpoints": [
+    { "verb":"shop.list_items","http":"GET  /api/list_items",
+      "schema_url":"/__easynet/schema/shop.list_items" },
+    { "verb":"shop.checkout","http":"POST /api/checkout",
+      "schema_url":"/__easynet/schema/shop.checkout" }
+  ]
+}
+\end{lstlisting}
+
+A peer agent --- say bob, running on a different node ---
+fetches this view, reads the schema for
+\texttt{shop.checkout}, and invokes the ability either through
+the EasyNet bus (cross-node) or through the public
+\texttt{/api/checkout} (same Hub). Both paths reach the same
+ability handler and produce the same kind of canonical receipt.
+
+\subsection{Audit replay}
+
+The \texttt{shop} web\_app's history shows three CanonicalReceipts
+(create, build, build): each carries a \texttt{post\_state\_hash}
+and an \texttt{owner\_signature}. The browser-driven checkout
+emitted a CanonicalReceipt for an entirely different state\_type
+(an \texttt{order} state object owned by alice or alice's order
+service); that receipt also chains back to alice's signing key.
+A peer reading both chains can reconstruct, byte-for-byte:
+
+\begin{itemize}[leftmargin=2em,itemsep=0.15em]
+    \item which build artifact the page was at when the
+    checkout happened;
+    \item which API endpoints were declared at that build;
+    \item that the checkout request reached
+    \texttt{shop.checkout} version K and produced order
+    \texttt{ord\_77a3f};
+    \item that all of the above was signed by alice.
+\end{itemize}
+
+\noindent This is the audit story that decisively cannot be told
+on the traditional web. A CDN serving the shop today, an A/B
+testing rewrite tomorrow, and an out-of-band order processor on
+the third day fragment the truth. The web\_app collapses it into
+a single signed receipt chain.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Open questions deferred to RFC-006-B v2}
+\label{sec:open}
+
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.18em]
+    \item \textbf{Server-side rendering with persistent
+    process.} Phase 1 supports \texttt{serve.mode = static-only}.
+    Frameworks that need a Node.js process per request
+    (Next.js with SSR, Remix loaders) need
+    \texttt{serve.mode = process}: the executor binds a port,
+    runs the process, the Hub reverse-proxies. The runtime
+    overlay state then carries \texttt{bound\_port},
+    \texttt{process\_id}, \texttt{health\_endpoint}; a process
+    crash transitions runtime to \texttt{Crashed} without
+    touching canonical (TR-INV-5 already requires this).
+
+    \item \textbf{Cross-node hubs.} A web\_app owned by node A
+    served by a Hub on node B. The Hub becomes a federation
+    client; the API handler invokes
+    \texttt{<owner>.<verb>} via federation rather than locally.
+
+    \item \textbf{Signed asset bundles for SRI.} The TreeBlob
+    already provides a hash per file. Embedding those hashes as
+    Subresource Integrity attributes in
+    \texttt{index.html} is a straightforward post-build pass;
+    Phase 1 leaves the SRI pipeline to the framework's own
+    plugins.
+
+    \item \textbf{Build sandboxing.} See the Open decision in
+    \S\ref{sec:build-pipeline}.
+
+    \item \textbf{Multi-version routing.} A user wants
+    \texttt{/v7/...} to serve build version 7 while
+    \texttt{/...} serves the latest. Today the canonical state
+    is single-version per slug. v2 might introduce
+    \texttt{webapp.tag} transitions associating versions with
+    routable aliases.
+\end{enumerate}
+
+\subsection{Coverage check}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\linewidth}{l X l}
+\toprule
+\textbf{Main rule} & \textbf{Discharged by} & \textbf{Where} \\
+\midrule
+SO-INV-1 (key immutability)              & state\_key parser refuses key updates                           & \S\ref{sec:state-machine} \\
+CSH-INV-1 (hash over projection)         & schema-driven $\pi$, JCS, SHA-256                                & \S\ref{sec:state-machine} \\
+CSH-INV-2 (content as blob)              & TreeBlob + per-file blobs; canonical state holds only hashes     & \S\ref{sec:build-pipeline} \\
+RC-INV-1 (receipt binding)               & every webapp receipt carries (state\_key, transition\_id, attempt\_id) & \S\ref{sec:state-machine} \\
+RC-INV-2 (optimistic concurrency)        & ETag check on update\_config                                     & \S\ref{sec:impl-plan} P-B2 \\
+TA-INV-1 (transition\_id required)       & every \texttt{webapp.<verb>@v1} validated                        & \S\ref{sec:state-machine} \\
+VP-INV-1 (ability\_surface from state)   & \texttt{ability\_surface} derived from state\_value              & \S\ref{sec:agent-view} \\
+TR-INV-1 (long-running terminal)         & build emits exactly one terminal CanonicalReceipt                & \S\ref{sec:build-pipeline} \\
+TR-INV-2 (progress not canonical)        & \texttt{build.progress} are OperationalReceipts                  & \S\ref{sec:build-pipeline} \\
+TR-INV-5 (runtime overlay independent)   & runtime crash leaves canonical untouched                         & \S\ref{sec:state-machine} \\
+TR-INV-7 (multi-view first-class)        & human (HTML+API+WS) and agent\_view both implemented             & \S\ref{sec:hub-routing}, \S\ref{sec:agent-view} \\
+TR-INV-8 (cross-state-space matrix)      & canonical $\times$ runtime admissibility enforced                & \S\ref{sec:state-machine} \\
+TR-INV-11 (URA-receipt traceability)     & \texttt{/\_\_easynet/receipts} + state\_key index                & \S\ref{sec:e2e} \\
+TR-INV-12 (principal/human-anon)         & Hub mints the URI on every request                               & \S\ref{sec:hub-routing} \\
+TR-INV-13 (caller\_context)              & populated from headers; recorded in operational receipts        & \S\ref{sec:hub-routing}, \S\ref{sec:e2e} \\
+WB-INV-1 (api\_surface enforcement)      & Hub refuses unlisted verbs with 404                              & \S\ref{sec:project} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\paragraph{Closing.} pages was the easy half: a single document
+in canonical state, no build, no runtime overlay, no API. web\_app
+is the hard half: long-running canonical transition, runtime
+overlay, declared API surface, full Hub routing matrix,
+WebSocket. Implementing P-B1 through P-B5 closes Phase 1 of
+stateful EasyNet's web layer and lands the agent-native web
+in industrial form.
+
+\vfill
+\hrule
+\vspace{0.4em}
+\noindent\small
+\textit{The historical analogue: the early web was static
+documents (\texttt{easynet.page}); the modern web is
+applications (\texttt{easynet.web\_app}). EasyNet's specification
+follows the same arc, deliberately. Pages first, web\_apps next,
+each layer ratifying the protocol primitives the next layer
+will lean on.}
+
+\end{document}
