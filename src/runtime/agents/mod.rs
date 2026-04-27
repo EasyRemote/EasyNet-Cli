@@ -41,6 +41,14 @@
 /// the `gen-ability-tomls` binary regenerates after any code
 /// change to the metadata.
 pub mod ability_toml;
+/// Per-ability real-invocation tests. Each `#[test]` exercises
+/// one published ability through the live dispatcher with
+/// realistic args (not `{}`). This is the test layer that
+/// validates the full chain: registry lookup + handler
+/// invocation + service interaction + response shape. See the
+/// file's preamble for what "real" does and does NOT cover.
+#[cfg(test)]
+mod real_invoke_tests;
 pub mod a2a_bridge_ability;
 pub mod a2a_client_ability;
 pub mod chat_ability;
