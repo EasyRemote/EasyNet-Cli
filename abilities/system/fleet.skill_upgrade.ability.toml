@@ -7,13 +7,13 @@ type = "object"
 required = ["name", "agent"]
 additionalProperties = false
 
-[input_schema.properties.name]
-type = "string"
-description = "Skill name to upgrade"
-
 [input_schema.properties.agent]
 type = "string"
 description = "Agent that owns the skill"
+
+[input_schema.properties.name]
+type = "string"
+description = "Skill name to upgrade"
 
 [input_schema.properties.to]
 type = "string"

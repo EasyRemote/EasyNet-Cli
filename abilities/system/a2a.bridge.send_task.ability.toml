@@ -11,9 +11,9 @@ additionalProperties = false
 type = "string"
 minLength = 1
 
+[input_schema.properties.args]
+description = "Free-form per-skill args; shape per the skill's own input schema."
+
 [input_schema.properties.skill_name]
 type = "string"
 minLength = 1
-
-[input_schema.properties.args]
-description = "Free-form per-skill args; shape per the skill's own input schema."

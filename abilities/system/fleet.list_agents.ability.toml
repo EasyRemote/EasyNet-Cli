@@ -5,5 +5,3 @@ description = "List the LLM sub-agents this device hosts (name, runtime, optiona
 [input_schema]
 type = "object"
 additionalProperties = false
-
-[input_schema.properties]

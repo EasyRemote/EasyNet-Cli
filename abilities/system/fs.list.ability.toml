@@ -1,11 +1,15 @@
 schema_version = "1"
 name = "fs.list"
-description = "List the contents of a directory on the host's filesystem. Part of the baseline-locomotion-v1 profile (AXIOM §Tier 2.5). Symlink loops are bounded by max_entries and by the symlink-aware traversal that does not follow self-referential links."
+description = "List the contents of a directory on the host's filesystem. Part of the baseline-locomotion-v1 profile (AXIOM §Tier 2.5)."
 
 [input_schema]
 type = "object"
 required = ["path"]
 additionalProperties = false
+
+[input_schema.properties.max_entries]
+type = "integer"
+minimum = 1
 
 [input_schema.properties.path]
 type = "string"
@@ -13,9 +17,3 @@ minLength = 1
 
 [input_schema.properties.recursive]
 type = "boolean"
-description = "Descend into subdirectories. Symlinks are not followed."
-
-[input_schema.properties.max_entries]
-type = "integer"
-minimum = 1
-description = "Cap on entry count. Default 4096; truncated=true in the response when the cap was reached."

@@ -44,6 +44,18 @@ path = "src/bin/easynet.rs"
 name = "easynet-daemon"
 path = "src/bin/easynet-daemon.rs"
 
+# Maintainer tool. Regenerates every abilities/system/<name>.ability.toml
+# descriptor from the live `published_abilities()` metadata. Run after
+# any change to a `description_*` / `input_schema_*` function; the
+# `every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer`
+# test in src/runtime/agents/mod.rs fails CI if the on-disk TOML
+# drifts from what this binary would emit.
+#
+#   cargo run --bin gen-ability-tomls
+[[bin]]
+name = "gen-ability-tomls"
+path = "src/bin/gen-ability-tomls.rs"
+
 [dependencies]
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }

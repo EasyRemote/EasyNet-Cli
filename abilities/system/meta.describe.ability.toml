@@ -5,5 +5,3 @@ description = "Return this Agent's identity + ability summary. Lightweight compa
 [input_schema]
 type = "object"
 additionalProperties = false
-
-[input_schema.properties]

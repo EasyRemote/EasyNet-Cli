@@ -1,6 +1,6 @@
 schema_version = "1"
 name = "fleet.pty_session_create"
-description = "Create an interactive PTY session and return its opaque session_id. Pair with fleet.pty_session_attach (data plane: bidirectional stdin/stdout streaming over InvokeBidi) and fleet.pty_session_close (lifecycle teardown). Defaults to 80×24 VT100, host shell, current cwd, inherited env. Part of the baseline-locomotion-v1 profile (AXIOM Tier 2.5)."
+description = "Create an interactive PTY session and return its opaque session_id. Pair with fleet.pty_session_attach (data plane) and fleet.pty_session_close (lifecycle teardown). Part of the baseline-locomotion-v1 profile."
 
 [input_schema]
 type = "object"
@@ -10,29 +10,23 @@ additionalProperties = false
 type = "integer"
 minimum = 1
 maximum = 65535
-description = "PTY columns. Default 80."
+
+[input_schema.properties.command]
+type = "string"
+minLength = 1
+
+[input_schema.properties.command_args]
+type = "array"
+items = { type = "string" }
+
+[input_schema.properties.cwd]
+type = "string"
+
+[input_schema.properties.env]
+type = "object"
+additionalProperties = { type = "string" }
 
 [input_schema.properties.rows]
 type = "integer"
 minimum = 1
 maximum = 65535
-description = "PTY rows. Default 24."
-
-[input_schema.properties.command]
-type = "string"
-minLength = 1
-description = "Program to spawn inside the PTY. Default is the host login shell. Resolved via PATH if relative; verbatim if absolute."
-
-[input_schema.properties.command_args]
-type = "array"
-description = "Argv tail passed to the command. No shell interpolation; each element is a literal arg."
-items = { type = "string" }
-
-[input_schema.properties.cwd]
-type = "string"
-description = "Working directory for the spawned program."
-
-[input_schema.properties.env]
-type = "object"
-description = "Environment overrides for the spawned program. None means inherit; map means replace."
-additionalProperties = { type = "string" }

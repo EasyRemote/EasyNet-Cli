@@ -5,5 +5,3 @@ description = "Operator-facing component snapshot: build version, membership sta
 [input_schema]
 type = "object"
 additionalProperties = false
-
-[input_schema.properties]

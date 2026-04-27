@@ -5,5 +5,3 @@ description = "List the host's local A2A agent cards in the v2 envelope shape (`
 [input_schema]
 type = "object"
 additionalProperties = false
-
-[input_schema.properties]

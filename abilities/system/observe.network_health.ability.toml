@@ -5,5 +5,3 @@ description = "Report the daemon's network posture (membership status, hosted Ag
 [input_schema]
 type = "object"
 additionalProperties = false
-
-[input_schema.properties]

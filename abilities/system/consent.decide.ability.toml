@@ -7,9 +7,9 @@ type = "object"
 required = ["id", "decision"]
 additionalProperties = false
 
-[input_schema.properties.id]
-type = "string"
-
 [input_schema.properties.decision]
 type = "string"
 enum = ["allow", "deny", "allow_once"]
+
+[input_schema.properties.id]
+type = "string"

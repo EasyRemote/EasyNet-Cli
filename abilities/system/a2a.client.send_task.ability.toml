@@ -7,17 +7,17 @@ type = "object"
 required = ["target_node_uri", "agent_name", "skill_name"]
 additionalProperties = false
 
-[input_schema.properties.target_node_uri]
-type = "string"
-minLength = 1
-
 [input_schema.properties.agent_name]
-type = "string"
-minLength = 1
-
-[input_schema.properties.skill_name]
 type = "string"
 minLength = 1
 
 [input_schema.properties.args]
 description = "Free-form per-skill args; shape per the remote skill's input_schema."
+
+[input_schema.properties.skill_name]
+type = "string"
+minLength = 1
+
+[input_schema.properties.target_node_uri]
+type = "string"
+minLength = 1
