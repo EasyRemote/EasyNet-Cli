@@ -1,0 +1,19 @@
+schema_version = "1"
+name = "mcp.client.call"
+description = "Forward a tools/call to a configured upstream MCP server. `server` is the operator-chosen name from mcp_clients.json; `name` is the upstream tool's name (as it appears in that upstream's tools/list). Returns the upstream's tools/call response verbatim (MCP {content, isError} shape)."
+
+[input_schema]
+type = "object"
+required = ["server", "name"]
+additionalProperties = false
+
+[input_schema.properties.server]
+type = "string"
+minLength = 1
+
+[input_schema.properties.name]
+type = "string"
+minLength = 1
+
+[input_schema.properties.arguments]
+description = "Per-tool args; shape per the upstream tool's input schema."

@@ -1,0 +1,16 @@
+schema_version = "1"
+name = "fleet.skill_remove"
+description = "Remove an installed skill from an agent. Errors when the skill isn't present so callers can decide whether to treat that as success."
+
+[input_schema]
+type = "object"
+required = ["name", "agent"]
+additionalProperties = false
+
+[input_schema.properties.name]
+type = "string"
+description = "Skill name as installed under <agent-root>/skills/<name>/"
+
+[input_schema.properties.agent]
+type = "string"
+description = "Agent that owns the skill"
