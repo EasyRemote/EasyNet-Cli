@@ -323,7 +323,7 @@ for line in sys.stdin:
     }
 
     #[test]
-    fn call_unknown_server_returns_isError_naming_the_server() {
+    fn call_unknown_server_returns_is_error_naming_the_server() {
         let mut reg = LocalAbilityRegistry::new();
         register(&mut reg, empty_svc());
         let handler = reg.get_rpc(ABILITY_CALL).unwrap();
