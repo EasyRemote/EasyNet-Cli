@@ -168,7 +168,13 @@ async fn main() -> anyhow::Result<()> {
     // — it delegates to whichever handler the registry has under
     // that name.
     let dispatcher_for_kernel = Arc::new(dispatcher.clone());
-    kernel.set_dispatcher(dispatcher_for_kernel);
+    kernel.set_dispatcher(Arc::clone(&dispatcher_for_kernel));
+    // Outbound A2A: a2a.client.send_task reads through a process-
+    // wide DISPATCHER_HANDLE (see a2a_client_ability module doc).
+    // Populate it with the same Arc the Kernel holds so the
+    // outbound path and Kernel::invoke share one dispatcher
+    // instance — a future Receipt-emit hook on either lands once.
+    easynet_cli::runtime::agents::a2a_client_ability::set_dispatcher(dispatcher_for_kernel);
 
     // Stage-1 resolver. Local node id from EASYNET_NODE_ID env (set
     // by the supervisor from credentials.json) or "self" as a

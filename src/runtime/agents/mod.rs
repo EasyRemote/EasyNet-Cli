@@ -34,6 +34,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub mod a2a_bridge_ability;
+pub mod a2a_client_ability;
 pub mod chat_ability;
 /// AXIOM §"Tier 2.5" Baseline Locomotion Profile, filesystem
 /// half. Three abilities (`fs.read`, `fs.write`, `fs.list`)
@@ -170,6 +171,13 @@ pub fn build_registry_with_services(
         move || agents_for_a2a.clone(),
         Arc::clone(&local_registry_handle),
     );
+    // a2a.client.send_task — outbound A2A. Reads through a process-
+    // wide DISPATCHER_HANDLE that the daemon bin populates after
+    // building the AbilityDispatcher (see
+    // a2a_client_ability::set_dispatcher). Tests leave the lock
+    // unset; the handler returns ok:false on every call, which is
+    // what the unit tests verify.
+    a2a_client_ability::register(&mut reg);
     // fleet.list_agents — operational view of registered LLM
     // sub-agents. Cheap-row projection (name, runtime, model, label);
     // for the protocol agent-card view see a2a.bridge.list_skills.
@@ -304,6 +312,7 @@ pub fn description_for(name: &str) -> &'static str {
         "mcp.bridge.call_tool" => mcp_bridge_ability::call_tool_description(),
         "a2a.bridge.list_skills" => a2a_bridge_ability::list_skills_description(),
         "a2a.bridge.send_task" => a2a_bridge_ability::send_task_description(),
+        "a2a.client.send_task" => a2a_client_ability::send_task_description(),
         "fleet.list_agents" => fleet_list_agents_ability::list_agents_description(),
         "meta.describe" => meta_ability::describe_description(),
         "meta.list_abilities" => meta_ability::list_abilities_description(),
@@ -356,6 +365,7 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "mcp.bridge.call_tool" => mcp_bridge_ability::call_tool_input_schema(),
         "a2a.bridge.list_skills" => a2a_bridge_ability::list_skills_input_schema(),
         "a2a.bridge.send_task" => a2a_bridge_ability::send_task_input_schema(),
+        "a2a.client.send_task" => a2a_client_ability::send_task_input_schema(),
         "fleet.list_agents" => fleet_list_agents_ability::list_agents_input_schema(),
         "meta.describe" => meta_ability::describe_input_schema(),
         "meta.list_abilities" => meta_ability::list_abilities_input_schema(),
@@ -436,6 +446,10 @@ mod tests {
             // IS the work.
             | "mcp.bridge.call_tool"
             | "a2a.bridge.send_task"
+            // a2a.client.send_task — outbound mirror of bridge.send_task.
+            // Same operational classification: dispatching crosses
+            // a wire and mutates the remote node's state.
+            | "a2a.client.send_task"
             | "discuss.create"
             | "discuss.post"
             | "discuss.subscribe"
