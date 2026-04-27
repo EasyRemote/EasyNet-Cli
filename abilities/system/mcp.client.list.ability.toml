@@ -1,0 +1,9 @@
+schema_version = "1"
+name = "mcp.client.list"
+description = "Aggregate tools/list across every configured upstream MCP server (~/.easynet/mcp_clients.json). Returns one server entry per configured upstream; an entry with `error` set indicates that specific upstream failed without taking the others down."
+
+[input_schema]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties]

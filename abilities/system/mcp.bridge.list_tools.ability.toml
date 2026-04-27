@@ -1,0 +1,9 @@
+schema_version = "1"
+name = "mcp.bridge.list_tools"
+description = "List the host's local abilities projected to the MCP tools/list shape. Used by in-process MCP-aware callers; the same projection drives the stdio MCP server's tools/list response so external and internal callers see one catalog."
+
+[input_schema]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties]

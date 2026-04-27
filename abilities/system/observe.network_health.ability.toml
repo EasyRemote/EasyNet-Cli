@@ -1,0 +1,9 @@
+schema_version = "1"
+name = "observe.network_health"
+description = "Report the daemon's network posture (membership status, hosted Agent count, link summary). v1 returns membership-derived state; live link probing lands with the broader admin.status work."
+
+[input_schema]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties]
