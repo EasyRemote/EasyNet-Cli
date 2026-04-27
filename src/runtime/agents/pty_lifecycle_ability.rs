@@ -94,7 +94,7 @@ fn close_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<Value> {
     let id = args
         .get("session_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("pty_session_close: `session_id` required"))?;
+        .ok_or_else(|| anyhow::anyhow!("`session_id` required"))?;
     let outcome = pty.close(&PtySessionId::new(id));
     match outcome.exit_status {
         Some(code) => Ok(json!({ "ack": outcome.ack, "exit_status": code })),
@@ -108,6 +108,11 @@ fn close_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<Value> {
 /// compatibility — a future schema addition mustn't break old
 /// callers), but reject malformed values (a `cols: "not-a-number"`
 /// is a caller bug, not a forward-compat scenario).
+///
+/// Error messages do NOT prefix the ability name; the dispatcher's
+/// outer wrapper already attaches it. (Same SR-6+9 lesson the Go
+/// half learned earlier — repeated prefixes are noise plus a
+/// rename hazard.)
 fn parse_create_spec(args: &Value) -> anyhow::Result<PtyCreateSpec> {
     fn u16_field(args: &Value, key: &str, default: u16) -> anyhow::Result<u16> {
         match args.get(key) {
@@ -115,21 +120,15 @@ fn parse_create_spec(args: &Value) -> anyhow::Result<PtyCreateSpec> {
             Some(Value::Number(n)) => n
                 .as_u64()
                 .and_then(|v| u16::try_from(v).ok())
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "pty_session_create: `{key}` must fit in u16 (got {n})"
-                    )
-                }),
-            Some(other) => anyhow::bail!(
-                "pty_session_create: `{key}` must be a number, got {other}"
-            ),
+                .ok_or_else(|| anyhow::anyhow!("`{key}` must fit in u16 (got {n})")),
+            Some(other) => anyhow::bail!("`{key}` must be a number, got {other}"),
         }
     }
 
     let cols = u16_field(args, "cols", DEFAULT_COLS)?;
     let rows = u16_field(args, "rows", DEFAULT_ROWS)?;
     if cols == 0 || rows == 0 {
-        anyhow::bail!("pty_session_create: cols and rows must be > 0");
+        anyhow::bail!("cols and rows must be > 0");
     }
 
     let command = args
@@ -142,16 +141,12 @@ fn parse_create_spec(args: &Value) -> anyhow::Result<PtyCreateSpec> {
         Some(Value::Array(arr)) => arr
             .iter()
             .map(|v| {
-                v.as_str().map(str::to_string).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "pty_session_create: `command_args` entries must be strings"
-                    )
-                })
+                v.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| anyhow::anyhow!("`command_args` entries must be strings"))
             })
             .collect::<anyhow::Result<Vec<_>>>()?,
-        Some(other) => anyhow::bail!(
-            "pty_session_create: `command_args` must be an array, got {other}"
-        ),
+        Some(other) => anyhow::bail!("`command_args` must be an array, got {other}"),
     };
 
     let cwd = args
@@ -164,14 +159,12 @@ fn parse_create_spec(args: &Value) -> anyhow::Result<PtyCreateSpec> {
         Some(Value::Object(map)) => map
             .iter()
             .map(|(k, v)| {
-                v.as_str().map(|s| (k.clone(), s.to_string())).ok_or_else(|| {
-                    anyhow::anyhow!("pty_session_create: env values must be strings")
-                })
+                v.as_str()
+                    .map(|s| (k.clone(), s.to_string()))
+                    .ok_or_else(|| anyhow::anyhow!("env values must be strings"))
             })
             .collect::<anyhow::Result<HashMap<_, _>>>()?,
-        Some(other) => anyhow::bail!(
-            "pty_session_create: `env` must be an object, got {other}"
-        ),
+        Some(other) => anyhow::bail!("`env` must be an object, got {other}"),
     };
 
     Ok(PtyCreateSpec {

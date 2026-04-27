@@ -151,9 +151,10 @@ pub struct PtyCloseOutcome {
     /// (idempotent close — the surface is "remove if present").
     pub ack: bool,
     /// Exit status reported by the child, when waitable. None when
-    /// the row was unknown OR when the child was force-killed
-    /// before wait could grab a status.
-    pub exit_status: Option<i32>,
+    /// the row was unknown OR when the child was killed before wait
+    /// could grab a status. u32 preserves portable-pty's own type;
+    /// POSIX exit codes are 0-255 in practice.
+    pub exit_status: Option<u32>,
 }
 
 /// Process-wide PTY session registry. Cloneable handle (the inner
@@ -253,13 +254,16 @@ impl PtyService {
     ///
     /// Sequence:
     ///   1. Remove the session row (no further attach can claim it).
-    ///   2. Take the child out of its slot, kill it. We don't wait
-    ///      forever for a graceful exit because the close path is
-    ///      synchronous from the wire's perspective; portable-pty's
-    ///      kill() sends SIGKILL on unix, which is decisive.
+    ///   2. Take the child out of its slot, kill it. portable-pty's
+    ///      Child::kill() sends SIGHUP on unix (verified against
+    ///      portable-pty 0.8 src/unix.rs) — most shells handle that
+    ///      as "session disconnected" and clean up gracefully. We
+    ///      don't escalate to SIGKILL because the close path is
+    ///      synchronous from the wire's perspective; a stuck child
+    ///      can be reaped by the OS later.
     ///   3. Try-wait once for the exit status; if it's not yet
-    ///      reaped (rare — kill is synchronous on unix) return
-    ///      `exit_status: None`. The OS reaper still claims it.
+    ///      reaped return `exit_status: None`. The OS reaper still
+    ///      claims it.
     pub fn close(&self, id: &PtySessionId) -> PtyCloseOutcome {
         let session = {
             let mut g = self.inner.lock().expect("pty service lock");
@@ -280,9 +284,13 @@ impl PtyService {
                 exit_status: None,
             };
         };
-        // SIGKILL on unix; ignored if the child already exited.
+        // SIGHUP on unix; ignored if the child already exited.
         let _ = child.kill();
-        let exit_status = child.try_wait().ok().flatten().map(|s| s.exit_code() as i32);
+        // exit_code() returns u32; preserve as u32 (POSIX exit codes
+        // are 0-255). The previous `as i32` cast was a footgun for
+        // the rare cases when extended status fields encode signal
+        // info in high bits.
+        let exit_status = child.try_wait().ok().flatten().map(|s| s.exit_code());
         PtyCloseOutcome {
             ack: true,
             exit_status,
