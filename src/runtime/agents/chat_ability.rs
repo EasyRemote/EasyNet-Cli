@@ -586,15 +586,35 @@ fn stream_handler(
     let context_used_for_thread = context_used;
     let composed_context_owned = composed_context;
 
+    // Per-token progress forwarder. The driver invokes this
+    // once per stdout line in stream-json mode; we wrap each
+    // chunk in a `progress` frame and broadcast to subscribers.
+    // Pre-fix the chat stream emitted only {session, loaded?,
+    // done|error} — the audit conversation caught it. With
+    // this callback the stream is now a real per-token stream.
+    let tx_for_progress = tx.clone();
+    let progress_callback: Arc<dyn Fn(serde_json::Value) + Send + Sync> =
+        Arc::new(move |chunk: serde_json::Value| {
+            let frame = json!({
+                "type": "progress",
+                "chunk": chunk,
+            });
+            // SendError when subscriber dropped. Same handling
+            // as the terminal frame: discard silently — the IPC
+            // forwarder already noticed the cancel.
+            let _ = tx_for_progress.send(frame);
+        });
+
     std::thread::Builder::new()
         .name(format!("chat-stream-{agent_name}"))
         .spawn(move || {
-            let result = crate::runtime::dispatch::send_external_with_overrides(
+            let result = crate::runtime::dispatch::send_external_with_overrides_and_progress(
                 &agent_name_owned,
                 &entry_owned,
                 &prompt_owned,
                 composed_context_owned.as_deref(),
                 Some(&driver_owned),
+                Some(progress_callback),
             );
             let elapsed_ms = started.elapsed().as_millis() as u64;
             let frame = match result {
