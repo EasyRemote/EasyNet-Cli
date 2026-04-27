@@ -38,6 +38,7 @@ pub fn descriptors_for(
                 .expect("registry-derived names satisfy descriptor invariants")
                 .with_input_schema(m.input_schema.clone())
                 .with_source("kernel:built-in")
+                .with_description(m.description)
         })
         .collect()
 }

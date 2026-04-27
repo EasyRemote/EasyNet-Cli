@@ -81,7 +81,8 @@ pub fn descriptors_for_with_metadata(
                 AbilityDescriptor::new(m.name.clone(), owner_agent_uri, visibility)
                     .expect("registry-derived names satisfy descriptor invariants")
                     .with_input_schema(m.input_schema.clone())
-                    .with_source("kernel:built-in");
+                    .with_source("kernel:built-in")
+                    .with_description(m.description);
             if let Some(t) = agent_type_display {
                 desc = desc.with_metadata_entry("agent_type", t);
             }
