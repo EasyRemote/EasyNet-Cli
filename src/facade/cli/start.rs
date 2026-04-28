@@ -258,13 +258,24 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     // discovery just degrades to "this node has no abilities yet"
     // until a successful re-publish lands. A subsequent
     // `easynet agent add` against a healthy runtime fixes it.
-    // RFC-001 P4.8: federation.advertise_* path replaces both the
-    // legacy per-agent publish and the legacy system-abilities
-    // publish. Driven by `runtime::publish::republish_abilities_via_advertise`
-    // which: (1) bootstraps URAs into local-agents.json, (2)
-    // advertises the device-profile + each hosted profile, (3)
-    // advertises descriptors for each Agent. Best-effort: per-row
-    // failures are warned but never abort startup.
+    // Spawn the IPC daemon (`easynet-daemon`) before re-publishing.
+    // The daemon owns:
+    //   * `~/.easynet/control.sock` — length-delimited JSON IPC for
+    //     CLI/library callers and the local stdio MCP server.
+    //   * `~/.easynet/runtime-dispatch.sock` — newline-delimited UDS
+    //     responder axon-runtime opens when forwarding Invokes for
+    //     daemon-owned abilities (`runtime_local_tools` route, Step 3
+    //     of the cross-repo plan).
+    //
+    // `republish_via_federation_best_effort` immediately below calls
+    // `runtime.register_local_tool` for every daemon-owned ability —
+    // those registrations name the dispatch socket above. If the
+    // daemon is not running, the registrations succeed at the runtime
+    // (it just stores the endpoint) but every actual Invoke falls
+    // through to `connect refused` until the daemon catches up. Spawning
+    // here closes that gap so the path is hot the moment the runtime
+    // starts accepting calls.
+    let _daemon_handle = spawn_easynet_daemon(&creds.node_id);
     republish_via_federation_best_effort(&bridge, &creds);
 
     if args.foreground {
@@ -288,6 +299,74 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
 ///   3. Render outcomes — one warn per failed advertise; one
 ///      info line summarising successes.
 ///
+/// Spawn the easynet-daemon child process so its UDS listeners are
+/// up before `runtime.register_local_tool` advertises their paths to
+/// the runtime. Returns the spawned `Child` so the caller (or its
+/// drop on shutdown) can terminate it; v1 leaves orphaning to the
+/// process supervisor (operators usually run this in a session that
+/// gets SIGTERMed on Ctrl-C, which propagates to the child).
+///
+/// Best-effort: a spawn failure is logged but never aborts startup.
+/// In that degraded state, the runtime accepts register calls and
+/// the registered endpoint is recorded, but every actual Invoke
+/// falling back to `runtime_local_tools` will fail at the UDS
+/// connect step until the operator manually starts the daemon.
+fn spawn_easynet_daemon(node_id: &str) -> Option<std::process::Child> {
+    // Resolve the daemon binary: env override > sibling of current
+    // exe > PATH. The env override exists because the test stack
+    // uses an out-of-tree build; production installers drop both
+    // binaries into /usr/local/bin so the sibling lookup wins.
+    let bin_path = std::env::var_os("EASYNET_DAEMON_BIN")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join("easynet-daemon")))
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("easynet-daemon"));
+
+    let mut cmd = std::process::Command::new(&bin_path);
+    cmd.env("EASYNET_NODE_ID", node_id);
+    // Daemon's IPC + dispatch logs go to a known file so operators
+    // can tail without guessing where stderr landed.
+    let log_dir = std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+        .join(".easynet")
+        .join("logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join("easynet-daemon.log");
+    if let Ok(f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        if let Ok(f2) = f.try_clone() {
+            cmd.stdout(std::process::Stdio::from(f2));
+        }
+        cmd.stderr(std::process::Stdio::from(f));
+    }
+    match cmd.spawn() {
+        Ok(child) => {
+            output::detail(
+                "daemon",
+                &format!(
+                    "spawned {} (pid {}; log: {})",
+                    bin_path.display(),
+                    child.id(),
+                    log_path.display()
+                ),
+            );
+            Some(child)
+        }
+        Err(e) => {
+            output::warn(&format!(
+                "failed to spawn easynet-daemon ({}): {e}; control.sock + runtime-dispatch.sock will not be available",
+                bin_path.display()
+            ));
+            None
+        }
+    }
+}
+
 /// Best-effort by contract — daemon startup completes regardless
 /// of advertise failures so heartbeat, federation join, and other
 /// surfaces stay reachable. The directory just degrades until a
