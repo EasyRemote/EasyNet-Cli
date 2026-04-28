@@ -618,6 +618,38 @@ impl AbilityProxy {
             .map_err(|e| format!("{e}"))
     }
 
+    /// Stream-mode counterpart to `execute_runtime_dispatch`. Returns
+    /// the live `StreamSource` so the runtime-dispatch UDS responder
+    /// can forward each frame as a separate JSON line on the same
+    /// connection (per the v2 stream wire shape — see
+    /// `runtime_dispatch.rs` module header).
+    ///
+    /// Same plan-build as the RPC variant aside from the
+    /// `CallMode::Stream` discriminant; we route through the same
+    /// resolver so an ability without a registered stream handler
+    /// surfaces the dispatcher's "no local stream handler registered"
+    /// error verbatim, and the UDS responder maps that into a typed
+    /// `kind:"error"` frame for the caller.
+    pub fn execute_runtime_dispatch_stream(
+        &self,
+        ability: &str,
+        args: serde_json::Value,
+    ) -> Result<StreamSource, String> {
+        let plan = InvocationPlan {
+            ability: ability.to_string(),
+            target_node_hint: extract_node_hint(&args),
+            args,
+            call_mode: CallMode::Stream,
+        };
+        let target = self
+            .resolver
+            .resolve(plan)
+            .map_err(|e| format!("resolver: {e}"))?;
+        self.dispatcher
+            .execute_stream(target)
+            .map_err(|e| format!("{e}"))
+    }
+
     fn handle_invoke(
         &self,
         request_id: String,

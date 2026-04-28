@@ -15,12 +15,34 @@
 // --------------------------------------------------------------------
 //
 //   request line  (terminated by \n):
-//     {"tool_name":"<x>","function_name":"<y>","arguments_b64":"<base64>"}
+//     {"mode":"rpc",    "tool_name":"<x>","function_name":"<y>","arguments_b64":"<base64>"}
+//   OR:
+//     {"mode":"stream", "tool_name":"<x>","function_name":"<y>","arguments_b64":"<base64>"}
 //
-//   response line (terminated by \n):
+// `mode` defaults to "rpc" so a stale axon-runtime that does not
+// know about streaming gets the original single-line response shape.
+//
+//   RPC response (single line, terminated by \n):
 //     {"ok":true,  "result_b64":"<base64>", "content_type":"application/json"}
 //   OR:
 //     {"ok":false, "code":"<typed>",        "message":"<human>"}
+//
+//   STREAM response (multiple lines, each terminated by \n; the
+//   daemon closes the socket after writing the terminal frame so
+//   the runtime sees EOF and stops reading):
+//     {"kind":"snapshot","frames":[...]}        (zero or one, optional)
+//     {"kind":"progress","frame":{...}}         (zero or more)
+//     ... more progress lines ...
+//     {"kind":"done","frame":{...}}             (terminal, exactly one)
+//   OR (terminal in place of done):
+//     {"kind":"error","code":"<typed>","message":"<human>"}
+//
+// `frames` / `frame` payloads are the chat-ability stream frames
+// verbatim (e.g. `{"type":"session","session_id":"..."}` for the
+// snapshot, `{"type":"progress","chunk":{...}}` per progress, and
+// `{"type":"done", ...}` for the terminal). The runtime passes them
+// up to the gRPC InvokeStream caller as the chunk payload bytes
+// without further interpretation.
 //
 // One request per accepted connection, then close. Matches the
 // runtime side's per-request UDS connection (no pooling) — keeps
@@ -51,7 +73,7 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
@@ -65,6 +87,15 @@ use crate::services::control::ability_proxy::AbilityProxy;
 /// trailing arguments.
 #[derive(Debug, Deserialize)]
 struct DispatchRequest {
+    /// Dispatch mode. Defaults to `"rpc"` (backwards compat with a
+    /// stale runtime that omits the field) which keeps the legacy
+    /// single-line response shape. `"stream"` switches to multi-line
+    /// frame output documented in the module header. Anything else
+    /// is rejected with `BAD_REQUEST` rather than silently coerced —
+    /// a typo'd mode should fail loud rather than produce surprising
+    /// output.
+    #[serde(default = "default_mode")]
+    mode: String,
     #[serde(default)]
     tool_name: String,
     /// MCP-shape function-name. Today the daemon's abilities are
@@ -77,6 +108,10 @@ struct DispatchRequest {
     /// JSON args), invokes, and re-encodes the result.
     #[serde(default)]
     arguments_b64: String,
+}
+
+fn default_mode() -> String {
+    "rpc".to_string()
 }
 
 /// Success response shape.
@@ -195,8 +230,10 @@ pub async fn accept_loop(
     }
 }
 
-/// Drive a single accepted connection: read one line, dispatch,
-/// write one line, close.
+/// Drive a single accepted connection. RPC mode reads one line,
+/// dispatches, writes one line, closes. Stream mode reads one line,
+/// dispatches, writes a multi-line stream of frame lines, then closes.
+/// `mode` is parsed from the request (default "rpc").
 async fn serve_one(stream: UnixStream, proxy: AbilityProxy) -> anyhow::Result<()> {
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
@@ -206,10 +243,49 @@ async fn serve_one(stream: UnixStream, proxy: AbilityProxy) -> anyhow::Result<()
         return Ok(()); // peer closed without sending
     }
 
-    let response_line = build_response_line(&line, &proxy);
-    write_half.write_all(response_line.as_bytes()).await?;
-    write_half.flush().await?;
+    // Pre-parse just enough to learn the mode. Anything more nuanced
+    // (tool_name validation, base64 decode) happens inside the mode-
+    // specific path so error reporting stays consistent across the
+    // two response shapes.
+    let mode = parse_mode(&line);
+    match mode {
+        Mode::Rpc => {
+            let response_line = build_response_line(&line, &proxy);
+            write_half.write_all(response_line.as_bytes()).await?;
+            write_half.flush().await?;
+        }
+        Mode::Stream => {
+            stream_frames_for_request(&line, &proxy, &mut write_half).await?;
+        }
+        Mode::Bad(reason) => {
+            let line = error_line("BAD_REQUEST", reason);
+            write_half.write_all(line.as_bytes()).await?;
+            write_half.flush().await?;
+        }
+    }
     Ok(())
+}
+
+#[derive(Debug)]
+enum Mode {
+    Rpc,
+    Stream,
+    Bad(String),
+}
+
+fn parse_mode(request_line: &str) -> Mode {
+    // Trim before parse; serde_json rejects surrounding whitespace
+    // depending on flag set. Pre-trimming also strips the trailing
+    // newline produced by the runtime side's `format!("...\n")`.
+    let req: DispatchRequest = match serde_json::from_str(request_line.trim()) {
+        Ok(r) => r,
+        Err(e) => return Mode::Bad(format!("malformed request: {e}")),
+    };
+    match req.mode.as_str() {
+        "rpc" => Mode::Rpc,
+        "stream" => Mode::Stream,
+        other => Mode::Bad(format!("unknown mode '{other}' (expected rpc|stream)")),
+    }
 }
 
 /// Pure decision function — what response should we send for a
@@ -296,6 +372,211 @@ fn error_line(code: &str, message: String) -> String {
         message,
     };
     let mut s = serde_json::to_string(&body).expect("serialise err");
+    s.push('\n');
+    s
+}
+
+/// Stream-mode counterpart to `build_response_line`. Resolves the
+/// request, opens a `StreamSource` on the dispatcher, and writes
+/// each frame as its own newline-terminated JSON line. Closes the
+/// connection (by returning) after the terminal frame, so the
+/// runtime side sees EOF as the stream-end signal.
+///
+/// Frame envelope shapes (see module header for the full grammar):
+///   - `{"kind":"snapshot","frames":[<frame>, ...]}`  optional, written first
+///   - `{"kind":"progress","frame":<frame>}`          zero or more, in arrival order
+///   - `{"kind":"done","frame":<frame>}`              terminal-success, exactly one
+///   - `{"kind":"error","code":..., "message":...}`   terminal-failure, exactly one
+///
+/// The chat-ability stream handler emits its own `type` field on each
+/// frame (`session`/`loaded`/`progress`/`done`/`error`); we wrap the
+/// whole frame in `{"kind":...,"frame":<verbatim>}` so the runtime
+/// side can route by transport-level kind without parsing payload
+/// JSON. The chat-frame `type` is preserved for the gRPC consumer.
+async fn stream_frames_for_request<W>(
+    request_line: &str,
+    proxy: &AbilityProxy,
+    write_half: &mut W,
+) -> anyhow::Result<()>
+where
+    W: tokio::io::AsyncWriteExt + Unpin,
+{
+    let req: DispatchRequest = match serde_json::from_str(request_line.trim()) {
+        Ok(r) => r,
+        Err(e) => {
+            let line = error_line("BAD_REQUEST", format!("malformed request: {e}"));
+            write_half.write_all(line.as_bytes()).await?;
+            write_half.flush().await?;
+            return Ok(());
+        }
+    };
+    if req.tool_name.trim().is_empty() {
+        let line = error_line("BAD_REQUEST", "tool_name must be non-empty".into());
+        write_half.write_all(line.as_bytes()).await?;
+        write_half.flush().await?;
+        return Ok(());
+    }
+    let args_value = match decode_args(&req.arguments_b64) {
+        Ok(v) => v,
+        Err(msg) => {
+            let line = error_line("BAD_REQUEST", msg);
+            write_half.write_all(line.as_bytes()).await?;
+            write_half.flush().await?;
+            return Ok(());
+        }
+    };
+
+    let source = match proxy.execute_runtime_dispatch_stream(&req.tool_name, args_value) {
+        Ok(s) => s,
+        Err(msg) => {
+            let code = if msg.contains("no local stream handler registered")
+                || msg.contains("no local handler registered")
+            {
+                "NOT_FOUND"
+            } else {
+                "ABILITY_FAILED"
+            };
+            let line = stream_error_line(code, msg);
+            write_half.write_all(line.as_bytes()).await?;
+            write_half.flush().await?;
+            return Ok(());
+        }
+    };
+
+    write_stream_source(source, write_half).await
+}
+
+/// Decode the base64 arguments. Pulled out so both RPC and stream
+/// paths report the same error message on a malformed payload.
+fn decode_args(arguments_b64: &str) -> Result<Value, String> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(arguments_b64.as_bytes())
+        .map_err(|e| format!("arguments_b64 decode: {e}"))?;
+    if bytes.is_empty() {
+        return Ok(Value::Object(Default::default()));
+    }
+    serde_json::from_slice(&bytes).map_err(|e| format!("decoded arguments_b64 is not valid JSON: {e}"))
+}
+
+/// Pump a `StreamSource` to the wire. The `done` / `error`
+/// classification of the terminal frame is decided by inspecting the
+/// chat-ability `type` field — `error` becomes a `kind:"error"`
+/// envelope with the inner message lifted; everything else is
+/// `kind:"done"`. Snapshot frames are coalesced into a single
+/// `kind:"snapshot"` line because they are typically two short
+/// frames (session + loaded?) and the runtime side prefers one
+/// snapshot record per InvokeStream chunk.
+async fn write_stream_source<W>(
+    source: crate::runtime::ability_dispatch::StreamSource,
+    write_half: &mut W,
+) -> anyhow::Result<()>
+where
+    W: tokio::io::AsyncWriteExt + Unpin,
+{
+    use crate::runtime::ability_dispatch::StreamSource;
+    use tokio::sync::broadcast;
+
+    let (snapshot, mut rx_opt): (Vec<Value>, Option<broadcast::Receiver<Value>>) = match source {
+        StreamSource::Snapshot(v) => (v, None),
+        StreamSource::Live(rx) => (Vec::new(), Some(rx)),
+        StreamSource::SnapshotThenLive(s, rx) => (s, Some(rx)),
+    };
+
+    if !snapshot.is_empty() {
+        let line = snapshot_line(&snapshot);
+        write_half.write_all(line.as_bytes()).await?;
+    }
+
+    // Snapshot-only StreamSource: no live half to drain. The
+    // contract demands a terminal envelope so the runtime side
+    // never sees an unanchored EOF; emit a synthetic `done` with
+    // an empty frame and return.
+    if rx_opt.is_none() {
+        let line = json!({"kind": "done", "frame": {"type": "done"}}).to_string() + "\n";
+        write_half.write_all(line.as_bytes()).await?;
+        write_half.flush().await?;
+        return Ok(());
+    }
+
+    // Live half. The chat ability emits its own terminal frame
+    // (`type:"done"` or `type:"error"`); the broadcast channel then
+    // closes (sender drops at end of dispatch thread). When either
+    // happens we stop reading and return — the connection close on
+    // our side is the EOF signal the runtime needs.
+    if let Some(rx) = rx_opt.as_mut() {
+        loop {
+            match rx.recv().await {
+                Ok(frame) => {
+                    let kind = frame
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let envelope = match kind {
+                        "done" => json!({"kind": "done", "frame": frame}),
+                        "error" => {
+                            // Lift the inner `message` to the
+                            // transport-level `message` field so the
+                            // runtime can surface it without
+                            // re-parsing the frame.
+                            let message = frame
+                                .get("message")
+                                .and_then(Value::as_str)
+                                .unwrap_or("stream ability error")
+                                .to_string();
+                            json!({
+                                "kind": "error",
+                                "code": "ABILITY_FAILED",
+                                "message": message,
+                                "frame": frame,
+                            })
+                        }
+                        _ => json!({"kind": "progress", "frame": frame}),
+                    };
+                    let mut s = serde_json::to_string(&envelope)
+                        .expect("serialise stream envelope");
+                    s.push('\n');
+                    write_half.write_all(s.as_bytes()).await?;
+                    if matches!(kind, "done" | "error") {
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    // Subscriber lag is fatal for ordering — emit a
+                    // typed error frame and hang up. The chat
+                    // ability's broadcast capacity (8 in v1) is
+                    // sized for the modest frame rate; sustained lag
+                    // means the runtime side is stalled and the
+                    // healthiest action is to surface that loud.
+                    let line = stream_error_line(
+                        "ABILITY_FAILED",
+                        format!("stream subscriber lagged by {n} frames; aborting"),
+                    );
+                    write_half.write_all(line.as_bytes()).await?;
+                    break;
+                }
+            }
+        }
+    }
+
+    write_half.flush().await?;
+    Ok(())
+}
+
+fn snapshot_line(frames: &[Value]) -> String {
+    let body = json!({"kind": "snapshot", "frames": frames});
+    let mut s = serde_json::to_string(&body).expect("serialise snapshot");
+    s.push('\n');
+    s
+}
+
+fn stream_error_line(code: &str, message: String) -> String {
+    let body = json!({
+        "kind": "error",
+        "code": code,
+        "message": message,
+    });
+    let mut s = serde_json::to_string(&body).expect("serialise stream error");
     s.push('\n');
     s
 }
@@ -511,6 +792,153 @@ mod tests {
         assert_eq!(v["content_type"], "application/json");
 
         let _ = std::fs::remove_file(&socket_path);
+    }
+
+    /// Stream-mode round-trip against `fleet.attach_session` with an
+    /// unknown session id. The handler returns a `Snapshot::Snapshot`
+    /// with zero history frames; the daemon side must (a) emit a
+    /// snapshot envelope (frames=[]) — actually skipped because we
+    /// only emit when non-empty — and (b) emit a synthetic terminal
+    /// `kind:"done"` envelope so the runtime side does not see an
+    /// unanchored EOF. Pins both halves of the contract.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn real_uds_stream_round_trip_attach_session_empty() {
+        let socket_path = std::path::PathBuf::from(format!(
+            "/tmp/erld-stream-{}-{}.sock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        let _ = std::fs::remove_file(&socket_path);
+
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let proxy = fresh_proxy();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            serve_one(stream, proxy).await.unwrap();
+        });
+
+        let mut client = UnixStream::connect(&socket_path).await.unwrap();
+        let req_value = json!({
+            "mode": "stream",
+            "tool_name": "fleet.attach_session",
+            "function_name": "",
+            "arguments_b64": base64::engine::general_purpose::STANDARD
+                .encode(b"{\"session_id\":\"nonexistent\"}"),
+        });
+        let mut req = req_value.to_string();
+        req.push('\n');
+        client.write_all(req.as_bytes()).await.unwrap();
+        client.flush().await.unwrap();
+
+        let (read_half, _) = client.into_split();
+        let mut reader = BufReader::new(read_half);
+        // Empty Snapshot ⇒ no `kind:"snapshot"` line (only emitted
+        // when frames are non-empty), then the synthetic terminal
+        // `kind:"done"`. Any other shape is a regression.
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        let v: Value = serde_json::from_str(line.trim()).expect("envelope is JSON");
+        assert_eq!(
+            v["kind"], "done",
+            "snapshot-only stream must produce a synthetic terminal `done` envelope"
+        );
+        // EOF after terminal: read_line returns 0 bytes.
+        let mut line2 = String::new();
+        let n = reader.read_line(&mut line2).await.unwrap();
+        assert_eq!(n, 0, "daemon must close after terminal envelope");
+
+        server.await.unwrap();
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    /// Stream-mode against an ability that does not exist must
+    /// produce a single `kind:"error"` envelope with code=NOT_FOUND
+    /// (mirrors the unary path's NOT_FOUND mapping).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn real_uds_stream_unknown_ability_returns_not_found() {
+        let socket_path = std::path::PathBuf::from(format!(
+            "/tmp/erld-stream-nf-{}-{}.sock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let proxy = fresh_proxy();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            serve_one(stream, proxy).await.unwrap();
+        });
+        let mut client = UnixStream::connect(&socket_path).await.unwrap();
+        let req = json!({
+            "mode": "stream",
+            "tool_name": "this.ability.is.not.registered",
+            "arguments_b64": "",
+        })
+        .to_string()
+            + "\n";
+        client.write_all(req.as_bytes()).await.unwrap();
+        client.flush().await.unwrap();
+        let (read_half, _) = client.into_split();
+        let mut reader = BufReader::new(read_half);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        let v: Value = serde_json::from_str(line.trim()).expect("envelope is JSON");
+        assert_eq!(v["kind"], "error");
+        assert_eq!(v["code"], "NOT_FOUND");
+        server.await.unwrap();
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    /// Mode default: a request without the `mode` field must be
+    /// treated as RPC. This is the backwards-compat hinge — a stale
+    /// axon-runtime that does not yet know about streaming sends a
+    /// no-mode request and expects the legacy single-line response
+    /// shape.
+    #[test]
+    fn mode_omitted_defaults_to_rpc() {
+        let req: DispatchRequest = serde_json::from_str(
+            r#"{"tool_name":"observe.health","arguments_b64":""}"#,
+        )
+        .unwrap();
+        assert_eq!(req.mode, "rpc");
+
+        // Sanity: explicit "rpc" parses too.
+        let req2: DispatchRequest = serde_json::from_str(
+            r#"{"mode":"rpc","tool_name":"observe.health","arguments_b64":""}"#,
+        )
+        .unwrap();
+        assert_eq!(req2.mode, "rpc");
+
+        // And explicit "stream" is preserved.
+        let req3: DispatchRequest = serde_json::from_str(
+            r#"{"mode":"stream","tool_name":"x","arguments_b64":""}"#,
+        )
+        .unwrap();
+        assert_eq!(req3.mode, "stream");
+    }
+
+    /// Unknown mode value is rejected at the top of `parse_mode`
+    /// rather than silently coerced to RPC. Pin the strictness so a
+    /// future driver that ships a typo does not run a different
+    /// dispatch path than the operator expected.
+    #[test]
+    fn unknown_mode_returns_bad_request() {
+        let m = parse_mode(
+            r#"{"mode":"streaem","tool_name":"x","arguments_b64":""}"#,
+        );
+        match m {
+            Mode::Bad(msg) => {
+                assert!(msg.contains("unknown mode"));
+                assert!(msg.contains("streaem"));
+            }
+            other => panic!("expected Mode::Bad for typo, got {other:?}"),
+        }
     }
 
     /// `bind_socket` cleans up a stale (no live listener) socket
