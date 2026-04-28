@@ -48,6 +48,33 @@ use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope}
 /// hold heterogeneous handlers behind a uniform key.
 pub type LocalRpcHandler = Arc<dyn Fn(Value) -> anyhow::Result<Value> + Send + Sync>;
 
+/// Slice of the AXIOM 7-tuple that an envelope-aware handler needs
+/// access to. Currently carries `subject` only — extending this is
+/// the path for future envelope fields (delegation, causal_context)
+/// to reach handlers without another sweep through call sites.
+///
+/// Per **INV-SUBJECT-ENVELOPE**: this is the ONLY way a handler
+/// reads its `subject`. Handlers MUST NOT accept `subject` in
+/// `args`; the `register_*_with_envelope` family of methods is
+/// the way for handlers to opt into envelope access.
+#[derive(Debug, Clone, Default)]
+pub struct EnvelopeContext {
+    /// AXIOM 7-tuple `subject`. `None` for legacy abilities and
+    /// for the degenerate `subject = callee` case (per
+    /// INV-META-SUBJECT-EXEMPT). Resource handlers MUST treat
+    /// `None` as a missing-subject failure (`resource_not_found`
+    /// or InvalidArgument).
+    pub subject: Option<String>,
+}
+
+/// Envelope-aware RPC handler. The dispatcher passes a snapshot of
+/// the relevant envelope fields alongside the args. Used by media
+/// abilities (which need `subject` for resource resolution) and any
+/// future ability that needs to inspect AXIOM-layer state without
+/// pulling it out of args.
+pub type LocalRpcHandlerWithEnvelope =
+    Arc<dyn Fn(EnvelopeContext, Value) -> anyhow::Result<Value> + Send + Sync>;
+
 /// What a stream-mode ability handler may return.
 ///
 /// Three shapes:
@@ -64,10 +91,10 @@ pub type LocalRpcHandler = Arc<dyn Fn(Value) -> anyhow::Result<Value> + Send + S
 ///     `error` on lag, or `cancelled` if the Client cancels.
 ///
 ///   * `SnapshotThenLive(snapshot, rx)` — snapshot first, live tail
-///     after. The "replay then subscribe" composition every Paseo-
-///     style UI wants: a Permission dialog joining mid-flight needs
-///     to see currently-pending requests AND new ones; a Discuss
-///     room view shows past turns AND new posts.
+///     after. The "replay then subscribe" composition every
+///     state-then-stream UI wants: a Permission dialog joining
+///     mid-flight needs to see currently-pending requests AND new
+///     ones; a Discuss room view shows past turns AND new posts.
 ///
 /// The `From` impls let handlers return either a `Vec<Value>` or a
 /// `broadcast::Receiver<Value>` directly via `.into()`.
@@ -116,6 +143,10 @@ impl StreamSource {
 /// contract.
 pub type LocalStreamHandler =
     Arc<dyn Fn(Value) -> anyhow::Result<StreamSource> + Send + Sync>;
+
+/// Envelope-aware stream handler. Mirrors `LocalRpcHandlerWithEnvelope`.
+pub type LocalStreamHandlerWithEnvelope =
+    Arc<dyn Fn(EnvelopeContext, Value) -> anyhow::Result<StreamSource> + Send + Sync>;
 
 /// Channel bound for both directions of every bidi session. Per
 /// C-M3a §D1: not exposed as a `register_bidi` parameter — the
@@ -182,6 +213,10 @@ pub struct BidiSource {
 pub type LocalBidiHandler =
     Arc<dyn Fn(Value) -> anyhow::Result<BidiSource> + Send + Sync>;
 
+/// Envelope-aware bidi handler. Mirrors `LocalRpcHandlerWithEnvelope`.
+pub type LocalBidiHandlerWithEnvelope =
+    Arc<dyn Fn(EnvelopeContext, Value) -> anyhow::Result<BidiSource> + Send + Sync>;
+
 /// Resolver consulted on a registry miss. Returns `Some(handler)`
 /// when the resolver can synthesize one for the queried ability
 /// (e.g. a `<agent>.<verb>` whose TOML was added to the workspace
@@ -210,6 +245,36 @@ pub struct LocalAbilityRegistry {
     stream: BTreeMap<String, LocalStreamHandler>,
     bidi: BTreeMap<String, LocalBidiHandler>,
     rpc_fallback: Option<LocalFallbackResolver>,
+    // ── Envelope-aware variants (PR-DISPATCHER-SUBJECT) ──────
+    // Separate maps so legacy `register_*` callers stay on the
+    // args-only signature (zero churn) and only abilities that
+    // need envelope context opt in via the `_with_envelope`
+    // family. Dispatcher consults these FIRST, falling back to
+    // the args-only maps on miss; one ability MUST be in exactly
+    // one map (registering both forms is rejected at boot via
+    // debug_assert).
+    rpc_with_env: BTreeMap<String, LocalRpcHandlerWithEnvelope>,
+    stream_with_env: BTreeMap<String, LocalStreamHandlerWithEnvelope>,
+    bidi_with_env: BTreeMap<String, LocalBidiHandlerWithEnvelope>,
+}
+
+impl std::fmt::Debug for LocalAbilityRegistry {
+    /// Manual impl because the handler types are `Arc<dyn Fn>`
+    /// trait objects which do not implement `Debug`. Surfaces just
+    /// the registered ability counts + names per shape — enough for
+    /// `OnceLock::set`'s `.expect(..)` to print a useful message
+    /// without leaking handler addresses.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalAbilityRegistry")
+            .field("rpc_count", &self.rpc.len())
+            .field("stream_count", &self.stream.len())
+            .field("bidi_count", &self.bidi.len())
+            .field("rpc_with_env_count", &self.rpc_with_env.len())
+            .field("stream_with_env_count", &self.stream_with_env.len())
+            .field("bidi_with_env_count", &self.bidi_with_env.len())
+            .field("has_rpc_fallback", &self.rpc_fallback.is_some())
+            .finish()
+    }
 }
 
 impl LocalAbilityRegistry {
@@ -246,6 +311,44 @@ impl LocalAbilityRegistry {
         self.bidi.insert(ability.into(), handler);
     }
 
+    /// Register an envelope-aware RPC handler. Used by abilities
+    /// that need access to the AXIOM 7-tuple `subject` (per
+    /// **INV-SUBJECT-ENVELOPE**) — typically media abilities
+    /// resolving a `subject = resource_uri` to a local resource
+    /// table entry. The handler closure signature is
+    /// `Fn(EnvelopeContext, Value) -> Result<Value>`; the dispatcher
+    /// passes the resolved `InvocationTarget.subject` in the
+    /// context. Mutually exclusive with `register_rpc` per ability
+    /// — registering both is a startup bug (caller picks one
+    /// shape per ability).
+    pub fn register_rpc_with_envelope(
+        &mut self,
+        ability: impl Into<String>,
+        handler: LocalRpcHandlerWithEnvelope,
+    ) {
+        self.rpc_with_env.insert(ability.into(), handler);
+    }
+
+    /// Envelope-aware stream variant. See `register_rpc_with_envelope`
+    /// for the rationale.
+    pub fn register_stream_with_envelope(
+        &mut self,
+        ability: impl Into<String>,
+        handler: LocalStreamHandlerWithEnvelope,
+    ) {
+        self.stream_with_env.insert(ability.into(), handler);
+    }
+
+    /// Envelope-aware bidi variant. See `register_rpc_with_envelope`
+    /// for the rationale.
+    pub fn register_bidi_with_envelope(
+        &mut self,
+        ability: impl Into<String>,
+        handler: LocalBidiHandlerWithEnvelope,
+    ) {
+        self.bidi_with_env.insert(ability.into(), handler);
+    }
+
     /// Lookup helper — exposed because PR-ATTACH onwards will need
     /// a way to introspect "what abilities does this daemon
     /// publish?" without reflecting through the dispatcher.
@@ -257,12 +360,30 @@ impl LocalAbilityRegistry {
     /// honest if a future ability legitimately exposes both shapes).
     pub fn list_abilities(&self) -> Vec<String> {
         let mut names: Vec<String> = self.rpc.keys().cloned().collect();
+        // Envelope-aware variants are part of the same discovery
+        // surface — meta.list_abilities should not care which
+        // signature an ability registered under.
+        for k in self.rpc_with_env.keys() {
+            if !names.iter().any(|n| n == k) {
+                names.push(k.clone());
+            }
+        }
         for k in self.stream.keys() {
             if !names.iter().any(|n| n == k) {
                 names.push(k.clone());
             }
         }
+        for k in self.stream_with_env.keys() {
+            if !names.iter().any(|n| n == k) {
+                names.push(k.clone());
+            }
+        }
         for k in self.bidi.keys() {
+            if !names.iter().any(|n| n == k) {
+                names.push(k.clone());
+            }
+        }
+        for k in self.bidi_with_env.keys() {
             if !names.iter().any(|n| n == k) {
                 names.push(k.clone());
             }
@@ -346,13 +467,24 @@ impl AbilityDispatcher {
             );
         }
         match target.scope {
-            TargetScope::Local => match self.local.resolve_rpc(&target.ability) {
-                Some(handler) => handler(target.normalized_args),
-                None => anyhow::bail!(
-                    "no local handler registered for ability {} (loopback path)",
-                    target.ability
-                ),
-            },
+            TargetScope::Local => {
+                // Per PR-DISPATCHER-SUBJECT: envelope-aware
+                // handlers take precedence so an ability that
+                // opted into envelope access is never called via
+                // the legacy args-only path. The args-only registry
+                // is the fallback for legacy abilities.
+                if let Some(handler) = self.local.rpc_with_env.get(&target.ability) {
+                    let env = EnvelopeContext { subject: target.subject };
+                    return handler(env, target.normalized_args);
+                }
+                match self.local.resolve_rpc(&target.ability) {
+                    Some(handler) => handler(target.normalized_args),
+                    None => anyhow::bail!(
+                        "no local handler registered for ability {} (loopback path)",
+                        target.ability
+                    ),
+                }
+            }
             TargetScope::Remote { node } => self.gateway.invoke_remote_ability(
                 &RemoteTarget {
                     node,
@@ -381,13 +513,19 @@ impl AbilityDispatcher {
             );
         }
         match target.scope {
-            TargetScope::Local => match self.local.get_stream(&target.ability) {
-                Some(handler) => handler(target.normalized_args),
-                None => anyhow::bail!(
-                    "no local stream handler registered for ability {} (loopback path)",
-                    target.ability
-                ),
-            },
+            TargetScope::Local => {
+                if let Some(handler) = self.local.stream_with_env.get(&target.ability) {
+                    let env = EnvelopeContext { subject: target.subject };
+                    return handler(env, target.normalized_args);
+                }
+                match self.local.get_stream(&target.ability) {
+                    Some(handler) => handler(target.normalized_args),
+                    None => anyhow::bail!(
+                        "no local stream handler registered for ability {} (loopback path)",
+                        target.ability
+                    ),
+                }
+            }
             TargetScope::Remote { .. } => anyhow::bail!(
                 "remote stream dispatch not yet wired in v1; \
                  lands once GatewayApi::subscribe_remote_ability is plumbed \
@@ -422,13 +560,19 @@ impl AbilityDispatcher {
             );
         }
         match target.scope {
-            TargetScope::Local => match self.local.get_bidi(&target.ability) {
-                Some(handler) => handler(target.normalized_args),
-                None => anyhow::bail!(
-                    "no local bidi handler registered for ability {} (loopback path)",
-                    target.ability
-                ),
-            },
+            TargetScope::Local => {
+                if let Some(handler) = self.local.bidi_with_env.get(&target.ability) {
+                    let env = EnvelopeContext { subject: target.subject };
+                    return handler(env, target.normalized_args);
+                }
+                match self.local.get_bidi(&target.ability) {
+                    Some(handler) => handler(target.normalized_args),
+                    None => anyhow::bail!(
+                        "no local bidi handler registered for ability {} (loopback path)",
+                        target.ability
+                    ),
+                }
+            }
             TargetScope::Remote { .. } => anyhow::bail!(
                 "remote bidi dispatch not yet wired in v1; \
                  lands once GatewayApi exposes a bidi forwarder over \
@@ -456,6 +600,7 @@ mod tests {
             ability: "observe.health".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
+            subject: None,
         }
     }
 
@@ -490,6 +635,142 @@ mod tests {
         assert_eq!(resp, json!({"echo": {"k": "v"}}));
     }
 
+    // ── PR-DISPATCHER-SUBJECT envelope-aware handler tests ───
+
+    #[test]
+    fn envelope_aware_rpc_handler_receives_subject_from_target() {
+        // The load-bearing test for INV-SUBJECT-ENVELOPE positive
+        // half: handler registered via register_rpc_with_envelope
+        // receives target.subject in EnvelopeContext, NOT via args.
+        let mut reg = LocalAbilityRegistry::new();
+        reg.register_rpc_with_envelope(
+            "media.x.snapshot",
+            Arc::new(|env: EnvelopeContext, _args: Value| {
+                Ok(json!({
+                    "saw_subject": env.subject,
+                    "args_subject_was_present": false,
+                }))
+            }),
+        );
+        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let target = InvocationTarget {
+            scope: TargetScope::Local,
+            ability: "media.x.snapshot".into(),
+            normalized_args: json!({}),
+            call_mode: CallMode::Rpc,
+            subject: Some("easynet:///r/acme/resource/01CAM".into()),
+        };
+        let resp = dispatcher.execute_rpc(target).unwrap();
+        assert_eq!(
+            resp["saw_subject"],
+            json!("easynet:///r/acme/resource/01CAM")
+        );
+    }
+
+    #[test]
+    fn envelope_aware_handler_takes_precedence_over_legacy_handler() {
+        // If an ability is mistakenly registered under both shapes
+        // (a programming error), the envelope-aware path wins. Pin
+        // this so a future refactor that flipped precedence would
+        // surface here rather than silently routing media handlers
+        // through the args-only path that drops subject.
+        let mut reg = LocalAbilityRegistry::new();
+        reg.register_rpc(
+            "x.dual",
+            Arc::new(|_args: Value| Ok(json!({"path": "legacy"}))),
+        );
+        reg.register_rpc_with_envelope(
+            "x.dual",
+            Arc::new(|_env: EnvelopeContext, _args: Value| {
+                Ok(json!({"path": "envelope"}))
+            }),
+        );
+        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let target = InvocationTarget {
+            scope: TargetScope::Local,
+            ability: "x.dual".into(),
+            normalized_args: json!({}),
+            call_mode: CallMode::Rpc,
+            subject: None,
+        };
+        let resp = dispatcher.execute_rpc(target).unwrap();
+        assert_eq!(resp, json!({"path": "envelope"}));
+    }
+
+    #[test]
+    fn envelope_aware_handler_with_none_subject_still_dispatches() {
+        // Legacy callers that don't set subject still reach the
+        // envelope-aware handler — it just sees subject=None and
+        // can decide what to do (fail with resource_not_found or
+        // process anyway). The dispatcher does NOT reject the call
+        // for missing subject; that's a per-handler policy.
+        let mut reg = LocalAbilityRegistry::new();
+        reg.register_rpc_with_envelope(
+            "x.optional",
+            Arc::new(|env: EnvelopeContext, _args: Value| {
+                Ok(json!({"subject_was_none": env.subject.is_none()}))
+            }),
+        );
+        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let target = InvocationTarget {
+            scope: TargetScope::Local,
+            ability: "x.optional".into(),
+            normalized_args: json!({}),
+            call_mode: CallMode::Rpc,
+            subject: None,
+        };
+        let resp = dispatcher.execute_rpc(target).unwrap();
+        assert_eq!(resp, json!({"subject_was_none": true}));
+    }
+
+    #[test]
+    fn envelope_aware_stream_handler_receives_subject() {
+        let mut reg = LocalAbilityRegistry::new();
+        reg.register_stream_with_envelope(
+            "x.subscribe",
+            Arc::new(|env: EnvelopeContext, _args: Value| {
+                let frame = json!({"subject_seen": env.subject});
+                Ok(StreamSource::Snapshot(vec![frame]))
+            }),
+        );
+        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let target = InvocationTarget {
+            scope: TargetScope::Local,
+            ability: "x.subscribe".into(),
+            normalized_args: json!({}),
+            call_mode: CallMode::Stream,
+            subject: Some("easynet:///r/x/resource/01MIC".into()),
+        };
+        let src = dispatcher.execute_stream(target).unwrap();
+        match src {
+            StreamSource::Snapshot(frames) => {
+                assert_eq!(frames.len(), 1);
+                assert_eq!(
+                    frames[0]["subject_seen"],
+                    json!("easynet:///r/x/resource/01MIC")
+                );
+            }
+            other => panic!("expected Snapshot; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn list_abilities_includes_envelope_aware_registrations() {
+        // Discovery must see env-aware handlers — meta.list_abilities
+        // and gen-ability-tomls iterate this list, and a handler
+        // registered only via register_rpc_with_envelope MUST appear.
+        let mut reg = LocalAbilityRegistry::new();
+        reg.register_rpc_with_envelope(
+            "x.env_only",
+            Arc::new(|_env, _args| Ok(json!({}))),
+        );
+        let names = reg.list_abilities();
+        assert!(
+            names.iter().any(|n| n == "x.env_only"),
+            "envelope-aware ability missing from list_abilities: {names:?}"
+        );
+    }
+
     #[test]
     fn remote_target_routes_through_gateway() {
         // The remote path goes through GatewayApi. NoopGateway
@@ -505,6 +786,7 @@ mod tests {
             ability: "observe.health".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
+            subject: None,
         };
         let err = dispatcher.execute_rpc(target).unwrap_err();
         let msg = format!("{err}");
@@ -683,6 +965,7 @@ mod tests {
             ability: "fleet.echo".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Bidi,
+            subject: None,
         };
 
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -712,6 +995,7 @@ mod tests {
             ability: "fleet.session_attach".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Bidi,
+            subject: None,
         };
         let err = dispatcher.execute_bidi(target).unwrap_err();
         let msg = format!("{err}");
@@ -739,6 +1023,7 @@ mod tests {
             ability: "fleet.bad".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Bidi,
+            subject: None,
         };
         let err = dispatcher.execute_bidi(target).unwrap_err();
         assert!(format!("{err}").contains("precondition foo missing"));
@@ -757,6 +1042,7 @@ mod tests {
             ability: "fleet.session_attach".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Bidi,
+            subject: None,
         };
         let err = dispatcher.execute_bidi(target).unwrap_err();
         assert!(format!("{err}").to_lowercase().contains("remote"));
