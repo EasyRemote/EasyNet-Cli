@@ -67,6 +67,27 @@ pub struct InvokeOpts {
     /// upheld by `TimelineWriter::emit` holding the fsync
     /// barrier before broadcast wake (see `runtime::timeline`).
     pub timeline: Option<Arc<TimelineWriter>>,
+    /// Optional live-progress callback. When Some, the driver
+    /// invokes it once per stdout line emitted by the spawned
+    /// LLM CLI — i.e. once per token-batch in stream-json mode.
+    /// The callback receives a typed `progress` frame with the
+    /// raw driver chunk inside; the chat ability's stream
+    /// handler uses this to forward per-token progress to the
+    /// InvokeBidi/Stream subscriber's broadcast channel.
+    ///
+    /// Distinct from `timeline`: timeline is durable
+    /// (fsynced-to-disk) audit log; progress_tx is the
+    /// volatile in-memory wire to a live subscriber. Both can
+    /// be set at once — every driver line goes to BOTH, in
+    /// that order (timeline first so disk durability holds the
+    /// barrier before subscribers wake).
+    ///
+    /// Pre-fix the chat stream emitted only {session, loaded?,
+    /// done|error} — three frames total per call regardless of
+    /// LLM response length. The ability's wire shape claimed
+    /// to be \"streaming\" but in practice was a snapshot +
+    /// terminal frame. Real-world audit caught it.
+    pub progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
     /// Binary to spawn for this agent's runtime. Resolved at
     /// dispatch time from `AgentEntry::command`, with an empty
     /// string signalling "take the driver default" (claude /

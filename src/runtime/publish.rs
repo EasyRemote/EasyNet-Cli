@@ -1,295 +1,930 @@
-// EasyNet CLI — Ability Publishing
-// =================================
+// EasyNet CLI — Ability publishing via federation.advertise_*
+// =============================================================
 //
 // File: src/runtime/publish.rs
-// Description: Bridge between the on-disk per-agent ability manifests
-//              and the local axon-runtime's MCP tool catalog. Without
-//              this layer, an agent's `<agent>.<verb>.ability.toml`
-//              files are inert metadata: the runtime never learns
-//              about them, so `ListMCPTools` returns nothing, and the
-//              EasyNet frontend's Abilities catalog stays empty.
 //
-// What "publishing" means here
-// ----------------------------
-// We use the lightweight register-tool primitive (see
-// EasyNet-Axon `core/runtime-rs/src/state/runtime_tool.rs` for the
-// design rationale and `RegisterMCPTool` proto). Each manifest gets
-// translated into one `bridge.register_runtime_local_mcp_tool(...)`
-// call. The runtime stores the registration in memory; it surfaces
-// in `ListMCPTools` until the runtime restarts (registration is
-// in-memory, not persisted) or `unregister_runtime_local_mcp_tool`
-// is called.
+// Per AXON-RFC-001 §A4 + plan v4.1.2 §1, abilities are published to
+// the realm directory by invoking the hub-profile Agent's
+// `federation.advertise_agent` + `federation.advertise_abilities`
+// abilities — NOT by the legacy `register_runtime_local_mcp_tool`
+// path that was deleted in P1.2.a.
 //
-// Where this is called from
+// Pre-RFC history this module replaces
+// ------------------------------------
+// The pre-RFC publish.rs registered every per-agent manifest +
+// every "system ability" against an in-memory MCP catalog held by
+// the local axon-runtime. That layer was the single biggest source
+// of "frontend Skills page is empty" bugs because the catalog was
+// not persistent and the MCP path was load-bearing for Hub-mediated
+// discovery. P1.2.a deleted the underlying RPC; the module then
+// stubbed every public function to `Ok(false)` until P3+ shipped
+// the federation alternative.
+//
+// What this module does now
 // -------------------------
-//   * `easynet agent add` — after the registry row + AgentDirectory
-//     are written, publish the new agent's manifests so the frontend
-//     sees them immediately on the next list.
-//   * `easynet-daemon` boot — re-publish every registered agent's
-//     manifests because the runtime registry is in-memory and a
-//     runtime restart drops them all.
-//   * `easynet agent remove` — unregister the removed agent's tools
-//     so the runtime's catalog matches the registry.
-//
-// Failure model
-// -------------
-// Publishing is **best-effort**. Reasons:
-//
-//   1. The local axon-runtime may not be running (operator paired
-//      the device but hasn't started runtime). Failing `agent add`
-//      because the runtime is down would block the whole CLI flow
-//      for what is purely a discovery convenience.
-//   2. The runtime may be older than this CLI build (shipped
-//      before the register-tool primitive landed). Older bridges
-//      surface as `AxonError::Bridge("...unsupported...")` from
-//      `register_runtime_local_mcp_tool`; we log + continue so a
-//      mixed-version install doesn't deadlock on `agent add`.
-//
-// In both cases the registry row + AgentDirectory still write
-// correctly; only the federation-discovery surface degrades. A
-// later `easynet-daemon` start (or any successful re-publish) will
-// catch up.
+//   * `republish_abilities_via_advertise(invoker, tenant, plan)`
+//     bootstraps URAs, persists local-agents.json, advertises
+//     every enabled Agent + its descriptors. The single entry
+//     point the daemon-boot path and `easynet agent add` both
+//     call.
+//   * `unpublish_abilities_via_revoke(invoker, tenant, realm,
+//     agent_uri)` revokes one Agent's directory entry — used by
+//     `easynet agent remove`. Maps to `federation.revoke` per
+//     plan §18.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use easynet_axon::dendrite_bridge::DendriteBridge;
+use crate::persistence::local_agents::{self, LocalAgentsFile};
+use crate::runtime::advertise::{
+    self, AbilityInvoker, AdvertiseOutcome,
+};
+use crate::runtime::agents::profiles::{
+    bootstrap::{self, BootstrapOutcome, BootstrapPlan, UriMinter, UuidMinter},
+    self as profiles_mod,
+};
 use serde_json::Value;
 
-use crate::core::ability_spec::AbilityManifest;
-use crate::runtime::directory::AgentDirectory;
-
-/// One per-tool publish outcome. Returned to the caller (e.g. `run_add`)
-/// as a Vec so a CLI command can render a small status table without
-/// the publish layer dictating UI.
+/// Per-call summary returned by `republish_abilities_via_advertise`.
+/// Each row is one Agent the daemon advertised — either the device
+/// itself (Selfsigned, Model A) or a hosted profile (HostedBy,
+/// Model B). The CLI / daemon-boot output layer renders these.
 #[derive(Debug, Clone)]
 pub struct PublishOutcome {
-    /// Wire-level tool name as registered (e.g. `claude.chat`).
-    pub tool_name: String,
-    /// `Ok(replaced_prior)` on success — `replaced_prior` mirrors the
-    /// runtime's response and is `true` when this register overwrote
-    /// an earlier registration with the same triple (common after a
-    /// daemon restart). `Err(message)` on best-effort failure (logged,
-    /// not propagated).
-    pub result: Result<bool, String>,
+    /// Canonical URA the advertise call targeted. Empty when
+    /// bootstrap returned no rows (operator hasn't enabled any
+    /// hosted profiles).
+    pub agent_uri: String,
+    /// Free-form descriptor of which Agent this row corresponds to,
+    /// e.g. `device`, `consent/default`, `llm/claude`. Used for
+    /// log lines, not for protocol decisions.
+    pub label: String,
+    /// `Ok(())` on a clean advertise round trip; `Err(msg)` on any
+    /// failure. Per the historical contract, this layer is best-
+    /// effort: callers log + continue rather than abort startup.
+    pub result: Result<(), String>,
 }
 
-/// Publish every manifest under `<agent-root>/abilities/` to the local
-/// axon-runtime as a runtime-local MCP tool. Each manifest's verb
-/// becomes the suffix of the wire-level tool name (`<agent_name>.<verb>`).
+/// The single entry point the daemon-boot path and `easynet agent
+/// add` use to keep the realm directory in sync with the local
+/// install state.
 ///
-/// Returns one `PublishOutcome` per manifest. The function does NOT
-/// return `Err` — failures are per-tool entries with `result: Err(...)`
-/// so a caller can render partial success without blowing up the
-/// whole CLI flow.
+/// Steps:
+///   1. Run `bootstrap_local_agents` to mint or reuse URAs for
+///      every enabled hosted profile.
+///   2. Persist the resulting `local-agents.json` (mode 0600).
+///   3. Advertise the device-profile Agent itself (Selfsigned).
+///   4. Advertise each hosted Agent (HostedBy).
+///   5. Advertise the AbilityDescriptors emitted by each profile
+///      module's `descriptors_for(...)`.
 ///
-/// `dispatch_endpoint` is the URI the runtime will (in a future
-/// commit) use to route invocations of these tools back to a local
-/// process. For v1 we pass the EasyNet daemon's IPC socket path so a
-/// future `CallMCPTool` for `<agent>.chat` can route into the chat
-/// handler the daemon already registered. The runtime stores it
-/// today without acting on it.
-pub fn publish_agent_to_local_runtime(
-    bridge: &DendriteBridge,
+/// Returns a flat Vec<PublishOutcome> the caller renders. The
+/// function never panics on a failed advertise — every per-row
+/// error becomes one Err entry.
+pub fn republish_abilities_via_advertise<I: AbilityInvoker>(
+    invoker: &I,
     tenant_id: &str,
-    node_id: &str,
-    agent_name: &str,
-    directory: &AgentDirectory,
-    dispatch_endpoint: &str,
+    plan: &BootstrapPlan,
 ) -> Vec<PublishOutcome> {
-    let manifests = match directory.list_ability_manifests() {
-        Ok(m) => m,
+    republish_with_minter(invoker, tenant_id, plan, &UuidMinter)
+}
+
+/// Same as `republish_abilities_via_advertise` but accepts a
+/// custom URI minter. Used by tests with a deterministic minter.
+pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
+    invoker: &I,
+    tenant_id: &str,
+    plan: &BootstrapPlan,
+    minter: &M,
+) -> Vec<PublishOutcome> {
+    let mut outcomes = Vec::new();
+
+    // Step 1+2: bootstrap + persist.
+    let mut file = match local_agents::load() {
+        Ok(f) => f,
         Err(e) => {
-            // A directory whose abilities folder is unreadable: surface
-            // as a single synthetic outcome rather than dropping the
-            // signal. The CLI caller renders it like any other failure.
-            return vec![PublishOutcome {
-                tool_name: format!("{agent_name}.<unknown>"),
-                result: Err(format!("read abilities directory failed: {e}")),
-            }];
+            outcomes.push(PublishOutcome {
+                agent_uri: String::new(),
+                label: "local-agents.json".into(),
+                result: Err(format!("read failed; using empty file: {e}")),
+            });
+            LocalAgentsFile::default()
         }
     };
-    manifests
-        .into_iter()
-        .map(|manifest| {
-            publish_one(bridge, tenant_id, node_id, agent_name, &manifest, dispatch_endpoint)
-        })
-        .collect()
-}
+    let bootstrap_outcomes = bootstrap::bootstrap_local_agents(plan, &mut file, minter);
+    if let Err(e) = local_agents::save(&file) {
+        outcomes.push(PublishOutcome {
+            agent_uri: String::new(),
+            label: "local-agents.json".into(),
+            result: Err(format!("save failed: {e}")),
+        });
+        // Continue — in-memory state still allows advertise to run.
+    }
 
-/// Publish a single manifest. Factored out so callers that already
-/// know the manifest (e.g. a future `agent ability add`) can reuse the
-/// register call without re-walking the directory.
-pub fn publish_one(
-    bridge: &DendriteBridge,
-    tenant_id: &str,
-    node_id: &str,
-    agent_name: &str,
-    manifest: &AbilityManifest,
-    dispatch_endpoint: &str,
-) -> PublishOutcome {
-    let tool_name = manifest.qualified_name(agent_name);
-    let input_schema: &Value = manifest.input_schema();
-    let output_schema: Option<&Value> = manifest.output_schema();
-    let result = bridge
-        .register_runtime_local_mcp_tool(
+    if plan.realm.is_empty() || plan.host_device_uri.is_empty() {
+        // Pre-join: nothing to advertise yet (the hub-profile that
+        // would receive the call doesn't know us). The bootstrap
+        // file has been persisted with `<unjoined>` placeholders;
+        // a post-join boot will retry.
+        outcomes.push(PublishOutcome {
+            agent_uri: String::new(),
+            label: "skipped".into(),
+            result: Err("daemon not yet joined to a realm; advertise deferred".into()),
+        });
+        return outcomes;
+    }
+
+    // Step 3: advertise the device-profile (Selfsigned, Model A).
+    let device_outcome = advertise::advertise_self_signed_device(
+        invoker,
+        tenant_id,
+        &plan.realm,
+        &plan.host_device_uri,
+        // P5 supplies the actual public_key_hex; P4.8a ships an
+        // empty placeholder so the advertise wire shape stays
+        // stable. The hub still records the URA + status.
+        "",
+    );
+    outcomes.push(advertise_outcome_to_publish_outcome(
+        device_outcome,
+        "device".into(),
+    ));
+
+    // Lookup tables from bootstrap_outcomes for the descriptor
+    // advertise step that follows.
+    let consent_uri = first_uri(&bootstrap_outcomes, "consent", "default");
+    let policy_uri = first_uri(&bootstrap_outcomes, "policy", "default");
+    let mcp_uri = first_uri(&bootstrap_outcomes, "mcp", "default");
+    let llm_uris: Vec<(String, String)> = bootstrap_outcomes
+        .iter()
+        .filter(|o| o.profile == "llm")
+        .map(|o| (o.name.clone(), o.agent_uri.clone()))
+        .collect();
+
+    // Step 4: advertise each hosted Agent (HostedBy, Model B).
+    for o in &bootstrap_outcomes {
+        let outcome = advertise::advertise_hosted_agent(
+            invoker,
             tenant_id,
-            node_id,
-            &tool_name,
-            manifest.description(),
-            Some(input_schema),
-            output_schema,
-            dispatch_endpoint,
-        )
-        .map(|response| {
-            response
-                .get("replaced_prior")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-        })
-        .map_err(|e| format!("{e}"));
-    PublishOutcome { tool_name, result }
+            &plan.realm,
+            &o.agent_uri,
+            &plan.host_device_uri,
+        );
+        outcomes.push(advertise_outcome_to_publish_outcome(
+            outcome,
+            format!("{}/{}", o.profile, o.name),
+        ));
+    }
+
+    // Step 5: advertise descriptors per Agent. We use the
+    // profiles aggregator so each Agent's descriptor list is
+    // computed once from the live registry.
+    let mut descriptors = profiles_mod::all_descriptors_for_host(
+        &plan.host_device_uri,
+        consent_uri.as_deref(),
+        policy_uri.as_deref(),
+        mcp_uri.as_deref(),
+        &llm_uris,
+    );
+
+    // Step 5b: advertise the abilities OWNED by each user-installed
+    // agent (e.g. `alice.chat` and any per-agent verbs declared in
+    // `<workspace>/abilities/*.ability.toml`). The `llm` profile's
+    // descriptors_for() only emits the generic conversation/session/
+    // meta/skill prefixes — without this step the realm directory
+    // never learns that `alice.chat` exists, so the EasyNet
+    // frontend's Abilities catalog cannot list it and the user
+    // cannot invoke per-agent abilities through the UI.
+    //
+    // Read the live registry once, look up each user agent's URA
+    // in `llm_uris` (bootstrap minted these earlier), call
+    // `abilities_for(name, entry)` to get the per-agent specs, and
+    // convert to AbilityDescriptors owned by the user-agent URA.
+    // A registry-load failure degrades to "no per-agent advertise
+    // this cycle" rather than blocking the rest of publish — the
+    // outcome row surfaces the reason.
+    match crate::registry::agents::load_agents() {
+        Ok(reg) => {
+            for (name, entry) in &reg.agents {
+                let owner_uri = match llm_uris
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .map(|(_, u)| u.clone())
+                {
+                    Some(u) => u,
+                    None => continue, // bootstrap didn't mint a URA for this agent
+                };
+                let specs = crate::runtime::abilities::abilities_for(name, entry);
+                for spec in specs {
+                    let desc = crate::runtime::ability_descriptor::AbilityDescriptor::new(
+                        spec.name(),
+                        &owner_uri,
+                        crate::runtime::ability_descriptor::Visibility::Scoped,
+                    );
+                    match desc {
+                        Ok(d) => {
+                            let d = d
+                                .with_description(spec.description())
+                                .with_input_schema(spec.parameters().clone())
+                                .with_source(format!("agent:{name}"));
+                            descriptors.push(d);
+                        }
+                        Err(e) => {
+                            outcomes.push(PublishOutcome {
+                                agent_uri: owner_uri.clone(),
+                                label: format!("agent-ability/{}", spec.name()),
+                                result: Err(format!("descriptor build failed: {e}")),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            outcomes.push(PublishOutcome {
+                agent_uri: String::new(),
+                label: "user-agent-abilities".into(),
+                result: Err(format!(
+                    "load agent registry failed; per-agent abilities not advertised this cycle: {e}"
+                )),
+            });
+        }
+    }
+
+    // Group descriptors by owner Agent and advertise each group.
+    let mut by_owner: std::collections::HashMap<String, Vec<_>> = std::collections::HashMap::new();
+    for d in descriptors {
+        by_owner.entry(d.owner_agent_uri.clone()).or_default().push(d);
+    }
+    for (owner_uri, abilities) in by_owner {
+        let result = advertise::advertise_abilities(
+            invoker,
+            tenant_id,
+            &plan.realm,
+            &owner_uri,
+            &abilities,
+        );
+        outcomes.push(PublishOutcome {
+            agent_uri: owner_uri.clone(),
+            label: format!("abilities/{}", abilities.len()),
+            result: result.map(|_| ()),
+        });
+    }
+
+    outcomes
 }
 
-/// Publish every `system.*` ability (ping, session.*, permission.*,
-/// discuss.*, schedule.*, loop.*, skill.*, …) to the local
-/// axon-runtime as runtime-local MCP tools.
+/// Register every daemon-owned ability with the local axon-runtime
+/// via the `runtime.register_local_tool` admin RPC. After this call
+/// returns, an external Invoke arriving at axon-runtime for any
+/// of the registered ability names is routed back to the daemon's
+/// `dispatch_endpoint` (a UDS path the daemon's
+/// `services::control::runtime_dispatch` server is listening on).
 ///
-/// Why this exists
-/// ---------------
-/// `publish_agent_to_local_runtime` only walks per-agent manifests
-/// under `<agent-root>/abilities/`. System abilities have no on-disk
-/// manifest — they are registered in the daemon's in-memory
-/// `LocalAbilityRegistry` (see `runtime::system::build_registry_for_daemon`).
-/// Without this function, the axon-runtime's MCP catalog never learns
-/// the names: a Hub-mediated `CallMcpTool("system.skill.list", node)`
-/// returns "tool not found" and the EasyNet frontend's Skills page
-/// silently shows zero installs (the backend's listInstalledLogic
-/// degrades a missing-ability response to an empty list, by design).
-/// The same gap blocked every other `system.*` discoverability
-/// surface; surfacing skill.list incidentally fixes the rest.
+/// This is Step 3-completion on the daemon side. The runtime side
+/// (EasyNet-Axon `runtime_admin.rs` + `try_dispatch_runtime_local_tool`)
+/// already exposes the registration RPC and reads `dispatch_endpoint`
+/// to forward invokes; without this registration the runtime has
+/// nothing to look up and falls through to `NoBinding` for every
+/// daemon-owned ability.
 ///
-/// What gets published
-/// -------------------
-/// Whatever `runtime::system::published_abilities()` returns — today
-/// 17 entries (ping + session + permission + discuss + schedule + loop
-/// + skill). `<agent>.chat` is filtered there because those tools
-/// already publish via the per-agent path off `chat.ability.toml`;
-/// double-registering with a synthesised schema would silently
-/// shadow the manifest's real schema.
+/// Inputs:
+///   * `invoker` — same `BridgeAbilityInvoker` used by advertise;
+///     wraps the dendrite-bridge `ability_call_raw` path. The
+///     resource URI follows the canonical 5-segment shape required
+///     by `AxonClient::canonicalize_easynet_resource_uri`:
+///     `easynet:///r/private/hub/<realm>/abilities/runtime.register_local_tool@1`.
+///     The `runtime.*` namespace is intercepted before membership +
+///     admission checks (rpc_handlers.rs::is_runtime_admin_ability)
+///     so the hub-style subject is purely a URI shape, not an actual
+///     hub-routing decision.
+///   * `tenant_id` — runtime key namespace.
+///   * `realm` — used to construct the URI's subject_value. Any non-
+///     empty value works since runtime.* is intercepted by ability
+///     name; we reuse the daemon's joined realm for consistency with
+///     federation.advertise URIs.
+///   * `node_id` — the local device's node id from `~/.easynet/credentials.json`.
+///   * `dispatch_endpoint` — `ipc://<absolute-path>`. Typically
+///     `runtime_dispatch::dispatch_endpoint_uri()`.
 ///
-/// Failure model
-/// -------------
-/// Best-effort, identical to the per-agent publisher. A runtime that
-/// is not reachable (operator paired but not started runtime) returns
-/// `Err(...)` per outcome; the caller logs and continues so daemon
-/// startup never blocks on the discovery surface. The handlers stay
-/// callable through the local IPC proxy regardless — only the
-/// federation discovery + Hub-mediated CallMcpTool path depends on
-/// this register completing.
-pub fn publish_system_abilities_to_local_runtime(
-    bridge: &DendriteBridge,
+/// Returns one `PublishOutcome` per registration attempt. Best-
+/// effort: a registration failure is logged but never aborts boot.
+/// The daemon stays advertising in the directory; only the
+/// runtime-side dispatch path degrades to NoBinding.
+pub fn register_local_tools_via_runtime<I: AbilityInvoker>(
+    invoker: &I,
     tenant_id: &str,
+    realm: &str,
     node_id: &str,
     dispatch_endpoint: &str,
 ) -> Vec<PublishOutcome> {
-    crate::runtime::system::published_abilities()
-        .into_iter()
-        .map(|meta| {
-            let result = bridge
-                .register_runtime_local_mcp_tool(
-                    tenant_id,
-                    node_id,
-                    &meta.name,
-                    meta.description,
-                    Some(&meta.input_schema),
-                    None,
-                    dispatch_endpoint,
-                )
-                .map(|response| {
-                    response
-                        .get("replaced_prior")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                })
-                .map_err(|e| format!("{e}"));
-            PublishOutcome {
-                tool_name: meta.name,
-                result,
-            }
-        })
-        .collect()
+    let mut outcomes = Vec::new();
+
+    // The set of ability names we register equals the device-
+    // profile's own published abilities + every user-agent's
+    // per-agent abilities. We mirror the advertise side's
+    // descriptor walk so the registry and the directory stay
+    // consistent: anything we *advertised* must also be
+    // *dispatchable*, otherwise an Abilities-page user clicks
+    // Invoke and gets NoBinding.
+    let names = collect_daemon_owned_ability_names();
+
+    let resource_uri = format!(
+        "easynet:///r/private/hub/{realm}/abilities/runtime.register_local_tool@1"
+    );
+    for name in names {
+        let args = build_register_args(tenant_id, node_id, &name, dispatch_endpoint);
+        let result = invoker.invoke_ability(tenant_id, &resource_uri, args);
+        outcomes.push(PublishOutcome {
+            agent_uri: format!("local:{node_id}"),
+            label: format!("runtime/register/{name}"),
+            result: result.map(|_| ()),
+        });
+    }
+
+    outcomes
 }
 
-/// Unregister every manifest under `<agent-root>/abilities/` from the
-/// local axon-runtime. Used by `easynet agent remove` to keep the
-/// catalog in sync with the registry — without this, removed agents
-/// leave dangling tool entries in `ListMCPTools` until the runtime
-/// restarts.
-///
-/// Same best-effort policy as publish: per-tool failures are
-/// returned, not propagated. A removed agent always succeeds in the
-/// registry-row + directory sense; the catalog cleanup is the
-/// "everything else" half.
-pub fn unpublish_agent_from_local_runtime(
-    bridge: &DendriteBridge,
+/// Build the JSON args for a single `runtime.register_local_tool`
+/// invocation. Pulled out as a helper so the test below can pin
+/// the wire shape without spinning up the bridge invoker.
+fn build_register_args(
     tenant_id: &str,
     node_id: &str,
-    agent_name: &str,
-    directory: &AgentDirectory,
-) -> Vec<PublishOutcome> {
-    let manifests = match directory.list_ability_manifests() {
-        Ok(m) => m,
-        Err(e) => {
-            return vec![PublishOutcome {
-                tool_name: format!("{agent_name}.<unknown>"),
-                result: Err(format!("read abilities directory failed: {e}")),
-            }];
+    tool_name: &str,
+    dispatch_endpoint: &str,
+) -> Value {
+    serde_json::json!({
+        "tenant_id": tenant_id,
+        "node_id": node_id,
+        "tool_name": tool_name,
+        // We don't have a McpToolSpec proto encoded here — the
+        // runtime's register handler accepts an empty
+        // spec_proto_b64 and inherits the wire tool_name. A future
+        // PR can encode the real spec via prost so meta.list_tools
+        // surfaces input_schema; v1 trades that for simplicity.
+        "spec_proto_b64": "",
+        "dispatch_endpoint": dispatch_endpoint,
+    })
+}
+
+/// Build the canonical list of ability names the daemon owns and
+/// therefore must register with the runtime. Drives the publish
+/// loop above; pulled out so tests can pin the set against
+/// `published_ability_names` + per-agent abilities.
+fn collect_daemon_owned_ability_names() -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    // Device-profile + consent + policy + mcp + llm published
+    // names — these are the names `meta.list_abilities` would
+    // surface to a remote caller. Driven by the same source the
+    // runtime-local registry surfaces via list_tools.
+    names.extend(crate::runtime::agents::published_ability_names());
+
+    // Per-user-agent abilities — `<agent>.chat` and any
+    // `<agent>.<verb>` declared in the agent's
+    // `<workspace>/abilities/*.ability.toml`. These don't appear
+    // in `published_ability_names` (that table is device-level)
+    // so we walk the agent registry the same way
+    // `republish_with_minter` does at advertise time.
+    if let Ok(reg) = crate::registry::agents::load_agents() {
+        for (agent_name, entry) in &reg.agents {
+            for spec in crate::runtime::abilities::abilities_for(agent_name, entry) {
+                names.push(spec.name().to_string());
+            }
         }
-    };
-    manifests
-        .into_iter()
-        .map(|manifest| {
-            let tool_name = manifest.qualified_name(agent_name);
-            let result = bridge
-                .unregister_runtime_local_mcp_tool(tenant_id, node_id, &tool_name)
-                .map(|response| {
-                    response
-                        .get("was_registered")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                })
-                .map_err(|e| format!("{e}"));
-            PublishOutcome { tool_name, result }
-        })
-        .collect()
+    }
+
+    // Dedup. The published table has uniqueness by name; per-agent
+    // walks may duplicate `<agent>.chat` for fixtures that didn't
+    // get a unique name. Sort for deterministic test output.
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Revoke one Agent's directory entry. Used by `easynet agent
+/// remove` to keep the hub's directory in sync with the local
+/// install state.
+pub fn unpublish_abilities_via_revoke<I: AbilityInvoker>(
+    invoker: &I,
+    tenant_id: &str,
+    realm: &str,
+    agent_uri: &str,
+    reason: &str,
+) -> PublishOutcome {
+    let resource_uri = format!(
+        "easynet:///r/private/hub/{realm}/abilities/federation.revoke@1"
+    );
+    let payload = serde_json::json!({
+        "agent_uri": agent_uri,
+        "reason": reason,
+    });
+    let result = invoker
+        .invoke_ability(tenant_id, &resource_uri, payload)
+        .map(|_| ());
+    PublishOutcome {
+        agent_uri: agent_uri.into(),
+        label: "revoke".into(),
+        result,
+    }
+}
+
+fn advertise_outcome_to_publish_outcome(
+    outcome: AdvertiseOutcome,
+    label: String,
+) -> PublishOutcome {
+    PublishOutcome {
+        agent_uri: outcome.agent_uri,
+        label,
+        result: outcome.result.map(|_receipt| ()),
+    }
+}
+
+fn first_uri(
+    outcomes: &[BootstrapOutcome],
+    profile: &str,
+    name: &str,
+) -> Option<String> {
+    outcomes
+        .iter()
+        .find(|o| o.profile == profile && o.name == name)
+        .map(|o| o.agent_uri.clone())
 }
 
 #[cfg(test)]
 mod tests {
-    //! These tests cover the directory-walking + outcome-shape logic
-    //! in isolation. The actual bridge round-trip is exercised by the
-    //! cross-repo smoke (`scripts/chat-as-ability-smoke.sh`) once
-    //! Step 3's daemon-boot register lands and the runtime is
-    //! reachable. Here we only verify that the function returns one
-    //! outcome per manifest and that an unreadable directory surfaces
-    //! as a single synthetic outcome.
-
     use super::*;
-    use crate::core::ability_spec::default_chat_manifest;
+    use crate::facade::cli::test_support::HomeGuard;
+    use crate::runtime::agents::profiles::bootstrap::LlmSubAgent;
+    use std::cell::RefCell;
+
+    /// Recording fake invoker; mirrors the one in advertise.rs but
+    /// counts calls per resource URI so we can assert the expected
+    /// federation.* sequence happened.
+    struct CountingInvoker {
+        calls: RefCell<Vec<(String, Value)>>,
+        reply: Value,
+    }
+
+    impl CountingInvoker {
+        fn new(reply: Value) -> Self {
+            Self {
+                calls: RefCell::new(Vec::new()),
+                reply,
+            }
+        }
+        fn calls(&self) -> Vec<(String, Value)> {
+            self.calls.borrow().clone()
+        }
+    }
+
+    impl AbilityInvoker for CountingInvoker {
+        fn invoke_ability(
+            &self,
+            _tenant_id: &str,
+            resource_uri: &str,
+            payload_json: Value,
+        ) -> Result<Value, String> {
+            self.calls
+                .borrow_mut()
+                .push((resource_uri.to_string(), payload_json));
+            Ok(self.reply.clone())
+        }
+    }
+
+    struct FailingInvoker;
+    impl AbilityInvoker for FailingInvoker {
+        fn invoke_ability(
+            &self,
+            _: &str,
+            _: &str,
+            _: Value,
+        ) -> Result<Value, String> {
+            Err("transport down".into())
+        }
+    }
+
+    /// Same deterministic minter we used in bootstrap tests.
+    struct CountingMinter(std::cell::Cell<usize>);
+    impl CountingMinter {
+        fn new() -> Self {
+            Self(std::cell::Cell::new(0))
+        }
+    }
+    impl UriMinter for CountingMinter {
+        fn mint_id(&self, profile: &str, name: &str) -> String {
+            let n = self.0.get();
+            self.0.set(n + 1);
+            format!("{profile}-{name}-{n}")
+        }
+    }
+
+    fn good_reply() -> Value {
+        serde_json::json!({"ack": true, "replaced_prior": false})
+    }
+
+    fn plan_for(realm: &str, host: &str) -> BootstrapPlan {
+        BootstrapPlan {
+            realm: realm.into(),
+            host_device_uri: host.into(),
+            consent: true,
+            policy: false,
+            mcp: false,
+            llm_sub_agents: vec![LlmSubAgent {
+                name: "claude".into(),
+                agent_type_display: "claude-code".into(),
+            }],
+        }
+    }
 
     #[test]
-    fn one_outcome_per_manifest_in_a_fresh_agent_directory() {
-        // The fresh agent directory ships exactly one manifest:
-        // chat.ability.toml seeded by AgentDirectory::create. Bridge
-        // is not exercised — we only assert the per-manifest fan-out.
-        // PublishOutcome::result is irrelevant because the bridge call
-        // happens inside publish_one which we don't reach here (the
-        // function would unwrap the bridge ref).
-        let manifest = default_chat_manifest();
-        // qualified_name builds the wire shape the publisher would
-        // emit; pin that as the contract this layer's caller depends
-        // on for matching outcomes back to manifests.
-        assert_eq!(manifest.qualified_name("alice"), "alice.chat");
+    fn republish_emits_device_advertise_then_each_hosted_then_descriptors() {
+        let _h = HomeGuard::new();
+        let invoker = CountingInvoker::new(good_reply());
+        let plan = plan_for("acme", "easynet:///r/acme/agent/01DEV");
+        let outcomes = republish_with_minter(&invoker, "tenant", &plan, &CountingMinter::new());
+
+        // We expect: 1 device-advertise + N hosted-advertises + M
+        // ability-advertises. With consent + claude enabled, hosted
+        // count = 2 (consent/default + llm/claude).
+        let calls = invoker.calls();
+        let resource_seq: Vec<&str> = calls.iter().map(|(u, _)| u.as_str()).collect();
+        let device_count = resource_seq
+            .iter()
+            .filter(|u| u.contains("federation.advertise_agent@1"))
+            .count();
+        let abilities_count = resource_seq
+            .iter()
+            .filter(|u| u.contains("federation.advertise_abilities@1"))
+            .count();
+        assert_eq!(
+            device_count, 3,
+            "1 device + 2 hosted = 3 advertise_agent calls; got resource sequence {resource_seq:?}"
+        );
+        assert!(
+            abilities_count >= 1,
+            "at least one advertise_abilities call expected; got {resource_seq:?}"
+        );
+        // No outcome should be Err on a clean reply.
+        for o in &outcomes {
+            if o.label == "skipped" {
+                panic!("post-join plan produced a skipped outcome: {o:?}");
+            }
+            assert!(o.result.is_ok(), "unexpected Err outcome: {o:?}");
+        }
+    }
+
+    #[test]
+    fn republish_skips_advertise_when_realm_empty() {
+        let _h = HomeGuard::new();
+        let invoker = CountingInvoker::new(good_reply());
+        let mut plan = plan_for("", "");
+        plan.consent = true;
+        let outcomes =
+            republish_with_minter(&invoker, "tenant", &plan, &CountingMinter::new());
+        // Pre-join: bootstrap still ran but advertise was skipped.
+        // We should see ZERO calls to the bridge.
+        assert!(invoker.calls().is_empty(), "no advertise calls should have happened");
+        // The single outcome must report the skip.
+        let skipped = outcomes
+            .iter()
+            .find(|o| o.label == "skipped")
+            .expect("expected a 'skipped' outcome");
+        assert!(skipped.result.is_err());
+    }
+
+    #[test]
+    fn republish_surfaces_per_call_failure_without_aborting() {
+        let _h = HomeGuard::new();
+        let plan = plan_for("acme", "easynet:///r/acme/agent/01DEV");
+        let outcomes =
+            republish_with_minter(&FailingInvoker, "tenant", &plan, &CountingMinter::new());
+        // Every advertise call must turn into one Err PublishOutcome.
+        assert!(
+            outcomes.iter().all(|o| {
+                o.label == "skipped" || o.result.is_err() || o.label == "local-agents.json"
+            }),
+            "every advertise must surface its error; got {outcomes:?}"
+        );
+        let failed = outcomes
+            .iter()
+            .filter(|o| o.result.is_err() && o.label != "local-agents.json")
+            .count();
+        assert!(failed > 0, "at least one advertise failure expected");
+    }
+
+    #[test]
+    fn republish_advertises_user_agent_chat_ability_under_user_agent_owner() {
+        // Reproduces the gap caught by an end-to-end audit: when a
+        // user installs a claude-code agent named `alice`, the daemon
+        // must advertise `alice.chat` (and any other per-agent
+        // verbs from <workspace>/abilities/*.ability.toml) so the
+        // EasyNet frontend's Abilities catalog can list it AND the
+        // backend can route invokes back to alice. Pre-fix the LLM
+        // profile only published the generic conversation/session/
+        // meta/skill prefixes, so `alice.chat` never reached the
+        // realm directory and the UI could not see it.
+        let _h = HomeGuard::new();
+
+        // Persist an `alice` AgentEntry into the registry so that
+        // `load_agents()` inside republish_with_minter sees it.
+        let mut reg = crate::registry::agents::AgentRegistry::default();
+        reg.agents.insert(
+            "alice".to_string(),
+            crate::registry::agents::AgentEntry::new(
+                crate::registry::agents::AgentType::ClaudeCode,
+                None,
+            ),
+        );
+        crate::registry::agents::save_agents(&reg).expect("save alice into registry");
+
+        // Plan: realm joined, alice listed as an LLM sub-agent so
+        // bootstrap mints a URA for her.
+        let plan = BootstrapPlan {
+            realm: "acme".into(),
+            host_device_uri: "easynet:///r/acme/agent/01DEV".into(),
+            consent: false,
+            policy: false,
+            mcp: false,
+            llm_sub_agents: vec![LlmSubAgent {
+                name: "alice".into(),
+                agent_type_display: "claude-code".into(),
+            }],
+        };
+        let invoker = CountingInvoker::new(good_reply());
+        let outcomes = republish_with_minter(&invoker, "tenant", &plan, &CountingMinter::new());
+
+        // Locate the `alice` URA via the persisted local-agents file.
+        let file_back = local_agents::load().expect("load local-agents.json");
+        let alice_uri = &file_back
+            .hosted_agents
+            .iter()
+            .find(|e| e.profile == "llm" && e.name == "alice")
+            .expect("bootstrap must have minted a URA for alice")
+            .agent_uri;
+
+        // Find the advertise_abilities call whose payload's
+        // `agent_uri` is alice's URA, and assert `alice.chat`
+        // appears in its abilities list. The daemon may pack
+        // multiple abilities per call; we scan, not require the
+        // first match.
+        let calls = invoker.calls();
+        let alice_advert = calls
+            .iter()
+            .find(|(u, p)| {
+                u.contains("federation.advertise_abilities@1")
+                    && p["agent_uri"].as_str() == Some(alice_uri.as_str())
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected an advertise_abilities call owned by {alice_uri:?}; \
+                     resource_seq = {:?}",
+                    calls.iter().map(|(u, _)| u).collect::<Vec<_>>()
+                )
+            });
+        let abilities = alice_advert.1["abilities"]
+            .as_array()
+            .expect("abilities array on advertise_abilities payload");
+        let names: Vec<&str> = abilities
+            .iter()
+            .filter_map(|a| a["name"].as_str())
+            .collect();
+        assert!(
+            names.iter().any(|n| *n == "alice.chat"),
+            "alice.chat must appear in advertised abilities for {alice_uri:?}; got names = {names:?}"
+        );
+
+        // Sanity: outcomes carry one row per advertise_abilities
+        // group; alice's row must be Ok.
+        let alice_row = outcomes
+            .iter()
+            .find(|o| o.agent_uri == *alice_uri && o.label.starts_with("abilities/"))
+            .expect("alice's abilities-advertise outcome row must exist");
+        assert!(alice_row.result.is_ok(), "alice abilities advertise: {alice_row:?}");
+    }
+
+    #[test]
+    fn republish_does_not_lose_device_descriptors_when_user_agent_added() {
+        // Regression guard: stitching per-agent descriptors into the
+        // existing list must not displace device-level ones. If a
+        // refactor accidentally replaces (rather than appends) the
+        // descriptors Vec, the device-profile abilities (fs.read,
+        // shell.run, …) would silently drop off the wire.
+        let _h = HomeGuard::new();
+        let mut reg = crate::registry::agents::AgentRegistry::default();
+        reg.agents.insert(
+            "alice".into(),
+            crate::registry::agents::AgentEntry::new(
+                crate::registry::agents::AgentType::ClaudeCode,
+                None,
+            ),
+        );
+        crate::registry::agents::save_agents(&reg).unwrap();
+        let plan = BootstrapPlan {
+            realm: "acme".into(),
+            host_device_uri: "easynet:///r/acme/agent/01DEV".into(),
+            consent: false,
+            policy: false,
+            mcp: false,
+            llm_sub_agents: vec![LlmSubAgent {
+                name: "alice".into(),
+                agent_type_display: "claude-code".into(),
+            }],
+        };
+        let invoker = CountingInvoker::new(good_reply());
+        let _ = republish_with_minter(&invoker, "tenant", &plan, &CountingMinter::new());
+
+        // The device-owner advertise must still carry at least one
+        // device-level ability (fs.read is the canary — it has been
+        // in the device profile since Tier 2.5 baseline locomotion).
+        let calls = invoker.calls();
+        let device_advert = calls
+            .iter()
+            .find(|(u, p)| {
+                u.contains("federation.advertise_abilities@1")
+                    && p["agent_uri"].as_str() == Some("easynet:///r/acme/agent/01DEV")
+            })
+            .expect("device-owner advertise_abilities call must still exist");
+        let abilities = device_advert.1["abilities"]
+            .as_array()
+            .expect("abilities array on device advertise");
+        let names: Vec<&str> = abilities
+            .iter()
+            .filter_map(|a| a["name"].as_str())
+            .collect();
+        assert!(
+            names.iter().any(|n| *n == "fs.read"),
+            "device descriptors must survive per-agent stitch; got names = {names:?}"
+        );
+    }
+
+    #[test]
+    fn unpublish_targets_federation_revoke_resource_uri() {
+        let invoker = CountingInvoker::new(good_reply());
+        let outcome = unpublish_abilities_via_revoke(
+            &invoker,
+            "tenant",
+            "acme",
+            "easynet:///r/acme/agent/01OLD",
+            "operator removed",
+        );
+        assert!(outcome.result.is_ok());
+        let calls = invoker.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].0.contains("federation.revoke@1"));
+        assert_eq!(calls[0].1["agent_uri"], "easynet:///r/acme/agent/01OLD");
+        assert_eq!(calls[0].1["reason"], "operator removed");
+    }
+
+    #[test]
+    fn republish_persists_local_agents_file_with_minted_uris() {
+        let _h = HomeGuard::new();
+        let invoker = CountingInvoker::new(good_reply());
+        let plan = plan_for("acme", "easynet:///r/acme/agent/01DEV");
+        let _ = republish_with_minter(&invoker, "tenant", &plan, &CountingMinter::new());
+        let calls = invoker.calls();
+        // Find the consent-hosted advertise and assert the URA shape.
+        let consent_call = calls
+            .iter()
+            .find(|(u, p)| {
+                u.contains("federation.advertise_agent")
+                    && p["signing_authority"]["kind"] == "hosted_by"
+                    && p["agent_uri"].as_str().unwrap().contains("consent-default")
+            });
+        assert!(
+            consent_call.is_some(),
+            "expected a hosted_by advertise for consent/default, got calls = {calls:#?}"
+        );
+
+        // Persistence end-to-end: read local-agents.json back from
+        // the isolated $HOME and confirm the consent + llm rows
+        // landed with stable URAs.
+        let file_back = local_agents::load().expect("load after save must succeed");
+        assert_eq!(file_back.host_device_agent_uri, "easynet:///r/acme/agent/01DEV");
+        let consent_row = file_back
+            .hosted_agents
+            .iter()
+            .find(|e| e.profile == "consent" && e.name == "default")
+            .expect("consent/default row must be persisted");
+        assert!(consent_row.agent_uri.contains("consent-default"));
+        let llm_row = file_back
+            .hosted_agents
+            .iter()
+            .find(|e| e.profile == "llm" && e.name == "claude")
+            .expect("llm/claude row must be persisted");
+        assert!(llm_row.agent_uri.contains("llm-claude"));
+    }
+
+    #[test]
+    fn second_republish_reuses_persisted_uris_no_duplicate_advertise() {
+        let _h = HomeGuard::new();
+        let plan = plan_for("acme", "easynet:///r/acme/agent/01DEV");
+        let invoker_a = CountingInvoker::new(good_reply());
+        let _ = republish_with_minter(&invoker_a, "tenant", &plan, &CountingMinter::new());
+        let first_calls = invoker_a.calls();
+        let consent_uri_v1 = first_calls
+            .iter()
+            .find_map(|(u, p)| {
+                if u.contains("federation.advertise_agent")
+                    && p["signing_authority"]["kind"] == "hosted_by"
+                    && p["agent_uri"].as_str().unwrap().contains("consent-default")
+                {
+                    p["agent_uri"].as_str().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            })
+            .expect("first run must have advertised consent/default");
+
+        // Second run with a fresh minter — if the persistence path
+        // works, we must NOT mint a new URI; the second advertise
+        // must carry the same URA as the first.
+        let invoker_b = CountingInvoker::new(good_reply());
+        let _ = republish_with_minter(&invoker_b, "tenant", &plan, &CountingMinter::new());
+        let consent_uri_v2 = invoker_b
+            .calls()
+            .iter()
+            .find_map(|(u, p)| {
+                if u.contains("federation.advertise_agent")
+                    && p["signing_authority"]["kind"] == "hosted_by"
+                    && p["agent_uri"].as_str().unwrap().contains("consent-default")
+                {
+                    p["agent_uri"].as_str().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            })
+            .expect("second run must still advertise consent/default");
+
+        assert_eq!(
+            consent_uri_v1, consent_uri_v2,
+            "second republish must reuse the persisted URA for consent/default"
+        );
+    }
+
+    #[test]
+    fn register_local_tools_uses_canonical_runtime_admin_uri() {
+        // The bridge requires a 5-segment /r URI, and the runtime
+        // intercepts `runtime.*` ability names before admission/
+        // membership gates. We pin both shape constraints here so
+        // future refactors of the URI builder don't quietly break
+        // the dispatch registration.
+        let _h = HomeGuard::new();
+        let invoker = CountingInvoker::new(serde_json::json!({"ack": true}));
+        let outcomes = register_local_tools_via_runtime(
+            &invoker,
+            "tenant",
+            "acme",
+            "node-01DEV",
+            "ipc:///tmp/runtime-dispatch-test.sock",
+        );
+
+        // At least one ability must have been published —
+        // device-profile abilities are unconditional.
+        assert!(
+            !outcomes.is_empty(),
+            "register must walk at least one ability"
+        );
+        // Every call must hit the canonical hub-style runtime admin
+        // resource URI; ability_name on the wire derives from the
+        // URI tail, so a wrong shape silently misroutes.
+        let calls = invoker.calls();
+        assert_eq!(calls.len(), outcomes.len(), "1 call per ability");
+        for (uri, payload) in &calls {
+            assert_eq!(
+                uri,
+                "easynet:///r/private/hub/acme/abilities/runtime.register_local_tool@1",
+                "register URI must be the canonical 5-segment runtime admin URI"
+            );
+            assert_eq!(payload["tenant_id"], "tenant");
+            assert_eq!(payload["node_id"], "node-01DEV");
+            assert_eq!(
+                payload["dispatch_endpoint"], "ipc:///tmp/runtime-dispatch-test.sock"
+            );
+            assert!(
+                payload["tool_name"].as_str().is_some_and(|s| !s.is_empty()),
+                "tool_name must be present and non-empty"
+            );
+        }
+        for o in &outcomes {
+            assert!(o.result.is_ok(), "every register call should succeed: {o:?}");
+        }
+    }
+
+    #[test]
+    fn register_local_tools_surfaces_failure_per_call() {
+        let _h = HomeGuard::new();
+        let outcomes = register_local_tools_via_runtime(
+            &FailingInvoker,
+            "tenant",
+            "acme",
+            "node-x",
+            "ipc:///tmp/x.sock",
+        );
+        assert!(!outcomes.is_empty());
+        assert!(
+            outcomes.iter().all(|o| o.result.is_err()),
+            "every register call must surface its transport error"
+        );
     }
 }

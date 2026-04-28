@@ -1,0 +1,1526 @@
+\documentclass[11pt,a4paper]{article}
+
+% ──────────────────────────────────────────────────────────────────────────
+% AXON-RFC-006 Appendix A — easynet.pages
+% Status: Draft v0.3 (HTML/EAL dual-canonical: EAL is the source
+%                     of truth; HTML and API surface are derived
+%                     projections; pages.get_eal mandatory)
+% Build:  xelatex AXON-RFC-006-A-easynet-pages.tex
+% Companion: AXON-RFC-006-stateful-easynet.tex (minimal normative core)
+% ──────────────────────────────────────────────────────────────────────────
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{xltabular}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{tcolorbox}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{parskip}
+\usepackage{xspace}
+
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setCJKmainfont{PingFang SC}[
+    BoldFont={PingFang SC Semibold},
+    ItalicFont={PingFang SC Light}
+]
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small AXON-RFC-006 Appendix A}
+\fancyhead[R]{\small easynet.pages --- Technical Design}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\titleformat{\section}{\Large\bfseries\color{black!85}}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\large\bfseries\color{black!75}}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{black!70}}{\thesubsubsection}{0.5em}{}
+
+\definecolor{normativecolor}{RGB}{180,30,30}
+\definecolor{derivedcolor}{RGB}{30,90,180}
+\definecolor{deferredcolor}{RGB}{120,90,30}
+\definecolor{codebg}{RGB}{245,245,248}
+\definecolor{codeborder}{RGB}{210,210,220}
+
+\newcommand{\normsv}{\textcolor{normativecolor}{\textbf{[normative]}}\xspace}
+\newcommand{\derived}{\textcolor{derivedcolor}{\textbf{[derived]}}\xspace}
+\newcommand{\deferred}{\textcolor{deferredcolor}{\textbf{[deferred]}}\xspace}
+
+\lstdefinestyle{ealstyle}{
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small,
+    frame=single,
+    rulecolor=\color{codeborder},
+    breaklines=true,
+    showstringspaces=false,
+    keywordstyle=\color{blue!70!black}\bfseries,
+    commentstyle=\color{green!40!black}\itshape,
+    stringstyle=\color{red!60!black},
+    morekeywords={state_type,state_key,canonical,operational,transition,receipt,view,principal,agent,owner_signature,attempt_id,transition_id,fn,let,struct,impl,pub,async,await},
+    columns=fullflexible,
+    keepspaces=true,
+    aboveskip=0.6em,
+    belowskip=0.6em,
+}
+\lstset{style=ealstyle}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+
+\newtcolorbox{invariant}[1][Invariant]{
+    colback=red!4!white,
+    colframe=red!50!black,
+    fonttitle=\bfseries,
+    title={Invariant --- #1},
+    sharp corners=south,
+    boxrule=0.6pt,
+}
+\newtcolorbox{notebox}[1][]{
+    colback=blue!4!white,
+    colframe=blue!50!black,
+    fonttitle=\bfseries,
+    title={Note},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+\newtcolorbox{warningbox}[1][]{
+    colback=orange!6!white,
+    colframe=orange!70!black,
+    fonttitle=\bfseries,
+    title={Transitional misalignment},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+\newtcolorbox{decisionbox}[1][]{
+    colback=purple!4!white,
+    colframe=purple!60!black,
+    fonttitle=\bfseries,
+    title={Open decision},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+
+\title{
+    \vspace{-2em}
+    \textbf{\Large AXON-RFC-006 Appendix A: easynet.pages}\\[0.3em]
+    \large Technical design, algorithms, and implementation plan
+    for the first reference state machine of stateful EasyNet
+}
+\author{
+    Silan Hu \\ \small National University of Singapore
+}
+\date{Draft v0.3, \today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+This appendix specifies \texttt{easynet.pages}, the simplest
+\texttt{state\_type} that exercises the full set of normative
+primitives defined in AXON-RFC-006 main. A page is a state
+object that carries identity, canonical content, and version
+under the rules of \S\S1--7 of the main body, and exposes that
+state through two views: \texttt{human\_view} (an HTML rendering
+for browsers) and \texttt{agent\_view} (a structured JSON
+metadata document --- canonical fields, ability surface,
+receipt-history pointer, and an optional pointer to the page's
+\texttt{actions.*} namespace if the owner exposed one).
+
+\textbf{What changed in v0.2.} The agent-actionable surface
+(EAL fragments, missions, form maps) is no longer embedded into
+\texttt{agent\_view} as a static field. Instead, when a page's
+owner wishes to expose action-style discovery, they implement
+abilities in the \texttt{actions.*} namespace, exactly as
+described in Appendix B for web\_apps.
+
+\textbf{What changed in v0.3.} EAL is promoted to the page's
+canonical agent-facing artifact. Every page carries a single
+EAL source file (markdown documentation in \texttt{//}
+comments + zero or more \texttt{mission} declarations) hashed
+into canonical state as \texttt{eal\_hash}. The HTML body, the
+page's API surface, and the form/button bindings are all
+deterministic projections of the EAL plus the page's manifest:
+one source, multiple derived views. \texttt{pages.get\_eal@v1}
+becomes a mandatory ability (PA-INV-2); the previous
+\texttt{pages.get\_markdown@v1} and the separate
+\texttt{markdown\_hash} field are removed --- agent-facing
+markdown is the EAL comments and is read by the same
+\texttt{pages.get\_eal} call that returns the missions.
+
+The appendix covers four layers of detail. First, the
+state machine: the field set, the four-state space, and the seven
+transitions. Second, the wire schemas of every transition's
+arguments and receipt body. Third, the algorithms: canonical
+projection, JCS canonicalisation, hash, ETag, optimistic
+concurrency, and view projection, each with a worked byte-level
+example. Fourth, the implementation plan: a module map for
+\texttt{EasyNet-Cli}, a five-PR slice plan (P-A1 through P-A5),
+and a complete end-to-end worked example following one page from
+its first \texttt{pages.create} through a Hub-rendered HTML
+response and an agent-readable URA fetch. Appendix B (the
+\texttt{easynet.web\_app} pressure test) and the main body's
+thirteen \texttt{TR-INV-*} invariants are referenced throughout
+but not redefined; this document is a \emph{reference
+implementation specification}, not a re-derivation of the
+protocol.
+\end{abstract}
+
+\tableofcontents
+\vspace{1em}
+\hrule
+\vspace{1em}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Goals and non-goals}
+\label{sec:goals}
+
+\subsection{Goals}
+
+\normsv{} This appendix specifies an implementation of
+\texttt{easynet.pages} that:
+
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.25em]
+    \item Conforms to every \normsv{} clause of AXON-RFC-006
+    main (\S\S1--7) and discharges every applicable
+    \texttt{TR-INV-*} from the companion Appendix~B.
+    \item Provides four canonical transitions (\texttt{create},
+    \texttt{publish}, \texttt{update}, \texttt{archive},
+    \texttt{delete}) and two query abilities (\texttt{get},
+    \texttt{list}).
+    \item Stores page content as a content-addressed blob,
+    keyed by SHA-256, never embedded in canonical state
+    (CSH-INV-2).
+    \item Exposes both \texttt{human\_view} (HTML rendered from
+    the content blob) and \texttt{agent\_view} (a typed JSON
+    document containing canonical fields, ability surface,
+    receipt history pointer, and an optional pointer to the
+    page's \texttt{actions.*} namespace if the owner exposed one)
+    for every published page.
+    \item Reuses the same \texttt{easynet-pages-author} agent
+    skill that Appendix~B seeds. The skill teaches an agent how
+    to author both pages (this appendix) and web\_apps
+    (Appendix~B); the structural overlap on
+    \texttt{pages.create / publish / update / delete} makes one
+    bundled skill sufficient. The seeder lives in P-A5 and is
+    described in detail in Appendix~B \S3.4.
+    \item Is implementable end-to-end in five PR-sized slices
+    (\S\ref{sec:impl-plan}).
+\end{enumerate}
+
+\subsection{Non-goals}
+
+\derived{} The following are deliberately out of scope:
+
+\begin{itemize}[leftmargin=2.2em,itemsep=0.2em]
+    \item \textbf{webapp} (the long-running, runtime-overlay
+    pressure test). Covered by Appendix~B.
+    \item \textbf{cross-realm or cross-node hubs}. Phase~1 ships
+    a single-node Hub that reverse-proxies pages owned by the
+    same daemon. Multi-realm hubs are deferred to RFC-006-A v2.
+    \item \textbf{authenticated human callers}
+    (\texttt{principal/human-auth}). Phase~1 supports
+    \texttt{principal/human-anon} only.
+    \item \textbf{HTML sanitisation pipelines and CSP policies
+    beyond a fixed default}. Owners author HTML; the Hub serves
+    it under a single hard-coded CSP. A sanitisation/template
+    layer is RFC-006-A v2.
+    \item \textbf{TLS termination, rate limiting, multi-instance
+    Hub fleets}. The Hub is an axum process binding a single
+    port; deployment-grade hardening is operations work, not
+    protocol work.
+\end{itemize}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Relation to the normative core}
+\label{sec:relation}
+
+This appendix is a \emph{reference implementation} of the
+normative core in AXON-RFC-006 main. It does not redefine any
+primitive. The mapping is:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\linewidth}{l X}
+\toprule
+\textbf{Main clause} & \textbf{This appendix's instantiation} \\
+\midrule
+\S1 State Object               & \S\ref{sec:state-machine}: pages state\_type, key, lifecycle. \\
+\S1.5 SO-INV-1 immutability    & state\_key (realm, owner, slug) is immutable post-create. \\
+\S2 Canonical State Hash       & \S\ref{sec:algorithms}: explicit projection $\pi$, JCS, SHA-256 example. \\
+\S2 CSH-INV-2 content-as-blob  & \S\ref{sec:storage}: blob layout; canonical state holds only \texttt{content\_hash}. \\
+\S3 Receipt Classes            & \S\ref{sec:wire-schemas}: every transition's receipt body shown. \\
+\S3 RC-INV-2 optimistic concurrency & \S\ref{sec:algo-concurrency}: \texttt{ETag} = first 16 bytes of canonical hash. \\
+\S4 Transition Ability         & \S\ref{sec:wire-schemas}: \texttt{transition\_id}s for every page transition. \\
+\S5 Authority + delegation     & Phase 1: owner\_agent signs locally; no delegated execution for pages. \\
+\S5 principal/ caller          & \S\ref{sec:hub}: Hub mints \texttt{human-anon} URIs per request. \\
+\S6 View Projection            & \S\ref{sec:algo-views}: human\_view and agent\_view algorithms. \\
+\S7 Receipt Indexing           & \S\ref{sec:storage}: state\_key index in addition to receipt\_id. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textbf{Reading discipline.} A statement labelled \normsv{} in this
+appendix is binding on the \texttt{pages} implementation only; it
+does not propose a new protocol-level rule. Where this document
+appears to extend the protocol, it does so by instantiating an
+already-\normsv{} clause of the main body.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{State machine}
+\label{sec:state-machine}
+
+\subsection{state\_type and state\_key}
+
+\normsv{}
+
+\begin{lstlisting}
+state_type:  easynet.page
+
+state_key:
+    (realm: string, owner_agent_uri: string, slug: string)
+
+  realm           Logical namespace. Phase 1: a single realm per
+                  daemon, named in config (default "default").
+  owner_agent_uri Canonical authority. The agent that signs every
+                  CanonicalReceipt for this page. Embedded in the
+                  key (not a field) per main §1.3.
+  slug            Owner-namespaced kebab-case identifier
+                  (^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$).
+
+URA form:
+  easynet:///r/<realm>/agent/<owner>/page/<slug>
+
+ABNF (slug):
+  slug      = head [ *body tail ]
+  head      = ALPHA / DIGIT
+  body      = ALPHA / DIGIT / "-"
+  tail      = ALPHA / DIGIT
+  ALPHA     = %x61-7A         ; lowercase ASCII letters only
+\end{lstlisting}
+
+The slug grammar deliberately rejects uppercase, dots, slashes, and
+internationalised characters. Two reasons: the slug appears in URLs
+with no escape pass; and case-sensitive collisions
+(\texttt{Hello} vs \texttt{hello}) are a rich source of admin
+confusion. RFC-006-A v2 may relax this.
+
+\subsection{Canonical fields}
+
+\normsv{} Per CSH-INV-2 (main \S2.5), large content is held as a
+hash. The canonical state of a page is therefore a small map:
+
+\begin{lstlisting}
+canonical_fields(page) = {
+    manifest_hash:    bytes(32),    // SHA-256 of the manifest
+                                    // sub-document (title,
+                                    // description, content_type,
+                                    // visibility); see §3.3
+    eal_hash:         bytes(32),    // SHA-256 of the page's EAL
+                                    // source (see §3.6, PA-INV-2).
+                                    // The agent-facing canonical
+                                    // artifact: contains markdown
+                                    // documentation in `// ...`
+                                    // comments and zero or more
+                                    // mission declarations. null/
+                                    // zero in Draft and after
+                                    // archive/delete.
+    content_hash:     bytes(32),    // SHA-256 of the rendered HTML
+                                    // body (the human projection
+                                    // of the EAL source). null/
+                                    // zero in Draft and after
+                                    // archive/delete.
+    state_value:      string,       // "Draft" | "Published"
+                                    //   | "Archived" | "Deleted"
+    visibility:       string,       // "private" | "realm" | "public"
+    version:          uint64        // monotonic; +1 per
+                                    // CanonicalReceipt
+}
+\end{lstlisting}
+
+The schema annotates every field with \texttt{canonical:true}. The
+following \emph{operational} fields exist in Phase 1 but are
+\emph{never} part of canonical projection $\pi$
+(\S\ref{sec:algorithms}):
+
+\begin{lstlisting}
+operational_fields(page) = {
+    last_view_at:        timestamp,    // observation only
+    view_count_estimate: uint64,       // best-effort
+    last_caller_class:   string|null   // "browser" | "bot" | ...
+}
+\end{lstlisting}
+
+These are computed from \texttt{OperationalReceipt}s emitted by
+the Hub during view projection (\S\ref{sec:algo-views}); they are
+useful for the agent\_view's audit summary but never enter
+\texttt{canonical\_state\_hash}.
+
+\subsection{State space}
+\label{sec:state-space}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\linewidth}{l X}
+\toprule
+\textbf{state\_value} & \textbf{Meaning} \\
+\midrule
+\texttt{Draft}       & Created but not yet published. content\_hash may be null or set; not served by Hub. \\
+\texttt{Published}   & Live. content\_hash non-null. Served by Hub if visibility allows. \\
+\texttt{Archived}    & Previously Published; not served by Hub. content\_hash retained for history. \\
+\texttt{Deleted}     & Terminal. content\_hash cleared. No further transitions accepted. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\noindent Allowed canonical transitions (single canonical state
+space, no runtime overlay --- pages have no long-running serve
+process, unlike \texttt{web\_app}):
+
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\linewidth}{l l X}
+\toprule
+\textbf{Transition} & \textbf{Pre $\to$ Post} & \textbf{Notes} \\
+\midrule
+\texttt{pages.create@v1}   & $\emptyset \to$ Draft     & Mints state key. \\
+\texttt{pages.publish@v1}  & Draft $\to$ Published     & Requires non-null content\_hash. \\
+\texttt{pages.update@v1}   & Published $\to$ Published & version+1; content\_hash and/or manifest\_hash change. \\
+\texttt{pages.archive@v1}  & Published $\to$ Archived  & Reversible by re-publish. \\
+\texttt{pages.unpublish@v1}& Archived $\to$ Draft      & Allows resume of editing. \\
+\texttt{pages.delete@v1}   & * $\to$ Deleted (terminal)& Clears content\_hash. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\noindent Query abilities (no state mutation, no
+\texttt{CanonicalReceipt}, only \texttt{OperationalReceipt} for
+audit):
+
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\linewidth}{l l}
+\toprule
+\textbf{Ability} & \textbf{Returns} \\
+\midrule
+\texttt{pages.get@v1}     & full canonical projection + content blob handle \\
+\texttt{pages.list@v1}    & list of (slug, state\_value, version) for one owner \\
+\texttt{pages.get\_eal@v1}& UTF-8 EAL source of the page (see §3.6, PA-INV-2). Mandatory. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\begin{invariant}[PA-INV-1]
+A page \texttt{Draft} or \texttt{Archived} \textbf{MUST NOT} be
+served by any Hub regardless of visibility. The Hub
+discriminates on \texttt{state\_value} \emph{before} consulting
+visibility; visibility gates only Published pages.
+\end{invariant}
+
+\textbf{Why PA-INV-1.} A draft is by definition unfinished; serving
+it because visibility happened to be \texttt{public} would surface
+work-in-progress as published content. Archived pages are
+deliberately un-served --- they exist for history, not access.
+
+\subsection{EAL is canonical; HTML and API surface are derived}
+\label{sec:eal-canonical}
+
+\normsv{} A peer EasyNet agent that lands on a page wants two
+things: to understand the page's content, and (when the page
+has any) to invoke its actions. The previous draft addressed
+these with two separate mechanisms (a mandatory
+\texttt{pages.get\_markdown} ability for content; the
+\texttt{actions.*} namespace for invocations). v0.3 unifies
+them: a page's \emph{agent-facing canonical artifact is a
+single EAL source file}.
+
+\begin{invariant}[PA-INV-2]
+Every \texttt{easynet.page} \textbf{MUST} carry an EAL source
+as a canonical artifact, hashed into \texttt{eal\_hash}. The
+EAL source is structured as a markdown documentation block in
+\texttt{// \ldots} line comments, followed by zero or more
+\texttt{mission} declarations corresponding to the page's
+interactive elements. For a page in \texttt{state\_value =
+Published} the owner \textbf{MUST} register and implement
+\texttt{<owner>.pages.get\_eal@v1}, returning the UTF-8 EAL
+text whose SHA-256 equals the current \texttt{eal\_hash}. The
+Hub \textbf{MUST} expose the HTTP mirror
+\texttt{GET /<\ldots>/easynet-for-agents/eal} which translates
+to a \texttt{pages.get\_eal@v1} invocation; the response body
+is \texttt{Content-Type: text/eal} (or
+\texttt{text/plain; charset=utf-8} as fallback).
+\end{invariant}
+
+\textbf{The canonical authoring direction is EAL → HTML.} The
+owner writes the EAL source. The HTML body is a projection
+generated from the EAL by a deterministic renderer (the markdown
+comments become rendered HTML; each \texttt{mission} declaration
+becomes an HTML form / button bound to the corresponding ability
+call). \texttt{content\_hash} (the HTML body) and
+\texttt{eal\_hash} (the EAL source) are both canonical fields,
+but the dependency is asymmetric: the renderer is a pure
+function of the EAL plus the page's manifest, so a verifier
+given the EAL and the renderer's version can independently
+reconstruct \texttt{content\_hash} and check it against the
+receipt.
+
+\textbf{This is the key v0.3 claim.} Many APIs and UI elements
+on a page can be \emph{generated} from a single EAL source ---
+the form action attributes, the button \texttt{onclick}
+handlers, the \texttt{<a>} hrefs that link to actions, and
+the page's agent-facing summary all derive from the same EAL
+text. The owner maintains one canonical artifact; the protocol
+ensures every projection is byte-deterministic and
+content-hash-anchored.
+
+\textbf{Structure of the EAL source.}
+
+\begin{lstlisting}
+// # Ceramic mug, 12oz
+//
+// **Price:** $19.99
+// **Ships:** Tuesday
+//
+// To buy this mug, submit the form (HTML) or run the
+// `buy` mission (EAL).
+
+mission "buy" {
+  let order = call "shop.checkout" on "alice" with {
+    item_id = "mug-12oz",
+    address = "<filled by owner-side specialisation>",
+    qty     = 1
+  } timeout 30
+}
+\end{lstlisting}
+
+A purely-documentary page (one with no interactive elements)
+carries a trivial mission whose body is empty:
+
+\begin{lstlisting}
+// # About this site
+//
+// This is a static information page. There is nothing to do
+// here, only content to read.
+
+mission "view" { }
+\end{lstlisting}
+
+The trivial \texttt{mission "view" \{ \}} satisfies the EAL
+parser's current ``exactly one mission per program''
+requirement (\texttt{src/eal/parser.rs}, \texttt{program =
+mission\_decl}). A future EAL relaxation may admit zero-mission
+programs; this appendix's contract does not depend on it.
+
+\textbf{HTML/EAL correspondence (informational, not a strict
+invariant).} A peer agent expecting \emph{rough} information
+parity between HTML and EAL is well-served:
+
+\begin{itemize}[leftmargin=2em,itemsep=0.15em]
+    \item Each markdown heading / paragraph in the EAL comments
+    corresponds to the same content rendered as HTML.
+    \item Each \texttt{mission} declaration corresponds to one
+    interactive element (form / button / action link) on the
+    HTML page; the \texttt{call} inside the mission is the same
+    ability the form's \texttt{POST /api/<verb>} would invoke.
+    \item Each outbound ability the EAL references inside its
+    mission bodies is automatically eligible for the
+    \texttt{api\_surface} (web\_app, Appendix~B); the page's
+    declared API is derived from EAL, not separately
+    enumerated.
+\end{itemize}
+
+The protocol does \emph{not} enforce strict correspondence
+(an owner could render different HTML than the EAL implies)
+because v1 cannot mechanically verify ``these HTML bytes are
+the canonical projection of these EAL bytes.'' What the
+protocol does enforce is that both bytes exist as canonical
+fields, both are signed by the owner, and any drift between
+them is detectable by a peer comparing the EAL's described
+behaviour to the HTML's rendered behaviour.
+
+\textbf{Why a single EAL source rather than separate
+markdown + actions blobs.}
+
+\begin{enumerate}[leftmargin=2em,itemsep=0.15em]
+    \item One artifact, one signature, one publish moment ---
+    the markdown content and the actions cannot drift because
+    they are physically the same bytes.
+    \item No \texttt{markdown\_hash} field, no separate
+    \texttt{actions.list\_for\_page} round-trip for simple
+    pages: \texttt{pages.get\_eal} returns everything a peer
+    needs in one invocation.
+    \item EAL is already a first-class artifact in EasyNet
+    (\texttt{src/eal/}); reusing it for the agent-facing page
+    representation avoids inventing a parallel format.
+    \item The EAL syntax is the same one a peer agent would
+    \emph{execute} via \texttt{easynet mission run}, so the
+    boundary between ``read about this page'' and ``do
+    something on this page'' collapses to a single textual
+    artifact. Reading is free; executing the mission requires
+    \texttt{mission run}.
+\end{enumerate}
+
+\textbf{Relationship to \texttt{actions.*} (Appendix~B).} A
+purely-static page (no missions beyond the trivial
+\texttt{view}) is fully described by its EAL +
+\texttt{pages.get\_eal}; \texttt{actions.*} need not be
+registered. A page or web\_app with multiple interactive
+elements registers both \texttt{pages.get\_eal@v1} (the full
+canonical EAL) \emph{and} the \texttt{actions.*} verbs (for
+fine-grained per-mission queries with parameter
+specialisation). The two coexist: \texttt{pages.get\_eal}
+is the all-at-once view; \texttt{actions.list\_for\_page} +
+\texttt{actions.get(name, params)} is the on-demand view.
+
+\subsection{Lifecycle diagram}
+
+\begin{lstlisting}
+                       pages.create
+                            |
+                            v
+            ┌─────────────[Draft]─────────────┐
+            |                                 |
+   pages.publish                       pages.delete
+            |                                 |
+            v                                 v
+        [Published] ──── pages.update ──> [Published]
+            |                                 |
+   pages.archive                       pages.delete
+            |                                 |
+            v                                 v
+        [Archived] ── pages.unpublish → [Draft]
+            |
+   pages.delete
+            |
+            v
+         [Deleted]   (terminal)
+\end{lstlisting}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Wire schemas}
+\label{sec:wire-schemas}
+
+Every transition's \texttt{ability} input schema and the
+\texttt{receipt\_schema} for its \texttt{CanonicalReceipt} are
+listed below. JSON Schema is abbreviated (types, required keys
+only); the canonical schemas live in
+\texttt{abilities/pages.<verb>.ability.toml}.
+
+\subsection{pages.create@v1}
+
+\begin{lstlisting}
+args:
+{
+  slug:         string (matches §3.1 slug ABNF, required)
+  manifest:     {
+    title:        string,         required
+    description:  string|null,
+    content_type: "text/html" | "text/markdown",
+                                  required
+    visibility:   "private" | "realm" | "public",
+                                  required
+  }
+  initial_body: bytes|null        // utf8 or base64 per content_type;
+                                  // null leaves the page empty draft
+}
+
+CanonicalReceipt body extends the main-§3.1 base with:
+{
+  page_state_key:    (realm, owner, slug),
+  pre_state_hash:    zero(32),    // creation: pre is empty
+  post_state_hash:   sha256(jcs(canonical_fields)),
+  state_version:     1,
+  manifest_hash:     sha256(jcs(manifest)),
+  content_hash:      sha256(initial_body) if initial_body else zero(32),
+  blob_handles:      [content_hash] if content_hash != 0 else []
+}
+\end{lstlisting}
+
+\subsection{pages.publish@v1}
+
+\begin{lstlisting}
+args:
+{
+  slug:    string,
+  // optional: replace body before publishing
+  body:    bytes|null,
+  reason:  string|null   // free-form, recorded in receipt
+}
+
+precondition: state_value == Draft AND content_hash != 0
+              (or `body` is provided and non-empty)
+
+CanonicalReceipt body:
+{
+  page_state_key:    ...,
+  pre_state_hash:    canonical_state_hash(Draft snapshot),
+  post_state_hash:   canonical_state_hash(Published snapshot),
+  state_version:     prev+1,
+  content_hash:      sha256(new body),
+  blob_handles:      [content_hash],
+  reason:            args.reason
+}
+\end{lstlisting}
+
+\subsection{pages.update@v1}
+
+\begin{lstlisting}
+args:
+{
+  slug:        string,
+  manifest:    manifest|null,    // partial update permitted;
+                                 //   null = unchanged
+  body:        bytes|null,       // null = unchanged
+  reason:      string|null
+}
+precondition: state_value == Published AND
+              (manifest != null OR body != null)
+
+CanonicalReceipt body:
+{
+  page_state_key:    ...,
+  pre_state_hash:    h_prev,
+  post_state_hash:   h_next,
+  state_version:     prev+1,
+  manifest_hash:     unchanged or new,
+  content_hash:      unchanged or new,
+  changed_fields:    ["manifest_hash"|"content_hash", ...],
+  reason:            args.reason
+}
+\end{lstlisting}
+
+\subsection{pages.archive@v1, pages.unpublish@v1, pages.delete@v1}
+
+These three follow the same template: small \texttt{args}
+($\texttt{slug}, \texttt{reason}$), a CanonicalReceipt with
+correctly-set \texttt{pre\_state\_hash} / \texttt{post\_state\_hash}
+/ \texttt{state\_version}. \texttt{pages.delete@v1} additionally
+clears \texttt{content\_hash} and \emph{decrements} the blob's
+ref-count (Phase 1 ref-count is a stub; see RFC-007).
+
+\subsection{pages.get@v1 (query)}
+
+\begin{lstlisting}
+args:
+{
+  slug:    string,
+  version: uint64|null      // null = current
+}
+returns:
+{
+  state_key:    ...,
+  state_value:  string,
+  canonical:    canonical_fields,
+  body:         bytes|null,           // null if Deleted/Archived
+                                      //   when caller is unauthorised;
+                                      // omitted entirely if visibility
+                                      //   gates the caller out
+  version:      uint64,
+  canonical_state_hash: bytes(32),
+  etag:         bytes(16)             // §5.4
+}
+\end{lstlisting}
+
+\texttt{pages.get@v1} produces an \texttt{OperationalReceipt}
+recording the read, the caller URI, and (when from a Hub) the
+\texttt{caller\_context} (main \S3.6).
+
+\subsection{pages.list@v1 (query)}
+
+\begin{lstlisting}
+args:
+{
+  owner:        string,
+  state_filter: ["Draft"|"Published"|...] | null,
+  limit:        uint <= 1000,
+  cursor:       string|null
+}
+returns:
+{
+  pages:        [{slug, state_value, version, etag, last_modified}],
+  next_cursor:  string|null
+}
+\end{lstlisting}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Algorithms}
+\label{sec:algorithms}
+
+\subsection{Canonical projection $\pi$}
+
+\normsv{} Per main \S2.1, $\pi$ is schema-driven, not hand-rolled.
+The pages schema lists six fields with
+\texttt{canonical:true}: \texttt{manifest\_hash},
+\texttt{eal\_hash}, \texttt{content\_hash}, \texttt{state\_value},
+\texttt{visibility}, \texttt{version}. $\pi(v)$ projects $v$ onto
+exactly those keys, in schema-declared order.
+
+\begin{lstlisting}
+fn project_pages(state: &PageState) -> Map<String, Value> {
+    let mut out = BTreeMap::new();
+    out.insert("manifest_hash".into(), bytes_to_hex(&state.manifest_hash));
+    out.insert("eal_hash".into(),      bytes_to_hex(&state.eal_hash));
+    out.insert("content_hash".into(),  bytes_to_hex(&state.content_hash));
+    out.insert("state_value".into(),   state.state_value.clone().into());
+    out.insert("visibility".into(),    state.visibility.clone().into());
+    out.insert("version".into(),       state.version.into());
+    out  // BTreeMap iterates in lexicographic order — deterministic
+}
+\end{lstlisting}
+
+\textbf{Cost.} $O(1)$ time and space (six fields, fixed sizes).
+
+\subsection{Canonical serialisation $\sigma$ (JCS)}
+
+\normsv{} $\sigma$ is RFC 8785 (JSON Canonicalization Scheme).
+For pages this is a straight subset: object keys lexicographically
+sorted (already guaranteed by \texttt{BTreeMap}), no extraneous
+whitespace, hex strings for byte fields, integers without leading
+zeros, no floats. JCS for the pages projection is therefore a
+deterministic compaction of the projected JSON.
+
+\subsection{canonical\_state\_hash $h$}
+
+\normsv{} $h(b) = \mathrm{SHA256}(b)$, fixed in Phase 1.
+
+\subsection{Worked byte example}
+
+A page in Published state with the following canonical projection:
+
+\begin{lstlisting}
+{
+  "content_hash":  "abf0c1...c8f3",   // 32 bytes hex
+  "eal_hash":      "6b21d3...49e0",
+  "manifest_hash": "1d4a7e...09e2",
+  "state_value":   "Published",
+  "version":       3,
+  "visibility":    "public"
+}
+\end{lstlisting}
+
+After JCS:
+
+\begin{lstlisting}
+{"content_hash":"abf0c1...c8f3","eal_hash":"6b21d3...49e0","manifest_hash":"1d4a7e...09e2","state_value":"Published","version":3,"visibility":"public"}
+\end{lstlisting}
+
+\noindent
+$\texttt{canonical\_state\_hash} =
+\mathrm{SHA256}(\text{above bytes})$
+$= \texttt{0xa3b91f7e...8d04}$
+(32 bytes). The first 16 bytes serve as the ETag
+(\S\ref{sec:algo-concurrency}).
+
+\subsection{Optimistic concurrency: ETag}
+\label{sec:algo-concurrency}
+
+\normsv{} Per RC-INV-2 (main \S3.7) every canonical transition
+attempt declares its expected \texttt{pre\_state\_hash}. The Hub
+and HTTP clients work better with a 16-byte ETag than a 32-byte
+hex string; we therefore define:
+
+\[
+    \texttt{ETag}(p) = \mathrm{Base64Url}\bigl(\texttt{canonical\_state\_hash}(p)[0..16]\bigr)
+\]
+
+The 128-bit prefix is collision-safe at the population sizes a
+single-realm Hub serves
+(birthday bound $\approx 2^{64}$ pages before any collision).
+On every \texttt{pages.update}, the caller supplies an
+\texttt{If-Match} header (or, in the EasyNet ability path, an
+\texttt{expected\_etag} field). The receipt-validation layer:
+
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.2em]
+    \item Computes the page's current \texttt{ETag}.
+    \item Compares against \texttt{expected\_etag}.
+    \item On mismatch: rejects the transition with
+    \texttt{ConcurrencyConflict}, recording the conflict in an
+    \texttt{OperationalReceipt} (so the audit log records what
+    was attempted but not committed).
+\end{enumerate}
+
+\begin{notebox}
+\texttt{ETag} is a presentation of \texttt{canonical\_state\_hash}, not a
+substitute. Internal protocol logic uses the full 32-byte hash
+(RC-INV-2 cites \texttt{pre\_state\_hash}); the 16-byte ETag exists
+only at the external HTTP boundary.
+\end{notebox}
+
+\subsection{View projection algorithms}
+\label{sec:algo-views}
+
+\subsubsection{human\_view (HTML)}
+
+\normsv{}
+
+\begin{lstlisting}
+fn human_view(p: &PageState, blob: &BlobStore) -> HttpResponse {
+    if p.state_value != "Published" {
+        return http_404();
+    }
+    if !visibility_allows(p.visibility, request.caller) {
+        return http_404();   // never 403 — leaks existence
+    }
+    let body = blob.get(&p.content_hash)?;
+    let csp = "default-src 'self'; script-src 'none'; \
+               style-src 'unsafe-inline' 'self'; img-src 'self' data:; \
+               object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
+    HttpResponse::ok()
+        .content_type(p.manifest.content_type)
+        .header("ETag", etag(p))
+        .header("Cache-Control", "public, max-age=60, must-revalidate")
+        .header("Content-Security-Policy", csp)
+        .header("Referrer-Policy", "no-referrer")
+        .header("X-Content-Type-Options", "nosniff")
+        .body(body)
+}
+\end{lstlisting}
+
+\textbf{Determinism.} Per main TR-INV-6, \texttt{human\_view} is a
+deterministic function of $(p, \text{blob})$. The CSP, the cache
+header, and the response code are pure functions of \texttt{p}
+and the request's principal; nothing here depends on wall-clock
+time or load.
+
+\textbf{Why 404 (not 403) on visibility miss.} A 403 confirms the
+page exists. For \texttt{visibility=private} this is a leak. The
+trade-off (private page indistinguishable from non-existent) is
+intentional.
+
+\subsubsection{agent\_view (structured)}
+
+\normsv{}
+
+\begin{lstlisting}
+fn agent_view(p: &PageState) -> Value {
+    let surface = derive_ability_surface(p);  // VP-INV-1
+    let history = receipt_history_pointer(p); // §6.3
+    let actions = actions_pointer(p);         // see "actions" below
+    json!({
+        "state_type":  "easynet.page",
+        "state_key":   { "realm": p.realm,
+                         "owner": p.owner,
+                         "slug":  p.slug },
+        "ura":          p.ura(),
+        "canonical": {
+            "state":        p.state_value,
+            "manifest":     p.manifest,         // small, in-line OK
+            "content_hash": hex(p.content_hash),
+            "visibility":   p.visibility,
+            "version":      p.version,
+            "etag":         etag(p)
+        },
+        "ability_surface":  surface,
+        "history":  {
+            "versions":                p.version,
+            "latest_canonical_receipt_id": p.last_receipt_id,
+            "receipt_log_ura":         history
+        },
+        "actions":  actions,            // see below; null for simple pages
+        "view_meta": {
+            "generated_from": "(canonical, runtime=∅, caller_context)"
+        }
+    })
+}
+
+fn derive_ability_surface(p: &PageState) -> Vec<&'static str> {
+    match p.state_value.as_str() {
+        "Draft"      => vec!["pages.publish@v1", "pages.update@v1",
+                             "pages.delete@v1"],
+        "Published"  => vec!["pages.update@v1", "pages.archive@v1",
+                             "pages.delete@v1"],
+        "Archived"   => vec!["pages.unpublish@v1", "pages.delete@v1"],
+        "Deleted"    => vec![],
+        _            => vec![],
+    }
+}
+\end{lstlisting}
+
+\textbf{Compliance with VP-INV-1.} \texttt{ability\_surface} is
+derived strictly from \texttt{p.state\_value} and the static
+transition schema (the match block). It is not a snapshot of the
+ability registry; an ability that is registered but whose
+\texttt{pre\_state} does not include \texttt{p.state\_value} is
+invisible here.
+
+\subsubsection{actions: optional pointer to a queryable namespace}
+
+\normsv{} A simple document does not need an agent-actionable
+surface beyond ``read me.'' Most pages therefore set
+\texttt{actions: null} and that is the end of the story.
+
+When a page DOES carry richer interaction --- a contact form, a
+subscribe button, a schedule-meeting flow embedded in HTML ---
+the owner exposes those actions through the \texttt{actions.*}
+ability namespace, exactly as web\_apps do (Appendix B \S6).
+\texttt{agent\_view.actions} is then a small pointer:
+
+\begin{lstlisting}
+{
+  "namespace": "actions",
+  "registered_verbs": ["actions.list_for_page",
+                       "actions.get",
+                       "actions.search"],
+  "http_mirror_prefix": "/easynet-for-agents/",
+  "discovery_hint":
+     "POST /easynet-for-agents/list_for_page {\"page_path\":\"<path>\"}"
+}
+\end{lstlisting}
+
+A peer agent reading this pointer calls
+\texttt{<owner>.actions.list\_for\_page} (or its HTTP mirror) to
+discover what it can do; \texttt{agent\_view} itself never
+embeds the EAL/missions. The reasoning is identical to web\_app:
+embedding actions in a static view forces bulk download and
+breaks per-intent specialisation. Pages reuse web\_app's design
+to keep the agent-facing convention identical across the two
+state types.
+
+\textbf{Single-call short form.} For a page whose owner wants to
+expose exactly one action and prefers not to register any
+\texttt{actions.*} ability, an
+\texttt{eal\_hint: <single-line-string>} field MAY be included
+inline in \texttt{agent\_view} as a degenerate case --- the
+single-line analog of a one-verb \texttt{actions.list\_for\_page}
+response. This short form is informative only; if both
+\texttt{actions} and \texttt{eal\_hint} are present, \texttt{actions}
+is authoritative.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Architecture}
+\label{sec:architecture}
+
+\subsection{Module map (EasyNet-Cli)}
+\label{sec:module-map}
+
+\begin{lstlisting}
+src/runtime/state/                   ← NEW (P-A1, P-A2)
+  mod.rs                             pub use of types below
+  store.rs                           StateStore trait + sled-backed impl
+  hash.rs                            project / canonicalize_jcs / sha256
+  receipt.rs                         CanonicalReceipt, OperationalReceipt
+
+src/runtime/blob_store/              ← NEW (P-A1)
+  mod.rs                             BlobStore trait
+  fs.rs                              FsBlobStore (content-addressed
+                                     directory tree, sha256 keys)
+
+src/runtime/agents/pages_ability.rs  ← NEW (P-A2)
+                                     register: create/publish/update/
+                                     archive/unpublish/delete/get/list
+
+src/runtime/views/                   ← NEW (P-A3)
+  mod.rs                             View trait
+  human.rs                           human_view (CSP, blob fetch)
+  agent.rs                           agent_view (JSON projection)
+
+src/bin/easynet-hub.rs               ← NEW (P-A4)
+                                     axum binary, path → URA → view
+src/runtime/hub/                     ← NEW (P-A4)
+  mod.rs
+  router.rs                          path parsing, view selection
+  caller.rs                          principal/human-anon URI
+                                     minting + caller_context
+                                     extraction
+
+src/runtime/eal_hint.rs              ← NEW (P-A5)
+                                     deterministic EAL templates
+\end{lstlisting}
+
+\textbf{Design choice: \texttt{sled} for state and receipt index.}
+sled is already a dependency in adjacent code; it gives us
+range queries (needed for \texttt{state\_key}-prefix scans
+mandated by main \S7.1) and atomic batches (needed to write a
+canonical receipt + state mutation in one go). RFC-006 main does
+not pin a backend; if sled is later replaced (e.g. by SQLite),
+the \texttt{StateStore} trait stays.
+
+\textbf{Design choice: filesystem blob store.} Phase 1 stores
+blobs at \texttt{<state-root>/blobs/<aa>/<bb>/<full-hash>}, where
+\texttt{aa} and \texttt{bb} are the first two hex bytes of the
+SHA-256. The two-level fan-out keeps any single directory
+under a few thousand entries even at large scale. RFC-007 will
+refine this with ref-counts and a GC sweep; Phase 1 stubs both
+(a blob is never deleted in Phase 1).
+
+\subsection{Daemon wiring}
+
+The daemon at boot:
+
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.2em]
+    \item Opens the state store at \texttt{\$EASYNET\_HOME/state.sled}.
+    \item Opens the blob store at \texttt{\$EASYNET\_HOME/blobs/}.
+    \item Calls \texttt{pages\_ability::register} for every agent
+    in the registry; the registration captures
+    \texttt{(state\_store, blob\_store, agent\_name)} into the
+    handler closure.
+    \item Boots the receipt index (state\_key prefix index built
+    on top of the same sled tree).
+    \item Resumes any in-flight transitions
+    (none in pages: every transition is single-shot, no
+    \texttt{Building}-style intermediate state).
+\end{enumerate}
+
+\subsection{Hub wiring}
+
+A separate binary, \texttt{easynet-hub}, embeds an axum router:
+
+\begin{lstlisting}
+GET  /<realm>/<owner>/<slug>           -> human_view
+GET  /<realm>/<owner>/<slug>/.agent    -> agent_view (JSON)
+GET  /<realm>/<owner>/<slug>/.receipts -> receipt history (JSON)
+GET  /healthz                          -> 200 "ok"
+\end{lstlisting}
+
+The Hub is a daemon client: it has no direct access to the
+state store. Every view fetch is a \texttt{pages.get@v1}
+invocation against the daemon, with the envelope filled per
+main \S5.4 (caller URI \texttt{principal/human-anon/...},
+caller\_context filled per main \S3.6).
+
+\textbf{Trust boundary.} The Hub is allowed to mint
+\texttt{principal/human-anon} callers but not arbitrary
+\texttt{agent/} callers. The daemon validates the caller URI on
+admission and rejects \texttt{agent/} URIs that do not match
+the Hub's authorisation token (an out-of-band shared secret in
+Phase 1; RFC-008 will replace with proper signing).
+
+\subsection{Storage layout}
+\label{sec:storage}
+
+\begin{lstlisting}
+$EASYNET_HOME/
+├── state.sled/                  sled DB
+│   trees:
+│     "page::canonical"          key: jcs((realm,owner,slug))
+│                                value: bincode(PageState)
+│     "page::receipts"           key: (jcs((realm,owner,slug)),
+│                                      version_be_u64,
+│                                      receipt_id)
+│                                value: bincode(CanonicalReceipt)
+│     "page::idx_owner"          key: (owner, slug)
+│                                value: state_key (back-pointer)
+│     "page::idx_receipt_id"     key: receipt_id
+│                                value: state_key
+└── blobs/
+    ├── ab/
+    │   ├── f0/
+    │   │   └── abf0c1...c8f3    raw bytes
+    └── ...
+\end{lstlisting}
+
+The two indexes (\texttt{idx\_owner}, \texttt{idx\_receipt\_id})
+satisfy main \S7.1's dual-axis enumeration requirement: receipt
+log enumerable both by \texttt{receipt\_id} (preserve original
+EasyNet invocation traceability) and by \texttt{state\_key}
+(new object-granularity traceability).
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Implementation plan}
+\label{sec:impl-plan}
+
+Five PR slices. Each slice is independently reviewable and
+verifiable; merging the first does not block subsequent work in
+parallel branches.
+
+\subsection{P-A1: BlobStore + StateStore skeletons}
+
+\textbf{Files added.} \texttt{src/runtime/blob\_store/} (\texttt{mod.rs}
++ \texttt{fs.rs}); \texttt{src/runtime/state/} (\texttt{mod.rs} +
+\texttt{store.rs} + \texttt{hash.rs} + \texttt{receipt.rs}).
+
+\textbf{Public API.}
+\begin{lstlisting}
+pub trait BlobStore: Send + Sync {
+    fn put(&self, bytes: &[u8]) -> Result<[u8; 32]>;       // returns sha256
+    fn get(&self, hash: &[u8; 32]) -> Result<Vec<u8>>;
+    fn exists(&self, hash: &[u8; 32]) -> Result<bool>;
+}
+
+pub trait StateStore<S: StateObject>: Send + Sync {
+    fn read(&self, key: &S::Key) -> Result<Option<S>>;
+    fn apply(
+        &self,
+        receipt: &CanonicalReceipt,
+        post_state: &S,
+    ) -> Result<()>;     // atomic: state mutation + receipt append
+    fn list_by_owner(...) -> Result<Vec<S::Key>>;
+    fn enumerate_receipts(&self, key: &S::Key)
+        -> Result<Vec<CanonicalReceipt>>;
+}
+
+pub fn project(state: &dyn StateObject) -> BTreeMap<String, Value>;
+pub fn canonicalize_jcs(map: &BTreeMap<String, Value>) -> Vec<u8>;
+pub fn canonical_state_hash(state: &dyn StateObject) -> [u8; 32];
+\end{lstlisting}
+
+\textbf{Tests.} JCS conformance (a curated set of RFC 8785 test
+vectors); SHA-256 round-trip; \texttt{StateStore::apply}
+atomicity under concurrent attempts (RC-INV-2 invariants pinned).
+
+\textbf{Acceptance.} \texttt{cargo test -p easynet --lib state}
+green; benchmarks $\geq$ 50k canonical hashes/sec on commodity
+hardware (sanity bound, not a strict requirement).
+
+\subsection{P-A2: pages.* ability registration + receipts}
+
+\textbf{Files added.} \texttt{src/runtime/agents/pages\_ability.rs}.
+Touches \texttt{src/runtime/agents/mod.rs} to register the
+namespace.
+
+\textbf{Behaviour.} Every transition listed in
+\S\ref{sec:wire-schemas} is implemented:
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.15em]
+    \item Validate args against the ability schema.
+    \item Read current state via \texttt{StateStore}.
+    \item Validate \texttt{pre\_state\_hash} (RC-INV-2).
+    \item Compute \texttt{post\_state} and \texttt{post\_state\_hash}.
+    \item Build \texttt{CanonicalReceipt}; sign with owner key
+    (Phase 1: stub Ed25519 signature with a hard-coded keypair
+    per agent; key management deferred to RFC-008).
+    \item \texttt{StateStore::apply} (atomic).
+    \item Return result.
+\end{enumerate}
+
+\textbf{Tests.}
+\begin{itemize}[leftmargin=2.2em,itemsep=0.1em]
+    \item Round-trip every transition.
+    \item Reject \texttt{publish} from \texttt{Archived} (must
+    \texttt{unpublish} first).
+    \item Reject \texttt{create} with malformed slug.
+    \item Reject any transition on \texttt{Deleted} (terminal).
+    \item Optimistic concurrency: two \texttt{update} attempts
+    racing on the same page \texttt{slug}; one wins, one rejected
+    with \texttt{ConcurrencyConflict}.
+\end{itemize}
+
+\textbf{Acceptance.} The ability is callable via
+\texttt{easynet ability invoke}; receipts visible via the
+existing receipt log surface.
+
+\subsection{P-A3: view projection + EAL hints}
+
+\textbf{Files added.} \texttt{src/runtime/views/} +
+\texttt{src/runtime/eal\_hint.rs}.
+
+\textbf{Behaviour.} Pure functions: a \texttt{PageState} maps to
+a \texttt{(human\_view\_response, agent\_view\_json)} pair plus
+an EAL hint string. No network, no state mutation.
+
+\textbf{Tests.} Determinism (1000 iterations of identical input
+yield identical output bytes); \texttt{ability\_surface} matches
+\S\ref{sec:state-space} for every state; CSP header constant.
+
+\subsection{P-A4: Hub binary}
+
+\textbf{Files added.} \texttt{src/bin/easynet-hub.rs} +
+\texttt{src/runtime/hub/}.
+
+\textbf{Behaviour.} axum router, three GET routes, each:
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.1em]
+    \item Parse path $\to$ \texttt{(realm, owner, slug)} $\to$
+    \texttt{state\_key}.
+    \item Build envelope: caller URI is
+    \texttt{principal/human-anon/<ip-hash>/<session-id>}
+    (\S\ref{sec:hub}); \texttt{caller\_context} populated from
+    HTTP headers.
+    \item Invoke \texttt{pages.get@v1} on the daemon.
+    \item Apply view projection (P-A3).
+    \item Return HTTP response.
+\end{enumerate}
+
+\textbf{Tests.} Integration: launch a daemon + Hub in a temp dir,
+\texttt{create+publish} a page, \texttt{curl} through the Hub,
+assert HTML response + correct ETag + correct CSP. \texttt{curl}
+the \texttt{/.agent} suffix, assert JSON shape matches
+\S\ref{sec:algo-views}.
+
+\subsection{P-A5: agent\_view enrichment + receipt history endpoint}
+
+\textbf{Behaviour.} Implements the \texttt{/.receipts} route:
+returns the receipt history for a page (canonical receipts only,
+in version order) as a JSON array. Adds an
+\texttt{eal\_hint} field to \texttt{agent\_view} (already
+specified in P-A3 but only stubbed there).
+
+\textbf{Tests.} Replay a receipt history client-side using
+\texttt{canonical\_state\_hash} reconstruction; assert the final
+hash equals the page's current hash.
+
+\subsection{Hub envelope minting}
+\label{sec:hub}
+
+\begin{lstlisting}
+fn build_envelope(req: &HttpRequest) -> Envelope {
+    let ip   = client_ip(req);
+    let salt = HUB_LOCAL_SALT.read();
+    let ip_hash = hmac_sha256(&salt, ip.to_string().as_bytes())
+        .iter().take(8)
+        .flat_map(|b| format!("{:02x}", b).chars().collect::<Vec<_>>())
+        .collect::<String>();
+    let sid = req.cookie("easynet_session")
+        .or_else(|| req.header("X-EasyNet-Session"))
+        .or_else(|| req.query("session"))
+        .unwrap_or_else(|| "-".to_string());
+
+    let caller = format!(
+        "easynet:///principal/human-anon/{ip_hash}/{sid}"
+    );
+    let caller_context = json!({
+        "origin": {
+            "referer_url":   req.header("Referer"),
+            "referer_realm": referer_origin(req.header("Referer")),
+            "direct":        is_direct_navigation(req)
+        },
+        "agent_class": classify_user_agent(req.header("User-Agent")),
+        "headers": {
+            "accept_language":      req.header("Accept-Language"),
+            "sec_fetch_site":       req.header("Sec-Fetch-Site"),
+            "sec_fetch_mode":       req.header("Sec-Fetch-Mode"),
+            "sec_fetch_dest":       req.header("Sec-Fetch-Dest"),
+            "x_forwarded_for_hash": xff_hash(req)
+        }
+    });
+    Envelope { caller, caller_context, ... }
+}
+\end{lstlisting}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{End-to-end worked example}
+\label{sec:e2e}
+
+A complete trace from \texttt{pages.create} through Hub-rendered
+HTML access and agent URA fetch.
+
+\subsection{Setup}
+
+\begin{lstlisting}
+$ easynet agent add alice --type claude-code
+$ easynet-daemon &       # listens on $EASYNET_HOME ipc
+$ easynet-hub --bind 127.0.0.1:8787 &
+\end{lstlisting}
+
+\subsection{Author and publish}
+
+\begin{lstlisting}
+$ easynet ability invoke alice.pages.create --args '{
+    "slug": "shop-001",
+    "manifest": {
+        "title": "Mug, ceramic, 12oz",
+        "content_type": "text/html",
+        "visibility": "public"
+    },
+    "initial_body": "<h1>Mug</h1><p>$19.99 — ships Tuesday.</p>"
+}'
+
+response:
+  receipt_id:           "r_a1b2..."
+  state_value:          "Draft"
+  canonical_state_hash: "0xa3b91f7e..."
+  version:              1
+
+$ easynet ability invoke alice.pages.publish --args '{ "slug": "shop-001" }'
+
+response:
+  receipt_id:           "r_c3d4..."
+  state_value:          "Published"
+  canonical_state_hash: "0x4d28ee17..."
+  version:              2
+  etag:                 "TSjuFw0pAvjpAQ=="
+\end{lstlisting}
+
+\subsection{Browser fetch via Hub}
+
+\begin{lstlisting}
+$ curl -i http://127.0.0.1:8787/default/alice/shop-001
+
+HTTP/1.1 200 OK
+ETag: "TSjuFw0pAvjpAQ=="
+Cache-Control: public, max-age=60, must-revalidate
+Content-Security-Policy: default-src 'self'; script-src 'none'; ...
+Content-Type: text/html
+Content-Length: 49
+
+<h1>Mug</h1><p>$19.99 — ships Tuesday.</p>
+\end{lstlisting}
+
+\noindent The Hub emits an \texttt{OperationalReceipt} for the
+read:
+
+\begin{lstlisting}
+{
+  "receipt_class":  "operational",
+  "state_key":      ["default","alice","shop-001"],
+  "transition_id":  "pages.get@v1",
+  "attempt_id":     "att_e5f6...",
+  "envelope": {
+    "caller": "easynet:///principal/human-anon/9c4e.../sess-abc",
+    "caller_context": {
+      "origin":      { "referer_url":   null,
+                       "referer_realm": null,
+                       "direct":        true },
+      "agent_class": { "kind":          "browser",
+                       "user_agent_hash": "a1b2..." },
+      "headers":     { "accept_language": "en-US",
+                       "sec_fetch_site":  "none",
+                       "sec_fetch_mode":  "navigate",
+                       "sec_fetch_dest":  "document" }
+    }
+  },
+  "observed_at": "2026-04-28T10:14:32Z"
+}
+\end{lstlisting}
+
+\subsection{Peer agent fetches via URA}
+
+\begin{lstlisting}
+$ curl http://127.0.0.1:8787/default/alice/shop-001/.agent | jq
+
+{
+  "state_type":  "easynet.page",
+  "state_key":   { "realm": "default",
+                   "owner": "alice",
+                   "slug":  "shop-001" },
+  "ura":         "easynet:///r/default/agent/alice/page/shop-001",
+  "canonical": {
+    "state":        "Published",
+    "manifest":     { "title":         "Mug, ceramic, 12oz",
+                      "content_type":  "text/html",
+                      "visibility":    "public" },
+    "content_hash": "0x4d28ee17...",
+    "visibility":   "public",
+    "version":      2,
+    "etag":         "TSjuFw0pAvjpAQ=="
+  },
+  "ability_surface": ["pages.update@v1", "pages.archive@v1",
+                      "pages.delete@v1"],
+  "history": {
+    "versions": 2,
+    "latest_canonical_receipt_id": "r_c3d4...",
+    "receipt_log_ura":
+      "easynet:///r/default/agent/alice/page/shop-001/receipts"
+  },
+  "actions": null    // simple HTML page; no actions.* namespace.
+                     // For an interactive page (form / subscribe / ...) the
+                     // owner registers actions.list_for_page etc. and this
+                     // becomes a pointer object — see §5.5 actions.
+}
+\end{lstlisting}
+
+\subsection{Audit replay}
+
+A peer fetches the receipt history and replays it locally:
+
+\begin{lstlisting}
+$ curl http://127.0.0.1:8787/default/alice/shop-001/.receipts | jq -r '.[].post_state_hash'
+0xa3b91f7e...   # version 1, after create
+0x4d28ee17...   # version 2, after publish
+\end{lstlisting}
+
+\noindent The peer:
+\begin{enumerate}[leftmargin=2em,itemsep=0.15em]
+    \item Reconstructs canonical state from each receipt
+    in order.
+    \item Computes \texttt{canonical\_state\_hash} for each
+    reconstruction.
+    \item Asserts each computed hash equals the receipt's
+    \texttt{post\_state\_hash}.
+    \item Asserts the final hash equals the agent\_view's
+    \texttt{canonical.content\_hash} (well, not literally ---
+    the comparison is on \texttt{canonical\_state\_hash}, but
+    \texttt{content\_hash} is one of its inputs).
+    \item Verifies each receipt's \texttt{owner\_signature}
+    against \texttt{alice}'s published key.
+\end{enumerate}
+
+\noindent Successful audit means: the peer has cryptographic
+proof that this page, at version 2, presented exactly this
+content, signed by Alice, on or before the timestamp in the
+final receipt. This is the audit story the traditional web
+cannot tell.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Open questions deferred to RFC-006-A v2}
+\label{sec:open}
+
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.2em]
+    \item \textbf{HTML sanitisation.} Phase 1 trusts owner-authored
+    HTML entirely (CSP \texttt{script-src 'none'} mitigates the
+    worst case but still lets \texttt{onerror=}-style attribute
+    injection through). v2 should specify a safe-subset
+    sanitiser run at \texttt{publish} time and pin its output
+    hash.
+    \item \textbf{Multi-realm Hubs.} A Hub serving more than one
+    realm needs a routing table; the path scheme
+    \texttt{/<realm>/...} already accommodates it but Phase 1
+    binds a single realm at startup.
+    \item \textbf{Page templates / slot-filling.} Common pages
+    (product catalogue, blog post) repeat structure. A template
+    layer could let owners author manifests + slot data and
+    have the canonical \texttt{content\_hash} cover the
+    rendered output.
+    \item \textbf{Authenticated humans
+    (\texttt{principal/human-auth}).} For private/realm pages
+    that need real user identity, the
+    \texttt{principal/human-auth/<provider>/<user-id>} sub-namespace
+    must be specified along with its signature scheme.
+    \item \textbf{Federated reads.} A page owned by node A read
+    through a Hub on node B. The Hub becomes a federation
+    client, not just a daemon client. RFC-006-A v2.
+\end{enumerate}
+
+\subsection{Coverage check}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\linewidth}{l X l}
+\toprule
+\textbf{Main rule} & \textbf{Discharged by} & \textbf{Where} \\
+\midrule
+SO-INV-1 (key immutability)              & state\_key parser refuses key updates                 & \S\ref{sec:state-machine} \\
+CSH-INV-1 (hash over projection)         & \texttt{project\_pages} + JCS only                     & \S\ref{sec:algorithms} \\
+CSH-INV-2 (content as blob)              & FsBlobStore; canonical state holds only the hash       & \S\ref{sec:storage} \\
+RC-INV-1 (receipt binding)               & every receipt carries (state\_key, transition\_id, attempt\_id) & \S\ref{sec:wire-schemas} \\
+RC-INV-2 (optimistic concurrency)        & ETag check at receipt-validation time                  & \S\ref{sec:algo-concurrency} \\
+TA-INV-1 (transition\_id required)       & every \texttt{pages.<verb>@v1} string is validated     & \S\ref{sec:wire-schemas} \\
+VP-INV-1 (ability\_surface from state)   & \texttt{derive\_ability\_surface} match block          & \S\ref{sec:algo-views} \\
+TR-INV-7 (multi-view first-class)        & \texttt{human\_view} + \texttt{agent\_view} both implemented & \S\ref{sec:algo-views} \\
+TR-INV-11 (URA-receipt traceability)     & \texttt{/.receipts} endpoint + idx\_owner index        & \S\ref{sec:storage}, \S\ref{sec:e2e} \\
+TR-INV-12 (principal/human-anon)         & \texttt{build\_envelope} mints the URI                 & \S\ref{sec:hub} \\
+TR-INV-13 (caller\_context)              & populated by \texttt{build\_envelope}; entered into operational receipts & \S\ref{sec:hub}, \S\ref{sec:e2e} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\paragraph{Closing.} Pages is the simplest reference machine that
+exercises the full normative core of stateful EasyNet.
+Implementing the five PRs above closes Phase 1 of stateful
+EasyNet and unlocks both the pressure-test machine
+(\texttt{webapp}, Appendix B) and the agent-native web layer
+that follows.
+
+\vfill
+\hrule
+\vspace{0.4em}
+\noindent\small
+\textit{This document is a Phase-1 implementation specification.
+Discrepancies with AXON-RFC-006 main are bugs in this document;
+discrepancies with Appendix~B's pressure tests are bugs in either
+this document or the main body, to be reconciled in alignment.}
+
+\end{document}

@@ -5,7 +5,7 @@
 // Description: `easynet mcp-install` — install/update MCP server entries for Claude Code / Codex.
 //
 // Goals:
-// - One command to add an `mcpServers.<name>` entry pointing at `easynet mcp-server`.
+// - One command to add an `mcpServers.<name>` entry pointing at `easynet mcp serve`.
 // - Support multiple installs (one per agent/device) by changing `--name` and `--bound-node`.
 // - Safe by default: refuses to overwrite existing entries unless `--force`.
 //
@@ -44,15 +44,15 @@ pub struct McpInstallArgs {
     #[arg(long, default_value = "easynet")]
     pub name: String,
 
-    /// Tenant ID passed to `easynet mcp-server`
+    /// Tenant ID passed to `easynet mcp serve`
     ///
     /// If omitted, we try reading from `~/.easynet/runtime.json`, else default to "default".
     #[arg(long)]
     pub tenant: Option<String>,
 
-    /// Runtime endpoint passed to `easynet mcp-server`
+    /// Runtime endpoint passed to `easynet mcp serve`
     ///
-    /// If omitted, `easynet mcp-server` auto-detects from `~/.easynet/runtime.json`.
+    /// If omitted, `easynet mcp serve` auto-detects from `~/.easynet/runtime.json`.
     #[arg(long)]
     pub endpoint: Option<String>,
 
@@ -74,7 +74,7 @@ pub struct McpInstallArgs {
     #[arg(long)]
     pub allow_node_override: bool,
 
-    /// Label the MCP server with an agent id (purely informational; passed to `easynet mcp-server --agent`).
+    /// Label the MCP server with an agent id (purely informational; passed to `easynet mcp serve --agent`).
     #[arg(long)]
     pub agent: Option<String>,
 
@@ -207,22 +207,31 @@ fn build_install_spec(
     endpoint: Option<&str>,
     args: &McpInstallArgs,
 ) -> anyhow::Result<InstallSpec> {
+    // `easynet mcp serve` is a two-token CLI path; pre-fix this
+    // wrote `mcp-server` (hyphenated, single token) which the
+    // CLI dispatcher doesn't recognise. See workspace.rs slice-27
+    // commit for the corresponding fix on the spawned-from-CLI
+    // path; this one is the operator-facing
+    // `easynet mcp install` path that writes the same shape into
+    // ~/.claude/settings.json or ~/.codex/config.toml.
+    // `easynet mcp serve` accepts only --tenant and --agent
+    // (see facade/cli/mcp_server.rs::McpServerArgs). The flags
+    // we used to write — --endpoint, --bound-node,
+    // --allow-node-override — were dropped in the P4.9
+    // quarantine. Keep accepting them as `easynet mcp install`
+    // CLI inputs for backwards compatibility (the operator's
+    // muscle memory still uses them) but DON'T write them into
+    // the spawn args; doing so causes claude/codex to spawn the
+    // MCP subprocess with "unexpected argument" failures.
     let mut cmd_args: Vec<String> = vec![
-        "mcp-server".to_string(),
+        "mcp".to_string(),
+        "serve".to_string(),
         "--tenant".to_string(),
         tenant.to_string(),
     ];
-    if let Some(ep) = endpoint {
-        cmd_args.push("--endpoint".to_string());
-        cmd_args.push(ep.to_string());
-    }
-    if let Some(node) = args.bound_node.as_deref() {
-        cmd_args.push("--bound-node".to_string());
-        cmd_args.push(node.to_string());
-        if args.allow_node_override {
-            cmd_args.push("--allow-node-override".to_string());
-        }
-    }
+    let _ = endpoint; // accepted for back-compat, not written
+    let _ = &args.bound_node;
+    let _ = args.allow_node_override;
     if let Some(agent) = args.agent.as_deref() {
         cmd_args.push("--agent".to_string());
         cmd_args.push(agent.to_string());

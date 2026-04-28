@@ -65,7 +65,7 @@ pub struct CapabilityClaim {
 /// Trait implemented by every broker variant. v1 ships
 /// AllowAllBroker (default; preserves pre-PR behaviour) and
 /// SubscriberBroker (engages when an external observer is
-/// listening on `system.permission.subscribe`).
+/// listening on `consent.subscribe`).
 ///
 /// `ask` is synchronous in v1 because the call site (mission
 /// dispatch) is sync. The SubscriberBroker turns the
@@ -94,7 +94,7 @@ impl PermissionBroker for AllowAllBroker {
 }
 
 /// Subscriber broker: when at least one observer is listening on
-/// `system.permission.subscribe`, every ask becomes a pending
+/// `consent.subscribe`, every ask becomes a pending
 /// request published to the broadcast channel. The handler waits
 /// for `decide_permission` to deliver a decision via the per-
 /// request response channel.
@@ -148,7 +148,7 @@ impl SubscriberBroker {
     }
 
     /// Snapshot of every currently-pending request. PR-PERM's
-    /// `system.permission.subscribe` handler emits this snapshot
+    /// `consent.subscribe` handler emits this snapshot
     /// before tailing live updates so a Client sees the full
     /// queue on first connection.
     pub fn pending_snapshot(&self) -> Vec<PermissionRequest> {
@@ -326,13 +326,13 @@ impl PermissionService {
     }
 
     /// Borrow the SubscriberBroker if one is installed. Used by
-    /// `system.permission.subscribe` handler to attach to the
+    /// `consent.subscribe` handler to attach to the
     /// broadcast channel + serve the snapshot.
     pub fn subscriber(&self) -> Option<&Arc<SubscriberBroker>> {
         self.subscriber.as_ref()
     }
 
-    /// PR-PERM `system.permission.decide` entry point. Forwards
+    /// PR-PERM `consent.decide` entry point. Forwards
     /// to the SubscriberBroker if installed; rejects with a clear
     /// error otherwise (AllowAllBroker has no pending state to
     /// decide on).
@@ -394,7 +394,7 @@ mod tests {
     #[test]
     fn subscriber_broker_falls_back_to_allow_when_no_observers() {
         // A daemon that has no Client connected on
-        // `system.permission.subscribe` must not block on every
+        // `consent.subscribe` must not block on every
         // mission — that would freeze all autonomous runs. Falling
         // back to Allow here matches AllowAllBroker behaviour.
         let b = SubscriberBroker::new();

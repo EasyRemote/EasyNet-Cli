@@ -235,6 +235,30 @@ pub fn send_external_with_overrides(
     send_to_agent_with_depth(agent_name, entry, prompt, context, None, Some(0), overrides)
 }
 
+/// Same as `send_external_with_overrides` but threads a
+/// per-token progress callback through to the driver. Used by
+/// the chat ability's stream_handler to forward live LLM
+/// progress to its broadcast channel.
+pub fn send_external_with_overrides_and_progress(
+    agent_name: &str,
+    entry: &AgentEntry,
+    prompt: &str,
+    context: Option<&str>,
+    overrides: Option<&DriverOverrides>,
+    progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
+) -> anyhow::Result<AgentResponse> {
+    send_to_agent_with_depth_and_progress(
+        agent_name,
+        entry,
+        prompt,
+        context,
+        None,
+        Some(0),
+        overrides,
+        progress_tx,
+    )
+}
+
 /// Same as `send_to_agent` but accepts an explicit `depth_override`. When
 /// `depth_override` is `Some(d)`, that value is used as the current
 /// recursion depth instead of consulting the typed dispatch context. This
@@ -270,6 +294,37 @@ pub fn send_to_agent_with_depth(
     extra_trace_path: Option<&Path>,
     depth_override: Option<u32>,
     overrides: Option<&DriverOverrides>,
+) -> anyhow::Result<AgentResponse> {
+    send_to_agent_with_depth_and_progress(
+        agent_name,
+        entry,
+        prompt,
+        context,
+        extra_trace_path,
+        depth_override,
+        overrides,
+        None,
+    )
+}
+
+/// Same as `send_to_agent_with_depth` but threads through an
+/// optional per-token progress callback. Pre-fix the chat
+/// ability's stream surface emitted only {session, loaded?,
+/// done|error} — three frames per call regardless of LLM
+/// response length, despite calling itself \"streaming\".
+/// Threading a callback in here is what makes the stream a
+/// real per-token stream: the driver invokes `progress_tx`
+/// once per stdout line in stream-json mode, and chat's
+/// stream_handler forwards that into its broadcast channel.
+pub fn send_to_agent_with_depth_and_progress(
+    agent_name: &str,
+    entry: &AgentEntry,
+    prompt: &str,
+    context: Option<&str>,
+    extra_trace_path: Option<&Path>,
+    depth_override: Option<u32>,
+    overrides: Option<&DriverOverrides>,
+    progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
 ) -> anyhow::Result<AgentResponse> {
     // Mission context invariant — only enforced in production, skipped
     // when a test passes `depth_override` to exercise the recursion
@@ -399,20 +454,15 @@ pub fn send_to_agent_with_depth(
         entry.model.clone(),
     );
 
-    // The other DriverOverrides fields (temperature, max_tokens) are
-    // accepted by the schema and parsed by ChatArgs, but the v1
-    // claude-code / codex CLI drivers do not expose either knob. Log
-    // a one-shot warning the first time they are set so an operator
-    // experimenting with these knobs in chat args knows they aren't
-    // wired through yet (rather than silently being dropped). A
-    // future driver (or a remote-API path) can pick them up by
-    // reading `overrides` here without re-shaping the dispatch
-    // surface.
-    if let Some(o) = overrides {
-        if o.temperature.is_some() || o.max_tokens.is_some() {
-            warn_unhonored_driver_knobs_once(o);
-        }
-    }
+    // The other DriverOverrides fields (temperature, max_tokens)
+    // are rejected at the chat-ability parse boundary — by the time
+    // dispatch sees overrides, only `model` can be set. See
+    // chat_ability::parse_driver_overrides for the rationale.
+    debug_assert!(
+        overrides.map(|o| o.temperature.is_none() && o.max_tokens.is_none()).unwrap_or(true),
+        "DriverOverrides reached dispatch with unsupported fields set; chat_ability \
+         parse_driver_overrides should have rejected this earlier"
+    );
 
     // Build env for the child subprocess. The env vars are how the typed
     // context crosses the process boundary into the spawned agent CLI —
@@ -554,6 +604,7 @@ pub fn send_to_agent_with_depth(
             // progress events interleave between them in
             // sequence order.
             timeline: Some(session.writer_arc()),
+            progress_tx: progress_tx.clone(),
             // Honor the operator-supplied binary override. Each
             // driver substitutes its own default when this is
             // empty (see `ClaudeOptions::resolved_command` and
@@ -693,35 +744,6 @@ pub fn send_to_agent_with_depth(
 ///   parse on these tokens reliably.
 const CONTEXT_OPEN: &str = "<!-- easynet:context-start -->";
 const CONTEXT_CLOSE: &str = "<!-- easynet:context-end -->";
-
-/// One-shot warning helper for driver knobs that the v1 CLI drivers
-/// (claude-code, codex) accept in the chat args schema but cannot
-/// pass through to the underlying subprocess. We warn instead of
-/// silently dropping so an operator who set `temperature: 0.3` in a
-/// chat call sees that the value is ignored — and once per process,
-/// not on every dispatch, so the log noise is bounded.
-fn warn_unhonored_driver_knobs_once(o: &DriverOverrides) {
-    use std::sync::OnceLock;
-    static WARNED: OnceLock<()> = OnceLock::new();
-    if WARNED.set(()).is_ok() {
-        let mut knobs: Vec<&'static str> = Vec::new();
-        if o.temperature.is_some() {
-            knobs.push("temperature");
-        }
-        if o.max_tokens.is_some() {
-            knobs.push("max_tokens");
-        }
-        eprintln!(
-            "dispatch: chat `driver.{}` set but the current claude-code / codex CLI \
-             drivers do not expose this knob; values are accepted by the schema and \
-             recorded in DriverOverrides but not piped through to the subprocess. \
-             A future driver layer that supports them can read overrides from \
-             send_to_agent_with_depth without re-shaping the dispatch surface. \
-             (warned once per process)",
-            knobs.join(", driver."),
-        );
-    }
-}
 
 fn compose_prompt(prompt: &str, context: Option<&str>) -> String {
     match context.map(str::trim).filter(|s| !s.is_empty()) {
@@ -1300,6 +1322,7 @@ mod tests {
             cwd: std::path::PathBuf::from("."),
             run_dir: None,
             timeline: None,
+            progress_tx: None,
             command: String::new(),
         };
         let out = adapter
@@ -1330,6 +1353,7 @@ mod tests {
             cwd: std::path::PathBuf::from("."),
             run_dir: None,
             timeline: None,
+            progress_tx: None,
             command: String::new(),
         };
         let out = adapter.invoke(&entry, "p", opts).unwrap();
@@ -1367,6 +1391,7 @@ mod tests {
             cwd: std::path::PathBuf::from("."),
             run_dir: None,
             timeline: None,
+            progress_tx: None,
             command: String::new(),
         };
         let out = adapter.invoke(&entry, "p", opts).unwrap();

@@ -42,7 +42,7 @@ use serde_json::Value;
 #[derive(Debug, Clone)]
 pub struct InvocationPlan {
     /// Fully-qualified ability name (`<agent>.chat`,
-    /// `system.session.attach`, etc.).
+    /// `fleet.attach_session`, etc.).
     pub ability: String,
 
     /// Raw JSON args. v1 uses serde JSON; v2 will switch to
@@ -86,6 +86,10 @@ pub enum CallMode {
     /// Streaming: one request, multiple response frames, explicit
     /// terminal frame at the end.
     Stream,
+    /// Bidirectional session: long-lived, both ends may push frames
+    /// at any time until either closes. See C-M3a design doc and
+    /// `LocalBidiHandler` for the contract.
+    Bidi,
 }
 
 /// Trait for the resolver. Concrete impl: `LocalNodeResolver`.
@@ -163,7 +167,7 @@ mod tests {
 
     fn plan(hint: Option<&str>) -> InvocationPlan {
         InvocationPlan {
-            ability: "system.ping".into(),
+            ability: "observe.health".into(),
             args: json!({}),
             target_node_hint: hint.map(NodeId::new),
             call_mode: CallMode::Rpc,
@@ -178,7 +182,7 @@ mod tests {
         let r = LocalNodeResolver::new(NodeId::new("self"));
         let t = r.resolve(plan(None)).unwrap();
         assert_eq!(t.scope, TargetScope::Local);
-        assert_eq!(t.ability, "system.ping");
+        assert_eq!(t.ability, "observe.health");
     }
 
     #[test]

@@ -1,15 +1,18 @@
-// EasyNet CLI
-// ===========
+// EasyNet CLI — `easynet mcp_server`
+// ===================================
 //
-// File: src/cli/mcp_server.rs
-// Description: `easynet mcp-server` — Hub-level MCP server on stdio for Claude Code / Codex.
+// File: src/facade/cli/mcp_server.rs
 //
-// Protocol: JSON-RPC 2.0 over stdin/stdout (MCP specification).
-// Provider: HubMcpProvider exposes 11 tools covering device management, ability
-//           lifecycle, remote execution, and EAL mission orchestration.
+// Argument parsing + foreground-server-loop entry point. The actual
+// server construction lives in
+// `runtime::agents::profiles::mcp::build_stdio_server`; this file is
+// intentionally thin so the MCP edge adapter has exactly one
+// construction site, shared with the `easynet start --mcp` path.
 //
-// Configuration for Claude Code:
-//   { "mcpServers": { "easynet": { "command": "easynet", "args": ["mcp-server"] } } }
+// RFC-001 §A3 quarantine (P4.8d + P4.9): every tool call routes
+// through the in-process AbilityProxy via InvokeMcpProvider. No
+// independent dispatch, no duplicate catalog, no direct bridge
+// calls.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -17,104 +20,45 @@
 use anyhow::Context;
 use clap::Args;
 
-use crate::persistence::config;
-
 #[derive(Debug, Args)]
 pub struct McpServerArgs {
-    /// Runtime endpoint (auto-detect from ~/.easynet/runtime.json if omitted)
-    #[arg(long)]
-    pub endpoint: Option<String>,
-    /// Tenant ID
+    /// Tenant ID. Surfaces in audit logs only; the actual dispatch
+    /// honours whatever tenant the loaded credentials carry.
     #[arg(long, default_value = "default")]
     pub tenant: String,
-    /// Bind node-scoped tools to this `node_id` (device-bound MCP server).
-    #[arg(long)]
-    pub bound_node: Option<String>,
-    /// Allow overriding `node_id` even when `--bound-node` is set.
-    #[arg(long)]
-    pub allow_node_override: bool,
     /// Agent label (informational; included in server name).
     #[arg(long)]
     pub agent: Option<String>,
-    /// Enable the `send_to_agent` MCP tool for agent-to-agent dispatch.
-    #[arg(long)]
-    pub enable_agent_dispatch: bool,
 }
 
 pub fn run(args: McpServerArgs) -> anyhow::Result<()> {
-    let ep = match args.endpoint {
-        Some(ep) => ep,
-        None => config::load()?.endpoint,
+    let server_name = format!(
+        "easynet-mcp-{}",
+        args.agent.as_deref().unwrap_or("device")
+    );
+    let config = crate::runtime::agents::profiles::mcp::StdioServerConfig {
+        server_name: server_name.clone(),
+        tenant_id: args.tenant.clone(),
+        // Thread --agent through so the workspace MCP server
+        // also exposes the agent's per-workspace abilities.
+        // Without this, an agent's own ability TOMLs (declared
+        // at <workspace>/abilities/) would be invisible to the
+        // LLM running inside that workspace.
+        agent_name: args.agent.clone(),
     };
+    let configured =
+        crate::runtime::agents::profiles::mcp::build_stdio_server(&config);
 
-    let mut kit = crate::facade::mcp::provider::HubMcpProvider::new(ep, args.tenant.clone());
+    eprintln!(
+        "[easynet mcp] tenant={} agent={} advertising {} tools (RFC-001 §A3 edge adapter)",
+        args.tenant,
+        args.agent.as_deref().unwrap_or("?"),
+        configured.descriptor_count(),
+    );
 
-    // Advertise agent abilities from the local registry so an MCP
-    // client talking to a standalone `easynet mcp serve` can invoke
-    // `<agent>.<verb>` tools the same way it would against a
-    // device-mode provider. Falls back to an empty adapter on a
-    // missing / malformed registry (same degraded-but-running policy
-    // as the device-mode path in `cli::start`).
-    let agent_abilities = match crate::registry::agents::load_agents() {
-        Ok(registry) => {
-            // Build a LocalAbilityRegistry with chat handlers so MCP
-            // dispatch routes through the unified handler (same code
-            // path the daemon uses for its own ability registry).
-            let mut local = crate::runtime::ability_dispatch::LocalAbilityRegistry::new();
-            crate::runtime::system::chat_ability::register(
-                &mut local,
-                &registry,
-                std::sync::Arc::new(Vec::new()),
-            );
-            crate::facade::mcp::agent_dispatch::AgentDispatchAdapter::build(
-                &registry,
-                std::sync::Arc::new(local),
-                args.tenant.clone(),
-            )
-        }
-        Err(e) => {
-            eprintln!(
-                "[easynet mcp] agents.json unreadable ({e}); advertising no agent abilities"
-            );
-            crate::facade::mcp::agent_dispatch::AgentDispatchAdapter::empty(args.tenant.clone())
-        }
-    };
-    kit = kit.with_agent_abilities(agent_abilities);
-
-    if let Some(node) = args.bound_node {
-        let lock = !args.allow_node_override;
-        kit = kit.with_bound_node(node, lock);
-    }
-    if let Some(agent) = &args.agent {
-        kit = kit.with_agent(agent.clone());
-    }
-    if args.enable_agent_dispatch {
-        kit = kit.with_agent_dispatch(true);
-
-        // User-visible banner: tell the operator that this MCP server
-        // can spawn other agents through the mission runtime. The
-        // banner is printed unconditionally on stderr whenever the flag
-        // is set, regardless of whether it was set by the workspace
-        // launcher (the default for `easynet agent send`) or flipped
-        // manually by the user. This is the safety counterpart to the
-        // workspace `build_mcp_entry` defaulting `--enable-agent-dispatch`
-        // — there is no silent escalation path.
-        eprintln!(
-            "[easynet mcp] agent dispatch enabled — this MCP server can spawn \
-             other agents in the same tenant. Calls go through the mission \
-             runtime; depth limit = 2. See docs/easynet_ontology.tex §6.2."
-        );
-        if let Some(agent) = &args.agent {
-            eprintln!("[easynet mcp] launching agent: {agent}");
-        }
-    }
-
-    let server_name = kit.server_name();
-
-    let server = easynet_axon::mcp::StdioMcpServer::new(kit)
-        .with_server_name(server_name)
+    let server = easynet_axon::mcp::StdioMcpServer::new(configured.provider)
+        .with_server_name(configured.server_name)
         .with_server_version(env!("CARGO_PKG_VERSION"));
-
     server
         .run(std::io::stdin().lock(), &mut std::io::stdout())
         .context("mcp server")

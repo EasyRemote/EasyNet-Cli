@@ -103,6 +103,13 @@ pub struct ClaudeOptions {
     /// the driver's stat accumulator only — the legacy
     /// `runs/trace.jsonl` write path is gone.
     pub timeline: Option<Arc<crate::runtime::timeline::TimelineWriter>>,
+    /// Optional live-progress callback. When `Some`, the
+    /// stdout-line callback invokes it once per streamed line
+    /// (in addition to the durable `timeline` emit). The chat
+    /// ability's stream_handler uses this to forward per-token
+    /// progress to its broadcast channel; without it the
+    /// stream surface was effectively snapshot+done.
+    pub progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
     /// Binary to spawn. Empty string means "use the driver
     /// default" (`DEFAULT_CLAUDE_BINARY`). Dispatch fills this
     /// from `AgentEntry::command` so operators who have a
@@ -128,6 +135,7 @@ impl Default for ClaudeOptions {
             cwd: None,
             run_dir: None,
             timeline: None,
+            progress_tx: None,
             command: String::new(),
         }
     }
@@ -164,9 +172,17 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
         "acceptEdits".to_string(),
         // Pre-authorise common read-only / launch shell commands so the
         // agent doesn't stall waiting for approval on `open`, `ls`, etc.
+        // The trailing `mcp__easynet` (no parens, no glob) authorises
+        // every MCP tool exposed by the EasyNet workspace MCP server
+        // — i.e. fs.read / fs.write / process.exec / shell.run /
+        // http.request and the agent's own per-workspace abilities.
+        // Without this, the spawned `claude -p` runs in non-interactive
+        // mode and refuses to call MCP tools because no human is there
+        // to approve. Claude Code's CLI accepts `mcp__<server>` to
+        // mean "every tool from this MCP server is pre-allowed".
         "--allowedTools".to_string(),
         "Bash(open:*) Bash(ls:*) Bash(cat:*) Bash(pwd) Bash(mkdir:*) \
-         Read Write Edit Glob Grep"
+         Read Write Edit Glob Grep mcp__easynet"
             .to_string(),
     ];
 
@@ -182,6 +198,45 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
             args.push("--mcp-config".to_string());
             args.push(mcp_json.to_string_lossy().to_string());
         }
+        // G2 — installed skills as Claude Code plugins.
+        // `fleet.skill_install` writes to <cwd>/skills/<name>/.
+        // Claude Code's `--plugin-dir <path>` accepts a directory
+        // whose subdirs each look like a plugin (containing a
+        // skills/ / commands/ / agents/ / hooks/ subtree). When
+        // an EasyNet-installed skill matches that layout — which
+        // a github:owner/repo source typically does because
+        // upstream Claude-skill repos are shaped that way — the
+        // plugin gets discovered as `/{skill-name}` and the agent
+        // can invoke it.
+        //
+        // Pre-fix the skill files were dropped on disk but the
+        // adapter never told claude to look at them. The skill
+        // was inert.
+        let skills_dir = cwd.join("skills");
+        if skills_dir.is_dir() {
+            // Each subdirectory of skills/ is a candidate plugin.
+            // Only push --plugin-dir entries for ones that look
+            // plugin-shaped (contain a SKILL.md or plugin.json,
+            // or have a skills/ subdir of their own — claude's
+            // discovery is forgiving but we'd rather not point
+            // it at empty dirs that would just print a warning).
+            if let Ok(entries) = std::fs::read_dir(&skills_dir) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if !p.is_dir() {
+                        continue;
+                    }
+                    let looks_plugin_shaped = p.join("plugin.json").is_file()
+                        || p.join("SKILL.md").is_file()
+                        || p.join("skills").is_dir()
+                        || p.join("commands").is_dir();
+                    if looks_plugin_shaped {
+                        args.push("--plugin-dir".to_string());
+                        args.push(p.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
     }
 
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
@@ -195,39 +250,45 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
     let final_text_cb = Arc::clone(&final_text);
     let stats_cb = Arc::clone(&stats);
     let timeline_cb = opts.timeline.clone();
+    let progress_tx_cb = opts.progress_tx.clone();
 
     let callback = Arc::new(move |line: &str| {
-        // PR-7 Commit 2: emit each streamed line as a `progress`
-        // event on the Timeline. The payload carries the raw
-        // JSONL line from the driver (driver-specific shape);
-        // downstream consumers (PR-10 services/chat, Frontend
-        // resume) parse the shape they expect and ignore the
-        // rest. The fsync on each emit is what gives us P2
-        // (disk durable before broadcast wake); the cost per
-        // chunk is bounded by LLM streaming rate, which is
-        // slower than fsync on any reasonable disk.
+        // Build the progress payload once; reuse it for both
+        // timeline emit and the live-broadcast callback so a
+        // subscriber's view matches what's on disk.
+        let payload = match serde_json::from_str::<serde_json::Value>(line) {
+            // Structured driver JSON — store the parsed value
+            // so subscribers get a typed payload instead of
+            // an opaque string.
+            Ok(v) => serde_json::json!({"driver": "claude-code", "chunk": v}),
+            // Non-JSON line (driver warning, stderr leak) —
+            // store verbatim under `raw` so it's still
+            // observable, just not typed.
+            Err(_) => serde_json::json!({"driver": "claude-code", "raw": line}),
+        };
+
+        // PR-7 Commit 2: durable timeline first. The fsync gives
+        // us P2 (disk durable before broadcast wake); the cost
+        // per chunk is bounded by the LLM streaming rate, which
+        // is slower than fsync on any reasonable disk.
         if let Some(tl) = &timeline_cb {
-            let payload = match serde_json::from_str::<serde_json::Value>(line) {
-                // Structured driver JSON — store the parsed
-                // value so subscribers get a typed payload
-                // instead of an opaque string.
-                Ok(v) => serde_json::json!({"driver": "claude-code", "chunk": v}),
-                // Non-JSON line (driver warning, stderr leak) —
-                // store verbatim under `raw` so it's still
-                // observable, just not typed.
-                Err(_) => serde_json::json!({"driver": "claude-code", "raw": line}),
-            };
-            if let Err(e) = tl.emit("progress", Some(payload)) {
-                // A sustained emit failure means the disk is
-                // unreachable. One stderr line is the compromise
-                // between surfacing the problem and not flooding
-                // when the LLM is streaming tokens at high rate.
+            if let Err(e) = tl.emit("progress", Some(payload.clone())) {
                 eprintln!(
                     "[easynet warn] timeline progress emit failed ({e}); \
                      subsequent lines for this run may be lost"
                 );
             }
         }
+
+        // Live-progress fan-out: forward the same payload to the
+        // chat stream's broadcast channel so an InvokeBidi/Stream
+        // subscriber sees per-token progress. Without this the
+        // \"stream\" was effectively snapshot+done — the audit
+        // conversation caught this in slice 32.
+        if let Some(tx) = &progress_tx_cb {
+            tx(payload);
+        }
+
         handle_stream_line(line, &final_text_cb, &stats_cb, run_start);
     });
 
@@ -482,6 +543,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
                 cwd: Some(opts.cwd),
                 run_dir: opts.run_dir,
                 timeline: opts.timeline,
+                progress_tx: opts.progress_tx,
                 // Honor `InvokeOpts::command` — dispatch filled
                 // it from `AgentEntry::command`. Empty string
                 // falls through to the driver default inside

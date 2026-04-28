@@ -497,6 +497,34 @@ pub fn default_chat_manifest() -> AbilityManifest {
                                 call and asks the caller to use the subscribe entry point \
                                 instead. The streaming subscribe path emits typed frames \
                                 (session/loaded/delta/tool_call_*/done|error)."
+            },
+            "attachments": {
+                "type": "array",
+                "description": "Files to read off disk and embed inline in the prompt's \
+                                context block. Each entry is read with the same path-safety \
+                                rules as the `fs.read` ability (no traversal outside the \
+                                workspace) and a per-call total cap of 1 MiB. Use this \
+                                instead of writing file contents into `context` by hand.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Filesystem path. Relative paths resolve against \
+                                            the agent's workspace directory."
+                        },
+                        "encoding": {
+                            "type": "string",
+                            "enum": ["utf8", "base64"],
+                            "description": "How to read the file. `utf8` (default) embeds \
+                                            text verbatim; `base64` embeds binary content \
+                                            with `<file encoding=\"base64\">…</file>` so \
+                                            the LLM can reason about non-text payloads."
+                        }
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false
+                }
             }
         },
         "required": ["prompt"],
@@ -686,6 +714,7 @@ mod tests {
             "context_loaders",
             "driver",
             "stream",
+            "attachments",
         ] {
             assert!(
                 props.contains_key(required_key),

@@ -83,7 +83,7 @@ use crate::runtime::directory::AgentDirectory;
 /// Behaviour per runtime (branching on `AgentSpec::runtime`):
 /// * `ClaudeCode`: writes `.mcp.json` + `CLAUDE.md` + `AGENTS.md`.
 /// * `Codex` / `CodexAppServer`: additionally writes
-///   `.codex/config.toml` + `.agents/skills/easynet-ability-author/*`
+///   `.codex/config.toml` + `.agents/skills/easynet-ability-crud/*`
 ///   and runs `git init` if `.git/` is absent.
 pub fn ensure_from_directory(dir: &AgentDirectory) -> anyhow::Result<PathBuf> {
     // Guarantee the four spec-adjacent subdirs exist. Covers the
@@ -149,9 +149,22 @@ pub fn ensure_from_directory(dir: &AgentDirectory) -> anyhow::Result<PathBuf> {
         RuntimeKind::ClaudeCode => {} // `.mcp.json` + `CLAUDE.md` is enough.
         RuntimeKind::Codex | RuntimeKind::CodexAppServer => {
             write_codex_config(&root, model.as_deref(), &agent_name)?;
-            write_codex_skill(&root)?;
         }
     }
+
+    // Seed the ability-CRUD skill for every runtime. Claude Code
+    // discovers it via --plugin-dir <root>/skills/<name>/ (see
+    // drivers::claude_code::invoke); Codex via the legacy
+    // .agents/skills/ convention. Writing to both makes the skill
+    // visible no matter which runtime spawns.
+    //
+    // Pre-fix this seeded ONLY for Codex, and the content named
+    // MCP tools (deploy_ability, run_mission, list_devices) that
+    // do not exist in the current MCP surface. Surfaced when an
+    // audit asked whether agents knew how to author abilities at
+    // all — claude workspaces had no skill, codex had a skill that
+    // pointed at ghost tools.
+    write_ability_crud_skill(&root)?;
 
     Ok(root)
 }
@@ -323,30 +336,94 @@ fn write_codex_config(
     Ok(())
 }
 
-/// Write Codex-native skill in .agents/skills/ for project-level discovery.
-fn write_codex_skill(ws: &Path) -> anyhow::Result<()> {
-    let skill_dir = ws
-        .join(".agents")
-        .join("skills")
-        .join("easynet-ability-author");
-    let agents_dir = skill_dir.join("agents");
-    fs::create_dir_all(&agents_dir)?;
-
-    config::atomic_write(&skill_dir.join("SKILL.md"), CODEX_SKILL_MD.as_bytes())?;
-    config::atomic_write(
-        &agents_dir.join("openai.yaml"),
-        CODEX_OPENAI_YAML.as_bytes(),
-    )?;
+/// Seed the `easynet-ability-crud` skill so a freshly-installed
+/// agent knows how to author / validate / deploy / invoke / remove
+/// abilities through EasyNet's actual MCP surface and CLI.
+///
+/// We write to TWO locations on purpose:
+///
+///   * `<workspace>/skills/easynet-ability-crud/SKILL.md` — picked
+///     up by Claude Code via `--plugin-dir <workspace>/skills/...`
+///     (drivers::claude_code::invoke walks this directory at spawn
+///     time and adds one --plugin-dir per plugin-shaped subdir).
+///   * `<workspace>/.agents/skills/easynet-ability-crud/SKILL.md`
+///     — the legacy Codex/Agent-Skills convention.
+///
+/// Both files have identical content. The duplication costs ~3 KiB
+/// per workspace and means the same skill works under whichever
+/// runtime ends up dispatching, without a runtime branch here.
+fn write_ability_crud_skill(ws: &Path) -> anyhow::Result<()> {
+    for relative in ["skills", ".agents/skills"] {
+        let skill_dir = ws.join(relative).join("easynet-ability-crud");
+        fs::create_dir_all(&skill_dir)?;
+        config::atomic_write(
+            &skill_dir.join("SKILL.md"),
+            ABILITY_CRUD_SKILL_MD.as_bytes(),
+        )?;
+    }
     Ok(())
 }
 
 // ── Shared ───────────────────────────────────────────────────────────────────
 
+/// Resolve the path of the `easynet` binary that the spawned
+/// MCP server child should run.
+///
+/// Resolution order:
+///   1. `current_exe()` IF the executable is named `easynet`
+///      / `easynet-daemon` (the two binaries that actually
+///      implement `mcp-server`). This is the production case:
+///      the daemon spawned the call, so its own path is the
+///      correct subprocess to relaunch.
+///   2. Else, search `PATH` for a binary literally named
+///      `easynet`. This catches the dev-time scenario where a
+///      maintainer runs `cargo run --bin gen-ability-tomls` or
+///      a smoke binary; current_exe() returns that test
+///      binary's path, but we want claude's `.mcp.json` to
+///      point at the real `easynet` install on the developer's
+///      PATH (typically `/usr/local/bin/easynet` from
+///      `cargo install easynet`).
+///   3. Last resort: the literal string `"easynet"` and let
+///      the spawn-time PATH search find it.
+///
+/// Why we don't use current_exe unconditionally
+/// --------------------------------------------
+/// During this audit conversation, `cargo run --bin
+/// real-user-smoke` corrupted the developer's
+/// `~/.easynet/workspaces/claude/.mcp.json` to point at the
+/// smoke binary. The smoke binary doesn't implement
+/// `mcp-server`, so the next claude.chat invocation that tries
+/// to use an EasyNet MCP tool would fail silently. The check
+/// against the binary's filename eliminates that whole class
+/// of test-side-effect.
 fn resolve_easynet_binary() -> String {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.to_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "easynet".to_string())
+    let current = std::env::current_exe().ok();
+
+    // Step 1: current_exe is `easynet` or `easynet-daemon`.
+    if let Some(p) = current.as_ref() {
+        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+            if stem == "easynet" || stem == "easynet-daemon" {
+                if let Some(s) = p.to_str() {
+                    return s.to_string();
+                }
+            }
+        }
+    }
+
+    // Step 2: search PATH for `easynet`.
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join("easynet");
+            if candidate.is_file() {
+                if let Some(s) = candidate.to_str() {
+                    return s.to_string();
+                }
+            }
+        }
+    }
+
+    // Step 3: last resort — let spawn-time PATH search find it.
+    "easynet".to_string()
 }
 
 /// Build the (command, args, env) tuple for launching the EasyNet MCP
@@ -369,29 +446,41 @@ fn resolve_easynet_binary() -> String {
 /// MCP can spawn other agents.
 pub(super) fn build_mcp_entry(agent_name: &str) -> (String, Vec<String>, serde_json::Value) {
     let cmd = resolve_easynet_binary();
-    let mut args = vec!["mcp-server".to_string()];
+    // The CLI subcommand is `easynet mcp serve` (a two-token
+    // path, not a single hyphenated `mcp-server`). The earlier
+    // shape was renamed when the `mcp` group split into
+    // serve/status/install/skill-install — but the .mcp.json
+    // writer was never updated, so every agent's workspace got
+    // a broken MCP server config that fails with "unrecognized
+    // subcommand" the moment Claude Code / Codex tries to spawn
+    // it. Fixed in slice 27.
+    let mut args = vec!["mcp".to_string(), "serve".to_string()];
     let mut env = serde_json::Map::new();
 
+    // `easynet mcp serve` accepts only --tenant and --agent
+    // (see facade/cli/mcp_server.rs::McpServerArgs). Two flags
+    // we used to write — --endpoint and --enable-agent-dispatch
+    // — were dropped in the P4.9 quarantine when MCP server
+    // construction moved into the mcp profile. Writing them
+    // here today causes claude/codex to spawn the subprocess
+    // and immediately get "error: unexpected argument
+    // '--endpoint'", which surfaces in claude's debug as
+    // `mcp_servers: [{name: "easynet", status: "failed"}]`.
+    // The audit conversation surfaced this; the fix below
+    // matches the actual subcommand grammar.
     if let Ok(state) = config::load() {
-        if !state.endpoint.is_empty() {
-            args.push("--endpoint".to_string());
-            args.push(state.endpoint);
-        }
         if let Some(t) = &state.tenant {
             args.push("--tenant".to_string());
             args.push(t.clone());
         }
     }
 
-    // Identify the launching agent so the MCP server can label its
-    // audit lines with `from=<agent_name>`.
+    // Identify the launching agent. The mcp serve handler uses
+    // this to (a) label audit lines, (b) include the agent's
+    // per-workspace abilities in the tool catalogue (slice
+    // 28's G1 fix in profiles/mcp.rs::build_stdio_server).
     args.push("--agent".to_string());
     args.push(agent_name.to_string());
-
-    // Allow the MCP server to dispatch back to other agents via the
-    // mission runtime. Without this flag the workspace MCP can only
-    // expose local Hub tools — agent-to-agent calls would silently fail.
-    args.push("--enable-agent-dispatch".to_string());
 
     if let Ok(lib) = std::env::var("EASYNET_DENDRITE_BRIDGE_LIB") {
         env.insert(
@@ -585,55 +674,169 @@ easynet device list                     # list hosting substrates
     .to_string()
 }
 
-const CODEX_SKILL_MD: &str = r#"---
-name: easynet-ability-author
-description: Author, deploy, and orchestrate EasyNet abilities and EAL missions. Use when asked to create abilities for edge devices, write EAL programs, or build multi-agent workflows.
+/// Default skill seeded into every freshly-provisioned workspace.
+///
+/// The frontmatter follows the Agent-Skills convention (Anthropic
+/// Skills, Claude Code plugins, Codex `.agents/skills/`): `name`,
+/// `description`, `allowed-tools`, `when_to_use`. The body is
+/// structured as Goal → numbered Steps with explicit Success
+/// criteria — the layout AliveCode's `skillify` template uses, and
+/// the layout the EasyNet ability scaffolder itself emits when it
+/// writes `SKILL.md` next to a new ability.
+///
+/// Tool names referenced inside MUST be tools the workspace's MCP
+/// server actually advertises (from `easynet mcp serve --agent <n>
+/// tools/list`). The stale predecessor of this file referenced
+/// `deploy_ability`, `run_mission`, `list_devices`, etc — none of
+/// which exist in the current MCP surface. Audit caught that an
+/// agent reading the seed skill would try those names and get a
+/// MethodNotFound on every call.
+const ABILITY_CRUD_SKILL_MD: &str = r#"---
+name: easynet-ability-crud
+description: Create, validate, deploy, invoke, and remove EasyNet abilities through the workspace MCP server and the `easynet ability` CLI.
+allowed-tools:
+  - mcp__easynet
+  - Bash(easynet:*)
+  - Bash(ls:*)
+  - Bash(cat:*)
+  - Read
+  - Write
+  - Edit
+when_to_use: |
+  Use when the user wants to create a new ability, deploy an existing ability
+  to a device, invoke a registered ability, list what abilities exist on the
+  fleet, or remove one. Trigger phrases: "make an ability", "scaffold an
+  ability", "deploy <name> to <node>", "what abilities are available",
+  "uninstall <ability>", "validate this ability".
 ---
 
-# EasyNet Ability Author
+# EasyNet Ability CRUD
 
-Create and deploy abilities to edge devices via EasyNet MCP tools.
+You are an EasyNet agent. EasyNet exposes one MCP server — `easynet` —
+under your `.mcp.json`. Every tool described below is reachable as
+`mcp__easynet__<tool>` from your tool list. Inspect the live list with
+`meta.list_abilities` if you are unsure what is registered right now.
 
-## Deploy an ability
+## Goal
 
-Use the `deploy_ability` MCP tool:
-- `node_id`: target device
-- `tool_name`: ability name
-- `command`: shell command (must output JSON)
-- `description`: human-readable description
+Help the user own the full lifecycle of an EasyNet ability:
+**author → validate → deploy → invoke → list → remove**, using the
+real MCP tools and the `easynet` CLI on disk.
 
-## Write EAL programs
+## Inputs
 
-Use the `run_mission` MCP tool with EAL source:
+- `$ability_name`: kebab-case ability identifier, e.g. `image-resize`.
+- `$node_id` (optional): the device that should host the ability when
+  deploying. If omitted, the runtime auto-routes.
 
-```eal
-mission "name" {
-  let a = call "ability" on "device" with { key = "value" } timeout 30
-  let b = call "process" on "device-2" with { input = a.output }
-}
+## Steps
+
+### 1. Discover what is already available
+
+Use the `meta.list_abilities` MCP tool to enumerate every ability the
+local daemon has registered. Cross-check with `fleet.list_agents` if
+the user asks "who can do X" — that returns the LLM sub-agents this
+device hosts.
+
+**Success criteria**: You can name at least the namespaces present
+(`fs.*`, `process.*`, `shell.*`, `http.*`, `fleet.*`, `meta.*`,
+`schedule.*`, `loop.*`, `discuss.*`, `observe.*`, `a2a.*`, `consent.*`).
+
+### 2. Scaffold a new ability
+
+Run the CLI through `Bash`:
+
+```bash
+easynet ability new $ability_name --description "<one-line>"
 ```
 
-Dependencies are inferred. Independent steps run in parallel.
-Agent targets (`on "claude"`) dispatch to AI agents instead of devices.
+This drops a directory containing `ability.json`, `SKILL.md`,
+`scripts/invoke.sh`, and `scripts/handler.sh`. Read each file with
+`Read` before editing — the scaffolder is the source of truth for
+the manifest shape, do not invent a different one.
 
-## Available MCP tools
+**Success criteria**: The directory exists, `ability.json` parses as
+JSON, and `easynet ability validate <path>` reports no errors.
 
-`list_devices`, `deploy_ability`, `invoke_ability`, `execute_command`,
-`list_all_abilities`, `run_mission`, `uninstall_ability`, `hub_status`
-"#;
+### 3. Implement the handler
 
-const CODEX_OPENAI_YAML: &str = r#"interface:
-  display_name: "EasyNet Ability Author"
-  short_description: "Create and deploy abilities to edge devices via EasyNet"
+Edit `scripts/handler.sh` (or `handler.py` / `handler.rs` for the
+other `--lang` variants) to read JSON from stdin and write JSON to
+stdout. Use `fs.read` / `fs.write` MCP tools when the implementation
+needs to consult / produce other files in the workspace, and
+`process.exec` for argv-style invocations of trusted binaries (no
+shell interpretation). Reach for `shell.run` only when bash
+expansion or piping is genuinely needed — it routes through an
+8-stage security pipeline that rejects destructive verbs by default.
 
-policy:
-  allow_implicit_invocation: true
+**Success criteria**: A trial invocation through `process.exec`
+returns the expected JSON from the handler script, end-to-end.
 
-dependencies:
-  tools:
-    - type: "mcp"
-      value: "easynet"
-      description: "EasyNet Hub MCP server for device management and ability deployment"
+### 4. Validate
+
+Always run validation before deploy:
+
+```bash
+easynet ability validate <path>
+```
+
+The CLI re-checks the same structural rules `ability deploy` will
+re-check, so a clean validate means deploy will not reject on
+shape — only on a runtime / target issue.
+
+**Success criteria**: Exit code 0, no error lines.
+
+### 5. Deploy
+
+```bash
+easynet ability deploy <path> --node $node_id
+```
+
+Omit `--node` to let the realm directory auto-route. After deploy,
+re-run `meta.list_abilities` to confirm the new name shows up.
+
+**Success criteria**: `meta.list_abilities` includes the new
+`<ability>.<verb>` and `easynet ability show <name>` returns its
+manifest.
+
+### 6. Invoke
+
+From inside this agent, prefer the MCP path: call the ability by its
+qualified name through the `easynet` MCP server. The args object
+must satisfy the ability's input schema (which `meta.list_abilities`
+returns inline).
+
+For interactive verification from a shell, the CLI's
+`easynet ability invoke <name> --args '<json>'` is the equivalent.
+
+**Success criteria**: The receipt's terminal state is `Succeeded`
+and the result body matches the ability's documented shape.
+
+### 7. List, audit, remove
+
+- `easynet ability list` — every ability the federation knows about.
+- `easynet ability show <name>` — single-ability detail card.
+- `easynet ability uninstall <name>` — remove a previously-deployed
+  ability. **Human checkpoint**: confirm with the user before this,
+  uninstall is the only step in this flow that is destructive and
+  not undone by a re-deploy.
+
+**Success criteria for uninstall**: `easynet ability list` no
+longer includes the name, and a follow-up `meta.list_abilities`
+confirms removal.
+
+## Rules
+
+- Never invent MCP tool names. If a tool you want is not in
+  `meta.list_abilities`, the right move is to scaffold it (Step 2),
+  not to call a name and hope it routes.
+- The agent's own `<self>.chat` is intentionally NOT exposed in the
+  MCP tool list (recursion guard). Reach for sibling agents' chats
+  instead, when you need agent-to-agent dispatch.
+- Treat `shell.run` and `process.exec` as the same authority surface
+  — both are gated by the same per-call permission rules. If a call
+  is rejected, do not retry with `destructive_acknowledged: true`
+  unless the user explicitly authorised that specific action.
 "#;
 
 #[cfg(test)]
@@ -647,13 +850,64 @@ mod tests {
     /// and `--agent <name>` so cross-agent dispatch is always available
     /// from inside an agent.
     #[test]
-    fn build_mcp_entry_enables_agent_dispatch_with_name() {
+    fn resolve_easynet_binary_does_not_use_test_runner_path() {
+        // During `cargo test`, `current_exe()` returns the path of
+        // the test runner binary (e.g.
+        // `target/debug/deps/easynet_cli-<hash>`), NOT `easynet`.
+        // Pre-fix this leaked into the developer's `.mcp.json`
+        // and broke claude.chat's MCP discovery for any subsequent
+        // call. The resolver must return either an actual
+        // `easynet` path on PATH, or the bare string "easynet"
+        // — never the test runner's path.
+        let resolved = resolve_easynet_binary();
+        let runner = std::env::current_exe().ok();
+        if let Some(r) = runner {
+            let r_str = r.to_string_lossy().to_string();
+            assert_ne!(
+                resolved, r_str,
+                "resolve_easynet_binary returned the test runner's path: {r_str}; \
+                 fix the resolver, see the slice-24 commit message"
+            );
+        }
+        // The resolved path either ends in /easynet or is the
+        // literal "easynet" fallback.
+        let stem = std::path::Path::new(&resolved)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        assert!(
+            stem == "easynet" || stem == "easynet-daemon" || resolved == "easynet",
+            "resolved binary path has unexpected name: {resolved}"
+        );
+    }
+
+    #[test]
+    fn build_mcp_entry_uses_correct_two_token_subcommand() {
+        // `easynet mcp serve` is the actual CLI path. Pre-fix
+        // this wrote `["mcp-server", ...]` (a single hyphenated
+        // token that the CLI dispatcher does not recognise),
+        // which meant every agent's `.mcp.json` had a broken
+        // MCP server config that failed with "unrecognized
+        // subcommand" the moment Claude Code / Codex spawned
+        // it. Lock the correct two-token path so a future
+        // rename of the subcommand requires updating both this
+        // writer and this test in lockstep.
+        let (_, args, _) = build_mcp_entry("claude");
+        assert_eq!(args.first().map(|s| s.as_str()), Some("mcp"));
+        assert_eq!(args.get(1).map(|s| s.as_str()), Some("serve"));
+        // The hyphenated form must NEVER appear.
+        for a in &args {
+            assert!(
+                a != "mcp-server",
+                "args must not contain the legacy `mcp-server` token: {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_mcp_entry_passes_agent_name_via_two_arg_flag() {
         let (cmd, args, _env) = build_mcp_entry("claude");
         assert!(!cmd.is_empty(), "command must be set");
-        assert!(
-            args.iter().any(|a| a == "--enable-agent-dispatch"),
-            "args must contain --enable-agent-dispatch, got: {args:?}"
-        );
         // The agent name must be passed as `--agent <name>` (two adjacent
         // args, not a single `--agent=name`).
         let agent_idx = args
@@ -664,6 +918,20 @@ mod tests {
             args.get(agent_idx + 1).map(|s| s.as_str()),
             Some("claude"),
             "--agent must be followed by the agent name"
+        );
+        // Sanity: args must NOT contain flags that the current
+        // `mcp serve` subcommand doesn't accept. P4.9 dropped
+        // --endpoint and --enable-agent-dispatch; writing them
+        // here would cause every workspace MCP server to fail
+        // with "unexpected argument" the moment claude/codex
+        // spawned it.
+        assert!(
+            !args.iter().any(|a| a == "--endpoint"),
+            "args must NOT contain --endpoint (removed in P4.9): {args:?}"
+        );
+        assert!(
+            !args.iter().any(|a| a == "--enable-agent-dispatch"),
+            "args must NOT contain --enable-agent-dispatch (removed in P4.9): {args:?}"
         );
     }
 
@@ -724,9 +992,21 @@ mod tests {
         // ClaudeCode runtime — the branch in the projection is
         // what enforces the size/shape of the workspace.
         assert!(!root.join(".codex/config.toml").exists());
-        assert!(
-            !root.join(".agents/skills/easynet-ability-author").exists()
-        );
+        // Ability-CRUD skill is seeded for EVERY runtime now (P6 audit
+        // fix): pre-fix the seeder ran only for Codex, leaving Claude
+        // workspaces with no idea that EasyNet exposed an ability
+        // CRUD surface at all. Both runtimes get the same SKILL.md
+        // at <root>/skills/easynet-ability-crud/SKILL.md so Claude
+        // Code's --plugin-dir scan picks it up.
+        assert!(root
+            .join("skills/easynet-ability-crud/SKILL.md")
+            .is_file());
+        // The legacy Codex path is also written for both runtimes —
+        // harmless duplication that keeps the seed visible no matter
+        // which runtime convention the consumer follows.
+        assert!(root
+            .join(".agents/skills/easynet-ability-crud/SKILL.md")
+            .is_file());
         cleanup(&root);
     }
 
@@ -738,9 +1018,56 @@ mod tests {
         assert!(root.join(".mcp.json").is_file());
         assert!(root.join(".codex/config.toml").is_file());
         assert!(root
-            .join(".agents/skills/easynet-ability-author/SKILL.md")
+            .join(".agents/skills/easynet-ability-crud/SKILL.md")
+            .is_file());
+        // Codex workspace also gets the Claude-style skills/ path
+        // so the seed survives a runtime swap (e.g. an operator
+        // reuses the workspace to test claude-code).
+        assert!(root
+            .join("skills/easynet-ability-crud/SKILL.md")
             .is_file());
         cleanup(&root);
+    }
+
+    #[test]
+    fn ability_crud_skill_md_references_only_real_mcp_tools() {
+        // The seed text MUST NOT name MCP tools that don't exist on
+        // the live workspace MCP server — pre-fix the const named
+        // `deploy_ability`, `run_mission`, `list_devices`, etc, none
+        // of which are advertised today, so any agent following the
+        // skill's instructions hit MethodNotFound on every call.
+        // Audit caught this when we probed `tools/list` and compared.
+        let dead = [
+            "deploy_ability",
+            "run_mission",
+            "list_devices",
+            "invoke_ability",
+            "execute_command",
+            "list_all_abilities",
+            "uninstall_ability",
+            "hub_status",
+        ];
+        for name in dead {
+            assert!(
+                !ABILITY_CRUD_SKILL_MD.contains(name),
+                "seed skill still references the stale tool name {name:?}; \
+                 pick a name from `easynet mcp serve --agent <n> tools/list` instead"
+            );
+        }
+        // Sanity: a couple of tools that SHOULD be referenced (proof
+        // the new content has substance, not just absence of the
+        // old strings).
+        for name in [
+            "meta.list_abilities",
+            "easynet ability new",
+            "easynet ability validate",
+            "easynet ability deploy",
+        ] {
+            assert!(
+                ABILITY_CRUD_SKILL_MD.contains(name),
+                "seed skill must walk the agent through {name:?}; missing"
+            );
+        }
     }
 
     #[test]

@@ -15,7 +15,7 @@
 // result (RPC)" or "name + JSON args → stream of JSON frames
 // (Subscribe)". Keeping the ABI at two functions means:
 //
-//   (a) Adding `system.session.attach` doesn't bump the ABI.
+//   (a) Adding `fleet.attach_session` doesn't bump the ABI.
 //   (b) Client bindings can be auto-generated from `.proto` files
 //       without a per-ability C wrapper layer.
 //   (c) The ABI stability contract has exactly two functions to
@@ -557,6 +557,25 @@ async fn run_subscription_loop(
                             break;
                         }
                         OutgoingFrame::Result { .. } => continue,
+                        // Bidi-only outbound variants must never appear on a
+                        // Subscribe response stream — the server only emits
+                        // them in reply to OpenBidi, which this code path
+                        // never sends. Treat as a server protocol violation:
+                        // surface as an error to the dispatcher and end the
+                        // stream so a buggy server can't silently pump bidi
+                        // frames into a stream subscriber's queue.
+                        OutgoingFrame::RecvBidi { .. }
+                        | OutgoingFrame::TerminalBidi { .. }
+                        | OutgoingFrame::ErrorBidi { .. } => {
+                            let v = serde_json::json!({
+                                "kind": "error",
+                                "message": "server emitted a bidi frame on a Subscribe stream",
+                            });
+                            if let Ok(json) = serde_json::to_vec(&v) {
+                                let _ = tx.send(json);
+                            }
+                            break;
+                        }
                     }
                 }
             }
@@ -634,7 +653,7 @@ mod tests {
         // an invalid-handle error. Pin this ordering: swapping
         // them would hide real null-pointer bugs behind "invalid
         // handle" errors.
-        let ability = CString::new("system.ping").unwrap();
+        let ability = CString::new("observe.health").unwrap();
         let args = CString::new("{}").unwrap();
         let code = unsafe {
             easynet_ability_invoke(0, ability.as_ptr(), args.as_ptr(), std::ptr::null_mut())
@@ -644,7 +663,7 @@ mod tests {
 
     #[test]
     fn invoke_with_invalid_handle_returns_invalid_handle_code() {
-        let ability = CString::new("system.ping").unwrap();
+        let ability = CString::new("observe.health").unwrap();
         let args = CString::new("{}").unwrap();
         let mut out: *mut c_char = std::ptr::null_mut();
         let code = unsafe {
@@ -665,7 +684,7 @@ mod tests {
         // (the closest "your arg is wrong" code we have today),
         // never a panic.
         let h = live_handle_no_client();
-        let ability = CString::new("system.ping").unwrap();
+        let ability = CString::new("observe.health").unwrap();
         // Trailing comma, not legal JSON.
         let bad_args = CString::new("{,}").unwrap();
         let mut out: *mut c_char = std::ptr::null_mut();
@@ -683,7 +702,7 @@ mod tests {
         // distinctive message, not a panic. This pins the safety
         // net for misuse from inside the crate's own tests.
         let h = live_handle_no_client();
-        let ability = CString::new("system.ping").unwrap();
+        let ability = CString::new("observe.health").unwrap();
         let args = CString::new("{}").unwrap();
         let mut out: *mut c_char = std::ptr::null_mut();
         let code =
@@ -697,7 +716,7 @@ mod tests {
         // through; reject at the ABI boundary rather than crashing
         // later when the first frame arrives.
         let h = live_handle_no_client();
-        let ability = CString::new("system.session.attach").unwrap();
+        let ability = CString::new("fleet.attach_session").unwrap();
         let args = CString::new("{}").unwrap();
         let mut sub: SubscriptionId = 42;
         let code = unsafe {

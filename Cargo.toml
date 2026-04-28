@@ -44,6 +44,26 @@ path = "src/bin/easynet.rs"
 name = "easynet-daemon"
 path = "src/bin/easynet-daemon.rs"
 
+# Maintainer tool. Regenerates every abilities/system/<name>.ability.toml
+# descriptor from the live `published_abilities()` metadata. Run after
+# any change to a `description_*` / `input_schema_*` function; the
+# `every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer`
+# test in src/runtime/agents/mod.rs fails CI if the on-disk TOML
+# drifts from what this binary would emit.
+#
+#   cargo run --bin gen-ability-tomls
+[[bin]]
+name = "gen-ability-tomls"
+path = "src/bin/gen-ability-tomls.rs"
+
+[[bin]]
+name = "real-user-smoke"
+path = "src/bin/real-user-smoke.rs"
+
+[[bin]]
+name = "real-publish-smoke"
+path = "src/bin/real-publish-smoke.rs"
+
 [dependencies]
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -90,9 +110,40 @@ uuid = { version = "1", features = ["v4"] }
 # next-fire instant in a given timezone — minimum surface needed
 # for the daemon's tick runner.
 cron = "0.12"
+# PTY support for fleet.pty_session_* abilities (C-M3b/c). Wraps
+# openpty(3) on unix and the ConPTY API on Windows behind one
+# trait. Used by the PtyService to spawn child processes attached
+# to a real terminal so interactive workloads (REPLs, editors)
+# work over the InvokeBidi attach surface. Stays light: portable-pty
+# pulls only winapi-rs on Windows and nothing extra on unix beyond
+# what tokio already drags in.
+portable-pty = "0.8"
+# Base64 encoding for binary frame payloads (PTY stdin/stdout).
+# JSON can't carry raw bytes, so the bidi attach handler base64-
+# encodes both directions. Using base64 (not hex) saves ~33% of
+# wire bytes for the throughput-bound terminal output path.
+base64 = "0.22"
+# thiserror for derive(Error) on internal error enums (e.g. shellguard
+# runner). std::error::Error trait derivation by hand is verbose; this
+# crate is the de-facto standard.
+thiserror = "1"
+# tree-sitter + tree-sitter-bash drive the AST stage of the shell.run
+# 8-stage pipeline (AXIOM Tier 2.5). Same parser AliveCode uses, so
+# the cross-implementation security semantics line up. The parser's
+# job is *only* to give shellguard a structured view of a command
+# string; everything else (allow/deny, dangerous-pattern detection,
+# permission rules) sits in plain Rust on top.
+tree-sitter = "0.25"
+tree-sitter-bash = "0.25"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+# Tests for the McpClientService spawn a real subprocess against a
+# script written into a tempdir; tempfile gives us auto-cleanup so
+# a panicked test doesn't leak the dir.
+tempfile = "3"
 
 # Protobuf schema tooling — gated behind `proto-gen` feature.
 # Plan v10.5 R1 pins Protobuf as the single source of truth for

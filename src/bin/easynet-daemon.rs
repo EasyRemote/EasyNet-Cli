@@ -56,8 +56,9 @@ use easynet_cli::runtime::invocation::{
 use easynet_cli::runtime::invocation_target::{LocalNodeResolver, TargetResolver};
 use easynet_cli::runtime::kernel::Kernel;
 use easynet_cli::runtime::kernel_api::KernelApi;
-use easynet_cli::runtime::system;
+use easynet_cli::runtime::agents;
 use easynet_cli::services::control::ability_proxy::AbilityProxy;
+use easynet_cli::services::control::runtime_dispatch;
 use easynet_cli::services::control::server;
 
 /// Heartbeat is opt-in: only spawn the legacy loop if the parent
@@ -71,7 +72,7 @@ async fn main() -> anyhow::Result<()> {
     // v1: a Kernel wrapping a NoopGateway is sufficient for the
     // proxy to construct Receipts. The daemon installs the
     // SubscriberBroker permission variant so a Client UI
-    // connected to system.permission.subscribe sees real pending
+    // connected to consent.subscribe sees real pending
     // requests when an agent dispatch is gated. (When no Client
     // is subscribed the broker auto-allows — a daemon running
     // headless does not freeze on permission gates.)
@@ -137,22 +138,18 @@ async fn main() -> anyhow::Result<()> {
     // briefly disagrees about agents should not take down
     // ping/session/permission alongside it.
     //
-    // The v1 default context-loader chain: user_profile (global) +
-    // schedule (agent-scoped) + memory (agent-scoped). Tests and the
-    // standalone MCP server pass an empty Vec when they want chat
-    // without any context injection.
-    let chat_loaders: Arc<Vec<Arc<dyn system::chat_ability::ContextLoader>>> =
-        Arc::new(system::context_loaders::default_loaders(
-            kernel.schedule_service(),
-        ));
-
-    let registry = system::build_registry_for_daemon(
+    // Default v1 context-loader chain (user_profile + schedule +
+    // memory) is auto-attached by build_registry_for_daemon when
+    // we pass None. A test or the standalone MCP server that
+    // wants chat without any context injection passes
+    // Some(Arc::new(Vec::new())) instead.
+    let registry = agents::build_registry_for_daemon(
         kernel.session_service(),
         kernel.permission_service(),
         kernel.discuss_service(),
         kernel.schedule_service(),
         kernel.loop_service(),
-        chat_loaders,
+        None,
     );
 
     // Stage-2 dispatcher (executor). Wired with the unified registry
@@ -168,7 +165,13 @@ async fn main() -> anyhow::Result<()> {
     // — it delegates to whichever handler the registry has under
     // that name.
     let dispatcher_for_kernel = Arc::new(dispatcher.clone());
-    kernel.set_dispatcher(dispatcher_for_kernel);
+    kernel.set_dispatcher(Arc::clone(&dispatcher_for_kernel));
+    // Outbound A2A: a2a.client.send_task reads through a process-
+    // wide DISPATCHER_HANDLE (see a2a_client_ability module doc).
+    // Populate it with the same Arc the Kernel holds so the
+    // outbound path and Kernel::invoke share one dispatcher
+    // instance — a future Receipt-emit hook on either lands once.
+    easynet_cli::runtime::agents::a2a_client_ability::set_dispatcher(dispatcher_for_kernel);
 
     // Stage-1 resolver. Local node id from EASYNET_NODE_ID env (set
     // by the supervisor from credentials.json) or "self" as a
@@ -199,9 +202,24 @@ async fn main() -> anyhow::Result<()> {
     // by constructing a real Invocation per fire and routing it
     // through Kernel::invoke. The Kernel admits the Session,
     // dispatches the agent, and terminates — Clients subscribed
-    // to system.session.attach see the same lifecycle they would
+    // to fleet.attach_session see the same lifecycle they would
     // see for a Client-initiated invoke.
     spawn_schedule_tick(kernel_for_tick, schedule_for_tick);
+
+    // Step-3 sidecar: runtime-dispatch UDS responder. Listens on a
+    // separate socket from `control.sock` because the runtime side
+    // talks newline-delimited single-line JSON, while the CLI/MCP IPC
+    // server speaks length-delimited frames. axon-runtime opens this
+    // socket only when it has resolved a `runtime_local_tools` entry
+    // whose `dispatch_endpoint` points at it — i.e., one of the
+    // abilities the daemon registered via `runtime.register_local_tool`
+    // at boot. A failure here logs but does not tear down the daemon.
+    let dispatch_proxy = proxy.clone();
+    tokio::spawn(async move {
+        if let Err(e) = runtime_dispatch::run(dispatch_proxy).await {
+            eprintln!("[runtime-dispatch] responder exited: {e:#}");
+        }
+    });
 
     // Foreground: Control-plane IPC server. Returns when the listener
     // is dropped (i.e. never, in v1 — we exit on SIGTERM via the OS).
@@ -222,7 +240,7 @@ async fn main() -> anyhow::Result<()> {
 ///
 /// Kernel::invoke admits a Session keyed by invocation_id and
 /// emits the lifecycle events Clients subscribe to via
-/// system.session.attach. Failed agent dispatches surface as
+/// fleet.attach_session. Failed agent dispatches surface as
 /// `Failed(reason)` Receipts — operators see the same diagnostic
 /// they would see if they dispatched the agent manually.
 ///

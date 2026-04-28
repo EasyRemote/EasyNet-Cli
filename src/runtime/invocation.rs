@@ -213,7 +213,7 @@ mod tests {
         Invocation {
             caller: "easynet://nodes/a".into(),
             callee: "easynet://nodes/b".into(),
-            ability: "system.ping".into(),
+            ability: "observe.health".into(),
             subject: "easynet://nodes/b".into(),
             nonce_hex: "00112233445566778899aabbccddeeff".into(),
             causal_context: CausalContext::Null,

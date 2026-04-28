@@ -1,0 +1,1391 @@
+\documentclass[11pt,a4paper]{article}
+
+% ──────────────────────────────────────────────────────────────────────────
+% AXON-RFC-006 附录 B（实现规约）—— easynet.web_app（中文版）
+% Status: 草稿 v0.3（HTML/EAL 双 canonical：每个 web_app 携带一份 EAL
+%                   源，其哈希入 canonical state；HTML 与 api_surface
+%                   是 EAL 的确定性投影。镜像附录 A v0.3。）
+% Build:  xelatex AXON-RFC-006-B-easynet-webapp.zh-CN.tex
+% ──────────────────────────────────────────────────────────────────────────
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{xltabular}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{tcolorbox}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{parskip}
+\usepackage{xspace}
+
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setCJKmainfont{PingFang SC}[
+    BoldFont={PingFang SC Semibold},
+    ItalicFont={PingFang SC Light}
+]
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small AXON-RFC-006 附录 B}
+\fancyhead[R]{\small easynet.web\_app —— 技术设计}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\titleformat{\section}{\Large\bfseries\color{black!85}}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\large\bfseries\color{black!75}}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{black!70}}{\thesubsubsection}{0.5em}{}
+
+\definecolor{normativecolor}{RGB}{180,30,30}
+\definecolor{derivedcolor}{RGB}{30,90,180}
+\definecolor{deferredcolor}{RGB}{120,90,30}
+\definecolor{codebg}{RGB}{245,245,248}
+\definecolor{codeborder}{RGB}{210,210,220}
+
+\newcommand{\normsv}{\textcolor{normativecolor}{\textbf{[规范性]}}\xspace}
+\newcommand{\derived}{\textcolor{derivedcolor}{\textbf{[推论]}}\xspace}
+\newcommand{\deferred}{\textcolor{deferredcolor}{\textbf{[暂缓]}}\xspace}
+
+\lstdefinestyle{ealstyle}{
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small,
+    frame=single,
+    rulecolor=\color{codeborder},
+    breaklines=true,
+    showstringspaces=false,
+    keywordstyle=\color{blue!70!black}\bfseries,
+    commentstyle=\color{green!40!black}\itshape,
+    stringstyle=\color{red!60!black},
+    morekeywords={state_type,state_key,canonical,operational,transition,receipt,view,principal,agent,owner_signature,attempt_id,transition_id,routes_manifest,api_abilities,actions,fn,let,struct,impl,pub,async,await,location,server,proxy_pass,call,on,with,timeout,mission,inputs,return},
+    columns=fullflexible,
+    keepspaces=true,
+    aboveskip=0.6em,
+    belowskip=0.6em,
+}
+\lstset{style=ealstyle}
+
+\newtheorem{theorem}{定理}
+\newtheorem{lemma}[theorem]{引理}
+\newtheorem{corollary}[theorem]{推论}
+\theoremstyle{definition}
+\newtheorem{definition}{定义}
+
+\newtcolorbox{invariant}[1][不变量]{
+    colback=red!4!white,
+    colframe=red!50!black,
+    fonttitle=\bfseries,
+    title={不变量 --- #1},
+    sharp corners=south,
+    boxrule=0.6pt,
+}
+\newtcolorbox{notebox}[1][]{
+    colback=blue!4!white,
+    colframe=blue!50!black,
+    fonttitle=\bfseries,
+    title={说明},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+\newtcolorbox{warningbox}[1][]{
+    colback=orange!6!white,
+    colframe=orange!70!black,
+    fonttitle=\bfseries,
+    title={过渡期偏差},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+\newtcolorbox{decisionbox}[1][]{
+    colback=purple!4!white,
+    colframe=purple!60!black,
+    fonttitle=\bfseries,
+    title={待决策},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+
+\title{
+    \vspace{-2em}
+    \textbf{\Large AXON-RFC-006 附录 B：easynet.web\_app}\\[0.3em]
+    \large 由 agent 部署的全栈应用：技术设计、构建管线、Hub 路由、
+    \texttt{actions.*} 命名空间与实现计划
+}
+\author{
+    胡思蓝 \\ \small 新加坡国立大学
+}
+\date{草稿 v0.3，\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+本附录规定 \texttt{easynet.web\_app}：用于支撑完整现代 web 部署的
+state\_type。一个 agent（典型情形为 Claude Code）在
+\texttt{\textasciitilde/.easynet/pages-project/<slug>/} 项目目录中
+撰写真实的 React/Vue/Next 风格前端项目，通过构建产生静态 \texttt{dist/}，
+该 \texttt{dist/} 与一个由 EasyNet ability 直接充当的后端一起被服务。
+Hub 扮演\emph{有状态版的 nginx} 角色：服务前端 bundle、把
+\texttt{POST /api/<verb>} 翻译成 owner agent 上的 ability 调用、把
+WebSocket 订阅代理到 ability stream，并通过
+\texttt{/\_\_easynet/agent} 暴露结构化的 \texttt{agent\_view}。除
+serve-and-translate 之外，本附录还引入 \texttt{actions.*} ability
+命名空间——可查询的接口（\texttt{actions.list\_for\_page}、
+\texttt{actions.get}、\texttt{actions.search}），peer agent 通过它\emph{按需}
+取得与某个具体页面或意图相关的 EAL 片段与 mission，而不必批量下载
+静态清单。Agent skill 自动种子（\texttt{easynet-pages-author}）在守护进程
+首次接触 agent 时安装到其 workspace，让"撰写 web\_app"成为一项
+可学习的技能而不是隐式协议知识。本附录覆盖：项目位置与生命周期；
+状态机（canonical + runtime 叠加）；长任务构建管线；Hub 路由矩阵；
+\texttt{actions.*} 契约与 \texttt{/easynet-for-agents/<verb>} HTTP
+镜像；agent\_view 在新设计下的角色；在 \texttt{EasyNet-Cli} 中落地所需
+的五个 PR 切片；以及一个端到端的 worked example——agent 用
+Vite + React 写购物前端、声明 API 与 actions 面、构建、发布、上线、
+被审计的全过程。
+\end{abstract}
+
+\tableofcontents
+\vspace{1em}
+\hrule
+\vspace{1em}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{位置与脉络}
+\label{sec:position}
+
+\derived{} web 从一个静态文档媒介演变成完整应用平台；本附录沿同一弧线，
+作为 RFC-006 两个附录中的第二个：
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\linewidth}{l X}
+\toprule
+\textbf{附录} & \textbf{建模对象} \\
+\midrule
+A（\texttt{easynet.page}）   & 单一文档。作者写 HTML / Markdown；Hub 服务它。最简参考——单一规范状态、无 runtime 叠加、无构建步骤、无 API 面。 \\
+B（\texttt{easynet.web\_app}）& 完整应用。作者写真实前端项目，构建管线产生静态 bundle，应用的 API endpoint \emph{即} EasyNet ability，且 peer agent 可经 \texttt{actions.*} ability 命名空间询问 owner "在这一页上能做什么"。 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\noindent 两者都保留。Pages 仍是协议规范核最简化的验证；web\_app
+是第一个调用长任务规范 transition、runtime 叠加、完整 Hub 路由、以及
+agent 可执行接口发现的状态类型。
+
+\subsection{为什么这不是 nginx}
+
+nginx 只服务一个静态目录、并把请求反向代理到独立部署的后端。后端
+对 nginx 是黑盒——它不理解后端状态、不知道后端有哪些 endpoint，也
+无法对一个通过结构化发现机制询问"调用方在这一页上能做什么"的邻居
+作答。本附录规定的 Hub 服务的字节与 nginx 一样，但其路由决策派生自
+state object 的规范状态、其 API endpoint 是和其他每个 EasyNet 调用方
+共享同一注册表的、可内省的 ability，并且其发现表面（\texttt{actions.*}）
+不是侧带 manifest 而是 owner 拥有的可查询一等命名空间。nginx 是 HTTP
+管道；Hub 是恰好在外边界讲 HTTP、在内边界讲 EAL 的状态投影层。
+
+\subsection{相对 v0.1 的变化}
+
+自上一稿起的三处结构性改动：
+
+\begin{enumerate}[leftmargin=2em,itemsep=0.18em]
+    \item \textbf{项目位置。} 项目目录从
+    \texttt{<workspace>/web\_apps/<slug>/} 改到独立、全局的
+    \texttt{\textasciitilde/.easynet/pages-project/<slug>/}。理由：
+    项目属于一个 state object，其 owner 已经在 state\_key 中编码，
+    不必再通过目录嵌套表达 ownership。
+
+    \item \textbf{Agent skill 默认 seeded。} 一个名为
+    \texttt{easynet-pages-author} 的捆绑 skill 在守护进程首次接触
+    agent 时安装到其 workspace，与现有的
+    \texttt{easynet-ability-crud} 同模式。该 skill 教 agent 如何
+    scaffold、声明、构建、上线、发现 web\_app。撰写一份 web\_app 是
+    可学习的技能，不是口耳相传的知识。
+
+    \item \textbf{actions 是可查询的 ability 命名空间。} 上一稿曾把
+    "actions\_view"设计成与页面并列的、放着 EAL 文件的静态目录。
+    那种设计强迫 peer agent 不论与当前页/当前意图是否相关都批量下载
+    所有 action——这正是 peer 想消费 agent 可执行接口表面时最不愿
+    遇到的事。新设计把 \texttt{actions.*} 引入为 EasyNet ability
+    命名空间：peer agent 调用
+    \texttt{<owner>.actions.list\_for\_page(page\_path)} 即按需得到
+    \emph{仅}与该页面相关的 actions。\texttt{/easynet-for-agents/<verb>}
+    HTTP 镜像存在以便浏览器侧使用，但协议级契约是 ability，不是
+    URL。
+\end{enumerate}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{目标与非目标}
+\label{sec:goals}
+
+\subsection{目标}
+
+\normsv{} 一个符合本附录的实现：
+
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.18em]
+    \item 让 agent 在
+    \texttt{\textasciitilde/.easynet/pages-project/<slug>/} 中
+    用任意工具链（Vite、Next.js、Remix 等）撰写真实前端项目；EasyNet
+    不发明项目结构。
+    \item 提供长任务规范 transition \texttt{webapp.build}，运行项目
+    声明的构建命令、把产出的 \texttt{dist/} 以一份不可变的内容寻址
+    bundle 形式捕获，并按成功/失败推进 canonical state。
+    \item 提供 runtime 叠加 transition（\texttt{webapp.serve}、
+    \texttt{webapp.stop}）绑定 Hub 映射；canonical state 不变。
+    \item 在 Hub 上把 HTTP 请求按三条正交通道翻译为 EasyNet 操作：
+    静态 bundle 拉取、API ability 调用（\texttt{/api/<verb>}）、
+    WebSocket ability 订阅（\texttt{/ws/<topic>}）。
+    \item 在 \texttt{/\_\_easynet/agent} 暴露 \texttt{agent\_view}
+    作为应用状态与可发现性元数据的类型化 JSON 文档，含指向
+    \texttt{actions.*} 命名空间的指针。
+    \item 定义 \texttt{actions.*} ability 命名空间
+    （\S\ref{sec:actions}）：一个由 owner 实现、可查询的接口表面，
+    peer agent 通过它按需请求 EAL 片段与 mission。HTTP 镜像
+    \texttt{/easynet-for-agents/<verb>} 是 ability 调用的别名，不是
+    静态目录。
+    \item 在每个 agent 的 workspace 中 seed
+    \texttt{easynet-pages-author} skill，让"撰写 web\_app"成为
+    agent 自身有据可查的能力（\S\ref{sec:skill-seed}）。
+    \item 可在五个 PR 切片（\S\ref{sec:impl-plan}）中落地，
+    每个切片可独立审阅。
+\end{enumerate}
+
+\subsection{非目标}
+
+\derived{} 不在本附录范围：
+
+\begin{itemize}[leftmargin=2.2em,itemsep=0.18em]
+    \item TLS 终结、HTTP/2 协商、多实例 Hub 集群——属于运维。
+    \item 选定的前端框架——本附录使用 React/Vite 仅因 Claude Code
+    默认这套；协议本身与框架无关。
+    \item 持续进程 SSR——Phase 1 是静态 + Hub 路由 API + WebSocket；
+    每请求都需要 Node.js 进程响应的 SSR 推迟到 RFC-006-B v2。
+    \item 跨 realm 或跨节点应用联邦——Phase 1 单 owner / 单节点。
+    \item 已认证人类（\texttt{principal/human-auth}）——Phase 1 仅
+    \texttt{principal/human-anon}。
+    \item 把"三视图等价"作为严格协议不变量——希望
+    \texttt{human\_view} 与 actions 内容承载完全相同的信息确实有
+    价值，但 v1 无法以协议形式编码；\texttt{actions.*} 命名空间是
+    owner 自愿声明的 agent 可执行表面，不是从其他视图派生的。
+\end{itemize}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{项目模型}
+\label{sec:project}
+
+\subsection{项目位置}
+
+\normsv{} state object 在磁盘上的真值来源是位于以下路径的项目目录：
+
+\begin{lstlisting}
+~/.easynet/pages-project/<slug>/
+├── easynet.app.toml           # EasyNet 侧的声明
+├── package.json               # agent 工具链所有
+├── package-lock.json          # 同上
+├── src/                       # 框架风格源码
+├── public/
+├── vite.config.ts             # 或 next.config.js 等
+└── （可选）框架需要的任何其他文件
+\end{lstlisting}
+
+EasyNet \textbf{只拥有} \texttt{easynet.app.toml}；其余属于框架。
+该位置全局（每主机一棵目录树，按 slug 寻址）而非每 agent
+（\texttt{<workspace>/...}），因为 state\_key 已经携带 owner 身份——
+把目录嵌套到 agent workspace 下会重复编码 ownership 并使 Hub 访问
+复杂化（Hub 通过 blob store 读字节，而调试运维不应该需要先知道某
+slug 归哪个 agent）。
+
+目录在 \texttt{webapp.create} 时由守护进程创建；agent 通过自己的工具链
+（\texttt{npm create vite} 等）填入框架文件。守护进程在创建之后\emph{不}
+向该目录写入，除非通过该 state object 的 transition（如
+\texttt{webapp.delete} 时清空）。位于
+\texttt{\textasciitilde/.easynet/blobs/} 的 blob 存储是 Hub 服务字节
+的规范来源；项目目录是 agent 的工作副本。
+
+\begin{invariant}[WB-INV-1]
+\texttt{webapp.build} 成功之后，Hub \textbf{必须}仅从 blob 存储以
+\texttt{build\_artifact\_hash} 为键服务字节。项目目录的 \texttt{dist/}
+可以为 agent 调试方便保留在磁盘上，但 Hub \textbf{绝不}读取它用于
+服务。为服务而读取项目的 \texttt{dist/} 是非合规。
+\end{invariant}
+
+\subsection{easynet.app.toml}
+
+\normsv{} EasyNet 用以理解 web\_app 的唯一文件：
+
+\begin{lstlisting}
+# easynet.app.toml —— EasyNet 编写并阅读的唯一文件。
+# 项目其余部分属于框架。
+
+[manifest]
+name         = "shop"
+description  = "由 agent 构建的小型陶瓷店。"
+visibility   = "public"            # private | realm | public
+
+[build]
+command      = "npm install && npm run build"
+dist_dir     = "dist"              # 相对项目根
+build_timeout_secs = 600
+node_version = "20"                # 建议性
+
+[serve]
+mode         = "static-only"
+                # "static-only" : 无后端进程；API 完全由 Hub 发起的
+                #                 ability 调用满足。Phase 1 默认与
+                #                 生产形态。
+                # "process"      : 启动后端进程；预留给 v2（SSR）。
+
+[api]
+# 前端\emph{允许}通过 Hub 的 /api/<verb> 路由调用的 ability。Hub 会
+# 拒绝把 verb 不在此列表的 /api/<verb> 请求翻译。
+abilities = [
+  "shop.list_items",
+  "shop.checkout",
+  "shop.order_status",
+]
+
+[actions]
+# 经 /easynet-for-agents/<verb> 镜像暴露的、由 owner 实现的
+# `actions.*` ability。每条是 owner agent 已注册的 actions.*
+# 命名空间下的 verb。peer agent 调用这些以按需发现 EAL 片段与
+# mission。详见 §6。
+abilities = [
+  "actions.list_for_page",
+  "actions.get",
+  "actions.search",
+]
+
+[routes]
+# nginx 风格路由规则。顺序重要。
+rules = [
+  { match = "exact:/",                      action = "static:dist/index.html" },
+  { match = "prefix:/assets/",              action = "static:dist/assets/" },
+  { match = "regex:^/api/([a-z][a-z0-9_]*)$",
+    action = "api:$1",
+    methods = ["GET","POST"] },
+  { match = "regex:^/easynet-for-agents/([a-z][a-z0-9_]*)$",
+    action = "actions:$1",
+    methods = ["GET","POST"] },
+  { match = "prefix:/ws/",                  action = "ws:$path" },
+  { match = "exact:/__easynet/agent",       action = "agent_view" },
+  { match = "exact:/__easynet/health",      action = "health" },
+  { match = "exact:/__easynet/receipts",    action = "receipts" },
+  { match = "fallback",                     action = "spa:dist/index.html" },
+]
+
+[csp]
+extra_script_src  = []
+extra_style_src   = ["'unsafe-inline'"]
+extra_connect_src = ["self"]
+\end{lstlisting}
+
+最小应用三个段（\texttt{[manifest]}、\texttt{[build]}、\texttt{[api]}）
+即可；\texttt{[actions]} 可选（\S\ref{sec:actions} 解释为何）；routes
+默认走上面 SPA + actions 标准布局。
+
+\subsection{为什么 API 与 actions 面必须声明而不是自动检测}
+
+\normsv{} \texttt{[api]} 与 \texttt{[actions]} 两个面都是\emph{声明}
+而非\emph{发现}的。当对应 verb 未声明时，Hub 拒绝把
+\texttt{/api/<verb>} 或 \texttt{/easynet-for-agents/<verb>} 翻译为调用。
+
+\begin{invariant}[WB-INV-2]
+当 \texttt{<verb>} 不在 web\_app 当前 Built canonical state 的
+\texttt{api\_surface\_hash}（即规范化的 \texttt{[api].abilities} 列表）
+中时，Hub \textbf{必须}拒绝把 \texttt{/api/<verb>} 翻译为调用。同
+规则对 \texttt{/easynet-for-agents/<verb>} 与
+\texttt{actions\_surface\_hash} 适用。拒绝必须返 HTTP 404（不是
+403）以避免确认内部 ability 的存在——身份层 TR-INV-12 建立的信任
+边界纪律在应用层的实例化。
+\end{invariant}
+
+\subsection{Agent skill 默认 seed}
+\label{sec:skill-seed}
+
+\normsv{} 守护进程在首次接触每个 agent 时，把一个名为
+\texttt{easynet-pages-author} 的捆绑 skill 安装到该 agent 的 workspace
+标准 skill 路径下：
+
+\begin{lstlisting}
+<workspace>/skills/easynet-pages-author/SKILL.md
+<workspace>/.agents/skills/easynet-pages-author/SKILL.md
+\end{lstlisting}
+
+该 skill 形态与现有的 \texttt{easynet-ability-crud}（commit 3bc6c70）
+完全一致。它讲清楚：
+
+\begin{itemize}[leftmargin=2em,itemsep=0.15em]
+    \item 怎样 scaffold 一个前端项目
+    （\texttt{npm create vite@latest <slug> -- --template react-ts}）；
+    \item 项目标准位置
+    （\texttt{\textasciitilde/.easynet/pages-project/<slug>/}）——
+    在 \texttt{webapp.create} 铸造 state\_key 并创建目录\emph{之后}
+    使用；agent \texttt{cd} 进守护进程准备好的目录；
+    \item \texttt{easynet.app.toml} 的结构，含 \texttt{[api]} 与
+    \texttt{[actions]} 段；
+    \item 通过现有 \texttt{easynet-ability-crud} skill 注册
+    \texttt{api.*} ability 的方法；
+    \item 怎样实现 \texttt{actions.*} 命名空间
+    （\S\ref{sec:actions}）以让 peer agent 发现该应用的可执行表面；
+    \item 生命周期：\texttt{webapp.create} $\to$ 填项目 $\to$
+    \texttt{webapp.build} $\to$ \texttt{webapp.serve}；
+    \item 不需重建即可改路由或 CSP 时如何用
+    \texttt{webapp.update\_config}；
+    \item 故障排查（构建失败、端口冲突、visibility 拦下的 404）。
+\end{itemize}
+
+该 skill 是 Phase 1 的 P-B5 交付物（\S\ref{sec:impl-plan}）。它不进
+canonical state——它在 agent workspace 中、归 agent 所有，仅在守护
+进程检测到丢失或过时时重新种子。
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{状态机}
+\label{sec:state-machine}
+
+\subsection{state\_type 与 state\_key}
+
+\normsv{}
+
+\begin{lstlisting}
+state_type:  easynet.web_app
+
+state_key:
+    (realm: string, owner_agent_uri: string, app_slug: string)
+
+URA 形态：
+  easynet:///r/<realm>/agent/<owner>/web_app/<slug>
+\end{lstlisting}
+
+\texttt{app\_slug} 匹配 Appendix A pages 中定义的 slug ABNF。位于
+\texttt{\textasciitilde/.easynet/pages-project/<app\_slug>/} 的目录
+在 \texttt{webapp.create} 时创建、\texttt{webapp.delete} 时清除。
+
+\subsection{规范字段}
+
+\normsv{} 按 CSH-INV-2（主文 \S2.5）大体积值都按内容哈希持有：
+
+\begin{lstlisting}
+canonical_fields(web_app) = {
+    manifest_hash:        bytes(32),  // [manifest] 段
+    build_config_hash:    bytes(32),  // [build] 段
+    eal_hash:             bytes(32),  // web_app 的 EAL 源的 SHA-256
+                                      //   （`// ...` 注释中的 markdown
+                                      //   文档 + mission 声明）。按
+                                      //   附录 A PA-INV-2，EAL 是
+                                      //   canonical 的 agent 面向
+                                      //   artifact；api_surface_hash
+                                      //   在 update_config 时由 daemon
+                                      //   从 EAL 派生，不另行手写。
+    api_surface_hash:     bytes(32),  // [api].abilities（已排序）；
+                                      //   由 daemon 从 EAL 重算，
+                                      //   不手写
+    actions_surface_hash: bytes(32),  // [actions].abilities（已排序）
+    routes_manifest_hash: bytes(32),  // [routes].rules（按声明顺序）
+    csp_hash:             bytes(32),  // [csp] 段
+    source_snapshot_hash: bytes(32),  // 上次成功构建源树
+                                      //   首次构建前为 null
+    build_artifact_hash:  bytes(32),  // dist 树哈希
+                                      //   首次 Built 前为 null
+    state_value:          string,
+    visibility:           string,
+    version:              uint64,
+}
+\end{lstlisting}
+
+每字段在 schema 中标 \texttt{canonical:true}；schema 驱动的
+$\pi$ 投影恰按这些 key 产出。
+
+\subsection{规范状态空间}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\linewidth}{l X}
+\toprule
+\textbf{state\_value} & \textbf{含义} \\
+\midrule
+\texttt{Created}   & 已注册 easynet.app.toml；项目目录已存在；尚未尝试构建。 \\
+\texttt{Building}  & \texttt{webapp.build} 在进行中。瞬态。仅经 OperationalReceipt 可见；从不作终态规范状态。 \\
+\texttt{Built}     & 已存在至少一次成功构建。\texttt{build\_artifact\_hash} 非空。可被 Served。 \\
+\texttt{Failed}    & 最近一次构建失败。owner 可迭代后重试。 \\
+\texttt{Deleted}   & 终态；项目目录与 blob 引用清除。 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Runtime 叠加状态空间}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\linewidth}{l X}
+\toprule
+\textbf{runtime} & \textbf{含义} \\
+\midrule
+\texttt{Stopped}  & 此 app 没有附着的服务叠加。 \\
+\texttt{Starting} & \texttt{webapp.serve} 已被调用；Hub 正在把 slug 绑定到其路由。 \\
+\texttt{Running}  & Hub 正主动为此 app 翻译 \texttt{/<slug>/...} 请求。 \\
+\texttt{Crashed}  & Hub 丢失了映射（进程重启、配置重载错误等）；canonical state 未触动。可经 \texttt{webapp.serve} 恢复。 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Transition 列表}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\linewidth}{l l X}
+\toprule
+\textbf{Transition} & \textbf{类} & \textbf{说明} \\
+\midrule
+\texttt{webapp.create@v1}      & canonical   & $\emptyset \to$ Created。铸造 state\_key、创建项目目录、落各段哈希。 \\
+\texttt{webapp.update\_config@v1}
+                               & canonical   & Created/Built/Failed $\to$ 同。替换声明配置（manifest、build、api、actions、routes、csp）。\emph{不}触发构建。 \\
+\texttt{webapp.build@v1}       & canonical   & Created/Built/Failed $\to$ Building（瞬态）$\to$ Built|Failed。长任务。见 \S\ref{sec:build-pipeline}。 \\
+\texttt{webapp.delete@v1}      & canonical   & * $\to$ Deleted。隐式触发 \texttt{webapp.stop} 副作用；清空项目目录。 \\
+\texttt{webapp.serve@v1}       & operational & Stopped/Crashed $\to$ Starting $\to$ Running。要求 canonical = Built。 \\
+\texttt{webapp.stop@v1}        & operational & Starting/Running/Crashed $\to$ Stopped。 \\
+\texttt{webapp.get@v1}         & query       & 返回 canonical + runtime 快照。 \\
+\texttt{webapp.get\_eal@v1}    & query       & 强制实现。返回 SHA-256 等于 \texttt{eal\_hash} 的 UTF-8 EAL 源代码。HTTP 镜像：\texttt{GET /\_\_easynet/eal}。镜像附录 A PA-INV-2。 \\
+\texttt{webapp.list@v1}        & query       & 列出某 agent 拥有的 web\_app。 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{构建管线}
+\label{sec:build-pipeline}
+
+\subsection{webapp.build@v1 步骤}
+
+\normsv{} \texttt{webapp.build} 时执行器：
+
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.18em]
+    \item 读取
+    \texttt{\textasciitilde/.easynet/pages-project/<slug>/easynet.app.toml}
+    并校验。
+    \item 计算 \texttt{source\_snapshot\_hash}：项目目录的 Merkle 哈希
+    （排除 \texttt{node\_modules/}、\texttt{dist/}、\texttt{.git/}
+    以及框架 \texttt{.gitignore} 排除的任何路径）。
+    \item 发出 \texttt{build.started} OperationalReceipt，含源快照
+    哈希、声明命令、预期超时。
+    \item 在项目目录内 spawn 构建命令。stdout/stderr 三通；按周期发
+    \texttt{build.progress} OperationalReceipt（可丢失）。
+    \item 退出时：
+    \begin{itemize}[leftmargin=1.5em]
+        \item 状态 0 且 \texttt{dist\_dir} 非空：遍历
+        \texttt{dist\_dir}；按 Merkle 计算
+        \texttt{build\_artifact\_hash}；把整棵 dist 树作为单个
+        TreeBlob（一份按 JCS 规范化的 manifest，列文件路径与各自
+        blob 哈希）写到 blob 存储。
+        \item 状态非零或 \texttt{dist\_dir} 空：构建失败原因 payload
+        并存其哈希。
+    \end{itemize}
+    \item 发出唯一一条 CanonicalReceipt：成功为
+    \texttt{build.completed}，失败为 \texttt{build.failed}。该
+    transition 的唯一规范推进；\texttt{post\_state\_hash} 反映 Built
+    或 Failed；\texttt{state\_version} +1。
+\end{enumerate}
+
+瞬态 \texttt{Building}、流式进度、构建工具 stdout 都是观测；它们绝不
+进入规范哈希。
+
+\subsection{TreeBlob 格式}
+
+\normsv{}
+
+\begin{lstlisting}
+TreeBlob (JCS 规范化 JSON)
+{
+  "version": 1,
+  "entries": [
+    { "path": "index.html",
+      "size": 2148,
+      "blob": "<file 字节的 sha256>",
+      "mode": "0644" },
+    ...
+  ]
+}
+\end{lstlisting}
+
+树的哈希是 \texttt{sha256(jcs(TreeBlob))} ——
+\texttt{build\_artifact\_hash}。每个独立文件也是内容寻址 blob。
+
+\subsection{构建执行器}
+
+\normsv{} Phase 1 交付一个本地构建执行器：构建在拥有 agent 的 EasyNet
+守护进程的子进程中运行。owner 直接为产生的 CanonicalReceipt 签名。
+委托构建（源在 agent A、构建在 agent B）属于未来：协议形态已就绪
+（主文 \S5.3），但执行器尚未实现。
+
+\begin{decisionbox}
+\textbf{待决策：构建沙箱。} 构建子进程具备守护进程的进程权限。
+Phase 1 缓解：构建在限制 \texttt{PATH}、不继承除 \texttt{NODE\_VERSION}
+与 \texttt{HOME} 外的环境变量、更严的 \texttt{ulimit} 下运行。完整
+沙箱（seccomp / pledge / Docker）属于 RFC-006-B v2。
+\end{decisionbox}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{actions.* ability 命名空间}
+\label{sec:actions}
+
+\subsection{为什么是命名空间，不是静态目录}
+
+\derived{} peer agent 访问一个 web\_app 时，它\emph{不}想下载 owner
+写过的每一个 EAL 片段；它想拿到\emph{与当前页或当前意图相关的
+actions}。静态 EAL 文件目录强迫批量下载与客户端过滤——上一稿就
+卡在这里。重新设计把 agent 可执行表面当成可查询资源。
+
+owner agent 在 \texttt{actions.*} 命名空间下注册 ability。peer agent
+（或 Hub 代浏览器）按名调用这些 ability。owner 的实现决定返回什么：
+按页相关集、按意图匹配集、完整目录、单个具名 action，或任何未来形态。
+因为 actions 是 ability，所有现存协议机制全部适用：
+\texttt{ability\_surface}、schema、scope check、receipt、审计、
+联邦路由。
+
+\subsection{推荐 verb 集}
+
+\normsv{} 鼓励但不要求 owner 实现一组标准 verb：
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\linewidth}{l X}
+\toprule
+\textbf{Ability} & \textbf{用途} \\
+\midrule
+\texttt{actions.list\_for\_page(page\_path)}
+    & 返回与 \texttt{page\_path} 相关的 actions。最常用入口：刚访问
+      某页的 agent 问"我在这能做什么"。 \\
+\texttt{actions.get(name)}
+    & 返回某具名 action 的完整定义——通常是 EAL 或 mission 文本，
+      加结构化的 \texttt{inputs} schema。 \\
+\texttt{actions.search(intent)}
+    & 返回与自由文本意图字符串匹配的 action 描述符的有序列表。排序
+      由 owner 决定。 \\
+\texttt{actions.list\_all()}
+    & 返回完整目录。等价于 sitemap；爬虫与镜像有用。 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+verb 集是\emph{约定}，不是协议。owner 可实现子集、超集，或一个都不
+实现；agent 调一个不存在的 verb 得到普通的 \texttt{MethodNotFound}。
+Hub 的 \texttt{/easynet-for-agents/<verb>} 镜像只转发到 owner 注册的
+任意 verb。
+
+\subsection{Action 描述符}
+
+\normsv{} 任意 \texttt{actions.*} verb 返回的描述符形态：
+
+\begin{lstlisting}
+{
+  "name":     "checkout",          // owner 命名空间
+  "kind":     "eal" | "mission" | "form_map",
+  "summary":  "下一笔订单。",
+  "url":      "/easynet-for-agents/get?name=checkout",
+                                   // POST 携带 params 以获取已具体化
+                                   //   的 mission
+  "params_schema": {               // peer 传给 actions.get 的 params
+                                   //   对象的 schema；owner 把这些
+                                   //   作为字面量内嵌到返回的 mission
+    "item_id": { "type":"string", "required":true,
+                 "doc":"用 actions.search 找 ID" },
+    "qty":     { "type":"uint",   "default":1 }
+  },
+  "result_render": {               // 可选，为 form_map 用
+    "success_template": "订单 {order_id}，预计 {eta}",
+    "error_template":   "抱歉：{error_message}"
+  }
+}
+\end{lstlisting}
+
+action 主体——EAL 片段、mission，或 form\_map JSON——都是
+\texttt{actions.get} 返回的值。因为主体是 ability 返回值而非磁盘文件，
+owner 可动态计算（如把当前用户的会话注入到 mission 中）而不违反任何
+协议规则。视图确定性（TR-INV-6）不适用——actions 是 ability 不是
+view。
+
+\subsection{EAL 实际是什么（以及不是什么）}
+\label{sec:eal-grammar-note-cn}
+
+\normsv{} \texttt{actions.get} 返回的 mission 主体是该代码库已实现
+的 EAL（\texttt{src/eal/}）程序。EAL 是有意为之的窄语言：
+
+\begin{itemize}[leftmargin=2em,itemsep=0.15em]
+    \item 一个 mission 是 \texttt{call} 步骤的\emph{静态 DAG}。
+    没有 \texttt{if}、没有 \texttt{fail}、没有表达式求值、没有
+    \texttt{return}。每个步骤的 args 在 mission 文本写下时就已
+    全部填好。
+    \item 参数语法是 \texttt{with \{ key = value, \ldots \}}
+    （\texttt{=}，不是 \texttt{:}）。值是 string / int / float /
+    bool 字面量，或 \texttt{prev\_step.output} 变量引用。
+    \item 绑定：\texttt{let x = call \ldots}。变量只能被引用为
+    \texttt{x.output}。
+    \item 步骤选项恰好为 \texttt{timeout N}、\texttt{retries N}、
+    \texttt{on\_failure \{abort | skip | retry | continue\}}、
+    \texttt{optional}。
+    \item 唯一 block 形式是 \texttt{loop}，含
+    \texttt{body \{\ldots\} verify \{\ldots\}}。
+\end{itemize}
+
+这是 \texttt{src/eal/lexer.rs} 与 \texttt{src/eal/ast.rs} 的实际语法。
+没有 \texttt{inputs} 子句、没有 \texttt{\$variable} 插值、除了
+\texttt{loop} 块外没有任何 mission 内控制流。
+
+\textbf{对 actions 的含义。} 因为 mission 文本是静态的，需要 caller
+提供参数的 action \emph{不能}在主体里"接收 inputs"。协议改用
+\textbf{owner 端具体化}：peer agent 把它要的参数传给
+\texttt{actions.get(name, params)}；owner agent 把这些参数作为
+字面量内嵌到返回的 mission 文本中。peer 拿到的是已具体化、可直接
+喂给 \texttt{mission run} 的 mission。
+
+这保留了 receipt 链。mission 中的每个 \texttt{call} 都是真实的
+EasyNet invocation，经现有 dispatcher 走、产生 CanonicalReceipt；
+mission 的第一个步骤把 \texttt{actions.get} 的 receipt 引用为它的
+\texttt{causal\_context.Scalar}，让审计者能证明"这次 mission 运行
+源于对 alice 的某个 \texttt{actions.get} 调用"。
+
+\subsection{例：actions.list\_for\_page + actions.get}
+
+\begin{lstlisting}
+$ easynet ability invoke alice.actions.list_for_page \
+    --args '{"page_path":"/cart"}'
+
+[
+  { "name":"checkout", "kind":"mission",
+    "summary":"购买当前用户购物车里的商品。",
+    "url":"/easynet-for-agents/get?name=checkout",
+    "params_schema":{                       // peer 把这些传给
+      "address":{"type":"string","required":true},  // actions.get
+      "qty":    {"type":"uint",  "default":1}
+    } },
+  { "name":"clear_cart", "kind":"eal",
+    "summary":"清空购物车。",
+    "url":"/easynet-for-agents/get?name=clear_cart" }
+]
+
+# Peer 让 owner 用 peer 自己的输入把 checkout mission 具体化。
+# Owner 把它们作为字面量内嵌到一个真实的 EAL mission 中
+# （没有 $variable，没有 inputs 块）。
+$ easynet ability invoke alice.actions.get \
+    --args '{"name":"checkout",
+             "params":{"address":"123 Main St","qty":1}}'
+
+mission "checkout" {
+  let cart = call "shop.cart_contents" on "alice" with {} timeout 5
+
+  let order = call "shop.checkout" on "alice" with {
+    items   = cart.output,
+    address = "123 Main St",
+    qty     = 1
+  } timeout 30
+}
+\end{lstlisting}
+
+peer agent 现在直接运行返回的文本：
+
+\begin{lstlisting}
+$ easynet mission run /tmp/checkout.eal --cite-receipt <actions.get-receipt-id>
+\end{lstlisting}
+
+\noindent \texttt{--cite-receipt} 标志把
+\texttt{causal\_context.Scalar(\textit{prior\_invocation\_id})} 写入
+mission 第一个步骤的 invocation envelope，让 receipt 日志记录
+\texttt{actions.get $\to$ shop.cart\_contents $\to$ shop.checkout}
+这条链。peer 没引用也仍能正确运行——只是失去了跨状态对象的因果链接,
+让"为何此 mission 现在运行"这件事在审计层无证。
+
+对比上一稿的静态目录设计：同一个 agent 必须拉 \texttt{checkout.eal}、
+\texttt{clear\_cart.eal}、\texttt{list\_items.eal} 加索引文件再过滤
+——一个意图四次拉取加客户端参数替换，且没有 causal\_context 把
+运行链回到提示该运行的页面。
+
+\subsection{Hub 镜像语义}
+
+\normsv{} 路由 action \texttt{actions:<verb>} 把 HTTP 请求
+
+\begin{lstlisting}
+GET  /easynet-for-agents/<verb>?<query>
+POST /easynet-for-agents/<verb>     {<json>}
+\end{lstlisting}
+
+翻译为 EasyNet ability 调用 \texttt{<owner>.actions.<verb>}，把
+query string 或 JSON body 作 args，与 \texttt{api:<verb>} 同。结果
+作 JSON 返回（或当结果是字符串、且 owner 标了
+\texttt{Content-Type: text/eal} 时，原文按该 type 转发）。任何不在
+\texttt{actions\_surface\_hash} 的 verb 按 WB-INV-2 拒绝。
+
+\begin{notebox}
+HTTP 镜像存在是便利，不是权威。peer EasyNet agent 可等价地直接经总线
+调 \texttt{<owner>.actions.<verb>}。两条路径产生同种
+OperationalReceipt 与 caller-context 记录。镜像主要是为了浏览器侧
+脚本可在 actions 表面之上构 UI（如"我在这能做什么"下拉），无需
+EasyNet 客户端。
+\end{notebox}
+
+\subsection{协议\emph{不}强制的事}
+
+\derived{} 三件刻意省略的强制：
+
+\begin{itemize}[leftmargin=2em,itemsep=0.18em]
+    \item \textbf{human\_view 与 actions 不要求基数对应。} 页面显示
+    "12 件商品在售"的 owner 不被协议强制让
+    \texttt{actions.list\_for\_page("/")} 返回 12 件。视图间诚实是
+    \emph{owner 纪律}；协议提供机制（两视图都由同一 owner 签名；
+    审计链可检测漂移）但不要求等价作不变量——v1 的强制窗口太窄。
+    \item \textbf{无标准 EAL/mission 文本格式版本。}
+    \texttt{actions.get} 主体是 owner 自由返回的；EAL 语法在自己的
+    RFC 中演化。Action 描述符携带 \texttt{kind} 让消费者按主体解释
+    分派。
+    \item \textbf{无权威排序或相关性。}
+    \texttt{actions.list\_for\_page} 与 \texttt{actions.search} 返回
+    owner 定义的排序。需要独立排序的 peer 自己实现。
+\end{itemize}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Hub 路由模型}
+\label{sec:hub-routing}
+
+Hub 绑定单端口（Phase 1 默认 \texttt{127.0.0.1:8787}）。每个进入的
+HTTP 请求按七步处理：
+
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.16em]
+    \item 铸造 envelope：\texttt{caller =
+    principal/human-anon/<ip-hash>/<sid>}；\texttt{caller\_context}
+    按主文 \S3.6 从 header 填。
+    \item 解析 path 到 \texttt{(realm, owner, slug, tail)}。
+    \item 解析 state。若不在 Built，按 \S\ref{sec:hub-by-state} 返；
+    若 visibility 拒绝 caller，返 404。
+    \item 按声明顺序在 \texttt{routes\_manifest} 规则中匹配
+    \texttt{tail}。
+    \item 按命中 action 分派：\texttt{static} / \texttt{api} /
+    \texttt{actions} / \texttt{ws} / \texttt{agent\_view} /
+    \texttt{health} / \texttt{receipts} / \texttt{spa} fallback
+    （\S\ref{sec:hub-actions}）。
+    \item 构响应（CSP、ETag、缓存头、content-type）。
+    \item 发出一条 OperationalReceipt，含 caller、caller\_context、
+    命中规则、action、响应状态。非规范。
+\end{enumerate}
+
+\subsection{按状态划分的 Hub 行为矩阵}
+\label{sec:hub-by-state}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\linewidth}{l l X}
+\toprule
+\textbf{Canonical} & \textbf{Runtime} & \textbf{Hub 响应} \\
+\midrule
+\texttt{Created}  & *           & 503 "未构建"。\texttt{Retry-After: 60}。 \\
+\texttt{Building} & *           & 503 + 通过 SSE 流式发送 build.progress 的小进度页。 \\
+\texttt{Built}    & \texttt{Stopped}  & 503 "未在服务"。 \\
+\texttt{Built}    & \texttt{Starting} & 503 "启动中"，\texttt{Retry-After: 2}。 \\
+\texttt{Built}    & \texttt{Running}  & 完整 action 分派（下文）。 \\
+\texttt{Built}    & \texttt{Crashed}  & 503 + reason hash；\texttt{Retry-After: 5}。 \\
+\texttt{Failed}   & *           & 503 "上次构建失败" + reason hash。 \\
+\texttt{Deleted}  & *           & 404。 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Action 分派}
+\label{sec:hub-actions}
+
+\paragraph{static:<path>} TreeBlob path lookup、blob 拉取、扩展名 MIME
+（允许列表），由 \texttt{csp\_hash} 构 CSP；对 \texttt{/assets/*}
+用 immutable 缓存。
+
+\paragraph{api:<verb>} 按 \texttt{api\_surface\_hash} 校验、把 JSON
+body 或 query string 作 args、调用 \texttt{<owner>.<verb>}、返回
+result body 或结构化错误。拒绝：HTTP 404（WB-INV-2）。
+
+\paragraph{actions:<verb>} 按 \texttt{actions\_surface\_hash} 校验、
+把 JSON body 或 query string 作 args、调用
+\texttt{<owner>.actions.<verb>}、返回 result body。Content-Type
+默认 \texttt{application/json}；若结果体声明
+\texttt{Content-Type: text/eal}，Hub 原文以该 type 转发（让 peer 经
+镜像取 EAL 文件时看到正确文本类型）。拒绝：HTTP 404（WB-INV-2）。
+
+\paragraph{ws:<path>} WebSocket 升级；首条文本帧必须是
+\texttt{\{ ability, args \}} JSON；绑到 ability stream；转发后续帧。
+
+\paragraph{agent\_view} 返回 \S\ref{sec:agent-view} 规定的 JSON。
+
+\paragraph{health} 返回 canonical 与 runtime 状态。
+
+\paragraph{receipts} 返回受 \texttt{?from=...\&to=...} 约束的
+CanonicalReceipt 历史。
+
+\paragraph{spa:<fallback-path>} 等价于 \texttt{static:<fallback-path>}
+但带 \texttt{Cache-Control: no-cache}。
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{agent\_view}
+\label{sec:agent-view}
+
+\normsv{} \texttt{agent\_view} 是关于应用的结构化\emph{元数据}：
+状态、版本、历史、应用宣示的接口面（api + actions）。它\emph{不是}
+action 库——actions 在 \texttt{actions.*} 命名空间中、经该命名空间
+被查询，\emph{不}经 agent\_view。
+
+\begin{lstlisting}
+GET /<realm>/<owner>/<slug>/__easynet/agent
+
+200 OK
+Content-Type: application/json
+
+{
+  "state_type":  "easynet.web_app",
+  "state_key":   { "realm":"default","owner":"alice","slug":"shop" },
+  "ura":         "easynet:///r/default/agent/alice/web_app/shop",
+
+  "canonical": {
+    "state":              "Built",
+    "manifest":           { "name":"shop",
+                            "description":"由 agent 构建的小型陶瓷店。",
+                            "visibility":"public" },
+    "build_artifact_hash":"0x4d28ee17...",
+    "version":            7,
+    "etag":               "TSjuFw0pAvjpAQ=="
+  },
+
+  "runtime": {
+    "state":     "Running",
+    "started_at":"2026-04-28T09:11:02Z"
+  },
+
+  "ability_surface": [
+    "webapp.update_config@v1",
+    "webapp.build@v1",
+    "webapp.stop@v1",
+    "webapp.delete@v1"
+  ],
+
+  "api": {
+    "endpoints": [
+      { "verb":"shop.list_items",
+        "http":"GET  /api/list_items",
+        "schema_url":"/__easynet/schema/shop.list_items" },
+      { "verb":"shop.checkout",
+        "http":"POST /api/checkout",
+        "schema_url":"/__easynet/schema/shop.checkout" }
+    ]
+  },
+
+  "actions": {
+    "namespace": "actions",
+    "registered_verbs": [
+      "actions.list_for_page",
+      "actions.get",
+      "actions.search"
+    ],
+    "http_mirror_prefix": "/easynet-for-agents/",
+    "discovery_hint":
+      "POST /easynet-for-agents/list_for_page {\"page_path\":\"<path>\"}"
+  },
+
+  "history": {
+    "versions": 7,
+    "latest_canonical_receipt_id": "r_c3d4...",
+    "receipt_log_ura":
+       "easynet:///r/default/agent/alice/web_app/shop/receipts"
+  }
+}
+\end{lstlisting}
+
+\textbf{为什么 agent\_view 不内嵌 action 库。} 内嵌 actions 会迫使
+agent\_view 列出 owner 写过的每个 EAL 片段——正是促使引入 actions
+命名空间的批量下载低效。agent\_view 指向命名空间；peer agent 再向
+命名空间按需调用。两文档互补：agent\_view 答"这是什么应用"，
+actions 答"我现在在它上能做什么"。
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{架构}
+\label{sec:architecture}
+
+\subsection{模块拓扑（EasyNet-Cli）}
+
+\begin{lstlisting}
+src/runtime/state/                    [与 pages 共享，P-A1]
+
+src/runtime/blob_store/               [与 pages 共享，P-A1]
+  tree.rs                             ← 新：TreeBlob put/get、
+                                       per-path lookup
+
+src/runtime/agents/webapp_ability.rs  ← 新（P-B2）
+
+src/runtime/build_executor/           ← 新（P-B1）
+  mod.rs                              长任务规范 transition 驱动
+  source_snapshot.rs                  项目目录 Merkle 哈希
+  spawn.rs                            子进程 + 日志流
+  artifact_capture.rs                 dist 树 -> TreeBlob
+
+src/runtime/views/webapp/             ← 新（P-B5）
+  agent_view.rs                       §7 的 JSON 投影
+  health.rs
+  receipts.rs
+
+src/runtime/hub/                      [扩展 P-A4 的 pages Hub]
+  router.rs                           ← 扩展以读 routes_manifest
+                                       与新的 actions: action
+  static_handler.rs                   ← 新（P-B3）
+  api_handler.rs                      ← 新（P-B3）：/api/<verb>
+  actions_handler.rs                  ← 新（P-B3）：/easynet-for-agents/<verb>
+  ws_handler.rs                       ← 新（P-B4）：/ws/* 升级
+
+src/runtime/skills/easynet-pages-author/  ← 新（P-B5）
+  SKILL.md                            seeded 到每个 workspace 的
+                                      agent 教程
+\end{lstlisting}
+
+\subsection{守护进程接线}
+
+启动时守护进程在 pages 接线之上加：
+
+\begin{enumerate}[leftmargin=2em,itemsep=0.15em]
+    \item 在 \texttt{\textasciitilde/.easynet/build-cache/} 打开
+    构建执行器工作目录。
+    \item 给每个 agent 注册 \texttt{webapp\_ability}。
+    \item 对每个规范状态为 \texttt{Building} 的 web\_app（即守护进程
+    重启打断了一次构建）：标 Failed 并把 reason 设为"守护进程在构建
+    途中重启"。
+    \item Seed \texttt{easynet-pages-author} skill 到每个 agent 的
+    workspace（若不存在或过时）。
+\end{enumerate}
+
+\subsection{Hub 接线}
+
+Hub 二进制（\texttt{easynet-hub}，P-A4 起）在 P-B3/P-B4 中加上
+\texttt{static\_handler}、\texttt{api\_handler}、
+\texttt{actions\_handler}、\texttt{ws\_handler}，与 P-A4 的 page
+handler 并列。顶层分派：
+
+\begin{lstlisting}
+fn handle(req: HttpRequest) -> HttpResponse {
+    let envelope = build_envelope(&req);
+    let (realm, owner, slug, tail) = parse_path(&req.uri)?;
+    let kind = state_store.classify(realm, owner, slug)?;
+
+    match kind {
+        Kind::Page    => pages_dispatch(envelope, owner, slug, tail),
+        Kind::WebApp  => webapp_dispatch(envelope, owner, slug, tail),
+        Kind::Unknown => http_404(),
+    }
+}
+\end{lstlisting}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{实现计划}
+\label{sec:impl-plan}
+
+五个 PR 切片，可顺序化。P-B1 基于 P-A1（pages 的 blob 与 state
+存储）；P-B3/B4 基于 P-A4（基本 Hub）。
+
+\subsection{P-B1：构建执行器 + TreeBlob}
+
+\textbf{新增文件。} \texttt{src/runtime/build\_executor/}（4 模块）、
+\texttt{src/runtime/blob\_store/tree.rs}。
+
+\textbf{公开 API。}
+\begin{lstlisting}
+pub trait BuildExecutor: Send + Sync {
+    fn execute(
+        &self,
+        project_dir: &Path,
+        config: &BuildConfig,
+        progress: ProgressSink,
+    ) -> Result<BuildOutcome>;
+}
+pub fn source_snapshot_hash(project_dir: &Path, ignore: &[Pattern])
+    -> Result<[u8; 32]>;
+pub fn capture_dist(dist_dir: &Path, blob: &dyn BlobStore)
+    -> Result<(TreeBlob, [u8; 32])>;
+\end{lstlisting}
+
+\textbf{测试。} 快照确定性、构建烟测、守护进程在构建中崩溃恢复。
+
+\subsection{P-B2：webapp.* 能力}
+
+\textbf{新增文件。} \texttt{src/runtime/agents/webapp\_ability.rs}。
+
+\textbf{行为。} \S\ref{sec:state-machine} 中每个 transition 都被实现，
+包括长任务构建（按 TR-INV-1）。
+
+\textbf{测试。} 每个 transition 往返；从 \texttt{Created} 出发的
+\texttt{webapp.serve} 被拒；\texttt{webapp.update\_config} 上的乐观
+并发；构建进度回执可丢失。
+
+\subsection{P-B3：Hub 静态 + API + actions 路由}
+
+\textbf{新增文件。} \texttt{src/runtime/hub/static\_handler.rs}、
+\texttt{api\_handler.rs}、\texttt{actions\_handler.rs}；扩展
+\texttt{router.rs} 以读 \texttt{routes\_manifest}。
+
+\textbf{行为。}
+\begin{enumerate}[leftmargin=2em,itemsep=0.1em]
+    \item 静态处理器：TreeBlob path lookup、blob 拉取、对
+    \texttt{/assets/*} immutable 缓存。
+    \item API 处理器：捕获 verb、按 \texttt{api\_surface} 校验、
+    解析 args、调用 \texttt{<owner>.<verb>}、映射结果。
+    \item Actions 处理器：捕获 verb、按 \texttt{actions\_surface}
+    校验、解析 args、调用 \texttt{<owner>.actions.<verb>}、映射结果。
+    默认 \texttt{application/json}；尊重 ability 返回的
+    \texttt{Content-Type: text/eal}。
+\end{enumerate}
+
+\textbf{测试。} 集成：起一个 fixture web\_app，其
+\texttt{api}.abilities 含 \texttt{shop.echo}、其
+\texttt{actions}.abilities 含 \texttt{actions.list\_for\_page}；
+\texttt{POST /api/echo} 回填、\texttt{POST /easynet-for-agents/list\_for\_page}
+返 action 描述符。未授权 verb 返 404。
+
+\subsection{P-B4：WebSocket 代理 + SPA fallback}
+
+\textbf{新增文件。} \texttt{src/runtime/hub/ws\_handler.rs}。
+
+\textbf{行为。} \texttt{/ws/*} 上 WS 升级；首条文本消息必须是
+\texttt{\{ability,args\}} JSON；绑到 ability stream；转发文本帧。
+SPA fallback：用 \texttt{no-cache} 服务 \texttt{dist/index.html}。
+
+\textbf{测试。} WS 流式烟测、SPA fallback 应对未知路径。
+
+\subsection{P-B5：agent\_view + meta 端点 + skill seed}
+
+\textbf{新增文件。} \texttt{src/runtime/views/webapp/}（3 模块）；
+对 \texttt{/\_\_easynet/*} 前缀做轻微路由扩展；捆绑 skill 在
+\texttt{src/runtime/skills/easynet-pages-author/SKILL.md}。
+
+\textbf{行为。}
+\begin{enumerate}[leftmargin=2em,itemsep=0.1em]
+    \item \texttt{/\_\_easynet/agent} 返回 \S7 的 JSON。
+    \item \texttt{/\_\_easynet/health} 返 canonical + runtime 状态。
+    \item \texttt{/\_\_easynet/receipts} 返 CanonicalReceipt 历史。
+    \item \texttt{/\_\_easynet/schema/<verb>} 返该 ability 的输入/
+    输出 schema。
+    \item Skill seeder：启动时守护进程把捆绑
+    \texttt{easynet-pages-author} skill 写到每个 agent 的 workspace
+    \texttt{<workspace>/skills/} 与 \texttt{<workspace>/.agents/skills/}。
+    幂等：已存在且最新时跳过。
+\end{enumerate}
+
+\textbf{测试。} agent\_view 字节确定性；skill seeder 幂等性；从回执
+重放重构 canonical state。
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{端到端 worked example}
+\label{sec:e2e}
+
+\subsection{准备}
+
+\begin{lstlisting}
+$ easynet agent add alice --type claude-code
+$ easynet-daemon &       # 首次接触 alice 时 seed easynet-pages-author skill
+$ easynet-hub --bind 127.0.0.1:8787 &
+\end{lstlisting}
+
+\subsection{编辑项目}
+
+Claude Code 读完 \texttt{easynet-pages-author} 的 SKILL.md 后，请求
+守护进程铸造 state 并创建项目目录：
+
+\begin{lstlisting}
+$ easynet ability invoke alice.webapp.create --args '{
+    "slug":"shop",
+    "manifest":{ "name":"shop",
+                 "description":"由 agent 构建的小型陶瓷店。",
+                 "visibility":"public" }
+}'
+{ "state":"Created", "version":1,
+  "project_dir":"~/.easynet/pages-project/shop" }
+\end{lstlisting}
+
+\noindent agent 然后 \texttt{cd} 进项目目录、用工具链：
+
+\begin{lstlisting}
+$ cd ~/.easynet/pages-project/shop
+$ npm create vite@latest . -- --template react-ts
+$ # ... 写 src/App.tsx，注册 API 与 actions ability ...
+$ # ... 按 §3.2 填 easynet.app.toml ...
+$ easynet ability deploy abilities/shop.list_items     --node alice
+$ easynet ability deploy abilities/shop.checkout       --node alice
+$ easynet ability deploy abilities/actions.list_for_page --node alice
+$ easynet ability deploy abilities/actions.get         --node alice
+\end{lstlisting}
+
+\subsection{构建与上线}
+
+\begin{lstlisting}
+$ easynet ability invoke alice.webapp.build --args '{ "slug":"shop" }' \
+    --stream
+[build.started   ] command="npm install && npm run build"
+[build.progress  ] log_hash=0x12... 8% installed
+[build.progress  ] log_hash=0x13... 47% bundled
+[build.completed ] artifact_hash=0x4d28ee17... duration=38.2s
+{ "state":"Built", "version":2,
+  "build_artifact_hash":"0x4d28ee17..." }
+
+$ easynet ability invoke alice.webapp.serve --args '{ "slug":"shop" }'
+{ "runtime_state":"Running" }
+\end{lstlisting}
+
+\subsection{浏览器拉取}
+
+\begin{lstlisting}
+$ curl -i http://127.0.0.1:8787/default/alice/shop/
+
+HTTP/1.1 200 OK
+Content-Type: text/html
+ETag: "TSjuFw0pAvjpAQ=="
+Cache-Control: max-age=60, must-revalidate
+Content-Security-Policy: default-src 'self'; script-src 'self'; ...
+
+<!doctype html>...
+\end{lstlisting}
+
+\subsection{浏览器侧 API 调用}
+
+\begin{lstlisting}
+POST /default/alice/shop/api/checkout HTTP/1.1
+Cookie: easynet_session=sess-abc
+{ "item_id":"mug-12oz", "qty":1 }
+
+→ HTTP/1.1 200 OK
+{ "order_id":"ord_77a3f", "eta":"2026-04-29" }
+\end{lstlisting}
+
+\subsection{邻居 agent 发现 actions}
+
+邻居 agent（bob）落到购物车页，问 owner 它能做什么：
+
+\begin{lstlisting}
+$ curl -s -X POST http://127.0.0.1:8787/default/alice/shop/easynet-for-agents/list_for_page \
+       -d '{"page_path":"/cart"}' | jq
+[
+  { "name":"checkout", "kind":"mission",
+    "summary":"购买当前用户购物车里的商品。",
+    "url":"/easynet-for-agents/get?name=checkout",
+    "params_schema":{
+      "address":{"type":"string","required":true}
+    } },
+  { "name":"clear_cart", "kind":"eal",
+    "summary":"清空购物车。",
+    "url":"/easynet-for-agents/get?name=clear_cart" }
+]
+
+# bob 让 owner 用 bob 选择的地址把 mission 具体化。owner 把字面量
+# 内嵌到一个真实的 EAL DAG 中（没有 $variable —— EAL 不支持；见 §6.4）。
+$ curl -s -X POST "http://127.0.0.1:8787/default/alice/shop/easynet-for-agents/get" \
+       -d '{"name":"checkout",
+            "params":{"address":"123 Main St"}}'
+
+mission "checkout" {
+  let cart = call "shop.cart_contents" on "alice" with {} timeout 5
+
+  let order = call "shop.checkout" on "alice" with {
+    items   = cart.output,
+    address = "123 Main St"
+  } timeout 30
+}
+\end{lstlisting}
+
+\noindent 两次 RPC、精确 action、地址由 owner 内嵌为字面量。bob 现在
+直接运行返回的文本，引用 \texttt{actions.get} 的 receipt 让运行
+首步带上跨状态对象的因果链：
+
+\begin{lstlisting}
+$ easynet mission run /tmp/checkout.eal --cite-receipt <actions.get-receipt-id>
+\end{lstlisting}
+
+每个 \texttt{call} 经现有 dispatcher 走、产生 CanonicalReceipt；
+首步的 invocation envelope 携带 \texttt{causal\_context.Scalar}
+指向 \texttt{actions.get} 的 receipt，让审计者沿着链看到
+\texttt{actions.list\_for\_page → actions.get →
+shop.cart\_contents → shop.checkout} 这条连续因果。
+
+\subsection{审计重放}
+
+\texttt{shop} web\_app 的历史显示三条 CanonicalReceipt（create、build、
+build）：每条都带 \texttt{post\_state\_hash} 与 \texttt{owner\_signature}。
+浏览器驱动的 checkout 触发了一条针对完全不同 state\_type 的
+CanonicalReceipt（一个由 alice 或 alice 的订单服务拥有的 \texttt{order}
+state object）；该回执也链回 alice 的签名密钥。同时阅读两条链的邻居
+可逐字节重构：
+
+\begin{itemize}[leftmargin=2em,itemsep=0.12em]
+    \item 当 checkout 发生时，page 处于哪个构建产物；
+    \item 那个构建声明了哪些 API 与 actions endpoint；
+    \item \texttt{actions.get} 给驱动该 checkout 的请求返回了哪段
+    mission 主体；
+    \item 上述全部由 alice 签名。
+\end{itemize}
+
+\noindent 这是传统 web 决然讲不出的审计故事。
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{暂缓至 RFC-006-B v2 的开放问题}
+\label{sec:open}
+
+\begin{enumerate}[leftmargin=2.2em,itemsep=0.15em]
+    \item 持续进程 SSR（\texttt{serve.mode = process}）。
+    \item 跨节点 Hub、联邦读取。
+    \item 已签资源 bundle 用于 SRI。
+    \item 构建沙箱。
+    \item 多版本路由（\texttt{webapp.tag} transition）。
+    \item dev-mode 反向代理（\texttt{serve.mode = dev-proxy}）以支持
+    HMR / Vite dev server。
+\end{enumerate}
+
+\subsection{覆盖检查}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\linewidth}{l X l}
+\toprule
+\textbf{主文规则} & \textbf{由谁兑现} & \textbf{位置} \\
+\midrule
+SO-INV-1（key 不可变）                   & state\_key 解析器拒绝 key 更新                          & \S\ref{sec:state-machine} \\
+CSH-INV-1（hash 取自 projection）       & schema 驱动的 $\pi$、JCS、SHA-256                          & \S\ref{sec:state-machine} \\
+CSH-INV-2（内容外置为 blob）             & TreeBlob + 单文件 blob；规范状态只持哈希                 & \S\ref{sec:build-pipeline} \\
+RC-INV-1（receipt 绑定）                 & 每条 webapp 回执均带 (state\_key, transition\_id, attempt\_id) & \S\ref{sec:state-machine} \\
+RC-INV-2（乐观并发）                    & 在 update\_config 上做 ETag 检查                          & P-B2 \\
+TA-INV-1（必须带 transition\_id）        & 每个 \texttt{webapp.<verb>@v1} 字符串均被校验             & \S\ref{sec:state-machine} \\
+VP-INV-1（ability\_surface 来自 state）  & 由 state\_value 派生                                      & \S\ref{sec:agent-view} \\
+TR-INV-1（长任务终结）                  & 构建只发恰一条终结 CanonicalReceipt                       & \S\ref{sec:build-pipeline} \\
+TR-INV-2（progress 不进规范）           & \texttt{build.progress} 是 OperationalReceipt              & \S\ref{sec:build-pipeline} \\
+TR-INV-5（runtime 叠加独立）            & runtime 崩溃不触动 canonical                              & \S\ref{sec:state-machine} \\
+TR-INV-7（multi-view 一等公民）          & human（HTML+API+WS）与 agent\_view 都已实现              & \S\ref{sec:hub-routing}, \S\ref{sec:agent-view} \\
+TR-INV-8（cross-state-space 矩阵）       & canonical $\times$ runtime 准入被强制                    & \S\ref{sec:state-machine} \\
+TR-INV-11（URA-receipt 可追踪）          & \texttt{/\_\_easynet/receipts} + state\_key 索引          & \S\ref{sec:e2e} \\
+TR-INV-12（principal/human-anon）        & Hub 在每个请求上铸造该 URI                                & \S\ref{sec:hub-routing} \\
+TR-INV-13（caller\_context）             & 由请求头填充；记录到 operational receipt                  & \S\ref{sec:hub-routing}, \S\ref{sec:e2e} \\
+WB-INV-1（仅从 blob 服务）              & Hub 永不读项目 dist/                                      & \S\ref{sec:project} \\
+WB-INV-2（api/actions 面强制）          & Hub 拒绝未列出 verb 并返 404                              & \S\ref{sec:project} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\paragraph{结语。} agent-native web 的可发现性问题现在在正确的层得到
+解决。peer agent 落到一页，调 \texttt{actions.list\_for\_page}，得到的
+正是与该页相关、用其自身意图参数化的 EAL/mission——不是要过滤的
+sitemap，不是要下载的 manifest。撰写是可学习技能，不是口耳相传：每个
+agent 在首次接触时获得 \texttt{easynet-pages-author}。项目位于稳定
+且与 agent 无关的位置（\texttt{\textasciitilde/.easynet/pages-project/}），
+同一份 codebase 不论被哪个 agent 操作读起来都一致。落地 P-B1 至 P-B5
+完成 Phase 1。
+
+\vfill
+\hrule
+\vspace{0.4em}
+\noindent\small
+\textit{web 从文档演变到应用；agent-native web 从被动视图演变到可查询
+actions。先 pages、后 web\_app；不论 pages 还是 web\_app，actions 都是
+peer agent 不批量下载就能使用它们的方式。}
+
+\end{document}

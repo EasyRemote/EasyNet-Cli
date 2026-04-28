@@ -106,9 +106,15 @@ pub mod execution;
 // namespace. `ability_dispatch` consumes `InvocationTarget` (from
 // stage-1 resolver in `invocation_target.rs`) and routes either to
 // the in-process `LocalAbilityRegistry` or via `GatewayApi`.
-// `system::build_registry` populates the registry with every
-// device-level ability the daemon publishes (today: `system.ping`;
+// `agents::build_registry` populates the registry with every
+// device-level ability the daemon publishes (today: `observe.health`;
 // PR-ATTACH onwards extends this).
+pub mod ability_descriptor;
 pub mod ability_dispatch;
+pub mod advertise;
+pub mod dispatch_receipt;
+pub mod federation_client;
+pub mod hosted_receipt;
+pub mod provisional_ura;
 pub mod publish;
-pub mod system;
+pub mod agents;

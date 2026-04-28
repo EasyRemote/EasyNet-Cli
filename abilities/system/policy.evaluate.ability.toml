@@ -1,0 +1,11 @@
+schema_version = "1"
+name = "policy.evaluate"
+description = "Admit (or reject) an invocation envelope. v1 returns Allowed for all callers; the config-driven evaluator lands behind the same handler signature in a follow-up."
+
+[input_schema]
+type = "object"
+required = ["invocation_envelope"]
+additionalProperties = false
+
+[input_schema.properties.invocation_envelope]
+type = "object"

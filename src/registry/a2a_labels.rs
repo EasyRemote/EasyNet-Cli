@@ -70,6 +70,59 @@ use super::agents::AgentRegistry;
 ///   `docs/spec/node-roster-label-v2.md`.
 pub const A2A_SCHEMA_VERSION: &str = "v2";
 
+/// Build the v2 `{"agents": [...]}` envelope as a structured Value.
+/// This is the lower-level half of `build`: it produces the JSON shape
+/// that downstream consumers (the `a2a.agents_json` label, the
+/// `a2a.bridge.list_skills` ability handler) parse, without the
+/// label-map wrapping or the size-limit warning that `build` adds for
+/// the on-the-wire label encoding.
+///
+/// Iteration order: agent-name (BTreeMap), then per-agent skills
+/// sorted by `name`. Both orderings feed the byte-stable
+/// `tests/fixtures/a2a-v2/golden.json` fixture; do not switch to a
+/// `HashMap` here.
+pub fn build_agents_envelope(registry: &AgentRegistry) -> serde_json::Value {
+    let agents_json: Vec<serde_json::Value> = registry
+        .agents
+        .iter()
+        .map(|(name, e)| {
+            let mut skills: Vec<serde_json::Value> =
+                crate::runtime::abilities::abilities_for(name, e)
+                    .iter()
+                    .map(|spec| spec.to_discovery_json())
+                    .collect();
+            skills.sort_by(|a, b| {
+                a.get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .cmp(b.get("name").and_then(|v| v.as_str()).unwrap_or(""))
+            });
+            // Optional fields carry explicit `null` rather than being
+            // omitted. Spec §"null vs absent" fixes the writer rule;
+            // fixture byte-stability depends on it.
+            let description: serde_json::Value = e
+                .label
+                .clone()
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null);
+            let model: serde_json::Value = e
+                .model
+                .clone()
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null);
+            json!({
+                "a2a_schema_version": A2A_SCHEMA_VERSION,
+                "description": description,
+                "model": model,
+                "name": name,
+                "runtime": e.agent_type.to_string(),
+                "skills": skills,
+            })
+        })
+        .collect();
+    json!({ "agents": agents_json })
+}
+
 /// Build the `a2a.*` label map for registering this node with the Axon
 /// runtime. Returns `None` — not an empty map — when the registry carries
 /// no agents, so the caller can feed the result straight into
@@ -105,45 +158,7 @@ pub fn build(registry: &AgentRegistry, hostname: &str) -> Option<HashMap<String,
     // `debug_assert!` to surface a regression in dev and fall back
     // to an empty envelope in release (the node stays registered
     // without the roster).
-    let agents_json: Vec<serde_json::Value> = registry
-        .agents
-        .iter()
-        .map(|(name, e)| {
-            let mut skills: Vec<serde_json::Value> =
-                crate::runtime::abilities::abilities_for(name, e)
-                    .iter()
-                    .map(|spec| spec.to_discovery_json())
-                    .collect();
-            skills.sort_by(|a, b| {
-                a.get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .cmp(b.get("name").and_then(|v| v.as_str()).unwrap_or(""))
-            });
-            // Optional fields carry explicit `null` rather than
-            // being omitted. Spec §"null vs absent" fixes the
-            // writer rule; fixture byte-stability depends on it.
-            let description: serde_json::Value = e
-                .label
-                .clone()
-                .map(serde_json::Value::String)
-                .unwrap_or(serde_json::Value::Null);
-            let model: serde_json::Value = e
-                .model
-                .clone()
-                .map(serde_json::Value::String)
-                .unwrap_or(serde_json::Value::Null);
-            json!({
-                "a2a_schema_version": A2A_SCHEMA_VERSION,
-                "description": description,
-                "model": model,
-                "name": name,
-                "runtime": e.agent_type.to_string(),
-                "skills": skills,
-            })
-        })
-        .collect();
-    let envelope = json!({ "agents": agents_json });
+    let envelope = build_agents_envelope(registry);
     let agents_json_str = match serde_json::to_string(&envelope) {
         Ok(s) => s,
         Err(_e) => {
@@ -167,25 +182,17 @@ pub fn build(registry: &AgentRegistry, hostname: &str) -> Option<HashMap<String,
     }
     labels.insert("a2a.agents_json".into(), agents_json_str);
 
-    // PR-SYS: device-level system abilities published as a separate
-    // label key so v2-only parsers (which read `a2a.agents_json` and
-    // ignore unknown labels) keep working unchanged. v3-aware
-    // parsers will look for `a2a.system_skills_json` and merge into
-    // their discovery view.
+    // RFC-001 P2.4: a2a.system_skills_json label retired.
     //
-    // Why a separate label rather than a new envelope field on
-    // a2a.agents_json:
-    //   * tests/fixtures/a2a-v2/golden.json byte-stability is a
-    //     CI invariant; introducing a new field at the envelope
-    //     level would force a coordinated backend release.
-    //   * The 32 KiB per-label limit is enforced per key. With
-    //     two separate labels each gets its own budget.
-    //   * Disambiguates "agent abilities" from "device abilities"
-    //     in label-grep tooling.
-    let system_skills_json = system_skills_json();
-    if !system_skills_json.is_empty() {
-        labels.insert("a2a.system_skills_json".into(), system_skills_json);
-    }
+    // Per RFC §A4 + restatement-mapping: there is no separate "system
+    // ability" discovery surface. The realm directory enumerates
+    // every Agent's abilities via `federation.resolve` (and per-Agent
+    // `meta.list_abilities`). The discovery view that consumed this
+    // label folds into the standard ability listing.
+    //
+    // Removed in P2.4. The full body of `system_skills_json()` and
+    // its supporting `description_for` table are kept compiled but
+    // unused for now — they get GC'd in a follow-up cleanup.
 
     labels.insert(
         "a2a.description".into(),
@@ -213,12 +220,12 @@ pub fn build(registry: &AgentRegistry, hostname: &str) -> Option<HashMap<String,
 /// agent entries so downstream tooling can reuse the same parser.
 ///
 /// Iteration order follows
-/// `runtime::system::published_ability_names()` which is built from
+/// `runtime::agents::published_ability_names()` which is built from
 /// a `BTreeMap` and therefore deterministic. A regression that
 /// switched the underlying registry to a `HashMap` would silently
 /// break golden-fixture byte-stability.
 fn system_skills_json() -> String {
-    let names = crate::runtime::system::published_ability_names();
+    let names = crate::runtime::agents::published_ability_names();
     if names.is_empty() {
         return String::new();
     }
@@ -267,15 +274,15 @@ fn system_skills_json() -> String {
 /// Look up the human-readable description for a published system
 /// ability name.
 ///
-/// Authoritative source lives in `runtime::system::description_for` —
+/// Authoritative source lives in `runtime::agents::description_for` —
 /// kept there so the federation label and the runtime-local register
-/// publisher (`runtime::publish::publish_system_abilities_to_local_runtime`)
+/// publisher (`runtime::publish::republish_abilities_via_advertise`)
 /// pull from one table. This function exists as a thin local alias so
 /// the call sites in this module read naturally; do NOT inline a
 /// second match here, that's exactly the drift the centralisation
 /// removed.
 fn description_for(name: &str) -> &'static str {
-    crate::runtime::system::description_for(name)
+    crate::runtime::agents::description_for(name)
 }
 
 #[cfg(test)]
@@ -473,6 +480,17 @@ mod tests {
         // (e.g. a HashSet leaking into the build path) would produce
         // flaky Hub-side registrations when the daemon's re-register
         // hook fires.
+        //
+        // HomeGuard isolates this test from the developer's real
+        // ~/.easynet/. Without it, abilities_for's slice-25
+        // fallback can pick up real on-disk manifests under
+        // ~/.easynet/workspaces/{claude,codex}, and a parallel
+        // test that mutates those workspaces (e.g. the new G1
+        // build_stdio_server_with_agent_name test) would race
+        // and produce different bytes between the two build()
+        // calls. The HomeGuard pins the test to a fresh tempdir.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+
         let mut registry = AgentRegistry::default();
         registry
             .agents
@@ -494,6 +512,20 @@ mod tests {
         // the backend's companion fixture must be updated in the
         // same release window (spec §"Contract test (golden
         // fixture)").
+        //
+        // HomeGuard isolates this test from the developer's real
+        // ~/.easynet/. abilities_from_manifests falls back to
+        // agents_root().join(name) when an entry has no root_path —
+        // on a developer's machine that already has
+        // ~/.easynet/workspaces/alice (left over from a previous
+        // session), the fallback would return THAT workspace's
+        // real manifests, drifting from the canonical synth-fallback
+        // description this fixture was authored against. The guard
+        // ensures the test sees a freshly-empty home so the fallback
+        // hits the synth path every time, restoring cross-host
+        // stability.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+
         let mut registry = AgentRegistry::default();
         let mut alice = entry(AgentType::ClaudeCode, Some("claude-opus-4-7"));
         alice.label = Some("code-review assistant".into());

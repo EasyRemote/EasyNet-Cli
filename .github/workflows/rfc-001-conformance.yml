@@ -1,0 +1,39 @@
+name: RFC-001 Conformance
+
+# Enforces AXON-RFC-001 architectural invariants on every PR + push
+# to main. Three checks:
+#   1. self-test  — verifies the conformance script itself works
+#   2. baseline   — runs the conformance script (informational)
+#   3. lock       — fails if violation total regressed above baseline
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, "rfc-001-impl"]
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ripgrep
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y ripgrep
+          fi
+          rg --version
+
+      - name: Self-test (verifies the conformance script catches violations)
+        run: |
+          ./scripts/check-rfc-001-conformance-self-test.sh
+
+      - name: Baseline scan (informational; never fails CI)
+        run: |
+          ./scripts/check-rfc-001-conformance.sh
+
+      - name: Baseline regression lock (fails if violations increased)
+        run: |
+          ./scripts/check-rfc-001-baseline-lock.sh

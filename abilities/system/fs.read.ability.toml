@@ -1,0 +1,32 @@
+schema_version = "1"
+name = "fs.read"
+description = "Read a file from the host's filesystem (streamed up to max_bytes, default 8 MiB, hard cap 100 MiB). With encoding=\"utf8\" the optional offset_lines / limit_lines pair selects a 1-based line window. Blocked-device paths (/dev/{zero,random,urandom,stdin,stdout,tty}, /proc/self/fd/{0,1,2}) reject. Part of the baseline-locomotion-v1 profile (AXIOM §Tier 2.5)."
+
+[input_schema]
+type = "object"
+required = ["path"]
+additionalProperties = false
+
+[input_schema.properties.encoding]
+type = "string"
+enum = ["binary", "utf8"]
+
+[input_schema.properties.limit_lines]
+type = "integer"
+description = "Maximum lines to return after offset_lines. Requires encoding=\"utf8\"."
+minimum = 0
+
+[input_schema.properties.max_bytes]
+type = "integer"
+description = "Per-call read cap. Default 8 MiB, hard cap 100 MiB. Read is streamed up to this cap; multi-GB paths cannot OOM the receiver."
+minimum = 0
+maximum = 104857600
+
+[input_schema.properties.offset_lines]
+type = "integer"
+description = "1-based starting line. Requires encoding=\"utf8\". 0 returns empty deterministically."
+minimum = 0
+
+[input_schema.properties.path]
+type = "string"
+minLength = 1

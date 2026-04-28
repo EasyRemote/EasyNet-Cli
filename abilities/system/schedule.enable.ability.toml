@@ -7,8 +7,8 @@ type = "object"
 required = ["schedule_id", "enabled"]
 additionalProperties = false
 
-[input_schema.properties.schedule_id]
-type = "string"
-
 [input_schema.properties.enabled]
 type = "boolean"
+
+[input_schema.properties.schedule_id]
+type = "string"
