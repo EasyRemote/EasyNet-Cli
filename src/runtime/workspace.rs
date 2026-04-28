@@ -970,9 +970,11 @@ needs the ability before removing it.
 /// per the ability-only model: every agent owns its own copy of the
 /// self bundle, with `<self>` substituted by the runtime. The
 /// `<self>.discover` ability accepts a `scope` argument
-/// (`self | device | easynet`) and surfaces typed errors when a tier
-/// is not yet wired (notably `federation_not_available` for `easynet`
-/// before the federation layer ships).
+/// (`self | device | easynet`) and surfaces typed errors per tier
+/// failure mode: `federation_not_joined` (daemon hasn't run
+/// `device join`) and `federation_unavailable` (hub call failed)
+/// for `easynet`. The federation tier is wired against the realm's
+/// hub via `federation.resolve` (Hub-profile, RFC-001 §A14).
 const DELEGATE_SKILL_MD: &str = r#"---
 name: delegate
 description: Walk a three-tier discovery ladder (your own abilities → other agents on this device → abilities published to EasyNet) and delegate work to whichever existing ability fits, before falling back to "I can't do that" or a generic web search.
@@ -1046,15 +1048,24 @@ Args: { "scope": "easynet", "query": "<short task description>" }
 ```
 
 Other users have published `[access].visibility = "public"` abilities
-to the federation. Reaching this tier costs a network round-trip and
-the publisher is outside your user's trust boundary — prefer Tier 1
-or 2 when they have a usable match.
+to the federation. Reaching this tier costs a network round-trip
+(typically 100–500ms against the realm hub) and the publisher is
+outside your user's trust boundary — prefer Tier 1 or 2 when they
+have a usable match.
 
-> Note: until the federation layer ships, `scope: "easynet"` returns
-> the typed error `federation_not_available`. When you see that
-> error, stop the ladder gracefully and fall back to telling the
-> user honestly that no published ability exists for this. Do not
-> fabricate.
+Each candidate carries `fulfilled_by: "federation"` so you can tell
+at a glance the call won't run on this device. When you invoke a
+federation candidate, the daemon signs a DelegationProof on your
+behalf, the hub routes to the publishing device, and the receipt
+comes back with the same envelope shape the local tiers use.
+
+> Typed errors (degrade-gracefully cases):
+>   * `federation_not_joined`   — the daemon hasn't joined a realm
+>                                  yet. Tell the user once; don't
+>                                  retry within the turn.
+>   * `federation_unavailable`  — hub call failed (transport / hub
+>                                  rejection). Fall back to telling
+>                                  the user no public ability matched.
 
 ## Discover output (all tiers share this shape)
 
@@ -1157,7 +1168,9 @@ user asks for <X>
    │
    ├── Tier 3: <self>.discover(scope:"easynet", query:"<X>")
    │     │
-   │     ├── federation_not_available? ──► stop, fall through
+   │     ├── federation_not_joined? ──► stop, fall through (tell user
+   │     │                              the daemon isn't in a realm yet)
+   │     ├── federation_unavailable? ──► stop, fall through
    │     │
    │     └── match? ──yes──► <self>.invoke({ ability, target, args })
    │
@@ -1520,7 +1533,8 @@ mod tests {
             "\"self\"",
             "\"device\"",
             "\"easynet\"",
-            "federation_not_available",
+            "federation_not_joined",
+            "federation_unavailable",
             "candidates",
         ] {
             assert!(

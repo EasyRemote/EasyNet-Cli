@@ -119,12 +119,26 @@ pub struct ResolveArgs {
 pub struct ResolveFilter {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_uri_prefix: Option<String>,
+    /// When true, the Hub includes each agent's
+    /// `advertised_abilities` in the receipt. Default false keeps
+    /// the listing payload small for the common "is this agent
+    /// alive" check; `<self>.discover(scope: "easynet")` flips it
+    /// to true so the LLM sees what each peer offers.
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    pub include_abilities: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct ResolvedAgent {
     pub uri: String,
     pub status: String,
+    /// Per-ability descriptors as advertised through
+    /// `federation.advertise_abilities`. Empty when the resolve
+    /// call did not pass `include_abilities = true`. Each entry
+    /// is a JSON object preserving whatever shape the publisher
+    /// emitted (name, description, input_schema, …).
+    #[serde(default)]
+    pub abilities: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -261,6 +275,7 @@ mod tests {
         let args = ResolveArgs {
             filter: Some(ResolveFilter {
                 agent_uri_prefix: Some("easynet:///r/acme/".into()),
+                include_abilities: false,
             }),
         };
         let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();

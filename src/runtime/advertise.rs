@@ -38,8 +38,8 @@
 
 use crate::runtime::ability_descriptor::AbilityDescriptor;
 use crate::runtime::federation_client::{
-    AdvertiseAgentArgs, AdvertiseAgentReceipt, AdvertisedSigningAuthority, args_to_bytes,
-    parse_receipt_value,
+    AdvertiseAgentArgs, AdvertiseAgentReceipt, AdvertisedSigningAuthority, ResolveArgs,
+    ResolveFilter, ResolveReceipt, ResolvedAgent, args_to_bytes, parse_receipt_value,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -69,6 +69,12 @@ const FED_ADVERTISE_AGENT_RESOURCE_FMT: &str =
 const FED_ADVERTISE_ABILITIES_RESOURCE_FMT: &str =
     "easynet:///r/prv/hub/{realm}/abilities/federation.advertise_abilities@1?tenant_id={tenant}";
 
+/// `federation.resolve` — read-only directory query against the
+/// realm's hub. Same `prv` visibility as the advertise pair (hub-
+/// profile abilities are private to the realm, not network-public).
+const FED_RESOLVE_RESOURCE_FMT: &str =
+    "easynet:///r/prv/hub/{realm}/abilities/federation.resolve@1?tenant_id={tenant}";
+
 /// Build the canonical resource URI for `federation.advertise_agent`
 /// against the realm's hub. Public so call sites can construct the
 /// URI consistently without re-typing the format string.
@@ -85,6 +91,16 @@ pub fn advertise_agent_resource_uri(realm: &str, tenant_id: &str) -> String {
 
 pub fn advertise_abilities_resource_uri(realm: &str, tenant_id: &str) -> String {
     FED_ADVERTISE_ABILITIES_RESOURCE_FMT
+        .replace("{realm}", realm)
+        .replace("{tenant}", tenant_id)
+}
+
+/// Build the canonical resource URI for `federation.resolve` against
+/// the realm's hub. Inbound counterpart to `advertise_*`: peers query
+/// this to discover what every other agent in the realm has
+/// published.
+pub fn resolve_resource_uri(realm: &str, tenant_id: &str) -> String {
+    FED_RESOLVE_RESOURCE_FMT
         .replace("{realm}", realm)
         .replace("{tenant}", tenant_id)
 }
@@ -211,6 +227,49 @@ pub fn advertise_abilities<I: AbilityInvoker>(
     let payload =
         serde_json::to_value(&args).map_err(|e| format!("encode advertise_abilities args: {e}"))?;
     invoker.invoke_ability(tenant_id, &resource_uri, payload)
+}
+
+/// Inbound counterpart to the advertise pair above:
+/// `federation.resolve` against the realm's hub. Returns the typed
+/// `Vec<ResolvedAgent>` the discover ladder consumes.
+///
+/// `prefix` filters by `agent_uri_prefix` server-side — pass an empty
+/// string for "every agent". `include_abilities` is the load-bearing
+/// flag for `<self>.discover(scope: "easynet")`: without it every
+/// peer record is just `{uri, status}` with no descriptors, and the
+/// LLM can't pick a candidate.
+///
+/// Errors are stringified per the AbilityInvoker contract — the
+/// caller's recovery is invariant: log + degrade. The discover
+/// handler propagates them as a typed `federation_unavailable`
+/// envelope so the LLM falls through gracefully.
+pub fn resolve_agents<I: AbilityInvoker>(
+    invoker: &I,
+    tenant_id: &str,
+    realm: &str,
+    prefix: &str,
+    include_abilities: bool,
+) -> Result<Vec<ResolvedAgent>, String> {
+    let resource_uri = resolve_resource_uri(realm, tenant_id);
+    let filter = if prefix.is_empty() && !include_abilities {
+        None
+    } else {
+        Some(ResolveFilter {
+            agent_uri_prefix: if prefix.is_empty() {
+                None
+            } else {
+                Some(prefix.to_string())
+            },
+            include_abilities,
+        })
+    };
+    let args = ResolveArgs { filter };
+    let payload: Value = serde_json::from_slice(&args_to_bytes(&args))
+        .map_err(|e| format!("encode resolve args: {e}"))?;
+    let receipt_value = invoker.invoke_ability(tenant_id, &resource_uri, payload)?;
+    let receipt: ResolveReceipt = parse_receipt_value(&receipt_value)
+        .map_err(|e| format!("parse federation.resolve receipt: {e}"))?;
+    Ok(receipt.agents)
 }
 
 /// Convenience: advertise the device-profile Agent itself (Selfsigned

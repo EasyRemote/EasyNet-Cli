@@ -11,9 +11,16 @@
 //                                on this device whose [access].
 //                                visibility ≥ device
 //   Tier 3  scope = "easynet"  — abilities published to the EasyNet
-//                                federation. Returns the typed error
-//                                `federation_not_available` until the
-//                                federation layer ships.
+//                                federation. Calls `federation.resolve`
+//                                against the realm's hub (Hub-profile
+//                                ability, RFC-001 §A14) and projects
+//                                each `ResolvedAgent` into the same
+//                                `Candidate` envelope as the local
+//                                tiers. Failures (no realm joined /
+//                                hub call dropped) surface as typed
+//                                `federation_not_joined` /
+//                                `federation_unavailable` envelopes
+//                                so the LLM falls through gracefully.
 //
 // Why "<self>.discover" and not the legacy "easynet.discover"
 // -----------------------------------------------------------
@@ -139,21 +146,25 @@ pub fn dispatch(
     let top_k = parse_top_k(&args)?;
 
     if matches!(scope, Scope::Easynet) {
-        // Federation tier is intentionally not wired up yet; the
-        // `delegate` SKILL.md trains the LLM to handle this typed
-        // error gracefully. Returning Ok with a typed error envelope
-        // (rather than Err) so the caller sees a structured value
-        // and the dispatch layer doesn't escalate to a generic
-        // "ability failed" surface.
-        return Ok(error_envelope(
-            "federation_not_available",
-            "scope=\"easynet\" requires the federation layer; \
-             until it ships, fall back to scope=\"self\" or \
-             scope=\"device\" or tell the user no published \
-             ability matches.",
-            scope,
-            query.as_deref(),
-        ));
+        // Tier 3 — federation. Dial the realm's hub via
+        // `federation.resolve`, project the receipt into the same
+        // `Candidate[]` shape the local tiers return so the LLM
+        // sees a uniform output regardless of where the candidate
+        // came from.
+        //
+        // Three failure modes, all surfaced as a typed envelope so
+        // the LLM falls through gracefully (no Err that the
+        // dispatch layer would escalate):
+        //
+        //   * `federation_not_joined`   — daemon isn't joined to a
+        //                                  realm yet; nothing to query.
+        //   * `federation_unavailable`  — hub call failed (transport,
+        //                                  hub-side rejection).
+        //   * `federation_empty`        — hub returned no agents at
+        //                                  all. Surfaced as ok with
+        //                                  `candidates = []`, not as
+        //                                  an error.
+        return resolve_via_federation(query.as_deref(), top_k);
     }
 
     let agents = agent_registry_provider();
@@ -236,6 +247,158 @@ fn strip_provider_field(args: &Value) -> Value {
         }
         other => other.clone(),
     }
+}
+
+/// Tier 3 — `scope: "easynet"` resolution. Dials the realm's hub via
+/// `federation.resolve`, parses the receipt, projects each
+/// `ResolvedAgent` into the `Candidate` shape the local tiers
+/// already return.
+///
+/// Why a helper that builds its own bridge per call rather than a
+/// shared OnceLock-stashed pool: federation discovery is a
+/// human-paced action (LLM probing the realm for an ability), not
+/// a tight loop. The construction cost (~1 ms for a fresh bridge)
+/// is dominated by the hub round-trip; the operational complexity
+/// of threading another OnceLock through the dispatch layer
+/// outweighs the perf win. If discover-on-easynet ever becomes
+/// hot, swap to a stashed `BridgePool` here without touching
+/// callers.
+fn resolve_via_federation(
+    query: Option<&str>,
+    top_k: usize,
+) -> anyhow::Result<Value> {
+    let scope = Scope::Easynet;
+
+    let (bridge, state) = match crate::persistence::config::load_and_connect() {
+        Ok(pair) => pair,
+        Err(e) => {
+            return Ok(error_envelope(
+                "federation_not_joined",
+                &format!(
+                    "no usable runtime state ({e}); start the daemon and join \
+                     a realm before scope=\"easynet\""
+                ),
+                scope,
+                query,
+            ));
+        }
+    };
+
+    let creds = match crate::persistence::config::load_credentials() {
+        Ok(c) => c,
+        Err(_) => {
+            return Ok(error_envelope(
+                "federation_not_joined",
+                "no credentials.json; run `easynet device join` to register \
+                 with a hub before scope=\"easynet\"",
+                scope,
+                query,
+            ));
+        }
+    };
+    // Realm doubles as tenant in the v1 wire shape (see
+    // `build_bootstrap_plan` in facade::cli::start). A future config
+    // split separates them; until then the same string flows into
+    // both fields and `federation.resolve` accepts it as the realm
+    // segment.
+    let _ = state;
+    let realm = creds.tenant_id.clone();
+    let tenant = creds.tenant_id.as_str();
+    if realm.is_empty() {
+        return Ok(error_envelope(
+            "federation_not_joined",
+            "credentials.json carries an empty tenant; rejoin via \
+             `easynet device join` before scope=\"easynet\"",
+            scope,
+            query,
+        ));
+    }
+
+    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::new(&bridge);
+    let resolved = match crate::runtime::advertise::resolve_agents(
+        &invoker, tenant, &realm, "", true,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            return Ok(error_envelope(
+                "federation_unavailable",
+                &format!("federation.resolve against realm {realm:?} failed: {e}"),
+                scope,
+                query,
+            ));
+        }
+    };
+
+    let mut rows: Vec<Candidate> = Vec::new();
+    for agent in resolved {
+        if agent.status != "active" {
+            // Skip revoked / suspended agents — the LLM shouldn't
+            // pick a candidate the hub knows is gone.
+            continue;
+        }
+        let owner = agent.uri.clone();
+        for desc in agent.abilities {
+            let bare_ability = desc
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            if bare_ability.is_empty() {
+                continue;
+            }
+            let description = desc
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let input_schema = desc
+                .get("input_schema")
+                .cloned()
+                .unwrap_or(Value::Null);
+            let qualified_name = if bare_ability.contains('.') {
+                // Hub-side descriptors sometimes carry the
+                // owner-prefixed name verbatim; preserve it.
+                bare_ability.clone()
+            } else {
+                format!("{owner}.{bare_ability}")
+            };
+            rows.push(Candidate {
+                qualified_name,
+                owner: owner.clone(),
+                ability: bare_ability,
+                description,
+                input_schema,
+                visibility: Visibility::Public,
+                scope_matched: Scope::Easynet,
+                score: 0.0,
+                reason: String::new(),
+                fulfilled_by: Some("federation"),
+            });
+        }
+    }
+
+    if let Some(q) = query {
+        score_against_query(&mut rows, q);
+        rows.retain(|c| c.score > 0.0);
+    } else {
+        for r in rows.iter_mut() {
+            r.score = 1.0;
+        }
+    }
+    rows.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.qualified_name.cmp(&b.qualified_name))
+    });
+    rows.truncate(top_k);
+
+    let candidates: Vec<Value> = rows.iter().map(Candidate::to_json).collect();
+    Ok(json!({
+        "candidates": candidates,
+        "scope": scope.as_str(),
+        "query": query,
+    }))
 }
 
 /// Where the call wants to look. Mirrors the `[access].visibility`
@@ -481,8 +644,11 @@ pub fn input_schema() -> Value {
                                 device = abilities published by other agents \
                                 on this device with visibility >= device. \
                                 easynet = published to the EasyNet federation \
-                                (returns federation_not_available until that \
-                                layer ships)."
+                                (calls federation.resolve against the realm's \
+                                hub; returns federation_not_joined when the \
+                                daemon hasn't run `device join`, or \
+                                federation_unavailable when the hub call \
+                                fails — both as typed envelopes, not Err)."
             },
             "query": {
                 "type": "string",
@@ -512,11 +678,14 @@ pub fn input_schema() -> Value {
 
 pub fn description() -> &'static str {
     "Walk the discovery ladder (self → device → easynet) and return \
-     ranked candidates matching the optional query. Returns a typed \
-     {code: \"federation_not_available\"} error for scope=\"easynet\" \
-     until the federation layer ships. Use this BEFORE telling the \
-     user you can't do something — another ability on this device may \
-     already cover it."
+     ranked candidates matching the optional query. Tier 3 \
+     (scope=\"easynet\") dials the realm hub via federation.resolve \
+     and projects the receipt into the same Candidate envelope as \
+     the local tiers; failures surface as typed envelopes \
+     ({code: \"federation_not_joined\"} / \"federation_unavailable\") \
+     so callers fall through gracefully. Use this BEFORE telling the \
+     user you can't do something — another ability on the device or \
+     in the realm may already cover it."
 }
 
 #[cfg(test)]
@@ -587,7 +756,12 @@ mod tests {
     }
 
     #[test]
-    fn easynet_scope_returns_typed_error_envelope() {
+    fn easynet_scope_unjoined_returns_typed_error_envelope() {
+        // No ~/.easynet/credentials.json under HomeGuard tmp HOME →
+        // resolve_via_federation sees the unjoined state and returns
+        // a typed envelope so the LLM falls through gracefully.
+        // Pin the wire-level code so a SKILL.md grep stays stable.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
         let mut reg = LocalAbilityRegistry::new();
         register_for_agent(
             &mut reg,
@@ -597,7 +771,11 @@ mod tests {
         );
         let h = reg.get_rpc("claude.discover").unwrap();
         let resp = h(json!({"scope": "easynet"})).unwrap();
-        assert_eq!(resp["error"]["code"], "federation_not_available");
+        let code = resp["error"]["code"].as_str().unwrap_or("");
+        assert!(
+            code == "federation_not_joined" || code == "federation_unavailable",
+            "expected federation_* typed code, got {code:?}; full resp: {resp:#?}"
+        );
         assert_eq!(resp["candidates"].as_array().unwrap().len(), 0);
         assert_eq!(resp["scope"], "easynet");
     }
