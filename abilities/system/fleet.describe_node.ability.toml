@@ -1,0 +1,11 @@
+schema_version = "1"
+name = "fleet.describe_node"
+description = "Describe one node by id. `node_id == \"local\"` (or this device's own id) returns the local snapshot; any other id surfaces a `federation_not_wired` error until the Invoke replacement lands."
+
+[input_schema]
+type = "object"
+required = ["node_id"]
+additionalProperties = false
+
+[input_schema.properties.node_id]
+type = "string"

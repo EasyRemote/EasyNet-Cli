@@ -47,6 +47,7 @@ fn target(ability: &str, args: Value) -> InvocationTarget {
         ability: ability.to_string(),
         normalized_args: args,
         call_mode: CallMode::Rpc,
+        subject: None,
     }
 }
 
@@ -323,6 +324,7 @@ fn main() -> anyhow::Result<()> {
                         "stream": false,
                     }),
                     call_mode: CallMode::Rpc,
+                    subject: None,
                 })
             })
             .await
@@ -368,6 +370,7 @@ fn main() -> anyhow::Result<()> {
                     ability: "claude.audit-test-ability".to_string(),
                     normalized_args: json!({}),
                     call_mode: CallMode::Rpc,
+                    subject: None,
                 })
             })
             .await
@@ -411,6 +414,7 @@ fn main() -> anyhow::Result<()> {
                     "stream": true,
                 }),
                 call_mode: CallMode::Stream,
+                subject: None,
             };
             match dispatcher_for_codex.execute_stream(codex_target) {
                 Ok(stream_source) => {
@@ -476,6 +480,7 @@ fn main() -> anyhow::Result<()> {
                 "stream": true,
             }),
             call_mode: CallMode::Stream,
+            subject: None,
         };
         let stream_source = dispatcher_for_stream
             .execute_stream(stream_target)

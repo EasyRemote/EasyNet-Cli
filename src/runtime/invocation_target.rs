@@ -57,6 +57,17 @@ pub struct InvocationPlan {
 
     /// Streaming vs single-shot RPC.
     pub call_mode: CallMode,
+
+    /// AXIOM 7-tuple `subject` — the resource URA the invocation
+    /// acts on. `None` for legacy abilities and for the degenerate
+    /// `subject = callee` case (per INV-META-SUBJECT-EXEMPT). Per
+    /// **INV-SUBJECT-ENVELOPE**: when set, this MUST come from the
+    /// invocation envelope (signed cross-process bytes), NEVER from
+    /// args. The IPC translator that builds this plan reads the
+    /// signed envelope's subject field; future in-process callers
+    /// supply it explicitly via the `with_subject` builder on the
+    /// resolved target.
+    pub subject: Option<String>,
 }
 
 /// Resolved target. Feature PR handlers consume this type; they are
@@ -68,6 +79,28 @@ pub struct InvocationTarget {
     pub ability: String,
     pub normalized_args: Value,
     pub call_mode: CallMode,
+    /// Resolved AXIOM 7-tuple `subject`. Carried through
+    /// dispatch so handlers registered via `register_*_with_envelope`
+    /// can read it. Per **INV-SUBJECT-ENVELOPE**: handlers that
+    /// need a subject MUST consume it from this field; they MUST
+    /// NOT accept a `subject` key in `normalized_args`. The
+    /// `reject_subject_in_args` guard in media_abilities enforces
+    /// the negative half. Default `None` — every legacy site
+    /// (struct literal in tests, resolvers built before this PR)
+    /// gets `None` until it explicitly sets a subject.
+    pub subject: Option<String>,
+}
+
+impl InvocationTarget {
+    /// Builder: attach a subject to the resolved target. Used by
+    /// callers that have envelope context (the IPC translator, or a
+    /// future planner). In-process tests construct the literal
+    /// directly with `subject: None`; they exercise the no-subject
+    /// path which most handlers don't need.
+    pub fn with_subject(mut self, subject: impl Into<String>) -> Self {
+        self.subject = Some(subject.into());
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,6 +171,7 @@ impl TargetResolver for LocalNodeResolver {
             ability: plan.ability,
             normalized_args: plan.args,
             call_mode: plan.call_mode,
+            subject: plan.subject,
         })
     }
 }
@@ -171,6 +205,7 @@ mod tests {
             args: json!({}),
             target_node_hint: hint.map(NodeId::new),
             call_mode: CallMode::Rpc,
+            subject: None,
         }
     }
 
@@ -223,8 +258,52 @@ mod tests {
             args: json!({"prompt": "hello", "count": 3}),
             target_node_hint: None,
             call_mode: CallMode::Rpc,
+            subject: None,
         };
         let t = r.resolve(plan).unwrap();
         assert_eq!(t.normalized_args, json!({"prompt": "hello", "count": 3}));
+    }
+
+    #[test]
+    fn resolver_threads_subject_from_plan_to_target() {
+        // INV-SUBJECT-ENVELOPE: when the IPC translator built a
+        // plan with a subject (read from the signed envelope), the
+        // resolver MUST surface it on the resolved target so the
+        // downstream `register_*_with_envelope` handler can read
+        // it. Dropping it here would force handlers back to args
+        // and break the invariant in flight.
+        let r = LocalNodeResolver::new(NodeId::new("self"));
+        let plan = InvocationPlan {
+            ability: "camera.snapshot".into(),
+            args: json!({}),
+            target_node_hint: None,
+            call_mode: CallMode::Rpc,
+            subject: Some("easynet:///r/acme/resource/01CAM".into()),
+        };
+        let t = r.resolve(plan).unwrap();
+        assert_eq!(
+            t.subject.as_deref(),
+            Some("easynet:///r/acme/resource/01CAM")
+        );
+    }
+
+    #[test]
+    fn target_with_subject_builder_attaches_uri() {
+        // The builder is the dispatcher-side path: a caller that
+        // already has a resolved target can attach a subject after
+        // the fact (used by the IPC layer translator that resolves
+        // first, then rebuilds with envelope context).
+        let t = InvocationTarget {
+            scope: TargetScope::Local,
+            ability: "camera.snapshot".into(),
+            normalized_args: json!({}),
+            call_mode: CallMode::Rpc,
+            subject: None,
+        };
+        let with = t.with_subject("easynet:///r/acme/resource/01CAM");
+        assert_eq!(
+            with.subject.as_deref(),
+            Some("easynet:///r/acme/resource/01CAM")
+        );
     }
 }

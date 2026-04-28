@@ -47,8 +47,10 @@
 use anyhow::Context;
 use clap::{Args, Subcommand};
 use console::style;
+use serde_json::Value;
 
 use crate::facade::cli::{abilities, ability_scaffold, deploy, exec, invoke};
+use crate::support::local_invoke::{federation_not_wired_error, invoke_local_ability};
 use crate::support::{
     output::{self, OutputFormat},
 };
@@ -83,10 +85,18 @@ pub enum AbilityAction {
 
 #[derive(Debug, Args)]
 pub struct ShowArgs {
-    /// Hosting device node id.
-    pub node_id: String,
-    /// Ability tool name.
+    /// Fully-qualified ability name (e.g. `claude.weather`,
+    /// `easynet.discover`, `observe.health`). The bare-verb form
+    /// is accepted for system abilities; agent-owned abilities
+    /// MUST carry their `<owner>.` prefix.
     pub name: String,
+    /// ⚠ Reserved for federation-tier resolution. Today this CLI
+    /// pulls metadata from the local daemon's catalogue (post
+    /// AXON-RFC-001 P1.5 there is no remote `list_mcp_tools`
+    /// surface). Passing `--node` returns a precise error rather
+    /// than silently auto-resolving locally.
+    #[arg(long, short = 'n', value_name = "NODE_ID")]
+    pub node: Option<String>,
     /// Output format. `table` emits the human-readable contract view;
     /// `json` emits the raw underlying registry record. Aligned with
     /// every other list/show command — see `support::output::OutputFormat`.
@@ -96,10 +106,20 @@ pub struct ShowArgs {
 
 #[derive(Debug, Args)]
 pub struct UninstallArgs {
-    /// Hosting device node id.
-    pub node_id: String,
-    /// Install id (from `ability list` or the deploy receipt).
-    pub install_id: String,
+    /// Target ability name. Post-P1.5 the only addressable form is
+    /// the qualified `<owner>.<verb>`; the historical
+    /// `<node_id> <install_id>` shape is preserved as `--node` and
+    /// `--install-id` so existing scripts keep parsing while the
+    /// federation Invoke replacement is wired.
+    pub name: String,
+    /// Reserved for federation-tier uninstall. See `--node` on
+    /// `ability show`.
+    #[arg(long, short = 'n', value_name = "NODE_ID")]
+    pub node: Option<String>,
+    /// Install id from the deploy receipt. Reserved for the
+    /// federation-tier uninstall surface; not consumed today.
+    #[arg(long, value_name = "INSTALL_ID")]
+    pub install_id: Option<String>,
     /// Skip the interactive confirmation.
     #[arg(long, short = 'y')]
     pub yes: bool,
@@ -119,48 +139,85 @@ pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
 }
 
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
-    let (br, rt) = crate::persistence::config::load_and_connect()?;
-    let tenant = rt.tenant_or_default();
-    let tools = br
-        .list_mcp_tools(tenant, "", &args.node_id)
-        .with_context(|| format!("list_mcp_tools {}", args.node_id))?;
-    let tool = tools
-        .iter()
-        .find(|t| {
-            t.get("tool_name")
-                .or_else(|| t.get("ability_name"))
-                .and_then(|v| v.as_str())
+    // --node is reserved-but-not-implemented per the same pattern as
+    // every other CLI surface that pre-dated the AXON-RFC-001 P1.5
+    // federation cull. A scripted caller passing `--node <id>` MUST
+    // see a precise error rather than silently get the local entry
+    // for whichever ability happened to share the name.
+    if args.node.as_deref().map(str::trim).is_some_and(|s| !s.is_empty()) {
+        return Err(federation_not_wired_error(
+            "showing an ability hosted on a remote node",
+        ));
+    }
+
+    // Pull the catalogue from the local daemon — the only authority
+    // post-P1.5 — and find the requested ability by exact name.
+    // `easynet.discover` returns an `{abilities: [...]}` envelope
+    // matching the shape `easynet ability list` consumes.
+    let catalogue = invoke_local_ability("easynet.discover", serde_json::json!({}))
+        .context("invoke easynet.discover")?;
+    let abilities = catalogue
+        .get("abilities")
+        .or_else(|| catalogue.get("tools"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let entry = abilities
+        .into_iter()
+        .find(|e| {
+            e.get("name")
+                .or_else(|| e.get("tool_name"))
+                .or_else(|| e.get("ability_name"))
+                .and_then(Value::as_str)
                 == Some(args.name.as_str())
         })
         .ok_or_else(|| {
-            anyhow::anyhow!("ability '{}' not found on '{}'", args.name, args.node_id)
+            anyhow::anyhow!(
+                "ability '{}' not found in this node's catalogue. \
+                 Run `easynet ability list` to see what is registered.",
+                args.name
+            )
         })?;
 
     if args.format == OutputFormat::Json {
-        println!("{}", serde_json::to_string_pretty(tool)?);
+        println!("{}", serde_json::to_string_pretty(&entry)?);
         return Ok(());
     }
 
-    // Human-readable contract surface. We deliberately speak the OOP /
-    // "published service endpoint" vocabulary here so the CLI itself
-    // teaches the ontology.
-    let name = tool
-        .get("tool_name")
-        .or_else(|| tool.get("ability_name"))
-        .and_then(|v| v.as_str())
+    // Human-readable contract surface. The fields below are
+    // best-effort: `easynet.discover` doesn't yet surface every
+    // historical `list_mcp_tools` field (version / state / hosted
+    // node), so the renderer falls back to "-" when a field is
+    // absent rather than failing — it's a *show* command, missing
+    // metadata should still print the rest.
+    let name = entry
+        .get("name")
+        .or_else(|| entry.get("tool_name"))
+        .or_else(|| entry.get("ability_name"))
+        .and_then(Value::as_str)
         .unwrap_or(&args.name);
-    let version = tool
+    let version = entry
         .get("ability_version")
-        .and_then(|v| v.as_str())
+        .and_then(Value::as_str)
         .unwrap_or("-");
-    let description = tool
+    let description = entry
         .get("description")
-        .and_then(|v| v.as_str())
+        .and_then(Value::as_str)
         .unwrap_or("");
-    let state = tool
+    let state = entry
         .get("state")
-        .and_then(|v| v.as_str())
+        .and_then(Value::as_str)
         .unwrap_or("ACTIVE");
+    let owner = entry
+        .get("owner_agent_uri")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            // Fall back to deriving owner from the qualified name
+            // (`<owner>.<verb>`); aligns with `ability list`'s
+            // owner column when discover doesn't surface a URI.
+            name.split_once('.').map(|(o, _)| o)
+        })
+        .unwrap_or("-");
 
     eprintln!();
     eprintln!(
@@ -170,11 +227,14 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         style(version).dim(),
         style(format!("[{state}]")).dim(),
     );
-    output::detail("hosted on", &args.node_id);
+    output::detail("owner", owner);
     if !description.is_empty() {
         output::detail("description", description);
     }
-    if let Some(schema) = tool.get("input_schema") {
+    if let Some(schema) = entry
+        .get("input_schema")
+        .or_else(|| entry.get("schema_summary").and_then(|s| s.get("input")))
+    {
         eprintln!();
         eprintln!("  {}", style("input schema").dim());
         println!("{}", serde_json::to_string_pretty(schema)?);
@@ -197,30 +257,22 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
 
 fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
     if !args.yes {
-        let prompt = format!(
-            "Uninstall ability install '{}' from device '{}'?",
-            args.install_id, args.node_id
-        );
+        let prompt = format!("Uninstall ability '{}' from this fleet?", args.name);
         if !output::confirm(&prompt)? {
             output::info("aborted");
             return Ok(());
         }
     }
-
-    let (br, rt) = crate::persistence::config::load_and_connect()?;
-    let tenant = rt.tenant_or_default();
-    let result = br
-        .uninstall_capability_with_reason(
-            tenant,
-            &args.node_id,
-            &args.install_id,
-            "removed via easynet ability uninstall",
-        )
-        .with_context(|| format!("uninstall {} on {}", args.install_id, args.node_id))?;
-    output::success(&format!(
-        "uninstalled {} on {}",
-        args.install_id, args.node_id
-    ));
+    let mut body = serde_json::json!({ "ability_name": args.name });
+    if let Some(node) = args.node.as_deref().filter(|s| !s.trim().is_empty()) {
+        body["node_id"] = serde_json::json!(node);
+    }
+    if let Some(iid) = args.install_id.as_deref().filter(|s| !s.trim().is_empty()) {
+        body["install_id"] = serde_json::json!(iid);
+    }
+    let result = invoke_local_ability("fleet.uninstall_ability", body)
+        .context("invoke fleet.uninstall_ability")?;
+    output::success(&format!("uninstalled {}", args.name));
     if !result.is_null() {
         println!("{}", serde_json::to_string_pretty(&result)?);
     }

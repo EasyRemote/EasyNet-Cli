@@ -104,18 +104,35 @@ pub fn run(args: DeviceArgs) -> anyhow::Result<()> {
 }
 
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
-    let (br, rt) = crate::persistence::config::load_and_connect()?;
-    let tenant = rt.tenant_or_default();
+    // Per the ability-only ontology this command is one
+    // `fleet.describe_node` invocation against the local daemon.
+    // The daemon-side handler returns the node envelope (or
+    // `federation_not_wired` for a remote id while the federation
+    // Invoke replacement is being landed).
+    let node = crate::support::local_invoke::invoke_local_ability(
+        "fleet.describe_node",
+        json!({ "node_id": args.node_id }),
+    )
+    .with_context(|| format!("describe node {}", args.node_id))?;
 
-    let nodes = br.list_nodes(tenant, None).context("list nodes")?;
-    let node = nodes
-        .iter()
-        .find(|n| n.get("node_id").and_then(|v| v.as_str()) == Some(args.node_id.as_str()))
-        .ok_or_else(|| anyhow::anyhow!("substrate '{}' not found", args.node_id))?;
-
-    let abilities = br
-        .list_mcp_tools(tenant, "", &args.node_id)
-        .unwrap_or_default();
+    // Hosted-ability list is `easynet.discover` filtered to entries
+    // whose owner matches the target node id. v1 only knows about
+    // the local node — once federation Invoke ships the daemon-side
+    // handler will return per-node ability lists.
+    let abilities = match crate::support::local_invoke::invoke_local_ability(
+        "easynet.discover",
+        json!({}),
+    ) {
+        Ok(catalogue) => catalogue
+            .get("abilities")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+    // Refer to the borrowed slot below as `&node` to keep parity
+    // with the legacy variable name; the dereferences are checked.
+    let node = &node;
 
     if args.format == OutputFormat::Json {
         let payload = json!({"node": node, "abilities": abilities});
@@ -128,34 +145,33 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         .and_then(|v| v.as_str())
         .unwrap_or(&args.node_id);
 
-    // state and trust_level are returned as integers from Axon SDK.
-    let state = match node.get("state").and_then(|v| v.as_i64()).unwrap_or(0) {
-        0 => "UNKNOWN",
-        1 => "JOINING",
-        2 => "PROBATION",
-        3 => "HEALTHY",
-        4 => "SUSPECT",
-        5 => "QUARANTINED",
-        6 => "DRAINING",
-        7 => "REMOVED",
-        _ => "UNKNOWN",
-    };
-    let trust = match node
-        .get("trust_level")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0)
-    {
-        0 => "UNKNOWN",
-        1 => "UNTRUSTED",
-        2 => "PROBATION",
-        3 => "STANDARD",
-        4 => "TRUSTED",
-        _ => "UNKNOWN",
-    };
-    let online = node
-        .get("online")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    // `fleet.describe_node` returns a string `state` (HEALTHY /
+    // STANDALONE / REMOVED / etc) and a boolean `paired`. Fall
+    // back to integer-indexed `state` for compatibility with any
+    // future federation-tier handler that still serialises the
+    // Axon SDK enum (the legacy form was 0..=7 → label).
+    let state = node
+        .get("state")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .or_else(|| {
+            node.get("state").and_then(|v| v.as_i64()).map(|n| {
+                match n {
+                    1 => "JOINING",
+                    2 => "PROBATION",
+                    3 => "HEALTHY",
+                    4 => "SUSPECT",
+                    5 => "QUARANTINED",
+                    6 => "DRAINING",
+                    7 => "REMOVED",
+                    _ => "UNKNOWN",
+                }
+                .to_string()
+            })
+        })
+        .unwrap_or_else(|| "UNKNOWN".to_string());
+    let paired = node.get("paired").and_then(|v| v.as_bool()).unwrap_or(false);
+    let online = state == "HEALTHY" || state == "REGISTERED" || state == "STANDALONE";
 
     let dot = if online {
         style("●").green()
@@ -166,8 +182,8 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     eprintln!();
     eprintln!("  {} {}", dot, style(display_name).bold());
     output::detail("node_id", &args.node_id);
-    output::detail("state", &format!("{state} (trust: {trust})"));
-    output::detail("online", &format!("{online}"));
+    output::detail("state", &state);
+    output::detail("paired", &format!("{paired}"));
     if let Some(os) = node.pointer("/device/os").and_then(|v| v.as_str()) {
         output::detail("os", os);
     }
@@ -205,20 +221,26 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         style("hosted on this substrate").dim(),
     );
     for a in &abilities {
+        // `easynet.discover` returns each ability as `{name, …}`
+        // (no `tool_name` / `ability_version` fields). Fall back
+        // through the historical aliases for forward-compat with
+        // the day a federation-tier `list_mcp_tools` ability ships.
         let name = a
-            .get("tool_name")
+            .get("name")
+            .or_else(|| a.get("tool_name"))
             .or_else(|| a.get("ability_name"))
             .and_then(|v| v.as_str())
             .unwrap_or("-");
-        let ver = a
-            .get("ability_version")
+        let owner = a
+            .get("owner_agent_uri")
             .and_then(|v| v.as_str())
+            .or_else(|| name.split_once('.').map(|(o, _)| o))
             .unwrap_or("-");
         eprintln!(
             "    {} {}  {}",
             style("·").dim(),
             style(name).cyan(),
-            style(ver).dim(),
+            style(owner).dim(),
         );
     }
     eprintln!();
@@ -247,14 +269,23 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
         }
     }
 
-    let (br, rt) = crate::persistence::config::load_and_connect()?;
-    let tenant = rt.tenant_or_default();
-
-    // Drain first so any in-flight calls finish, then deregister.
-    let _ = br.drain_node(tenant, &args.node_id, &args.reason);
-    br.deregister_node(tenant, &args.node_id, &args.reason)
-        .with_context(|| format!("deregister {}", args.node_id))?;
+    // One ability invocation: `fleet.remove_node`. The daemon-side
+    // handler refuses to remove the local device (operator should
+    // use `easynet device reset` for that — it is the local side
+    // of the same operation) and surfaces `federation_not_wired`
+    // for remote ids until the Invoke replacement ships.
+    let result = crate::support::local_invoke::invoke_local_ability(
+        "fleet.remove_node",
+        json!({
+            "node_id": args.node_id,
+            "reason":  args.reason,
+        }),
+    )
+    .with_context(|| format!("remove {}", args.node_id))?;
 
     output::success(&format!("removed {}", args.node_id));
+    if !result.is_null() {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    }
     Ok(())
 }

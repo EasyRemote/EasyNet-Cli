@@ -138,30 +138,54 @@ fn check_runtime() -> Check {
 }
 
 fn check_federation() -> Check {
-    let (br, rt) = match crate::persistence::config::load_and_connect() {
-        Ok(t) => t,
-        Err(_) => {
-            return Check {
-                name: "federation".to_string(),
-                status: CheckStatus::Warn,
-                detail: "skipped (no runtime)".to_string(),
-                hint: None,
-            };
+    // Per the ability-only ontology this check goes through
+    // `fleet.list_nodes` — the same surface every other CLI
+    // surface uses — instead of the dead `bridge.list_nodes`
+    // path that pre-rewrite returned a hard error here.
+    match crate::support::local_invoke::invoke_local_ability(
+        "fleet.list_nodes",
+        serde_json::json!({}),
+    ) {
+        Ok(envelope) => {
+            let count = envelope
+                .get("nodes")
+                .and_then(serde_json::Value::as_array)
+                .map(|a| a.len())
+                .unwrap_or(0);
+            let view = envelope
+                .get("federation_view")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            // `local_only` is the expected steady-state today: the
+            // federation Invoke replacement for AXON-RFC-001 P1.5's
+            // `list_nodes` ships in a follow-up. Surface as Warn
+            // (not Fail) — the daemon is healthy, the federation
+            // surface is just incomplete by design.
+            if view == "local_only" {
+                Check {
+                    name: "federation".to_string(),
+                    status: CheckStatus::Warn,
+                    detail: format!(
+                        "{count} node(s); local-only view (federation Invoke replacement pending)"
+                    ),
+                    hint: Some(
+                        "This is expected post-AXON-RFC-001 P1.5. Local fleet operations remain available.",
+                    ),
+                }
+            } else {
+                Check {
+                    name: "federation".to_string(),
+                    status: CheckStatus::Ok,
+                    detail: format!("{count} node(s) reachable"),
+                    hint: None,
+                }
+            }
         }
-    };
-    let tenant = rt.tenant_or_default();
-    match br.list_nodes(tenant, None) {
-        Ok(nodes) => Check {
-            name: "federation".to_string(),
-            status: CheckStatus::Ok,
-            detail: format!("{} substrate(s) reachable", nodes.len()),
-            hint: None,
-        },
         Err(e) => Check {
             name: "federation".to_string(),
-            status: CheckStatus::Fail,
-            detail: format!("list_nodes failed: {e}"),
-            hint: Some("Check Hub connectivity and credentials."),
+            status: CheckStatus::Warn,
+            detail: format!("fleet.list_nodes unavailable: {e}"),
+            hint: Some("Check that the daemon is running (`easynet runtime status`)."),
         },
     }
 }

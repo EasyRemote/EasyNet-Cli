@@ -41,15 +41,17 @@ pub fn run(_args: StopArgs) -> anyhow::Result<()> {
     // success even on transient Hub errors, hiding inconsistent state
     // from the operator.
     if !hb_killed {
-        if let Ok(creds) = config::load_credentials() {
-            if let Ok(bridge) = support::connect_bridge_to(&state.endpoint) {
-                match bridge.deregister_node(&creds.tenant_id, &creds.node_id, "device shutdown") {
-                    Ok(_) => output::info("Node deregistered"),
-                    Err(e) => output::warn(&format!(
-                        "Hub deregister failed (continuing local stop): {e}"
-                    )),
-                }
-            }
+        if config::load_credentials().is_ok() {
+            // Per the ability-only ontology this would invoke
+            // `fleet.deregister_self` on the daemon. The daemon is
+            // about to be torn down here, so going through its IPC
+            // surface for one last call would race the shutdown.
+            // The legacy `bridge.deregister_node` was removed by
+            // AXON-RFC-001 P1.5; the federation Invoke replacement
+            // (which the heartbeat thread will issue *while* the
+            // daemon is alive, see heartbeat.rs) is the canonical
+            // path.
+            output::info("Node deregister: deferred to heartbeat exit path");
         }
     }
 

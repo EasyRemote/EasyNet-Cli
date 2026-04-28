@@ -1,0 +1,19 @@
+schema_version = "1"
+name = "speaker.publish"
+description = "Push audio frames to a speaker resource. Caller streams BinaryChunk frames UP; downstream channel exists per axon bidi shape but emits no frames. Subject MUST be a speaker resource_uri."
+
+[input_schema]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties.channels]
+type = "integer"
+enum = [1, 2]
+
+[input_schema.properties.codec]
+type = "string"
+enum = ["opus"]
+
+[input_schema.properties.sample_rate]
+type = "integer"
+enum = [24000, 48000]

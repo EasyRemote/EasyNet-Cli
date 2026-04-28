@@ -95,16 +95,26 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
     // message lied to the operator on transient Hub failures, which then
     // looked indistinguishable from a successful clean-up in the audit
     // trail.
-    if let Ok(creds) = config::load_credentials() {
+    if config::load_credentials().is_ok() {
         if let Some(ref state) = runtime_state {
-            if let Ok(bridge) = support::connect_bridge_to(&state.endpoint) {
-                match bridge.deregister_node(&creds.tenant_id, &creds.node_id, "device reset") {
-                    Ok(_) => output::info("Node deregistered from Hub"),
-                    Err(e) => output::warn(&format!(
-                        "Hub deregister failed (continuing local reset): {e}"
-                    )),
-                }
+            // Per ability-only ontology this is `fleet.deregister_self`.
+            // Best-effort: the daemon may already be drained, and
+            // this command's primary job is to wipe LOCAL state.
+            // The legacy `bridge.deregister_node` was removed by
+            // AXON-RFC-001 P1.5. We attempt the ability invocation;
+            // failure is logged and reset continues.
+            match crate::support::local_invoke::invoke_local_ability(
+                "fleet.deregister_self",
+                serde_json::json!({}),
+            ) {
+                Ok(_) => output::info("Node deregistered (local acknowledgement)"),
+                Err(e) => output::warn(&format!(
+                    "fleet.deregister_self failed (continuing local reset): {e}"
+                )),
             }
+            // Suppress unused-binding warning for the runtime state
+            // until the federation Invoke surface consumes it again.
+            let _ = state;
         }
     }
 

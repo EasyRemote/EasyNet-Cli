@@ -111,6 +111,11 @@ pub mod fleet_list_agents_ability;
 /// reaches these through `support::local_invoke::invoke_local_ability`,
 /// the same path every other CLI surface uses.
 pub mod fleet_ops_ability;
+/// voice.* call signaling abilities backing the `easynet call …`
+/// subcommand surface (create, show, join, leave, end, watch,
+/// report_metrics). v1 stores call state in-process; persistence
+/// + federation fan-out land with the RFC-006 follow-up.
+pub mod voice_call_ability;
 pub mod loop_ability;
 pub mod mcp_bridge_ability;
 pub mod mcp_client_ability;
@@ -301,6 +306,10 @@ pub fn build_registry_with_services(
     // register_self, deregister_self). These are the canonical
     // ability surfaces backing the CLI's device + ability subcommands.
     fleet_ops_ability::register(&mut reg);
+    // voice.* call signaling abilities — `easynet call …`
+    // subcommand surface routes through these via the same
+    // ability-only invocation path every other CLI surface uses.
+    voice_call_ability::register(&mut reg);
     // policy.{evaluate,simulate} — admission-gate consumer surface
     // pinned to the §A6 contract. v1 is allow-all; the gate's
     // rewiring to actually call this ability lands in a follow-up
@@ -661,6 +670,13 @@ pub fn description_for(name: &str) -> &'static str {
         "fleet.exec_remote" => fleet_ops_ability::exec_remote_description(),
         "fleet.register_self" => fleet_ops_ability::register_self_description(),
         "fleet.deregister_self" => fleet_ops_ability::deregister_self_description(),
+        "voice.create_call" => voice_call_ability::create_call_description(),
+        "voice.show_call" => voice_call_ability::show_call_description(),
+        "voice.join_call" => voice_call_ability::join_call_description(),
+        "voice.leave_call" => voice_call_ability::leave_call_description(),
+        "voice.end_call" => voice_call_ability::end_call_description(),
+        "voice.watch_call" => voice_call_ability::watch_call_description(),
+        "voice.report_metrics" => voice_call_ability::report_metrics_description(),
         "admin.status" => admin_status_ability::description(),
         // RFC-005 v3.2 A1–A8 — media abilities. `media_abilities`
         // owns the single source of truth (the `ABILITIES` table);
@@ -754,6 +770,13 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "fleet.exec_remote" => fleet_ops_ability::exec_remote_input_schema(),
         "fleet.register_self" => fleet_ops_ability::register_self_input_schema(),
         "fleet.deregister_self" => fleet_ops_ability::deregister_self_input_schema(),
+        "voice.create_call" => voice_call_ability::create_call_input_schema(),
+        "voice.show_call" => voice_call_ability::show_call_input_schema(),
+        "voice.join_call" => voice_call_ability::join_call_input_schema(),
+        "voice.leave_call" => voice_call_ability::leave_call_input_schema(),
+        "voice.end_call" => voice_call_ability::end_call_input_schema(),
+        "voice.watch_call" => voice_call_ability::watch_call_input_schema(),
+        "voice.report_metrics" => voice_call_ability::report_metrics_input_schema(),
         "admin.status" => admin_status_ability::input_schema(),
         // RFC-005 v3.2 A1–A8 — media abilities. Same single-source
         // -of-truth pattern as `description_for` above.
@@ -878,6 +901,18 @@ mod tests {
             | "fleet.exec_remote"
             | "fleet.register_self"
             | "fleet.deregister_self"
+            // voice.* call signaling abilities. State-mutating
+            // (create / join / leave / end / report_metrics) and
+            // state-reading (show / watch) — Operational by intent
+            // because the call IS the work. Same shape as
+            // discuss.subscribe / loop.subscribe sit here.
+            | "voice.create_call"
+            | "voice.show_call"
+            | "voice.join_call"
+            | "voice.leave_call"
+            | "voice.end_call"
+            | "voice.watch_call"
+            | "voice.report_metrics"
             // mcp.bridge.call_tool / a2a.bridge.send_task — both
             // dispatch into another local ability; the side effects
             // come from that dispatch, not the bridge itself. Sit

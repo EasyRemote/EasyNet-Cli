@@ -1,0 +1,31 @@
+schema_version = "1"
+name = "screen.snapshot"
+description = "Capture one still image of a screen target. Subject MUST be a screen resource_uri whose type is `display`, `application`, or `window`. Optional `region` arg is valid ONLY when subject's type is `display`."
+
+[input_schema]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties.format]
+type = "string"
+enum = ["jpeg", "png"]
+
+[input_schema.properties.region]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties.region.properties.h]
+type = "integer"
+minimum = 1
+
+[input_schema.properties.region.properties.w]
+type = "integer"
+minimum = 1
+
+[input_schema.properties.region.properties.x]
+type = "integer"
+minimum = 0
+
+[input_schema.properties.region.properties.y]
+type = "integer"
+minimum = 0

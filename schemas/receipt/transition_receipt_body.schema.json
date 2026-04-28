@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.dev/schemas/receipt/transition_receipt_body.schema.json",
+  "title": "TransitionReceiptBody",
+  "description": "Fields a CanonicalReceipt MUST carry when the invoked ability has class=Transition. Fields ride inside the existing receipt body — RFC-003 v1 wire format and envelope are unchanged. Query and Stream abilities MUST NOT emit a body containing these fields (TR-INV-5).",
+  "type": "object",
+  "required": [
+    "transition_id",
+    "attempt_id",
+    "state_type",
+    "state_key",
+    "pre_state_hash",
+    "post_state_hash",
+    "pre_state_version",
+    "post_state_version",
+    "state_version"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "transition_id": {
+      "type": "string",
+      "description": "Stable identifier for the transition. MUST be identical across deployments and SDKs (TR-INV-7). Convention: dotted ability name, e.g. 'media.call.join'.",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
+      "minLength": 3,
+      "maxLength": 128
+    },
+    "transition_name": {
+      "type": "string",
+      "description": "Optional human-readable alias. MAY differ from transition_id; MUST NOT be used for routing or verification (TR-INV-7).",
+      "maxLength": 128
+    },
+    "attempt_id": {
+      "type": "string",
+      "description": "Globally-unique identifier for this attempt. Retries MUST mint a fresh attempt_id; reuse is forbidden (TR-INV-10). Format: UUIDv4 or ULID.",
+      "pattern": "^[A-Za-z0-9-]{16,64}$"
+    },
+    "state_type": {
+      "type": "string",
+      "description": "The typed state object this transition acts on. Same value as the descriptor's state_type field (TR-INV-1). Convention: dotted, e.g. 'media.call'.",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+      "minLength": 3,
+      "maxLength": 64
+    },
+    "state_key": {
+      "type": "string",
+      "description": "Canonicalized string identifying the specific state object instance (TR-INV-8). Resolved from the descriptor's state_key_arg by reading that named field from the invocation args.",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "pre_state_hash": {
+      "type": "string",
+      "description": "SHA-256 hash of the canonical-encoded state object as observed BEFORE the transition. Format: 'sha256:<hex>'. For chain-linkage rule see TR-INV-4.",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "post_state_hash": {
+      "type": "string",
+      "description": "SHA-256 hash of the canonical-encoded state object as it exists AFTER the transition was applied. Format: 'sha256:<hex>'.",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "pre_state_version": {
+      "type": "integer",
+      "description": "Monotonic version of the state object as observed before the transition. Per (state_type, state_key). Verified atomically against current store value (TR-INV-9 / SV-INV-1).",
+      "minimum": 0
+    },
+    "post_state_version": {
+      "type": "integer",
+      "description": "Monotonic version after the transition. MUST equal pre_state_version + 1 on success (TR-INV-9). Failed transitions MUST NOT emit a transition receipt at all.",
+      "minimum": 1
+    },
+    "state_version": {
+      "type": "integer",
+      "description": "Convenience alias equal to post_state_version. Provided so downstream readers do not have to pick between pre/post when they want 'current'.",
+      "minimum": 1
+    }
+  },
+  "$comment": "Constraint state_version == post_state_version is enforced by the implementation, not by JSON Schema (Draft 2020-12 cannot express equality between sibling fields without $data, which is non-standard). The implementation MUST reject receipts where these two values differ."
+}

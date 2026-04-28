@@ -1,0 +1,7 @@
+schema_version = "1"
+name = "fleet.list_nodes"
+description = "List device nodes visible from this daemon. v1 returns the local device only; federation peer enumeration awaits the AXON-RFC-001 P1.5 follow-up. The response carries `federation_view = \"local_only\"` so callers can detect the limited view explicitly."
+
+[input_schema]
+type = "object"
+additionalProperties = false

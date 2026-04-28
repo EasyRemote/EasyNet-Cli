@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.dev/schemas/descriptor/transition_descriptor.schema.json",
+  "title": "TransitionAbilityDescriptorIncrement",
+  "description": "Schema delta added to the existing AbilityDescriptor (plan v4.1.1 §1.6) by RFC-006. Existing descriptor fields (name, owner_agent_uri, visibility, scope_*, source, schema_summary, hints) are unchanged and not repeated here. This schema describes ONLY the new RFC-006 fields. The 'class' field is mandatory on every descriptor; 'transition_id', 'state_type', 'state_key_arg', and the [transition] block are mandatory iff class == 'Transition'.",
+  "type": "object",
+  "required": ["class"],
+  "properties": {
+    "class": {
+      "enum": ["Query", "Transition", "Stream"],
+      "description": "Three-way classification (RFC-006 §1). Query: no state mutation, receipt proves observation. Transition: state mutation, receipt proves pre/post. Stream: long-lived observation or bidi transport, receipt proves stream lifecycle."
+    },
+    "transition_id": {
+      "type": "string",
+      "description": "Stable identifier for the transition (TR-INV-7). MUST be present iff class == 'Transition'. MUST equal the transition_id field on emitted receipts.",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
+      "minLength": 3,
+      "maxLength": 128
+    },
+    "state_type": {
+      "type": "string",
+      "description": "The typed state object this ability acts on (TR-INV-1). MUST be present iff class == 'Transition'.",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+      "minLength": 3,
+      "maxLength": 64
+    },
+    "state_key_arg": {
+      "type": "string",
+      "description": "Name of an input arg whose stringified value is the state object's key (TR-INV-8). MUST be present iff class == 'Transition'. The runtime reads args[state_key_arg], canonicalizes to a string, and uses it as the state_key on the receipt. Missing or non-stringifiable value MUST yield InvalidArgument.",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "transition": {
+      "type": "object",
+      "description": "Allowed pre/post states for this transition (TR-INV-2). MUST be present iff class == 'Transition'.",
+      "required": ["from_states", "to_state"],
+      "additionalProperties": false,
+      "properties": {
+        "from_states": {
+          "type": "array",
+          "description": "List of state names from which this transition is legal. Use ['*'] to mean 'any state' (e.g. media.call.end legal from any state).",
+          "items": { "type": "string", "pattern": "^([A-Z][A-Z0-9_]*|\\*)$" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "to_state": {
+          "type": "string",
+          "description": "Single target state name. Multi-target transitions MUST be split into multiple distinct ability descriptors with distinct transition_ids.",
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if":   { "properties": { "class": { "const": "Transition" } } },
+      "then": {
+        "required": ["class", "transition_id", "state_type", "state_key_arg", "transition"]
+      }
+    },
+    {
+      "if":   { "properties": { "class": { "const": "Query" } } },
+      "then": {
+        "not": { "required": ["transition"] },
+        "$comment": "Query descriptors MAY declare state_type for grouping/discovery, but MUST NOT declare a [transition] block — TR-INV-5."
+      }
+    },
+    {
+      "if":   { "properties": { "class": { "const": "Stream" } } },
+      "then": {
+        "not": { "required": ["transition"] },
+        "$comment": "Stream descriptors MAY declare state_type for grouping. Stream session lifecycle is separate from frame payloads — TR-INV-6."
+      }
+    }
+  ]
+}

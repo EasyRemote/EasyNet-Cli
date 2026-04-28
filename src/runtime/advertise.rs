@@ -429,11 +429,20 @@ mod tests {
 
     #[test]
     fn advertise_abilities_targets_correct_resource_uri() {
+        // `advertise_abilities_resource_uri` substitutes both
+        // `{realm}` and `{tenant}` placeholders. The parallel test
+        // above (`advertise_agent_targets_correct_resource_uri`)
+        // already pins the substituted form for the agent variant.
+        // This test was previously asserting the raw template
+        // (`tenant_id={tenant}`) and silently regressed when the
+        // substitution landed; pinning the post-substitution shape
+        // catches a future regression that "forgets" to replace
+        // one of the placeholders.
         let invoker = RecordingInvoker::new(serde_json::json!({"ack": true}));
         let _ = advertise_abilities(&invoker, "tenant", "acme", "u", &[]).unwrap();
         assert_eq!(
             invoker.last_resource_uri.borrow().as_deref().unwrap(),
-            "easynet:///r/prv/hub/acme/abilities/federation.advertise_abilities@1?tenant_id={tenant}"
+            "easynet:///r/prv/hub/acme/abilities/federation.advertise_abilities@1?tenant_id=tenant"
         );
     }
 }

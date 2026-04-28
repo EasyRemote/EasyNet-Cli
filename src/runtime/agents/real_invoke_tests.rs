@@ -101,6 +101,10 @@ fn target(name: &str, args: Value) -> InvocationTarget {
         ability: name.to_string(),
         normalized_args: args,
         call_mode: CallMode::Rpc,
+        // Test helper: legacy callers that don't need a subject
+        // get None. The `with_subject` builder lets per-test code
+        // attach one when exercising INV-SUBJECT-ENVELOPE paths.
+        subject: None,
     }
 }
 
@@ -190,6 +194,222 @@ fn real_meta_list_abilities_returns_at_least_observe_health() {
     assert!(
         found_observe,
         "meta.list_abilities must include observe.health: got {resp}"
+    );
+}
+
+#[test]
+fn real_easynet_discover_aliases_meta_list_abilities() {
+    // `easynet.discover` is the user-facing alias for
+    // `meta.list_abilities` — same handler, same payload shape.
+    // Pin both calls returning a body with at least one array
+    // containing `observe.health` so a regression that wired the
+    // alias to a different handler trips loud.
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target("easynet.discover", json!({})))
+        .expect("easynet.discover");
+    let body = resp.as_object().expect("object");
+    let mut found = false;
+    for (_k, v) in body {
+        if let Some(arr) = v.as_array() {
+            for item in arr {
+                let name = item
+                    .as_object()
+                    .and_then(|o| o.get("name").or_else(|| o.get("ability")))
+                    .and_then(Value::as_str);
+                if name == Some("observe.health") {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if found {
+            break;
+        }
+    }
+    assert!(
+        found,
+        "easynet.discover must include observe.health: got {resp}"
+    );
+}
+
+#[test]
+fn real_easynet_run_validates_args_before_touching_the_runtime() {
+    // `easynet.run` requires a non-empty `source`. The argument
+    // validation runs BEFORE the handler reaches into
+    // `run_mission_inproc` (which needs a live runtime + bridge
+    // pool for device dispatch). This test exercises the wiring
+    // up to the validation gate without requiring a daemon to be
+    // running — empty source must produce a precise error
+    // message so an LLM-driven caller sees what to fix.
+    let (reg, _g) = registry_with_temp_home();
+    let result = dispatcher_for(reg)
+        .execute_rpc(target("easynet.run", json!({ "source": "" })));
+    let err = result.expect_err("empty source must fail validation");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("source") && msg.contains("non-empty"),
+        "empty source must yield a precise validation error mentioning \
+         `source` and `non-empty`; got: {msg}"
+    );
+}
+
+#[test]
+fn real_mission_run_alias_validates_args_the_same_way_as_easynet_run() {
+    // The legacy `mission.run` name MUST route to the same
+    // handler as the canonical `easynet.run` — proven here by a
+    // matching validation error on the same malformed input. A
+    // regression that wired the alias to a different handler (or
+    // forgot to register it at all) would either return a
+    // different error message or report `not_found`.
+    let (reg, _g) = registry_with_temp_home();
+    let result = dispatcher_for(reg)
+        .execute_rpc(target("mission.run", json!({ "source": "" })));
+    let err = result.expect_err("empty source must fail validation");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("source") && msg.contains("non-empty"),
+        "empty source via mission.run must yield the same precise \
+         validation error as easynet.run; got: {msg}"
+    );
+}
+
+#[test]
+fn real_easynet_track_returns_an_error_for_an_unknown_run_id() {
+    // `easynet.track` reads the persisted state of a prior
+    // `easynet.run` by id. With a fresh HOME there are no run
+    // dirs, so any id lookup MUST surface an error rather than
+    // silently fabricating an empty envelope. A regression that
+    // returns Ok({}) for a missing run would mask "the mission
+    // is gone" as "the mission has nothing to report".
+    let (reg, _g) = registry_with_temp_home();
+    let result = dispatcher_for(reg).execute_rpc(target(
+        "easynet.track",
+        json!({ "run_id": "no-such-run-id" }),
+    ));
+    assert!(
+        result.is_err(),
+        "easynet.track must error on an unknown run_id; got {result:?}"
+    );
+}
+
+#[test]
+fn real_easynet_cancel_returns_an_error_for_an_unknown_run_id() {
+    // Same contract as easynet.track — an unknown run id must
+    // surface as an error, not a silent no-op. A regression that
+    // returned `cancelled = false` here would let a caller think
+    // they had reached a (terminal) run when in fact no run by
+    // that id ever existed.
+    let (reg, _g) = registry_with_temp_home();
+    let result = dispatcher_for(reg).execute_rpc(target(
+        "easynet.cancel",
+        json!({ "run_id": "no-such-run-id" }),
+    ));
+    assert!(
+        result.is_err(),
+        "easynet.cancel must error on an unknown run_id; got {result:?}"
+    );
+}
+
+// ── fleet.* device + ability operations ─────────────────────────
+//
+// Eight abilities backing every CLI device + ability subcommand
+// (`device list/show/remove`, `ability deploy/uninstall/exec`,
+// daemon lifecycle hooks). Per-handler unit tests live alongside
+// `fleet_ops_ability` itself; the tests below are the integration
+// layer — dispatch each one through the real dispatcher to prove
+// the registration site + name + arg shape line up.
+
+#[test]
+fn real_fleet_list_nodes_returns_local_view_envelope() {
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target("fleet.list_nodes", json!({})))
+        .expect("fleet.list_nodes");
+    let nodes = resp.get("nodes").and_then(Value::as_array).unwrap();
+    assert!(
+        nodes.iter().any(|n| n.get("is_self") == Some(&json!(true))),
+        "fleet.list_nodes must include the local device entry: {resp}"
+    );
+}
+
+#[test]
+fn real_fleet_describe_node_local_returns_self_envelope() {
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target(
+            "fleet.describe_node",
+            json!({ "node_id": "local" }),
+        ))
+        .expect("fleet.describe_node local");
+    assert_eq!(resp.get("is_self"), Some(&json!(true)));
+}
+
+#[test]
+fn real_fleet_remove_node_refuses_to_remove_self() {
+    let (reg, _g) = registry_with_temp_home();
+    let err = dispatcher_for(reg)
+        .execute_rpc(target("fleet.remove_node", json!({ "node_id": "local" })))
+        .expect_err("fleet.remove_node must refuse to remove self");
+    assert!(format!("{err}").contains("device reset"));
+}
+
+#[test]
+fn real_fleet_deploy_ability_validates_path_argument() {
+    let (reg, _g) = registry_with_temp_home();
+    let err = dispatcher_for(reg)
+        .execute_rpc(target("fleet.deploy_ability", json!({})))
+        .expect_err("fleet.deploy_ability must require `path`");
+    assert!(format!("{err}").contains("path"));
+}
+
+#[test]
+fn real_fleet_uninstall_ability_acknowledges_local_intent() {
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target(
+            "fleet.uninstall_ability",
+            json!({ "ability_name": "claude.weather", "node_id": "local" }),
+        ))
+        .expect("fleet.uninstall_ability local");
+    assert_eq!(resp.get("state").and_then(Value::as_str), Some("REMOVED"));
+}
+
+#[test]
+fn real_fleet_exec_remote_local_runs_argv() {
+    // Use printf — POSIX, deterministic, available on macOS + Linux.
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target(
+            "fleet.exec_remote",
+            json!({
+                "node_id": "local",
+                "command": ["printf", "%s", "ok"],
+            }),
+        ))
+        .expect("fleet.exec_remote local");
+    assert_eq!(resp.get("stdout").and_then(Value::as_str), Some("ok"));
+    assert_eq!(resp.get("exit_code"), Some(&json!(0)));
+}
+
+#[test]
+fn real_fleet_register_self_acknowledges_intent() {
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target("fleet.register_self", json!({})))
+        .expect("fleet.register_self");
+    assert!(resp.get("state").is_some());
+}
+
+#[test]
+fn real_fleet_deregister_self_acknowledges_intent() {
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target("fleet.deregister_self", json!({})))
+        .expect("fleet.deregister_self");
+    assert_eq!(
+        resp.get("state").and_then(Value::as_str),
+        Some("DEREGISTERED")
     );
 }
 
@@ -1436,4 +1656,151 @@ async fn real_fleet_file_transfer_uploads_a_round_trip_through_dispatcher() {
     assert!(got_complete, "expected `complete` frame from fleet.file_transfer");
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
     let _ = std::fs::remove_file(&path);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Category F: RFC-005 v3.2 media abilities (A1–A9)
+// ────────────────────────────────────────────────────────────────
+//
+// Eight physical-channel abilities (mic / camera / screen /
+// speaker / voice / transcribe) plus `meta.list_resources`. Of
+// these, `camera.snapshot` has a real envelope-aware handler
+// backed by `SyntheticBackend` (see `media::camera_snapshot` for
+// the dedicated end-to-end suite); `meta.list_resources` ships
+// fully working too. The remaining seven are PR2 stubs that
+// reject by design until PR3 lands cpal/nokhwa/screen, so the
+// real-invoke test for each one asserts the dispatch reached the
+// stub (rather than 404'd as "no handler") and surfaced the
+// expected "not yet wired" / "subject required" reason — same
+// shape any caller would observe today.
+//
+// Each test references the ability name as a string literal so
+// `every_published_ability_has_a_real_invoke_test`'s coverage
+// scanner sees it.
+// ════════════════════════════════════════════════════════════════
+
+/// Helper: for the seven stubs, the expected behaviour is a
+/// terminal error whose message reaches the stub body. Match on
+/// either `"device backend not yet wired"` (PR2 stub default) or
+/// the INV-SUBJECT-ENVELOPE rejection — anything else means the
+/// ability didn't route to its handler at all.
+fn assert_routed_to_media_stub(ability: &str, err: &anyhow::Error) {
+    let msg = err.to_string();
+    let routed = msg.contains("device backend not yet wired")
+        || msg.contains("INV-SUBJECT-ENVELOPE")
+        || msg.contains("subject_required")
+        || msg.contains("subject_in_args");
+    assert!(
+        routed,
+        "{ability}: error did not look like the PR2 media stub: {msg}"
+    );
+}
+
+#[test]
+fn real_mic_subscribe_routes_to_media_stub() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let mut t = target("mic.subscribe", json!({}));
+    t.call_mode = CallMode::Stream;
+    let err = d.execute_stream(t).expect_err("PR2 stub must reject");
+    assert_routed_to_media_stub("mic.subscribe", &err);
+}
+
+#[test]
+fn real_camera_subscribe_routes_to_media_stub() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let mut t = target("camera.subscribe", json!({}));
+    t.call_mode = CallMode::Stream;
+    let err = d.execute_stream(t).expect_err("PR2 stub must reject");
+    assert_routed_to_media_stub("camera.subscribe", &err);
+}
+
+#[test]
+fn real_camera_snapshot_with_no_subject_returns_subject_required() {
+    // PR3a real handler: with no envelope subject the handler
+    // MUST reject with reason="subject_required". The dedicated
+    // suite in `media::camera_snapshot` covers the populated path.
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let err = d
+        .execute_rpc(target("camera.snapshot", json!({})))
+        .expect_err("camera.snapshot without subject must reject");
+    assert!(
+        err.to_string().contains("subject_required"),
+        "camera.snapshot: expected reason=subject_required; got {err}"
+    );
+}
+
+#[test]
+fn real_screen_subscribe_routes_to_media_stub() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let mut t = target("screen.subscribe", json!({}));
+    t.call_mode = CallMode::Stream;
+    let err = d.execute_stream(t).expect_err("PR2 stub must reject");
+    assert_routed_to_media_stub("screen.subscribe", &err);
+}
+
+#[test]
+fn real_screen_snapshot_routes_to_media_stub() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let err = d
+        .execute_rpc(target("screen.snapshot", json!({})))
+        .expect_err("PR2 stub must reject");
+    assert_routed_to_media_stub("screen.snapshot", &err);
+}
+
+#[test]
+fn real_speaker_publish_routes_to_media_stub() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let mut t = target("speaker.publish", json!({}));
+    t.call_mode = CallMode::Bidi;
+    let err = d.execute_bidi(t).expect_err("PR2 stub must reject");
+    assert_routed_to_media_stub("speaker.publish", &err);
+}
+
+#[test]
+fn real_voice_subscribe_routes_to_media_stub() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let mut t = target("voice.subscribe", json!({}));
+    t.call_mode = CallMode::Stream;
+    let err = d.execute_stream(t).expect_err("PR2 stub must reject");
+    assert_routed_to_media_stub("voice.subscribe", &err);
+}
+
+#[test]
+fn real_voice_transcribe_routes_to_media_stub() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let mut t = target("voice.transcribe", json!({}));
+    t.call_mode = CallMode::Bidi;
+    let err = d.execute_bidi(t).expect_err("PR2 stub must reject");
+    assert_routed_to_media_stub("voice.transcribe", &err);
+}
+
+#[test]
+fn real_meta_list_resources_returns_resources_array() {
+    // A9 ships fully working in PR2: empty `~/.easynet/` →
+    // `{"resources":[]}` (no failure). HomeGuard ensures we read
+    // a fresh empty resources.json.
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let resp = invoke("meta.list_resources", json!({}));
+    assert!(
+        resp.get("resources")
+            .and_then(Value::as_array)
+            .is_some(),
+        "meta.list_resources receipt must carry `resources` array; got {resp}"
+    );
 }
