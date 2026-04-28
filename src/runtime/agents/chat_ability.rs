@@ -631,7 +631,20 @@ fn stream_handler(
     let agent_name_owned = agent_name.to_string();
     let entry_owned = entry.clone();
     let prompt_owned = parsed.prompt.clone();
-    let driver_owned = parsed.driver.clone();
+    // Conversation resume on the stream path mirrors handle_invoke:
+    // when the caller's session_id parses as a driver-issued thread
+    // id we thread it through `DriverOverrides::resume_thread_id`,
+    // and the driver maps it to `codex exec resume <id>` /
+    // `claude -p --resume <id>`. See the matching block in
+    // handle_invoke for the full rationale; the comment is not
+    // duplicated here to keep the two paths visibly identical.
+    let mut driver_owned = parsed.driver.clone();
+    if let Some(sid) = parsed.session_id.as_deref() {
+        if looks_like_thread_id(sid) {
+            driver_owned.resume_thread_id = Some(sid.to_string());
+        }
+    }
+    let resume_id_for_done = driver_owned.resume_thread_id.clone();
     let session_id_for_thread = session_id.clone();
     let skills_loaded_for_thread = skills_loaded;
     let context_used_for_thread = context_used;
@@ -688,9 +701,22 @@ fn stream_handler(
                             })
                         })
                         .collect();
+                    // Resolve the terminal-frame session id with the
+                    // same precedence as handle_invoke:
+                    //   1. Resume turn → echo caller's id unchanged.
+                    //   2. Fresh turn, driver minted an id → use it.
+                    //   3. Fresh turn, driver did not surface one →
+                    //      fall back to the locally-resolved id.
+                    let resolved_session_id = if let Some(rid) = resume_id_for_done.as_ref() {
+                        rid.clone()
+                    } else if let Some(did) = resp.thread_id.as_ref() {
+                        did.clone()
+                    } else {
+                        session_id_for_thread.clone()
+                    };
                     json!({
                         "type": "done",
-                        "session_id": session_id_for_thread,
+                        "session_id": resolved_session_id,
                         "reply": resp.content,
                         "skills_loaded": skills_loaded_for_thread,
                         "tool_calls": tool_calls_json,
@@ -1587,6 +1613,102 @@ mod tests {
         let a = uuid_like();
         let b = uuid_like();
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn looks_like_thread_id_accepts_uuid_shape_only() {
+        // Codex emits UUIDv7 (`019dd304-60d9-74f2-8085-d4624e195d62`)
+        // and claude emits UUIDv4 (`38e5640c-6843-4f15-8f3a-2c8de75d0209`)
+        // — both are 8-4-4-4-12 hex with dashes, regardless of the
+        // version nibble. The helper must accept both so the chat
+        // ability routes resume requests through to either driver.
+        assert!(looks_like_thread_id(
+            "019dd304-60d9-74f2-8085-d4624e195d62"
+        ));
+        assert!(looks_like_thread_id(
+            "38e5640c-6843-4f15-8f3a-2c8de75d0209"
+        ));
+        assert!(looks_like_thread_id(
+            "00000000-0000-0000-0000-000000000000"
+        ));
+
+        // Locally-minted `chat-<uuid_like>` ids — `<32-hex>-<16-hex>`
+        // — are NOT a driver-issued shape and MUST be rejected so the
+        // chat ability does not try to feed them to `--resume`.
+        let local = format!("chat-{}", uuid_like());
+        assert!(!looks_like_thread_id(&local));
+        assert!(!looks_like_thread_id(&uuid_like()));
+
+        // Edge cases: wrong dash positions, wrong length, non-hex.
+        assert!(!looks_like_thread_id(""));
+        assert!(!looks_like_thread_id("not-a-uuid"));
+        assert!(!looks_like_thread_id(
+            "019dd304-60d9-74f2-8085-d4624e195d6"
+        )); // 35 chars
+        assert!(!looks_like_thread_id(
+            "019dd304-60d9-74f2-8085-d4624e195d622"
+        )); // 37 chars
+        assert!(!looks_like_thread_id(
+            "019dd30460d9-74f2-8085-d4624e195d62-"
+        )); // dashes wrong
+        assert!(!looks_like_thread_id(
+            "019dd304-60d9-74f2-8085-d4624e195XYZ"
+        )); // non-hex tail
+    }
+
+    #[test]
+    fn stream_handler_resume_id_only_set_for_uuid_shaped_session() {
+        // Pin the wiring contract for the stream path:
+        //   - A caller-supplied uuid-shaped session_id should be
+        //     surfaced as the terminal-frame session_id (so the
+        //     driver can resume on the next turn).
+        //   - A non-uuid-shaped session_id falls through unchanged.
+        //
+        // We can't drive a real dispatch without a live LLM in the
+        // unit-test environment, but we CAN observe the snapshot
+        // frame's session_id which the handler emits before any
+        // dispatch happens. That is sufficient to exercise the
+        // `looks_like_thread_id` branch the resume wiring keys on.
+        let entry = entry();
+        let resume_id = "019dd304-60d9-74f2-8085-d4624e195d62";
+        let source = stream_handler(
+            "alice",
+            &entry,
+            &[],
+            json!({"prompt": "hi", "session_id": resume_id}),
+        )
+        .expect("stream handler must construct snapshot");
+        match source {
+            StreamSource::SnapshotThenLive(snapshot, _rx) => {
+                let first = &snapshot[0];
+                assert_eq!(
+                    first.get("session_id").and_then(Value::as_str),
+                    Some(resume_id),
+                    "snapshot session frame must echo caller-supplied uuid id verbatim"
+                );
+            }
+            other => panic!("expected SnapshotThenLive, got {other:?}"),
+        }
+
+        // Non-uuid id still echoed verbatim through the snapshot —
+        // the resume branch is gated separately at the driver wire.
+        let custom = "my-replay-tag";
+        let source2 = stream_handler(
+            "alice",
+            &entry,
+            &[],
+            json!({"prompt": "hi", "session_id": custom}),
+        )
+        .expect("stream handler must construct snapshot");
+        match source2 {
+            StreamSource::SnapshotThenLive(snapshot, _rx) => {
+                assert_eq!(
+                    snapshot[0].get("session_id").and_then(Value::as_str),
+                    Some(custom),
+                );
+            }
+            other => panic!("expected SnapshotThenLive, got {other:?}"),
+        }
     }
 
     // ── Phase 4 unification: Kernel::invoke routes through registry ────
