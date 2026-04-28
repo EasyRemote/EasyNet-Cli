@@ -75,6 +75,21 @@ const FED_ADVERTISE_ABILITIES_RESOURCE_FMT: &str =
 const FED_RESOLVE_RESOURCE_FMT: &str =
     "easynet:///r/prv/hub/{realm}/abilities/federation.resolve@1?tenant_id={tenant}";
 
+/// `federation.revoke` — voluntary leave (or operator-initiated
+/// revocation) of an Agent's directory entry. CLI shutdown calls
+/// this on the daemon's own device-profile URI to remove its
+/// directory presence cleanly. RFC-001 §A14 reserves this hub
+/// ability for the legacy `deregister_node` migration path.
+const FED_REVOKE_RESOURCE_FMT: &str =
+    "easynet:///r/prv/hub/{realm}/abilities/federation.revoke@1?tenant_id={tenant}";
+
+/// `federation.heartbeat` — membership liveness ping. Periodically
+/// re-stamps the hub's `last_heartbeat_unix_ms` so the directory
+/// sweep doesn't evict the daemon's record. Replaces the legacy
+/// gRPC `NodeHeartbeat` RPC removed by AXON-RFC-001 P1.5.
+const FED_HEARTBEAT_RESOURCE_FMT: &str =
+    "easynet:///r/prv/hub/{realm}/abilities/federation.heartbeat@1?tenant_id={tenant}";
+
 /// Build the canonical resource URI for `federation.advertise_agent`
 /// against the realm's hub. Public so call sites can construct the
 /// URI consistently without re-typing the format string.
@@ -101,6 +116,26 @@ pub fn advertise_abilities_resource_uri(realm: &str, tenant_id: &str) -> String 
 /// published.
 pub fn resolve_resource_uri(realm: &str, tenant_id: &str) -> String {
     FED_RESOLVE_RESOURCE_FMT
+        .replace("{realm}", realm)
+        .replace("{tenant}", tenant_id)
+}
+
+/// Build the canonical resource URI for `federation.revoke` against
+/// the realm's hub. Used by the CLI shutdown path to remove the
+/// daemon's own directory entry — replaces the deprecated
+/// `bridge.deregister_node` gRPC call.
+pub fn revoke_resource_uri(realm: &str, tenant_id: &str) -> String {
+    FED_REVOKE_RESOURCE_FMT
+        .replace("{realm}", realm)
+        .replace("{tenant}", tenant_id)
+}
+
+/// Build the canonical resource URI for `federation.heartbeat`
+/// against the realm's hub. Periodic invocation keeps the daemon's
+/// directory entry alive. Replaces the deprecated
+/// `bridge.NodeHeartbeat` keepalive RPC.
+pub fn heartbeat_resource_uri(realm: &str, tenant_id: &str) -> String {
+    FED_HEARTBEAT_RESOURCE_FMT
         .replace("{realm}", realm)
         .replace("{tenant}", tenant_id)
 }
@@ -409,6 +444,52 @@ pub fn resolve_agents<I: AbilityInvoker>(
     let receipt: ResolveReceipt = parse_receipt_value(&receipt_body)
         .map_err(|e| format!("parse federation.resolve receipt: {e}"))?;
     Ok(receipt.agents)
+}
+
+/// `federation.revoke` invocation. Removes the named Agent from the
+/// realm directory. The CLI shutdown path calls this on the
+/// daemon's own device-profile URI to clean up its directory
+/// presence — replaces the deprecated `bridge.deregister_node`
+/// gRPC call.
+///
+/// Best-effort by contract: a hub-side rejection (rare — the only
+/// nonzero failure mode in v1 is "agent already revoked, no-op")
+/// surfaces as an Err string and the caller logs + continues.
+pub fn revoke_agent<I: AbilityInvoker>(
+    invoker: &I,
+    tenant_id: &str,
+    realm: &str,
+    agent_uri: &str,
+    reason: &str,
+) -> Result<(), String> {
+    let resource_uri = revoke_resource_uri(realm, tenant_id);
+    let payload = serde_json::json!({
+        "agent_uri": agent_uri,
+        "reason": reason,
+    });
+    let _ = invoker.invoke_ability(tenant_id, &resource_uri, payload)?;
+    Ok(())
+}
+
+/// `federation.heartbeat` invocation. Refreshes the daemon's
+/// `last_heartbeat_unix_ms` in the directory so the sweep doesn't
+/// evict the entry. Replaces the deprecated `bridge.NodeHeartbeat`
+/// keepalive RPC.
+///
+/// Best-effort: a transient hub-side failure surfaces as Err and
+/// the caller's loop logs + retries on the next tick. Persistent
+/// failure escalates to membership eviction same as before.
+pub fn heartbeat<I: AbilityInvoker>(
+    invoker: &I,
+    tenant_id: &str,
+    realm: &str,
+) -> Result<(), String> {
+    let resource_uri = heartbeat_resource_uri(realm, tenant_id);
+    // federation.heartbeat takes no arguments; the hub keys the
+    // refresh on the envelope's caller URI alone.
+    let payload = serde_json::json!({});
+    let _ = invoker.invoke_ability(tenant_id, &resource_uri, payload)?;
+    Ok(())
 }
 
 /// Convenience: advertise the device-profile Agent itself (Selfsigned

@@ -210,38 +210,17 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
         }
     };
 
-    // RFC-001 P1.5 collapsed the legacy RegisterNode RPC; the SDK
-    // surface is now stub-only and returns an error. Treat that as a
-    // warning + use the default heartbeat: federation.advertise_*
-    // (run below by `republish_via_federation_best_effort`) is the
-    // canonical replacement and does the directory bookkeeping.
-    let reg_attempt = bridge.register_node_with_options(
-        &creds.tenant_id,
-        &creds.node_id,
-        &hostname,
-        easynet_axon::dendrite_bridge::RegisterNodeOptions { labels, role: None },
-    );
-    let heartbeat_ms = match reg_attempt {
-        Ok(reg_resp) => {
-            let hb = reg_resp
-                .get("heartbeat_interval_ms")
-                .and_then(serde_json::Value::as_u64)
-                .filter(|&v| v > 0)
-                .unwrap_or(heartbeat::DEFAULT_HEARTBEAT_MS);
-            output::success(&format!(
-                "Node registered: {} (heartbeat every {}ms)",
-                creds.node_id, hb
-            ));
-            hb
-        }
-        Err(e) => {
-            output::warn(&format!(
-                "register_node legacy RPC unsupported on this runtime ({e}); \
-                 continuing with federation.advertise_* path"
-            ));
-            heartbeat::DEFAULT_HEARTBEAT_MS
-        }
-    };
+    // RFC-001 P1.5 collapsed the legacy RegisterNode RPC. The
+    // federation-side bookkeeping (directory advertisement,
+    // visibility on peers) is now done entirely through
+    // `federation.advertise_agent` / `federation.advertise_abilities`
+    // ability invocations, which `republish_via_federation_best_effort`
+    // (called below) issues. We default the heartbeat interval since
+    // the deprecated RPC was the only place the runtime ever told us
+    // a per-node value; future `federation.heartbeat` may surface one
+    // and we'll thread it then.
+    let _ = labels; // a2a labels travel through federation.advertise_abilities now
+    let heartbeat_ms = heartbeat::DEFAULT_HEARTBEAT_MS;
 
     // Re-publish every registered agent's manifests to the freshly
     // started axon-runtime. The runtime-local tool registry is
@@ -673,16 +652,32 @@ fn run_foreground_with_heartbeat(
         &shutdown,
     );
 
-    if let Err(e) = bridge.deregister_node(&creds.tenant_id, &creds.node_id, outcome.reason()) {
-        // Failing to deregister leaves a phantom node in the Hub view
-        // until the next stale-node sweep. The local shutdown still
-        // proceeds, but the operator should know the federation is in
-        // an inconsistent state.
-        output::warn(&format!(
-            "deregister_node failed for {} ({}): {e}",
-            creds.node_id,
+    // Federation shutdown: remove this daemon's directory entry via
+    // `federation.revoke`. Replaces the deprecated
+    // `bridge.deregister_node` gRPC RPC (removed by AXON-RFC-001
+    // P1.5). Best-effort — a hub-side failure leaves a phantom
+    // entry until the next stale-node sweep, which is the same
+    // semantics the legacy RPC had.
+    {
+        let plan_realm = &creds.tenant_id; // realm == tenant in v1 (see build_bootstrap_plan_from)
+        let device_uri = format!("easynet:///r/{}/agent/{}", creds.tenant_id, creds.node_id);
+        let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+            bridge,
+            device_uri.clone(),
+        );
+        if let Err(e) = crate::runtime::advertise::revoke_agent(
+            &invoker,
+            &creds.tenant_id,
+            plan_realm,
+            &device_uri,
             outcome.reason(),
-        ));
+        ) {
+            output::warn(&format!(
+                "federation.revoke failed for {} ({}): {e}",
+                creds.node_id,
+                outcome.reason(),
+            ));
+        }
     }
     drop(srv);
     config::remove()?;
