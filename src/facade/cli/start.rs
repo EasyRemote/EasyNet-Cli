@@ -382,7 +382,14 @@ fn republish_via_federation_best_effort(
             return;
         }
     };
-    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::new(bridge);
+    // Pin the caller URI for hub-shaped federation calls so the
+    // bridge stamps `envelope.caller.uri` to a canonical URA —
+    // `plan.host_device_uri` already carries that shape (see
+    // `build_bootstrap_plan_from`).
+    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+        bridge,
+        plan.host_device_uri.clone(),
+    );
 
     // Bootstrap self-identity FIRST. Every subsequent signed Invoke
     // (federation.advertise_*, runtime.register_local_tool, anything)
@@ -523,11 +530,14 @@ pub(crate) fn build_bootstrap_plan_from(
         // The credentials' realm field maps to the tenant for now;
         // a future config split will separate them.
         realm: tenant_id.to_string(),
-        // node_id from credentials is the device-profile URA. Pre-
-        // RFC daemons used it as a node identifier; same string,
-        // RFC-001 reuses it as an Agent URA at the §1.3 Model A
-        // anchor. P5 backend SDK rewrite confirms the shape.
-        host_device_uri: node_id.to_string(),
+        // node_id from credentials is the local node identifier
+        // (`en-...`). Wrap it in the canonical URA shape so every
+        // downstream consumer (advertise_self_signed_device,
+        // BridgeAbilityInvoker::with_caller_uri, hub
+        // self-signed-must-equal-caller check) sees one form. The
+        // bare node_id remains accessible separately via
+        // `creds.node_id` when an entry path needs it.
+        host_device_uri: format!("easynet:///r/{tenant_id}/agent/{node_id}"),
         // Defaults match plan §1's "default-on consent on
         // interactive hosts"; policy + mcp default off until
         // [profiles] config wiring lands.
@@ -1062,7 +1072,10 @@ mod tests {
         let creds = test_creds();
         let plan = build_bootstrap_plan(&creds).expect("plan must build");
         assert_eq!(plan.realm, "tenant-test");
-        assert_eq!(plan.host_device_uri, "node-test");
+        assert_eq!(
+            plan.host_device_uri,
+            "easynet:///r/tenant-test/agent/node-test"
+        );
         assert!(plan.consent, "consent default-on per plan §1");
         assert!(!plan.policy);
         assert!(!plan.mcp);
@@ -1075,11 +1088,18 @@ mod tests {
         // build_bootstrap_plan_from is what agent.rs uses — it
         // takes pre-extracted (tenant, node) pair so callers don't
         // re-load credentials. Behavior must match build_bootstrap_plan
-        // for the same inputs.
+        // for the same inputs. Plan wraps the raw node id into the
+        // canonical `easynet:///r/<realm>/agent/<node>` resource URA
+        // for downstream Hub-tier signing — that wrapping is exactly
+        // what the federation Invoke surface consumes, so the test
+        // pins the wrapped form rather than the raw bare id.
         let plan = build_bootstrap_plan_from("tenant-test", "node-test")
             .expect("plan must build");
         assert_eq!(plan.realm, "tenant-test");
-        assert_eq!(plan.host_device_uri, "node-test");
+        assert_eq!(
+            plan.host_device_uri,
+            "easynet:///r/tenant-test/agent/node-test"
+        );
     }
 
     #[test]

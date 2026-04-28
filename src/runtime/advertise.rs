@@ -140,6 +140,16 @@ pub struct BridgeAbilityInvoker<'a> {
     /// indefinitely if the runtime is wedged — operators see a
     /// failed advertise in logs and re-run later.
     pub timeout_ms: u64,
+    /// Caller URI to stamp on every envelope this invoker emits
+    /// when the resource URI's subject is hub-shaped. The bridge's
+    /// unsigned-invoke path uses this as the `caller.uri` field
+    /// instead of synthesising one from the subject_id (which for
+    /// `easynet:prv:hub:<realm>` would otherwise produce a
+    /// nonsensical `agents/easynet:prv:hub:<realm>` literal). Empty
+    /// string means "fall back to SDK default", which is correct
+    /// for tests and pre-join callers that don't yet know their
+    /// own agent URI.
+    pub caller_uri_for_hub: String,
 }
 
 impl<'a> BridgeAbilityInvoker<'a> {
@@ -150,6 +160,22 @@ impl<'a> BridgeAbilityInvoker<'a> {
             // and a 5-second budget covers ordinary cold-start
             // latency without making startup hang.
             timeout_ms: 5_000,
+            caller_uri_for_hub: String::new(),
+        }
+    }
+
+    /// Same as `new` but pins the caller URI to use on hub-shaped
+    /// federation calls. Production callers (the daemon boot path)
+    /// build this with their own device-profile Agent URI; tests
+    /// keep using `new()` so the SDK fallback is exercised.
+    pub fn with_caller_uri(
+        bridge: &'a easynet_axon::dendrite_bridge::DendriteBridge,
+        caller_uri: impl Into<String>,
+    ) -> Self {
+        Self {
+            bridge,
+            timeout_ms: 5_000,
+            caller_uri_for_hub: caller_uri.into(),
         }
     }
 }
@@ -161,17 +187,101 @@ impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
         resource_uri: &str,
         payload_json: Value,
     ) -> Result<Value, String> {
+        // Build the subject_id from the URI shape so the runtime's
+        // `verify_easynet_invocation_metadata` (security.rs:222)
+        // sees a subject that matches the URI's parsed
+        // `<visibility>:<subject_type>:<subject_value>` decomposition.
+        //
+        // Two shapes the daemon legitimately calls:
+        //   1. `r/<vis>/hub/<realm>/abilities/...` — hub-profile
+        //      (federation.advertise_*, federation.resolve, runtime.*).
+        //      Subject MUST be `easynet:<vis>:hub:<realm>`.
+        //   2. `r/<vis>/agent/<id>/abilities/...` — agent-profile.
+        //      Subject is `easynet:<vis>:reg:agent.<id>` and is the
+        //      SDK's default when subject_id = None — no override
+        //      needed.
+        //
+        // Pre-fix every call passed `subject_id = None`, which the
+        // SDK defaulted to the agent form regardless of URI shape.
+        // Hub-shaped URIs therefore got `agent.<node>` as subject
+        // and the runtime rejected with AXON_EASYNET_SUBJECT_MISMATCH
+        // ("subject_id does not match resource URI subject"), even
+        // though the daemon's bootstrap_self_identity had succeeded
+        // and topology had the key. Two-layer subject mismatch:
+        // first the URI-vs-subject check at canonicalize fails,
+        // never even reaching the topology key lookup.
+        let subject_id = subject_id_from_resource_uri(resource_uri);
+        // Hub-shaped subject + a configured override → pin the
+        // caller URI on the metadata bag so the bridge's unsigned-
+        // invoke path doesn't synthesise the broken
+        // `agents/easynet:prv:hub:<realm>` literal. Other shapes
+        // (agent subjects, or hub subjects without an override —
+        // tests, pre-join callers) fall back to the SDK default.
+        let mut metadata: Option<std::collections::HashMap<String, String>> = None;
+        if subject_id.as_deref().map(|s| s.contains(":hub:")).unwrap_or(false)
+            && !self.caller_uri_for_hub.is_empty()
+        {
+            let mut map = std::collections::HashMap::new();
+            map.insert(
+                "easynet.caller_uri_override".to_string(),
+                self.caller_uri_for_hub.clone(),
+            );
+            metadata = Some(map);
+        }
         self.bridge
             .ability_call_raw(
                 tenant_id,
                 resource_uri,
                 payload_json,
-                None,
-                None,
+                subject_id.as_deref(),
+                metadata.as_ref(),
                 self.timeout_ms,
             )
             .map_err(|e| format!("{e}"))
     }
+}
+
+/// Derive the canonical `subject_id` an envelope should carry for a
+/// given EasyNet resource URI. Returns `None` for URIs the helper
+/// doesn't recognise (the SDK falls back to its default
+/// `easynet:<vis>:reg:agent.<owner>` form, which is correct for
+/// agent-profile URIs and what the SDK already does).
+///
+/// Visible to tests via the module re-export below; the function is
+/// pure (no I/O, no state) so a test that pins each shape is
+/// sufficient.
+pub(crate) fn subject_id_from_resource_uri(resource_uri: &str) -> Option<String> {
+    // Strip the scheme and `//` authority. RFC-001 canonical shape
+    // is `easynet:///r/<vis>/<subject_type>/<subject_value>/abilities/<name>@<ver>`.
+    // We deliberately match by structural prefix rather than trying
+    // to parse a full URL — the canonicalizer downstream owns
+    // structural validation.
+    let after_scheme = resource_uri.strip_prefix("easynet:///")?;
+    let mut parts = after_scheme.split('/');
+    if parts.next()? != "r" {
+        return None;
+    }
+    let visibility = parts.next()?;
+    let subject_type = parts.next()?;
+    let subject_value = parts.next()?;
+    if !matches!(visibility, "pub" | "org" | "prv") {
+        return None;
+    }
+    // Hub-profile: `r/<vis>/hub/<realm>/abilities/...` →
+    // `easynet:<vis>:hub:<realm>`.
+    if subject_type == "hub" {
+        return Some(format!("easynet:{visibility}:hub:{subject_value}"));
+    }
+    // Agent-profile: `r/<vis>/agent/<id>/abilities/...` →
+    // `easynet:<vis>:reg:agent.<id>`. We let the SDK fall back to
+    // its default by returning None — the same shape it already
+    // builds.
+    if subject_type == "agent" {
+        return None;
+    }
+    // Other subject_types (none today; reserved for future): fall
+    // through to SDK default rather than guessing.
+    None
 }
 
 /// Build the `federation.advertise_agent` payload + invoke it.
@@ -193,20 +303,44 @@ pub fn advertise_agent<I: AbilityInvoker>(
         }
     };
     match invoker.invoke_ability(tenant_id, &resource_uri, payload) {
-        Ok(receipt_body) => match parse_receipt_value::<AdvertiseAgentReceipt>(&receipt_body) {
-            Ok(parsed) => AdvertiseOutcome {
-                agent_uri: args.agent_uri.clone(),
-                result: Ok(parsed),
-            },
-            Err(e) => AdvertiseOutcome {
-                agent_uri: args.agent_uri.clone(),
-                result: Err(format!("parse advertise_agent receipt: {e}")),
-            },
-        },
+        Ok(response) => {
+            let body = unwrap_result_json(response);
+            match parse_receipt_value::<AdvertiseAgentReceipt>(&body) {
+                Ok(parsed) => AdvertiseOutcome {
+                    agent_uri: args.agent_uri.clone(),
+                    result: Ok(parsed),
+                },
+                Err(e) => AdvertiseOutcome {
+                    agent_uri: args.agent_uri.clone(),
+                    result: Err(format!("parse advertise_agent receipt: {e}")),
+                },
+            }
+        }
         Err(e) => AdvertiseOutcome {
             agent_uri: args.agent_uri.clone(),
             result: Err(e),
         },
+    }
+}
+
+/// Strip the SDK's invoke-response wrapper to expose the receipt
+/// body. `bridge.ability_call_raw` returns the full Invoke response
+/// envelope (`{result_json, ok?, ...}`) — receipts live in
+/// `result_json`. When `result_json` is a string the caller
+/// pre-stringified the body, so we re-parse it. Anything that
+/// already looks like a top-level receipt (no `result_json` field)
+/// passes through verbatim, which keeps tests + future SDK
+/// refactors that flatten the shape working without a version
+/// branch.
+fn unwrap_result_json(response: Value) -> Value {
+    let inner = if response.get("result_json").is_some() {
+        response.get("result_json").cloned().unwrap_or(Value::Null)
+    } else {
+        return response;
+    };
+    match inner {
+        Value::String(s) => serde_json::from_str(&s).unwrap_or(Value::String(s)),
+        other => other,
     }
 }
 
@@ -266,8 +400,13 @@ pub fn resolve_agents<I: AbilityInvoker>(
     let args = ResolveArgs { filter };
     let payload: Value = serde_json::from_slice(&args_to_bytes(&args))
         .map_err(|e| format!("encode resolve args: {e}"))?;
-    let receipt_value = invoker.invoke_ability(tenant_id, &resource_uri, payload)?;
-    let receipt: ResolveReceipt = parse_receipt_value(&receipt_value)
+    let response = invoker.invoke_ability(tenant_id, &resource_uri, payload)?;
+    // Same `result_json` unwrap as advertise_agent — the SDK's
+    // raw invoke surface wraps every receipt in an Invoke response
+    // envelope, and the federation receipt parsers want the inner
+    // body verbatim. See `unwrap_result_json` doc comment.
+    let receipt_body = unwrap_result_json(response);
+    let receipt: ResolveReceipt = parse_receipt_value(&receipt_body)
         .map_err(|e| format!("parse federation.resolve receipt: {e}"))?;
     Ok(receipt.agents)
 }

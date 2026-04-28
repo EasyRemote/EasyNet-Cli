@@ -383,28 +383,69 @@ pub fn bootstrap_self_identity_via_runtime<I: AbilityInvoker>(
     realm: &str,
     node_id: &str,
 ) -> PublishOutcome {
-    // Derive the public key the bridge will sign under for this
-    // node's owner. Mirrors `AxonClient::derive_owner_auth(node_id,
-    // tenant_id)` which produces an EasyNetUserAuth whose
-    // `public_key_b64url` is the URL-SAFE-NO-PAD base64 of the
-    // derived ed25519 verifying key.
-    let public_key_b64 = derive_owner_public_key_b64(tenant_id, node_id);
-
+    // Two keys to register, both under this node_id:
+    //
+    //   1. agent key — derived from `easynet:prv:reg:agent.<node_id>`.
+    //      Used by every Invoke whose canonical subject is the
+    //      daemon's own agent identity (most calls — chat, custom
+    //      verbs, runtime.register_local_tool's signed envelope).
+    //
+    //   2. hub key   — derived from `easynet:prv:hub:<realm>`.
+    //      Used by every federation hub-profile call
+    //      (federation.advertise_*, federation.resolve, …) because
+    //      the SDK's `default_auth_for_subject` derives a SUBJECT-
+    //      KEYED ed25519 key — and the hub subject differs from the
+    //      agent subject, so the derived key differs too. Without
+    //      this second registration every federation hub call
+    //      fails with PUBLIC_KEY_UNTRUSTED.
+    //
+    // The two calls share `node_id`. axon-runtime's
+    // `runtime.bootstrap_self_identity` appends a NEW key under the
+    // existing node when the (node_id, public_key) tuple is novel,
+    // so the second call doesn't overwrite the first.
     let resource_uri = format!(
         "easynet:///r/prv/hub/{realm}/abilities/runtime.bootstrap_self_identity@1?tenant_id={tenant_id}"
     );
-    let args = serde_json::json!({
+    let agent_key_b64 = derive_owner_public_key_b64(tenant_id, node_id);
+    let agent_args = serde_json::json!({
         "tenant_id": tenant_id,
         "node_id": node_id,
         "owner_id": node_id, // v1: daemon runs as the owner of its own node
         "display_name": "",
-        "public_key_b64": public_key_b64,
+        "public_key_b64": agent_key_b64,
     });
-    let result = invoker.invoke_ability(tenant_id, &resource_uri, args);
+    let agent_result = invoker.invoke_ability(tenant_id, &resource_uri, agent_args);
+    if let Err(e) = agent_result {
+        return PublishOutcome {
+            agent_uri: format!("local:{node_id}"),
+            label: "runtime/bootstrap_self_identity".into(),
+            result: Err(e),
+        };
+    }
+
+    let hub_key_b64 = derive_hub_public_key_b64(tenant_id, realm);
+    if hub_key_b64 != agent_key_b64 {
+        let hub_args = serde_json::json!({
+            "tenant_id": tenant_id,
+            "node_id": node_id,
+            "owner_id": node_id,
+            "display_name": "",
+            "public_key_b64": hub_key_b64,
+        });
+        let hub_result = invoker.invoke_ability(tenant_id, &resource_uri, hub_args);
+        if let Err(e) = hub_result {
+            return PublishOutcome {
+                agent_uri: format!("local:{node_id}"),
+                label: "runtime/bootstrap_self_identity_hub".into(),
+                result: Err(e),
+            };
+        }
+    }
+
     PublishOutcome {
         agent_uri: format!("local:{node_id}"),
         label: "runtime/bootstrap_self_identity".into(),
-        result: result.map(|_| ()),
+        result: Ok(()),
     }
 }
 
@@ -445,6 +486,22 @@ pub(crate) fn derive_owner_public_key_b64_for_keepalive(
 }
 
 fn derive_owner_public_key_b64(tenant_id: &str, node_id: &str) -> String {
+    let subject_id = format!("easynet:prv:reg:agent.{node_id}");
+    derive_subject_public_key_b64(tenant_id, &subject_id)
+}
+
+/// Hub-profile counterpart of `derive_owner_public_key_b64`. Returns
+/// the public key the bridge will sign under for hub-shaped resource
+/// URIs (`r/prv/hub/<realm>/abilities/...`). The SDK's
+/// `default_auth_for_subject` derives a DIFFERENT key for the hub
+/// subject than for the agent subject, so the daemon needs to
+/// register both — see `bootstrap_self_identity_via_runtime`.
+pub(crate) fn derive_hub_public_key_b64(tenant_id: &str, realm: &str) -> String {
+    let subject_id = format!("easynet:prv:hub:{realm}");
+    derive_subject_public_key_b64(tenant_id, &subject_id)
+}
+
+fn derive_subject_public_key_b64(tenant_id: &str, subject_id: &str) -> String {
     use base64::Engine as _;
     use ed25519_dalek::SigningKey;
     use sha2::{Digest, Sha256};
@@ -456,10 +513,6 @@ fn derive_owner_public_key_b64(tenant_id: &str, node_id: &str) -> String {
     // the context, this string MUST update in lockstep — the SDK
     // doc explicitly calls out the cross-version compatibility cost.
     const DERIVE_CONTEXT: &str = "axon-client-sdk-ed25519-v1";
-    // prv visibility because that is the canonical shape the rest
-    // of the daemon path uses. See doc comment above for why we do
-    // not use the org-visibility derivation here.
-    let subject_id = format!("easynet:prv:reg:agent.{node_id}");
     let mut hasher = Sha256::new();
     hasher.update(tenant_id.as_bytes());
     hasher.update(b":");

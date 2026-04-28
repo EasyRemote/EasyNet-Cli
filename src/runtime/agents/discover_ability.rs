@@ -314,7 +314,20 @@ fn resolve_via_federation(
         ));
     }
 
-    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::new(&bridge);
+    // Pin the caller URI to the daemon's own device-profile Agent
+    // URA. Without this the bridge synthesises a hub-literal caller
+    // (`agents/easynet:prv:hub:<realm>`) and the hub's membership
+    // gate rejects with AXON_MEMBERSHIP_REQUIRED — same caller-URI
+    // fix we apply at the daemon-boot advertise call site (see
+    // `facade::cli::start::republish_via_federation_best_effort`).
+    let device_caller_uri = format!(
+        "easynet:///r/{tenant}/agent/{node_id}",
+        node_id = creds.node_id
+    );
+    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+        &bridge,
+        device_caller_uri,
+    );
     let resolved = match crate::runtime::advertise::resolve_agents(
         &invoker, tenant, &realm, "", true,
     ) {
