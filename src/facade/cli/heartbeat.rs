@@ -94,6 +94,12 @@ impl<'a> DirectBridge<'a> {
     }
 }
 
+// Heartbeat is device-scoped — one `federation.heartbeat` per tick from
+// the device URA. The hub fans liveness out to every hosted Agent that
+// names this device as its host (`AgentsCatalog::refresh_heartbeat_for_device`),
+// so consent/policy/mcp/llm/... do NOT need to ping the hub independently.
+// Process death takes them all out at once; multiplying ticks per process
+// would just amplify hub traffic without adding signal.
 impl<'a> HeartbeatTransport for DirectBridge<'a> {
     fn beat(&mut self, tenant: &str, node_id: &str) -> AxonResult<serde_json::Value> {
         // Heartbeat tick: `federation.heartbeat` is the canonical
@@ -432,6 +438,7 @@ fn build_reregister_hook(tenant: String, node_id: String, _hostname: String) -> 
             public_key_hex: String::new(),
             signing_authority:
                 crate::runtime::federation_client::AdvertisedSigningAuthority::SelfSigned,
+            host_node_id: Some(node_id.clone()),
         };
         let outcome = crate::runtime::advertise::advertise_agent(
             &invoker, &tenant, &tenant, &args,

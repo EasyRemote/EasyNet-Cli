@@ -118,3 +118,8 @@ pub mod hosted_receipt;
 pub mod provisional_ura;
 pub mod publish;
 pub mod agents;
+// RFC-002 keyring + KeyResolver. Local-first, zero axon dependency.
+pub mod keyring;
+// RFC-002 tenant suffix resolver: maps tenant_id to admission mode +
+// URA scope + hub endpoints.
+pub mod resolver;

@@ -135,7 +135,12 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
     }
 
     // Step 3: advertise the device-profile (Selfsigned, Model A).
-    let device_outcome = advertise::advertise_self_signed_device(
+    // RFC-002: pass host_node_id so federation.forward_invoke can
+    // route inbound forward requests to this daemon's local-tool
+    // dispatch surface. Falls back to the legacy node-less form
+    // when host_device_uri lacks an `/agent/<id>` suffix.
+    let host_node_id = host_node_id_from_uri(&plan.host_device_uri);
+    let device_outcome = advertise::advertise_self_signed_device_with_host_node(
         invoker,
         tenant_id,
         &plan.realm,
@@ -144,6 +149,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
         // empty placeholder so the advertise wire shape stays
         // stable. The hub still records the URA + status.
         "",
+        host_node_id.clone(),
     );
     outcomes.push(advertise_outcome_to_publish_outcome(
         device_outcome,
@@ -163,12 +169,13 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
 
     // Step 4: advertise each hosted Agent (HostedBy, Model B).
     for o in &bootstrap_outcomes {
-        let outcome = advertise::advertise_hosted_agent(
+        let outcome = advertise::advertise_hosted_agent_with_host_node(
             invoker,
             tenant_id,
             &plan.realm,
             &o.agent_uri,
             &plan.host_device_uri,
+            host_node_id.clone(),
         );
         outcomes.push(advertise_outcome_to_publish_outcome(
             outcome,
@@ -502,16 +509,42 @@ pub(crate) fn derive_hub_public_key_b64(tenant_id: &str, realm: &str) -> String 
 }
 
 fn derive_subject_public_key_b64(tenant_id: &str, subject_id: &str) -> String {
+    let (_seed, pk_b64) = derive_subject_keypair(tenant_id, subject_id);
+    pk_b64
+}
+
+/// Extract the node id segment from a canonical device URA.
+/// Accepts both the legacy `easynet:///r/<tenant>/agent/<node>` shape
+/// and the URA-conformant `easynet:///r/<scope>/reg/agent.<node>`
+/// shape. Returns None when the URA does not match either form.
+fn host_node_id_from_uri(uri: &str) -> Option<String> {
+    if let Some(rest) = uri.strip_prefix("easynet:///r/") {
+        // Drop optional query-string suffix.
+        let rest = rest.split('?').next().unwrap_or(rest);
+        let segments: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
+        // Pattern A: <tenant>/agent/<node> (legacy 3-segment)
+        if segments.len() >= 3 && segments[1] == "agent" {
+            return Some(segments[2].to_string());
+        }
+        // Pattern B: <scope>/reg/agent.<node> (URA-conformant)
+        if segments.len() >= 3 && segments[1] == "reg" {
+            if let Some(node) = segments[2].strip_prefix("agent.") {
+                return Some(node.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Deterministic keypair derivation used by the SDK's
+/// `derive_subject_auth`. Returns `(seed_bytes, public_key_b64)` so
+/// the daemon can both publish the public key AND mirror the seed
+/// into the keyring (RFC-002 P3) without re-deriving in two places.
+pub(crate) fn derive_subject_keypair(tenant_id: &str, subject_id: &str) -> ([u8; 32], String) {
     use base64::Engine as _;
     use ed25519_dalek::SigningKey;
     use sha2::{Digest, Sha256};
 
-    // Mirrors `AxonClient::derive_subject_auth` from the SDK
-    // (client-sdk/src/domain/easynet/semantic.rs). The DERIVE_CONTEXT
-    // there is a fixed protocol constant; reproducing the literal
-    // here keeps this fn dependency-light. If the SDK ever rotates
-    // the context, this string MUST update in lockstep — the SDK
-    // doc explicitly calls out the cross-version compatibility cost.
     const DERIVE_CONTEXT: &str = "axon-client-sdk-ed25519-v1";
     let mut hasher = Sha256::new();
     hasher.update(tenant_id.as_bytes());
@@ -520,11 +553,60 @@ fn derive_subject_public_key_b64(tenant_id: &str, subject_id: &str) -> String {
     hasher.update(b":");
     hasher.update(DERIVE_CONTEXT.as_bytes());
     let digest = hasher.finalize();
-    let mut private_key = [0_u8; 32];
-    private_key.copy_from_slice(&digest[..32]);
-    let signing = SigningKey::from_bytes(&private_key);
-    let public_key_bytes = signing.verifying_key().to_bytes();
-    base64::engine::general_purpose::STANDARD.encode(public_key_bytes)
+    let mut seed = [0_u8; 32];
+    seed.copy_from_slice(&digest[..32]);
+    let signing = SigningKey::from_bytes(&seed);
+    let pk_b64 = base64::engine::general_purpose::STANDARD
+        .encode(signing.verifying_key().to_bytes());
+    (seed, pk_b64)
+}
+
+/// Mirror the deterministic agent + hub keys into the keyring so
+/// federation `KeyResolver` queries return the same bytes the SDK
+/// signs under. Idempotent: re-running with the same inputs is a
+/// no-op (existing matching entry is reused). The keyring stores
+/// the seed encrypted so `keyring.sign` works for these entries
+/// (necessary for forward_invoke to sign envelopes locally without
+/// going through the SDK).
+pub(crate) fn mirror_derived_keys_into_keyring(
+    keyring: &crate::runtime::keyring::KeyringHandle,
+    tenant_id: &str,
+    node_id: &str,
+    realm: &str,
+    device_uri: &str,
+) -> anyhow::Result<()> {
+    let agent_subject_id = format!("easynet:prv:reg:agent.{node_id}");
+    let (agent_seed, agent_pk_b64) =
+        derive_subject_keypair(tenant_id, &agent_subject_id);
+    let agent_pk = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        agent_pk_b64.as_bytes(),
+    )?;
+    keyring.mirror_external_key(
+        "agent_signing",
+        device_uri.to_string(),
+        &agent_pk,
+        Some(&agent_seed),
+    )?;
+
+    let hub_subject_id = format!("easynet:prv:hub:{realm}");
+    let (hub_seed, hub_pk_b64) = derive_subject_keypair(tenant_id, &hub_subject_id);
+    if hub_pk_b64 != agent_pk_b64 {
+        let hub_pk = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            hub_pk_b64.as_bytes(),
+        )?;
+        let hub_subject_uri = format!(
+            "easynet:///r/prv/hub/{realm}?tenant_id={tenant_id}"
+        );
+        keyring.mirror_external_key(
+            "hub_signing",
+            hub_subject_uri,
+            &hub_pk,
+            Some(&hub_seed),
+        )?;
+    }
+    Ok(())
 }
 
 /// Build the JSON args for a single `runtime.register_local_tool`

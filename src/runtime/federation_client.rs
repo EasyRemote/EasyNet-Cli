@@ -44,6 +44,50 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// RFC-002 §5.2 federation.forward_invoke argument shape. Matches
+/// the hub-profile's `ForwardInvokeArgs` exactly.
+#[derive(Debug, Clone, Serialize)]
+pub struct ForwardInvokeArgs {
+    pub target_uri: String,
+    pub ability_name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub function_name: String,
+    /// Standard base64 of the serialized argument payload (typically
+    /// JSON bytes for ability calls). Hub forwards verbatim.
+    pub arguments_b64: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ForwardInvokeReceipt {
+    pub ok: bool,
+    pub state_code: i32,
+    #[serde(default)]
+    pub result_b64: String,
+    #[serde(default)]
+    pub result_content_type: String,
+    #[serde(default)]
+    pub error_code: String,
+    #[serde(default)]
+    pub error_message: String,
+}
+
+/// RFC-002 §5.1 federation.resolve_key argument shape.
+#[derive(Debug, Clone, Serialize)]
+pub struct ResolveKeyArgs {
+    pub agent_uri: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ResolveKeyReceipt {
+    pub agent_uri: String,
+    pub public_key_hex: String,
+    pub status: String,
+    #[serde(default)]
+    pub key_id: String,
+    #[serde(default)]
+    pub rotation_epoch: u64,
+}
+
 /// Arguments for `federation.join`. Matches the hub-profile's
 /// `JoinArgs` struct in
 /// `EasyNet-Axon/core/runtime-rs/src/services/invocation/hub_profile.rs`.
@@ -83,6 +127,12 @@ pub struct AdvertiseAgentArgs {
     #[serde(default)]
     pub public_key_hex: String,
     pub signing_authority: AdvertisedSigningAuthority,
+    /// RFC-002 §5.2 forward_invoke routing key. The advertising
+    /// daemon supplies its own runtime node_id so the hub knows
+    /// which UDS-bound local-tool registration to dispatch into
+    /// when an inbound forward arrives for this agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_node_id: Option<String>,
 }
 
 /// Wire shape for the `signing_authority` field. Mirrors the
@@ -213,6 +263,7 @@ mod tests {
             agent_uri: "easynet:///r/acme/agent/01DEV".into(),
             public_key_hex: "aa".into(),
             signing_authority: AdvertisedSigningAuthority::SelfSigned,
+            host_node_id: None,
         };
         let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
         assert_eq!(v["signing_authority"]["kind"], "self_signed");
@@ -227,6 +278,7 @@ mod tests {
             signing_authority: AdvertisedSigningAuthority::HostedBy {
                 host_uri: "easynet:///r/acme/agent/01DEV".into(),
             },
+            host_node_id: None,
         };
         let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
         assert_eq!(v["signing_authority"]["kind"], "hosted_by");

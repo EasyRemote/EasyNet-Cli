@@ -90,6 +90,16 @@ const FED_REVOKE_RESOURCE_FMT: &str =
 const FED_HEARTBEAT_RESOURCE_FMT: &str =
     "easynet:///r/prv/hub/{realm}/abilities/federation.heartbeat@1?tenant_id={tenant}";
 
+/// RFC-002 §5.1 federation.resolve_key — agent_uri → public_key
+/// lookup against the realm directory.
+const FED_RESOLVE_KEY_RESOURCE_FMT: &str =
+    "easynet:///r/prv/hub/{realm}/abilities/federation.resolve_key@1?tenant_id={tenant}";
+
+/// RFC-002 §5.2 federation.forward_invoke — hub-mediated cross-
+/// device dispatch.
+const FED_FORWARD_INVOKE_RESOURCE_FMT: &str =
+    "easynet:///r/prv/hub/{realm}/abilities/federation.forward_invoke@1?tenant_id={tenant}";
+
 /// Build the canonical resource URI for `federation.advertise_agent`
 /// against the realm's hub. Public so call sites can construct the
 /// URI consistently without re-typing the format string.
@@ -492,6 +502,52 @@ pub fn heartbeat<I: AbilityInvoker>(
     Ok(())
 }
 
+/// RFC-002 §5.1 federation.resolve_key client. Returns the public
+/// key the directory has on file for the given URA.
+pub fn resolve_key<I: AbilityInvoker>(
+    invoker: &I,
+    tenant_id: &str,
+    realm: &str,
+    agent_uri: &str,
+) -> Result<crate::runtime::federation_client::ResolveKeyReceipt, String> {
+    let resource_uri = FED_RESOLVE_KEY_RESOURCE_FMT
+        .replace("{realm}", realm)
+        .replace("{tenant}", tenant_id);
+    let payload = serde_json::json!({ "agent_uri": agent_uri });
+    let response = invoker.invoke_ability(tenant_id, &resource_uri, payload)?;
+    let receipt_body = unwrap_result_json(response);
+    serde_json::from_value(receipt_body).map_err(|e| format!("parse resolve_key receipt: {e}"))
+}
+
+/// RFC-002 §5.2 federation.forward_invoke client. Hands a forward
+/// request to the realm's hub which routes it to the target's host
+/// daemon via runtime-local-tool dispatch.
+pub fn forward_invoke<I: AbilityInvoker>(
+    invoker: &I,
+    tenant_id: &str,
+    realm: &str,
+    target_uri: &str,
+    ability_name: &str,
+    arguments: &Value,
+) -> Result<crate::runtime::federation_client::ForwardInvokeReceipt, String> {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    let resource_uri = FED_FORWARD_INVOKE_RESOURCE_FMT
+        .replace("{realm}", realm)
+        .replace("{tenant}", tenant_id);
+    let arguments_bytes =
+        serde_json::to_vec(arguments).map_err(|e| format!("encode forward args: {e}"))?;
+    let arguments_b64 = STANDARD.encode(&arguments_bytes);
+    let payload = serde_json::json!({
+        "target_uri": target_uri,
+        "ability_name": ability_name,
+        "arguments_b64": arguments_b64,
+    });
+    let response = invoker.invoke_ability(tenant_id, &resource_uri, payload)?;
+    let receipt_body = unwrap_result_json(response);
+    serde_json::from_value(receipt_body).map_err(|e| format!("parse forward_invoke receipt: {e}"))
+}
+
 /// Convenience: advertise the device-profile Agent itself (Selfsigned
 /// Model A per §1.3) as a single helper since it's the very first
 /// call any daemon makes after federation.join.
@@ -502,10 +558,32 @@ pub fn advertise_self_signed_device<I: AbilityInvoker>(
     agent_uri: &str,
     public_key_hex: &str,
 ) -> AdvertiseOutcome {
+    advertise_self_signed_device_with_host_node(
+        invoker,
+        tenant_id,
+        realm,
+        agent_uri,
+        public_key_hex,
+        None,
+    )
+}
+
+/// RFC-002 §5.2 variant: pass host_node_id so forward_invoke knows
+/// which UDS-bound local-tool registration owns this agent's
+/// dispatch path.
+pub fn advertise_self_signed_device_with_host_node<I: AbilityInvoker>(
+    invoker: &I,
+    tenant_id: &str,
+    realm: &str,
+    agent_uri: &str,
+    public_key_hex: &str,
+    host_node_id: Option<String>,
+) -> AdvertiseOutcome {
     let args = AdvertiseAgentArgs {
         agent_uri: agent_uri.to_string(),
         public_key_hex: public_key_hex.to_string(),
         signing_authority: AdvertisedSigningAuthority::SelfSigned,
+        host_node_id,
     };
     advertise_agent(invoker, tenant_id, realm, &args)
 }
@@ -519,12 +597,28 @@ pub fn advertise_hosted_agent<I: AbilityInvoker>(
     agent_uri: &str,
     host_uri: &str,
 ) -> AdvertiseOutcome {
+    advertise_hosted_agent_with_host_node(
+        invoker, tenant_id, realm, agent_uri, host_uri, None,
+    )
+}
+
+/// RFC-002 §5.2 variant: pass host_node_id so forward_invoke knows
+/// where the hosted agent's dispatch endpoint is registered.
+pub fn advertise_hosted_agent_with_host_node<I: AbilityInvoker>(
+    invoker: &I,
+    tenant_id: &str,
+    realm: &str,
+    agent_uri: &str,
+    host_uri: &str,
+    host_node_id: Option<String>,
+) -> AdvertiseOutcome {
     let args = AdvertiseAgentArgs {
         agent_uri: agent_uri.to_string(),
         public_key_hex: String::new(),
         signing_authority: AdvertisedSigningAuthority::HostedBy {
             host_uri: host_uri.to_string(),
         },
+        host_node_id,
     };
     advertise_agent(invoker, tenant_id, realm, &args)
 }
