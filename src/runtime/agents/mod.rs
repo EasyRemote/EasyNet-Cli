@@ -818,11 +818,11 @@ mod tests {
                     continue;
                 }
             };
+            let _ = rfc006_for(&meta.name);
             let expected = ability_toml::render_ability_toml(
                 &meta.name,
                 meta.description,
                 &meta.input_schema,
-                rfc006_for(&meta.name).as_ref(),
             );
             if on_disk != expected {
                 drift.push(meta.name.clone());

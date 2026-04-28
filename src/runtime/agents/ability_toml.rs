@@ -190,6 +190,12 @@ fn escape_toml_basic(s: &str) -> String {
     out
 }
 
+/// RFC-006 metadata stub. Real shape lands with PR2 (#196); this
+/// keeps the type referenced by `rfc006_for` resolvable in the
+/// interim so callers compile against a `None`-only return.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rfc006Metadata;
+
 #[cfg(test)]
 mod tests {
     use super::*;
