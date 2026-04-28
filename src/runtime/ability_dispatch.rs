@@ -182,15 +182,34 @@ pub struct BidiSource {
 pub type LocalBidiHandler =
     Arc<dyn Fn(Value) -> anyhow::Result<BidiSource> + Send + Sync>;
 
+/// Resolver consulted on a registry miss. Returns `Some(handler)`
+/// when the resolver can synthesize one for the queried ability
+/// (e.g. a `<agent>.<verb>` whose TOML was added to the workspace
+/// after daemon boot — the dynamic per-agent fallback uses this
+/// to discover newly-authored abilities at invoke time without
+/// daemon restart). `None` keeps the legacy "not found" semantics.
+///
+/// One resolver per registry — the daemon owns this slot and uses
+/// it for the agent-workspace path. Returning `Send + Sync` so the
+/// registry stays clone-friendly on the Arc share.
+pub type LocalFallbackResolver = Arc<dyn Fn(&str) -> Option<LocalRpcHandler> + Send + Sync>;
+
 /// Local-ability registry. Keyed by full ability name. v1 shape is
 /// a `BTreeMap` for deterministic iteration order; the registry
 /// is read-mostly (built once at daemon start, queried per
 /// invocation), so RwLock + per-invocation hash is overkill.
+///
+/// Hot-reload note: the registry itself is built once at boot, but
+/// `rpc_fallback` lets a caller (the daemon's per-agent dispatcher)
+/// answer lookup misses dynamically. That is the seam new
+/// `<agent>.<verb>` abilities authored after boot use to become
+/// invokable without a daemon restart — see `chat_ability::register`.
 #[derive(Default)]
 pub struct LocalAbilityRegistry {
     rpc: BTreeMap<String, LocalRpcHandler>,
     stream: BTreeMap<String, LocalStreamHandler>,
     bidi: BTreeMap<String, LocalBidiHandler>,
+    rpc_fallback: Option<LocalFallbackResolver>,
 }
 
 impl LocalAbilityRegistry {
@@ -257,6 +276,29 @@ impl LocalAbilityRegistry {
         self.rpc.get(ability)
     }
 
+    /// Owned-clone counterpart that consults the fallback resolver
+    /// on a registry miss. Existing call sites that take `&Arc<...>`
+    /// keep using `get_rpc`; the dispatcher's execute path uses this
+    /// so a `<agent>.<verb>` written to disk post-boot is found via
+    /// the fallback without forcing the registry to be mutable.
+    pub fn resolve_rpc(&self, ability: &str) -> Option<LocalRpcHandler> {
+        if let Some(h) = self.rpc.get(ability) {
+            return Some(Arc::clone(h));
+        }
+        if let Some(resolver) = self.rpc_fallback.as_ref() {
+            return resolver(ability);
+        }
+        None
+    }
+
+    /// Install the RPC fallback resolver. Called once by the daemon
+    /// boot path after every static handler is in place. Replaces
+    /// any prior resolver — single-writer registry semantics still
+    /// hold; only the daemon installs this.
+    pub fn set_rpc_fallback(&mut self, resolver: LocalFallbackResolver) {
+        self.rpc_fallback = Some(resolver);
+    }
+
     /// Returns Some when a stream handler is registered for `ability`.
     pub fn get_stream(&self, ability: &str) -> Option<&LocalStreamHandler> {
         self.stream.get(ability)
@@ -304,7 +346,7 @@ impl AbilityDispatcher {
             );
         }
         match target.scope {
-            TargetScope::Local => match self.local.get_rpc(&target.ability) {
+            TargetScope::Local => match self.local.resolve_rpc(&target.ability) {
                 Some(handler) => handler(target.normalized_args),
                 None => anyhow::bail!(
                     "no local handler registered for ability {} (loopback path)",

@@ -51,6 +51,15 @@ pub enum AgentAction {
     /// Dry-run: show what `<agent>.<ability>` tools would be published,
     /// without touching Axon. Live publishing lands in a later PR.
     Publish(PublishArgs),
+    /// Re-run runtime.register_local_tool for every daemon-owned
+    /// ability against the live runtime. Use this after authoring a
+    /// new `<agent>/abilities/<verb>.ability.toml` to make the new
+    /// ability invokable from outside the daemon (the in-daemon
+    /// dispatcher's fallback resolver picks up new TOMLs automatically
+    /// for in-process invocation; this command propagates the same
+    /// view to axon-runtime so cross-process Invokes route correctly).
+    /// No daemon restart required.
+    Refresh,
 }
 
 #[derive(Debug, Args)]
@@ -154,6 +163,7 @@ pub fn run(args: AgentArgs) -> anyhow::Result<()> {
         AgentAction::Prune(a) => run_prune(a),
         AgentAction::Abilities(a) => run_abilities(a),
         AgentAction::Publish(a) => run_publish(a),
+        AgentAction::Refresh => run_refresh(),
     }
 }
 
@@ -1338,6 +1348,70 @@ fn summarize_schema(schema: &serde_json::Value) -> String {
     } else {
         format!("object({})", rendered.join(","))
     }
+}
+
+/// `easynet agent refresh` — re-issue `runtime.register_local_tool`
+/// for every daemon-owned ability the workspace currently declares.
+///
+/// Use this after authoring a new `<agent>/abilities/<verb>.ability.toml`
+/// (or after running `easynet agent add <name>` while the daemon is
+/// alive) to make the new ability invokable cross-process without
+/// restarting the daemon.
+///
+/// In-process invocations (the agent calling its own ability via the
+/// daemon's local MCP bridge) work the moment the TOML lands —
+/// `chat_ability::register_dynamic_agent_fallback` consults the
+/// workspace at lookup time. This command exists so the same view
+/// reaches axon-runtime's `runtime_local_tools` registry, which is
+/// what cross-process Invokes (frontend Abilities page,
+/// `bridge.ability_call_raw` from another process, etc.) consult.
+///
+/// Best-effort: bridge connect / register failures are reported but
+/// the command's exit code only reflects whether the bridge connect
+/// succeeded — partial registration is the same shape this same path
+/// already takes during boot.
+fn run_refresh() -> anyhow::Result<()> {
+    let (bridge, _state) = crate::persistence::config::load_and_connect()
+        .map_err(|e| anyhow::anyhow!(
+            "could not reach local axon-runtime: {e}; run `easynet runtime start` first"
+        ))?;
+    let creds = crate::persistence::config::load_credentials()
+        .map_err(|e| anyhow::anyhow!("load credentials: {e}"))?;
+    let plan = crate::facade::cli::start::build_bootstrap_plan_from(
+        &creds.tenant_id,
+        &creds.node_id,
+    )?;
+    if plan.realm.is_empty() {
+        anyhow::bail!(
+            "daemon is not joined to a realm yet; run `easynet join <token>` before refresh"
+        );
+    }
+    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::new(&bridge);
+    let dispatch_endpoint =
+        crate::services::control::runtime_dispatch::dispatch_endpoint_uri();
+    let outcomes = crate::runtime::publish::register_local_tools_via_runtime(
+        &invoker,
+        &creds.tenant_id,
+        &plan.realm,
+        &creds.node_id,
+        &dispatch_endpoint,
+    );
+    let mut ok = 0usize;
+    let mut total = 0usize;
+    for o in &outcomes {
+        total += 1;
+        match &o.result {
+            Ok(_) => ok += 1,
+            Err(msg) => {
+                output::warn(&format!("refresh {} failed: {msg}", o.label));
+            }
+        }
+    }
+    output::success(&format!(
+        "{ok}/{total} runtime.register_local_tool calls succeeded; \
+         daemon-owned abilities are now invokable cross-process."
+    ));
+    Ok(())
 }
 
 #[cfg(test)]

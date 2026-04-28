@@ -80,6 +80,13 @@ pub enum AgentAction {
     /// Dry-run: show the `<agent>.<ability>` tools that a future live
     /// publish would register. No Axon calls, no mutation.
     Publish(agent_cmd::PublishArgs),
+    /// Re-register every daemon-owned ability with axon-runtime.
+    /// Use after authoring a new `<agent>/abilities/<verb>.ability.toml`
+    /// so the new ability is invokable cross-process without daemon
+    /// restart. The in-daemon dispatcher's fallback resolver picks
+    /// up new TOMLs automatically; this command propagates the same
+    /// view to axon-runtime's `runtime_local_tools` registry.
+    Refresh,
     /// DEPRECATED: use `easynet mission discuss`.
     Discuss(discuss_cmd::DiscussArgs),
     /// DEPRECATED: use `easynet mission think`.
@@ -154,6 +161,9 @@ pub fn run(args: AgentArgs) -> anyhow::Result<()> {
         }),
         AgentAction::Abilities(a) => agent_cmd::run(agent_cmd::AgentArgs {
             action: agent_cmd::AgentAction::Abilities(a),
+        }),
+        AgentAction::Refresh => agent_cmd::run(agent_cmd::AgentArgs {
+            action: agent_cmd::AgentAction::Refresh,
         }),
         AgentAction::Publish(a) => agent_cmd::run(agent_cmd::AgentArgs {
             action: agent_cmd::AgentAction::Publish(a),

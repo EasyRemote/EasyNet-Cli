@@ -147,6 +147,19 @@ pub fn register(
     for (agent_name, entry) in &agents.agents {
         register_for_agent(reg, agent_name.clone(), entry.clone(), Arc::clone(&loaders));
     }
+    // After every static `<agent>.chat` + per-verb handler is in
+    // place, install a single fallback resolver so a `<agent>.<verb>`
+    // whose `*.ability.toml` is added to the workspace post-boot
+    // becomes invokable at the next call without daemon restart.
+    // Snapshotting `agents` into an Arc means a `easynet agent add`
+    // landing after boot does NOT propagate here yet (that lookup
+    // would still miss); the on-disk-TOML hot-reload story covers
+    // the common case where an existing agent grows a new ability,
+    // which is what the user asked for. Adding a brand-new agent
+    // still requires a refresh path (runtime.refresh_local_tools,
+    // wired in a sibling commit).
+    let agents_snapshot = Arc::new(agents.clone());
+    register_dynamic_agent_fallback(reg, agents_snapshot, loaders);
 }
 
 /// Register a single `<agent>.chat` handler. Factored out so a
@@ -186,8 +199,8 @@ pub fn register_for_agent(
     // invoke them: the dispatcher returns NOT_FOUND for every
     // <agent>.<ability> name that isn't `<agent>.chat`.
     //
-    // The fallback handler is intentionally simple: \"act as
-    // ability X with args Y\" — the agent's own CLAUDE.md /
+    // The fallback handler is intentionally simple: "act as
+    // ability X with args Y" — the agent's own CLAUDE.md /
     // SKILL.md define what fulfilling the ability means; this
     // function just routes the call.
     let other_abilities = crate::runtime::abilities::abilities_for(&agent_name, &entry);
@@ -197,62 +210,17 @@ pub fn register_for_agent(
             continue;
         }
         let ability_name = spec.name().to_string();
-        let agent_for_handler = agent_name.clone();
-        let entry_for_handler = entry.clone();
-        let loaders_for_handler = Arc::clone(&loaders);
         let bare_ability = ability_name
             .strip_prefix(&format!("{agent_name}."))
             .unwrap_or(&ability_name)
             .to_string();
-        reg.register_rpc(
-            &ability_name,
-            Arc::new(move |args: Value| {
-                let prompt = format!(
-                    "Fulfill your declared ability `{bare}` with the following arguments \
-                     (JSON, may be empty object): {args}\n\n\
-                     Reply with the ability's result as plain text — no preamble, no markdown \
-                     fence, no commentary. If the arguments are invalid for this ability, \
-                     reply with a single line starting with `error: `.",
-                    bare = bare_ability,
-                    args = serde_json::to_string(&args).unwrap_or_else(|_| "{}".to_string()),
-                );
-                let chat_args = serde_json::json!({
-                    "prompt": prompt,
-                    "stream": false,
-                });
-                handler(
-                    &agent_for_handler,
-                    &entry_for_handler,
-                    &loaders_for_handler,
-                    chat_args,
-                )
-                .map(|chat_resp| {
-                    // Pull the reply text out of the chat
-                    // response and return it as the ability's
-                    // result. The MCP bridge expects the result
-                    // value verbatim; wrapping in {result: ...}
-                    // keeps it inspectable. Keep usage so the
-                    // caller can see this WAS an LLM
-                    // fulfillment, not a synchronous handler.
-                    let reply = chat_resp
-                        .get("reply")
-                        .cloned()
-                        .unwrap_or(serde_json::Value::Null);
-                    let usage = chat_resp.get("usage").cloned().unwrap_or(serde_json::Value::Null);
-                    let elapsed_ms = chat_resp
-                        .get("elapsed_ms")
-                        .cloned()
-                        .unwrap_or(serde_json::Value::Null);
-                    serde_json::json!({
-                        "result": reply,
-                        "fulfilled_by": "agent_chat",
-                        "agent": agent_for_handler,
-                        "usage": usage,
-                        "elapsed_ms": elapsed_ms,
-                    })
-                })
-            }),
+        let h = build_agent_ability_handler(
+            agent_name.clone(),
+            entry.clone(),
+            Arc::clone(&loaders),
+            bare_ability,
         );
+        reg.register_rpc(&ability_name, h);
     }
 
     // Stream: emit framed events. v1 ships a Snapshot variant
@@ -264,6 +232,109 @@ pub fn register_for_agent(
         &ability,
         Arc::new(move |args: Value| stream_handler(&agent_name, &entry, &loaders, args)),
     );
+}
+
+/// Build one chat-translation RPC handler for an agent's
+/// non-`chat` ability. Pulled out as a free fn so both the
+/// boot-time pre-registration loop in `register_for_agent` and
+/// the post-boot fallback resolver in
+/// `register_dynamic_agent_fallback` produce byte-for-byte the
+/// same handler — keeps the "ability fulfilled by chat" contract
+/// in exactly one place.
+///
+/// The handler synthesises a prompt instructing the agent to
+/// fulfill the declared ability `<bare_ability>` with the caller's
+/// args, then routes through the agent's chat handler. The chat
+/// reply is wrapped in a `{result, fulfilled_by, agent, usage,
+/// elapsed_ms}` envelope so callers can distinguish an LLM-
+/// fulfilled call from a synchronous one.
+pub(crate) fn build_agent_ability_handler(
+    agent_name: String,
+    entry: AgentEntry,
+    loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
+    bare_ability: String,
+) -> crate::runtime::ability_dispatch::LocalRpcHandler {
+    Arc::new(move |args: Value| {
+        let prompt = format!(
+            "Fulfill your declared ability `{bare}` with the following arguments \
+             (JSON, may be empty object): {args}\n\n\
+             Reply with the ability's result as plain text — no preamble, no markdown \
+             fence, no commentary. If the arguments are invalid for this ability, \
+             reply with a single line starting with `error: `.",
+            bare = bare_ability,
+            args = serde_json::to_string(&args).unwrap_or_else(|_| "{}".to_string()),
+        );
+        let chat_args = serde_json::json!({
+            "prompt": prompt,
+            "stream": false,
+        });
+        handler(&agent_name, &entry, &loaders, chat_args).map(|chat_resp| {
+            let reply = chat_resp
+                .get("reply")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let usage = chat_resp
+                .get("usage")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let elapsed_ms = chat_resp
+                .get("elapsed_ms")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            serde_json::json!({
+                "result": reply,
+                "fulfilled_by": "agent_chat",
+                "agent": agent_name,
+                "usage": usage,
+                "elapsed_ms": elapsed_ms,
+            })
+        })
+    })
+}
+
+/// Install the per-agent fallback resolver on `reg`. After every
+/// agent's static `register_for_agent` has run, the daemon boot
+/// code calls this once so a `<agent>.<verb>` whose `*.ability.toml`
+/// landed in the workspace AFTER boot still routes correctly: the
+/// dispatcher's lookup-miss path consults this resolver, which
+/// re-reads the workspace's `abilities/` directory and synthesises
+/// a fresh chat-translation handler on the fly.
+///
+/// `loaders` is shared across every agent; the resolver picks the
+/// matching `AgentEntry` out of `agents` at lookup time. A miss in
+/// the registry that does NOT match any `<agent>.<verb>` shape is
+/// passed through to the legacy "no handler registered" error.
+pub(crate) fn register_dynamic_agent_fallback(
+    reg: &mut LocalAbilityRegistry,
+    agents: Arc<crate::registry::agents::AgentRegistry>,
+    loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
+) {
+    reg.set_rpc_fallback(Arc::new(
+        move |ability: &str| -> Option<crate::runtime::ability_dispatch::LocalRpcHandler> {
+            // Split `<agent>.<verb>` once; trailing dots in the verb
+            // are preserved for forward compat (a future ability
+            // could legitimately contain a dot).
+            let (agent_name, bare_verb) = ability.split_once('.')?;
+            let entry = agents.agents.get(agent_name)?.clone();
+
+            // Re-enumerate this agent's abilities at lookup time.
+            // `abilities_for` is filesystem-backed, so a TOML
+            // written post-boot becomes visible immediately.
+            let specs = crate::runtime::abilities::abilities_for(agent_name, &entry);
+            let qualified = format!("{agent_name}.{bare_verb}");
+            let matched = specs.iter().any(|s| s.name() == qualified);
+            if !matched {
+                return None;
+            }
+
+            Some(build_agent_ability_handler(
+                agent_name.to_string(),
+                entry,
+                Arc::clone(&loaders),
+                bare_verb.to_string(),
+            ))
+        },
+    ));
 }
 
 /// The chat ability's RPC handler. Parses args according to the
