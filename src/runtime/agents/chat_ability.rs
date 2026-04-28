@@ -380,11 +380,27 @@ fn handler(
     // `driver.temperature` / `driver.max_tokens` cannot reach this
     // point (parse_driver_overrides rejects them).
     //
-    // Synchronous (subprocess + wait); when invoked from a tokio
-    // worker thread we yield the worker via `block_in_place` to
-    // avoid stalling other tasks. Mirrors the same pattern the
-    // pre-refactor Kernel::dispatch_agent_chat used.
-    let driver_overrides = Some(&parsed.driver);
+    // Conversation resume. The caller's `session_id` (when supplied
+    // and shaped like a driver-issued thread id) tells us to
+    // continue an existing conversation rather than start fresh.
+    // We feed it through `DriverOverrides::resume_thread_id`; the
+    // driver layer (codex today) maps it to `codex exec resume`.
+    // For the fresh-conversation case the driver mints a new id and
+    // returns it via `AgentResponse::thread_id`; we surface that
+    // back to the caller as `session_id` so a follow-up turn can
+    // come back here and pick up the same thread.
+    //
+    // `looks_like_thread_id` is intentionally permissive — codex
+    // ids are UUIDv7 (8-4-4-4-12 hex with dashes), but operator
+    // tooling that fabricates ids for replay or test deserves the
+    // same path. The driver itself does the strict validation.
+    let mut driver_with_resume = parsed.driver.clone();
+    if let Some(sid) = parsed.session_id.as_deref() {
+        if looks_like_thread_id(sid) {
+            driver_with_resume.resume_thread_id = Some(sid.to_string());
+        }
+    }
+    let driver_overrides = Some(&driver_with_resume);
     let response_result = if tokio::runtime::Handle::try_current().is_ok() {
         tokio::task::block_in_place(|| {
             crate::runtime::dispatch::send_external_with_overrides(
@@ -407,6 +423,31 @@ fn handler(
 
     let resp = response_result?;
     let elapsed_ms = started.elapsed().as_millis() as u64;
+    // The session id we report back. Three cases:
+    //
+    //   1. Resume turn (`driver_with_resume.resume_thread_id` was
+    //      Some): the caller already owns the id; we MUST echo it
+    //      back unchanged so subsequent turns keep finding the same
+    //      transcript. Some drivers (claude-code) return a freshly-
+    //      minted id on the resume's stream — that id is internal
+    //      to the resumed run and is NOT a stable handle to the
+    //      original transcript; passing it back would break R3.
+    //
+    //   2. Fresh turn, driver minted an id (codex / claude on
+    //      first turn): use the driver's id so future resume can
+    //      find the transcript.
+    //
+    //   3. Fresh turn, driver did NOT mint an id (no resume-capable
+    //      driver wired to thread_id yet): fall back to the local
+    //      `session_id` we resolved at handler entry — caller-
+    //      supplied or our `uuid_like` mint.
+    let session_id = if let Some(resume_id) = driver_with_resume.resume_thread_id.as_ref() {
+        resume_id.clone()
+    } else if let Some(driver_id) = resp.thread_id.as_ref() {
+        driver_id.clone()
+    } else {
+        session_id
+    };
     let usage = resp.usage.as_ref().map(|u| {
         json!({
             "input_tokens": u.input_tokens,
@@ -1157,6 +1198,14 @@ fn parse_driver_overrides(value: &Value) -> anyhow::Result<DriverOverrides> {
         model,
         temperature,
         max_tokens,
+        // resume_thread_id is not parsed from the `driver` block; it
+        // is set by the chat handler from the caller's top-level
+        // `session_id` argument (see compute_resume_thread_id at
+        // the call site). Keeping it None here means a caller that
+        // tries to set `driver.resume_thread_id` is silently
+        // ignored — the canonical path is `session_id`, not a
+        // driver-shaped knob, and we do not want two surfaces.
+        resume_thread_id: None,
     })
 }
 
@@ -1180,6 +1229,38 @@ fn string_array(value: Option<&Value>, field: &str) -> anyhow::Result<Vec<String
         }
         Some(_) => anyhow::bail!("chat: {field} must be an array of strings"),
     }
+}
+
+/// Quick check: does this `session_id` look like a driver-issued
+/// thread id that we should pass through as `resume_thread_id`?
+///
+/// Codex emits UUIDv7 (8-4-4-4-12 hex digits with dashes). We accept
+/// any shape that matches that form regardless of the version nibble
+/// — accepting a UUIDv4 the operator fabricated for a test or replay
+/// is harmless; codex itself does the strict validation when we hand
+/// the id to `exec resume`. Strings that match our local `uuid_like`
+/// fallback (`<32-hex>-<16-hex>`) are intentionally NOT accepted —
+/// those are the chat ability's own minted ids that no resume-capable
+/// driver knows about; passing them through would force the driver
+/// into a UUID-parse failure on every legacy session.
+fn looks_like_thread_id(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.len() != 36 {
+        return false;
+    }
+    let dash_positions = [8, 13, 18, 23];
+    for (i, b) in bytes.iter().enumerate() {
+        let is_dash_pos = dash_positions.contains(&i);
+        let ok = if is_dash_pos {
+            *b == b'-'
+        } else {
+            b.is_ascii_hexdigit()
+        };
+        if !ok {
+            return false;
+        }
+    }
+    true
 }
 
 /// Mint a UUID-shaped session id without pulling in the `uuid` crate

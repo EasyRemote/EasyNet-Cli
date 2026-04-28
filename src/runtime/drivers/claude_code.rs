@@ -84,6 +84,14 @@ pub struct RunStats {
     /// Tool invocations the LLM made during this run, in order.
     /// Empty when the run made no tool calls (single-turn answer).
     pub tool_calls: Vec<ToolCallRecord>,
+    /// Claude-emitted session id parsed from the stream-json
+    /// `session_id` field (echoed on every event). Surfaces back
+    /// to the chat ability via `AdapterOutput::thread_id` so the
+    /// caller can pass it as `resume_thread_id` on the next turn
+    /// and `claude -p --resume <id>` continues the conversation.
+    /// Empty string when no event carried a session_id (the
+    /// stream ended before any was emitted).
+    pub thread_id: String,
 }
 
 pub struct ClaudeOptions {
@@ -118,6 +126,22 @@ pub struct ClaudeOptions {
     /// fallback mirrors the pre-refactor default so existing
     /// registry rows with an empty `command` field keep working.
     pub command: String,
+    /// When `Some(<UUID>)`, the driver continues an existing
+    /// claude-code session via `--resume <id>` instead of starting
+    /// a fresh one. The session is the same on-disk transcript
+    /// claude persists under `~/.claude/`; resume replays it as
+    /// turn-zero context for the model just like the interactive
+    /// `/resume` picker does.
+    pub resume_thread_id: Option<String>,
+    /// When set on a fresh-conversation invocation, the driver
+    /// passes `--session-id <uuid>` so the spawned `claude -p`
+    /// uses the supplied id rather than minting its own. The
+    /// chat ability uses this to pre-bind a caller-supplied id
+    /// to the session — useful when the caller wants the same
+    /// id across the bridge boundary as inside claude's transcript
+    /// store. `None` lets claude mint its own (and the driver
+    /// surfaces it back via `RunStats::thread_id`).
+    pub fresh_session_id: Option<String>,
 }
 
 /// Default binary name when `ClaudeOptions::command` is empty.
@@ -137,6 +161,8 @@ impl Default for ClaudeOptions {
             timeline: None,
             progress_tx: None,
             command: String::new(),
+            resume_thread_id: None,
+            fresh_session_id: None,
         }
     }
 }
@@ -189,6 +215,31 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
     if let Some(m) = &opts.model {
         args.push("--model".to_string());
         args.push(m.clone());
+    }
+
+    // Conversation-session controls. `claude -p` exposes two
+    // mutually-exclusive forms:
+    //
+    //   --resume <id>      Continue a prior session by id; the
+    //                      transcript is replayed as turn-zero
+    //                      context for the model.
+    //   --session-id <id>  Use a caller-supplied UUID for a fresh
+    //                      session (claude would otherwise mint
+    //                      its own).
+    //
+    // Resume wins when both are set — that is the path the chat
+    // ability takes when the caller passes a previously-issued
+    // session_id back. fresh_session_id is the optional pre-mint
+    // path; it lets a caller pin a UUID before the first turn so
+    // the same id is visible across both the EasyNet bridge and
+    // claude's local store. Without either flag claude mints a
+    // UUID itself and we capture it from the stream.
+    if let Some(id) = &opts.resume_thread_id {
+        args.push("--resume".to_string());
+        args.push(id.clone());
+    } else if let Some(id) = &opts.fresh_session_id {
+        args.push("--session-id".to_string());
+        args.push(id.clone());
     }
 
     // Explicitly load MCP config from the workspace.
@@ -351,6 +402,20 @@ fn handle_stream_line(
         Ok(v) => v,
         Err(_) => return,
     };
+
+    // Every claude-code stream event carries a `session_id` field
+    // (UUID) — both the init banner and per-turn events echo it. We
+    // capture the first one we see and stop overwriting; if `claude`
+    // ever rotates ids mid-run (it does not today), the last writer
+    // would silently win and the chat ability would return an id
+    // the next `--resume` cannot find. Holding to first-seen makes
+    // the surface stable.
+    if let Some(sid) = v.get("session_id").and_then(Value::as_str) {
+        let mut s = lock_or_recover(stats);
+        if s.thread_id.is_empty() {
+            s.thread_id = sid.to_string();
+        }
+    }
 
     let kind = v.get("type").and_then(Value::as_str).unwrap_or("");
 
@@ -549,6 +614,13 @@ impl AgentAdapter for ClaudeCodeAdapter {
                 // falls through to the driver default inside
                 // `ClaudeOptions::resolved_command`.
                 command: opts.command,
+                resume_thread_id: opts.resume_thread_id,
+                // The fresh-session-id bind path is currently
+                // unused by the chat ability (it lets claude mint
+                // its own id and surfaces it back). Reserved for
+                // future callers that need the id to be visible
+                // before the first turn completes.
+                fresh_session_id: None,
             },
         )?;
         // Project the driver's ToolCallRecord into the dispatch-
@@ -564,10 +636,16 @@ impl AgentAdapter for ClaudeCodeAdapter {
                 args: r.args.clone(),
             })
             .collect();
+        let thread_id = if stats.thread_id.is_empty() {
+            None
+        } else {
+            Some(stats.thread_id.clone())
+        };
         Ok(crate::runtime::adapter::AdapterOutput {
             content: text,
             usage: Some(run_stats_to_usage(&stats)),
             tool_calls,
+            thread_id,
         })
     }
 }

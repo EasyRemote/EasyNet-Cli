@@ -68,6 +68,13 @@ pub struct RunStats {
     pub num_turns: u64,
     pub total_cost_usd: f64,
     pub duration_ms: u64,
+    /// Codex-assigned conversation/thread id parsed from the
+    /// `thread.started` event. The chat ability returns this back
+    /// to the caller as `session_id` so a subsequent invocation can
+    /// pass it as `resume_thread_id` and continue the same
+    /// conversation. Empty string when no `thread.started` line
+    /// was observed (codex exited before emitting one).
+    pub thread_id: String,
 }
 
 pub struct CodexOptions {
@@ -104,6 +111,24 @@ pub struct CodexOptions {
     /// of `ClaudeOptions::command`; see that field's rustdoc
     /// for the motivation.
     pub command: String,
+    /// When `Some(<UUIDv7>)`, the driver invokes
+    /// `codex exec resume <thread_id> <prompt>` instead of
+    /// `codex exec <prompt>`, continuing the codex-side
+    /// conversation that was started under that id. `None` is the
+    /// fresh-conversation path (the legacy default).
+    ///
+    /// Why we delegate session storage to codex itself rather than
+    /// re-implementing it: codex already persists every turn under
+    /// `~/.codex/sessions/<yyyy>/<mm>/<dd>/rollout-...-<uuid>.jsonl`
+    /// and `exec resume` replays that file as the model's turn-zero
+    /// context. Re-rolling that on the EasyNet side would either
+    /// duplicate the on-disk state or diverge from how a `codex`
+    /// user resumes outside our wrapper. The chat ability passes a
+    /// caller-supplied `session_id` straight through here when it
+    /// looks like a UUID; on a fresh conversation it leaves this
+    /// `None` and surfaces the codex-minted thread_id back to the
+    /// caller via `RunStats::thread_id` so the next turn can resume.
+    pub resume_thread_id: Option<String>,
 }
 
 /// Default binary name when `CodexOptions::command` is empty.
@@ -122,6 +147,7 @@ impl Default for CodexOptions {
             timeline: None,
             progress_tx: None,
             command: String::new(),
+            resume_thread_id: None,
         }
     }
 }
@@ -145,16 +171,42 @@ impl CodexOptions {
 /// the raw event stream to `<run>/trace.jsonl` when a run directory is
 /// provided, and returns the final agent message plus run statistics.
 pub fn invoke_exec(prompt: &str, opts: CodexOptions) -> anyhow::Result<(String, RunStats)> {
-    let mut args: Vec<String> = vec![
-        "exec".to_string(),
-        "--json".to_string(),
-        // Skip the git-repo guard; our workspace may not be a repo.
-        "--skip-git-repo-check".to_string(),
-        // No colour control on the JSONL channel — turn it off explicitly
-        // so any stray prints don't carry ANSI escape bytes.
-        "--color".to_string(),
-        "never".to_string(),
-    ];
+    // Two argv shapes share most of the flag set:
+    //
+    //   fresh:   codex exec        --json --skip-git-repo-check --color never \
+    //                              --dangerously-bypass-approvals-and-sandbox \
+    //                              <flags> [-m model] [-C cwd] <prompt-on-stdin>
+    //
+    //   resume:  codex exec resume --json --skip-git-repo-check \
+    //                              --dangerously-bypass-approvals-and-sandbox \
+    //                              <flags> [-m model] [-C cwd] <thread_id> <prompt-on-stdin>
+    //
+    // `codex exec resume` rejects `--color` (its argv parser is a strict
+    // subset; we learned this the hard way against the live binary). The
+    // banner-suppression that --color=never gives us on `exec` is
+    // unnecessary on `exec resume` because resume drops straight into the
+    // JSONL stream — keeping the flag gated to the fresh path keeps both
+    // shapes clean.
+    let resuming = opts.resume_thread_id.is_some();
+    let mut args: Vec<String> = if resuming {
+        vec![
+            "exec".to_string(),
+            "resume".to_string(),
+            "--json".to_string(),
+            "--skip-git-repo-check".to_string(),
+        ]
+    } else {
+        vec![
+            "exec".to_string(),
+            "--json".to_string(),
+            "--skip-git-repo-check".to_string(),
+            // Suppress ANSI escape bytes on the JSONL channel for the
+            // fresh-conversation path. Not accepted by `exec resume`;
+            // see the argv-shape comment above.
+            "--color".to_string(),
+            "never".to_string(),
+        ]
+    };
 
     // Sandbox + approvals. We mirror the app-server wrapper here: read-only
     // sandbox, auto-approve everything, fully non-interactive.
@@ -210,9 +262,28 @@ pub fn invoke_exec(prompt: &str, opts: CodexOptions) -> anyhow::Result<(String, 
     // Run in the isolated workspace so the agent picks up `.codex/config.toml`
     // and has a writable scratch area without touching the user's home dir.
     // `-C` makes codex treat that directory as its working root.
+    //
+    // NOTE: `codex exec resume` does NOT accept `-C`. process_runner
+    // also passes `opts.cwd` to `run_child` below — that sets the
+    // child process's actual working directory at fork time. The `-C`
+    // flag duplicates that signal for codex's own cwd logic; on the
+    // resume path we rely on the process-level cwd alone, which is
+    // identical from codex's point of view.
     if let Some(cwd) = &opts.cwd {
-        args.push("-C".to_string());
-        args.push(cwd.to_string_lossy().to_string());
+        if !resuming {
+            args.push("-C".to_string());
+            args.push(cwd.to_string_lossy().to_string());
+        }
+    }
+
+    // Resume mode: `codex exec resume <SESSION_ID> [PROMPT]`. The
+    // session id is positional and MUST come after every flag/option
+    // and before the prompt (the prompt itself is fed via stdin
+    // by `process_runner::run_child` below — codex accepts the
+    // implicit-stdin shape when the [PROMPT] positional is absent,
+    // matching what the fresh-conversation path also does).
+    if let Some(thread_id) = &opts.resume_thread_id {
+        args.push(thread_id.clone());
     }
 
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
@@ -319,7 +390,24 @@ fn handle_stream_line(
     let kind = v.get("type").and_then(Value::as_str).unwrap_or("");
 
     match kind {
-        "thread.started" | "turn.started" => {
+        "thread.started" => {
+            // Codex assigns a UUIDv7 thread/conversation id once
+            // per `codex exec` invocation. Capture it into stats so
+            // the chat ability can return it as `session_id`; the
+            // next turn passes it back as `resume_thread_id` and
+            // `codex exec resume <id>` replays the prior turns'
+            // context. On the resume path the same line repeats the
+            // existing id verbatim — capturing it on every event is
+            // harmless and makes the field non-empty even if the
+            // caller forgets to thread the id through.
+            if let Some(tid) = v.get("thread_id").and_then(Value::as_str) {
+                let mut s = lock_or_recover(stats);
+                if s.thread_id.is_empty() || s.thread_id != tid {
+                    s.thread_id = tid.to_string();
+                }
+            }
+        }
+        "turn.started" => {
             // No output — handled by the header banner.
         }
         "item.started" => {
@@ -737,14 +825,21 @@ impl AgentAdapter for CodexExecAdapter {
                 // Honor the operator-supplied binary; empty
                 // falls back to `DEFAULT_CODEX_BINARY`.
                 command: opts.command,
+                resume_thread_id: opts.resume_thread_id,
             },
         )?;
+        let thread_id = if stats.thread_id.is_empty() {
+            None
+        } else {
+            Some(stats.thread_id.clone())
+        };
         // codex exec does not surface tool-use events on its
         // wire today; tool_calls is empty for this adapter.
         Ok(crate::runtime::adapter::AdapterOutput {
             content: text,
             usage: Some(run_stats_to_usage(&stats)),
             tool_calls: Vec::new(),
+            thread_id,
         })
     }
 }
@@ -787,12 +882,19 @@ impl AgentAdapter for CodexAppServerAdapter {
                 // Honor the operator-supplied binary; empty
                 // falls back to `DEFAULT_CODEX_BINARY`.
                 command: opts.command,
+                // app-server adapter does not yet plumb resume; the
+                // app-server protocol has its own conversation-id
+                // surface and would route through that, not through
+                // `codex exec resume`. Leave `None` here so the field
+                // is unused on this path.
+                resume_thread_id: None,
             },
         )?;
         Ok(crate::runtime::adapter::AdapterOutput {
             content: text,
             usage: None,
             tool_calls: Vec::new(),
+            thread_id: None,
         })
     }
 }
