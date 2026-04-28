@@ -58,6 +58,7 @@ use easynet_cli::runtime::kernel::Kernel;
 use easynet_cli::runtime::kernel_api::KernelApi;
 use easynet_cli::runtime::agents;
 use easynet_cli::services::control::ability_proxy::AbilityProxy;
+use easynet_cli::services::control::runtime_dispatch;
 use easynet_cli::services::control::server;
 
 /// Heartbeat is opt-in: only spawn the legacy loop if the parent
@@ -204,6 +205,21 @@ async fn main() -> anyhow::Result<()> {
     // to fleet.attach_session see the same lifecycle they would
     // see for a Client-initiated invoke.
     spawn_schedule_tick(kernel_for_tick, schedule_for_tick);
+
+    // Step-3 sidecar: runtime-dispatch UDS responder. Listens on a
+    // separate socket from `control.sock` because the runtime side
+    // talks newline-delimited single-line JSON, while the CLI/MCP IPC
+    // server speaks length-delimited frames. axon-runtime opens this
+    // socket only when it has resolved a `runtime_local_tools` entry
+    // whose `dispatch_endpoint` points at it — i.e., one of the
+    // abilities the daemon registered via `runtime.register_local_tool`
+    // at boot. A failure here logs but does not tear down the daemon.
+    let dispatch_proxy = proxy.clone();
+    tokio::spawn(async move {
+        if let Err(e) = runtime_dispatch::run(dispatch_proxy).await {
+            eprintln!("[runtime-dispatch] responder exited: {e:#}");
+        }
+    });
 
     // Foreground: Control-plane IPC server. Returns when the listener
     // is dropped (i.e. never, in v1 — we exit on SIGTERM via the OS).

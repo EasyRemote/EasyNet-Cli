@@ -326,6 +326,45 @@ fn republish_via_federation_best_effort(
             ),
         );
     }
+
+    // Step-3 register: tell axon-runtime that *this daemon* is the
+    // implementation behind every daemon-owned ability. Without this
+    // an InvokeAbility from the EasyNet frontend reaches the runtime,
+    // resolves no SessionRegistry binding, and falls through to
+    // NoBinding — even though the daemon is right there listening on
+    // its dispatch UDS. Best-effort: a register failure leaves the
+    // dispatch path degraded but keeps boot moving.
+    if !plan.realm.is_empty() && !plan.host_device_uri.is_empty() {
+        let dispatch_endpoint =
+            crate::services::control::runtime_dispatch::dispatch_endpoint_uri();
+        let reg_outcomes = crate::runtime::publish::register_local_tools_via_runtime(
+            &invoker,
+            &creds.tenant_id,
+            &plan.realm,
+            &creds.node_id,
+            &dispatch_endpoint,
+        );
+        let mut reg_ok = 0usize;
+        let mut reg_total = 0usize;
+        for o in &reg_outcomes {
+            reg_total += 1;
+            match &o.result {
+                Ok(_) => reg_ok += 1,
+                Err(msg) => {
+                    output::warn(&format!("runtime.register_local_tool {} failed: {msg}", o.label));
+                }
+            }
+        }
+        if reg_total > 0 {
+            output::detail(
+                "runtime-dispatch",
+                &format!(
+                    "{reg_ok}/{reg_total} runtime.register_local_tool calls succeeded — \
+                     daemon-owned abilities are reachable via runtime"
+                ),
+            );
+        }
+    }
 }
 
 /// Build a `BootstrapPlan` from credentials + the loaded agent

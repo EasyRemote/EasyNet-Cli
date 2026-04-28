@@ -588,6 +588,36 @@ impl AbilityProxy {
         }
     }
 
+    /// Direct RPC execution — used by the runtime-dispatch UDS
+    /// responder (Step 3 of the cross-repo plan) where the wire
+    /// shape is single-line JSON, not the framed IPC envelope.
+    /// Skips the IncomingFrame parse and OutgoingFrame wrapping
+    /// the regular `handle_invoke` does; returns the raw `Value`
+    /// the dispatcher produced (or a string error on failure).
+    ///
+    /// This is the **only** public method the runtime dispatcher
+    /// loop should use — going through `handle` / `handle_async`
+    /// would force JSON framing the runtime side does not speak.
+    pub fn execute_runtime_dispatch(
+        &self,
+        ability: &str,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let plan = InvocationPlan {
+            ability: ability.to_string(),
+            target_node_hint: extract_node_hint(&args),
+            args,
+            call_mode: CallMode::Rpc,
+        };
+        let target = self
+            .resolver
+            .resolve(plan)
+            .map_err(|e| format!("resolver: {e}"))?;
+        self.dispatcher
+            .execute_rpc(target)
+            .map_err(|e| format!("{e}"))
+    }
+
     fn handle_invoke(
         &self,
         request_id: String,

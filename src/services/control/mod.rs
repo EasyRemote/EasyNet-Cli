@@ -53,5 +53,12 @@
 pub mod ability_proxy;
 pub mod discovery;
 pub mod frames;
+/// Step 3 of the cross-repo plan: separate UDS responder for
+/// runtime-routed Invokes that arrived at axon-runtime for an
+/// ability the daemon registered via `runtime.register_local_tool`.
+/// Distinct from `server.rs` (length-delimited JSON IPC for CLI
+/// subcommands + local stdio MCP) — the runtime side speaks
+/// newline-delimited single-line JSON instead.
+pub mod runtime_dispatch;
 pub mod server;
 pub mod transport;
