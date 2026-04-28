@@ -293,7 +293,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
 ///     wraps the dendrite-bridge `ability_call_raw` path. The
 ///     resource URI follows the canonical 5-segment shape required
 ///     by `AxonClient::canonicalize_easynet_resource_uri`:
-///     `easynet:///r/private/hub/<realm>/abilities/runtime.register_local_tool@1`.
+///     `easynet:///r/prv/hub/<realm>/abilities/runtime.register_local_tool@1`.
 ///     The `runtime.*` namespace is intercepted before membership +
 ///     admission checks (rpc_handlers.rs::is_runtime_admin_ability)
 ///     so the hub-style subject is purely a URI shape, not an actual
@@ -329,8 +329,11 @@ pub fn register_local_tools_via_runtime<I: AbilityInvoker>(
     // Invoke and gets NoBinding.
     let names = collect_daemon_owned_ability_names();
 
+    // Non-pub URIs require `?tenant_id=<id>` per the SDK
+    // canonicalizer; without it we get "tenant_id query is required"
+    // before any admission/membership check runs.
     let resource_uri = format!(
-        "easynet:///r/private/hub/{realm}/abilities/runtime.register_local_tool@1"
+        "easynet:///r/prv/hub/{realm}/abilities/runtime.register_local_tool@1?tenant_id={tenant_id}"
     );
     for name in names {
         let args = build_register_args(tenant_id, node_id, &name, dispatch_endpoint);
@@ -413,7 +416,7 @@ pub fn unpublish_abilities_via_revoke<I: AbilityInvoker>(
     reason: &str,
 ) -> PublishOutcome {
     let resource_uri = format!(
-        "easynet:///r/private/hub/{realm}/abilities/federation.revoke@1"
+        "easynet:///r/prv/hub/{realm}/abilities/federation.revoke@1?tenant_id={tenant_id}"
     );
     let payload = serde_json::json!({
         "agent_uri": agent_uri,
@@ -893,7 +896,7 @@ mod tests {
         for (uri, payload) in &calls {
             assert_eq!(
                 uri,
-                "easynet:///r/private/hub/acme/abilities/runtime.register_local_tool@1",
+                "easynet:///r/prv/hub/acme/abilities/runtime.register_local_tool@1?tenant_id=tenant",
                 "register URI must be the canonical 5-segment runtime admin URI"
             );
             assert_eq!(payload["tenant_id"], "tenant");

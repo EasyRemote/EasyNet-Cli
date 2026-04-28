@@ -57,21 +57,36 @@ pub struct AdvertiseOutcome {
 /// against the hub-profile Agent. `<realm>` is filled at call time
 /// from the daemon's join receipt; `<hub_uri>` segment is fixed
 /// because every realm has exactly one canonical hub-profile Agent.
+// Visibility token must be one of `pub | org | prv` per the SDK
+// canonicalizer (client-sdk/src/domain/easynet/semantic.rs); the
+// pre-existing `private` literal silently failed canonicalization
+// with `invalid visibility for r easynet URI` on every advertise
+// call — operators saw "advertise X failed" with no entry in the
+// realm directory. Hub-profile URIs are not public, so we use `prv`.
 const FED_ADVERTISE_AGENT_RESOURCE_FMT: &str =
-    "easynet:///r/private/hub/{realm}/abilities/federation.advertise_agent@1";
+    "easynet:///r/prv/hub/{realm}/abilities/federation.advertise_agent@1?tenant_id={tenant}";
 
 const FED_ADVERTISE_ABILITIES_RESOURCE_FMT: &str =
-    "easynet:///r/private/hub/{realm}/abilities/federation.advertise_abilities@1";
+    "easynet:///r/prv/hub/{realm}/abilities/federation.advertise_abilities@1?tenant_id={tenant}";
 
 /// Build the canonical resource URI for `federation.advertise_agent`
 /// against the realm's hub. Public so call sites can construct the
 /// URI consistently without re-typing the format string.
-pub fn advertise_agent_resource_uri(realm: &str) -> String {
-    FED_ADVERTISE_AGENT_RESOURCE_FMT.replace("{realm}", realm)
+///
+/// `tenant_id` is mandatory: the SDK canonicalizer rejects any non-
+/// `pub` URI that does not carry `?tenant_id=...` and it must match
+/// the envelope tenant. Building the query here keeps every advertise
+/// caller from re-implementing it.
+pub fn advertise_agent_resource_uri(realm: &str, tenant_id: &str) -> String {
+    FED_ADVERTISE_AGENT_RESOURCE_FMT
+        .replace("{realm}", realm)
+        .replace("{tenant}", tenant_id)
 }
 
-pub fn advertise_abilities_resource_uri(realm: &str) -> String {
-    FED_ADVERTISE_ABILITIES_RESOURCE_FMT.replace("{realm}", realm)
+pub fn advertise_abilities_resource_uri(realm: &str, tenant_id: &str) -> String {
+    FED_ADVERTISE_ABILITIES_RESOURCE_FMT
+        .replace("{realm}", realm)
+        .replace("{tenant}", tenant_id)
 }
 
 /// Wire shape for `federation.advertise_abilities` arguments. Not in
@@ -151,7 +166,7 @@ pub fn advertise_agent<I: AbilityInvoker>(
     realm: &str,
     args: &AdvertiseAgentArgs,
 ) -> AdvertiseOutcome {
-    let resource_uri = advertise_agent_resource_uri(realm);
+    let resource_uri = advertise_agent_resource_uri(realm, tenant_id);
     let payload: Value = match serde_json::from_slice(&args_to_bytes(args)) {
         Ok(v) => v,
         Err(e) => {
@@ -188,7 +203,7 @@ pub fn advertise_abilities<I: AbilityInvoker>(
     agent_uri: &str,
     abilities: &[AbilityDescriptor],
 ) -> Result<Value, String> {
-    let resource_uri = advertise_abilities_resource_uri(realm);
+    let resource_uri = advertise_abilities_resource_uri(realm, tenant_id);
     let args = AdvertiseAbilitiesArgs {
         agent_uri,
         abilities,
@@ -289,12 +304,12 @@ mod tests {
     #[test]
     fn resource_uri_substitutes_realm_correctly() {
         assert_eq!(
-            advertise_agent_resource_uri("acme"),
-            "easynet:///r/private/hub/acme/abilities/federation.advertise_agent@1"
+            advertise_agent_resource_uri("acme", "tenant-1"),
+            "easynet:///r/prv/hub/acme/abilities/federation.advertise_agent@1?tenant_id=tenant-1"
         );
         assert_eq!(
-            advertise_abilities_resource_uri("contoso"),
-            "easynet:///r/private/hub/contoso/abilities/federation.advertise_abilities@1"
+            advertise_abilities_resource_uri("contoso", "tenant-2"),
+            "easynet:///r/prv/hub/contoso/abilities/federation.advertise_abilities@1?tenant_id=tenant-2"
         );
     }
 
@@ -418,7 +433,7 @@ mod tests {
         let _ = advertise_abilities(&invoker, "tenant", "acme", "u", &[]).unwrap();
         assert_eq!(
             invoker.last_resource_uri.borrow().as_deref().unwrap(),
-            "easynet:///r/private/hub/acme/abilities/federation.advertise_abilities@1"
+            "easynet:///r/prv/hub/acme/abilities/federation.advertise_abilities@1?tenant_id={tenant}"
         );
     }
 }
