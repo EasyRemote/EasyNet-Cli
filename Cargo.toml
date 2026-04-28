@@ -94,6 +94,14 @@ sha2 = "0.10"
 # pinned to match the SDK's transitive use.
 ed25519-dalek = "2"
 termimad = "0.31"
+# Pure-Rust JPEG encoder. Used by `camera.snapshot` /
+# `screen.snapshot` (RFC-005 v3.2 A3 / A8) to produce a real JPEG
+# byte stream. PR3a uses it with a synthetic frame buffer (no
+# hardware dep — the real cpal/nokhwa backends land later); the
+# encode path itself is the same for synthetic and real frames.
+# Picked over `image` because we only need encoding (no decoders,
+# no PNG/GIF/WebP) and want the smallest extra build surface.
+jpeg-encoder = { version = "0.7", default-features = false }
 toml = "0.8"
 toml_edit = "0.23"
 # Tokio adopted in PR-7 (Commit 1) as a transitive-to-direct dependency.
@@ -110,6 +118,10 @@ futures = "0.3"
 # bytes::BytesMut backing the codec.
 bytes = "1"
 ureq = { version = "2", features = ["json"] }
+# Percent-encoding for HTTP-executor URL templating. The `[exec]
+# kind = "http"` path encodes substituted values automatically so
+# an arg containing a space or non-ASCII char doesn't break the URL.
+urlencoding = "2"
 uuid = { version = "1", features = ["v4"] }
 # Cron expression parsing for PR-SCHED. The crate parses
 # `0 9 * * *`-style strings into a `Schedule` and computes the
