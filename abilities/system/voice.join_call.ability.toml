@@ -1,0 +1,17 @@
+schema_version = "1"
+name = "voice.join_call"
+description = "Add a participant to an existing call. The first participant transitions the call from `ringing` to `active`. Optional `sdp_offer` carries the participant's SDP; ICE candidates stream in via subsequent `voice.report_metrics`-style updates."
+
+[input_schema]
+type = "object"
+required = ["call_id", "participant_id"]
+additionalProperties = false
+
+[input_schema.properties.call_id]
+type = "string"
+
+[input_schema.properties.participant_id]
+type = "string"
+
+[input_schema.properties.sdp_offer]
+type = "string"

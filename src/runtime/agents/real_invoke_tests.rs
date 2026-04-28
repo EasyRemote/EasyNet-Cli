@@ -413,6 +413,152 @@ fn real_fleet_deregister_self_acknowledges_intent() {
     );
 }
 
+// ── voice.* call signaling abilities ────────────────────────────
+//
+// Seven abilities backing `easynet call …`. Per-handler unit tests
+// live alongside `voice_call_ability` itself; the tests below are
+// the integration layer — dispatch each one through the real
+// dispatcher to prove the registration site + name + arg shape line
+// up. We mint unique call_ids using nanos so concurrent test runs
+// (cargo test --test-threads=N) don't collide on the in-process
+// store.
+
+fn unique_call_id(label: &str) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("real-invoke-{label}-{nanos:x}")
+}
+
+#[test]
+fn real_voice_create_call_returns_a_minted_id() {
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target("voice.create_call", json!({})))
+        .expect("voice.create_call");
+    let cid = resp.get("call_id").and_then(Value::as_str).unwrap();
+    assert!(cid.starts_with("call-"));
+}
+
+#[test]
+fn real_voice_show_call_unknown_call_errors() {
+    let (reg, _g) = registry_with_temp_home();
+    let result = dispatcher_for(reg).execute_rpc(target(
+        "voice.show_call",
+        json!({"call_id": "no-such-call"}),
+    ));
+    assert!(
+        result.is_err(),
+        "voice.show_call must error on unknown call_id"
+    );
+}
+
+#[test]
+fn real_voice_join_call_transitions_call_to_active() {
+    let (reg, _g) = registry_with_temp_home();
+    let cid = unique_call_id("join");
+    let dispatcher = dispatcher_for(reg);
+    dispatcher
+        .execute_rpc(target("voice.create_call", json!({"call_id": cid.clone()})))
+        .expect("create");
+    dispatcher
+        .execute_rpc(target(
+            "voice.join_call",
+            json!({"call_id": cid.clone(), "participant_id": "alice"}),
+        ))
+        .expect("join");
+    let show = dispatcher
+        .execute_rpc(target("voice.show_call", json!({"call_id": cid})))
+        .expect("show");
+    assert_eq!(show.get("state").and_then(Value::as_str), Some("active"));
+}
+
+#[test]
+fn real_voice_leave_call_removes_participant() {
+    let (reg, _g) = registry_with_temp_home();
+    let cid = unique_call_id("leave");
+    let d = dispatcher_for(reg);
+    d.execute_rpc(target("voice.create_call", json!({"call_id": cid.clone()})))
+        .expect("create");
+    d.execute_rpc(target(
+        "voice.join_call",
+        json!({"call_id": cid.clone(), "participant_id": "alice"}),
+    ))
+    .expect("join");
+    d.execute_rpc(target(
+        "voice.leave_call",
+        json!({"call_id": cid.clone(), "participant_id": "alice"}),
+    ))
+    .expect("leave");
+    // No assertion on state machine here beyond "didn't panic" —
+    // semantics are pinned in the unit-test file. Real-invoke
+    // coverage just proves the ability is registered + reachable.
+    let _ = d
+        .execute_rpc(target("voice.show_call", json!({"call_id": cid})))
+        .expect("show");
+}
+
+#[test]
+fn real_voice_end_call_is_idempotent() {
+    let (reg, _g) = registry_with_temp_home();
+    let cid = unique_call_id("end");
+    let d = dispatcher_for(reg);
+    d.execute_rpc(target("voice.create_call", json!({"call_id": cid.clone()})))
+        .expect("create");
+    d.execute_rpc(target("voice.end_call", json!({"call_id": cid.clone()})))
+        .expect("first end");
+    let r2 = d
+        .execute_rpc(target("voice.end_call", json!({"call_id": cid})))
+        .expect("second end");
+    assert_eq!(r2.get("already_ended"), Some(&json!(true)));
+}
+
+#[test]
+fn real_voice_watch_call_returns_event_snapshot() {
+    let (reg, _g) = registry_with_temp_home();
+    let cid = unique_call_id("watch");
+    let d = dispatcher_for(reg);
+    d.execute_rpc(target("voice.create_call", json!({"call_id": cid.clone()})))
+        .expect("create");
+    d.execute_rpc(target(
+        "voice.join_call",
+        json!({"call_id": cid.clone(), "participant_id": "alice"}),
+    ))
+    .expect("join");
+    let w = d
+        .execute_rpc(target("voice.watch_call", json!({"call_id": cid})))
+        .expect("watch");
+    let events = w.get("events").and_then(Value::as_array).unwrap();
+    assert!(events.iter().any(|e| e.get("type") == Some(&json!("joined"))));
+}
+
+#[test]
+fn real_voice_report_metrics_appends_event() {
+    let (reg, _g) = registry_with_temp_home();
+    let cid = unique_call_id("metrics");
+    let d = dispatcher_for(reg);
+    d.execute_rpc(target("voice.create_call", json!({"call_id": cid.clone()})))
+        .expect("create");
+    d.execute_rpc(target(
+        "voice.join_call",
+        json!({"call_id": cid.clone(), "participant_id": "alice"}),
+    ))
+    .expect("join");
+    let r = d
+        .execute_rpc(target(
+            "voice.report_metrics",
+            json!({
+                "call_id": cid,
+                "participant_id": "alice",
+                "metrics": { "rtt_ms": 42 },
+            }),
+        ))
+        .expect("metrics");
+    assert_eq!(r.get("ack"), Some(&json!(true)));
+}
+
 #[test]
 fn real_fleet_list_abilities_returns_items_array_under_temp_home() {
     // NOTE: despite the name, fleet.list_abilities lists
