@@ -383,6 +383,36 @@ fn republish_via_federation_best_effort(
         }
     };
     let invoker = crate::runtime::advertise::BridgeAbilityInvoker::new(bridge);
+
+    // Bootstrap self-identity FIRST. Every subsequent signed Invoke
+    // (federation.advertise_*, runtime.register_local_tool, anything)
+    // carries an `easynet.public_key` derived from the daemon's
+    // identity; the runtime rejects them with
+    // AXON_EASYNET_SUBJECT_KEY_UNREGISTERED until that key is
+    // recorded in `state.identity.node_keys` for this node. Calling
+    // bootstrap_self_identity here populates that table once per
+    // runtime lifetime; it is a no-op on subsequent calls (the
+    // first-writer-wins guard returns replaced_prior=true).
+    if !plan.realm.is_empty() {
+        let identity_outcome = crate::runtime::publish::bootstrap_self_identity_via_runtime(
+            &invoker,
+            &creds.tenant_id,
+            &plan.realm,
+            &creds.node_id,
+        );
+        match &identity_outcome.result {
+            Ok(_) => output::detail(
+                "runtime-identity",
+                &format!("bootstrapped trusted-key material for {}", creds.node_id),
+            ),
+            Err(msg) => output::warn(&format!(
+                "runtime.bootstrap_self_identity failed: {msg}; signed Invokes will fail until \
+                 the runtime accepts this node's key (federation.advertise_* + every \
+                 frontend Invoke depend on this)"
+            )),
+        }
+    }
+
     let outcomes = crate::runtime::publish::republish_abilities_via_advertise(
         &invoker,
         &creds.tenant_id,

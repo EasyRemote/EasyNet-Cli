@@ -96,7 +96,27 @@ impl<'a> DirectBridge<'a> {
 
 impl<'a> HeartbeatTransport for DirectBridge<'a> {
     fn beat(&mut self, tenant: &str, node_id: &str) -> AxonResult<serde_json::Value> {
-        self.bridge.node_heartbeat(tenant, node_id)
+        // RFC-001 P5-rewrite-13 deleted `node_heartbeat`. Until the
+        // post-P3 federation client lands a real keepalive, the
+        // heartbeat loop reuses `runtime.bootstrap_self_identity`
+        // as a tickle: the runtime-side handler refreshes
+        // `last_heartbeat_unix_ms` on every call, which is exactly
+        // what the legacy heartbeat did. Best-effort: a failure
+        // propagates to the heartbeat-loop's failure budget the
+        // same way an old transport error would.
+        let realm = "self";
+        let resource_uri = format!(
+            "easynet:///r/prv/hub/{realm}/abilities/runtime.bootstrap_self_identity@1?tenant_id={tenant}"
+        );
+        let pk = crate::runtime::publish::derive_owner_public_key_b64_for_keepalive(tenant, node_id);
+        let payload = serde_json::json!({
+            "tenant_id": tenant,
+            "node_id": node_id,
+            "owner_id": node_id,
+            "display_name": "",
+            "public_key_b64": pk,
+        });
+        self.bridge.ability_call_raw(tenant, &resource_uri, payload, None, None, 5_000)
     }
 }
 
@@ -119,7 +139,22 @@ impl<'a> ReconnectingHeartbeat<'a> {
 
 impl<'a> HeartbeatTransport for ReconnectingHeartbeat<'a> {
     fn beat(&mut self, tenant: &str, node_id: &str) -> AxonResult<serde_json::Value> {
-        self.bridge.with_bridge(|br| br.node_heartbeat(tenant, node_id))
+        // Mirrors DirectBridge::beat — see that impl for the
+        // `runtime.bootstrap_self_identity` keepalive rationale.
+        let realm = "self";
+        let resource_uri = format!(
+            "easynet:///r/prv/hub/{realm}/abilities/runtime.bootstrap_self_identity@1?tenant_id={tenant}"
+        );
+        let pk = crate::runtime::publish::derive_owner_public_key_b64_for_keepalive(tenant, node_id);
+        let payload = serde_json::json!({
+            "tenant_id": tenant,
+            "node_id": node_id,
+            "owner_id": node_id,
+            "display_name": "",
+            "public_key_b64": pk,
+        });
+        self.bridge
+            .with_bridge(|br| br.ability_call_raw(tenant, &resource_uri, payload.clone(), None, None, 5_000))
     }
 }
 

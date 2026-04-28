@@ -348,6 +348,132 @@ pub fn register_local_tools_via_runtime<I: AbilityInvoker>(
     outcomes
 }
 
+/// Bootstrap this node's trusted-key material with the local
+/// axon-runtime via `runtime.bootstrap_self_identity`. Must run
+/// before any signed Invoke is attempted (i.e. before
+/// `register_local_tools_via_runtime` and before any
+/// federation.advertise_* call).
+///
+/// Why this is needed:
+///
+/// AXON-RFC-001 P5-rewrite-13 deleted the legacy `register_node`
+/// RPC that historically populated `state.identity.node_keys` /
+/// `node_key_materials` and inserted into `state.topology.nodes`.
+/// `verify_easynet_subject_key_binding` (rpc_handlers' early
+/// envelope-metadata check) still requires those tables to be
+/// populated before a signed Invoke is admitted. With `register_node`
+/// gone, every Invoke fails with
+/// `AXON_EASYNET_SUBJECT_KEY_UNREGISTERED` until something else
+/// fills the gap.
+///
+/// `runtime.bootstrap_self_identity` is the v1 self-bootstrap. The
+/// daemon derives the same deterministic public key the bridge will
+/// later sign under (via `AxonClient::derive_owner_auth`, which
+/// hashes `(tenant_id, subject_id, DERIVE_CONTEXT)`) and passes it
+/// to the runtime; the runtime stores it once per node. From that
+/// moment on, every signed Invoke from the bridge passes verification.
+///
+/// Best-effort by contract: a failure here logs and returns one
+/// `PublishOutcome` per attempt. The runtime is still functional
+/// for the runtime-dispatch path that does not require signed
+/// metadata; only the federation/Invoke path degrades.
+pub fn bootstrap_self_identity_via_runtime<I: AbilityInvoker>(
+    invoker: &I,
+    tenant_id: &str,
+    realm: &str,
+    node_id: &str,
+) -> PublishOutcome {
+    // Derive the public key the bridge will sign under for this
+    // node's owner. Mirrors `AxonClient::derive_owner_auth(node_id,
+    // tenant_id)` which produces an EasyNetUserAuth whose
+    // `public_key_b64url` is the URL-SAFE-NO-PAD base64 of the
+    // derived ed25519 verifying key.
+    let public_key_b64 = derive_owner_public_key_b64(tenant_id, node_id);
+
+    let resource_uri = format!(
+        "easynet:///r/prv/hub/{realm}/abilities/runtime.bootstrap_self_identity@1?tenant_id={tenant_id}"
+    );
+    let args = serde_json::json!({
+        "tenant_id": tenant_id,
+        "node_id": node_id,
+        "owner_id": node_id, // v1: daemon runs as the owner of its own node
+        "display_name": "",
+        "public_key_b64": public_key_b64,
+    });
+    let result = invoker.invoke_ability(tenant_id, &resource_uri, args);
+    PublishOutcome {
+        agent_uri: format!("local:{node_id}"),
+        label: "runtime/bootstrap_self_identity".into(),
+        result: result.map(|_| ()),
+    }
+}
+
+/// Compute the standard-base64 (with padding) ed25519 public key
+/// the local node will sign under for the *prv-visibility*
+/// `r/prv/reg/agent.<node>/abilities/...` URI shape — the canonical
+/// shape every daemon-owned ability invocation uses end-to-end.
+///
+/// Mirrors `AxonClient::default_auth_for_subject` in the SDK:
+///
+///   * For prv/org subjects it derives directly from the FULL
+///     subject_id string (`derive_subject_auth(subject_id, tenant)`).
+///   * For pub-visibility subjects it derives from the bare
+///     owner_id string (`derive_owner_auth(owner_id, tenant)`).
+///
+/// We bootstrap the prv-visibility key here because the entire
+/// daemon-owned-ability call path uses URIs that canonicalize to a
+/// prv subject; a key derived under any other subject would fail
+/// `verify_easynet_subject_key_binding` even though the math is
+/// otherwise identical. If/when a public-visibility caller is
+/// introduced, the daemon will need a second bootstrap call for
+/// that subject.
+///
+/// The runtime's `KeyInfo` storage expects standard base64; the
+/// bridge uses URL-SAFE-NO-PAD when it transmits the key in
+/// `easynet.public_key`. Both encodings decode to the same 32
+/// bytes; the admin RPC stays on standard base64 to avoid a needless
+/// translation step on the runtime side.
+/// Public alias for the heartbeat keepalive call site. Same
+/// derivation as `derive_owner_public_key_b64`; kept as a separate
+/// `pub(crate)` symbol so the heartbeat module can call it without
+/// promoting the underlying helper to the public surface.
+pub(crate) fn derive_owner_public_key_b64_for_keepalive(
+    tenant_id: &str,
+    node_id: &str,
+) -> String {
+    derive_owner_public_key_b64(tenant_id, node_id)
+}
+
+fn derive_owner_public_key_b64(tenant_id: &str, node_id: &str) -> String {
+    use base64::Engine as _;
+    use ed25519_dalek::SigningKey;
+    use sha2::{Digest, Sha256};
+
+    // Mirrors `AxonClient::derive_subject_auth` from the SDK
+    // (client-sdk/src/domain/easynet/semantic.rs). The DERIVE_CONTEXT
+    // there is a fixed protocol constant; reproducing the literal
+    // here keeps this fn dependency-light. If the SDK ever rotates
+    // the context, this string MUST update in lockstep — the SDK
+    // doc explicitly calls out the cross-version compatibility cost.
+    const DERIVE_CONTEXT: &str = "axon-client-sdk-ed25519-v1";
+    // prv visibility because that is the canonical shape the rest
+    // of the daemon path uses. See doc comment above for why we do
+    // not use the org-visibility derivation here.
+    let subject_id = format!("easynet:prv:reg:agent.{node_id}");
+    let mut hasher = Sha256::new();
+    hasher.update(tenant_id.as_bytes());
+    hasher.update(b":");
+    hasher.update(subject_id.as_bytes());
+    hasher.update(b":");
+    hasher.update(DERIVE_CONTEXT.as_bytes());
+    let digest = hasher.finalize();
+    let mut private_key = [0_u8; 32];
+    private_key.copy_from_slice(&digest[..32]);
+    let signing = SigningKey::from_bytes(&private_key);
+    let public_key_bytes = signing.verifying_key().to_bytes();
+    base64::engine::general_purpose::STANDARD.encode(public_key_bytes)
+}
+
 /// Build the JSON args for a single `runtime.register_local_tool`
 /// invocation. Pulled out as a helper so the test below can pin
 /// the wire shape without spinning up the bridge invoker.

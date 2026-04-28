@@ -87,6 +87,12 @@ rayon = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+# Used by `runtime::publish::derive_owner_public_key_b64` to mirror
+# the SDK's deterministic key derivation — the daemon must pass the
+# runtime the SAME key the bridge will later sign under, or
+# `verify_easynet_subject_key_binding` rejects every Invoke. Version
+# pinned to match the SDK's transitive use.
+ed25519-dalek = "2"
 termimad = "0.31"
 toml = "0.8"
 toml_edit = "0.23"
