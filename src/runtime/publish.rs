@@ -274,6 +274,134 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
     outcomes
 }
 
+/// Register every daemon-owned ability with the local axon-runtime
+/// via the `runtime.register_local_tool` admin RPC. After this call
+/// returns, an external Invoke arriving at axon-runtime for any
+/// of the registered ability names is routed back to the daemon's
+/// `dispatch_endpoint` (a UDS path the daemon's
+/// `services::control::runtime_dispatch` server is listening on).
+///
+/// This is Step 3-completion on the daemon side. The runtime side
+/// (EasyNet-Axon `runtime_admin.rs` + `try_dispatch_runtime_local_tool`)
+/// already exposes the registration RPC and reads `dispatch_endpoint`
+/// to forward invokes; without this registration the runtime has
+/// nothing to look up and falls through to `NoBinding` for every
+/// daemon-owned ability.
+///
+/// Inputs:
+///   * `invoker` — same `BridgeAbilityInvoker` used by advertise;
+///     wraps the dendrite-bridge `ability_call_raw` path. The
+///     resource URI follows the canonical 5-segment shape required
+///     by `AxonClient::canonicalize_easynet_resource_uri`:
+///     `easynet:///r/private/hub/<realm>/abilities/runtime.register_local_tool@1`.
+///     The `runtime.*` namespace is intercepted before membership +
+///     admission checks (rpc_handlers.rs::is_runtime_admin_ability)
+///     so the hub-style subject is purely a URI shape, not an actual
+///     hub-routing decision.
+///   * `tenant_id` — runtime key namespace.
+///   * `realm` — used to construct the URI's subject_value. Any non-
+///     empty value works since runtime.* is intercepted by ability
+///     name; we reuse the daemon's joined realm for consistency with
+///     federation.advertise URIs.
+///   * `node_id` — the local device's node id from `~/.easynet/credentials.json`.
+///   * `dispatch_endpoint` — `ipc://<absolute-path>`. Typically
+///     `runtime_dispatch::dispatch_endpoint_uri()`.
+///
+/// Returns one `PublishOutcome` per registration attempt. Best-
+/// effort: a registration failure is logged but never aborts boot.
+/// The daemon stays advertising in the directory; only the
+/// runtime-side dispatch path degrades to NoBinding.
+pub fn register_local_tools_via_runtime<I: AbilityInvoker>(
+    invoker: &I,
+    tenant_id: &str,
+    realm: &str,
+    node_id: &str,
+    dispatch_endpoint: &str,
+) -> Vec<PublishOutcome> {
+    let mut outcomes = Vec::new();
+
+    // The set of ability names we register equals the device-
+    // profile's own published abilities + every user-agent's
+    // per-agent abilities. We mirror the advertise side's
+    // descriptor walk so the registry and the directory stay
+    // consistent: anything we *advertised* must also be
+    // *dispatchable*, otherwise an Abilities-page user clicks
+    // Invoke and gets NoBinding.
+    let names = collect_daemon_owned_ability_names();
+
+    let resource_uri = format!(
+        "easynet:///r/private/hub/{realm}/abilities/runtime.register_local_tool@1"
+    );
+    for name in names {
+        let args = build_register_args(tenant_id, node_id, &name, dispatch_endpoint);
+        let result = invoker.invoke_ability(tenant_id, &resource_uri, args);
+        outcomes.push(PublishOutcome {
+            agent_uri: format!("local:{node_id}"),
+            label: format!("runtime/register/{name}"),
+            result: result.map(|_| ()),
+        });
+    }
+
+    outcomes
+}
+
+/// Build the JSON args for a single `runtime.register_local_tool`
+/// invocation. Pulled out as a helper so the test below can pin
+/// the wire shape without spinning up the bridge invoker.
+fn build_register_args(
+    tenant_id: &str,
+    node_id: &str,
+    tool_name: &str,
+    dispatch_endpoint: &str,
+) -> Value {
+    serde_json::json!({
+        "tenant_id": tenant_id,
+        "node_id": node_id,
+        "tool_name": tool_name,
+        // We don't have a McpToolSpec proto encoded here — the
+        // runtime's register handler accepts an empty
+        // spec_proto_b64 and inherits the wire tool_name. A future
+        // PR can encode the real spec via prost so meta.list_tools
+        // surfaces input_schema; v1 trades that for simplicity.
+        "spec_proto_b64": "",
+        "dispatch_endpoint": dispatch_endpoint,
+    })
+}
+
+/// Build the canonical list of ability names the daemon owns and
+/// therefore must register with the runtime. Drives the publish
+/// loop above; pulled out so tests can pin the set against
+/// `published_ability_names` + per-agent abilities.
+fn collect_daemon_owned_ability_names() -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    // Device-profile + consent + policy + mcp + llm published
+    // names — these are the names `meta.list_abilities` would
+    // surface to a remote caller. Driven by the same source the
+    // runtime-local registry surfaces via list_tools.
+    names.extend(crate::runtime::agents::published_ability_names());
+
+    // Per-user-agent abilities — `<agent>.chat` and any
+    // `<agent>.<verb>` declared in the agent's
+    // `<workspace>/abilities/*.ability.toml`. These don't appear
+    // in `published_ability_names` (that table is device-level)
+    // so we walk the agent registry the same way
+    // `republish_with_minter` does at advertise time.
+    if let Ok(reg) = crate::registry::agents::load_agents() {
+        for (agent_name, entry) in &reg.agents {
+            for spec in crate::runtime::abilities::abilities_for(agent_name, entry) {
+                names.push(spec.name().to_string());
+            }
+        }
+    }
+
+    // Dedup. The published table has uniqueness by name; per-agent
+    // walks may duplicate `<agent>.chat` for fixtures that didn't
+    // get a unique name. Sort for deterministic test output.
+    names.sort();
+    names.dedup();
+    names
+}
+
 /// Revoke one Agent's directory entry. Used by `easynet agent
 /// remove` to keep the hub's directory in sync with the local
 /// install state.
@@ -731,6 +859,72 @@ mod tests {
         assert_eq!(
             consent_uri_v1, consent_uri_v2,
             "second republish must reuse the persisted URA for consent/default"
+        );
+    }
+
+    #[test]
+    fn register_local_tools_uses_canonical_runtime_admin_uri() {
+        // The bridge requires a 5-segment /r URI, and the runtime
+        // intercepts `runtime.*` ability names before admission/
+        // membership gates. We pin both shape constraints here so
+        // future refactors of the URI builder don't quietly break
+        // the dispatch registration.
+        let _h = HomeGuard::new();
+        let invoker = CountingInvoker::new(serde_json::json!({"ack": true}));
+        let outcomes = register_local_tools_via_runtime(
+            &invoker,
+            "tenant",
+            "acme",
+            "node-01DEV",
+            "ipc:///tmp/runtime-dispatch-test.sock",
+        );
+
+        // At least one ability must have been published —
+        // device-profile abilities are unconditional.
+        assert!(
+            !outcomes.is_empty(),
+            "register must walk at least one ability"
+        );
+        // Every call must hit the canonical hub-style runtime admin
+        // resource URI; ability_name on the wire derives from the
+        // URI tail, so a wrong shape silently misroutes.
+        let calls = invoker.calls();
+        assert_eq!(calls.len(), outcomes.len(), "1 call per ability");
+        for (uri, payload) in &calls {
+            assert_eq!(
+                uri,
+                "easynet:///r/private/hub/acme/abilities/runtime.register_local_tool@1",
+                "register URI must be the canonical 5-segment runtime admin URI"
+            );
+            assert_eq!(payload["tenant_id"], "tenant");
+            assert_eq!(payload["node_id"], "node-01DEV");
+            assert_eq!(
+                payload["dispatch_endpoint"], "ipc:///tmp/runtime-dispatch-test.sock"
+            );
+            assert!(
+                payload["tool_name"].as_str().is_some_and(|s| !s.is_empty()),
+                "tool_name must be present and non-empty"
+            );
+        }
+        for o in &outcomes {
+            assert!(o.result.is_ok(), "every register call should succeed: {o:?}");
+        }
+    }
+
+    #[test]
+    fn register_local_tools_surfaces_failure_per_call() {
+        let _h = HomeGuard::new();
+        let outcomes = register_local_tools_via_runtime(
+            &FailingInvoker,
+            "tenant",
+            "acme",
+            "node-x",
+            "ipc:///tmp/x.sock",
+        );
+        assert!(!outcomes.is_empty());
+        assert!(
+            outcomes.iter().all(|o| o.result.is_err()),
+            "every register call must surface its transport error"
         );
     }
 }
