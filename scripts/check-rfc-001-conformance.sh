@@ -146,6 +146,17 @@ echo "Rule 3 — MCP only inside mcp-profile module (P4)"
 # MCP keyword scan. Allowed locations:
 #   * runtime/agents/profiles/mcp.rs          — owns InvokeMcpProvider
 #                                                 + tool spec projection
+#                                                 (current production
+#                                                 location).
+#   * runtime/agents/mcp.rs                    — planned mcp-profile module
+#                                                 path per RFC-001 plan.
+#                                                 Kept in the allowlist so
+#                                                 a future relocation does
+#                                                 not require a script
+#                                                 change; the self-test
+#                                                 fixture also uses this
+#                                                 path as its canonical
+#                                                 example.
 #   * facade/cli/mcp_server.rs                — `easynet mcp_server`
 #                                                 user-facing edge entry
 #   * facade/cli/start.rs                     — `easynet start --mcp`
@@ -155,6 +166,7 @@ count_pattern "MCP keyword in CLI src (case-insensitive)" \
   '(?i)\bmcp\b' \
   "$SRC" \
   "**/runtime/agents/profiles/mcp.rs" \
+  "**/runtime/agents/mcp.rs" \
   "**/facade/cli/mcp_server.rs" \
   "**/facade/cli/start.rs" \
   "**/facade/mcp/mod.rs"
@@ -165,6 +177,14 @@ count_pattern "MCP keyword in CLI src (case-insensitive)" \
 # Independent dispatch / tool catalog / handlers in this directory
 # are violations of plan §A3 + §A5.
 if [[ -d "$SRC/facade/mcp" ]]; then
+  # Mere presence of the legacy directory is itself worth flagging so a
+  # future RFC-001 P4.8d cleanup ("delete facade/mcp/") has a tracking
+  # signal even when the directory is currently quarantine-clean. The
+  # presence WARN does not increment total_violations on its own — it is
+  # an informational tracker. Submodule files or imports inside the dir
+  # are real violations and DO bump the count below.
+  printf "  [WARN] %-60s exists\n" "facade/mcp/ legacy directory (P4.8d removal pending)"
+
   unexpected_files=$(find "$SRC/facade/mcp" -type f -name '*.rs' ! -name 'mod.rs' 2>/dev/null)
   if [[ -n "$unexpected_files" ]]; then
     printf "  [WARN] %-60s present\n" "facade/mcp/ submodule files (must be in mcp-profile)"
@@ -176,10 +196,10 @@ if [[ -d "$SRC/facade/mcp" ]]; then
   else
     printf "  [ ok ] %-60s quarantine anchor only\n" "facade/mcp/ contains only mod.rs"
   fi
-  if grep -qE "^use|extern crate" "$SRC/facade/mcp/mod.rs" 2>/dev/null; then
+  if [[ -f "$SRC/facade/mcp/mod.rs" ]] && grep -qE "^use|extern crate" "$SRC/facade/mcp/mod.rs" 2>/dev/null; then
     printf "  [WARN] %-60s present\n" "facade/mcp/mod.rs imports (must be doc-only)"
     total_violations=$((total_violations + 1))
-  else
+  elif [[ -f "$SRC/facade/mcp/mod.rs" ]]; then
     printf "  [ ok ] %-60s no imports\n" "facade/mcp/mod.rs is doc-only"
   fi
 else
