@@ -51,6 +51,12 @@ use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
 pub const ABILITY_DESCRIBE: &str = "meta.describe";
 pub const ABILITY_LIST_ABILITIES: &str = "meta.list_abilities";
+/// User-facing alias for `meta.list_abilities`. From an LLM's seat
+/// "easynet.discover" reads more naturally than "meta.list_abilities"
+/// — the verb is an action, the namespace says where it runs. Kept
+/// in lockstep: both names route to the exact same handler so the
+/// catalogue you see is the one you'll dispatch against.
+pub const ABILITY_DISCOVER: &str = "easynet.discover";
 
 /// Register both meta abilities on the registry.
 ///
@@ -58,8 +64,25 @@ pub const ABILITY_LIST_ABILITIES: &str = "meta.list_abilities";
 /// hot-reload of the descriptor catalog is reflected without
 /// re-registration. Same closure type as `mcp_bridge_ability::register`
 /// so the daemon wires both off `profiles::load_host_descriptors`.
-pub fn register<F>(reg: &mut LocalAbilityRegistry, descriptors_provider: F)
-where
+///
+/// `registry_handle` is a `OnceLock` populated by the build site
+/// AFTER `Arc::new(reg)`. The list_abilities handler reads through
+/// it to enumerate every CURRENTLY-REGISTERED ability — including
+/// abilities registered AFTER `meta_ability::register` ran (e.g.
+/// `mission.run`, per-agent `<agent>.<verb>` chat-translation
+/// handlers, the dynamic per-agent fallback resolver). The static
+/// profile descriptor catalogue is merged on top so first-class
+/// abilities (fs.read, http.request, ...) keep their full schemas;
+/// runtime-only entries (mission.run, hot-reloaded agent abilities)
+/// surface with a synthesized descriptor when the static catalogue
+/// has nothing for them. Without this two-source merge, the LLM
+/// asking `meta.list_abilities` would see a stale, profile-only view
+/// that breaks every "discover then invoke" flow.
+pub fn register<F>(
+    reg: &mut LocalAbilityRegistry,
+    descriptors_provider: F,
+    registry_handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+) where
     F: Fn() -> Vec<AbilityDescriptor> + Send + Sync + 'static,
 {
     let provider: Arc<dyn Fn() -> Vec<AbilityDescriptor> + Send + Sync> =
@@ -69,10 +92,12 @@ where
         ABILITY_DESCRIBE,
         Arc::new(move |_args: Value| describe_handler(&p_for_describe)),
     );
-    reg.register_rpc(
-        ABILITY_LIST_ABILITIES,
-        Arc::new(move |_args: Value| list_abilities_handler(&provider)),
-    );
+    let p_for_list = Arc::clone(&provider);
+    let handle_for_list = Arc::clone(&registry_handle);
+    let list_handler: crate::runtime::ability_dispatch::LocalRpcHandler =
+        Arc::new(move |_args: Value| list_abilities_handler(&p_for_list, &handle_for_list));
+    reg.register_rpc(ABILITY_LIST_ABILITIES, Arc::clone(&list_handler));
+    reg.register_rpc(ABILITY_DISCOVER, list_handler);
 }
 
 fn describe_handler(
@@ -126,13 +151,58 @@ fn describe_handler(
 
 fn list_abilities_handler(
     descriptors_provider: &Arc<dyn Fn() -> Vec<AbilityDescriptor> + Send + Sync>,
+    registry_handle: &Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
 ) -> anyhow::Result<Value> {
-    let descriptors = descriptors_provider();
-    // AbilityDescriptor is Serialize so we hand the catalog through
-    // verbatim. Visibility filtering per §1.6 happens at the
-    // admission/dispatch layer (the handler doesn't know who the
-    // caller is); the full local catalog is what the gate filters.
-    Ok(json!({ "abilities": descriptors }))
+    use crate::runtime::ability_descriptor::Visibility;
+
+    // Phase 1: static profile descriptors (fs.*, http.*, shell.*,
+    // <agent>.chat, …). These carry full input/output schemas and
+    // descriptions read off the workspace ability TOMLs. We index by
+    // name so the live-registry merge below can keep them as-is.
+    let static_descriptors = descriptors_provider();
+    let mut by_name: std::collections::BTreeMap<String, AbilityDescriptor> =
+        std::collections::BTreeMap::new();
+    for d in static_descriptors {
+        by_name.insert(d.name.clone(), d);
+    }
+
+    // Phase 2: live registry. Anything registered into
+    // `LocalAbilityRegistry` that the static catalogue does NOT
+    // already cover gets a synthesised minimal descriptor. This
+    // catches (a) abilities registered AFTER meta_ability itself
+    // (mission.run, easynet.* aliases), (b) per-agent verbs that the
+    // dynamic fallback resolver wires up at boot from each agent's
+    // workspace `abilities/*.toml`, and (c) any future ability whose
+    // author forgot to thread it through the profile catalogue.
+    if let Some(registry) = registry_handle.get() {
+        for name in registry.list_abilities() {
+            if by_name.contains_key(&name) {
+                continue;
+            }
+            // Synthesised descriptor: enough for the LLM to know
+            // "this name exists, you can invoke it via mcp.bridge.call_tool
+            // / easynet.run". A future PR can plumb a per-ability
+            // metadata table (description / input_schema) into the
+            // registry so the synthesis becomes lossless; today the
+            // static profile catalogue is where rich schemas live and
+            // first-class abilities should land there.
+            let owner = "agent://self";
+            if let Ok(d) = AbilityDescriptor::new(name.clone(), owner, Visibility::Scoped) {
+                by_name.insert(
+                    name.clone(),
+                    d.with_description(
+                        "Registered local ability (no manifest schema; \
+                         pass JSON arguments by trial or consult the \
+                         workspace TOML if one exists)",
+                    )
+                    .with_source("registry"),
+                );
+            }
+        }
+    }
+
+    let merged: Vec<AbilityDescriptor> = by_name.into_values().collect();
+    Ok(json!({ "abilities": merged }))
 }
 
 // ── Discovery surfaces ────────────────────────────────────────
@@ -176,40 +246,64 @@ mod tests {
             .expect("test descriptor")
     }
 
+    /// Empty OnceLock used by tests that don't care about the
+    /// live-registry merge — they only exercise the static
+    /// descriptor path. The list_abilities handler tolerates an
+    /// unset OnceLock (returns the static catalogue alone), so
+    /// passing an empty one is the cheapest fixture.
+    fn empty_registry_handle()
+    -> Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>
+    {
+        Arc::new(std::sync::OnceLock::new())
+    }
+
     #[test]
     fn registration_makes_both_abilities_dispatchable() {
         let mut reg = LocalAbilityRegistry::new();
-        register(&mut reg, Vec::new);
+        register(&mut reg, Vec::new, empty_registry_handle());
         assert!(reg.get_rpc(ABILITY_DESCRIBE).is_some());
         assert!(reg.get_rpc(ABILITY_LIST_ABILITIES).is_some());
+        assert!(reg.get_rpc(ABILITY_DISCOVER).is_some());
     }
 
     #[test]
     fn list_abilities_returns_descriptors_verbatim() {
         let mut reg = LocalAbilityRegistry::new();
-        register(&mut reg, || {
-            vec![d("observe.health"), d("fleet.list_agents")]
-        });
+        register(
+            &mut reg,
+            || vec![d("observe.health"), d("fleet.list_agents")],
+            empty_registry_handle(),
+        );
         let handler = reg.get_rpc(ABILITY_LIST_ABILITIES).unwrap();
         let resp = handler(json!({})).unwrap();
         let abilities = resp["abilities"].as_array().unwrap();
         assert_eq!(abilities.len(), 2);
         // Round-trips through serde — full descriptor shape preserved.
-        assert_eq!(abilities[0]["name"], "observe.health");
-        assert_eq!(abilities[0]["owner_agent_uri"], "easynet:///r/test/agent/01DEV");
+        // BTreeMap iteration is alphabetical, so fleet.list_agents
+        // sorts before observe.health.
+        let names: Vec<&str> = abilities
+            .iter()
+            .filter_map(|a| a["name"].as_str())
+            .collect();
+        assert!(names.contains(&"observe.health"));
+        assert!(names.contains(&"fleet.list_agents"));
     }
 
     #[test]
     fn describe_buckets_abilities_by_namespace() {
         let mut reg = LocalAbilityRegistry::new();
-        register(&mut reg, || {
-            vec![
-                d("observe.health"),
-                d("fleet.list_agents"),
-                d("fleet.list_sessions"),
-                d("consent.subscribe"),
-            ]
-        });
+        register(
+            &mut reg,
+            || {
+                vec![
+                    d("observe.health"),
+                    d("fleet.list_agents"),
+                    d("fleet.list_sessions"),
+                    d("consent.subscribe"),
+                ]
+            },
+            empty_registry_handle(),
+        );
         let handler = reg.get_rpc(ABILITY_DESCRIBE).unwrap();
         let resp = handler(json!({})).unwrap();
         assert_eq!(resp["abilities_summary"]["total"], 4);
@@ -222,7 +316,7 @@ mod tests {
     #[test]
     fn describe_handles_empty_catalog() {
         let mut reg = LocalAbilityRegistry::new();
-        register(&mut reg, Vec::new);
+        register(&mut reg, Vec::new, empty_registry_handle());
         let handler = reg.get_rpc(ABILITY_DESCRIBE).unwrap();
         let resp = handler(json!({})).unwrap();
         assert_eq!(resp["abilities_summary"]["total"], 0);

@@ -108,6 +108,7 @@ mod tests {
             ability: ABILITY_NAME.into(),
             normalized_args: json!({"hello": "world"}),
             call_mode: CallMode::Rpc,
+            subject: None,
         };
         let resp = dispatcher.execute_rpc(target).unwrap();
         assert_eq!(resp["echo"], json!({"hello": "world"}));

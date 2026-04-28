@@ -180,7 +180,30 @@ impl AbilityProxy {
     /// alongside the syscall-boundary modules. The gate's rationale
     /// is documented at the top of that script.
     pub fn new(kernel: Arc<dyn KernelApi>) -> Self {
-        let registry = crate::runtime::agents::build_registry();
+        // Load the real agent registry so per-agent self-bundle
+        // abilities (`<agent>.discover`, `<agent>.invoke`,
+        // `<agent>.chat`, plus per-verb fallbacks) are wired up. The
+        // pre-fix path called `build_registry()` (no-agents form),
+        // which left every owner-namespaced handler unregistered;
+        // the symptom was the workspace MCP server announcing
+        // `claude.invoke` in `tools/list` (descriptor catalog comes
+        // from the on-disk + synth path) but failing dispatch with
+        // "no local handler registered for ability claude.invoke
+        // (loopback path)" — descriptor and registry diverged.
+        //
+        // Loading agents here keeps the descriptor catalog and the
+        // dispatchable registry in lockstep without forcing every
+        // caller of `AbilityProxy::new` to know about agents.
+        let agents = crate::registry::agents::load_agents().unwrap_or_default();
+        let registry = crate::runtime::agents::build_registry_with_services(
+            Arc::new(crate::runtime::execution::session::SessionService::new()),
+            Arc::new(crate::runtime::execution::permission::PermissionService::new()),
+            Arc::new(crate::runtime::execution::discuss::DiscussService::new()),
+            Arc::new(crate::runtime::execution::schedule::ScheduleService::new()),
+            Arc::new(crate::runtime::execution::loop_instance::LoopService::new()),
+            &agents,
+            Arc::new(Vec::new()),
+        );
         let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
             Arc::new(crate::runtime::gateway::NoopGateway::new());
         let dispatcher = AbilityDispatcher::new(registry, gateway);
@@ -349,6 +372,10 @@ impl AbilityProxy {
             target_node_hint: extract_node_hint(&args),
             args,
             call_mode: CallMode::Stream,
+            // PR-DISPATCHER-SUBJECT: wire envelope does not yet
+            // carry an AXIOM `subject` field at this IPC layer.
+            // When the wire schema grows it, extract here.
+            subject: None,
         };
         let target = match self.resolver.resolve(plan) {
             Ok(t) => t,
@@ -462,6 +489,8 @@ impl AbilityProxy {
             target_node_hint: extract_node_hint(&args),
             args,
             call_mode: CallMode::Bidi,
+            // PR-DISPATCHER-SUBJECT: see Stream sites above.
+            subject: None,
         };
         let target = match self.resolver.resolve(plan) {
             Ok(t) => t,
@@ -608,6 +637,8 @@ impl AbilityProxy {
             target_node_hint: extract_node_hint(&args),
             args,
             call_mode: CallMode::Rpc,
+            // PR-DISPATCHER-SUBJECT: see Stream sites above.
+            subject: None,
         };
         let target = self
             .resolver
@@ -640,6 +671,8 @@ impl AbilityProxy {
             target_node_hint: extract_node_hint(&args),
             args,
             call_mode: CallMode::Stream,
+            // PR-DISPATCHER-SUBJECT: see Stream sites above.
+            subject: None,
         };
         let target = self
             .resolver
@@ -663,6 +696,8 @@ impl AbilityProxy {
             target_node_hint: extract_node_hint(&args),
             args,
             call_mode: CallMode::Rpc,
+            // PR-DISPATCHER-SUBJECT: see Stream sites above.
+            subject: None,
         };
         let target = match self.resolver.resolve(plan) {
             Ok(t) => t,
@@ -722,6 +757,10 @@ impl AbilityProxy {
             target_node_hint: extract_node_hint(&args),
             args,
             call_mode: CallMode::Stream,
+            // PR-DISPATCHER-SUBJECT: wire envelope does not yet
+            // carry an AXIOM `subject` field at this IPC layer.
+            // When the wire schema grows it, extract here.
+            subject: None,
         };
         let target = match self.resolver.resolve(plan) {
             Ok(t) => t,

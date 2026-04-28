@@ -83,6 +83,13 @@ pub mod process_exec_ability;
 /// `support/shellguard/`, this module is the thin
 /// agent-dispatch wiring on top.
 pub mod shell_run_ability;
+/// shell_executor — backs `[exec] kind = "shell"` on agent-authored
+/// ability manifests. Distinct from `shell_run_ability` (the
+/// daemon-owned `shell.run` baseline locomotion ability): this
+/// module is invoked from the dispatch path when a manifest pins a
+/// concrete argv contract, bypassing chat translation. See module
+/// docstring for substitution model + injection-safety argument.
+pub mod shell_executor;
 /// http.request — outbound HTTP client. Last member of the
 /// Baseline Locomotion Profile. Issues one request per call,
 /// captures status / headers / body up to a cap, redacts
@@ -90,14 +97,25 @@ pub mod shell_run_ability;
 /// from every receipt the auditor may persist. Schemes
 /// restricted to http / https; CR/LF in header values
 /// rejected; redirect / timeout / body caps enforced.
+pub mod http_executor;
 pub mod http_request_ability;
 pub mod context_loaders;
+pub mod discover_ability;
 pub mod discuss_ability;
+pub mod invoke_ability;
 pub mod fleet_list_agents_ability;
+/// fleet.* device + ability operations: list_nodes, describe_node,
+/// remove_node, deploy_ability, uninstall_ability, exec_remote,
+/// register_self, deregister_self. The CLI side
+/// (`easynet device …`, `easynet ability deploy / uninstall / exec`)
+/// reaches these through `support::local_invoke::invoke_local_ability`,
+/// the same path every other CLI surface uses.
+pub mod fleet_ops_ability;
 pub mod loop_ability;
 pub mod mcp_bridge_ability;
 pub mod mcp_client_ability;
 pub mod meta_ability;
+pub mod mission_ability;
 pub mod network_health_ability;
 pub mod policy_ability;
 pub mod permission_ability;
@@ -132,6 +150,24 @@ pub mod schedule_ability;
 pub mod session_ability;
 pub mod skill_ability;
 pub mod skill_install_ability;
+/// RFC-005 v3.2 A1–A8 — eight physical-channel media abilities
+/// (mic.subscribe, camera.subscribe/snapshot, screen.subscribe/
+/// snapshot, speaker.publish, voice.subscribe, voice.transcribe).
+/// PR2 ships every handler as a stub that enforces
+/// INV-SUBJECT-ENVELOPE; PR3 / PR3a swap individual stubs out for
+/// real implementations.
+pub mod media_abilities;
+/// RFC-005 v3.2 A9 — `meta.list_resources`. Resource discovery
+/// surface for the eight media abilities above. Reads
+/// `~/.easynet/resources.json` via `persistence::resources` and
+/// projects to the wire shape; no device backend needed, so it
+/// ships fully working.
+pub mod list_resources_ability;
+/// Real (non-stub) media handlers, swapped in over the
+/// `media_abilities` stubs one ability at a time. PR3a delivers
+/// the `camera.snapshot` vertical slice with a deterministic
+/// synthetic backend; PR3 lands cpal/nokhwa/screen.
+pub mod media;
 
 use std::sync::Arc;
 
@@ -241,12 +277,30 @@ pub fn build_registry_with_services(
     // handler opens its own per-session FS handle on each
     // OpenBidi.
     file_transfer_ability::register(&mut reg);
+    // RFC-005 v3.2 — eight physical-channel media abilities (A1–A8)
+    // plus meta.list_resources (A9). The eight A1–A8 stubs are
+    // registered first; PR3a then swaps individual entries
+    // (currently `camera.snapshot`) for real envelope-aware
+    // handlers via `media::*::register`. The order matters: the
+    // real-handler register MUST come after the stub register so
+    // its envelope-aware variant takes precedence at dispatch time
+    // (the registry stores stub + env-aware handlers separately
+    // and the dispatcher's "envelope-first" lookup picks env-aware
+    // when both are present).
+    media_abilities::register(&mut reg);
+    media::camera_snapshot::register(&mut reg);
+    list_resources_ability::register(&mut reg);
     // fleet.start_agent / fleet.stop_agent — Invoke-side mirror
     // of `easynet agent add/remove`. LLM sub-agents are registry
     // rows (not resident processes), so start ≡ insert into
     // ~/.easynet/agents.json and return the canonical URA;
     // stop ≡ delete the row (idempotent).
     fleet_lifecycle_ability::register(&mut reg);
+    // fleet.* device + ability operations (list_nodes, describe_node,
+    // remove_node, deploy_ability, uninstall_ability, exec_remote,
+    // register_self, deregister_self). These are the canonical
+    // ability surfaces backing the CLI's device + ability subcommands.
+    fleet_ops_ability::register(&mut reg);
     // policy.{evaluate,simulate} — admission-gate consumer surface
     // pinned to the §A6 contract. v1 is allow-all; the gate's
     // rewiring to actually call this ability lands in a follow-up
@@ -257,7 +311,22 @@ pub fn build_registry_with_services(
     discuss_ability::register(&mut reg, discuss);
     schedule_ability::register(&mut reg, schedule);
     loop_ability::register(&mut reg, loop_svc);
-    chat_ability::register(&mut reg, agents, loaders);
+    // The shared OnceLock seam consumed by every ability that needs
+    // to dispatch through the live registry post-boot:
+    // mcp.bridge.call_tool, a2a.bridge.send_task, meta.list_abilities,
+    // per-agent <agent>.invoke, and the dynamic fallback resolver
+    // installed by chat_ability::register. Created BEFORE
+    // chat_ability::register so the fallback resolver — which gains
+    // the ability to synthesize `<self>.invoke` for hot-added agents
+    // — can close over it. Set once after `Arc::new(reg)` below.
+    let local_registry_handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>> =
+        Arc::new(std::sync::OnceLock::new());
+    chat_ability::register(
+        &mut reg,
+        agents,
+        loaders,
+        Arc::clone(&local_registry_handle),
+    );
     skill_ability::register(&mut reg);
     skill_install_ability::register(&mut reg);
     // mcp.bridge.{list_tools, call_tool} — MCP edge adapter.
@@ -271,30 +340,76 @@ pub fn build_registry_with_services(
     // and an in-process Invoke caller see one catalog.
     //
     // call_tool dispatches an in-process Invoke against the named
-    // local ability. The OnceLock seam below is the
-    // chicken-and-egg fix: call_tool needs an `Arc` to the
-    // registry being built, but the registry isn't yet wrapped in
-    // an `Arc` at registration time. Set the lock once after
-    // `Arc::new(reg)` completes; the closure's `get()` returns
-    // the populated handle on every subsequent call.
-    //
-    // One shared lock is enough — both mcp.bridge.call_tool and
-    // a2a.bridge.send_task target the same local registry;
-    // doubling up would waste an allocation per boot for no gain.
-    // Same OnceLock shape admin_status_ability uses elsewhere in
-    // this file.
-    let local_registry_handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>> =
-        Arc::new(std::sync::OnceLock::new());
+    // local ability. The shared OnceLock seam (declared above
+    // before chat_ability::register) is the chicken-and-egg fix:
+    // every consumer needs an `Arc` to the registry being built,
+    // but the registry isn't yet wrapped in an `Arc` at
+    // registration time. Set the lock once after `Arc::new(reg)`
+    // completes; every closure's `get()` returns the populated
+    // handle.
     mcp_bridge_ability::register(
         &mut reg,
         profiles::load_host_descriptors,
         Arc::clone(&local_registry_handle),
     );
+    // mission.run — single ability surface for EAL execution. The
+    // canonical orchestration entry point referenced by AGENTS.md
+    // ("cross-agent calls go through the mission runtime; there is
+    // no second path"). Without this an LLM inside an agent had to
+    // shell out to `easynet mission run`, which depended on shell
+    // access and bypassed the in-process dispatcher's invariants.
+    //
+    // Registered BEFORE meta.list_abilities so the live-registry
+    // merge inside that handler picks up the mission entry point
+    // — otherwise the LLM's discovery flow would not see this
+    // ability and would fall back to fabricating answers.
+    mission_ability::register(&mut reg);
+    // Per-agent self-bundle: `<agent>.discover` and `<agent>.invoke`.
+    //
+    // Why here and not inside `chat_ability::register`: invoke needs
+    // the dispatch registry handle (`local_registry_handle` above) to
+    // resolve the target ability through the live registry — including
+    // entries registered AFTER chat_ability runs (mission.run,
+    // meta.list_abilities, the dynamic fallback resolver). The handle
+    // is in scope here, so wiring sits next to the other consumers
+    // (mcp_bridge / meta / a2a_bridge).
+    //
+    // Both handlers close over a snapshot of `agents`: `<agent>.discover`
+    // enumerates peer manifests for scope-filtered candidates;
+    // `<agent>.invoke` validates that the requested `target` is a known
+    // local agent. The snapshot misses brand-new `easynet agent add`
+    // entries until the next daemon restart — same caveat that applies
+    // to chat_ability's dynamic-fallback snapshot, and tracked by the
+    // same future "runtime.refresh_local_tools" follow-up.
+    for agent_name in agents.agents.keys() {
+        let snapshot_for_discover = agents.clone();
+        discover_ability::register_for_agent(
+            &mut reg,
+            agent_name.clone(),
+            move || snapshot_for_discover.clone(),
+            Arc::clone(&local_registry_handle),
+        );
+        let snapshot_for_invoke = agents.clone();
+        invoke_ability::register_for_agent(
+            &mut reg,
+            agent_name.clone(),
+            move || snapshot_for_invoke.clone(),
+            Arc::clone(&local_registry_handle),
+        );
+    }
     // meta.{describe,list_abilities} — Agent self-introspection on
-    // the same descriptor catalogue. describe is the lightweight
-    // identity+summary surface; list_abilities returns the full
-    // catalogue (visibility-filtered at the admission gate, not here).
-    meta_ability::register(&mut reg, profiles::load_host_descriptors);
+    // the same descriptor catalogue PLUS the live registry. describe
+    // is the lightweight identity+summary surface; list_abilities
+    // merges the static profile catalogue with everything currently
+    // registered in `reg` (mission.run, per-agent <agent>.<verb>
+    // verbs, hot-reloaded TOMLs) so a discover-then-invoke flow sees
+    // every callable name. Visibility filtering per §1.6 happens at
+    // the admission gate, not here.
+    meta_ability::register(
+        &mut reg,
+        profiles::load_host_descriptors,
+        Arc::clone(&local_registry_handle),
+    );
     // a2a.bridge.list_skills — same edge-adapter pattern as the MCP
     // bridge above, but for the A2A agent-card surface. Closes over
     // a clone of the AgentRegistry passed in here. v1 has no
@@ -511,6 +626,16 @@ pub fn description_for(name: &str) -> &'static str {
         "fleet.list_agents" => fleet_list_agents_ability::list_agents_description(),
         "meta.describe" => meta_ability::describe_description(),
         "meta.list_abilities" => meta_ability::list_abilities_description(),
+        // `easynet.discover` is the canonical user-facing alias for
+        // meta.list_abilities. The handler is the same; the
+        // description points at the alias deliberately so a peer
+        // browsing the catalogue with `meta.list_abilities` and one
+        // browsing with `easynet.discover` see the same prose.
+        "easynet.discover" => meta_ability::list_abilities_description(),
+        "easynet.run" => mission_ability::run_description(),
+        "mission.run" => mission_ability::run_description(),
+        "easynet.track" => mission_ability::track_description(),
+        "easynet.cancel" => mission_ability::cancel_description(),
         // AXIOM §"Tier 2.5" Baseline Locomotion — filesystem half.
         "fs.read" => fs_ability::description_read(),
         "fs.write" => fs_ability::description_write(),
@@ -528,7 +653,26 @@ pub fn description_for(name: &str) -> &'static str {
         "fleet.file_transfer" => file_transfer_ability::description(),
         "fleet.start_agent" => fleet_lifecycle_ability::start_agent_description(),
         "fleet.stop_agent" => fleet_lifecycle_ability::stop_agent_description(),
+        "fleet.list_nodes" => fleet_ops_ability::list_nodes_description(),
+        "fleet.describe_node" => fleet_ops_ability::describe_node_description(),
+        "fleet.remove_node" => fleet_ops_ability::remove_node_description(),
+        "fleet.deploy_ability" => fleet_ops_ability::deploy_ability_description(),
+        "fleet.uninstall_ability" => fleet_ops_ability::uninstall_ability_description(),
+        "fleet.exec_remote" => fleet_ops_ability::exec_remote_description(),
+        "fleet.register_self" => fleet_ops_ability::register_self_description(),
+        "fleet.deregister_self" => fleet_ops_ability::deregister_self_description(),
         "admin.status" => admin_status_ability::description(),
+        // RFC-005 v3.2 A1–A8 — media abilities. `media_abilities`
+        // owns the single source of truth (the `ABILITIES` table);
+        // the projection here is one Option lookup, no per-name
+        // arm. A 9th media ability requires touching only that
+        // table; this arm picks the new name up automatically.
+        n if media_abilities::description(n).is_some() => {
+            media_abilities::description(n).unwrap()
+        }
+        // RFC-005 v3.2 A9 — meta.list_resources. Lives in its own
+        // module because the handler is fully real (not a stub).
+        list_resources_ability::ABILITY_META_LIST_RESOURCES => list_resources_ability::description(),
         _ if name.ends_with(".chat") => "Send a chat prompt to the locally-installed agent.",
         _ => "(system ability)",
     }
@@ -580,6 +724,11 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "fleet.list_agents" => fleet_list_agents_ability::list_agents_input_schema(),
         "meta.describe" => meta_ability::describe_input_schema(),
         "meta.list_abilities" => meta_ability::list_abilities_input_schema(),
+        "easynet.discover" => meta_ability::list_abilities_input_schema(),
+        "easynet.run" => mission_ability::run_input_schema(),
+        "mission.run" => mission_ability::run_input_schema(),
+        "easynet.track" => mission_ability::track_input_schema(),
+        "easynet.cancel" => mission_ability::cancel_input_schema(),
         // AXIOM §"Tier 2.5" Baseline Locomotion — filesystem half.
         "fs.read" => fs_ability::input_schema_read(),
         "fs.write" => fs_ability::input_schema_write(),
@@ -597,7 +746,21 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "fleet.file_transfer" => file_transfer_ability::input_schema(),
         "fleet.start_agent" => fleet_lifecycle_ability::start_agent_input_schema(),
         "fleet.stop_agent" => fleet_lifecycle_ability::stop_agent_input_schema(),
+        "fleet.list_nodes" => fleet_ops_ability::list_nodes_input_schema(),
+        "fleet.describe_node" => fleet_ops_ability::describe_node_input_schema(),
+        "fleet.remove_node" => fleet_ops_ability::remove_node_input_schema(),
+        "fleet.deploy_ability" => fleet_ops_ability::deploy_ability_input_schema(),
+        "fleet.uninstall_ability" => fleet_ops_ability::uninstall_ability_input_schema(),
+        "fleet.exec_remote" => fleet_ops_ability::exec_remote_input_schema(),
+        "fleet.register_self" => fleet_ops_ability::register_self_input_schema(),
+        "fleet.deregister_self" => fleet_ops_ability::deregister_self_input_schema(),
         "admin.status" => admin_status_ability::input_schema(),
+        // RFC-005 v3.2 A1–A8 — media abilities. Same single-source
+        // -of-truth pattern as `description_for` above.
+        n if media_abilities::input_schema(n).is_some() => {
+            media_abilities::input_schema(n).unwrap()
+        }
+        list_resources_ability::ABILITY_META_LIST_RESOURCES => list_resources_ability::input_schema(),
         _ => serde_json::json!({ "type": "object" }),
     }
 }
@@ -609,7 +772,13 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
 /// their RFC-006 class (Stream / Query). No Transition consumer
 /// exists yet; the renderer + descriptor schema support it but
 /// no name returns a Transition variant in v1.
-pub fn rfc006_for(_name: &str) -> Option<ability_toml::Rfc006Metadata> {
+pub fn rfc006_for(name: &str) -> Option<ability_toml::Rfc006Metadata> {
+    if let Some(meta) = media_abilities::rfc006(name) {
+        return Some(meta);
+    }
+    if name == list_resources_ability::ABILITY_META_LIST_RESOURCES {
+        return Some(list_resources_ability::rfc006());
+    }
     None
 }
 
@@ -651,6 +820,14 @@ mod tests {
             // ── Introspection ───────────────────────────────────
             "meta.describe"
             | "meta.list_abilities"
+            // `easynet.discover` is a user-facing alias for
+            // meta.list_abilities; same handler, same layer.
+            | "easynet.discover"
+            // `easynet.track` reads the persisted run dir of a
+            // prior easynet.run. Pure read of derived state →
+            // Introspection, same logic that puts schedule.list
+            // / loop.status here.
+            | "easynet.track"
             | "mcp.bridge.list_tools"
             // mcp.client.list — aggregate read of every configured
             // upstream MCP server's tools/list. No mutation;
@@ -661,6 +838,10 @@ mod tests {
             | "fleet.list_abilities"
             | "fleet.list_sessions"
             | "consent.list_pending"
+            // RFC-005 v3.2 A9 — meta.list_resources is a pure read of
+            // the local resources table (same shape as
+            // meta.list_abilities); Introspection by definition.
+            | "meta.list_resources"
             | "schedule.list"
             | "loop.status" => Some(AbilityLayer::Introspection),
             // ── Control / decision ──────────────────────────────
@@ -679,6 +860,24 @@ mod tests {
             | "fleet.skill_install"
             | "fleet.skill_remove"
             | "fleet.skill_upgrade"
+            // fleet.* device + ability operations. list_nodes /
+            // describe_node read state but conceptually they sit
+            // with the federation-tier *operations* (peer
+            // enumeration, health-of-fleet) — Operational by
+            // intent, mirroring how schedule.list / loop.status
+            // got bumped into the introspection layer because they
+            // describe daemon-managed state. The remaining
+            // verbs (remove_node, deploy_ability, uninstall_ability,
+            // exec_remote, register_self, deregister_self)
+            // mutate state — Operational unambiguous.
+            | "fleet.list_nodes"
+            | "fleet.describe_node"
+            | "fleet.remove_node"
+            | "fleet.deploy_ability"
+            | "fleet.uninstall_ability"
+            | "fleet.exec_remote"
+            | "fleet.register_self"
+            | "fleet.deregister_self"
             // mcp.bridge.call_tool / a2a.bridge.send_task — both
             // dispatch into another local ability; the side effects
             // come from that dispatch, not the bridge itself. Sit
@@ -703,6 +902,15 @@ mod tests {
             | "loop.create"
             | "loop.subscribe"
             | "loop.cancel"
+            // EAL orchestration. easynet.run / mission.run compile
+            // and execute a program (potentially multi-step,
+            // potentially cross-agent); easynet.cancel mutates the
+            // run state of an in-flight mission. Same Operational
+            // class as loop.{create,cancel} for the same reason —
+            // the ability IS the work.
+            | "easynet.run"
+            | "mission.run"
+            | "easynet.cancel"
             // AXIOM §"Tier 2.5" Baseline Locomotion Profile,
             // filesystem half. fs.read is technically read-only
             // but it returns business content, not just metadata
@@ -729,7 +937,19 @@ mod tests {
             | "fleet.pty_session_input"
             | "fleet.pty_session_read"
             | "fleet.pty_session_resize"
-            | "fleet.file_transfer" => Some(AbilityLayer::Operational),
+            | "fleet.file_transfer"
+            // RFC-005 v3.2 A1–A8 — physical-channel media verbs.
+            // Operational by intent: each one drives an external
+            // device (mic / camera / speaker / screen) or remote
+            // model (voice / asr). Subject = resource_uri.
+            | "mic.subscribe"
+            | "camera.subscribe"
+            | "camera.snapshot"
+            | "screen.subscribe"
+            | "screen.snapshot"
+            | "speaker.publish"
+            | "voice.subscribe"
+            | "voice.transcribe" => Some(AbilityLayer::Operational),
             _ => None,
         }
     }
@@ -938,6 +1158,7 @@ mod tests {
                 ability: name.clone(),
                 normalized_args: serde_json::json!({}),
                 call_mode: CallMode::Rpc,
+                subject: None,
             };
             match dispatcher.execute_rpc(target) {
                 Ok(_) => invoked_ok.push(name.clone()),

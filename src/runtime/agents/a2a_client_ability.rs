@@ -143,6 +143,11 @@ fn send_task_handler(args: Value) -> anyhow::Result<Value> {
         ability: format!("{agent_name}.{skill_name}"),
         normalized_args: task_args,
         call_mode: CallMode::Rpc,
+        // PR-DISPATCHER-SUBJECT: A2A skill invocation does not
+        // currently carry an AXIOM `subject`; the remote skill is
+        // identified by ability name only. Future A2A wire schema
+        // extension can populate this.
+        subject: None,
     };
 
     // The dispatcher's error already names the failure (e.g. "no
