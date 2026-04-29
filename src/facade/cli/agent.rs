@@ -48,9 +48,22 @@ pub enum AgentAction {
     Prune(PruneArgs),
     /// List the abilities declared under `<agent-root>/abilities/`.
     Abilities(AbilitiesArgs),
+    /// Update fields of a registered agent in place. Currently
+    /// supports `--model`. Mutates `agent.toml` + the registry
+    /// row atomically; preserves label, abilities, skills, runs.
+    Set(SetArgs),
     /// Dry-run: show what `<agent>.<ability>` tools would be published,
     /// without touching Axon. Live publishing lands in a later PR.
     Publish(PublishArgs),
+    /// Re-run runtime.register_local_tool for every daemon-owned
+    /// ability against the live runtime. Use this after authoring a
+    /// new `<agent>/abilities/<verb>.ability.toml` to make the new
+    /// ability invokable from outside the daemon (the in-daemon
+    /// dispatcher's fallback resolver picks up new TOMLs automatically
+    /// for in-process invocation; this command propagates the same
+    /// view to axon-runtime so cross-process Invokes route correctly).
+    /// No daemon restart required.
+    Refresh,
 }
 
 #[derive(Debug, Args)]
@@ -132,6 +145,25 @@ pub struct AbilitiesArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct SetArgs {
+    /// Registered agent name (from `easynet agent list`).
+    pub name: String,
+    /// New model identifier. Pass any string the underlying CLI
+    /// accepts for `--model` — `claude --model` and `codex
+    /// --model` accept aliases (e.g. `sonnet`, `opus`) or full
+    /// names (e.g. `claude-opus-4-7`). Neither CLI exposes an
+    /// enumeration surface, so we deliberately do NOT validate
+    /// the value — that would force EasyNet to ship a stale
+    /// allow-list. Validation happens at invocation time when the
+    /// underlying CLI sees the flag.
+    ///
+    /// Pass `--model ''` (empty string) to CLEAR the model and let
+    /// the CLI fall back to its own default.
+    #[arg(long)]
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Args)]
 pub struct PublishArgs {
     /// Registered agent name (from `easynet agent list`).
     pub name: String,
@@ -153,7 +185,9 @@ pub fn run(args: AgentArgs) -> anyhow::Result<()> {
         AgentAction::Doctor(a) => run_doctor(a),
         AgentAction::Prune(a) => run_prune(a),
         AgentAction::Abilities(a) => run_abilities(a),
+        AgentAction::Set(a) => run_set(a),
         AgentAction::Publish(a) => run_publish(a),
+        AgentAction::Refresh => run_refresh(),
     }
 }
 
@@ -320,7 +354,16 @@ fn publish_to_local_runtime_best_effort(agent_name: &str, directory: &AgentDirec
                 return;
             }
         };
-    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::new(&bridge);
+    // Pin the caller URI so the bridge's hub-shaped envelope synth
+    // doesn't fall back to the literal-subject path
+    // (`agents/easynet:prv:hub:<realm>`), which axon's membership
+    // gate rejects with AXON_MEMBERSHIP_REQUIRED. Same shape `start.rs`
+    // uses at boot — the difference there was the boot path always
+    // calls `with_caller_uri`; this post-add path was missed.
+    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+        &bridge,
+        plan.host_device_uri.clone(),
+    );
     let outcomes =
         crate::runtime::publish::republish_abilities_via_advertise(&invoker, tenant_id, &plan);
 
@@ -391,7 +434,15 @@ fn unpublish_from_local_runtime_best_effort(agent_name: &str, directory: &AgentD
         Some(uri) => uri,
         None => return,
     };
-    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::new(&bridge);
+    // Pin the caller URI so federation.revoke's signed envelope
+    // carries the daemon's host URA, not the literal-subject
+    // fallback the bridge would otherwise synthesise (which the
+    // membership gate rejects). See the same fix in
+    // `publish_to_local_runtime_best_effort`.
+    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+        &bridge,
+        file.host_device_agent_uri.clone(),
+    );
     let realm = crate::facade::cli::start::realm_from_agent_uri(&file.host_device_agent_uri)
         .unwrap_or("");
     let outcome = crate::runtime::publish::unpublish_abilities_via_revoke(
@@ -694,6 +745,75 @@ fn run_prune(args: PruneArgs) -> anyhow::Result<()> {
 /// cross-agent call in EasyNet (CLI surface, EAL programs, MCP handlers)
 /// goes through this function. See `cli/mission_runs.rs` for the load-
 /// bearing single-entry invariant.
+/// In-place mutation of a registered agent. Currently the only
+/// supported field is `model`; future fields plug in as additional
+/// `Option<...>` flags on `SetArgs` without changing this routing.
+///
+/// The two on-disk artifacts (`agent.toml` + `agents.json` row) are
+/// updated in two writes — atomic per file, but not jointly atomic.
+/// We update `agent.toml` first because it is the source of truth
+/// for the agent's runtime contract; if the registry write later
+/// fails, the next read goes through `AgentDirectory::open` and
+/// sees the new model. The opposite ordering would risk a window
+/// where the registry advertises a model the on-disk agent has
+/// not yet adopted.
+///
+/// We deliberately do NOT validate the model string against any
+/// hardcoded list. `claude --model` and `codex --model` accept
+/// any string transparently and resolve aliases at the upstream
+/// CLI's discretion; shipping our own allow-list would force
+/// EasyNet to chase upstream releases. Validation belongs at
+/// invocation time. See `SetArgs::model` doc.
+fn run_set(args: SetArgs) -> anyhow::Result<()> {
+    let registry_before = agents::load_agents()?;
+    if !registry_before.agents.contains_key(&args.name) {
+        anyhow::bail!(
+            "agent '{}' is not registered; run `easynet agent list` to see registered \
+             names, or `easynet agent add {} --type …` to register it first",
+            args.name,
+            args.name,
+        );
+    }
+
+    // The clap surface lets us tell "flag absent" from "flag empty
+    // string" via Option<String>. An empty string is the explicit
+    // CLEAR signal (operator wants the agent to fall back to the
+    // CLI's default model); absence means "no change".
+    let new_model: Option<Option<String>> = match args.model.as_deref() {
+        Some("") => Some(None),
+        Some(m) => Some(Some(m.to_string())),
+        None => None,
+    };
+
+    if new_model.is_none() {
+        anyhow::bail!(
+            "agent set: nothing to change. Pass --model <name> to change the model, or \
+             --model '' to clear it"
+        );
+    }
+    let new_model = new_model.unwrap();
+
+    // Step 1: rewrite agent.toml.
+    let mut directory = open_registered_agent(&args.name)?;
+    directory.set_model(new_model.clone())?;
+
+    // Step 2: rewrite registry row.
+    let mut registry = agents::load_agents()?;
+    if let Some(entry) = registry.agents.get_mut(&args.name) {
+        entry.with_model(new_model.clone());
+    }
+    agents::save_agents(&registry)?;
+
+    output::success(&format!("Updated agent '{}'", args.name));
+    match &new_model {
+        Some(m) => output::detail("model", m),
+        None => output::detail("model", "(cleared — CLI default will be used)"),
+    }
+    output::detail("root", &directory.root().display().to_string());
+
+    Ok(())
+}
+
 fn run_send(args: SendArgs) -> anyhow::Result<()> {
     // Validate the agent exists in the registry up-front so the user gets
     // a clear error before we go through the mission machinery.
@@ -1340,6 +1460,78 @@ fn summarize_schema(schema: &serde_json::Value) -> String {
     }
 }
 
+/// `easynet agent refresh` — re-issue `runtime.register_local_tool`
+/// for every daemon-owned ability the workspace currently declares.
+///
+/// Use this after authoring a new `<agent>/abilities/<verb>.ability.toml`
+/// (or after running `easynet agent add <name>` while the daemon is
+/// alive) to make the new ability invokable cross-process without
+/// restarting the daemon.
+///
+/// In-process invocations (the agent calling its own ability via the
+/// daemon's local MCP bridge) work the moment the TOML lands —
+/// `chat_ability::register_dynamic_agent_fallback` consults the
+/// workspace at lookup time. This command exists so the same view
+/// reaches axon-runtime's `runtime_local_tools` registry, which is
+/// what cross-process Invokes (frontend Abilities page,
+/// `bridge.ability_call_raw` from another process, etc.) consult.
+///
+/// Best-effort: bridge connect / register failures are reported but
+/// the command's exit code only reflects whether the bridge connect
+/// succeeded — partial registration is the same shape this same path
+/// already takes during boot.
+fn run_refresh() -> anyhow::Result<()> {
+    let (bridge, _state) = crate::persistence::config::load_and_connect()
+        .map_err(|e| anyhow::anyhow!(
+            "could not reach local axon-runtime: {e}; run `easynet runtime start` first"
+        ))?;
+    let creds = crate::persistence::config::load_credentials()
+        .map_err(|e| anyhow::anyhow!("load credentials: {e}"))?;
+    let plan = crate::facade::cli::start::build_bootstrap_plan_from(
+        &creds.tenant_id,
+        &creds.node_id,
+    )?;
+    if plan.realm.is_empty() {
+        anyhow::bail!(
+            "daemon is not joined to a realm yet; run `easynet join <token>` before refresh"
+        );
+    }
+    // Pin the caller URI for the refresh sweep — same reason as
+    // boot's start.rs and post-add publish_to_local_runtime: the
+    // bridge needs an explicit URA so hub-shaped envelopes carry
+    // a proper caller, not the literal-subject fallback that fails
+    // the membership gate.
+    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+        &bridge,
+        plan.host_device_uri.clone(),
+    );
+    let dispatch_endpoint =
+        crate::services::control::runtime_dispatch::dispatch_endpoint_uri();
+    let outcomes = crate::runtime::publish::register_local_tools_via_runtime(
+        &invoker,
+        &creds.tenant_id,
+        &plan.realm,
+        &creds.node_id,
+        &dispatch_endpoint,
+    );
+    let mut ok = 0usize;
+    let mut total = 0usize;
+    for o in &outcomes {
+        total += 1;
+        match &o.result {
+            Ok(_) => ok += 1,
+            Err(msg) => {
+                output::warn(&format!("refresh {} failed: {msg}", o.label));
+            }
+        }
+    }
+    output::success(&format!(
+        "{ok}/{total} runtime.register_local_tool calls succeeded; \
+         daemon-owned abilities are now invokable cross-process."
+    ));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1507,6 +1699,104 @@ mod tests {
             "--purge must delete the directory, but {} still exists",
             root.display()
         );
+    }
+
+    fn set_args(name: &str, model: Option<&str>) -> SetArgs {
+        SetArgs {
+            name: name.into(),
+            model: model.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn run_set_changes_model_in_both_agent_toml_and_registry_row() {
+        // The on-disk `agent.toml` and the registry row must agree
+        // after `agent set --model X`. Earlier versions only
+        // updated one; the discrepancy showed up later as
+        // "claude reports sonnet, but `agent list` shows opus" —
+        // the contract here pins both.
+        let _g = HomeGuard::new();
+        run_add(add_args("alice", "claude-code", Some("sonnet"))).unwrap();
+
+        run_set(set_args("alice", Some("opus"))).unwrap();
+
+        // Registry row updated.
+        let entry = agents::load_agents().unwrap().agents["alice"].clone();
+        assert_eq!(entry.model.as_deref(), Some("opus"));
+
+        // agent.toml on disk updated.
+        let root = entry.root_path.clone().unwrap();
+        let spec = AgentSpec::from_toml_str(
+            &fs::read_to_string(root.join("agent.toml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(spec.model.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn run_set_with_empty_model_string_clears_the_field() {
+        // Passing `--model ''` is the explicit CLEAR signal:
+        // the agent should fall back to the underlying CLI's
+        // default model. This is the load-bearing distinction
+        // between "no flag passed" (no change) and "flag with
+        // empty value" (clear).
+        let _g = HomeGuard::new();
+        run_add(add_args("alice", "claude-code", Some("sonnet"))).unwrap();
+
+        run_set(set_args("alice", Some(""))).unwrap();
+
+        let entry = agents::load_agents().unwrap().agents["alice"].clone();
+        assert!(
+            entry.model.is_none(),
+            "empty-string --model must clear; got {:?}",
+            entry.model
+        );
+        // agent.toml round-trips with no `model` field.
+        let root = entry.root_path.clone().unwrap();
+        let body = fs::read_to_string(root.join("agent.toml")).unwrap();
+        assert!(
+            !body.contains("model ="),
+            "cleared model must not be persisted; got:\n{body}"
+        );
+    }
+
+    #[test]
+    fn run_set_rejects_unknown_agent_with_actionable_message() {
+        // No false positives — `agent set nonexistent --model X`
+        // must fail with a clear message pointing at `agent list`,
+        // not silently create a row (which would be a footgun:
+        // operator typos a name and gets a phantom agent).
+        let _g = HomeGuard::new();
+        let err = run_set(set_args("nonexistent", Some("sonnet"))).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("not registered"), "msg: {msg}");
+        assert!(msg.contains("agent list"), "msg should hint list: {msg}");
+    }
+
+    #[test]
+    fn run_set_with_no_flags_errors_explicitly() {
+        // `agent set alice` (no --model) is meaningless today.
+        // We could silently no-op, but that risks operators
+        // believing they changed something when they didn't.
+        // Explicit error is friendlier.
+        let _g = HomeGuard::new();
+        run_add(add_args("alice", "claude-code", Some("sonnet"))).unwrap();
+        let err = run_set(set_args("alice", None)).unwrap_err();
+        assert!(format!("{err}").contains("nothing to change"));
+    }
+
+    #[test]
+    fn run_set_does_not_validate_model_string_against_any_allow_list() {
+        // Per the SetArgs::model doc: claude/codex CLIs accept any
+        // string and resolve aliases at their own discretion. Even
+        // a deliberately-wrong-looking name must round-trip — the
+        // validation belongs at invocation time, not at
+        // configuration time. This pins the no-allow-list policy.
+        let _g = HomeGuard::new();
+        run_add(add_args("alice", "claude-code", None)).unwrap();
+        run_set(set_args("alice", Some("definitely-not-a-real-model-xyz"))).unwrap();
+        let entry = agents::load_agents().unwrap().agents["alice"].clone();
+        assert_eq!(entry.model.as_deref(), Some("definitely-not-a-real-model-xyz"));
     }
 
     #[test]

@@ -1,32 +1,29 @@
-// EasyNet CLI
-// ===========
+// EasyNet CLI — `easynet ability deploy`
+// =======================================
 //
-// File: src/cli/deploy.rs
-// Description: `easynet ability deploy <path> --node <id>` —
-//              three-phase ability deployment pipeline.
+// File: src/facade/cli/deploy.rs
+// Description: Publish an ability bundle to a target node.
 //
-// Protocol Responsibility:
-// - Implements a forward-recovery saga: Publish → Install → Activate.
-//   Phase 1 (Publish): Registers package metadata + bytes in Hub registry.
-//   Phase 2 (Install): Materializes the ability on target node, returns install_id.
-//   Phase 3 (Activate): Enables invocation — ability appears in `easynet abilities`.
-// - Each phase is idempotent-safe; partial failures leave the system in a recoverable state.
+// Per the ability-only ontology, deploying an ability is itself an
+// ability invocation: the operator invokes `fleet.deploy_ability`
+// on the local daemon, passing the local path and target node id.
+// The daemon-side handler reads the bundle, validates the manifest,
+// computes the integrity digest, and publishes through the
+// federation transport. Single-node case (the only deployable
+// target is `local`) lands the bundle into the local registry; the
+// multi-node fan-out lights up the day federation Invoke ships.
 //
-// Implementation Approach:
-// - Reads ability.json for metadata: name, version, tool_name, description, command.
-// - Packages ability.json as base64 payload with SHA-256 digest for integrity.
-// - Uses ephemeral signature (__AXON_EPHEMERAL_DO_NOT_USE_IN_PROD__) for development;
-//   requires AXON_ALLOW_PLACEHOLDER_DEPLOY_SIGNATURE=1 env var.
+// What this CLI shim does
+// -----------------------
+//   1. Validate args locally (path exists, node id non-empty).
+//   2. Map args → JSON request body.
+//   3. invoke_local_ability("fleet.deploy_ability", body).
+//   4. Print the daemon's response.
 //
-// Usage Contract:
-// - The target node (--node) must be online and registered in the federation.
-// - ability.json must contain at minimum: "name" and "command" fields.
-// - After deployment, the ability is callable via `easynet ability invoke`
-//   or MCP tool calls.
-//
-// Architectural Position:
-// - Write path of the ability lifecycle. Read path is abilities.rs.
-// - Mirrors the MCP handler deploy_ability in mcp/handlers.rs (same three-phase flow).
+// All policy (manifest validation, signature handling, ordering of
+// publish→install→activate) lives inside the ability handler so
+// the federation Invoke replacement carries the same contract
+// without rewriting the CLI.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -34,92 +31,54 @@
 use anyhow::Context;
 use clap::Args;
 use console::style;
-use serde_json::Map;
+use serde_json::json;
 
-use crate::persistence::config;
-use crate::support::{output};
+use crate::support::local_invoke::invoke_local_ability;
+use crate::support::output;
 
 #[derive(Debug, Args)]
 pub struct DeployArgs {
     /// Path to the ability directory (must contain `ability.json`).
     pub path: String,
-    /// Target device node id. Named `--node`/`-n` to match every
-    /// other per-call command in the CLI (`ability invoke`,
-    /// `ability list`, `ability show`, `ability uninstall`).
-    /// The old `--to` spelling was removed before release — see
-    /// `docs/CLI_NAMING.md` if re-introducing an alias is ever
-    /// considered.
+    /// Target device node id. Use `local` to deploy onto this
+    /// device's own ability registry; any other node id requires
+    /// the federation Invoke transport (the handler returns a
+    /// typed `federation_not_wired` error in that case until it
+    /// ships).
     #[arg(long = "node", short = 'n', value_name = "NODE_ID")]
     pub node: String,
 }
 
 pub fn run(args: DeployArgs) -> anyhow::Result<()> {
-    let (br, state) = crate::persistence::config::load_and_connect()?;
-    let tenant = state.tenant_or_default();
-
     let dir = std::path::Path::new(&args.path);
     anyhow::ensure!(dir.is_dir(), "{} is not a directory", args.path);
-
-    let desc_path = dir.join("ability.json");
-    anyhow::ensure!(desc_path.exists(), "no ability.json in {}", args.path);
-
-    let desc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&desc_path)?)?;
-    let name = desc
-        .get("name")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("missing 'name'"))?;
-    let version = desc
-        .get("version")
-        .and_then(|v| v.as_str())
-        .unwrap_or("1.0.0");
-    let tool_name = desc
-        .get("tool_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or(name);
-    let description = desc
-        .get("description")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let command = desc
-        .get("command")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("missing 'command'"))?;
-
-    // Prefer real deploy signature from credentials; fall back to ephemeral for dev.
-    let signature = config::load_credentials()
-        .ok()
-        .map(|c| c.deploy_signature)
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| {
-            output::warn("no deploy signature found — using ephemeral placeholder (dev only)");
-            easynet_axon::EPHEMERAL_SIGNATURE.to_string()
-        });
-
-    // Build deploy package via SDK.
-    // Note: unlike the MCP handler (which wraps ad-hoc commands in a Python subprocess
-    // template for structured JSON output), CLI deploy passes the command as-is —
-    // ability authors are responsible for their own output format.
-    let mut pkg_args = Map::new();
-    pkg_args.insert("ability_name".into(), serde_json::json!(name));
-    pkg_args.insert("tool_name".into(), serde_json::json!(tool_name));
-    pkg_args.insert("description".into(), serde_json::json!(description));
-    pkg_args.insert("command_template".into(), serde_json::json!(command));
-    pkg_args.insert("version".into(), serde_json::json!(version));
-
-    let descriptor = easynet_axon::ability::build_deploy_package(&pkg_args, &signature)
-        .context("build deploy package")?;
+    anyhow::ensure!(
+        !args.node.trim().is_empty(),
+        "--node was given but empty; pass `local` for this device or a real node id"
+    );
 
     eprint!(
-        "  deploying {}@{} to {} ... ",
-        style(name).cyan(),
-        version,
+        "  deploying {} to {} ... ",
+        style(&args.path).cyan(),
         style(&args.node).cyan()
     );
-    let result = easynet_axon::ability::deploy_package(&br, tenant, &args.node, &descriptor, true)
-        .context("deploy")?;
+    let result = invoke_local_ability(
+        "fleet.deploy_ability",
+        json!({
+            "path": args.path,
+            "node_id": args.node,
+        }),
+    )
+    .context("invoke fleet.deploy_ability")?;
     eprintln!("{}", style("✓").green());
 
-    output::step(&format!("install_id: {}", result.install_id));
-    output::success(&format!("activated — {tool_name} is live"));
+    if let Some(install_id) = result.get("install_id").and_then(|v| v.as_str()) {
+        output::step(&format!("install_id: {install_id}"));
+    }
+    if let Some(name) = result.get("ability_name").and_then(|v| v.as_str()) {
+        output::success(&format!("activated — {name} is live on {}", args.node));
+    } else {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    }
     Ok(())
 }

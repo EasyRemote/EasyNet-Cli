@@ -399,16 +399,32 @@ impl StepDispatcher for BorrowedBridgeDispatcher<'_> {
         timeout_ms: Option<u64>,
     ) -> Result<Value, EalError> {
         match target {
-            IrTarget::Device { node_id } => self
-                .bridge
-                .call_mcp_tool_with_timeout(
-                    tenant,
-                    ability.as_str(),
-                    node_id,
-                    arguments,
-                    timeout_ms,
-                )
-                .map_err(EalError::from),
+            IrTarget::Device { node_id } => {
+                // RFC-001 P1.5 + RFC-002.2: the legacy MCP-shaped
+                // device-targeted RPC the SDK exposed
+                // (`call_mcp_tool_with_timeout`) was deleted along
+                // with the rest of the legacy gRPC surface. The
+                // canonical replacement for "EAL step targeting
+                // a remote device's ability" is
+                // `federation.forward_invoke` against the device
+                // URA — the same path
+                // `<self>.invoke(target=remote_uri)` takes. EAL's
+                // dispatcher does not yet construct that envelope
+                // (it would need keyring + tenant + realm in the
+                // dispatcher's scope, which today's `BorrowedBridgeDispatcher`
+                // is intentionally lighter than). Surface a typed
+                // Unavailable error pointing operators at the path
+                // that DOES work: the LLM-driven `<self>.invoke`
+                // surface or `mcp.bridge.call_tool` for in-process.
+                let _ = (tenant, ability, node_id, arguments, timeout_ms);
+                Err(EalError::Unavailable(
+                    "EAL device-targeted dispatch via the legacy MCP RPC was \
+                     removed by RFC-001 P1.5; route through \
+                     `<self>.invoke(target=<device-ura>)` (RFC-002.2 forward_invoke) \
+                     or `mcp.bridge.call_tool` for in-process MCP shapes."
+                        .to_string(),
+                ))
+            }
             // Agent target on a Device-only dispatcher is a planner /
             // call-site contract violation, not a transient failure —
             // categorise as Validation so retries don't fire and so
@@ -511,28 +527,24 @@ impl StepDispatcher for AgentAwareDispatcher {
                 dispatch_to_agent(&self.registry, agent_id, ability, arguments)
             }
             IrTarget::Device { node_id } => {
-                // Both pool checkout and the subsequent bridge call are
-                // transport-class failures — categorise explicitly as
-                // `Unavailable` at each site rather than relying on a
-                // default-via-`From` impl. Explicit categorisation is
-                // cheap (one constructor per site) and makes the error
-                // category visible in the source, which is the whole
-                // point of the typed-error migration.
-                let guard = self
-                    .pool
-                    .checkout()
-                    .map_err(|e| EalError::Unavailable(format!("bridge pool: {e}")))?;
-                guard
-                    .bridge()
-                    .call_mcp_tool_with_timeout(
-                        tenant,
-                        ability.as_str(),
-                        node_id,
-                        arguments,
-                        timeout_ms,
-                    )
-                    .map_err(EalError::from)
-                // guard drops here → bridge returned to pool
+                // RFC-001 P1.5 + RFC-002.2: see BorrowedBridgeDispatcher
+                // for the migration rationale. The legacy MCP RPC was
+                // deleted; route remote-device EAL steps through
+                // `<self>.invoke(target=<device-ura>)` (forward_invoke).
+                // Today's AgentAwareDispatcher does not synthesize
+                // that envelope — it would need keyring + tenant +
+                // realm in scope which the dispatcher trait doesn't
+                // carry. Surface a typed Unavailable so EAL programs
+                // see a stable error name and operators can grep
+                // for the migration reason.
+                let _ = (tenant, ability, arguments, timeout_ms, node_id);
+                Err(EalError::Unavailable(
+                    "EAL device-targeted dispatch via the legacy MCP RPC was \
+                     removed by RFC-001 P1.5; route through \
+                     `<self>.invoke(target=<device-ura>)` (RFC-002.2 forward_invoke) \
+                     or `mcp.bridge.call_tool` for in-process MCP shapes."
+                        .to_string(),
+                ))
             }
         }
     }
@@ -581,23 +593,20 @@ impl StepDispatcher for PooledBridgeDispatcher {
     ) -> Result<Value, EalError> {
         match target {
             IrTarget::Device { node_id } => {
-                // Explicit `Unavailable` categorisation at each site —
-                // see `AgentAwareDispatcher::dispatch` for the rationale
-                // on why we do not rely on a blanket `From<String>` impl.
-                let guard = self
-                    .pool
-                    .checkout()
-                    .map_err(|e| EalError::Unavailable(format!("bridge pool: {e}")))?;
-                guard
-                    .bridge()
-                    .call_mcp_tool_with_timeout(
-                        tenant,
-                        ability.as_str(),
-                        node_id,
-                        arguments,
-                        timeout_ms,
-                    )
-                    .map_err(EalError::from)
+                // RFC-001 P1.5 + RFC-002.2: see BorrowedBridgeDispatcher
+                // for the migration rationale. The legacy MCP RPC is
+                // gone; route through forward_invoke or
+                // mcp.bridge.call_tool. Pool is intentionally not
+                // checked out — surfacing the typed error fast keeps
+                // the caller's diagnostic clean.
+                let _ = (tenant, ability, arguments, timeout_ms, node_id, &self.pool);
+                Err(EalError::Unavailable(
+                    "EAL device-targeted dispatch via the legacy MCP RPC was \
+                     removed by RFC-001 P1.5; route through \
+                     `<self>.invoke(target=<device-ura>)` (RFC-002.2 forward_invoke) \
+                     or `mcp.bridge.call_tool` for in-process MCP shapes."
+                        .to_string(),
+                ))
             }
             // See note on `BorrowedBridgeDispatcher`: agent target on a
             // device-only dispatcher is a contract violation.
@@ -647,13 +656,98 @@ fn dispatch_to_agent(
         // same id will not help.
         .ok_or_else(|| EalError::NotFound(format!("agent '{key}' not found in registry")))?;
 
+    // Fast path: if the target ability has an `[exec]` binding in its
+    // on-disk manifest, run the executor directly and skip spawning
+    // the LLM. This is the EAL counterpart of the dispatcher's
+    // shell-exec short-circuit in `chat_ability::build_agent_ability_handler`
+    // — both paths converge on `manifests_for(...) → run_shell_exec(...)`
+    // for a deterministic ability. Without this branch, EAL's
+    // `agent.ability(...)` syntax would always go through the chat
+    // CLI even when the manifest pinned a concrete argv, and a
+    // weather lookup that should take 200 ms would burn 30 s of LLM
+    // tool-search latency.
+    let bare_ability = ability.as_str();
+    let manifest_match = crate::runtime::abilities::manifests_for(&agent_id.name, entry)
+        .into_iter()
+        .find(|m| m.name() == bare_ability);
+    if let Some(manifest) = manifest_match {
+        if let Some(exec) = manifest.exec() {
+            let timeout = manifest
+                .timeout_seconds()
+                .map(std::time::Duration::from_secs);
+            return match exec {
+                crate::core::ability_spec::AbilityExec::Shell(spec) => {
+                    crate::runtime::agents::shell_executor::run_shell_exec(
+                        spec, arguments, timeout,
+                    )
+                    .map_err(|e| EalError::Unavailable(format!("shell exec: {e}")))
+                }
+                crate::core::ability_spec::AbilityExec::Http(spec) => {
+                    crate::runtime::agents::http_executor::run_http_exec(
+                        spec, arguments, timeout,
+                    )
+                    .map_err(|e| EalError::Unavailable(format!("http exec: {e}")))
+                }
+                crate::core::ability_spec::AbilityExec::Eal(spec) => {
+                    crate::runtime::agents::eal_executor::run_eal_exec(
+                        spec, arguments, timeout,
+                    )
+                    .map_err(|e| EalError::Unavailable(format!("eal exec: {e}")))
+                }
+            };
+        }
+    }
+
+    // Second fast path: try the local daemon's ability registry over
+    // the control socket. The daemon registers per-agent self-bundle
+    // verbs (`<agent>.discover`, `<agent>.invoke`, …) plus any
+    // workspace-declared `<agent>.<verb>` whose manifest does NOT
+    // pin an `[exec]` block but DOES have a real registered handler
+    // (Rust builtin or shell-via-handler). Without this branch EAL
+    // would fall straight through to the chat-fulfils path even when
+    // a deterministic handler existed in the daemon — a 30 s LLM
+    // round-trip for what should be a sub-second registry call.
+    //
+    // We do the IPC round-trip here only when the manifest path
+    // above did NOT short-circuit. Failure modes are explicit:
+    //
+    //   * daemon down → propagate as Unavailable (caller may retry).
+    //   * daemon returned `ability_not_found` → fall through to the
+    //     chat path (preserves the legacy "manifest declares an
+    //     ability but only chat can fulfil it" behaviour).
+    //   * daemon returned any other typed error → propagate.
+    let qualified = format!("{}.{}", agent_id.name, ability.as_str());
+    match try_dispatch_via_daemon(&qualified, arguments) {
+        DaemonDispatch::Result(value) => return Ok(value),
+        DaemonDispatch::AbilityNotFound => { /* fall through to chat */ }
+        DaemonDispatch::DaemonDown(reason) => {
+            return Err(EalError::Unavailable(format!("daemon: {reason}")));
+        }
+        DaemonDispatch::Error(reason) => {
+            return Err(EalError::Unavailable(format!("daemon: {reason}")));
+        }
+    }
+
     let prompt = build_agent_prompt(ability.as_str(), arguments);
 
     // Agent CLI dispatch failures (process spawn, IO, model error) are
     // transport-class — `unavailable` is the right bucket so the
     // interpreter's retry policy can fire when configured.
-    let response = crate::runtime::dispatch::send_to_agent(&key, entry, &prompt, None, None)
-        .map_err(|e| EalError::Unavailable(format!("agent dispatch: {e}")))?;
+    //
+    // IMPORTANT: pass the BARE agent name to send_to_agent, not the
+    // namespaced AgentId form (`default/claude`). Downstream
+    // workspace::ensure_workspace runs the registry name validator
+    // against this string, and the validator legitimately rejects
+    // anything containing `/`. The namespaced form is the registry
+    // *lookup* identity above; the *runtime* identity is the bare
+    // name. Using the wrong one here was the root cause of every
+    // EAL→agent dispatch failing with
+    // "workspace provisioning failed: agent.toml: name = "default/claude"
+    //  must contain only lowercase ASCII letters, …" before the
+    // CLI could even spawn.
+    let response =
+        crate::runtime::dispatch::send_to_agent(&agent_id.name, entry, &prompt, None, None)
+            .map_err(|e| EalError::Unavailable(format!("agent dispatch: {e}")))?;
 
     Ok(serde_json::json!({
         "ok": true,
@@ -662,6 +756,146 @@ fn dispatch_to_agent(
         "model": response.model,
         "duration_ms": response.duration_ms,
     }))
+}
+
+/// Outcome of attempting to dispatch a `<agent>.<verb>` call through
+/// the local daemon's control socket.
+///
+/// Why a custom enum (rather than `Result<Option<Value>, ...>`)
+/// -----------------------------------------------------------
+/// `dispatch_to_agent` needs to make three decisions on the result:
+///   1. Got a value → return it directly.
+///   2. Daemon told us "no such ability" → silently fall through to
+///      the chat path. Legacy abilities that exist in name only (a
+///      manifest declares the verb but the daemon never registered
+///      a handler) STILL need the chat translation, and the caller
+///      must not see a stack trace just because the daemon was
+///      consulted first.
+///   3. Daemon down / daemon errored → propagate as Unavailable and
+///      stop. Continuing to chat in this case would mask transport
+///      failures.
+///
+/// A flat `Result<Option<Value>, ...>` collapses (2) and (3) into the
+/// "Err" axis, which the chat-fall-through code can't distinguish
+/// without string-matching the error message — fragile.
+enum DaemonDispatch {
+    Result(Value),
+    AbilityNotFound,
+    DaemonDown(String),
+    Error(String),
+}
+
+/// Dispatch a fully-qualified `<agent>.<verb>` against the local
+/// daemon's ability registry over the control socket. Returns one of
+/// the four outcome variants the caller branches on.
+///
+/// Spins a single-threaded current-thread tokio runtime per call.
+/// The cost is one runtime construction (~500 µs) plus the UDS
+/// round-trip (~1 ms). EAL's other CLI subcommands (mission run,
+/// agent send) follow the same pattern; if EAL ever runs inside an
+/// already-tokio context the construction will fail and we'll need
+/// to detect that — but today every EAL entry point is sync.
+fn try_dispatch_via_daemon(qualified_name: &str, arguments: &Value) -> DaemonDispatch {
+    let control_json = crate::services::control::discovery::default_path();
+    if !control_json.exists() {
+        return DaemonDispatch::DaemonDown(format!(
+            "no control.json at {} — start the daemon with `easynet runtime start`",
+            control_json.display()
+        ));
+    }
+
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            return DaemonDispatch::Error(format!("build tokio runtime: {e}"));
+        }
+    };
+
+    let ability = qualified_name.to_string();
+    let args = arguments.clone();
+    let request_id = format!("eal-{}", uuid_like_hex());
+
+    let outcome: Result<Result<Value, DaemonDispatch>, String> = runtime.block_on(async move {
+        use crate::services::control::frames::{IncomingFrame, OutgoingFrame};
+
+        let mut client = match crate::ffi::client::connect(&control_json).await {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(Err(DaemonDispatch::DaemonDown(format!(
+                    "connect control socket: {e}"
+                ))));
+            }
+        };
+        let resp = match client
+            .round_trip(IncomingFrame::Invoke {
+                request_id: request_id.clone(),
+                ability,
+                args,
+            })
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(Err(DaemonDispatch::Error(format!(
+                    "round_trip: {e}"
+                ))));
+            }
+        };
+        match resp {
+            OutgoingFrame::Result {
+                request_id: rid,
+                value,
+                ..
+            } => {
+                if rid != request_id {
+                    return Ok(Err(DaemonDispatch::Error(format!(
+                        "daemon Result rid mismatch (got {rid:?}, sent {request_id:?})"
+                    ))));
+                }
+                Ok(Ok(value))
+            }
+            OutgoingFrame::Error {
+                code, message, ..
+            } => {
+                // Map the typed code so the caller can route on intent
+                // rather than string-matching. `not_found` is the
+                // documented daemon code for "no handler for this
+                // ability"; anything else is propagated verbatim.
+                let lower = code.to_ascii_lowercase();
+                if lower.contains("not_found") || message.contains("no local handler registered") {
+                    Ok(Err(DaemonDispatch::AbilityNotFound))
+                } else {
+                    Ok(Err(DaemonDispatch::Error(format!(
+                        "code={code}: {message}"
+                    ))))
+                }
+            }
+            other => Ok(Err(DaemonDispatch::Error(format!(
+                "unexpected frame: {other:?}"
+            )))),
+        }
+    });
+
+    match outcome {
+        Ok(Ok(value)) => DaemonDispatch::Result(value),
+        Ok(Err(d)) => d,
+        Err(e) => DaemonDispatch::Error(e),
+    }
+}
+
+/// Short hex correlation id for the IPC `request_id`. Mirrors the
+/// helper in `facade::cli::invoke` — kept local to avoid a cross-crate
+/// dep just for a 5-line function.
+fn uuid_like_hex() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{:x}", nanos)
 }
 
 /// Build a prompt for an agent from an EAL step's `function_name` and arguments.

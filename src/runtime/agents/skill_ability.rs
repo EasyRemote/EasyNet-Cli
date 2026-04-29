@@ -72,6 +72,15 @@ pub fn register(reg: &mut LocalAbilityRegistry) {
     reg.register_rpc(ABILITY_LIST, Arc::new(list_handler));
 }
 
+/// Crate-internal entry for the `fleet.list_abilities` walk. Used
+/// by `skill_publish_ability::list_handler` so the curator's
+/// `skill.list` verb returns byte-identical rows to what the
+/// operator-facing Skills page sees through `fleet.list_abilities`.
+/// Single source of truth for the on-disk skill enumeration.
+pub(crate) fn list_handler_for_args(args: Value) -> anyhow::Result<Value> {
+    list_handler(args)
+}
+
 /// `fleet.list_abilities` RPC handler.
 ///
 /// Args: `{ "agent_id": "<name>"? }` — when present, filter to skills
@@ -114,17 +123,42 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
             }
         }
 
-        // Source 1 — EasyNet-managed installs under
-        // <agent-root>/skills/<skill>/.easynet/install.json. These
-        // carry full provenance (source URL, content_hash, install
-        // timestamp).
+        // Source 1 — EasyNet-managed installs.
+        //
+        // Path layout depends on agent type. For claude-code agents
+        // we publish skills under `<root>/.claude/skills/<name>/`
+        // (matching Claude Code's project-local skill convention so
+        // the running `claude` subprocess auto-loads them). For
+        // codex agents we use `<root>/skills/<name>/` because codex
+        // has no native project-local skill convention. Either
+        // way, the install record at
+        // `<dir>/.easynet/install.json` carries full provenance.
+        //
+        // We also scan the legacy `<root>/skills/` location for
+        // claude-code agents — earlier published skills (before the
+        // 2026-04-29 fix) live there. New publishes write to
+        // `.claude/skills/`; the legacy walk lets `easynet skill
+        // list` keep surfacing them until they're republished.
         let root = entry
             .root_path
             .clone()
             .unwrap_or_else(|| crate::persistence::config::agents_root().join(name));
-        let skills_dir = root.join("skills");
-        if skills_dir.exists() {
-            if let Ok(read) = std::fs::read_dir(&skills_dir) {
+        let mut skill_dirs: Vec<std::path::PathBuf> = Vec::new();
+        match entry.agent_type {
+            crate::registry::agents::AgentType::ClaudeCode => {
+                skill_dirs.push(root.join(".claude").join("skills"));
+                skill_dirs.push(root.join("skills")); // legacy, pre-fix
+            }
+            crate::registry::agents::AgentType::Codex
+            | crate::registry::agents::AgentType::CodexAppServer => {
+                skill_dirs.push(root.join("skills"));
+            }
+        }
+        for skills_dir in &skill_dirs {
+            if !skills_dir.exists() {
+                continue;
+            }
+            if let Ok(read) = std::fs::read_dir(skills_dir) {
                 for dir_entry in read.flatten() {
                     let record_path = dir_entry.path().join(".easynet").join("install.json");
                     if !record_path.exists() {

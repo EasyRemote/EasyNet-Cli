@@ -50,6 +50,15 @@ pub const DEVICE_PROFILE_ABILITY_PREFIXES: &[&str] = &[
     // Putting them under device matches their actual deployment
     // model: every host that participates in A2A has them.
     "a2a.",
+    // RFC-005 v3.2 A1–A5, A8 — physical-channel media abilities
+    // owned by device-profile (the host holds the hardware).
+    // voice.* / voice.transcribe are llm-profile-owned and live
+    // in `profiles/llm.rs`; the prefix list here intentionally
+    // omits "voice." for that reason.
+    "mic.",
+    "camera.",
+    "screen.",
+    "speaker.",
 ];
 
 /// Returns true if `ability_name` is owned by the device profile.

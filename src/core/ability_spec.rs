@@ -174,6 +174,280 @@ pub struct AbilityManifest {
     input_schema: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     output_schema: Option<Value>,
+    /// Optional executor binding. When present, the daemon dispatches
+    /// the ability to the named executor directly, bypassing the
+    /// chat-translation fallback. Absence preserves the legacy "fulfil
+    /// via the owning agent's chat handler" behaviour, so existing
+    /// manifests keep working unchanged.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    exec: Option<AbilityExec>,
+    /// Optional access policy. Drives `<self>.discover` filtering and
+    /// the `<self>.invoke` permission check. Absence is treated as the
+    /// default policy (`AccessPolicy::default()`), which sets
+    /// `visibility = "device"` — the same trust boundary as "agents
+    /// running on the same physical device under one user".
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    access: Option<AccessPolicy>,
+}
+
+/// Where this ability is discoverable and callable from.
+///
+/// The model is monotonic: each tier strictly includes the smaller
+/// ones (`device` includes `self`, `public` includes both). This
+/// matches the `<self>.discover(scope: ...)` ladder — Tier 1 returns
+/// `self`+, Tier 2 returns `device`+, Tier 3 returns `public`.
+///
+/// Default is `Device` rather than `Self` because two agents on the
+/// same device share the user's trust boundary; requiring an explicit
+/// opt-in for every per-agent ability would be a usability tax with
+/// no real security gain (the OS already gates the device boundary).
+/// An author who wants stricter scoping ticks `visibility = "self"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Visibility {
+    /// Only the owning agent can discover or invoke. Useful for
+    /// internal helpers an agent uses inside its own chat loop and
+    /// does not want peers to call.
+    #[serde(rename = "self")]
+    Selfish,
+    /// Other agents on the same device may discover and invoke.
+    /// Default. Matches "this is my computer, my agents can talk".
+    #[default]
+    Device,
+    /// Visible to the EasyNet federation (other users' devices).
+    /// Requires the federation layer to route. Until that layer
+    /// ships, the runtime treats `public` like `device` for local
+    /// dispatch and surfaces nothing extra to remote callers.
+    Public,
+}
+
+/// Per-ability access policy.
+///
+/// Visibility is the coarse "who can see / call this at all" knob;
+/// `allow_callers` / `deny_callers` are the fine-grained "of those
+/// allowed by visibility, which specific peer agents are pinned in
+/// (or out)" knobs. Order of evaluation:
+///
+///   1. `visibility` filter — `self`/`device`/`public` controls the
+///      tier.
+///   2. `deny_callers` — if the caller's name is here, reject. Deny
+///      always wins over allow.
+///   3. `allow_callers` — if non-empty, the caller's name MUST be
+///      in the list. Empty list = "anyone allowed by visibility".
+///
+/// Caller name comparison is exact-string (no glob / wildcard yet).
+/// `*` is reserved for future glob support but is not interpreted
+/// in v1 — it's just an unusual literal name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct AccessPolicy {
+    /// Discoverability + invocation tier. Default `Visibility::Device`.
+    /// See `Visibility` doc for the trust model.
+    #[serde(default)]
+    pub visibility: Visibility,
+    /// Optional whitelist of caller agent names. When non-empty, ONLY
+    /// these callers may invoke; everyone else is rejected with
+    /// `permission_denied`. Empty (default) = no whitelist applied.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub allow_callers: Option<Vec<String>>,
+    /// Optional blacklist of caller agent names. Always wins over
+    /// `allow_callers` and over `visibility`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub deny_callers: Option<Vec<String>>,
+}
+
+impl AccessPolicy {
+    /// Whether this policy permits a caller in `caller_scope` to
+    /// discover or invoke. The caller's scope is determined by the
+    /// dispatch layer (self if same agent, device if peer-on-this-box,
+    /// public if federation routed).
+    ///
+    /// This check ignores caller identity — pair with
+    /// `allows_caller_name` when the caller is named.
+    pub fn allows_caller(&self, caller_scope: Visibility) -> bool {
+        // Monotonic tier check: caller's scope must be ≤ ability's
+        // visibility. `self` is the strictest, `public` is the
+        // broadest.
+        let ability_tier = self.visibility.tier();
+        let caller_tier = caller_scope.tier();
+        caller_tier <= ability_tier
+    }
+
+    /// Whether this policy admits a caller named `caller_name` once
+    /// the visibility tier check has passed. Returns false when the
+    /// deny list contains the name OR when the allow list is non-
+    /// empty and does NOT contain the name.
+    ///
+    /// Exact-string match. v1 has no glob support; that's a future
+    /// addition (the `*` literal stays uninterpreted).
+    pub fn allows_caller_name(&self, caller_name: &str) -> bool {
+        if let Some(deny) = &self.deny_callers {
+            if deny.iter().any(|n| n == caller_name) {
+                return false;
+            }
+        }
+        if let Some(allow) = &self.allow_callers {
+            if !allow.is_empty() && !allow.iter().any(|n| n == caller_name) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl Visibility {
+    /// Numeric tier so `allows_caller` can compare. The values are
+    /// intentionally not part of the serialised TOML — TOML carries
+    /// the snake_case names and `tier()` is private numeric form.
+    fn tier(self) -> u8 {
+        match self {
+            Visibility::Selfish => 0,
+            Visibility::Device => 1,
+            Visibility::Public => 2,
+        }
+    }
+
+    /// Stable string form used in JSON discovery payloads (the
+    /// `visibility` field of a `<self>.discover` candidate). Mirrors
+    /// the TOML serde rename rules so the wire form and the on-disk
+    /// form agree.
+    pub fn as_wire_str(self) -> &'static str {
+        match self {
+            Visibility::Selfish => "self",
+            Visibility::Device => "device",
+            Visibility::Public => "public",
+        }
+    }
+}
+
+/// Executor binding for an ability. The TOML uses an internally-tagged
+/// representation (`kind = "shell"`); future executor kinds (http,
+/// wasm, agent_chat with a non-self target) plug in as additional
+/// variants.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AbilityExec {
+    /// Spawn a subprocess via `argv`. Each element is rendered as a
+    /// minijinja template with the call's arguments bound by name —
+    /// so `{{ location }}` in argv pulls from `args["location"]`. The
+    /// argv form deliberately bypasses `sh -c` so a value that
+    /// contains a space or shell metacharacter cannot expand into a
+    /// second token.
+    Shell(ShellExec),
+    /// Issue one HTTP request and return the response. Distinct from
+    /// the shell executor + curl: no subprocess, no shellguard, no
+    /// argv injection surface. Args are rendered into URL / headers /
+    /// body via the same `{{ name }}` template rules, but values are
+    /// URL-encoded automatically when interpolated into the URL — a
+    /// `{{ city }}` of `"São Paulo"` becomes `S%C3%A3o%20Paulo` so
+    /// the call doesn't fail mid-fetch on a control character.
+    Http(HttpExec),
+    /// Run a small EAL program as the ability's implementation. The
+    /// `source` field carries the EAL text with `{{ name }}` template
+    /// placeholders rendered against call args BEFORE the parser
+    /// runs. Lets a curator-published ability compose existing
+    /// abilities into a reusable workflow without inventing a second
+    /// orchestration surface — same EAL the human operator already
+    /// uses with `easynet.run`.
+    Eal(EalExec),
+}
+
+/// Configuration for the `shell` executor.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShellExec {
+    /// Argv vector. argv[0] is the program; subsequent elements are
+    /// arguments. Each element is independently rendered as a
+    /// minijinja template against the call args. Empty argv is
+    /// rejected at validate-time.
+    pub argv: Vec<String>,
+    /// Optional override for stdout decoding. Default is `"utf8_trim"`
+    /// (decode as UTF-8 and trim trailing whitespace). Future values:
+    /// `"json"`, `"base64"`. Kept as a string so adding a mode does
+    /// not break the schema.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub stdout: Option<String>,
+    /// Optional OS-level sandbox profile. When set the executor
+    /// wraps the spawn under macOS `sandbox-exec` (Linux: bwrap, when
+    /// wired). Pre-set named profiles:
+    ///
+    ///   * `none`         — no sandbox. Default behaviour. Use when
+    ///                      the ability is already trusted (a local
+    ///                      tool the operator vetted).
+    ///   * `net_only`     — deny filesystem writes outside of /tmp,
+    ///                      allow outbound network. Right for
+    ///                      `curl wttr.in`-style abilities.
+    ///   * `pure_compute` — deny network and writes; read-only fs
+    ///                      access. Right for `jq`/`awk`-style
+    ///                      abilities that don't need external
+    ///                      resources.
+    ///
+    /// On a platform without a backing sandbox tool (Linux without
+    /// bwrap, Windows) a non-`none` profile aborts the call rather
+    /// than silently no-op'ing — a security feature an operator
+    /// asked for must not become a no-op behind their back.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub sandbox: Option<String>,
+}
+
+/// Configuration for the `http` executor.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HttpExec {
+    /// HTTP method. Validated case-insensitively against the small
+    /// safe-methods set (GET / POST / PUT / DELETE / PATCH /
+    /// HEAD). A method outside that set is rejected at validate-time
+    /// rather than passed through, since most outliers (CONNECT /
+    /// TRACE / arbitrary verbs) are footguns.
+    pub method: String,
+    /// URL with `{{ name }}` placeholders. Each placeholder's value
+    /// is URL-encoded automatically when expanded into the URL —
+    /// see `HttpExec` doc for the encoding rule.
+    pub url: String,
+    /// Optional headers, each value rendered with the same template
+    /// rules. Header names are passed verbatim; values are NOT
+    /// URL-encoded (URL encoding is path-specific, not header-
+    /// specific) but ARE rejected for CR/LF on the way out via the
+    /// underlying http client's safe-header check.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
+    /// Optional body. Rendered with the same template rules. For a
+    /// JSON body the author should pre-stringify the JSON (the
+    /// executor will not auto-serialise) — this keeps the body
+    /// representation a single transparent string in the manifest.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub body: Option<String>,
+    /// Optional response decoding mode. Default `"text_trim"` (UTF-8
+    /// + trim trailing whitespace). Future: `"json"` (parse to JSON
+    /// Value), `"base64"` (binary). Same kept-as-string forward-
+    /// compat shape as `ShellExec.stdout`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub response: Option<String>,
+}
+
+/// Configuration for the `eal` executor — an ability whose
+/// implementation is a small EAL program composing other
+/// abilities. The `source` field is rendered with `{{ name }}`
+/// substitution against call args BEFORE the parser runs, then
+/// passed to `mission_runs::run_mission_inproc`.
+///
+/// Why we cap source size + reject empty
+/// -------------------------------------
+/// An empty source compiles to an empty mission (legal but
+/// useless); we reject so a typo in `ability.publish` surfaces at
+/// validate-time. The size cap (1 MiB) prevents an accidental
+/// stamp of a huge document into an ability — by far the more
+/// common manifest mistake than a deliberately large EAL
+/// program.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EalExec {
+    /// EAL source, with `{{ name }}` placeholders substituted
+    /// against the caller's `args` JSON before the parser runs.
+    pub source: String,
+    /// Optional binding name whose value becomes the ability's
+    /// final result. When set, the executor extracts
+    /// `mission_run.bound_vars[binding]` and returns it as the
+    /// envelope's `result` field. When absent, the executor
+    /// returns the entire `bound_vars` map as `result`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub result_binding: Option<String>,
 }
 
 impl AbilityManifest {
@@ -194,9 +468,29 @@ impl AbilityManifest {
             timeout_seconds: None,
             input_schema,
             output_schema: None,
+            exec: None,
+            access: None,
         };
         m.validate()?;
         Ok(m)
+    }
+
+    /// Attach an executor binding. Optional; absence keeps the legacy
+    /// chat-translation fallback. Returns the manifest for builder
+    /// chaining.
+    pub fn with_exec(mut self, exec: AbilityExec) -> anyhow::Result<Self> {
+        self.exec = Some(exec);
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Attach an access policy. Optional; absence is treated as the
+    /// default policy (`device` visibility) at read time. Returns the
+    /// manifest for builder chaining.
+    pub fn with_access(mut self, access: AccessPolicy) -> anyhow::Result<Self> {
+        self.access = Some(access);
+        self.validate()?;
+        Ok(self)
     }
 
     /// Override the default `None` timeout. Returns `self` for the
@@ -266,6 +560,20 @@ impl AbilityManifest {
     /// The optional output schema.
     pub fn output_schema(&self) -> Option<&Value> {
         self.output_schema.as_ref()
+    }
+
+    /// The optional executor binding. `None` means "fulfil via the
+    /// owning agent's chat handler" (legacy default).
+    pub fn exec(&self) -> Option<&AbilityExec> {
+        self.exec.as_ref()
+    }
+
+    /// The effective access policy. Falls back to `AccessPolicy::default()`
+    /// (visibility = `device`) when no `[access]` table was written, so
+    /// every consumer gets a non-None value without having to repeat
+    /// the default on every call site.
+    pub fn access(&self) -> AccessPolicy {
+        self.access.clone().unwrap_or_default()
     }
 
     /// Build the wire-level fully-qualified name `<agent>.<verb>`.
@@ -353,6 +661,145 @@ impl AbilityManifest {
                  the runtime default\", omit the field. If you want \"no timeout\", \
                  pick a real upper bound."
             );
+        }
+        if let Some(exec) = &self.exec {
+            exec.validate()?;
+        }
+        Ok(())
+    }
+}
+
+impl AbilityExec {
+    fn validate(&self) -> anyhow::Result<()> {
+        match self {
+            AbilityExec::Shell(s) => s.validate(),
+            AbilityExec::Http(h) => h.validate(),
+            AbilityExec::Eal(e) => e.validate(),
+        }
+    }
+}
+
+impl ShellExec {
+    fn validate(&self) -> anyhow::Result<()> {
+        if self.argv.is_empty() {
+            anyhow::bail!(
+                "ability.toml [exec] kind=\"shell\" requires a non-empty `argv` (the \
+                 first element is the program; subsequent elements are arguments)"
+            );
+        }
+        if self.argv[0].trim().is_empty() {
+            anyhow::bail!(
+                "ability.toml [exec] kind=\"shell\" `argv[0]` (the program) must not \
+                 be empty/whitespace"
+            );
+        }
+        if let Some(mode) = &self.stdout {
+            // Forward-compat: only the default decoder is implemented
+            // today; reject unknown values loud rather than silently
+            // ignore them so a typo in the manifest surfaces at load.
+            const KNOWN: &[&str] = &["utf8_trim"];
+            if !KNOWN.contains(&mode.as_str()) {
+                anyhow::bail!(
+                    "ability.toml [exec.shell] `stdout` = {:?} is not recognised; \
+                     known values: {:?}",
+                    mode,
+                    KNOWN
+                );
+            }
+        }
+        if let Some(profile) = &self.sandbox {
+            const KNOWN_PROFILES: &[&str] = &["none", "net_only", "pure_compute"];
+            if !KNOWN_PROFILES.contains(&profile.as_str()) {
+                anyhow::bail!(
+                    "ability.toml [exec.shell] `sandbox` = {:?} is not a known \
+                     profile; known values: {:?}",
+                    profile,
+                    KNOWN_PROFILES
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+impl HttpExec {
+    fn validate(&self) -> anyhow::Result<()> {
+        const KNOWN_METHODS: &[&str] = &["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"];
+        let upper = self.method.to_ascii_uppercase();
+        if !KNOWN_METHODS.contains(&upper.as_str()) {
+            anyhow::bail!(
+                "ability.toml [exec.http] `method` = {:?} is not in the safe set {:?}",
+                self.method,
+                KNOWN_METHODS
+            );
+        }
+        if self.url.trim().is_empty() {
+            anyhow::bail!("ability.toml [exec.http] `url` must not be empty");
+        }
+        // Reject schemes outside http/https up front. The runtime
+        // executor would also reject them, but catching at load time
+        // keeps a typo from sitting in a manifest until first call.
+        let lower = self.url.to_ascii_lowercase();
+        if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+            // Templated URLs that begin with `{{ base }}` count as
+            // valid here — we can't resolve the scheme until runtime.
+            // Only reject when the prefix is literal AND not http(s).
+            if !self.url.starts_with("{{") {
+                anyhow::bail!(
+                    "ability.toml [exec.http] `url` must start with http:// or https:// \
+                     (got {:?})",
+                    self.url
+                );
+            }
+        }
+        if let Some(mode) = &self.response {
+            const KNOWN: &[&str] = &["text_trim"];
+            if !KNOWN.contains(&mode.as_str()) {
+                anyhow::bail!(
+                    "ability.toml [exec.http] `response` = {:?} is not recognised; \
+                     known values: {:?}",
+                    mode,
+                    KNOWN
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+impl EalExec {
+    /// Soft cap on EAL `source` size embedded in a manifest. 1 MiB
+    /// is generous compared to anything an author would type by hand
+    /// (a curator-published workflow tends to be a few hundred lines)
+    /// while still small enough that a paste-the-wrong-thing accident
+    /// — dropping a transcript or binary blob into `source` — fails
+    /// loud at `from_toml_str` instead of silently bloating the on-
+    /// disk manifest.
+    const MAX_SOURCE_BYTES: usize = 1024 * 1024;
+
+    fn validate(&self) -> anyhow::Result<()> {
+        if self.source.trim().is_empty() {
+            anyhow::bail!(
+                "ability.toml [exec] kind=\"eal\" requires a non-empty `source` (the \
+                 EAL program text)"
+            );
+        }
+        if self.source.len() > Self::MAX_SOURCE_BYTES {
+            anyhow::bail!(
+                "ability.toml [exec] kind=\"eal\" `source` is {} bytes which exceeds \
+                 the {}-byte cap; split the workflow into smaller abilities or call \
+                 them via `easynet.run` directly",
+                self.source.len(),
+                Self::MAX_SOURCE_BYTES
+            );
+        }
+        if let Some(binding) = &self.result_binding {
+            if binding.trim().is_empty() {
+                anyhow::bail!(
+                    "ability.toml [exec.eal] `result_binding`, when set, must be a \
+                     non-empty binding name"
+                );
+            }
         }
         Ok(())
     }
@@ -961,6 +1408,418 @@ mod tests {
     fn from_toml_str_rejects_malformed_toml() {
         let err = AbilityManifest::from_toml_str("not = a = valid = toml").unwrap_err();
         assert!(format!("{err}").contains("parse"));
+    }
+
+    #[test]
+    fn from_toml_str_round_trips_shell_exec_section() {
+        // Pin the on-disk shape: `[exec] kind = "shell"` with a
+        // top-level `argv` array. The internally-tagged enum
+        // representation flattens `ShellExec`'s fields into the
+        // same table as `kind`, so an author writing
+        //
+        //     [exec]
+        //     kind = "shell"
+        //     argv = [...]
+        //
+        // matches what serde produces. Asserting the parse here
+        // means a future refactor that switches to
+        // `[exec.shell] argv = [...]` (a different, externally-
+        // tagged shape) would have to update this test, surfacing
+        // the breaking change to every author with a manifest on
+        // disk.
+        let toml = r#"
+schema_version = "1"
+name = "weather"
+description = "fetch weather"
+[input_schema]
+type = "object"
+[exec]
+kind = "shell"
+argv = ["curl", "-s", "https://example/{{ location }}"]
+"#;
+        let m = AbilityManifest::from_toml_str(toml).expect("manifest with [exec] must parse");
+        let exec = m.exec().expect("[exec] section must be preserved on parse");
+        match exec {
+            AbilityExec::Shell(s) => {
+                assert_eq!(s.argv.len(), 3);
+                assert_eq!(s.argv[0], "curl");
+                assert!(s.argv[2].contains("{{ location }}"));
+            }
+            other => panic!("expected Shell, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_toml_str_rejects_shell_exec_with_empty_argv() {
+        let toml = r#"
+schema_version = "1"
+name = "x"
+description = ""
+[input_schema]
+type = "object"
+[exec]
+kind = "shell"
+argv = []
+"#;
+        let err = AbilityManifest::from_toml_str(toml).unwrap_err();
+        assert!(
+            format!("{err}").contains("argv"),
+            "validator must call out empty argv: {err}"
+        );
+    }
+
+    #[test]
+    fn access_defaults_to_device_when_section_absent() {
+        // The on-disk shape that 99% of existing manifests use:
+        // no `[access]` section. The accessor must materialise the
+        // default policy so downstream consumers never have to repeat
+        // the "if None then device" branch.
+        let m = AbilityManifest::new("chat", "x", object_schema()).unwrap();
+        assert_eq!(m.access().visibility, Visibility::Device);
+    }
+
+    #[test]
+    fn access_visibility_self_round_trips_through_toml() {
+        // Author-side opt-in: an internal helper an agent doesn't
+        // want peers to see. The on-disk word must be exactly "self"
+        // (matching the discover scope name) to keep one vocabulary.
+        let toml = r#"
+schema_version = "1"
+name = "internal_helper"
+description = "private to the owning agent"
+[input_schema]
+type = "object"
+[access]
+visibility = "self"
+"#;
+        let m = AbilityManifest::from_toml_str(toml).unwrap();
+        assert_eq!(m.access().visibility, Visibility::Selfish);
+        let round_tripped = AbilityManifest::from_toml_str(&m.to_toml_string().unwrap()).unwrap();
+        assert_eq!(round_tripped.access().visibility, Visibility::Selfish);
+    }
+
+    #[test]
+    fn access_visibility_public_parses() {
+        // The federation tier is not wired up yet, but the schema
+        // must already accept `public` so an author who pre-publishes
+        // an ability for the federation rollout doesn't have to
+        // rewrite the manifest later.
+        let toml = r#"
+schema_version = "1"
+name = "x"
+description = ""
+[input_schema]
+type = "object"
+[access]
+visibility = "public"
+"#;
+        let m = AbilityManifest::from_toml_str(toml).unwrap();
+        assert_eq!(m.access().visibility, Visibility::Public);
+    }
+
+    #[test]
+    fn access_visibility_unknown_value_is_rejected() {
+        // A typo like "publik" must surface at load time rather than
+        // silently default to one of the legal values — the latter
+        // would let a misconfigured manifest leak (or hide) by
+        // accident.
+        let toml = r#"
+schema_version = "1"
+name = "x"
+description = ""
+[input_schema]
+type = "object"
+[access]
+visibility = "publik"
+"#;
+        let err = AbilityManifest::from_toml_str(toml).unwrap_err();
+        assert!(
+            format!("{err}").contains("visibility") || format!("{err}").contains("variant"),
+            "unknown visibility must mention the offending field: {err}"
+        );
+    }
+
+    #[test]
+    fn allows_caller_name_passes_when_no_lists_set() {
+        let p = AccessPolicy::default();
+        assert!(p.allows_caller_name("anyone"));
+    }
+
+    #[test]
+    fn allows_caller_name_respects_deny_list() {
+        let p = AccessPolicy {
+            visibility: Visibility::Device,
+            deny_callers: Some(vec!["mallory".into()]),
+            allow_callers: None,
+        };
+        assert!(!p.allows_caller_name("mallory"));
+        assert!(p.allows_caller_name("alice"));
+    }
+
+    #[test]
+    fn allows_caller_name_deny_wins_over_allow() {
+        // Same name in both lists → deny wins. Lock the policy
+        // direction here so a future refactor that flips the order
+        // (allow-then-deny) trips the test loud.
+        let p = AccessPolicy {
+            visibility: Visibility::Device,
+            allow_callers: Some(vec!["alice".into()]),
+            deny_callers: Some(vec!["alice".into()]),
+        };
+        assert!(!p.allows_caller_name("alice"));
+    }
+
+    #[test]
+    fn allows_caller_name_respects_non_empty_allow_list() {
+        let p = AccessPolicy {
+            visibility: Visibility::Device,
+            allow_callers: Some(vec!["alice".into(), "bob".into()]),
+            deny_callers: None,
+        };
+        assert!(p.allows_caller_name("alice"));
+        assert!(p.allows_caller_name("bob"));
+        assert!(!p.allows_caller_name("eve"));
+    }
+
+    #[test]
+    fn allows_caller_name_empty_allow_list_is_no_whitelist() {
+        // `allow_callers = []` (rare but legal) means "no whitelist
+        // applied" — caller still passes. Pinning here so the
+        // ergonomics of "I cleared the list" doesn't accidentally
+        // become "I locked everyone out".
+        let p = AccessPolicy {
+            visibility: Visibility::Device,
+            allow_callers: Some(vec![]),
+            deny_callers: None,
+        };
+        assert!(p.allows_caller_name("anyone"));
+    }
+
+    #[test]
+    fn access_policy_with_caller_lists_round_trips_through_toml() {
+        let toml = r#"
+schema_version = "1"
+name = "x"
+description = ""
+[input_schema]
+type = "object"
+[access]
+visibility = "device"
+allow_callers = ["claude", "alice"]
+deny_callers = ["mallory"]
+"#;
+        let m = AbilityManifest::from_toml_str(toml).unwrap();
+        let access = m.access();
+        assert_eq!(
+            access.allow_callers.as_deref(),
+            Some(&["claude".to_string(), "alice".to_string()][..])
+        );
+        assert_eq!(access.deny_callers.as_deref(), Some(&["mallory".to_string()][..]));
+    }
+
+    #[test]
+    fn access_policy_allows_caller_is_monotonic() {
+        // self < device < public — a stricter ability rejects looser
+        // callers; a looser ability admits stricter callers. Spelled
+        // out as a small matrix so a regression that flips the
+        // direction (or treats Public as the strictest) trips loud.
+        let cases: &[(Visibility, Visibility, bool)] = &[
+            (Visibility::Selfish, Visibility::Selfish, true),
+            (Visibility::Selfish, Visibility::Device, false),
+            (Visibility::Selfish, Visibility::Public, false),
+            (Visibility::Device, Visibility::Selfish, true),
+            (Visibility::Device, Visibility::Device, true),
+            (Visibility::Device, Visibility::Public, false),
+            (Visibility::Public, Visibility::Selfish, true),
+            (Visibility::Public, Visibility::Device, true),
+            (Visibility::Public, Visibility::Public, true),
+        ];
+        for (ability_vis, caller_scope, expected) in cases {
+            let policy = AccessPolicy {
+                visibility: *ability_vis,
+                ..Default::default()
+            };
+            assert_eq!(
+                policy.allows_caller(*caller_scope),
+                *expected,
+                "ability_vis={ability_vis:?} caller_scope={caller_scope:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn http_exec_round_trips_through_toml() {
+        let toml = r#"
+schema_version = "1"
+name = "weather_v2"
+description = "fetch weather over HTTP"
+[input_schema]
+type = "object"
+[exec]
+kind = "http"
+method = "GET"
+url = "https://wttr.in/{{ location }}?format=4"
+[exec.headers]
+"User-Agent" = "easynet-ability/1"
+"#;
+        let m = AbilityManifest::from_toml_str(toml).expect("manifest must parse");
+        match m.exec().expect("exec preserved") {
+            AbilityExec::Http(h) => {
+                assert_eq!(h.method, "GET");
+                assert!(h.url.contains("{{ location }}"));
+                assert_eq!(
+                    h.headers
+                        .as_ref()
+                        .and_then(|m| m.get("User-Agent"))
+                        .map(String::as_str),
+                    Some("easynet-ability/1")
+                );
+            }
+            other => panic!("expected Http, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn http_exec_rejects_unsafe_method() {
+        let toml = r#"
+schema_version = "1"
+name = "x"
+description = ""
+[input_schema]
+type = "object"
+[exec]
+kind = "http"
+method = "TRACE"
+url = "https://example.com"
+"#;
+        let err = AbilityManifest::from_toml_str(toml).unwrap_err();
+        assert!(
+            format!("{err}").contains("method"),
+            "validator must call out method: {err}"
+        );
+    }
+
+    #[test]
+    fn http_exec_rejects_non_http_scheme_when_literal() {
+        let toml = r#"
+schema_version = "1"
+name = "x"
+description = ""
+[input_schema]
+type = "object"
+[exec]
+kind = "http"
+method = "GET"
+url = "ftp://example.com"
+"#;
+        let err = AbilityManifest::from_toml_str(toml).unwrap_err();
+        assert!(format!("{err}").contains("http://"));
+    }
+
+    #[test]
+    fn http_exec_accepts_templated_url_prefix() {
+        // A manifest that interpolates the base URL must validate
+        // even though the literal scheme isn't visible at load time
+        // — the executor will reject at call time if the rendered
+        // URL is non-http(s).
+        let toml = r#"
+schema_version = "1"
+name = "x"
+description = ""
+[input_schema]
+type = "object"
+[exec]
+kind = "http"
+method = "GET"
+url = "{{ base }}/path"
+"#;
+        let m = AbilityManifest::from_toml_str(toml).expect("templated URL must parse");
+        assert!(matches!(m.exec(), Some(AbilityExec::Http(_))));
+    }
+
+    #[test]
+    fn eal_exec_round_trips_through_toml() {
+        // The EAL executor variant must parse from on-disk TOML and
+        // round-trip back unchanged. This pins the wire shape:
+        // `kind = "eal"`, `source = "..."`, optional
+        // `result_binding = "..."`. Without a round-trip test a
+        // serialization rename (e.g. accidentally renaming `source`
+        // to `program`) would silently break every published EAL
+        // ability without surfacing in any other test.
+        let toml = r#"
+schema_version = "1"
+name = "summarise_then_review"
+description = "summarise + judge in one call"
+[input_schema]
+type = "object"
+[exec]
+kind = "eal"
+source = """
+mission "x" {
+  let s = call "summarise" on "device" with { text = "{{ text }}" }
+}
+"""
+result_binding = "s"
+"#;
+        let m = AbilityManifest::from_toml_str(toml).expect("EAL manifest must parse");
+        match m.exec() {
+            Some(AbilityExec::Eal(e)) => {
+                assert!(e.source.contains("mission"));
+                assert!(e.source.contains("{{ text }}"));
+                assert_eq!(e.result_binding.as_deref(), Some("s"));
+            }
+            other => panic!("expected Eal, got {other:?}"),
+        }
+        // Round-trip: serialise and re-parse; the second parse must
+        // succeed and preserve the same binding.
+        let written = m.to_toml_string().expect("serialise");
+        let m2 = AbilityManifest::from_toml_str(&written).expect("re-parse");
+        match m2.exec() {
+            Some(AbilityExec::Eal(e)) => {
+                assert_eq!(e.result_binding.as_deref(), Some("s"));
+            }
+            other => panic!("round-trip lost the EAL variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eal_exec_rejects_empty_source() {
+        let toml = r#"
+schema_version = "1"
+name = "x"
+description = ""
+[input_schema]
+type = "object"
+[exec]
+kind = "eal"
+source = ""
+"#;
+        let err = AbilityManifest::from_toml_str(toml).unwrap_err();
+        assert!(
+            format!("{err}").contains("source"),
+            "validator must call out empty source: {err}"
+        );
+    }
+
+    #[test]
+    fn eal_exec_rejects_empty_result_binding_when_present() {
+        // `result_binding` is optional; absence is fine. But when
+        // the author writes `result_binding = ""` they almost
+        // certainly meant to delete the line — fail loud rather
+        // than silently treating it as "no binding".
+        let toml = r#"
+schema_version = "1"
+name = "x"
+description = ""
+[input_schema]
+type = "object"
+[exec]
+kind = "eal"
+source = "mission \"x\" {}"
+result_binding = ""
+"#;
+        let err = AbilityManifest::from_toml_str(toml).unwrap_err();
+        assert!(format!("{err}").contains("result_binding"));
     }
 
     #[test]

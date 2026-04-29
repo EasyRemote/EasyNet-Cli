@@ -1,0 +1,11 @@
+schema_version = "1"
+name = "fleet.remove_node"
+description = "Remove a node from the fleet. Refuses to remove the local device (use `easynet device reset` for that). Remote removal awaits the federation Invoke replacement."
+
+[input_schema]
+type = "object"
+required = ["node_id"]
+additionalProperties = false
+
+[input_schema.properties.node_id]
+type = "string"

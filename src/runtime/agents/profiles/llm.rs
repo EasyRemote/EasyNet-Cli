@@ -23,6 +23,14 @@ pub const LLM_PROFILE_ABILITY_PREFIXES: &[&str] = &[
     "session.",
     "meta.",
     "skill.",
+    // RFC-005 v3.2 A6, A7 — llm-owned media abilities. voice.*
+    // covers `voice.subscribe` (TTS persona stream) and
+    // `voice.transcribe` (ASR; audio-in / text-out bidi). The
+    // device-profile prefix list intentionally omits "voice." so
+    // these abilities advertise under the llm agent's URA, which
+    // is the natural ownership boundary (the persona / model
+    // belongs to the LLM sub-agent, not the host).
+    "voice.",
 ];
 
 pub fn owns(ability_name: &str) -> bool {

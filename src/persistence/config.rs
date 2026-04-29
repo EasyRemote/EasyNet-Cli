@@ -440,6 +440,23 @@ pub fn heartbeat_pid_path() -> PathBuf {
     state_dir().join("heartbeat.pid")
 }
 
+/// Path to the easynet-daemon PID file. Same shape and lifecycle as
+/// `heartbeat_pid_path`: start.rs writes it after spawn, stop.rs
+/// reads + signals + removes. Without it, `easynet runtime stop`
+/// could only kill the heartbeat daemon and the axon runtime;
+/// the easynet-daemon child stayed alive across restarts and a
+/// fresh `runtime start` would spawn a SECOND daemon that loses
+/// the runtime-dispatch socket bind to the older one ("another
+/// process already accepts on …/runtime-dispatch.sock — refusing
+/// to overwrite"). The newer daemon's responder exits and from
+/// that point control.sock chat dispatches succeed exactly once
+/// (whichever daemon's tokio runtime gets the connection) before
+/// returning "daemon closed the connection". Pidfile + signal-on-
+/// stop fixes that ghost-daemon class entirely.
+pub fn easynet_daemon_pid_path() -> PathBuf {
+    state_dir().join("easynet-daemon.pid")
+}
+
 pub fn save_credentials(creds: &Credentials) -> anyhow::Result<()> {
     let dir = state_dir();
     fs::create_dir_all(&dir)?;

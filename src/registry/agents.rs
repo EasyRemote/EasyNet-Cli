@@ -169,7 +169,14 @@ fn default_command() -> String {
     String::new()
 }
 fn default_timeout() -> u64 {
-    300
+    // 1 hour. Per-row deadline for an agent's underlying CLI dispatch
+    // (claude / codex). Bumped from 5 min: a real LLM with tool use
+    // can legitimately take tens of minutes on a long task (mission
+    // think, multi-step agent tool loop, large code-review pass), and
+    // a 5 min ceiling was forcing operators to override on nearly
+    // every long-running call. Operators who want a tight per-row
+    // cap can still set it explicitly via the registry editor.
+    3600
 }
 fn default_max_output() -> usize {
     1_048_576
@@ -196,6 +203,20 @@ impl AgentEntry {
     /// raw field-write permission to the rest of the crate.
     pub fn with_label(&mut self, label: Option<String>) -> &mut Self {
         self.label = label;
+        self
+    }
+
+    /// Replace the per-agent model identifier. Same chained-builder
+    /// shape as `with_label`; used by the CLI `agent set --model`
+    /// path so the registry row reflects the new model alongside
+    /// the on-disk `agent.toml` rewrite.
+    ///
+    /// `None` clears the field — the agent then falls back to
+    /// whatever default the underlying CLI (`claude` / `codex`)
+    /// picks. Symmetric with `agent add` where `--model` is
+    /// optional.
+    pub fn with_model(&mut self, model: Option<String>) -> &mut Self {
+        self.model = model;
         self
     }
 
@@ -861,24 +882,34 @@ mod tests {
 
     #[test]
     fn v1_timeout_default_is_not_persisted_in_spec() {
-        // A v1 row with `timeout_secs = 300` (the v1 default) must
-        // produce an agent.toml without an explicit
+        // A v1 row with `timeout_secs` matching the CURRENT default
+        // must produce an agent.toml without an explicit
         // `timeout_secs` field. That keeps migrated files minimal
         // and honours the "spec records explicit user choice"
         // principle: a default that happens to match is not a
         // choice, it's the absence of one.
+        //
+        // We construct the seed JSON from `default_timeout()` rather
+        // than hardcoding a number so a future bump to the default
+        // does not silently turn this test into a no-op (it would
+        // start passing for a different reason — the seed value
+        // becoming non-default — without anyone noticing). Pre-2026-04
+        // history: this test pinned `timeout_secs: 300` literally;
+        // when the default moved to 3600 it spuriously failed because
+        // 300 was no longer the default.
         let _g = HomeGuard::new();
-        seed_v1_registry(
-            r#"{
-                "agents": {
-                    "alice": {
+        let seed_timeout = default_timeout();
+        seed_v1_registry(&format!(
+            r#"{{
+                "agents": {{
+                    "alice": {{
                         "agent_type": "claude-code",
                         "command": "claude",
-                        "timeout_secs": 300
-                    }
-                }
-            }"#,
-        );
+                        "timeout_secs": {seed_timeout}
+                    }}
+                }}
+            }}"#
+        ));
         let reg = load_agents().unwrap();
         let root = reg.agents["alice"].root_path.as_ref().unwrap();
         let toml = fs::read_to_string(root.join("agent.toml")).unwrap();

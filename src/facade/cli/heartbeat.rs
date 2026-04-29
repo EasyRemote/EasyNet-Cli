@@ -13,7 +13,7 @@
 
 use anyhow::Context;
 
-use easynet_axon::dendrite_bridge::{DendriteBridge, RegisterNodeOptions};
+use easynet_axon::dendrite_bridge::DendriteBridge;
 use easynet_axon::error::Result as AxonResult;
 use easynet_axon::reconnect::{ReconnectConfig, ReconnectHook, ReconnectingBridge};
 
@@ -94,9 +94,33 @@ impl<'a> DirectBridge<'a> {
     }
 }
 
+// Heartbeat is device-scoped — one `federation.heartbeat` per tick from
+// the device URA. The hub fans liveness out to every hosted Agent that
+// names this device as its host (`AgentsCatalog::refresh_heartbeat_for_device`),
+// so consent/policy/mcp/llm/... do NOT need to ping the hub independently.
+// Process death takes them all out at once; multiplying ticks per process
+// would just amplify hub traffic without adding signal.
 impl<'a> HeartbeatTransport for DirectBridge<'a> {
     fn beat(&mut self, tenant: &str, node_id: &str) -> AxonResult<serde_json::Value> {
-        self.bridge.node_heartbeat(tenant, node_id)
+        // Heartbeat tick: `federation.heartbeat` is the canonical
+        // membership-liveness ability (Hub-Profile, RFC-001 §A14).
+        // Replaces the legacy `bridge.NodeHeartbeat` gRPC RPC
+        // removed by AXON-RFC-001 P1.5. Pre-fix the transport
+        // re-used `runtime.bootstrap_self_identity` as a tickle —
+        // it accidentally refreshed the same `last_heartbeat_unix_ms`
+        // because both paths populate that field, but it was a
+        // semantic abuse; the dedicated heartbeat ability is the
+        // proper carrier and `federation.advertise_*` /
+        // `federation.resolve` use the same caller URI we set
+        // here.
+        let device_uri = format!("easynet:///r/{tenant}/agent/{node_id}");
+        let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+            self.bridge,
+            device_uri,
+        );
+        crate::runtime::advertise::heartbeat(&invoker, tenant, tenant)
+            .map(|_| serde_json::json!({"ok": true}))
+            .map_err(|msg| easynet_axon::error::AxonError::Bridge(msg))
     }
 }
 
@@ -119,7 +143,22 @@ impl<'a> ReconnectingHeartbeat<'a> {
 
 impl<'a> HeartbeatTransport for ReconnectingHeartbeat<'a> {
     fn beat(&mut self, tenant: &str, node_id: &str) -> AxonResult<serde_json::Value> {
-        self.bridge.with_bridge(|br| br.node_heartbeat(tenant, node_id))
+        // Mirrors DirectBridge::beat — see that impl for the
+        // `federation.heartbeat` rationale. The reconnecting
+        // wrapper retries the call once on a transport-level
+        // failure (its standard contract), so an abilty-level
+        // hub rejection still propagates here while a transient
+        // dropped connection self-heals.
+        let device_uri = format!("easynet:///r/{tenant}/agent/{node_id}");
+        self.bridge.with_bridge(|br| {
+            let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+                br,
+                device_uri.clone(),
+            );
+            crate::runtime::advertise::heartbeat(&invoker, tenant, tenant)
+                .map(|_| serde_json::json!({"ok": true}))
+                .map_err(|msg| easynet_axon::error::AxonError::Bridge(msg))
+        })
     }
 }
 
@@ -374,43 +413,42 @@ fn rotate_log_if_needed(path: &std::path::Path) {
 /// daemon's bridge drops and reconnects later than that window, the Hub no
 /// longer has our registration — silently reconnecting without re-
 /// registering leaves a phantom heartbeat that the Hub rejects. The hook
-/// re-issues `register_node_with_options` on every successful reconnect,
-/// rebuilding the same `a2a.*` label set the parent process originally
-/// registered with.
+/// re-issues `federation.advertise_agent` (Hub-Profile ability) on every
+/// successful reconnect.
 ///
-/// Labels are rebuilt at hook-time (not captured at daemon start) so that
-/// if the operator edits `~/.easynet/agents.json` mid-session, the next
-/// reconnect picks up the changes — preferable to pinning stale labels
-/// for the whole daemon lifetime. If the registry file is missing or
-/// malformed the hook re-registers with no labels, matching the
-/// foreground path's "start without labels rather than refuse to
-/// register" policy.
-fn build_reregister_hook(tenant: String, node_id: String, hostname: String) -> ReconnectHook {
+/// Replaces the legacy `register_node_with_options` gRPC RPC removed by
+/// AXON-RFC-001 P1.5. The hub-side bookkeeping (directory entry,
+/// signing-authority binding) is now done entirely through the
+/// federation.* ability surface; no behavioural change at the Hub.
+///
+/// `_hostname` is preserved on the signature for source-compat with
+/// callers that build it for label generation; the federation
+/// advertise path doesn't currently consume it (per-node display name
+/// is a future RFC-006 hub field).
+fn build_reregister_hook(tenant: String, node_id: String, _hostname: String) -> ReconnectHook {
     use std::rc::Rc;
     Rc::new(move |bridge: &DendriteBridge| -> AxonResult<()> {
-        let labels = match crate::registry::agents::load_agents() {
-            Ok(registry) => crate::registry::a2a_labels::build(&registry, &hostname),
-            Err(e) => {
-                // Match foreground-path policy (see cli/start.rs:203): if the
-                // agents file is missing or malformed, register without
-                // a2a.* labels rather than refuse the reconnect entirely.
-                // The Hub-side federation view loses agent visibility until
-                // the next successful load, which is worse than a stale
-                // label set but better than a no-heartbeat outage.
-                output::warn(&format!(
-                    "reconnect: agents.json unreadable ({e}); re-registering without a2a.* labels"
-                ));
-                None
-            }
+        let device_uri = format!("easynet:///r/{}/agent/{}", tenant, node_id);
+        let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+            bridge,
+            device_uri.clone(),
+        );
+        let args = crate::runtime::federation_client::AdvertiseAgentArgs {
+            agent_uri: device_uri.clone(),
+            public_key_hex: String::new(),
+            signing_authority:
+                crate::runtime::federation_client::AdvertisedSigningAuthority::SelfSigned,
+            host_node_id: Some(node_id.clone()),
         };
-        bridge
-            .register_node_with_options(
-                &tenant,
-                &node_id,
-                &hostname,
-                RegisterNodeOptions { labels, role: None },
-            )
-            .map(|_| ())
+        let outcome = crate::runtime::advertise::advertise_agent(
+            &invoker, &tenant, &tenant, &args,
+        );
+        match outcome.result {
+            Ok(_) => Ok(()),
+            Err(msg) => Err(easynet_axon::error::AxonError::Bridge(format!(
+                "federation.advertise_agent on reconnect failed: {msg}"
+            ))),
+        }
     })
 }
 
@@ -462,22 +500,31 @@ pub fn run_daemon() -> anyhow::Result<()> {
     let mut transport = ReconnectingHeartbeat::new(&reconnecting);
     let outcome = heartbeat_loop(&mut transport, &tenant, &node_id, interval_ms, &shutdown);
 
-    // Deregister rides the same reconnecting bridge — if the current
-    // connection dropped mid-loop, the SDK reconnects once more here so
-    // the Hub sees a clean shutdown instead of waiting for its sweeper.
+    // Federation shutdown: invoke `federation.revoke` on this
+    // daemon's directory entry. Replaces the deprecated
+    // `bridge.deregister_node` gRPC RPC. Rides the same
+    // reconnecting bridge so a transient drop right before
+    // shutdown still reaches the hub via one auto-reconnect.
     let reason = outcome.reason();
-    let deregistered = reconnecting
-        .with_bridge(|br| br.deregister_node(&tenant, &node_id, reason));
+    let device_uri = format!("easynet:///r/{}/agent/{}", tenant, node_id);
+    let revoked = reconnecting.with_bridge(|br| {
+        let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+            br,
+            device_uri.clone(),
+        );
+        crate::runtime::advertise::revoke_agent(&invoker, &tenant, &tenant, &device_uri, reason)
+            .map_err(|e| easynet_axon::error::AxonError::Bridge(e))
+    });
     if outcome == HeartbeatOutcome::NodeRejected {
         config::delete_credentials().ok();
         output::warn("device removed by admin — credentials cleaned up");
     }
-    match deregistered {
+    match revoked {
         Ok(_) => output::info(&format!(
-            "heartbeat daemon: deregistered {node_id} ({reason}), exiting"
+            "heartbeat daemon: federation.revoke {node_id} ({reason}), exiting"
         )),
         Err(e) => output::warn(&format!(
-            "heartbeat daemon: deregister {node_id} ({reason}) failed: {e}; exiting anyway"
+            "heartbeat daemon: federation.revoke {node_id} ({reason}) failed: {e}; exiting anyway"
         )),
     }
     Ok(())

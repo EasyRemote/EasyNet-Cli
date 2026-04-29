@@ -523,6 +523,47 @@ fn lower_item(item: AnalyzedItem) -> anyhow::Result<IrStep> {
     }
 }
 
+/// Convert a non-VarRef `FieldValue` to the JSON representation
+/// `IrStep` carries in `static_args`. Pulled out as a helper so the
+/// nested-object case can recurse — without it, an `Object` field
+/// holding a nested `Object` would have to grow a copy of the
+/// scalar match arms.
+///
+/// VarRef intentionally NOT supported here: the planner threads
+/// VarRef through `input_refs` so the dispatcher resolves the
+/// dependency at run time, not the planner. A VarRef inside a nested
+/// object would lose its dependency edge — error out loud rather
+/// than silently inline a placeholder.
+fn field_value_to_json(v: &FieldValue) -> anyhow::Result<serde_json::Value> {
+    match v {
+        FieldValue::String(s) => Ok(serde_json::json!(s)),
+        FieldValue::Int(n) => Ok(serde_json::json!(n)),
+        FieldValue::Float(f) => Ok(serde_json::json!(f)),
+        FieldValue::Bool(b) => Ok(serde_json::json!(b)),
+        FieldValue::Object(fields) => {
+            let mut map = serde_json::Map::with_capacity(fields.len());
+            for f in fields {
+                if matches!(f.value, FieldValue::VarRef { .. }) {
+                    anyhow::bail!(
+                        "field '{}' uses `<var>.output` inside a nested object, \
+                         which is not supported (variable references must be \
+                         top-level args so the planner can wire dependency edges)",
+                        f.key
+                    );
+                }
+                map.insert(f.key.clone(), field_value_to_json(&f.value)?);
+            }
+            Ok(serde_json::Value::Object(map))
+        }
+        FieldValue::VarRef { var_name } => {
+            anyhow::bail!(
+                "internal: `<var>.output` ({var_name}) reached field_value_to_json; \
+                 should have been handled by the top-level VarRef arm in lower_call"
+            );
+        }
+    }
+}
+
 fn lower_call(step: &AnalyzedStep) -> anyhow::Result<IrStep> {
     use crate::core::agent_id::{AbilityName, AgentId};
 
@@ -533,17 +574,8 @@ fn lower_call(step: &AnalyzedStep) -> anyhow::Result<IrStep> {
             FieldValue::VarRef { var_name } => {
                 input_refs.insert(f.key.clone(), var_name.clone());
             }
-            FieldValue::String(s) => {
-                static_args.insert(f.key.clone(), serde_json::json!(s));
-            }
-            FieldValue::Int(n) => {
-                static_args.insert(f.key.clone(), serde_json::json!(n));
-            }
-            FieldValue::Float(v) => {
-                static_args.insert(f.key.clone(), serde_json::json!(v));
-            }
-            FieldValue::Bool(b) => {
-                static_args.insert(f.key.clone(), serde_json::json!(b));
+            other => {
+                static_args.insert(f.key.clone(), field_value_to_json(other)?);
             }
         }
     }

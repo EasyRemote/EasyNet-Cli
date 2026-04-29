@@ -1,26 +1,22 @@
-// EasyNet CLI
-// ===========
+// EasyNet CLI — `easynet runtime status`
+// =======================================
 //
-// File: src/cli/status.rs
-// Description: `easynet status` — displays Hub connection info, node/ability summary.
-//
-// Data Sources:
-// - Runtime state from ~/.easynet/runtime.json (Hub URL, tenant, label).
-// - Credentials from ~/.easynet/credentials.json (node_id, hub_endpoint, tenant_id).
-// - Live node list via DendriteBridge.list_nodes() — counts online/offline.
-// - Ability count via DendriteBridge.list_mcp_tools() aggregated across online nodes.
+// File: src/facade/cli/status.rs
+// Description: Hub connection info + fleet summary. Per the
+//              ability-only ontology this command sources its
+//              data from `fleet.list_nodes` and `easynet.discover`
+//              — the same ability surfaces every other CLI
+//              command uses. No direct bridge calls.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use clap::Args;
+use serde_json::Value;
 
 use crate::persistence::config;
-use crate::support::{self, node, output};
-
-/// Maximum number of online nodes to query for ability counts.
-/// Prevents O(N) gRPC calls in large federations.
-const MAX_NODES_TO_QUERY_ABILITIES: usize = 50;
+use crate::support::local_invoke::invoke_local_ability;
+use crate::support::output;
 
 #[derive(Debug, Args)]
 pub struct StatusArgs {}
@@ -28,7 +24,6 @@ pub struct StatusArgs {}
 pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
     output::info(&format!("EasyNet CLI v{}", env!("CARGO_PKG_VERSION")));
 
-    // Show device pairing info if available.
     if let Ok(creds) = config::load_credentials() {
         output::info("Device pairing:");
         output::detail("node_id", &creds.node_id);
@@ -36,14 +31,13 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
         output::detail("tenant_id", &creds.tenant_id);
         eprintln!();
     } else {
-        output::info("Device: not paired (run `easynet join <token>`)");
+        output::info("Device: not paired (run `easynet device join <token>`)");
         eprintln!();
     }
 
-    // Runtime info — may not be running.
     let Ok(state) = config::load() else {
         output::info("Runtime: not running");
-        output::info("Run `easynet start` or `easynet connect` to start.");
+        output::info("Run `easynet runtime start` to start.");
         return Ok(());
     };
 
@@ -55,50 +49,60 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
         output::info("Credential: NOT VERIFIED (Hub was unreachable at startup)");
     }
 
-    // Live federation stats — best effort.
-    let Ok(br) = support::connect_bridge_to(&state.endpoint) else {
-        output::info("Bridge: cannot connect (runtime may have crashed)");
-        return Ok(());
-    };
-    let tenant = state.tenant.as_deref().unwrap_or("default");
-
-    let nodes = match br.list_nodes(tenant, None) {
-        Ok(n) => n,
+    // Fleet view — go through fleet.list_nodes (the canonical
+    // ability surface) so the daemon's federation_view metadata
+    // tells us whether the count is local-only or full.
+    let nodes_envelope = match invoke_local_ability("fleet.list_nodes", serde_json::json!({})) {
+        Ok(v) => v,
         Err(e) => {
-            output::info(&format!("Federation: cannot query nodes ({e})"));
+            output::info(&format!("Fleet: cannot query (`{e}`)"));
             return Ok(());
         }
     };
-
-    let online = nodes.iter().filter(|n| node::is_online(n)).count();
+    let nodes = nodes_envelope
+        .get("nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let online = nodes
+        .iter()
+        .filter(|n| {
+            n.get("state")
+                .and_then(Value::as_str)
+                .map(|s| matches!(s, "HEALTHY" | "REGISTERED" | "STANDALONE"))
+                .unwrap_or(false)
+        })
+        .count();
     let offline = nodes.len() - online;
-
-    // Count abilities across online nodes only (avoid O(N) calls for large federations).
-    let mut ability_count = 0usize;
-    let mut nodes_queried = 0usize;
-    for n in &nodes {
-        if !node::is_online(n) {
-            continue;
-        }
-        if nodes_queried >= MAX_NODES_TO_QUERY_ABILITIES {
-            break;
-        }
-        if let Some(node_id) = n.get("node_id").and_then(|v| v.as_str()) {
-            if let Ok(tools) = br.list_mcp_tools(tenant, "", node_id) {
-                ability_count += tools.len();
-            }
-            nodes_queried += 1;
+    output::info(&format!("Nodes: {online} online, {offline} offline"));
+    if let Some(view) = nodes_envelope
+        .get("federation_view")
+        .and_then(Value::as_str)
+    {
+        if view == "local_only" {
+            output::info(
+                "Federation: local-only view (the federation Invoke replacement \
+                 for AXON-RFC-001 P1.5 list_nodes ships in a follow-up).",
+            );
         }
     }
-    let ability_suffix = if nodes_queried >= MAX_NODES_TO_QUERY_ABILITIES {
-        format!(" (sampled from first {MAX_NODES_TO_QUERY_ABILITIES} of {online} online nodes)")
-    } else {
-        format!(" (across {nodes_queried} online nodes)")
-    };
 
-    output::info(&format!("Nodes: {online} online, {offline} offline"));
-    output::info(&format!(
-        "Abilities: {ability_count} active{ability_suffix}"
-    ));
+    // Ability count — go through easynet.discover (one call,
+    // returns the full local catalogue). Cheaper than the legacy
+    // O(N) per-node fan-out and matches what `easynet ability list`
+    // reports.
+    match invoke_local_ability("easynet.discover", serde_json::json!({})) {
+        Ok(v) => {
+            let count = v
+                .get("abilities")
+                .and_then(Value::as_array)
+                .map(|a| a.len())
+                .unwrap_or(0);
+            output::info(&format!(
+                "Abilities: {count} active on this node (run `easynet ability list` for the full catalogue)"
+            ));
+        }
+        Err(e) => output::info(&format!("Abilities: cannot query (`{e}`)")),
+    }
     Ok(())
 }

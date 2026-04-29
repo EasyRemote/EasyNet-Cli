@@ -80,16 +80,30 @@
 /// Default deadline for `easynet invoke` / `easynet ability invoke`,
 /// in seconds. The runtime may impose a tighter ceiling; this is only
 /// the CLI-level floor.
-pub const INVOKE_DEFAULT_SECS: u64 = 60;
+///
+/// Set to 1 hour because the invoke surface routes to `<agent>.chat`
+/// for agent abilities, and a real LLM with tool use can legitimately
+/// run minutes-to-tens-of-minutes (mission.think cycles, multi-step
+/// agent tool loops). A 60 s floor was forcing an unhelpful retry/
+/// re-issue pattern from operators every time the model went into a
+/// long sequence of tool calls. Operators who want a tighter ceiling
+/// pass `--timeout <N>` explicitly.
+pub const INVOKE_DEFAULT_SECS: u64 = 3600;
 
 /// Default deadline for `easynet agent send` (LLM-backed dispatch), in
 /// seconds. LLM responses can legitimately take many minutes when the
-/// prompt is large or the model is reasoning, so the floor is 15 min.
-pub const AGENT_SEND_DEFAULT_SECS: u64 = 900;
+/// prompt is large or the model is reasoning, so the floor is 1 hour.
+/// Same rationale as `INVOKE_DEFAULT_SECS`: tool-using agents can
+/// legitimately run for tens of minutes without being stuck.
+pub const AGENT_SEND_DEFAULT_SECS: u64 = 3600;
 
 /// Default per-cycle deadline for `easynet think`, in seconds. Each
-/// cycle is one think + one action; the budget covers both.
-pub const THINK_DEFAULT_SECS: u64 = 120;
+/// cycle is one think + one action; the budget covers both. 1 hour
+/// matches the per-cycle worst case observed when the worker is
+/// running long tool sequences (file reads, build invocations, …) —
+/// the operator's intent in setting `max_cycles=N` is "let the model
+/// take N actual cycles", not "fail with a timeout mid-cycle".
+pub const THINK_DEFAULT_SECS: u64 = 3600;
 
 /// How long a `DendriteBridge::connect` may block before we declare
 /// the local Axon runtime unreachable, in milliseconds.
@@ -143,9 +157,13 @@ mod tests {
     #[test]
     fn positive_seconds_round_trip_to_milliseconds() {
         assert_eq!(effective_ms(1), Ok(Some(1_000)));
-        assert_eq!(effective_ms(INVOKE_DEFAULT_SECS), Ok(Some(60_000)));
-        assert_eq!(effective_ms(AGENT_SEND_DEFAULT_SECS), Ok(Some(900_000)));
-        assert_eq!(effective_ms(THINK_DEFAULT_SECS), Ok(Some(120_000)));
+        // The three LLM-dispatch defaults all sit at 1 hour. A
+        // regression that drops one to a sub-minute floor would
+        // re-introduce the "timeout fires mid-cycle" UX bug; pin
+        // the floor here.
+        assert_eq!(effective_ms(INVOKE_DEFAULT_SECS), Ok(Some(3_600_000)));
+        assert_eq!(effective_ms(AGENT_SEND_DEFAULT_SECS), Ok(Some(3_600_000)));
+        assert_eq!(effective_ms(THINK_DEFAULT_SECS), Ok(Some(3_600_000)));
     }
 
     #[test]

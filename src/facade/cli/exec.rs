@@ -1,70 +1,50 @@
-// EasyNet CLI
-// ===========
+// EasyNet CLI — `easynet ability exec`
+// =====================================
 //
-// File: src/cli/exec.rs
-// Description: `easynet exec <node> -- <command>` — one-shot remote command execution
-//              on a federated device, relayed through the Hub.
+// File: src/facade/cli/exec.rs
+// Description: One-shot remote command execution. Per the
+//              ability-only ontology this is `fleet.exec_remote`
+//              invoked on the local daemon; the daemon either
+//              runs the command in-process (when `node == local`)
+//              or forwards through federation transport (when
+//              the target is a remote node id).
 //
-// Protocol Responsibility:
-// - Invokes the built-in `session_bridge` MCP tool with action="exec" on the target node.
-// - The Hub relays the call to the target device's Axon runtime, which spawns a shell,
-//   runs the command, and returns {stdout, stderr, exit_code}.
-// - Requires EASYNET_SESSION_BRIDGE_EXEC_ENABLED=1 on the target device (security gate).
+// What this CLI shim does
+// -----------------------
+//   1. Validate args (node + non-empty command).
+//   2. Map args → JSON.
+//   3. invoke_local_ability("fleet.exec_remote", body).
+//   4. Pipe stdout / stderr / exit_code from the response.
 //
-// Implementation Approach:
-// - Uses call_mcp_tool_with_args for synchronous request-response (no streaming).
-// - Parses result from top-level or nested result_json (runtime version variance).
-// - Non-zero exit codes propagate as CLI errors.
-//
-// Usage Contract:
-// - Target node must be online and have exec enabled (via `easynet config exec on`).
-// - Command is shell-evaluated on the remote device — supports pipes, redirects, etc.
-// - For interactive sessions, use the web terminal; exec is strictly one-shot.
-//
-// Architectural Position:
-// - Imperative counterpart to deploy/invoke: exec runs arbitrary commands,
-//   while invoke calls registered abilities. Both route through session_bridge.
+// Local case: handler delegates to `process.exec`. Remote case:
+// handler forwards via federation Invoke (returns typed
+// federation_not_wired until that transport ships).
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use anyhow::Context;
 use clap::Args;
-use console::style;
+use serde_json::json;
 
+use crate::support::local_invoke::invoke_local_ability;
 use crate::support::{output, timeouts};
 
 #[derive(Debug, Args)]
 pub struct ExecArgs {
-    /// Target device node id.
+    /// Target device node id. Pass `local` for this device or a
+    /// real node id once federation Invoke is wired.
     pub node: String,
-    /// Per-call deadline in seconds. `0` inherits the runtime default.
-    /// Default: 60 s (`support::timeouts::INVOKE_DEFAULT_SECS`) — shares
-    /// the tower with `easynet invoke` so both flavours of one-shot
-    /// remote call have the same baseline.
+    /// Per-call deadline in seconds. `0` inherits the runtime
+    /// default. Default: 60 s (`support::timeouts::INVOKE_DEFAULT_SECS`).
     #[arg(long, value_name = "SECS", default_value_t = timeouts::INVOKE_DEFAULT_SECS)]
     pub timeout: u64,
-    /// Command to execute (everything after `--`).
+    /// Command to execute (everything after `--`). Joined with
+    /// spaces and passed to the handler verbatim; the handler
+    /// chooses whether to shell-evaluate (defaults to NO — argv
+    /// dispatch via `process.exec` for safety).
     #[arg(last = true)]
     pub command: Vec<String>,
-}
-
-/// Join command arguments into a shell-safe string.
-/// Arguments containing spaces or shell metacharacters are single-quoted.
-fn join_command(parts: &[String]) -> String {
-    parts
-        .iter()
-        .map(|p| {
-            if p.contains(|c: char| {
-                c.is_ascii_whitespace() || "\"'\\$`|&;(){}[]<>?*#!~".contains(c)
-            }) {
-                format!("'{}'", p.replace('\'', "'\"'\"'"))
-            } else {
-                p.clone()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 pub fn run(args: ExecArgs) -> anyhow::Result<()> {
@@ -73,51 +53,26 @@ pub fn run(args: ExecArgs) -> anyhow::Result<()> {
         "no command specified (use -- to separate)"
     );
 
-    let (br, state) = crate::persistence::config::load_and_connect()?;
-    let tenant = state.tenant_or_default();
-    let cmd_str = join_command(&args.command);
-
-    eprintln!(
-        "{} tunnel via {}",
-        style("┌").dim(),
-        state.hub.as_deref().unwrap_or("local")
-    );
-
-    let node = &args.node;
-    let call_args = serde_json::json!({
-        "action": "exec",
-        "command": cmd_str,
-    });
-
-    // Route through the shared tower so `--timeout 0` consistently means
-    // "inherit the runtime default" across the CLI, and absurdly large
-    // seconds (e.g. `--timeout 99999999999`) surface as a clear CLI
-    // error instead of silently overflowing to milliseconds.
     let timeout_ms = timeouts::effective_ms(args.timeout).map_err(anyhow::Error::msg)?;
-    let result = br
-        .call_mcp_tool_with_timeout(tenant, "session_bridge", node, &call_args, timeout_ms)
-        .context("exec")?;
+    let result = invoke_local_ability(
+        "fleet.exec_remote",
+        json!({
+            "node_id": args.node,
+            "command": args.command,
+            "timeout_ms": timeout_ms,
+        }),
+    )
+    .context("invoke fleet.exec_remote")?;
 
-    // Result may be at top level or nested in result_json.
-    let payload = result.get("result_json").unwrap_or(&result);
-
-    // Check for session_bridge error response first (e.g., exec disabled).
-    if payload.get("ok") == Some(&serde_json::json!(false)) {
-        let err = payload
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown error (no error field in response)");
-        anyhow::bail!("exec: {err}");
-    }
-    if let Some(stdout) = payload.get("stdout").and_then(|v| v.as_str()) {
+    if let Some(stdout) = result.get("stdout").and_then(|v| v.as_str()) {
         print!("{stdout}");
     }
-    if let Some(stderr) = payload.get("stderr").and_then(|v| v.as_str()) {
+    if let Some(stderr) = result.get("stderr").and_then(|v| v.as_str()) {
         if !stderr.is_empty() {
             eprint!("{stderr}");
         }
     }
-    if let Some(code) = payload.get("exit_code").and_then(serde_json::Value::as_i64) {
+    if let Some(code) = result.get("exit_code").and_then(serde_json::Value::as_i64) {
         if code != 0 {
             anyhow::bail!("command exited with code {code}");
         }

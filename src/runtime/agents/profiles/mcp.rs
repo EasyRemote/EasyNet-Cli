@@ -321,42 +321,116 @@ fn per_agent_workspace_descriptors(
         None => return Vec::new(),
     };
 
-    // Walk the workspace's abilities/*.toml. abilities_for has
-    // the fallback fix from slice 25 baked in (root_path None →
-    // agents_root().join(name)).
-    let specs = crate::runtime::abilities::abilities_for(agent_name, entry);
+    let mut out: Vec<AbilityDescriptor> = Vec::new();
 
-    // Owner URI: the agent itself, addressed by name. We don't
-    // try to resolve a federation URA here — pre-join the agent
-    // is local-only, and post-join the daemon publishes its real
-    // URA via federation.advertise; this side just needs an owner
-    // string the descriptor type accepts.
-    let owner_uri = format!("agent://{agent_name}");
+    let to_descriptor = |s: crate::runtime::abilities::AgentAbilitySpec,
+                         owner_uri: &str,
+                         source: String|
+     -> Option<AbilityDescriptor> {
+        AbilityDescriptor::new(s.name().to_string(), owner_uri, Visibility::Scoped)
+            .ok()
+            .map(|d| {
+                // AgentAbilitySpec calls its JSON-Schema field
+                // `parameters()` (carrying the input schema in
+                // the chat-style "parameters" shape) — that
+                // IS the input schema for the descriptor.
+                d.with_input_schema(s.parameters().clone())
+                    .with_source(source)
+                    .with_description(s.description())
+            })
+    };
 
+    // Phase 1: this agent's own abilities. Owner URI uses the
+    // agent's own name. The agent's `<agent_name>.chat` ability is
+    // filtered out — it is the outgoing surface, not something to
+    // expose AS a tool to the LLM running INSIDE it (that would
+    // invite infinite recursion).
+    let own_specs = crate::runtime::abilities::abilities_for(agent_name, entry);
+    let own_owner_uri = format!("agent://{agent_name}");
     let self_chat = format!("{agent_name}.chat");
-    specs
-        .into_iter()
-        // The agent's own chat ability is its outgoing surface,
-        // not something to expose AS a tool to the LLM running
-        // INSIDE it (that would invite infinite recursion: the
-        // agent calls its own chat tool, which spawns itself,
-        // which calls its own chat tool…). Mirror the same
-        // exclusion enumerate_skills applies in chat_ability.rs.
-        .filter(|s| s.name() != self_chat)
-        .filter_map(|s| {
-            AbilityDescriptor::new(s.name().to_string(), &owner_uri, Visibility::Scoped)
-                .ok()
-                .map(|d| {
-                    // AgentAbilitySpec calls its JSON-Schema field
-                    // `parameters()` (carrying the input schema in
-                    // the chat-style "parameters" shape) — that
-                    // IS the input schema for the descriptor.
-                    d.with_input_schema(s.parameters().clone())
-                        .with_source(format!("agent:{agent_name}"))
-                        .with_description(s.description())
-                })
-        })
-        .collect()
+    for s in own_specs.into_iter().filter(|s| s.name() != self_chat) {
+        if let Some(d) = to_descriptor(s, &own_owner_uri, format!("agent:{agent_name}")) {
+            out.push(d);
+        }
+    }
+
+    // Phase 1b: synthesise descriptors for the agent's self-bundle
+    // builtins — `<agent>.discover` and `<agent>.invoke`. These are
+    // registered programmatically in `build_registry_with_services`,
+    // not declared via on-disk TOMLs, so the workspace enumeration
+    // above never sees them. Without these synthesised entries an
+    // LLM running inside this agent cannot call its own discovery /
+    // invocation surface even though the daemon would happily
+    // dispatch them — exactly the gap that left `claude.discover`
+    // missing from `tools/list` after the ability-only refactor.
+    //
+    // The two descriptors are intentionally per-agent: every agent
+    // owns its own discover / invoke (the discovery ladder is
+    // owner-scoped). Source = `kernel:built-in:self-bundle` so an
+    // operator inspecting the descriptor catalogue can tell at a
+    // glance the entry came from a synth path, not a TOML.
+    {
+        let discover_name = format!(
+            "{agent_name}.{}",
+            crate::runtime::agents::discover_ability::ABILITY_VERB
+        );
+        let invoke_name = format!(
+            "{agent_name}.{}",
+            crate::runtime::agents::invoke_ability::ABILITY_VERB
+        );
+        for (name, schema, description) in [
+            (
+                discover_name,
+                crate::runtime::agents::discover_ability::input_schema(),
+                crate::runtime::agents::discover_ability::description(),
+            ),
+            (
+                invoke_name,
+                crate::runtime::agents::invoke_ability::input_schema(),
+                crate::runtime::agents::invoke_ability::description(),
+            ),
+        ] {
+            if let Ok(d) = AbilityDescriptor::new(name, &own_owner_uri, Visibility::Scoped) {
+                out.push(
+                    d.with_input_schema(schema)
+                        .with_source("kernel:built-in:self-bundle")
+                        .with_description(description),
+                );
+            }
+        }
+    }
+
+    // Phase 2: every OTHER registered agent's abilities. This is
+    // the cross-agent surface — when agent A is the active LLM and
+    // the user asks for something only agent B has the skill for,
+    // agent A's tool list now includes `<B>.<verb>` so the LLM can
+    // route to it. Calling those tools dispatches through the
+    // daemon's per-agent fallback resolver, which then runs B's
+    // own chat-translation handler with B's own skills exposed.
+    //
+    // `<other_name>.chat` is excluded for the same reason: chat is
+    // the agent's outgoing surface, not a callable tool. Calling
+    // another agent's chat from inside agent A would just spawn
+    // a nested chat session that bypasses the per-ability route
+    // we are trying to encourage.
+    for (other_name, other_entry) in &registry.agents {
+        if other_name == agent_name {
+            continue;
+        }
+        let other_chat = format!("{other_name}.chat");
+        let other_owner = format!("agent://{other_name}");
+        for s in
+            crate::runtime::abilities::abilities_for(other_name, other_entry)
+                .into_iter()
+                .filter(|s| s.name() != other_chat)
+        {
+            if let Some(d) = to_descriptor(s, &other_owner, format!("agent:{other_name}")) {
+                out.push(d);
+            }
+        }
+    }
+
+    out
 }
 
 impl<I: LocalInvoker> easynet_axon::mcp::McpToolProvider for InvokeMcpProvider<I> {

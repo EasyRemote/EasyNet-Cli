@@ -67,6 +67,12 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub(crate) mod bridge_pool;
+/// One helper — `invoke_local_ability(name, args)` — used by every
+/// CLI subcommand to talk to the local daemon's AbilityDispatcher.
+/// Per the AXON-RFC-001 ontology, every CLI action collapses to
+/// one ability Invoke; centralising the IPC dance here means a
+/// future transport swap lands in one file instead of N.
+pub(crate) mod local_invoke;
 pub(crate) mod net;
 pub(crate) mod node;
 pub(crate) mod output;

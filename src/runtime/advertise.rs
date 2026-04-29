@@ -38,8 +38,8 @@
 
 use crate::runtime::ability_descriptor::AbilityDescriptor;
 use crate::runtime::federation_client::{
-    AdvertiseAgentArgs, AdvertiseAgentReceipt, AdvertisedSigningAuthority, args_to_bytes,
-    parse_receipt_value,
+    AdvertiseAgentArgs, AdvertiseAgentReceipt, AdvertisedSigningAuthority, ResolveArgs,
+    ResolveFilter, ResolveReceipt, ResolvedAgent, args_to_bytes, parse_receipt_value,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -57,21 +57,97 @@ pub struct AdvertiseOutcome {
 /// against the hub-profile Agent. `<realm>` is filled at call time
 /// from the daemon's join receipt; `<hub_uri>` segment is fixed
 /// because every realm has exactly one canonical hub-profile Agent.
+// Visibility token must be one of `pub | org | prv` per the SDK
+// canonicalizer (client-sdk/src/domain/easynet/semantic.rs); the
+// pre-existing `private` literal silently failed canonicalization
+// with `invalid visibility for r easynet URI` on every advertise
+// call — operators saw "advertise X failed" with no entry in the
+// realm directory. Hub-profile URIs are not public, so we use `prv`.
 const FED_ADVERTISE_AGENT_RESOURCE_FMT: &str =
-    "easynet:///r/private/hub/{realm}/abilities/federation.advertise_agent@1";
+    "easynet:///r/prv/hub/{realm}/abilities/federation.advertise_agent@1?tenant_id={tenant}";
 
 const FED_ADVERTISE_ABILITIES_RESOURCE_FMT: &str =
-    "easynet:///r/private/hub/{realm}/abilities/federation.advertise_abilities@1";
+    "easynet:///r/prv/hub/{realm}/abilities/federation.advertise_abilities@1?tenant_id={tenant}";
+
+/// `federation.resolve` — read-only directory query against the
+/// realm's hub. Same `prv` visibility as the advertise pair (hub-
+/// profile abilities are private to the realm, not network-public).
+const FED_RESOLVE_RESOURCE_FMT: &str =
+    "easynet:///r/prv/hub/{realm}/abilities/federation.resolve@1?tenant_id={tenant}";
+
+/// `federation.revoke` — voluntary leave (or operator-initiated
+/// revocation) of an Agent's directory entry. CLI shutdown calls
+/// this on the daemon's own device-profile URI to remove its
+/// directory presence cleanly. RFC-001 §A14 reserves this hub
+/// ability for the legacy `deregister_node` migration path.
+const FED_REVOKE_RESOURCE_FMT: &str =
+    "easynet:///r/prv/hub/{realm}/abilities/federation.revoke@1?tenant_id={tenant}";
+
+/// `federation.heartbeat` — membership liveness ping. Periodically
+/// re-stamps the hub's `last_heartbeat_unix_ms` so the directory
+/// sweep doesn't evict the daemon's record. Replaces the legacy
+/// gRPC `NodeHeartbeat` RPC removed by AXON-RFC-001 P1.5.
+const FED_HEARTBEAT_RESOURCE_FMT: &str =
+    "easynet:///r/prv/hub/{realm}/abilities/federation.heartbeat@1?tenant_id={tenant}";
+
+/// RFC-002 §5.1 federation.resolve_key — agent_uri → public_key
+/// lookup against the realm directory.
+const FED_RESOLVE_KEY_RESOURCE_FMT: &str =
+    "easynet:///r/prv/hub/{realm}/abilities/federation.resolve_key@1?tenant_id={tenant}";
+
+/// RFC-002 §5.2 federation.forward_invoke — hub-mediated cross-
+/// device dispatch.
+const FED_FORWARD_INVOKE_RESOURCE_FMT: &str =
+    "easynet:///r/prv/hub/{realm}/abilities/federation.forward_invoke@1?tenant_id={tenant}";
 
 /// Build the canonical resource URI for `federation.advertise_agent`
 /// against the realm's hub. Public so call sites can construct the
 /// URI consistently without re-typing the format string.
-pub fn advertise_agent_resource_uri(realm: &str) -> String {
-    FED_ADVERTISE_AGENT_RESOURCE_FMT.replace("{realm}", realm)
+///
+/// `tenant_id` is mandatory: the SDK canonicalizer rejects any non-
+/// `pub` URI that does not carry `?tenant_id=...` and it must match
+/// the envelope tenant. Building the query here keeps every advertise
+/// caller from re-implementing it.
+pub fn advertise_agent_resource_uri(realm: &str, tenant_id: &str) -> String {
+    FED_ADVERTISE_AGENT_RESOURCE_FMT
+        .replace("{realm}", realm)
+        .replace("{tenant}", tenant_id)
 }
 
-pub fn advertise_abilities_resource_uri(realm: &str) -> String {
-    FED_ADVERTISE_ABILITIES_RESOURCE_FMT.replace("{realm}", realm)
+pub fn advertise_abilities_resource_uri(realm: &str, tenant_id: &str) -> String {
+    FED_ADVERTISE_ABILITIES_RESOURCE_FMT
+        .replace("{realm}", realm)
+        .replace("{tenant}", tenant_id)
+}
+
+/// Build the canonical resource URI for `federation.resolve` against
+/// the realm's hub. Inbound counterpart to `advertise_*`: peers query
+/// this to discover what every other agent in the realm has
+/// published.
+pub fn resolve_resource_uri(realm: &str, tenant_id: &str) -> String {
+    FED_RESOLVE_RESOURCE_FMT
+        .replace("{realm}", realm)
+        .replace("{tenant}", tenant_id)
+}
+
+/// Build the canonical resource URI for `federation.revoke` against
+/// the realm's hub. Used by the CLI shutdown path to remove the
+/// daemon's own directory entry — replaces the deprecated
+/// `bridge.deregister_node` gRPC call.
+pub fn revoke_resource_uri(realm: &str, tenant_id: &str) -> String {
+    FED_REVOKE_RESOURCE_FMT
+        .replace("{realm}", realm)
+        .replace("{tenant}", tenant_id)
+}
+
+/// Build the canonical resource URI for `federation.heartbeat`
+/// against the realm's hub. Periodic invocation keeps the daemon's
+/// directory entry alive. Replaces the deprecated
+/// `bridge.NodeHeartbeat` keepalive RPC.
+pub fn heartbeat_resource_uri(realm: &str, tenant_id: &str) -> String {
+    FED_HEARTBEAT_RESOURCE_FMT
+        .replace("{realm}", realm)
+        .replace("{tenant}", tenant_id)
 }
 
 /// Wire shape for `federation.advertise_abilities` arguments. Not in
@@ -109,6 +185,16 @@ pub struct BridgeAbilityInvoker<'a> {
     /// indefinitely if the runtime is wedged — operators see a
     /// failed advertise in logs and re-run later.
     pub timeout_ms: u64,
+    /// Caller URI to stamp on every envelope this invoker emits
+    /// when the resource URI's subject is hub-shaped. The bridge's
+    /// unsigned-invoke path uses this as the `caller.uri` field
+    /// instead of synthesising one from the subject_id (which for
+    /// `easynet:prv:hub:<realm>` would otherwise produce a
+    /// nonsensical `agents/easynet:prv:hub:<realm>` literal). Empty
+    /// string means "fall back to SDK default", which is correct
+    /// for tests and pre-join callers that don't yet know their
+    /// own agent URI.
+    pub caller_uri_for_hub: String,
 }
 
 impl<'a> BridgeAbilityInvoker<'a> {
@@ -119,6 +205,22 @@ impl<'a> BridgeAbilityInvoker<'a> {
             // and a 5-second budget covers ordinary cold-start
             // latency without making startup hang.
             timeout_ms: 5_000,
+            caller_uri_for_hub: String::new(),
+        }
+    }
+
+    /// Same as `new` but pins the caller URI to use on hub-shaped
+    /// federation calls. Production callers (the daemon boot path)
+    /// build this with their own device-profile Agent URI; tests
+    /// keep using `new()` so the SDK fallback is exercised.
+    pub fn with_caller_uri(
+        bridge: &'a easynet_axon::dendrite_bridge::DendriteBridge,
+        caller_uri: impl Into<String>,
+    ) -> Self {
+        Self {
+            bridge,
+            timeout_ms: 5_000,
+            caller_uri_for_hub: caller_uri.into(),
         }
     }
 }
@@ -130,17 +232,120 @@ impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
         resource_uri: &str,
         payload_json: Value,
     ) -> Result<Value, String> {
+        // Build the subject_id from the URI shape so the runtime's
+        // `verify_easynet_invocation_metadata` (security.rs:222)
+        // sees a subject that matches the URI's parsed
+        // `<visibility>:<subject_type>:<subject_value>` decomposition.
+        //
+        // Two shapes the daemon legitimately calls:
+        //   1. `r/<vis>/hub/<realm>/abilities/...` — hub-profile
+        //      (federation.advertise_*, federation.resolve, runtime.*).
+        //      Subject MUST be `easynet:<vis>:hub:<realm>`.
+        //   2. `r/<vis>/agent/<id>/abilities/...` — agent-profile.
+        //      Subject is `easynet:<vis>:reg:agent.<id>` and is the
+        //      SDK's default when subject_id = None — no override
+        //      needed.
+        //
+        // Pre-fix every call passed `subject_id = None`, which the
+        // SDK defaulted to the agent form regardless of URI shape.
+        // Hub-shaped URIs therefore got `agent.<node>` as subject
+        // and the runtime rejected with AXON_EASYNET_SUBJECT_MISMATCH
+        // ("subject_id does not match resource URI subject"), even
+        // though the daemon's bootstrap_self_identity had succeeded
+        // and topology had the key. Two-layer subject mismatch:
+        // first the URI-vs-subject check at canonicalize fails,
+        // never even reaching the topology key lookup.
+        let subject_id = subject_id_from_resource_uri(resource_uri);
+        // The metadata bag carries TWO load-bearing entries:
+        //
+        // 1. `easynet.resource_uri` — every call sets this. It lets
+        //    axon's `verify_easynet_invocation_metadata` recover the
+        //    ability name when the caller didn't fill `target.ability_name`
+        //    or `function_name` (the bridge's `ability_call_raw` path
+        //    doesn't fill those). Without it axon's pre-ability-name
+        //    extraction falls through to "" and the `runtime.*` /
+        //    `federation.*` security exemptions never fire — so a
+        //    `runtime.register_local_tool` (which is daemon-internal,
+        //    same-process admin) gets rejected with
+        //    AXON_EASYNET_SUBJECT_MISMATCH because the verifier expects
+        //    `agent.<owner>` shaped subjects but the URI is hub-shaped.
+        //    Pre-fix this caused 0/N runtime.register_local_tool calls
+        //    to succeed at boot — the daemon's local abilities were
+        //    advertised to peers but not dispatchable cross-process.
+        //
+        // 2. `easynet.caller_uri_override` — only set for hub-shaped
+        //    subjects when the daemon has a joined caller URI to
+        //    pin. Without it the bridge's unsigned-invoke path
+        //    synthesises `agents/easynet:prv:hub:<realm>` which the
+        //    runtime's caller-URI check rejects.
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "easynet.resource_uri".to_string(),
+            resource_uri.to_string(),
+        );
+        if subject_id.as_deref().map(|s| s.contains(":hub:")).unwrap_or(false)
+            && !self.caller_uri_for_hub.is_empty()
+        {
+            map.insert(
+                "easynet.caller_uri_override".to_string(),
+                self.caller_uri_for_hub.clone(),
+            );
+        }
+        let metadata: Option<std::collections::HashMap<String, String>> = Some(map);
         self.bridge
             .ability_call_raw(
                 tenant_id,
                 resource_uri,
                 payload_json,
-                None,
-                None,
+                subject_id.as_deref(),
+                metadata.as_ref(),
                 self.timeout_ms,
             )
             .map_err(|e| format!("{e}"))
     }
+}
+
+/// Derive the canonical `subject_id` an envelope should carry for a
+/// given EasyNet resource URI. Returns `None` for URIs the helper
+/// doesn't recognise (the SDK falls back to its default
+/// `easynet:<vis>:reg:agent.<owner>` form, which is correct for
+/// agent-profile URIs and what the SDK already does).
+///
+/// Visible to tests via the module re-export below; the function is
+/// pure (no I/O, no state) so a test that pins each shape is
+/// sufficient.
+pub(crate) fn subject_id_from_resource_uri(resource_uri: &str) -> Option<String> {
+    // Strip the scheme and `//` authority. RFC-001 canonical shape
+    // is `easynet:///r/<vis>/<subject_type>/<subject_value>/abilities/<name>@<ver>`.
+    // We deliberately match by structural prefix rather than trying
+    // to parse a full URL — the canonicalizer downstream owns
+    // structural validation.
+    let after_scheme = resource_uri.strip_prefix("easynet:///")?;
+    let mut parts = after_scheme.split('/');
+    if parts.next()? != "r" {
+        return None;
+    }
+    let visibility = parts.next()?;
+    let subject_type = parts.next()?;
+    let subject_value = parts.next()?;
+    if !matches!(visibility, "pub" | "org" | "prv") {
+        return None;
+    }
+    // Hub-profile: `r/<vis>/hub/<realm>/abilities/...` →
+    // `easynet:<vis>:hub:<realm>`.
+    if subject_type == "hub" {
+        return Some(format!("easynet:{visibility}:hub:{subject_value}"));
+    }
+    // Agent-profile: `r/<vis>/agent/<id>/abilities/...` →
+    // `easynet:<vis>:reg:agent.<id>`. We let the SDK fall back to
+    // its default by returning None — the same shape it already
+    // builds.
+    if subject_type == "agent" {
+        return None;
+    }
+    // Other subject_types (none today; reserved for future): fall
+    // through to SDK default rather than guessing.
+    None
 }
 
 /// Build the `federation.advertise_agent` payload + invoke it.
@@ -151,7 +356,7 @@ pub fn advertise_agent<I: AbilityInvoker>(
     realm: &str,
     args: &AdvertiseAgentArgs,
 ) -> AdvertiseOutcome {
-    let resource_uri = advertise_agent_resource_uri(realm);
+    let resource_uri = advertise_agent_resource_uri(realm, tenant_id);
     let payload: Value = match serde_json::from_slice(&args_to_bytes(args)) {
         Ok(v) => v,
         Err(e) => {
@@ -162,20 +367,44 @@ pub fn advertise_agent<I: AbilityInvoker>(
         }
     };
     match invoker.invoke_ability(tenant_id, &resource_uri, payload) {
-        Ok(receipt_body) => match parse_receipt_value::<AdvertiseAgentReceipt>(&receipt_body) {
-            Ok(parsed) => AdvertiseOutcome {
-                agent_uri: args.agent_uri.clone(),
-                result: Ok(parsed),
-            },
-            Err(e) => AdvertiseOutcome {
-                agent_uri: args.agent_uri.clone(),
-                result: Err(format!("parse advertise_agent receipt: {e}")),
-            },
-        },
+        Ok(response) => {
+            let body = unwrap_result_json(response);
+            match parse_receipt_value::<AdvertiseAgentReceipt>(&body) {
+                Ok(parsed) => AdvertiseOutcome {
+                    agent_uri: args.agent_uri.clone(),
+                    result: Ok(parsed),
+                },
+                Err(e) => AdvertiseOutcome {
+                    agent_uri: args.agent_uri.clone(),
+                    result: Err(format!("parse advertise_agent receipt: {e}")),
+                },
+            }
+        }
         Err(e) => AdvertiseOutcome {
             agent_uri: args.agent_uri.clone(),
             result: Err(e),
         },
+    }
+}
+
+/// Strip the SDK's invoke-response wrapper to expose the receipt
+/// body. `bridge.ability_call_raw` returns the full Invoke response
+/// envelope (`{result_json, ok?, ...}`) — receipts live in
+/// `result_json`. When `result_json` is a string the caller
+/// pre-stringified the body, so we re-parse it. Anything that
+/// already looks like a top-level receipt (no `result_json` field)
+/// passes through verbatim, which keeps tests + future SDK
+/// refactors that flatten the shape working without a version
+/// branch.
+fn unwrap_result_json(response: Value) -> Value {
+    let inner = if response.get("result_json").is_some() {
+        response.get("result_json").cloned().unwrap_or(Value::Null)
+    } else {
+        return response;
+    };
+    match inner {
+        Value::String(s) => serde_json::from_str(&s).unwrap_or(Value::String(s)),
+        other => other,
     }
 }
 
@@ -188,7 +417,7 @@ pub fn advertise_abilities<I: AbilityInvoker>(
     agent_uri: &str,
     abilities: &[AbilityDescriptor],
 ) -> Result<Value, String> {
-    let resource_uri = advertise_abilities_resource_uri(realm);
+    let resource_uri = advertise_abilities_resource_uri(realm, tenant_id);
     let args = AdvertiseAbilitiesArgs {
         agent_uri,
         abilities,
@@ -196,6 +425,163 @@ pub fn advertise_abilities<I: AbilityInvoker>(
     let payload =
         serde_json::to_value(&args).map_err(|e| format!("encode advertise_abilities args: {e}"))?;
     invoker.invoke_ability(tenant_id, &resource_uri, payload)
+}
+
+/// Inbound counterpart to the advertise pair above:
+/// `federation.resolve` against the realm's hub. Returns the typed
+/// `Vec<ResolvedAgent>` the discover ladder consumes.
+///
+/// `prefix` filters by `agent_uri_prefix` server-side — pass an empty
+/// string for "every agent". `include_abilities` is the load-bearing
+/// flag for `<self>.discover(scope: "easynet")`: without it every
+/// peer record is just `{uri, status}` with no descriptors, and the
+/// LLM can't pick a candidate.
+///
+/// Errors are stringified per the AbilityInvoker contract — the
+/// caller's recovery is invariant: log + degrade. The discover
+/// handler propagates them as a typed `federation_unavailable`
+/// envelope so the LLM falls through gracefully.
+pub fn resolve_agents<I: AbilityInvoker>(
+    invoker: &I,
+    tenant_id: &str,
+    realm: &str,
+    prefix: &str,
+    include_abilities: bool,
+) -> Result<Vec<ResolvedAgent>, String> {
+    resolve_agents_with_filter(invoker, tenant_id, realm, prefix, include_abilities, None)
+}
+
+/// RFC-002 §5 variant: pass an explicit tenant_filter so callers can
+/// request "scope to caller's tenant" (None / "") or "cross-tenant
+/// catalog listing" ("*"). The hub-side default is auto-fill from
+/// envelope tenant; CLI's `<self>.discover(scope: "user")` therefore
+/// passes None and the hub fills in the right value.
+pub fn resolve_agents_with_filter<I: AbilityInvoker>(
+    invoker: &I,
+    tenant_id: &str,
+    realm: &str,
+    prefix: &str,
+    include_abilities: bool,
+    tenant_filter: Option<String>,
+) -> Result<Vec<ResolvedAgent>, String> {
+    let resource_uri = resolve_resource_uri(realm, tenant_id);
+    let filter = if prefix.is_empty() && !include_abilities && tenant_filter.is_none() {
+        None
+    } else {
+        Some(ResolveFilter {
+            agent_uri_prefix: if prefix.is_empty() {
+                None
+            } else {
+                Some(prefix.to_string())
+            },
+            include_abilities,
+            tenant_filter,
+        })
+    };
+    let args = ResolveArgs { filter };
+    let payload: Value = serde_json::from_slice(&args_to_bytes(&args))
+        .map_err(|e| format!("encode resolve args: {e}"))?;
+    let response = invoker.invoke_ability(tenant_id, &resource_uri, payload)?;
+    // Same `result_json` unwrap as advertise_agent — the SDK's
+    // raw invoke surface wraps every receipt in an Invoke response
+    // envelope, and the federation receipt parsers want the inner
+    // body verbatim. See `unwrap_result_json` doc comment.
+    let receipt_body = unwrap_result_json(response);
+    let receipt: ResolveReceipt = parse_receipt_value(&receipt_body)
+        .map_err(|e| format!("parse federation.resolve receipt: {e}"))?;
+    Ok(receipt.agents)
+}
+
+/// `federation.revoke` invocation. Removes the named Agent from the
+/// realm directory. The CLI shutdown path calls this on the
+/// daemon's own device-profile URI to clean up its directory
+/// presence — replaces the deprecated `bridge.deregister_node`
+/// gRPC call.
+///
+/// Best-effort by contract: a hub-side rejection (rare — the only
+/// nonzero failure mode in v1 is "agent already revoked, no-op")
+/// surfaces as an Err string and the caller logs + continues.
+pub fn revoke_agent<I: AbilityInvoker>(
+    invoker: &I,
+    tenant_id: &str,
+    realm: &str,
+    agent_uri: &str,
+    reason: &str,
+) -> Result<(), String> {
+    let resource_uri = revoke_resource_uri(realm, tenant_id);
+    let payload = serde_json::json!({
+        "agent_uri": agent_uri,
+        "reason": reason,
+    });
+    let _ = invoker.invoke_ability(tenant_id, &resource_uri, payload)?;
+    Ok(())
+}
+
+/// `federation.heartbeat` invocation. Refreshes the daemon's
+/// `last_heartbeat_unix_ms` in the directory so the sweep doesn't
+/// evict the entry. Replaces the deprecated `bridge.NodeHeartbeat`
+/// keepalive RPC.
+///
+/// Best-effort: a transient hub-side failure surfaces as Err and
+/// the caller's loop logs + retries on the next tick. Persistent
+/// failure escalates to membership eviction same as before.
+pub fn heartbeat<I: AbilityInvoker>(
+    invoker: &I,
+    tenant_id: &str,
+    realm: &str,
+) -> Result<(), String> {
+    let resource_uri = heartbeat_resource_uri(realm, tenant_id);
+    // federation.heartbeat takes no arguments; the hub keys the
+    // refresh on the envelope's caller URI alone.
+    let payload = serde_json::json!({});
+    let _ = invoker.invoke_ability(tenant_id, &resource_uri, payload)?;
+    Ok(())
+}
+
+/// RFC-002 §5.1 federation.resolve_key client. Returns the public
+/// key the directory has on file for the given URA.
+pub fn resolve_key<I: AbilityInvoker>(
+    invoker: &I,
+    tenant_id: &str,
+    realm: &str,
+    agent_uri: &str,
+) -> Result<crate::runtime::federation_client::ResolveKeyReceipt, String> {
+    let resource_uri = FED_RESOLVE_KEY_RESOURCE_FMT
+        .replace("{realm}", realm)
+        .replace("{tenant}", tenant_id);
+    let payload = serde_json::json!({ "agent_uri": agent_uri });
+    let response = invoker.invoke_ability(tenant_id, &resource_uri, payload)?;
+    let receipt_body = unwrap_result_json(response);
+    serde_json::from_value(receipt_body).map_err(|e| format!("parse resolve_key receipt: {e}"))
+}
+
+/// RFC-002 §5.2 federation.forward_invoke client. Hands a forward
+/// request to the realm's hub which routes it to the target's host
+/// daemon via runtime-local-tool dispatch.
+pub fn forward_invoke<I: AbilityInvoker>(
+    invoker: &I,
+    tenant_id: &str,
+    realm: &str,
+    target_uri: &str,
+    ability_name: &str,
+    arguments: &Value,
+) -> Result<crate::runtime::federation_client::ForwardInvokeReceipt, String> {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    let resource_uri = FED_FORWARD_INVOKE_RESOURCE_FMT
+        .replace("{realm}", realm)
+        .replace("{tenant}", tenant_id);
+    let arguments_bytes =
+        serde_json::to_vec(arguments).map_err(|e| format!("encode forward args: {e}"))?;
+    let arguments_b64 = STANDARD.encode(&arguments_bytes);
+    let payload = serde_json::json!({
+        "target_uri": target_uri,
+        "ability_name": ability_name,
+        "arguments_b64": arguments_b64,
+    });
+    let response = invoker.invoke_ability(tenant_id, &resource_uri, payload)?;
+    let receipt_body = unwrap_result_json(response);
+    serde_json::from_value(receipt_body).map_err(|e| format!("parse forward_invoke receipt: {e}"))
 }
 
 /// Convenience: advertise the device-profile Agent itself (Selfsigned
@@ -208,10 +594,32 @@ pub fn advertise_self_signed_device<I: AbilityInvoker>(
     agent_uri: &str,
     public_key_hex: &str,
 ) -> AdvertiseOutcome {
+    advertise_self_signed_device_with_host_node(
+        invoker,
+        tenant_id,
+        realm,
+        agent_uri,
+        public_key_hex,
+        None,
+    )
+}
+
+/// RFC-002 §5.2 variant: pass host_node_id so forward_invoke knows
+/// which UDS-bound local-tool registration owns this agent's
+/// dispatch path.
+pub fn advertise_self_signed_device_with_host_node<I: AbilityInvoker>(
+    invoker: &I,
+    tenant_id: &str,
+    realm: &str,
+    agent_uri: &str,
+    public_key_hex: &str,
+    host_node_id: Option<String>,
+) -> AdvertiseOutcome {
     let args = AdvertiseAgentArgs {
         agent_uri: agent_uri.to_string(),
         public_key_hex: public_key_hex.to_string(),
         signing_authority: AdvertisedSigningAuthority::SelfSigned,
+        host_node_id,
     };
     advertise_agent(invoker, tenant_id, realm, &args)
 }
@@ -225,12 +633,28 @@ pub fn advertise_hosted_agent<I: AbilityInvoker>(
     agent_uri: &str,
     host_uri: &str,
 ) -> AdvertiseOutcome {
+    advertise_hosted_agent_with_host_node(
+        invoker, tenant_id, realm, agent_uri, host_uri, None,
+    )
+}
+
+/// RFC-002 §5.2 variant: pass host_node_id so forward_invoke knows
+/// where the hosted agent's dispatch endpoint is registered.
+pub fn advertise_hosted_agent_with_host_node<I: AbilityInvoker>(
+    invoker: &I,
+    tenant_id: &str,
+    realm: &str,
+    agent_uri: &str,
+    host_uri: &str,
+    host_node_id: Option<String>,
+) -> AdvertiseOutcome {
     let args = AdvertiseAgentArgs {
         agent_uri: agent_uri.to_string(),
         public_key_hex: String::new(),
         signing_authority: AdvertisedSigningAuthority::HostedBy {
             host_uri: host_uri.to_string(),
         },
+        host_node_id,
     };
     advertise_agent(invoker, tenant_id, realm, &args)
 }
@@ -289,12 +713,12 @@ mod tests {
     #[test]
     fn resource_uri_substitutes_realm_correctly() {
         assert_eq!(
-            advertise_agent_resource_uri("acme"),
-            "easynet:///r/private/hub/acme/abilities/federation.advertise_agent@1"
+            advertise_agent_resource_uri("acme", "tenant-1"),
+            "easynet:///r/prv/hub/acme/abilities/federation.advertise_agent@1?tenant_id=tenant-1"
         );
         assert_eq!(
-            advertise_abilities_resource_uri("contoso"),
-            "easynet:///r/private/hub/contoso/abilities/federation.advertise_abilities@1"
+            advertise_abilities_resource_uri("contoso", "tenant-2"),
+            "easynet:///r/prv/hub/contoso/abilities/federation.advertise_abilities@1?tenant_id=tenant-2"
         );
     }
 
@@ -414,11 +838,20 @@ mod tests {
 
     #[test]
     fn advertise_abilities_targets_correct_resource_uri() {
+        // `advertise_abilities_resource_uri` substitutes both
+        // `{realm}` and `{tenant}` placeholders. The parallel test
+        // above (`advertise_agent_targets_correct_resource_uri`)
+        // already pins the substituted form for the agent variant.
+        // This test was previously asserting the raw template
+        // (`tenant_id={tenant}`) and silently regressed when the
+        // substitution landed; pinning the post-substitution shape
+        // catches a future regression that "forgets" to replace
+        // one of the placeholders.
         let invoker = RecordingInvoker::new(serde_json::json!({"ack": true}));
         let _ = advertise_abilities(&invoker, "tenant", "acme", "u", &[]).unwrap();
         assert_eq!(
             invoker.last_resource_uri.borrow().as_deref().unwrap(),
-            "easynet:///r/private/hub/acme/abilities/federation.advertise_abilities@1"
+            "easynet:///r/prv/hub/acme/abilities/federation.advertise_abilities@1?tenant_id=tenant"
         );
     }
 }

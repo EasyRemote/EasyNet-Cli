@@ -64,6 +64,19 @@ pub struct DriverOverrides {
     pub temperature: Option<f64>,
     /// Same caveat as `temperature`.
     pub max_tokens: Option<u32>,
+    /// Driver-side conversation resume id. When `Some`, the driver
+    /// continues a prior conversation under that id (codex:
+    /// `codex exec resume <id>`); when `None`, the driver starts a
+    /// fresh conversation and the chat ability returns the newly
+    /// minted id back to the caller as `session_id`. Drivers that
+    /// do not support resume (claude-code today) ignore this field
+    /// and treat each call as fresh.
+    ///
+    /// The chat ability sets this from the caller's `session_id`
+    /// argument when it parses as a UUID — that shape is the
+    /// signal that the caller is asking us to continue an existing
+    /// thread rather than label a fresh one.
+    pub resume_thread_id: Option<String>,
 }
 
 /// One tool call the LLM made during a run. Lifted from the driver
@@ -96,6 +109,16 @@ pub struct AgentResponse {
     /// expose tool-call observability (codex today) leave this empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCall>,
+    /// Driver-assigned conversation id. Set by drivers whose backing
+    /// CLI/runtime persists multi-turn state under a stable id (codex
+    /// emits `thread.started` with a UUIDv7; claude-code does not yet
+    /// expose one and leaves this `None`). The chat ability echoes
+    /// this back to the caller as `session_id`, and a subsequent turn
+    /// can pass it through `driver.resume_thread_id` (or its
+    /// equivalent) to continue the same conversation. `None` is the
+    /// fresh-conversation path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
 }
 
 /// Resolve the dispatch timeout from spec + entry precedence.
@@ -614,6 +637,13 @@ pub fn send_to_agent_with_depth_and_progress(
             // with a custom install path route through without
             // editing driver source.
             command: entry.command.clone(),
+            // Conversation resume: `None` is fresh, `Some(id)` tells
+            // a resume-capable driver (codex) to continue under that
+            // thread id. Sourced from the chat ability's caller via
+            // `DriverOverrides::resume_thread_id`.
+            resume_thread_id: overrides
+                .as_ref()
+                .and_then(|o| o.resume_thread_id.clone()),
         },
     );
 
@@ -726,6 +756,7 @@ pub fn send_to_agent_with_depth_and_progress(
         usage: output.usage,
         run_dir: run_dir.as_ref().map(|d| d.path().to_path_buf()),
         tool_calls: output.tool_calls,
+        thread_id: output.thread_id,
     })
 }
 
@@ -1293,6 +1324,7 @@ mod tests {
                 content: self.response.clone(),
                 usage: self.usage.clone(),
                 tool_calls: self.tool_calls.clone(),
+                thread_id: None,
             })
         }
     }
@@ -1324,6 +1356,7 @@ mod tests {
             timeline: None,
             progress_tx: None,
             command: String::new(),
+            resume_thread_id: None,
         };
         let out = adapter
             .invoke(&entry, "ignored prompt", opts)
@@ -1355,6 +1388,7 @@ mod tests {
             timeline: None,
             progress_tx: None,
             command: String::new(),
+            resume_thread_id: None,
         };
         let out = adapter.invoke(&entry, "p", opts).unwrap();
         assert!(out.usage.is_none());
@@ -1393,6 +1427,7 @@ mod tests {
             timeline: None,
             progress_tx: None,
             command: String::new(),
+            resume_thread_id: None,
         };
         let out = adapter.invoke(&entry, "p", opts).unwrap();
         assert_eq!(out.tool_calls.len(), 2);

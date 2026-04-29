@@ -42,6 +42,18 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-pub(crate) mod config;
+// Public so integration tests + future external embedders can
+// construct `Credentials`. Inner field visibility on the struct
+// itself is already `pub`.
+pub mod config;
 pub(crate) mod local_agents;
+/// Local resources registry — `~/.easynet/resources.json`. Maps a
+/// stable hardware identifier (CoreAudio/PulseAudio device UID, USB
+/// serial, EDID, camera device-path, …) to the canonical resource
+/// URA used as the `subject` of RFC-005 v3.2 media invocations
+/// (`mic.subscribe`, `camera.snapshot`, …). Lives here rather than
+/// `runtime/` because it is on-disk state owned by the persistence
+/// layer; the runtime side reads it through this module's public
+/// API.
+pub mod resources;
 pub(crate) mod tenant_paths;

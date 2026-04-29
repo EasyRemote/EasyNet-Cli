@@ -1,0 +1,24 @@
+schema_version = "1"
+name = "mission.think"
+description = "Run a long-running task with a separate judge session. Each cycle: the worker session resumes its prior session_id and pushes the task forward; an independent judge session reads the worker's latest output, decides whether to terminate, and emits a memory- classification verdict (which Phase 5's curator turns into ability.publish or skill.publish)."
+
+[input_schema]
+type = "object"
+required = ["owner_agent_id", "prompt"]
+
+[input_schema.properties.judge_agent_id]
+type = "string"
+description = "Optional. The judge agent. Defaults to owner_agent_id; the *sessions* are independent regardless."
+
+[input_schema.properties.max_cycles]
+type = "integer"
+description = "Hard cap on worker+judge cycles. Default 5, ceiling HARD_MAX_CYCLES (50)."
+minimum = 1
+
+[input_schema.properties.owner_agent_id]
+type = "string"
+description = "The worker agent. Its `<agent>.chat` ability is invoked once per cycle with cross-session resume."
+
+[input_schema.properties.prompt]
+type = "string"
+description = "The initial task description for the worker. Cycle 1 sees this verbatim; cycles 2+ see a continue-hint, with the prior session_id rehydrating context."

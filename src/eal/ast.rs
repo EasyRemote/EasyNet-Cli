@@ -110,6 +110,13 @@ pub enum FieldValue {
     Float(f64),
     Bool(bool),
     VarRef { var_name: String },
+    /// Inline JSON-object literal. Lets a member-call carry nested
+    /// args (e.g. `claude.invoke(args: { location: "Beijing" })`).
+    /// Nesting is bounded by the parser's own recursion (no
+    /// artificial cap; bad input bottoms out at the EAL stack
+    /// limit). Lowered to `serde_json::Value::Object(...)` at IR
+    /// time.
+    Object(Vec<Field>),
 }
 
 #[derive(Debug, Clone, Default)]

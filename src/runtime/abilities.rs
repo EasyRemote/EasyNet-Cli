@@ -266,6 +266,59 @@ pub fn abilities_for(agent_name: &str, entry: &AgentEntry) -> Vec<AgentAbilitySp
     )]
 }
 
+/// Like `abilities_for`, but returns the full `AbilityManifest` for
+/// each ability rather than the discovery-trimmed `AgentAbilitySpec`.
+///
+/// The dispatch path needs more than the discovery shape: when a
+/// manifest pins an executor binding (`[exec]`) the handler must see
+/// the executor config to route the call to a real subprocess
+/// instead of the chat-translation fallback. `abilities_for` strips
+/// that field on its way to the wire-level spec; this helper keeps
+/// it.
+///
+/// Returns one entry per on-disk `<verb>.ability.toml` in the
+/// agent's root, in the same order as `abilities_for`. Falls back
+/// to an empty vector when the agent has no on-disk root (in-memory
+/// fixtures); callers that need the chat synth path use
+/// `abilities_for` instead.
+pub fn manifests_for(
+    agent_name: &str,
+    entry: &AgentEntry,
+) -> Vec<crate::core::ability_spec::AbilityManifest> {
+    let root: std::path::PathBuf = entry
+        .root_path
+        .clone()
+        .unwrap_or_else(|| crate::persistence::config::agents_root().join(agent_name));
+    if !root.is_dir() {
+        return Vec::new();
+    }
+    let dir = match AgentDirectory::open(&root) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!(
+                "manifests_for[{agent_name}]: failed to open agent directory at {}: {e}",
+                root.display()
+            );
+            return Vec::new();
+        }
+    };
+    if let Err(e) = ensure_chat_manifest(&dir) {
+        eprintln!(
+            "manifests_for[{agent_name}]: failed to seed default chat manifest: {e}; \
+             continuing with on-disk manifests"
+        );
+    }
+    match dir.list_ability_manifests() {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!(
+                "manifests_for[{agent_name}]: failed to enumerate ability manifests: {e}"
+            );
+            Vec::new()
+        }
+    }
+}
+
 /// Read the agent's on-disk ability manifests and convert them to
 /// network-visible specs. Returns `None` when there is no usable
 /// `root_path` or when the directory is unreadable — signaling the

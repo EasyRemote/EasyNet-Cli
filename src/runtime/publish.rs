@@ -135,7 +135,12 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
     }
 
     // Step 3: advertise the device-profile (Selfsigned, Model A).
-    let device_outcome = advertise::advertise_self_signed_device(
+    // RFC-002: pass host_node_id so federation.forward_invoke can
+    // route inbound forward requests to this daemon's local-tool
+    // dispatch surface. Falls back to the legacy node-less form
+    // when host_device_uri lacks an `/agent/<id>` suffix.
+    let host_node_id = host_node_id_from_uri(&plan.host_device_uri);
+    let device_outcome = advertise::advertise_self_signed_device_with_host_node(
         invoker,
         tenant_id,
         &plan.realm,
@@ -144,6 +149,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
         // empty placeholder so the advertise wire shape stays
         // stable. The hub still records the URA + status.
         "",
+        host_node_id.clone(),
     );
     outcomes.push(advertise_outcome_to_publish_outcome(
         device_outcome,
@@ -163,12 +169,13 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
 
     // Step 4: advertise each hosted Agent (HostedBy, Model B).
     for o in &bootstrap_outcomes {
-        let outcome = advertise::advertise_hosted_agent(
+        let outcome = advertise::advertise_hosted_agent_with_host_node(
             invoker,
             tenant_id,
             &plan.realm,
             &o.agent_uri,
             &plan.host_device_uri,
+            host_node_id.clone(),
         );
         outcomes.push(advertise_outcome_to_publish_outcome(
             outcome,
@@ -293,7 +300,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
 ///     wraps the dendrite-bridge `ability_call_raw` path. The
 ///     resource URI follows the canonical 5-segment shape required
 ///     by `AxonClient::canonicalize_easynet_resource_uri`:
-///     `easynet:///r/private/hub/<realm>/abilities/runtime.register_local_tool@1`.
+///     `easynet:///r/prv/hub/<realm>/abilities/runtime.register_local_tool@1`.
 ///     The `runtime.*` namespace is intercepted before membership +
 ///     admission checks (rpc_handlers.rs::is_runtime_admin_ability)
 ///     so the hub-style subject is purely a URI shape, not an actual
@@ -329,8 +336,11 @@ pub fn register_local_tools_via_runtime<I: AbilityInvoker>(
     // Invoke and gets NoBinding.
     let names = collect_daemon_owned_ability_names();
 
+    // Non-pub URIs require `?tenant_id=<id>` per the SDK
+    // canonicalizer; without it we get "tenant_id query is required"
+    // before any admission/membership check runs.
     let resource_uri = format!(
-        "easynet:///r/private/hub/{realm}/abilities/runtime.register_local_tool@1"
+        "easynet:///r/prv/hub/{realm}/abilities/runtime.register_local_tool@1?tenant_id={tenant_id}"
     );
     for name in names {
         let args = build_register_args(tenant_id, node_id, &name, dispatch_endpoint);
@@ -343,6 +353,260 @@ pub fn register_local_tools_via_runtime<I: AbilityInvoker>(
     }
 
     outcomes
+}
+
+/// Bootstrap this node's trusted-key material with the local
+/// axon-runtime via `runtime.bootstrap_self_identity`. Must run
+/// before any signed Invoke is attempted (i.e. before
+/// `register_local_tools_via_runtime` and before any
+/// federation.advertise_* call).
+///
+/// Why this is needed:
+///
+/// AXON-RFC-001 P5-rewrite-13 deleted the legacy `register_node`
+/// RPC that historically populated `state.identity.node_keys` /
+/// `node_key_materials` and inserted into `state.topology.nodes`.
+/// `verify_easynet_subject_key_binding` (rpc_handlers' early
+/// envelope-metadata check) still requires those tables to be
+/// populated before a signed Invoke is admitted. With `register_node`
+/// gone, every Invoke fails with
+/// `AXON_EASYNET_SUBJECT_KEY_UNREGISTERED` until something else
+/// fills the gap.
+///
+/// `runtime.bootstrap_self_identity` is the v1 self-bootstrap. The
+/// daemon derives the same deterministic public key the bridge will
+/// later sign under (via `AxonClient::derive_owner_auth`, which
+/// hashes `(tenant_id, subject_id, DERIVE_CONTEXT)`) and passes it
+/// to the runtime; the runtime stores it once per node. From that
+/// moment on, every signed Invoke from the bridge passes verification.
+///
+/// Best-effort by contract: a failure here logs and returns one
+/// `PublishOutcome` per attempt. The runtime is still functional
+/// for the runtime-dispatch path that does not require signed
+/// metadata; only the federation/Invoke path degrades.
+pub fn bootstrap_self_identity_via_runtime<I: AbilityInvoker>(
+    invoker: &I,
+    tenant_id: &str,
+    realm: &str,
+    node_id: &str,
+) -> PublishOutcome {
+    // Two keys to register, both under this node_id:
+    //
+    //   1. agent key — derived from `easynet:prv:reg:agent.<node_id>`.
+    //      Used by every Invoke whose canonical subject is the
+    //      daemon's own agent identity (most calls — chat, custom
+    //      verbs, runtime.register_local_tool's signed envelope).
+    //
+    //   2. hub key   — derived from `easynet:prv:hub:<realm>`.
+    //      Used by every federation hub-profile call
+    //      (federation.advertise_*, federation.resolve, …) because
+    //      the SDK's `default_auth_for_subject` derives a SUBJECT-
+    //      KEYED ed25519 key — and the hub subject differs from the
+    //      agent subject, so the derived key differs too. Without
+    //      this second registration every federation hub call
+    //      fails with PUBLIC_KEY_UNTRUSTED.
+    //
+    // The two calls share `node_id`. axon-runtime's
+    // `runtime.bootstrap_self_identity` appends a NEW key under the
+    // existing node when the (node_id, public_key) tuple is novel,
+    // so the second call doesn't overwrite the first.
+    let resource_uri = format!(
+        "easynet:///r/prv/hub/{realm}/abilities/runtime.bootstrap_self_identity@1?tenant_id={tenant_id}"
+    );
+    let agent_key_b64 = derive_owner_public_key_b64(tenant_id, node_id);
+    let agent_args = serde_json::json!({
+        "tenant_id": tenant_id,
+        "node_id": node_id,
+        "owner_id": node_id, // v1: daemon runs as the owner of its own node
+        "display_name": "",
+        "public_key_b64": agent_key_b64,
+    });
+    let agent_result = invoker.invoke_ability(tenant_id, &resource_uri, agent_args);
+    if let Err(e) = agent_result {
+        return PublishOutcome {
+            agent_uri: format!("local:{node_id}"),
+            label: "runtime/bootstrap_self_identity".into(),
+            result: Err(e),
+        };
+    }
+
+    let hub_key_b64 = derive_hub_public_key_b64(tenant_id, realm);
+    if hub_key_b64 != agent_key_b64 {
+        let hub_args = serde_json::json!({
+            "tenant_id": tenant_id,
+            "node_id": node_id,
+            "owner_id": node_id,
+            "display_name": "",
+            "public_key_b64": hub_key_b64,
+        });
+        let hub_result = invoker.invoke_ability(tenant_id, &resource_uri, hub_args);
+        if let Err(e) = hub_result {
+            return PublishOutcome {
+                agent_uri: format!("local:{node_id}"),
+                label: "runtime/bootstrap_self_identity_hub".into(),
+                result: Err(e),
+            };
+        }
+    }
+
+    PublishOutcome {
+        agent_uri: format!("local:{node_id}"),
+        label: "runtime/bootstrap_self_identity".into(),
+        result: Ok(()),
+    }
+}
+
+/// Compute the standard-base64 (with padding) ed25519 public key
+/// the local node will sign under for the *prv-visibility*
+/// `r/prv/reg/agent.<node>/abilities/...` URI shape — the canonical
+/// shape every daemon-owned ability invocation uses end-to-end.
+///
+/// Mirrors `AxonClient::default_auth_for_subject` in the SDK:
+///
+///   * For prv/org subjects it derives directly from the FULL
+///     subject_id string (`derive_subject_auth(subject_id, tenant)`).
+///   * For pub-visibility subjects it derives from the bare
+///     owner_id string (`derive_owner_auth(owner_id, tenant)`).
+///
+/// We bootstrap the prv-visibility key here because the entire
+/// daemon-owned-ability call path uses URIs that canonicalize to a
+/// prv subject; a key derived under any other subject would fail
+/// `verify_easynet_subject_key_binding` even though the math is
+/// otherwise identical. If/when a public-visibility caller is
+/// introduced, the daemon will need a second bootstrap call for
+/// that subject.
+///
+/// The runtime's `KeyInfo` storage expects standard base64; the
+/// bridge uses URL-SAFE-NO-PAD when it transmits the key in
+/// `easynet.public_key`. Both encodings decode to the same 32
+/// bytes; the admin RPC stays on standard base64 to avoid a needless
+/// translation step on the runtime side.
+/// Public alias for the heartbeat keepalive call site. Same
+/// derivation as `derive_owner_public_key_b64`; kept as a separate
+/// `pub(crate)` symbol so the heartbeat module can call it without
+/// promoting the underlying helper to the public surface.
+pub(crate) fn derive_owner_public_key_b64_for_keepalive(
+    tenant_id: &str,
+    node_id: &str,
+) -> String {
+    derive_owner_public_key_b64(tenant_id, node_id)
+}
+
+fn derive_owner_public_key_b64(tenant_id: &str, node_id: &str) -> String {
+    let subject_id = format!("easynet:prv:reg:agent.{node_id}");
+    derive_subject_public_key_b64(tenant_id, &subject_id)
+}
+
+/// Hub-profile counterpart of `derive_owner_public_key_b64`. Returns
+/// the public key the bridge will sign under for hub-shaped resource
+/// URIs (`r/prv/hub/<realm>/abilities/...`). The SDK's
+/// `default_auth_for_subject` derives a DIFFERENT key for the hub
+/// subject than for the agent subject, so the daemon needs to
+/// register both — see `bootstrap_self_identity_via_runtime`.
+pub(crate) fn derive_hub_public_key_b64(tenant_id: &str, realm: &str) -> String {
+    let subject_id = format!("easynet:prv:hub:{realm}");
+    derive_subject_public_key_b64(tenant_id, &subject_id)
+}
+
+fn derive_subject_public_key_b64(tenant_id: &str, subject_id: &str) -> String {
+    let (_seed, pk_b64) = derive_subject_keypair(tenant_id, subject_id);
+    pk_b64
+}
+
+/// Extract the node id segment from a canonical device URA.
+/// Accepts both the legacy `easynet:///r/<tenant>/agent/<node>` shape
+/// and the URA-conformant `easynet:///r/<scope>/reg/agent.<node>`
+/// shape. Returns None when the URA does not match either form.
+fn host_node_id_from_uri(uri: &str) -> Option<String> {
+    if let Some(rest) = uri.strip_prefix("easynet:///r/") {
+        // Drop optional query-string suffix.
+        let rest = rest.split('?').next().unwrap_or(rest);
+        let segments: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
+        // Pattern A: <tenant>/agent/<node> (legacy 3-segment)
+        if segments.len() >= 3 && segments[1] == "agent" {
+            return Some(segments[2].to_string());
+        }
+        // Pattern B: <scope>/reg/agent.<node> (URA-conformant)
+        if segments.len() >= 3 && segments[1] == "reg" {
+            if let Some(node) = segments[2].strip_prefix("agent.") {
+                return Some(node.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Deterministic keypair derivation used by the SDK's
+/// `derive_subject_auth`. Returns `(seed_bytes, public_key_b64)` so
+/// the daemon can both publish the public key AND mirror the seed
+/// into the keyring (RFC-002 P3) without re-deriving in two places.
+pub(crate) fn derive_subject_keypair(tenant_id: &str, subject_id: &str) -> ([u8; 32], String) {
+    use base64::Engine as _;
+    use ed25519_dalek::SigningKey;
+    use sha2::{Digest, Sha256};
+
+    const DERIVE_CONTEXT: &str = "axon-client-sdk-ed25519-v1";
+    let mut hasher = Sha256::new();
+    hasher.update(tenant_id.as_bytes());
+    hasher.update(b":");
+    hasher.update(subject_id.as_bytes());
+    hasher.update(b":");
+    hasher.update(DERIVE_CONTEXT.as_bytes());
+    let digest = hasher.finalize();
+    let mut seed = [0_u8; 32];
+    seed.copy_from_slice(&digest[..32]);
+    let signing = SigningKey::from_bytes(&seed);
+    let pk_b64 = base64::engine::general_purpose::STANDARD
+        .encode(signing.verifying_key().to_bytes());
+    (seed, pk_b64)
+}
+
+/// Mirror the deterministic agent + hub keys into the keyring so
+/// federation `KeyResolver` queries return the same bytes the SDK
+/// signs under. Idempotent: re-running with the same inputs is a
+/// no-op (existing matching entry is reused). The keyring stores
+/// the seed encrypted so `keyring.sign` works for these entries
+/// (necessary for forward_invoke to sign envelopes locally without
+/// going through the SDK).
+pub(crate) fn mirror_derived_keys_into_keyring(
+    keyring: &crate::runtime::keyring::KeyringHandle,
+    tenant_id: &str,
+    node_id: &str,
+    realm: &str,
+    device_uri: &str,
+) -> anyhow::Result<()> {
+    let agent_subject_id = format!("easynet:prv:reg:agent.{node_id}");
+    let (agent_seed, agent_pk_b64) =
+        derive_subject_keypair(tenant_id, &agent_subject_id);
+    let agent_pk = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        agent_pk_b64.as_bytes(),
+    )?;
+    keyring.mirror_external_key(
+        "agent_signing",
+        device_uri.to_string(),
+        &agent_pk,
+        Some(&agent_seed),
+    )?;
+
+    let hub_subject_id = format!("easynet:prv:hub:{realm}");
+    let (hub_seed, hub_pk_b64) = derive_subject_keypair(tenant_id, &hub_subject_id);
+    if hub_pk_b64 != agent_pk_b64 {
+        let hub_pk = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            hub_pk_b64.as_bytes(),
+        )?;
+        let hub_subject_uri = format!(
+            "easynet:///r/prv/hub/{realm}?tenant_id={tenant_id}"
+        );
+        keyring.mirror_external_key(
+            "hub_signing",
+            hub_subject_uri,
+            &hub_pk,
+            Some(&hub_seed),
+        )?;
+    }
+    Ok(())
 }
 
 /// Build the JSON args for a single `runtime.register_local_tool`
@@ -413,7 +677,7 @@ pub fn unpublish_abilities_via_revoke<I: AbilityInvoker>(
     reason: &str,
 ) -> PublishOutcome {
     let resource_uri = format!(
-        "easynet:///r/private/hub/{realm}/abilities/federation.revoke@1"
+        "easynet:///r/prv/hub/{realm}/abilities/federation.revoke@1?tenant_id={tenant_id}"
     );
     let payload = serde_json::json!({
         "agent_uri": agent_uri,
@@ -893,7 +1157,7 @@ mod tests {
         for (uri, payload) in &calls {
             assert_eq!(
                 uri,
-                "easynet:///r/private/hub/acme/abilities/runtime.register_local_tool@1",
+                "easynet:///r/prv/hub/acme/abilities/runtime.register_local_tool@1?tenant_id=tenant",
                 "register URI must be the canonical 5-segment runtime admin URI"
             );
             assert_eq!(payload["tenant_id"], "tenant");

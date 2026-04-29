@@ -1,0 +1,10 @@
+schema_version = "1"
+name = "voice.create_call"
+description = "Create a voice/video call signaling session. Returns the `call_id` (auto-generated when omitted) and the initial state. v1 stores call state in-process; persistence + federation fan-out land with the RFC-006 follow-up."
+
+[input_schema]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties.call_id]
+type = "string"

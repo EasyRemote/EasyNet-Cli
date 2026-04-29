@@ -101,6 +101,10 @@ fn target(name: &str, args: Value) -> InvocationTarget {
         ability: name.to_string(),
         normalized_args: args,
         call_mode: CallMode::Rpc,
+        // Test helper: legacy callers that don't need a subject
+        // get None. The `with_subject` builder lets per-test code
+        // attach one when exercising INV-SUBJECT-ENVELOPE paths.
+        subject: None,
     }
 }
 
@@ -191,6 +195,431 @@ fn real_meta_list_abilities_returns_at_least_observe_health() {
         found_observe,
         "meta.list_abilities must include observe.health: got {resp}"
     );
+}
+
+#[test]
+fn real_easynet_discover_aliases_meta_list_abilities() {
+    // `easynet.discover` is the user-facing alias for
+    // `meta.list_abilities` — same handler, same payload shape.
+    // Pin both calls returning a body with at least one array
+    // containing `observe.health` so a regression that wired the
+    // alias to a different handler trips loud.
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target("easynet.discover", json!({})))
+        .expect("easynet.discover");
+    let body = resp.as_object().expect("object");
+    let mut found = false;
+    for (_k, v) in body {
+        if let Some(arr) = v.as_array() {
+            for item in arr {
+                let name = item
+                    .as_object()
+                    .and_then(|o| o.get("name").or_else(|| o.get("ability")))
+                    .and_then(Value::as_str);
+                if name == Some("observe.health") {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if found {
+            break;
+        }
+    }
+    assert!(
+        found,
+        "easynet.discover must include observe.health: got {resp}"
+    );
+}
+
+#[test]
+fn real_easynet_run_validates_args_before_touching_the_runtime() {
+    // `easynet.run` requires a non-empty `source`. The argument
+    // validation runs BEFORE the handler reaches into
+    // `run_mission_inproc` (which needs a live runtime + bridge
+    // pool for device dispatch). This test exercises the wiring
+    // up to the validation gate without requiring a daemon to be
+    // running — empty source must produce a precise error
+    // message so an LLM-driven caller sees what to fix.
+    let (reg, _g) = registry_with_temp_home();
+    let result = dispatcher_for(reg)
+        .execute_rpc(target("easynet.run", json!({ "source": "" })));
+    let err = result.expect_err("empty source must fail validation");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("source") && msg.contains("non-empty"),
+        "empty source must yield a precise validation error mentioning \
+         `source` and `non-empty`; got: {msg}"
+    );
+}
+
+#[test]
+fn real_mission_run_alias_validates_args_the_same_way_as_easynet_run() {
+    // The legacy `mission.run` name MUST route to the same
+    // handler as the canonical `easynet.run` — proven here by a
+    // matching validation error on the same malformed input. A
+    // regression that wired the alias to a different handler (or
+    // forgot to register it at all) would either return a
+    // different error message or report `not_found`.
+    let (reg, _g) = registry_with_temp_home();
+    let result = dispatcher_for(reg)
+        .execute_rpc(target("mission.run", json!({ "source": "" })));
+    let err = result.expect_err("empty source must fail validation");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("source") && msg.contains("non-empty"),
+        "empty source via mission.run must yield the same precise \
+         validation error as easynet.run; got: {msg}"
+    );
+}
+
+#[test]
+fn real_easynet_track_returns_an_error_for_an_unknown_run_id() {
+    // `easynet.track` reads the persisted state of a prior
+    // `easynet.run` by id. With a fresh HOME there are no run
+    // dirs, so any id lookup MUST surface an error rather than
+    // silently fabricating an empty envelope. A regression that
+    // returns Ok({}) for a missing run would mask "the mission
+    // is gone" as "the mission has nothing to report".
+    let (reg, _g) = registry_with_temp_home();
+    let result = dispatcher_for(reg).execute_rpc(target(
+        "easynet.track",
+        json!({ "run_id": "no-such-run-id" }),
+    ));
+    assert!(
+        result.is_err(),
+        "easynet.track must error on an unknown run_id; got {result:?}"
+    );
+}
+
+#[test]
+fn real_easynet_cancel_returns_an_error_for_an_unknown_run_id() {
+    // Same contract as easynet.track — an unknown run id must
+    // surface as an error, not a silent no-op. A regression that
+    // returned `cancelled = false` here would let a caller think
+    // they had reached a (terminal) run when in fact no run by
+    // that id ever existed.
+    let (reg, _g) = registry_with_temp_home();
+    let result = dispatcher_for(reg).execute_rpc(target(
+        "easynet.cancel",
+        json!({ "run_id": "no-such-run-id" }),
+    ));
+    assert!(
+        result.is_err(),
+        "easynet.cancel must error on an unknown run_id; got {result:?}"
+    );
+}
+
+// ── fleet.* device + ability operations ─────────────────────────
+//
+// Eight abilities backing every CLI device + ability subcommand
+// (`device list/show/remove`, `ability deploy/uninstall/exec`,
+// daemon lifecycle hooks). Per-handler unit tests live alongside
+// `fleet_ops_ability` itself; the tests below are the integration
+// layer — dispatch each one through the real dispatcher to prove
+// the registration site + name + arg shape line up.
+
+#[test]
+fn real_fleet_list_nodes_returns_local_view_envelope() {
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target("fleet.list_nodes", json!({})))
+        .expect("fleet.list_nodes");
+    let nodes = resp.get("nodes").and_then(Value::as_array).unwrap();
+    assert!(
+        nodes.iter().any(|n| n.get("is_self") == Some(&json!(true))),
+        "fleet.list_nodes must include the local device entry: {resp}"
+    );
+}
+
+#[test]
+fn real_fleet_describe_node_local_returns_self_envelope() {
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target(
+            "fleet.describe_node",
+            json!({ "node_id": "local" }),
+        ))
+        .expect("fleet.describe_node local");
+    assert_eq!(resp.get("is_self"), Some(&json!(true)));
+}
+
+#[test]
+fn real_fleet_remove_node_refuses_to_remove_self() {
+    let (reg, _g) = registry_with_temp_home();
+    let err = dispatcher_for(reg)
+        .execute_rpc(target("fleet.remove_node", json!({ "node_id": "local" })))
+        .expect_err("fleet.remove_node must refuse to remove self");
+    assert!(format!("{err}").contains("device reset"));
+}
+
+#[test]
+fn real_fleet_deploy_ability_validates_path_argument() {
+    let (reg, _g) = registry_with_temp_home();
+    let err = dispatcher_for(reg)
+        .execute_rpc(target("fleet.deploy_ability", json!({})))
+        .expect_err("fleet.deploy_ability must require `path`");
+    assert!(format!("{err}").contains("path"));
+}
+
+#[test]
+fn real_fleet_uninstall_ability_acknowledges_local_intent() {
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target(
+            "fleet.uninstall_ability",
+            json!({ "ability_name": "claude.weather", "node_id": "local" }),
+        ))
+        .expect("fleet.uninstall_ability local");
+    assert_eq!(resp.get("state").and_then(Value::as_str), Some("REMOVED"));
+}
+
+#[test]
+fn real_fleet_exec_remote_local_runs_argv() {
+    // Use printf — POSIX, deterministic, available on macOS + Linux.
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target(
+            "fleet.exec_remote",
+            json!({
+                "node_id": "local",
+                "command": ["printf", "%s", "ok"],
+            }),
+        ))
+        .expect("fleet.exec_remote local");
+    assert_eq!(resp.get("stdout").and_then(Value::as_str), Some("ok"));
+    assert_eq!(resp.get("exit_code"), Some(&json!(0)));
+}
+
+#[test]
+fn real_fleet_register_self_acknowledges_intent() {
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target("fleet.register_self", json!({})))
+        .expect("fleet.register_self");
+    assert!(resp.get("state").is_some());
+}
+
+#[test]
+fn real_fleet_deregister_self_acknowledges_intent() {
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target("fleet.deregister_self", json!({})))
+        .expect("fleet.deregister_self");
+    assert_eq!(
+        resp.get("state").and_then(Value::as_str),
+        Some("DEREGISTERED")
+    );
+}
+
+// ── voice.* call signaling abilities ────────────────────────────
+//
+// Seven abilities backing `easynet call …`. Per-handler unit tests
+// live alongside `voice_call_ability` itself; the tests below are
+// the integration layer — dispatch each one through the real
+// dispatcher to prove the registration site + name + arg shape line
+// up. We mint unique call_ids using nanos so concurrent test runs
+// (cargo test --test-threads=N) don't collide on the in-process
+// store.
+
+fn unique_call_id(label: &str) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("real-invoke-{label}-{nanos:x}")
+}
+
+#[test]
+fn real_voice_create_call_returns_a_minted_id() {
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target("voice.create_call", json!({})))
+        .expect("voice.create_call");
+    let cid = resp.get("call_id").and_then(Value::as_str).unwrap();
+    assert!(cid.starts_with("call-"));
+}
+
+#[test]
+fn real_voice_show_call_unknown_call_errors() {
+    let (reg, _g) = registry_with_temp_home();
+    let result = dispatcher_for(reg).execute_rpc(target(
+        "voice.show_call",
+        json!({"call_id": "no-such-call"}),
+    ));
+    assert!(
+        result.is_err(),
+        "voice.show_call must error on unknown call_id"
+    );
+}
+
+#[test]
+fn real_voice_join_call_transitions_call_to_active() {
+    let (reg, _g) = registry_with_temp_home();
+    let cid = unique_call_id("join");
+    let dispatcher = dispatcher_for(reg);
+    dispatcher
+        .execute_rpc(target("voice.create_call", json!({"call_id": cid.clone()})))
+        .expect("create");
+    dispatcher
+        .execute_rpc(target(
+            "voice.join_call",
+            json!({"call_id": cid.clone(), "participant_id": "alice"}),
+        ))
+        .expect("join");
+    let show = dispatcher
+        .execute_rpc(target("voice.show_call", json!({"call_id": cid})))
+        .expect("show");
+    assert_eq!(show.get("state").and_then(Value::as_str), Some("active"));
+}
+
+#[test]
+fn real_voice_leave_call_removes_participant() {
+    let (reg, _g) = registry_with_temp_home();
+    let cid = unique_call_id("leave");
+    let d = dispatcher_for(reg);
+    d.execute_rpc(target("voice.create_call", json!({"call_id": cid.clone()})))
+        .expect("create");
+    d.execute_rpc(target(
+        "voice.join_call",
+        json!({"call_id": cid.clone(), "participant_id": "alice"}),
+    ))
+    .expect("join");
+    d.execute_rpc(target(
+        "voice.leave_call",
+        json!({"call_id": cid.clone(), "participant_id": "alice"}),
+    ))
+    .expect("leave");
+    // No assertion on state machine here beyond "didn't panic" —
+    // semantics are pinned in the unit-test file. Real-invoke
+    // coverage just proves the ability is registered + reachable.
+    let _ = d
+        .execute_rpc(target("voice.show_call", json!({"call_id": cid})))
+        .expect("show");
+}
+
+#[test]
+fn real_voice_end_call_is_idempotent() {
+    let (reg, _g) = registry_with_temp_home();
+    let cid = unique_call_id("end");
+    let d = dispatcher_for(reg);
+    d.execute_rpc(target("voice.create_call", json!({"call_id": cid.clone()})))
+        .expect("create");
+    d.execute_rpc(target("voice.end_call", json!({"call_id": cid.clone()})))
+        .expect("first end");
+    let r2 = d
+        .execute_rpc(target("voice.end_call", json!({"call_id": cid})))
+        .expect("second end");
+    assert_eq!(r2.get("already_ended"), Some(&json!(true)));
+}
+
+#[test]
+fn real_voice_watch_call_returns_event_snapshot() {
+    let (reg, _g) = registry_with_temp_home();
+    let cid = unique_call_id("watch");
+    let d = dispatcher_for(reg);
+    d.execute_rpc(target("voice.create_call", json!({"call_id": cid.clone()})))
+        .expect("create");
+    d.execute_rpc(target(
+        "voice.join_call",
+        json!({"call_id": cid.clone(), "participant_id": "alice"}),
+    ))
+    .expect("join");
+    let w = d
+        .execute_rpc(target("voice.watch_call", json!({"call_id": cid})))
+        .expect("watch");
+    let events = w.get("events").and_then(Value::as_array).unwrap();
+    assert!(events.iter().any(|e| e.get("type") == Some(&json!("joined"))));
+}
+
+#[test]
+fn real_voice_report_metrics_appends_event() {
+    let (reg, _g) = registry_with_temp_home();
+    let cid = unique_call_id("metrics");
+    let d = dispatcher_for(reg);
+    d.execute_rpc(target("voice.create_call", json!({"call_id": cid.clone()})))
+        .expect("create");
+    d.execute_rpc(target(
+        "voice.join_call",
+        json!({"call_id": cid.clone(), "participant_id": "alice"}),
+    ))
+    .expect("join");
+    let r = d
+        .execute_rpc(target(
+            "voice.report_metrics",
+            json!({
+                "call_id": cid,
+                "participant_id": "alice",
+                "metrics": { "rtt_ms": 42 },
+            }),
+        ))
+        .expect("metrics");
+    assert_eq!(r.get("ack"), Some(&json!(true)));
+}
+
+// ── mission.discuss_round ───────────────────────────────────────
+//
+// `mission.discuss_round` is the sub-turn orchestrator backing
+// `easynet mission discuss …`. We can't drive a full round in a
+// unit test (the inner per-cycle loop calls `<agent>.chat` over
+// IPC, which needs a daemon + real chat driver), but we CAN pin
+// the validation contract — the same shape of guard every other
+// CLI surface uses for arg-shape errors. A regression that, say,
+// silently accepts `agents: []` would let callers waste minutes
+// in a no-op sub-turn.
+
+#[test]
+fn real_discuss_list_turns_returns_empty_for_fresh_room() {
+    // discuss.list_turns is the snapshot RPC sibling of
+    // discuss.subscribe. A fresh room (one that hasn't been
+    // posted to) returns `{room_id, turns: []}`. We don't
+    // actually create a room here (DiscussService is internal
+    // — registry_with_temp_home doesn't expose its registration
+    // on the dispatcher unless services are wired through). The
+    // test asserts the validation error path: missing `room_id`
+    // surfaces a precise error, same shape as every other CLI
+    // surface.
+    let (reg, _g) = registry_with_temp_home();
+    let result = dispatcher_for(reg).execute_rpc(target("discuss.list_turns", json!({})));
+    let err = result.expect_err("discuss.list_turns must require room_id");
+    assert!(format!("{err}").contains("room_id"));
+}
+
+#[test]
+fn real_mission_discuss_round_rejects_missing_room_id() {
+    let (reg, _g) = registry_with_temp_home();
+    let result = dispatcher_for(reg)
+        .execute_rpc(target("mission.discuss_round", json!({"agents": ["a"]})));
+    let err = result.expect_err("missing room_id must fail");
+    assert!(format!("{err}").contains("room_id"));
+}
+
+#[test]
+fn real_mission_discuss_round_rejects_empty_agents() {
+    let (reg, _g) = registry_with_temp_home();
+    let result = dispatcher_for(reg).execute_rpc(target(
+        "mission.discuss_round",
+        json!({"room_id": "room-x", "agents": []}),
+    ));
+    let err = result.expect_err("empty agents must fail");
+    assert!(format!("{err}").contains("agents"));
+}
+
+#[test]
+fn real_mission_discuss_round_rejects_zero_max_cycles() {
+    let (reg, _g) = registry_with_temp_home();
+    let result = dispatcher_for(reg).execute_rpc(target(
+        "mission.discuss_round",
+        json!({
+            "room_id":    "room-x",
+            "agents":     ["a"],
+            "max_cycles": 0,
+        }),
+    ));
+    let err = result.expect_err("zero max_cycles must fail");
+    assert!(format!("{err}").contains("max_cycles"));
 }
 
 #[test]
@@ -892,6 +1321,105 @@ fn real_fleet_skill_upgrade_routes_for_unknown_name() {
     }
 }
 
+// ── ability.publish / skill.publish / skill.list ───────────────────
+//
+// These five abilities back the curator path that mission.think
+// drives. They are stateless root verbs: arg parsing fails with a
+// clear error before any disk write happens, which is exactly what
+// the "real-invoke" coverage guard wants — we confirm the
+// dispatcher routes by passing deliberately-incomplete args and
+// asserting the error is a *handler* error, not a "no rpc handler"
+// dispatcher miss.
+
+#[test]
+fn real_ability_publish_routes_with_missing_args() {
+    let (reg, _g) = registry_with_temp_home();
+    let d = dispatcher_for(reg);
+    let r = d.execute_rpc(target("ability.publish", json!({})));
+    match r {
+        Ok(_) => {}
+        Err(e) => assert!(
+            !format!("{e}").to_ascii_lowercase().contains("no rpc handler"),
+            "ability.publish must be routed: {e}"
+        ),
+    }
+}
+
+#[test]
+fn real_ability_unpublish_routes_with_missing_args() {
+    let (reg, _g) = registry_with_temp_home();
+    let d = dispatcher_for(reg);
+    let r = d.execute_rpc(target("ability.unpublish", json!({})));
+    match r {
+        Ok(_) => {}
+        Err(e) => assert!(
+            !format!("{e}").to_ascii_lowercase().contains("no rpc handler"),
+            "ability.unpublish must be routed: {e}"
+        ),
+    }
+}
+
+#[test]
+fn real_skill_publish_routes_with_missing_args() {
+    let (reg, _g) = registry_with_temp_home();
+    let d = dispatcher_for(reg);
+    let r = d.execute_rpc(target("skill.publish", json!({})));
+    match r {
+        Ok(_) => {}
+        Err(e) => assert!(
+            !format!("{e}").to_ascii_lowercase().contains("no rpc handler"),
+            "skill.publish must be routed: {e}"
+        ),
+    }
+}
+
+#[test]
+fn real_skill_unpublish_routes_with_missing_args() {
+    let (reg, _g) = registry_with_temp_home();
+    let d = dispatcher_for(reg);
+    let r = d.execute_rpc(target("skill.unpublish", json!({})));
+    match r {
+        Ok(_) => {}
+        Err(e) => assert!(
+            !format!("{e}").to_ascii_lowercase().contains("no rpc handler"),
+            "skill.unpublish must be routed: {e}"
+        ),
+    }
+}
+
+#[test]
+fn real_mission_think_routes_with_missing_args() {
+    // mission.think rejects missing owner_agent_id / prompt with a
+    // typed error. This test confirms the dispatcher routes the
+    // verb (the handler is registered) and that arg validation
+    // fires before any chat call attempts to spawn — important
+    // because a mis-routed mission.think with a real LLM agent
+    // could otherwise burn a token budget before failing.
+    let (reg, _g) = registry_with_temp_home();
+    let d = dispatcher_for(reg);
+    let r = d.execute_rpc(target("mission.think", json!({})));
+    match r {
+        Ok(_) => panic!("mission.think with empty args must error"),
+        Err(e) => assert!(
+            !format!("{e}").to_ascii_lowercase().contains("no rpc handler"),
+            "mission.think must be routed: {e}"
+        ),
+    }
+}
+
+#[test]
+fn real_skill_list_returns_items_array_under_temp_home() {
+    // Same shape as fleet.list_abilities (the underlying walk it
+    // delegates to). Empty under temp HOME but the field shape
+    // must hold.
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target("skill.list", json!({})))
+        .expect("skill.list");
+    assert!(resp.get("items").and_then(Value::as_array).is_some(),
+        "skill.list must return an `items` array; got {resp}");
+}
+
 // ════════════════════════════════════════════════════════════════
 // Category D: process / shell with real binaries
 // ════════════════════════════════════════════════════════════════
@@ -1126,6 +1654,10 @@ fn every_published_ability_has_a_real_invoke_test() {
         .list_abilities()
         .into_iter()
         .filter(|n| !n.ends_with(".chat")) // dynamic per-agent, not in this catalog
+        // RFC-002 §3.3: keyring abilities are owner-namespaced and
+        // covered by their own unit tests in
+        // `runtime::keyring::abilities::tests`.
+        .filter(|n| !n.starts_with("<self>.keyring."))
         .collect();
     let mut covered: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     // Walk every quoted string in the file. A token that matches
@@ -1436,4 +1968,151 @@ async fn real_fleet_file_transfer_uploads_a_round_trip_through_dispatcher() {
     assert!(got_complete, "expected `complete` frame from fleet.file_transfer");
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
     let _ = std::fs::remove_file(&path);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Category F: RFC-005 v3.2 media abilities (A1–A9)
+// ────────────────────────────────────────────────────────────────
+//
+// Eight physical-channel abilities (mic / camera / screen /
+// speaker / voice / transcribe) plus `meta.list_resources`. Of
+// these, `camera.snapshot` has a real envelope-aware handler
+// backed by `SyntheticBackend` (see `media::camera_snapshot` for
+// the dedicated end-to-end suite); `meta.list_resources` ships
+// fully working too. The remaining seven are PR2 stubs that
+// reject by design until PR3 lands cpal/nokhwa/screen, so the
+// real-invoke test for each one asserts the dispatch reached the
+// stub (rather than 404'd as "no handler") and surfaced the
+// expected "not yet wired" / "subject required" reason — same
+// shape any caller would observe today.
+//
+// Each test references the ability name as a string literal so
+// `every_published_ability_has_a_real_invoke_test`'s coverage
+// scanner sees it.
+// ════════════════════════════════════════════════════════════════
+
+/// Helper: for the seven stubs, the expected behaviour is a
+/// terminal error whose message reaches the stub body. Match on
+/// either `"device backend not yet wired"` (PR2 stub default) or
+/// the INV-SUBJECT-ENVELOPE rejection — anything else means the
+/// ability didn't route to its handler at all.
+fn assert_routed_to_media_stub(ability: &str, err: &anyhow::Error) {
+    let msg = err.to_string();
+    let routed = msg.contains("device backend not yet wired")
+        || msg.contains("INV-SUBJECT-ENVELOPE")
+        || msg.contains("subject_required")
+        || msg.contains("subject_in_args");
+    assert!(
+        routed,
+        "{ability}: error did not look like the PR2 media stub: {msg}"
+    );
+}
+
+#[test]
+fn real_mic_subscribe_routes_to_media_stub() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let mut t = target("mic.subscribe", json!({}));
+    t.call_mode = CallMode::Stream;
+    let err = d.execute_stream(t).expect_err("PR2 stub must reject");
+    assert_routed_to_media_stub("mic.subscribe", &err);
+}
+
+#[test]
+fn real_camera_subscribe_routes_to_media_stub() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let mut t = target("camera.subscribe", json!({}));
+    t.call_mode = CallMode::Stream;
+    let err = d.execute_stream(t).expect_err("PR2 stub must reject");
+    assert_routed_to_media_stub("camera.subscribe", &err);
+}
+
+#[test]
+fn real_camera_snapshot_with_no_subject_returns_subject_required() {
+    // PR3a real handler: with no envelope subject the handler
+    // MUST reject with reason="subject_required". The dedicated
+    // suite in `media::camera_snapshot` covers the populated path.
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let err = d
+        .execute_rpc(target("camera.snapshot", json!({})))
+        .expect_err("camera.snapshot without subject must reject");
+    assert!(
+        err.to_string().contains("subject_required"),
+        "camera.snapshot: expected reason=subject_required; got {err}"
+    );
+}
+
+#[test]
+fn real_screen_subscribe_routes_to_media_stub() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let mut t = target("screen.subscribe", json!({}));
+    t.call_mode = CallMode::Stream;
+    let err = d.execute_stream(t).expect_err("PR2 stub must reject");
+    assert_routed_to_media_stub("screen.subscribe", &err);
+}
+
+#[test]
+fn real_screen_snapshot_routes_to_media_stub() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let err = d
+        .execute_rpc(target("screen.snapshot", json!({})))
+        .expect_err("PR2 stub must reject");
+    assert_routed_to_media_stub("screen.snapshot", &err);
+}
+
+#[test]
+fn real_speaker_publish_routes_to_media_stub() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let mut t = target("speaker.publish", json!({}));
+    t.call_mode = CallMode::Bidi;
+    let err = d.execute_bidi(t).expect_err("PR2 stub must reject");
+    assert_routed_to_media_stub("speaker.publish", &err);
+}
+
+#[test]
+fn real_voice_subscribe_routes_to_media_stub() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let mut t = target("voice.subscribe", json!({}));
+    t.call_mode = CallMode::Stream;
+    let err = d.execute_stream(t).expect_err("PR2 stub must reject");
+    assert_routed_to_media_stub("voice.subscribe", &err);
+}
+
+#[test]
+fn real_voice_transcribe_routes_to_media_stub() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let mut t = target("voice.transcribe", json!({}));
+    t.call_mode = CallMode::Bidi;
+    let err = d.execute_bidi(t).expect_err("PR2 stub must reject");
+    assert_routed_to_media_stub("voice.transcribe", &err);
+}
+
+#[test]
+fn real_meta_list_resources_returns_resources_array() {
+    // A9 ships fully working in PR2: empty `~/.easynet/` →
+    // `{"resources":[]}` (no failure). HomeGuard ensures we read
+    // a fresh empty resources.json.
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let resp = invoke("meta.list_resources", json!({}));
+    assert!(
+        resp.get("resources")
+            .and_then(Value::as_array)
+            .is_some(),
+        "meta.list_resources receipt must carry `resources` array; got {resp}"
+    );
 }

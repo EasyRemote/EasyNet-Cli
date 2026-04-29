@@ -98,6 +98,14 @@ pub struct InvokeOpts {
     /// `runtime/drivers/codex.rs` for the empty-string fallback
     /// rule.
     pub command: String,
+    /// When `Some(<id>)`, the driver should resume an existing
+    /// conversation (codex: `codex exec resume <id>`) instead of
+    /// starting a fresh one. Drivers that do not support resume
+    /// (claude-code today) ignore this field and treat each call
+    /// as fresh. The chat ability sets this from the caller's
+    /// `session_id` argument when it looks like a driver-issued
+    /// thread id; on a fresh conversation it is `None`.
+    pub resume_thread_id: Option<String>,
 }
 
 /// A runtime driver that can invoke an external agent binary once
@@ -157,6 +165,13 @@ pub struct AdapterOutput {
     /// Tool invocations captured from the driver's stream. Empty for
     /// drivers that do not surface tool-use events (codex today).
     pub tool_calls: Vec<crate::runtime::dispatch::ToolCall>,
+    /// Driver-assigned conversation id parsed from the run (codex's
+    /// `thread.started` event populates this; claude-code leaves it
+    /// `None` until that driver gains an equivalent surface). The
+    /// dispatch layer copies this into `AgentResponse::thread_id`
+    /// without inspection — the chat ability is the layer that
+    /// decides what to do with it (currently: echo as `session_id`).
+    pub thread_id: Option<String>,
 }
 
 /// Bridge the dispatcher's already-filled `AgentResponse` fields to
@@ -189,5 +204,6 @@ pub(super) fn finalize_response(
         usage,
         run_dir: run_dir_path,
         tool_calls: Vec::new(),
+        thread_id: None,
     }
 }

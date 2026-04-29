@@ -44,8 +44,7 @@ use std::os::raw::{c_char, c_void};
 
 use crate::ffi::client::IpcClient;
 use crate::ffi::errors::{
-    set_last_error, ERR_ABILITY_FAILED, ERR_DAEMON_DOWN, ERR_GENERIC, ERR_INVALID_HANDLE,
-    ERR_NOT_IMPLEMENTED, ERR_NULL_POINTER,
+    set_last_error, ERR_ABILITY_FAILED, ERR_DAEMON_DOWN, ERR_GENERIC, ERR_INVALID_HANDLE, ERR_NULL_POINTER,
 };
 use crate::ffi::handle::{get, lib_runtime, EasynetHandle};
 use crate::ffi::strings::{alloc_output_cstring, read_cstr};
@@ -420,7 +419,7 @@ async fn run_subscription(
     token: tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<()> {
     use bytes::Bytes;
-    use futures::{SinkExt, StreamExt};
+    use futures::SinkExt;
 
     // Dial control.json → resolve socket path → connect a fresh
     // UnixStream. We deliberately do NOT reuse the session's

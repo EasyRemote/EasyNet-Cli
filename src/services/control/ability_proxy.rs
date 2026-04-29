@@ -180,7 +180,30 @@ impl AbilityProxy {
     /// alongside the syscall-boundary modules. The gate's rationale
     /// is documented at the top of that script.
     pub fn new(kernel: Arc<dyn KernelApi>) -> Self {
-        let registry = crate::runtime::agents::build_registry();
+        // Load the real agent registry so per-agent self-bundle
+        // abilities (`<agent>.discover`, `<agent>.invoke`,
+        // `<agent>.chat`, plus per-verb fallbacks) are wired up. The
+        // pre-fix path called `build_registry()` (no-agents form),
+        // which left every owner-namespaced handler unregistered;
+        // the symptom was the workspace MCP server announcing
+        // `claude.invoke` in `tools/list` (descriptor catalog comes
+        // from the on-disk + synth path) but failing dispatch with
+        // "no local handler registered for ability claude.invoke
+        // (loopback path)" — descriptor and registry diverged.
+        //
+        // Loading agents here keeps the descriptor catalog and the
+        // dispatchable registry in lockstep without forcing every
+        // caller of `AbilityProxy::new` to know about agents.
+        let agents = crate::registry::agents::load_agents().unwrap_or_default();
+        let registry = crate::runtime::agents::build_registry_with_services(
+            Arc::new(crate::runtime::execution::session::SessionService::new()),
+            Arc::new(crate::runtime::execution::permission::PermissionService::new()),
+            Arc::new(crate::runtime::execution::discuss::DiscussService::new()),
+            Arc::new(crate::runtime::execution::schedule::ScheduleService::new()),
+            Arc::new(crate::runtime::execution::loop_instance::LoopService::new()),
+            &agents,
+            Arc::new(Vec::new()),
+        );
         let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
             Arc::new(crate::runtime::gateway::NoopGateway::new());
         let dispatcher = AbilityDispatcher::new(registry, gateway);
@@ -226,7 +249,51 @@ impl AbilityProxy {
                 ability,
                 args,
             } => {
-                let frames = self.handle_invoke(request_id, ability, args);
+                // Wrap the (synchronous) ability dispatch in
+                // `catch_unwind` so a panic anywhere downstream — most
+                // commonly from the chat handler's `eprintln!` path
+                // when stderr fd state is unexpected — does not take
+                // out the per-connection tokio task. Without the
+                // catch, the panic unwinds the future, drops `out`,
+                // and the writer observes EOF — the client sees
+                // "daemon closed the connection before responding"
+                // instead of a typed error frame.
+                //
+                // The dispatcher itself is a closed crate-internal
+                // surface; it has no async state (handle_invoke is
+                // sync), so AssertUnwindSafe is sound: there's no
+                // borrow we'd be holding across an await.
+                let request_id_for_err = request_id.clone();
+                let ability_for_err = ability.clone();
+                let frames = match std::panic::catch_unwind(
+                    std::panic::AssertUnwindSafe(|| {
+                        self.handle_invoke(request_id, ability, args)
+                    }),
+                ) {
+                    Ok(frames) => frames,
+                    Err(panic_payload) => {
+                        let msg = if let Some(s) =
+                            panic_payload.downcast_ref::<&'static str>()
+                        {
+                            (*s).to_string()
+                        } else if let Some(s) =
+                            panic_payload.downcast_ref::<String>()
+                        {
+                            s.clone()
+                        } else {
+                            "non-string panic payload".to_string()
+                        };
+                        eprintln!(
+                            "[ability_proxy] handle_invoke {ability_for_err:?} panicked: {msg}"
+                        );
+                        vec![OutgoingFrame::Error {
+                            request_id: Some(request_id_for_err),
+                            subscription_id: None,
+                            code: codes::ABILITY_FAILED.into(),
+                            message: format!("ability handler panicked: {msg}"),
+                        }]
+                    }
+                };
                 for f in frames {
                     if out.send(f).await.is_err() {
                         return;
@@ -349,6 +416,10 @@ impl AbilityProxy {
             target_node_hint: extract_node_hint(&args),
             args,
             call_mode: CallMode::Stream,
+            // PR-DISPATCHER-SUBJECT: wire envelope does not yet
+            // carry an AXIOM `subject` field at this IPC layer.
+            // When the wire schema grows it, extract here.
+            subject: None,
         };
         let target = match self.resolver.resolve(plan) {
             Ok(t) => t,
@@ -462,6 +533,8 @@ impl AbilityProxy {
             target_node_hint: extract_node_hint(&args),
             args,
             call_mode: CallMode::Bidi,
+            // PR-DISPATCHER-SUBJECT: see Stream sites above.
+            subject: None,
         };
         let target = match self.resolver.resolve(plan) {
             Ok(t) => t,
@@ -608,6 +681,8 @@ impl AbilityProxy {
             target_node_hint: extract_node_hint(&args),
             args,
             call_mode: CallMode::Rpc,
+            // PR-DISPATCHER-SUBJECT: see Stream sites above.
+            subject: None,
         };
         let target = self
             .resolver
@@ -615,6 +690,40 @@ impl AbilityProxy {
             .map_err(|e| format!("resolver: {e}"))?;
         self.dispatcher
             .execute_rpc(target)
+            .map_err(|e| format!("{e}"))
+    }
+
+    /// Stream-mode counterpart to `execute_runtime_dispatch`. Returns
+    /// the live `StreamSource` so the runtime-dispatch UDS responder
+    /// can forward each frame as a separate JSON line on the same
+    /// connection (per the v2 stream wire shape — see
+    /// `runtime_dispatch.rs` module header).
+    ///
+    /// Same plan-build as the RPC variant aside from the
+    /// `CallMode::Stream` discriminant; we route through the same
+    /// resolver so an ability without a registered stream handler
+    /// surfaces the dispatcher's "no local stream handler registered"
+    /// error verbatim, and the UDS responder maps that into a typed
+    /// `kind:"error"` frame for the caller.
+    pub fn execute_runtime_dispatch_stream(
+        &self,
+        ability: &str,
+        args: serde_json::Value,
+    ) -> Result<StreamSource, String> {
+        let plan = InvocationPlan {
+            ability: ability.to_string(),
+            target_node_hint: extract_node_hint(&args),
+            args,
+            call_mode: CallMode::Stream,
+            // PR-DISPATCHER-SUBJECT: see Stream sites above.
+            subject: None,
+        };
+        let target = self
+            .resolver
+            .resolve(plan)
+            .map_err(|e| format!("resolver: {e}"))?;
+        self.dispatcher
+            .execute_stream(target)
             .map_err(|e| format!("{e}"))
     }
 
@@ -631,6 +740,8 @@ impl AbilityProxy {
             target_node_hint: extract_node_hint(&args),
             args,
             call_mode: CallMode::Rpc,
+            // PR-DISPATCHER-SUBJECT: see Stream sites above.
+            subject: None,
         };
         let target = match self.resolver.resolve(plan) {
             Ok(t) => t,
@@ -690,6 +801,10 @@ impl AbilityProxy {
             target_node_hint: extract_node_hint(&args),
             args,
             call_mode: CallMode::Stream,
+            // PR-DISPATCHER-SUBJECT: wire envelope does not yet
+            // carry an AXIOM `subject` field at this IPC layer.
+            // When the wire schema grows it, extract here.
+            subject: None,
         };
         let target = match self.resolver.resolve(plan) {
             Ok(t) => t,

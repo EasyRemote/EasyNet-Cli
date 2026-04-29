@@ -125,9 +125,9 @@ pub(crate) mod skill_install;
 pub(crate) mod start;
 pub(crate) mod status;
 pub(crate) mod stop;
+pub(crate) mod think;
 #[cfg(test)]
 pub(crate) mod test_support;
-pub(crate) mod think;
 
 use clap::{Parser, Subcommand};
 

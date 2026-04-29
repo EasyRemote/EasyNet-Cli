@@ -80,6 +80,56 @@ impl Default for Visibility {
     }
 }
 
+/// Per AXON-RFC-006 §"transition receipts", an ability falls into
+/// one of three execution shapes that determine receipt
+/// machinery + audit timing:
+///
+///   * `Query`      — single-shot read. One request, one response,
+///                    no state mutation. Receipt is signed at
+///                    completion. Examples: `meta.list_abilities`,
+///                    `fs.read`, `camera.snapshot`.
+///
+///   * `Stream`     — long-lived subscribe. One request, N response
+///                    frames, an explicit terminal frame. Receipt
+///                    covers the bracketed window; per-frame
+///                    auditing lives in the stream itself.
+///                    Examples: `mic.subscribe`, `camera.subscribe`,
+///                    `discuss.subscribe`.
+///
+///   * `Transition` — state-mutating sequence. The ability hands
+///                    back a receipt that itself carries the
+///                    pre-/post-state digests so a future
+///                    invocation can chain off it. Reserved for
+///                    RFC-006 v2 abilities; no caller instantiates
+///                    this variant in v1, but the enum carries it
+///                    so descriptor renderers / discovery surfaces
+///                    can match on it without a wildcard arm.
+///
+/// `Serialize` / `Deserialize` use the lowercased form so the
+/// on-disk descriptor TOMLs and the wire envelope agree
+/// byte-for-byte (`"class": "query"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AbilityClass {
+    Query,
+    Stream,
+    Transition,
+}
+
+impl AbilityClass {
+    /// Lowercase wire form, mirroring the serde rename. Pulled out
+    /// as a method so non-serde call sites (descriptor table
+    /// rendering, log lines) can stay drift-free with the wire
+    /// shape — one rename in this enum updates every consumer.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AbilityClass::Query => "query",
+            AbilityClass::Stream => "stream",
+            AbilityClass::Transition => "transition",
+        }
+    }
+}
+
 /// Per RFC §1.6, each scope axis (subject vs caller) is a rule.
 /// Modeled as an enum so an empty `Vec` cannot accidentally mean
 /// "no restriction" — it means "explicit deny-all" (None).

@@ -58,7 +58,7 @@ use crate::ffi::errors::{
     clear_last_error, set_last_error, EASYNET_OK, ERR_ALREADY_INIT, ERR_DAEMON_DOWN,
     ERR_GENERIC, ERR_INVALID_HANDLE, ERR_NULL_POINTER, ERR_VERSION_INCOMPATIBLE,
 };
-use crate::ffi::handle::{alloc, get, lib_runtime, release, ClientSession, EasynetHandle};
+use crate::ffi::handle::{alloc, lib_runtime, release, ClientSession, EasynetHandle};
 use crate::ffi::strings::read_cstr;
 use crate::services::control::discovery;
 

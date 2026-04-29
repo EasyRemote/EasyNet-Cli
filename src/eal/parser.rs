@@ -389,6 +389,30 @@ impl Parser {
     /// `unreachable!()` arm. Destructuring inside `match self.advance()`
     /// eliminates the invariant entirely.
     fn parse_arg_value(&mut self) -> anyhow::Result<FieldValue> {
+        // Nested object literal: `{ key: value, key: value }`. Lets
+        // a member-call carry structured args (e.g. `claude.invoke(
+        // args: { location: "Beijing" }, target: "claude")`). The
+        // body uses the same `key: value` shape as the top-level
+        // arg list — comma-separated pairs, each value goes back
+        // through `parse_arg_value` so the grammar is recursively
+        // consistent.
+        if *self.peek() == Token::LBrace {
+            self.advance();
+            let mut fields = Vec::new();
+            while *self.peek() != Token::RBrace && *self.peek() != Token::Eof {
+                let key = self.expect_ident()?;
+                self.expect(&Token::Colon)?;
+                let value = self.parse_arg_value()?;
+                fields.push(Field { key, value });
+                if *self.peek() == Token::Comma {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect(&Token::RBrace)?;
+            return Ok(FieldValue::Object(fields));
+        }
         // For the IDENT case we need look-ahead (to see `.output`), so
         // branch before consuming.
         if matches!(self.peek(), Token::Ident(_)) {

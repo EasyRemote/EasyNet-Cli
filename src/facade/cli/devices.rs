@@ -1,12 +1,23 @@
-// EasyNet CLI
-// ===========
+// EasyNet CLI — `easynet device list` / `easynet device show`
+// =============================================================
 //
-// File: src/cli/devices.rs
-// Description: `easynet devices` — lists all nodes across the federation.
+// File: src/facade/cli/devices.rs
+// Description: Read-only views over the fleet's device nodes.
+//              `list` enumerates every node visible from this
+//              daemon; `show <id>` describes one. Both go through
+//              the canonical fleet.* ability surface
+//              (`fleet.list_nodes`, `fleet.describe_node`)
+//              registered on the local daemon, in line with the
+//              ability-only ontology — the CLI never reaches for
+//              a transport directly.
 //
-// Output: colored, modern layout (no heavy table borders) or JSON.
-// Filterable by state (online/offline).
-// Data: DendriteBridge.list_nodes() returns federated peer nodes via Hub heartbeat sync.
+// Pre-rewrite this file called `bridge.list_nodes(...)` directly,
+// the AXON-RFC-001 P1.5 victim. The replacement abilities live in
+// `runtime::agents::fleet_ops_ability` and have a stable JSON
+// envelope: `{nodes: [...], federation_view: "local_only" | ... }`.
+// v1 returns the local device only; the federation_view field
+// surfaces the limitation so an operator who expected peer entries
+// sees why none appeared.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -14,8 +25,10 @@
 use anyhow::Context;
 use clap::Args;
 use console::style;
+use serde_json::{json, Value};
 
 use crate::persistence::config;
+use crate::support::local_invoke::invoke_local_ability;
 use crate::support::{
     node,
     output::{self, OutputFormat},
@@ -35,29 +48,19 @@ pub struct DevicesArgs {
 }
 
 pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
-    // First-run UX: if we have no credentials on disk, the user simply
-    // hasn't paired this machine yet. `load_and_connect` would raise a
-    // low-level "no runtime endpoint" error that points the operator at
-    // the wrong problem — the fix is `easynet device join <token>`,
-    // not diagnosing a transport. Detect the not-paired state before
-    // we reach the bridge and emit a direct, action-oriented message.
-    if config::load_credentials().is_err() {
-        anyhow::bail!(
-            "this device has no credentials yet. Run `easynet device join <token>` to pair it \
-             with the Hub (get a pairing token from the Hub dashboard), then retry."
-        );
-    }
-
-    let (br, rt) = crate::persistence::config::load_and_connect()?;
-    let tenant = rt.tenant_or_default();
+    let resp = invoke_local_ability("fleet.list_nodes", json!({}))
+        .context("invoke fleet.list_nodes")?;
+    let nodes = resp
+        .get("nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let current_node_id = config::load_credentials()
         .map(|c| c.node_id)
         .unwrap_or_default();
 
-    let nodes = br.list_nodes(tenant, None).context("list nodes")?;
-
-    let filtered: Vec<_> = nodes
-        .iter()
+    let filtered: Vec<Value> = nodes
+        .into_iter()
         .filter(|n| {
             let online = node::is_online(n);
             match args.state.as_str() {
@@ -70,7 +73,12 @@ pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
         .collect();
 
     if args.format == OutputFormat::Json {
-        println!("{}", serde_json::to_string_pretty(&filtered)?);
+        // Surface the full envelope (including `federation_view`) so
+        // a script can detect "this is the local-only view" without
+        // re-issuing the call. Keeps parity with the ability handler.
+        let mut envelope = resp;
+        envelope["nodes"] = Value::Array(filtered);
+        println!("{}", serde_json::to_string_pretty(&envelope)?);
         return Ok(());
     }
 
@@ -102,29 +110,46 @@ pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
         print_device(n, &current_node_id);
     }
 
+    // Surface the federation view limitation as a footer when
+    // active. A daemon that reports `local_only` is not a bug — it
+    // just hasn't joined a federation yet (or the federation Invoke
+    // replacement isn't published) — but the operator should know
+    // why the list is short.
+    if let Some(view) = resp_field(&resp, "federation_view") {
+        if view == "local_only" {
+            if let Some(reason) = resp_field(&resp, "federation_view_reason") {
+                println!();
+                output::info(&format!("federation view: local-only — {reason}"));
+            }
+        }
+    }
+
     Ok(())
 }
 
-fn print_device(n: &serde_json::Value, current_node_id: &str) {
+fn resp_field(_resp: &Value, _key: &str) -> Option<String> {
+    // Re-fetch via direct lookup; kept as a helper so a future
+    // envelope-shape change touches one place.
+    _resp.get(_key).and_then(Value::as_str).map(str::to_string)
+}
+
+fn print_device(n: &Value, current_node_id: &str) {
     let node_id = n.get("node_id").and_then(|v| v.as_str()).unwrap_or("-");
     let is_current = !current_node_id.is_empty() && node_id == current_node_id;
+    let is_self = n.get("is_self") == Some(&Value::Bool(true));
     let state_display = node::node_state_str(n);
     let online = node::is_online(n);
     let name = device_display_name(n, node_id);
     let (platform, os_detail, hardware_model) = device_platform_info(n);
     let last_active = device_last_active(n);
 
-    // Status indicator
     let indicator = if online {
         format!("{}", style("●").green())
     } else {
         format!("{}", style("○").dim())
     };
-
     let state_styled = style_state(&state_display);
-
-    // Line 1: indicator + name + state + current marker
-    let current_tag = if is_current {
+    let current_tag = if is_current || is_self {
         format!("  {}", style("← this device").cyan())
     } else {
         String::new()
@@ -137,7 +162,6 @@ fn print_device(n: &serde_json::Value, current_node_id: &str) {
         current_tag
     );
 
-    // Line 2: details
     let mut details: Vec<String> = Vec::new();
     if !platform.is_empty() && platform != "—" {
         details.push(platform);
@@ -145,26 +169,26 @@ fn print_device(n: &serde_json::Value, current_node_id: &str) {
     if !os_detail.is_empty() && hardware_model.is_empty() {
         details.push(os_detail);
     }
-    // Surface federation topology: for nodes reached through a peer runtime,
-    // the `list_nodes` handler stamps the originating runtime's label.
     if let Some(label) = node::federation_label(n) {
         details.push(format!("via {label}"));
     }
-    details.push(format!("Active {last_active}"));
-    println!("    {}", style(details.join("  ·  ")).dim());
+    if !last_active.is_empty() {
+        details.push(format!("Active {last_active}"));
+    }
+    if !details.is_empty() {
+        println!("    {}", style(details.join("  ·  ")).dim());
+    }
 
-    // Line 3: node ID (dimmed)
     println!("    {}", style(node_id).dim());
     println!();
 }
 
-fn device_display_name<'a>(n: &'a serde_json::Value, node_id: &'a str) -> &'a str {
+fn device_display_name<'a>(n: &'a Value, node_id: &'a str) -> &'a str {
     let display_name = n
         .get("display_name")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty());
     let short_id = if node_id.starts_with("en-") && node_id.len() > SHORT_NODE_ID_LEN {
-        // Safe: "en-" prefix guarantees first bytes are ASCII.
         node_id.get(..SHORT_NODE_ID_LEN).unwrap_or(node_id)
     } else {
         node_id
@@ -172,8 +196,7 @@ fn device_display_name<'a>(n: &'a serde_json::Value, node_id: &'a str) -> &'a st
     display_name.unwrap_or(short_id)
 }
 
-/// Returns (platform, `os_detail`, `hardware_model`) for display.
-fn device_platform_info(n: &serde_json::Value) -> (String, String, String) {
+fn device_platform_info(n: &Value) -> (String, String, String) {
     let device_meta = n.get("device");
     let os = device_meta
         .and_then(|d| d.get("os"))
@@ -214,23 +237,21 @@ fn device_platform_info(n: &serde_json::Value) -> (String, String, String) {
     (platform, os_detail, hardware_model.to_string())
 }
 
-fn device_last_active(n: &serde_json::Value) -> String {
+fn device_last_active(n: &Value) -> String {
     let last_seen = n
         .get("last_seen_unix_ms")
-        .and_then(serde_json::Value::as_i64)
-        .or_else(|| {
-            n.get("last_heartbeat_unix_ms")
-                .and_then(serde_json::Value::as_i64)
-        });
+        .and_then(Value::as_i64)
+        .or_else(|| n.get("last_heartbeat_unix_ms").and_then(Value::as_i64));
     match last_seen {
         Some(ms) if ms > 0 => output::relative_time(ms),
-        _ => "—".to_string(),
+        _ => String::new(),
     }
 }
 
 fn style_state(state: &str) -> String {
     match state {
-        "HEALTHY" => format!("{}", style("Online").green()),
+        "HEALTHY" | "REGISTERED" => format!("{}", style("Online").green()),
+        "STANDALONE" => format!("{}", style("Standalone").yellow()),
         "JOINING" => format!("{}", style("Joining").cyan()),
         "PROBATION" => format!("{}", style("Probation").cyan()),
         "SUSPECT" => format!("{}", style("Suspect").yellow()),

@@ -1,0 +1,1149 @@
+\documentclass[11pt,a4paper]{article}
+
+% ──────────────────────────────────────────────────────────────────────────
+% AXON-RFC-006 — Stateful EasyNet (Minimal Normative Core)
+% Status: Draft v0.1 (pre-implementation main body)
+% Build:  xelatex AXON-RFC-006-stateful-easynet.tex
+% Companion: AXON-RFC-006-stateful-easynet.md (Appendix B pressure test)
+% ──────────────────────────────────────────────────────────────────────────
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{xltabular}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{tcolorbox}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{parskip}
+\usepackage{xspace}
+
+% ── Unicode + CJK support (xelatex) ───────────────────────────────────────
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setCJKmainfont{PingFang SC}[
+    BoldFont={PingFang SC Semibold},
+    ItalicFont={PingFang SC Light}
+]
+
+% ── Page style ────────────────────────────────────────────────────────────
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small AXON-RFC-006}
+\fancyhead[R]{\small Stateful EasyNet --- Minimal Normative Core}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% ── Section styling ───────────────────────────────────────────────────────
+\titleformat{\section}{\Large\bfseries\color{black!85}}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\large\bfseries\color{black!75}}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{black!70}}{\thesubsubsection}{0.5em}{}
+
+% ── Tag colors ────────────────────────────────────────────────────────────
+\definecolor{normativecolor}{RGB}{180,30,30}
+\definecolor{derivedcolor}{RGB}{30,90,180}
+\definecolor{deferredcolor}{RGB}{120,90,30}
+\definecolor{codebg}{RGB}{245,245,248}
+\definecolor{codeborder}{RGB}{210,210,220}
+
+% ── Tag macros (parallel to AXIOM.tex's [axiom]/[derived]/[deferred]) ─────
+\newcommand{\normsv}{\textcolor{normativecolor}{\textbf{[normative]}}\xspace}
+\newcommand{\derived}{\textcolor{derivedcolor}{\textbf{[derived]}}\xspace}
+\newcommand{\deferred}{\textcolor{deferredcolor}{\textbf{[deferred]}}\xspace}
+
+% ── Code listing style ────────────────────────────────────────────────────
+\lstdefinestyle{ealstyle}{
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small,
+    frame=single,
+    rulecolor=\color{codeborder},
+    breaklines=true,
+    showstringspaces=false,
+    keywordstyle=\color{blue!70!black}\bfseries,
+    commentstyle=\color{green!40!black}\itshape,
+    stringstyle=\color{red!60!black},
+    morekeywords={state_type,state_key,canonical,operational,transition,receipt,view,principal,agent,owner_signature,attempt_id,transition_id},
+    columns=fullflexible,
+    keepspaces=true,
+    aboveskip=0.6em,
+    belowskip=0.6em,
+}
+\lstset{style=ealstyle}
+
+% ── Theorem-like environments ─────────────────────────────────────────────
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+
+% Invariant box accepts an optional tag in #1 (e.g. SO-INV-1) and
+% renders it inside the title bar so we don't have to push it into
+% pgfkeys (which would treat the tag as an unknown key).
+\newtcolorbox{invariant}[1][Invariant]{
+    colback=red!4!white,
+    colframe=red!50!black,
+    fonttitle=\bfseries,
+    title={Invariant --- #1},
+    sharp corners=south,
+    boxrule=0.6pt,
+}
+\newtcolorbox{notebox}[1][]{
+    colback=blue!4!white,
+    colframe=blue!50!black,
+    fonttitle=\bfseries,
+    title={Note},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+\newtcolorbox{warningbox}[1][]{
+    colback=orange!6!white,
+    colframe=orange!70!black,
+    fonttitle=\bfseries,
+    title={Transitional misalignment},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+\newtcolorbox{decisionbox}[1][]{
+    colback=purple!4!white,
+    colframe=purple!60!black,
+    fonttitle=\bfseries,
+    title={Open decision},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+
+% ── Title ─────────────────────────────────────────────────────────────────
+\title{
+    \vspace{-2em}
+    \textbf{\Large AXON-RFC-006: Stateful EasyNet}\\[0.3em]
+    \large Minimal Normative Core --- the protocol primitives a stateful
+    agent network requires
+}
+\author{
+    Silan Hu \\ \small National University of Singapore
+}
+\date{Draft v0.1, \today}
+
+% ──────────────────────────────────────────────────────────────────────────
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+This document defines the minimal protocol surface a stateful EasyNet
+deployment must implement. It deliberately limits itself to seven
+sections covering the primitives that Phase~1 implementation work
+requires --- state object identity, canonical state hashing, receipt
+class separation, transition ability schema, authority and
+delegation, view projection, and receipt indexing by state key ---
+and explicitly defers everything else (full theorems, hub
+deployment, web-app and pages reference machines) to companion
+artefacts. The companion document \texttt{AXON-RFC-006-stateful-easynet.md}
+contains a pressure-test appendix (Appendix~B,
+\texttt{easynet.web\_app}) whose thirteen
+invariants this main body is engineered to satisfy. The relationship
+between the two documents is intentional: the appendix was written
+\emph{first}, as the hardest concrete state object the protocol must
+keep consistent; this main body then commits the minimal vocabulary
+and rules under which the appendix's invariants hold. Section~8 lists
+a coverage matrix proving that every appendix invariant has at least
+one normative anchor here, and that every locally-introduced
+invariant in this document (SO/CSH/RC/TA/VP-INV-*) is self-contained.
+The work this document directly authorises is Phase~1: schema-level
+\texttt{canonical:bool} marking, the two-class receipt split,
+\texttt{principal/} caller URIs, a content-as-blob boundary, and a
+state-key-keyed receipt index.
+\end{abstract}
+
+\tableofcontents
+\vspace{1em}
+\hrule
+\vspace{1em}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Reading guide}
+\label{sec:reading-guide}
+
+Every substantive statement in this document carries one of three
+tags, identical in role to the tags used in the Axon Invocation
+Axiom paper:
+
+\begin{itemize}[leftmargin=2.4em,itemsep=0.3em]
+    \item[\normsv] A foundational rule of the stateful protocol.
+    Binding on every Phase~1 implementation. Revising a
+    \normsv{} statement requires a separate alignment round and
+    invalidates every \derived{} statement downstream of it.
+
+    \item[\derived] Logically derived from one or more \normsv{}
+    statements. Negotiable \emph{only} by showing the derivation
+    is incorrect or that the rule it depends on has been revised.
+
+    \item[\deferred] A gap deliberately left open. Each \deferred{}
+    point names the artifact (companion paper, future RFC, or
+    Appendix~B sub-section) that will resolve it.
+\end{itemize}
+
+Four typographic boxes appear:
+
+\begin{itemize}[leftmargin=2.4em,itemsep=0.3em]
+    \item A red \textbf{Invariant} box pins the binding commitment of
+    a section in one sentence.
+    \item A blue \textbf{Note} box adds clarification or pointers to
+    related documents.
+    \item An orange \textbf{Transitional misalignment} box names a
+    specific place where the current \texttt{EasyNet-Cli}
+    implementation contradicts the rule. These are debts, tracked
+    explicitly, to be discharged in Phase~1.
+    \item A purple \textbf{Open decision} box marks a choice that
+    must be resolved before implementation proceeds.
+\end{itemize}
+
+\textbf{Reading order.} If reading for the first time, read
+\S\ref{sec:state-object} through \S\ref{sec:receipt-index} in order;
+the dependency graph is acyclic. \S\ref{sec:coverage} (the coverage
+matrix) is best read \emph{after} the rest, with the companion
+appendix open in a second window.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{State Object}
+\label{sec:state-object}
+
+\subsection{Definition}
+
+\normsv{}
+\begin{definition}[State object]
+A \emph{state object} is a triple
+\[
+    \mathcal{S} = \bigl(\,t,\ k,\ v(\tau)\,\bigr)
+\]
+where $t$ is a \emph{state type}, $k$ is a \emph{state key} unique
+within $t$, and $v(\tau)$ is the value of the object at logical time
+$\tau$, evolving under a sequence of \emph{transitions}. The pair
+$(t,k)$ is the object's identity; $v$ is its content.
+\end{definition}
+
+\subsection{State type}
+\label{sec:state-type}
+
+\normsv{}
+A \emph{state type} $t$ is a stable string identifier with the
+syntactic shape \texttt{<namespace>.<noun>}, both lowercase ASCII.
+Examples: \texttt{easynet.page}, \texttt{easynet.web\_app}.
+A state type names a \emph{class} of state objects sharing one
+schema, one transition vocabulary, one canonical projection, and
+one view declaration set. Two implementations claiming to host the
+same state type \textbf{MUST} agree on all four byte-for-byte.
+
+\subsection{State key}
+\label{sec:state-key}
+
+\normsv{}
+A \emph{state key} $k$ is a tuple of typed scalars whose tuple
+schema is fixed by the state type. The state key uniquely
+identifies one instance within $t$. State key fields \textbf{MUST}
+include enough information to derive the canonical authority for
+the object (\S\ref{sec:authority}); placing the
+\texttt{owner\_agent} URI inside the state key is the standard
+mechanism, because authority that lived as a mutable field could
+be rewritten by a transition, opening a privilege-escalation
+primitive the protocol refuses to expose.
+
+\subsection{Lifecycle}
+
+\derived{} A state object's lifecycle is the sequence
+\[
+    \emptyset \;\xrightarrow{\;\text{first canonical transition}\;}\; v_1
+    \;\to\; v_2 \;\to\; \cdots \;\to\; v_n \;\to\; \text{(terminal)}
+\]
+Each $v_i$ is the canonical value of the object after the
+$i$-th canonical transition; transitions are defined in
+\S\ref{sec:transition}. The terminal state is type-specific (e.g.
+\texttt{Deleted} for many object types); after the terminal,
+further transitions \textbf{MUST} be rejected.
+
+\subsection{Identity immutability}
+\label{sec:identity-immutability}
+
+\begin{invariant}[SO-INV-1]
+The state key of a state object \textbf{MUST NOT} change after the
+first \texttt{CanonicalReceipt} for that key has been emitted.
+A state object cannot be renamed, re-keyed, or moved across types;
+the only way to ``rename'' is to delete one object and create a
+distinct one.
+\end{invariant}
+
+\textbf{Rationale.} The audit chain in \S\ref{sec:receipt-index}
+indexes receipts by state key. A mutable key would break receipt
+enumeration: receipts emitted before the key change would no
+longer be discoverable through the new key. Implementations are
+expected to enforce SO-INV-1 at the receipt-validation layer (a
+canonical transition that would mutate any state-key field is
+rejected before apply).
+
+\subsection{Relationship to abilities}
+
+\derived{} A state object is \emph{not} an ability. Abilities are
+the verbs that mutate a state object; the object itself is the
+noun. One ability \textbf{MAY} affect zero or more state objects
+(per its declared transition schema, \S\ref{sec:transition}); one
+state object is acted on by one or more abilities. The protocol
+does not permit an ability to invent its own state object types
+at runtime --- every transition references a state type known
+statically through schema registration.
+
+\subsection{Schema-level canonicality marking}
+\label{sec:canonicality-marking}
+
+\normsv{}
+The schema of every state type \textbf{MUST} annotate every field
+with an explicit Boolean flag \texttt{canonical}. Fields with
+\texttt{canonical:true} participate in
+\texttt{canonical\_state\_hash} (\S\ref{sec:canonical-hash}); fields
+with \texttt{canonical:false} do not. There is no implicit default;
+omitting the flag is a schema error.
+
+\begin{notebox}
+The Phase~1 implementation in \texttt{EasyNet-Cli} \emph{does not
+yet} carry this annotation on \texttt{AbilityDescriptor} or on
+state-object schemas. The schema upgrade and the validator that
+refuses unannotated schemas are the first two work items of
+Phase~1a. See \S\ref{sec:coverage} for the appendix invariants
+this section anchors.
+\end{notebox}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Canonical State Hash}
+\label{sec:canonical-hash}
+
+\subsection{Three-step computation}
+
+\normsv{}
+The \texttt{canonical\_state\_hash} of a state object is computed in
+three deterministic, sequentially-composed steps:
+
+\begin{enumerate}[leftmargin=2.5em]
+    \item \textbf{Canonical projection.} A pure function
+    \[
+        \pi : v(\tau) \;\longmapsto\; v_{\text{can}}(\tau)
+    \]
+    that selects the subset of fields with
+    \texttt{canonical:true} (\S\ref{sec:canonicality-marking}) and
+    discards everything else. The projection \textbf{MUST} be
+    schema-driven; an implementation that hand-rolls the
+    projection for a specific state type produces a hash
+    incompatible with peer implementations.
+
+    \item \textbf{Canonical serialization.} A pure function
+    \[
+        \sigma : v_{\text{can}} \;\longmapsto\; b \in \{0,1\}^*
+    \]
+    producing a deterministic byte string. The serialization
+    \textbf{MUST} be RFC~8785 (JSON Canonicalization Scheme,
+    JCS): every implementation hashing the same canonical
+    projection produces the same bytes regardless of language,
+    map iteration order, or floating-point printer.
+
+    \item \textbf{Hashing.} A pure function
+    \[
+        h : b \;\longmapsto\; \texttt{canonical\_state\_hash}
+    \]
+    using a single fixed cryptographic hash (Phase~1: SHA-256;
+    upgradeable via a schema-level hash version field, but not
+    swappable per call).
+\end{enumerate}
+
+\begin{decisionbox}
+\textbf{Open: future hash agility.} SHA-256 is the Phase~1 choice.
+A migration path to an algorithm with stronger collision margin
+(SHA3-256 or BLAKE3) is required eventually. Mechanism: a per-state-type
+schema field \texttt{hash\_version} with a registry of algorithms.
+The mechanism is specified in this RFC; the migration policy is
+deferred to RFC-009.
+\end{decisionbox}
+
+\subsection{CSH-INV-1: hash over projection, not over raw state}
+
+\begin{invariant}[CSH-INV-1]
+\texttt{canonical\_state\_hash} \textbf{MUST} be computed over
+$\sigma(\pi(v))$, not over $\sigma(v)$ or any other transformation
+of $v$. An implementation that hashes raw state, or that performs
+its own ad-hoc projection, produces values incompatible with
+conforming peers and is non-conformant.
+\end{invariant}
+
+\textbf{Why this invariant exists.} Without an explicit projection
+step, distinct implementations diverge on which fields enter the
+hash even when their schemas agree --- different languages serialize
+maps in different orders, different SDKs canonicalize floats
+differently, and over time a field accidentally tagged
+\texttt{canonical:false} in one SDK and \texttt{canonical:true} in
+another produces silently different hashes. CSH-INV-1 forces the
+projection to be a first-class step, schema-driven, auditable.
+
+\subsection{CSH-INV-2: content-as-blob boundary}
+\label{sec:content-as-blob}
+
+\begin{invariant}[CSH-INV-2]
+A state object field whose semantically-meaningful value is large
+(e.g. an HTML body, an image, a build artifact) \textbf{MUST} be
+represented in canonical state as a content hash (a fixed-length
+byte string), with the actual bytes stored in a content-addressed
+blob store external to the state object. Embedding the bytes
+directly in canonical state is non-conformant.
+\end{invariant}
+
+\begin{notebox}
+The blob-store interface (\texttt{put}/\texttt{get}/\texttt{exists},
+ref-counting and garbage-collection rules) is \deferred{} to
+RFC-007. Phase~1 may implement a minimal local blob store that
+satisfies \texttt{put}/\texttt{get}/\texttt{exists}; ref-counting
+and GC may be stubbed.
+\end{notebox}
+
+\subsection{Hash and version binding}
+
+\derived{} The pair $(\texttt{canonical\_state\_hash},\,
+\texttt{state\_version})$ together identifies one specific value
+in the lifecycle of one state object. \texttt{state\_version} is a
+monotonic integer equal to the number of \texttt{CanonicalReceipt}s
+that have advanced the object's state key
+(\S\ref{sec:receipt-classes}). A verifier replaying canonical
+receipts produces a sequence of pairs with strictly increasing
+versions; if two distinct hashes are observed at the same version,
+the receipt log is corrupt.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Receipt Classes}
+\label{sec:receipt-classes}
+
+\subsection{CanonicalReceipt}
+
+\normsv{}
+A \texttt{CanonicalReceipt} witnesses one canonical transition of
+one state object. Its required fields are:
+
+\begin{lstlisting}
+CanonicalReceipt {
+    receipt_class:       "canonical",
+    state_type:          string,
+    state_key:           tuple,
+    pre_state_hash:      bytes(32),     // canonical_state_hash
+                                        // BEFORE the transition;
+                                        // null/zero only for the
+                                        // creation transition
+    post_state_hash:     bytes(32),     // canonical_state_hash
+                                        // AFTER the transition
+    state_version:       uint64,
+    transition_id:       string,        // §4
+    attempt_id:          string,        // §3.4
+    owner_signature:     bytes,         // §5.2
+    observed_at:         timestamp
+}
+\end{lstlisting}
+
+A \texttt{CanonicalReceipt} \textbf{MUST} be replayable offline:
+given a sequence of canonical receipts in version order, a verifier
+reconstructs the same canonical state without consulting any
+network channel.
+
+\subsection{OperationalReceipt}
+
+\normsv{}
+An \texttt{OperationalReceipt} records a runtime or observability
+event. It \textbf{MUST NOT} carry \texttt{pre\_state\_hash} or
+\texttt{post\_state\_hash} that refer to canonical state; the
+canonical chain is closed under \texttt{CanonicalReceipt}s alone.
+An \texttt{OperationalReceipt} \textbf{MAY} carry runtime metadata
+(executor node, pid, port, log references, progress fractions),
+\textbf{MAY} carry the \texttt{caller\_context} channel
+(\S\ref{sec:caller-context}), and is not required for replay
+correctness: the loss of any subset of operational receipts
+\textbf{MUST NOT} affect the recoverability of canonical state.
+
+\subsection{No mixing}
+
+\normsv{}
+A single ability invocation \textbf{MUST NOT} produce both a
+\texttt{CanonicalReceipt} and an \texttt{OperationalReceipt} for
+the same logical effect. A long-running canonical transition
+produces many operational progress receipts \emph{plus} exactly
+one terminal canonical receipt; this is one logical effect spread
+across receipts of different classes, but each receipt witnesses a
+distinct event (a progress observation versus the canonical
+commit) and the classification is unambiguous.
+
+\subsection{RC-INV-1: receipt binding}
+\label{sec:receipt-binding}
+
+\begin{invariant}[RC-INV-1]
+Every receipt \textbf{MUST} carry the triple
+\[
+    \bigl(\texttt{state\_key},\ \texttt{transition\_id},\ \texttt{attempt\_id}\bigr)
+\]
+identifying exactly which transition attempt the receipt belongs
+to. \texttt{attempt\_id} \textbf{MUST} be unique within a
+\texttt{(state\_key,\ transition\_id)} pair and \textbf{MUST} be
+preserved across all operational and canonical receipts
+participating in the same attempt.
+\end{invariant}
+
+\textbf{Why this invariant exists.} Without \texttt{attempt\_id},
+two concurrent invocations of the same transition on the same
+state key cannot be told apart in the receipt log: their progress
+streams interleave indistinguishably, and a verifier cannot
+attribute a given progress receipt to a specific canonical
+terminal. With \texttt{attempt\_id}, every receipt is unambiguously
+attributable.
+
+\subsection{Long-running transition pattern}
+\label{sec:long-running}
+
+\derived{} A long-running transition (one whose wall-clock duration
+spans more than a single network round-trip) emits a receipt
+sequence of the form
+
+\begin{lstlisting}
+on success:
+    [1] OperationalReceipt   transition.started
+    [2] OperationalReceipt   transition.progress     (0..N, lossy)
+    [3] CanonicalReceipt     transition.completed
+                              pre_state_hash  = hash before attempt
+                              post_state_hash = hash after success
+
+on failure:
+    [1] OperationalReceipt   transition.started
+    [2] OperationalReceipt   transition.progress     (0..N, lossy)
+    [3] CanonicalReceipt     transition.failed
+                              pre_state_hash  = hash before attempt
+                              post_state_hash = hash after failure
+\end{lstlisting}
+
+The properties this implies are sharp:
+\begin{itemize}[leftmargin=2em,itemsep=0.3em]
+    \item Canonical state advances at exactly one point per attempt,
+    namely the terminal canonical receipt.
+    \item Replay from \texttt{CanonicalReceipt}s alone reaches the
+    correct terminal; the transient ``in-flight'' state is invisible
+    to a verifier without operational receipts.
+    \item Progress receipts are observability, not history. A peer
+    connecting late receives only the canonical terminal; one
+    connecting early sees the progress stream as well.
+\end{itemize}
+
+\subsection{Caller-context channel}
+\label{sec:caller-context}
+
+\normsv{}
+An \texttt{OperationalReceipt} \textbf{MAY} carry a structured
+\texttt{caller\_context} map alongside (not replacing)
+\texttt{envelope.caller}. The map records observations the call
+site made about the request; its presence \textbf{MUST NOT}
+influence \texttt{canonical\_state\_hash}, and its absence
+\textbf{MUST NOT} affect canonical replay correctness. Specific
+field schema is delegated to the call site (\S\ref{sec:caller-uri}
+specifies one in the principal-URI context). RFC-006 main commits
+only to the channel's existence and to its non-canonical nature.
+
+\subsection{Concurrent transition admissibility}
+\label{sec:concurrency}
+
+\begin{invariant}[RC-INV-2]
+Every canonical transition attempt \textbf{MUST} declare its
+expected \texttt{pre\_state\_hash}. A canonical receipt whose
+declared \texttt{pre\_state\_hash} does not match the current
+\texttt{canonical\_state\_hash} of its state key \textbf{MUST}
+be rejected at receipt-validation time, before any apply step.
+\end{invariant}
+
+This is optimistic concurrency: two attempts on the same state key
+may proceed in parallel; whichever's terminal canonical receipt
+arrives first wins, the other's receipt is rejected (the loser
+re-reads state and retries). RFC-006 main \emph{commits} to
+optimistic concurrency rather than strict serialization because the
+former preserves liveness under network partition: a node that
+cannot temporarily reach the owner of a state key can still queue
+attempts whose viability is checked at the owner's next contact.
+Strict serialization, while simpler to implement, requires a
+single in-flight transition per key globally and is
+network-partition-fragile.
+
+\begin{notebox}
+RC-INV-2's \texttt{pre\_state\_hash} field is the same field
+already required in \S\ref{sec:receipt-classes}. The novelty here
+is the validation rule: rejection is at the receipt log's gate,
+not at the apply step. An apply-time check would let two attempts
+both complete locally and only collide at convergence time, which
+is not an admissible failure mode.
+\end{notebox}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Transition Ability}
+\label{sec:transition}
+
+\subsection{transition\_id}
+
+\normsv{}
+A \emph{transition} is an ability whose schema declares it as
+canonical or operational. Every transition is identified by a
+stable \texttt{transition\_id} string of the form
+
+\[
+    \texttt{<ability-qualified-name>@v<version>}
+\]
+
+where \texttt{<ability-qualified-name>} follows the ordinary EasyNet
+ability naming scheme (\texttt{<namespace>.<verb>}) and
+\texttt{<version>} is a monotonically-increasing integer assigned by
+the schema registry when the ability's transition schema changes in
+a non-backward-compatible way.
+
+Examples: \texttt{webapp.build@v1}, \texttt{pages.publish@v2}.
+
+\textbf{Schema evolution.} A receipt referring to
+\texttt{webapp.build@v1} is forever validated under the v1
+schema; a transition schema upgrade allocates a new
+\texttt{transition\_id} (\texttt{@v2}). Old receipts replay
+under their original schema; new attempts use the new
+\texttt{transition\_id}. The receipt log is therefore stable
+under unbounded schema evolution; this is the same discipline an
+append-only event store applies to schema versioning.
+
+\subsection{Transition schema fields}
+
+\normsv{}
+A transition schema declares, at minimum:
+
+\begin{lstlisting}
+{
+    transition_id:    string,                 // see §4.1
+    transition_class: "canonical" | "operational",
+    pre_state:        set<state_value>,       // admissible inputs
+    post_state:       set<state_value>,       // admissible outputs
+    args_schema:      JSONSchema,
+    receipt_schema:   JSONSchema              // schema of the
+                                              // receipt this
+                                              // transition emits
+}
+\end{lstlisting}
+
+The \texttt{pre\_state} and \texttt{post\_state} sets are interpreted
+relative to the state type's state space; an admissible attempt is
+one whose owning object's current state value is in
+\texttt{pre\_state}, and whose successful outcome lies in
+\texttt{post\_state}.
+
+\subsection{TA-INV-1: receipt-to-transition binding}
+
+\begin{invariant}[TA-INV-1]
+Every receipt \textbf{MUST} reference its transition's
+\texttt{transition\_id}. Validators \textbf{MUST} resolve that
+\texttt{transition\_id} against the schema registry and validate
+the receipt's payload against the schema's
+\texttt{receipt\_schema}. Receipts referencing an unknown
+\texttt{transition\_id} \textbf{MUST} be rejected.
+\end{invariant}
+
+This is the schema-validation hook for the entire receipt log.
+Without TA-INV-1, replay must trust that historic receipts
+conformed to whatever schema was in force at the time, with no way
+to verify; with TA-INV-1, the schema registry is the source of
+truth, and the receipt log is auditable against it indefinitely.
+
+\subsection{Validation timing}
+
+\normsv{}
+Transition schema validation \textbf{MUST} occur at
+receipt-validation time (the moment a receipt is admitted to the
+log), not at apply time. A receipt that fails schema validation
+\textbf{MUST} be rejected before any state mutation; an
+implementation that allows non-conformant receipts to apply
+locally and only rejects them at convergence time is
+non-conformant.
+
+\subsection{Cross-state-space composition}
+\label{sec:cross-state-space}
+
+\normsv{}
+A state type \textbf{MAY} declare multiple parallel state spaces
+on the same state key (the canonical / runtime overlay split of
+Appendix~B is the minimal interesting case; types declaring
+review, billing, or audit overlays are admissible future cases).
+When a state type declares $n \geq 2$ state spaces, its schema
+\textbf{MUST} include a \emph{cross-product admissibility matrix}
+specifying which combinations of values across the spaces are
+allowed; transitions producing an inadmissible combination
+\textbf{MUST} be rejected at receipt-validation time.
+
+\begin{notebox}
+The cross-product matrix is what prevents a runtime crash from
+being modelled as a canonical state change. With only one state
+space, an implementation cannot express the difference; with two
+spaces and an explicit admissibility matrix, the impossibility of
+\texttt{(canonical=Building, runtime=Running)} is a schema-level
+fact, not a runtime invariant the application must remember.
+\end{notebox}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Authority Domain and Delegation}
+\label{sec:authority}
+
+\subsection{Owner agent}
+
+\normsv{}
+Every state object has exactly one \emph{owner agent}, identified
+by an EasyNet agent URI. The owner agent is the \emph{canonical
+authority} for the object: every \texttt{CanonicalReceipt} for the
+object \textbf{MUST} carry the owner agent's signature
+(\S\ref{sec:owner-sig}).
+
+The owner agent's identity \textbf{MUST} be embedded in the
+state key (\S\ref{sec:state-key}), not in a mutable field.
+Embedding it in the key turns ``who can sign canonical
+transitions for this object'' into a property of the object's
+identity rather than a property of its content. Because keys are
+immutable (SO-INV-1), authority cannot be silently rewritten by a
+transition; the only way to change ownership is to delete the
+object and create a distinct one with a different key.
+
+\subsection{Owner signature on canonical receipts}
+\label{sec:owner-sig}
+
+\normsv{}
+A \texttt{CanonicalReceipt} for state key $k$ \textbf{MUST} carry
+a cryptographic signature
+\[
+    \texttt{owner\_signature} = \mathrm{Sign}_{\mathrm{sk}_{\mathrm{owner}(k)}}\!\bigl(\sigma(\text{receipt body})\bigr)
+\]
+where $\mathrm{sk}_{\mathrm{owner}(k)}$ is the private key bound to
+the owner agent identity in $k$, and $\sigma$ is the canonical
+serialization of \S\ref{sec:canonical-hash}. A canonical receipt
+without owner signature \textbf{MUST} be rejected; a receipt whose
+signature does not verify against the owner agent's published key
+\textbf{MUST} be rejected; verification \textbf{MUST} be performed
+at receipt-validation time.
+
+\begin{decisionbox}
+\textbf{Open: signature scheme.} Phase~1 commits to Ed25519 for
+its small key size and well-understood security profile.
+Threshold or multi-signature schemes (for shared-ownership
+objects, e.g. organisations) are \deferred{} to RFC-008.
+\end{decisionbox}
+
+\subsection{Delegated execution}
+
+\normsv{}
+A canonical transition \textbf{MAY} be \emph{executed} by a node
+other than the owner --- the source of a webapp may live on
+agent~$A$, the build farm on agent~$B$, the serve runtime on
+agent~$C$ --- but the owner remains the canonical authority. The
+delegated execution flow is:
+
+\begin{enumerate}[leftmargin=2.5em,itemsep=0.3em]
+    \item The owner emits an authorisation token (or signs an
+    attempt-prefix) addressed to the delegate agent and bound to
+    \texttt{(state\_key, transition\_id, attempt\_id)}.
+    \item The delegate executes the transition; on success or
+    failure, it constructs the canonical receipt body but does
+    \emph{not} sign it.
+    \item The delegate returns the receipt body to the owner.
+    \item The owner verifies the body, signs it with
+    $\mathrm{sk}_{\mathrm{owner}(k)}$, and emits the signed
+    \texttt{CanonicalReceipt}.
+\end{enumerate}
+
+A delegate-emitted receipt without owner signature \textbf{MUST
+NOT} advance canonical state. The owner's signature is the
+authoritative act; the delegate's execution is mechanical labour.
+
+\begin{notebox}
+The authorisation token format and the round-trip latency
+budget for the delegate $\to$ owner signing handshake are
+\deferred{} to RFC-008. Phase~1 may implement a synchronous
+loop in which the owner signs canonical receipts on demand from
+co-located delegates.
+\end{notebox}
+
+\subsection{The principal/ caller URI scheme}
+\label{sec:caller-uri}
+
+\normsv{}
+The \texttt{envelope.caller} field of every invocation \textbf{MUST}
+be a URI under one of two namespaces:
+
+\begin{itemize}[leftmargin=2em,itemsep=0.3em]
+    \item \textbf{Agent caller.}
+    $\texttt{easynet:///agent/<id>}$ --- the caller is an EasyNet
+    agent. This is the original (pre-stateful) form.
+
+    \item \textbf{Principal caller.}
+    $\texttt{easynet:///principal/<class>/<\,\ldots\,>}$ --- the
+    caller is a principal that is not an EasyNet agent. The
+    \texttt{<class>} segment is one of a small set of reserved
+    classes (\texttt{human-anon}, \texttt{human-auth},
+    \texttt{bot-auth}; new classes require an RFC). Subsequent
+    segments are class-specific.
+\end{itemize}
+
+The reserved class \texttt{human-anon} has the form
+
+\[
+    \texttt{easynet:///principal/human-anon/<ip-hash>/<session-id|"-">}
+\]
+
+where \texttt{ip-hash} is a stable hash (e.g.
+\texttt{HMAC(local\_salt, ip).hex[..16]}) and \texttt{session-id}
+is an opaque token or the literal \texttt{"-"} when absent. The
+class \texttt{human-anon} is the conformant placeholder for a
+hub-translated public browser request; using the hub's own agent
+URI as caller for such requests is non-conformant.
+
+\textbf{Disambiguation discipline.} Authorisation, scope-check, and
+audit code paths \textbf{MUST} discriminate \texttt{agent/} from
+\texttt{principal/} by URI prefix and \textbf{MUST NOT} treat a
+\texttt{principal/} caller as carrying agent-level identity
+guarantees. Specifically: a \texttt{principal/human-anon/...} caller
+has no signature, no key, no realm membership; any code path that
+relies on those for an \texttt{agent/} caller \textbf{MUST} fail
+fast on a \texttt{principal/} caller rather than degrading
+silently.
+
+\begin{warningbox}
+Phase~1 implementation: the existing \texttt{envelope.caller} parser
+in \texttt{EasyNet-Cli} assumes \texttt{agent/} form throughout.
+Acceptance of \texttt{principal/} URIs requires extending the parser,
+extending scope-check, and adding a fail-fast classifier in
+\texttt{ability\_proxy}. This is Phase~1c work.
+\end{warningbox}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{View Projection}
+\label{sec:view-projection}
+
+\subsection{Definition}
+
+\normsv{}
+A \emph{view} is a pure projection of a state object's
+$(\text{canonical state},\ \text{runtime overlay state})$ pair, and,
+optionally, of the \texttt{caller\_context} of the request that
+asked for the view. A view computation \textbf{MUST NOT} mutate any
+state, \textbf{MUST NOT} consult side channels (network, time of
+day, load, locale) for its output content, and \textbf{MUST}
+produce identical bytes when given identical inputs.
+
+(View \emph{caching} may consult time. View \emph{content} may not.)
+
+\subsection{Multi-view as first-class}
+
+\normsv{}
+A state type \textbf{MAY} declare $n \geq 0$ named views in its
+schema. Any state type intended for exposure through a Hub-class
+deployment \textbf{MUST} declare at least the two reserved views
+
+\begin{itemize}[leftmargin=2em,itemsep=0.2em]
+    \item \texttt{human\_view} --- HTTP-renderable (HTML, image,
+    stream).
+    \item \texttt{agent\_view} --- structured, machine-actionable.
+\end{itemize}
+
+The two views \textbf{MUST} produce structurally distinct outputs;
+serving the same byte sequence to a human GET and an agent GET on
+the URA channel is non-conformant content negotiation, not
+multi-view.
+
+\subsection{agent\_view minimum content}
+\label{sec:agent-view-min}
+
+\normsv{}
+The \texttt{agent\_view} of any state object \textbf{MUST}
+include, at minimum:
+
+\begin{enumerate}[leftmargin=2em,itemsep=0.25em]
+    \item A snapshot of the canonical state (the values of all
+    canonical fields at the current version).
+    \item A snapshot of the runtime overlay state, when the
+    state type declares one.
+    \item An \texttt{ability\_surface} listing the
+    \texttt{transition\_id}s admissible from the current state.
+    \item A pointer to the receipt-history view of this state
+    object (\S\ref{sec:receipt-index}).
+\end{enumerate}
+
+It \textbf{MAY} additionally include an \texttt{eal\_hint} (a
+ready-to-paste EAL invocation that advances the state object) and
+implementation-specific fields enabled by the state type's view
+schema.
+
+\subsection{VP-INV-1: ability\_surface is derived, not registry-snapshot}
+
+\begin{invariant}[VP-INV-1]
+The \texttt{ability\_surface} of an \texttt{agent\_view}
+\textbf{MUST} be derived from the current state of the object and
+the transition schema (specifically: the set of
+\texttt{transition\_id}s whose \texttt{pre\_state} contains the
+current state value, intersected with the cross-product
+admissibility matrix of \S\ref{sec:cross-state-space}). It
+\textbf{MUST NOT} be a static snapshot of the agent's ability
+registry.
+\end{invariant}
+
+\textbf{Why this invariant exists.} An \texttt{ability\_surface}
+that simply lists ``every ability the agent has ever registered''
+defeats state-gating: a peer agent reading the view would attempt
+calls that are inadmissible from the current state, and the
+state-gating logic would have to be replicated at every caller.
+Deriving the surface from current state and schema makes the view
+a genuine affordance: the listed transitions are precisely those
+that will succeed if attempted now.
+
+\subsection{Determinism}
+
+\normsv{}
+Every view of a state type is a deterministic function of its
+declared input set. The default input set is
+$(\text{canonical},\ \text{runtime})$; views that consult
+\texttt{caller\_context} \textbf{MUST} declare it as an explicit
+input. No view \textbf{MAY} consult \texttt{caller\_context}
+ambiently or partially; the dependency is either declared and
+deterministic, or absent.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Receipt Indexing by State Key}
+\label{sec:receipt-index}
+
+\subsection{Dual indexing requirement}
+
+\normsv{}
+The receipt log \textbf{MUST} support enumeration along two axes
+simultaneously:
+
+\begin{itemize}[leftmargin=2em,itemsep=0.25em]
+    \item \textbf{By \texttt{receipt\_id}} --- preserves the
+    pre-stateful ``one invocation is traceable end-to-end''
+    property of the original EasyNet protocol.
+    \item \textbf{By \texttt{state\_key}} --- enables the new
+    ``one state object's entire life is traceable end-to-end''
+    property.
+\end{itemize}
+
+A log that supports only one axis is non-conformant.
+
+\subsection{URA mapping}
+
+\normsv{}
+Every state object \textbf{MUST} be addressable by a stable
+URA derived from its state key alone, via a mapping function
+declared by the state type's schema. The mapping
+\textbf{MUST} be bijective on $(\texttt{state\_type},
+\texttt{state\_key}) \leftrightarrow \texttt{ura}$ within a realm:
+two state objects map to the same URA if and only if they have
+the same key under the same type, and the URA can be inverted to
+recover both.
+
+The standard form is
+
+\[
+    \texttt{easynet:///r/<realm>/agent/<owner>/<state\_type>/<slug>}
+\]
+
+where \texttt{<slug>} is the rendering of the non-owner part of
+the state key; the schema specifies the rendering function.
+
+\subsection{Receipt-history enumeration via URA}
+
+\normsv{}
+Given a state object's URA, a verifier \textbf{MUST} be able to
+enumerate the full ordered sequence of \texttt{CanonicalReceipt}s
+that have advanced the object's state, up to a chosen
+\texttt{state\_version} (or up to the present), without
+consulting any channel other than the receipt log addressable
+through that URA.
+
+The receipt-history view \textbf{MAY} be exposed as a sub-URA of
+the form $\texttt{<state\_object\_ura>/receipts}$, but the URA
+form is not protocol-fixed; the binding requirement is that the
+enumeration is reachable through the same trust boundary as the
+state object itself.
+
+\subsection{Append-only}
+
+\normsv{}
+The receipt log is append-only. Receipts \textbf{MUST NOT} be
+deleted, renumbered, or rewritten; corrections are made by emitting
+a new receipt that supersedes (but does not erase) the prior one.
+Implementations that compact, archive, or shard the log
+\textbf{MUST} preserve the externally-observable enumeration
+contract: a client repeating an enumeration query receives the
+same sequence (or a strict prefix), modulo new receipts appended
+since.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Invariant Coverage Matrix}
+\label{sec:coverage}
+
+This section verifies that the main body anchors every invariant
+declared in Appendix~B (the companion pressure-test) and that
+every locally-declared invariant in this document is anchored to
+one main-body section. If any row in either table is missing or
+inconsistent, the main body is incomplete and must be revised
+before Phase~1 implementation begins.
+
+\subsection{Appendix~B invariants $\rightarrow$ main-body anchors}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\linewidth}{l X l}
+\toprule
+\textbf{Invariant} & \textbf{Statement (abridged)} & \textbf{Anchor} \\
+\midrule
+TR-INV-1  & Long-running transition completion semantics       & \S\ref{sec:long-running} \\
+TR-INV-2  & Progress receipts not in canonical chain           & \S\ref{sec:receipt-classes}, \S\ref{sec:long-running} \\
+TR-INV-3  & Schema-level canonicality marking                  & \S\ref{sec:canonicality-marking}, \S\ref{sec:canonical-hash} \\
+TR-INV-4  & Owner authority over delegated execution           & \S\ref{sec:owner-sig} \\
+TR-INV-5  & Runtime overlay observable but not canonical       & \S\ref{sec:receipt-classes}, \S\ref{sec:cross-state-space} \\
+TR-INV-6  & View $\neq$ State                                  & \S\ref{sec:view-projection} \\
+TR-INV-7  & Multi-view as first-class                          & \S\ref{sec:view-projection}, \S\ref{sec:agent-view-min} \\
+TR-INV-8  & Cross-state-space composition                      & \S\ref{sec:cross-state-space} \\
+TR-INV-9  & Concurrent canonical transitions                   & \S\ref{sec:concurrency} (RC-INV-2) \\
+TR-INV-10 & Content-as-blob boundary                           & \S\ref{sec:content-as-blob} (CSH-INV-2) \\
+TR-INV-11 & URA-receipt traceability                           & \S\ref{sec:receipt-index} \\
+TR-INV-12 & Hub-translated caller identity                     & \S\ref{sec:caller-uri} \\
+TR-INV-13 & Caller-context as observability channel            & \S\ref{sec:caller-context} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Main-body invariants (self-contained)}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\linewidth}{l X l}
+\toprule
+\textbf{Invariant} & \textbf{Statement (abridged)} & \textbf{Defined in} \\
+\midrule
+SO-INV-1  & State-key immutability after first canonical receipt & \S\ref{sec:identity-immutability} \\
+CSH-INV-1 & Hash computed over projection, not raw state         & \S\ref{sec:canonical-hash} \\
+CSH-INV-2 & Content-as-blob boundary                             & \S\ref{sec:content-as-blob} \\
+RC-INV-1  & Receipt binding to (state\_key, transition\_id, attempt\_id) & \S\ref{sec:receipt-binding} \\
+RC-INV-2  & Pre-state-hash declaration and rejection             & \S\ref{sec:concurrency} \\
+TA-INV-1  & Receipt-to-transition binding                        & \S\ref{sec:transition} \\
+VP-INV-1  & ability\_surface derived from state and schema       & \S\ref{sec:view-projection} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Coverage statement}
+
+\derived{} The two tables above account for every TR-INV-*
+invariant declared in the companion appendix and for every
+SO/CSH/RC/TA/VP-INV-* invariant declared in this main body. No
+invariant is left without a normative anchor; no anchor is
+referenced by zero invariants. The Phase~1 implementation work
+plan
+(\S\ref{sec:phase1}) is therefore well-founded: each work item
+discharges a specific subset of the rows above.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Phase 1 implementation work plan}
+\label{sec:phase1}
+
+\derived{} The work this RFC immediately authorises is bounded.
+Each item below is a Phase~1 deliverable in
+\texttt{EasyNet-Cli}, mapping to one or more invariants from
+\S\ref{sec:coverage}.
+
+\begin{enumerate}[leftmargin=2.5em,itemsep=0.3em]
+    \item \textbf{1a. Schema-level \texttt{canonical:bool}
+    annotation.} Extend \texttt{AbilityDescriptor} and state-type
+    schemas with the \texttt{canonical} flag; reject schemas
+    missing it. Discharges TR-INV-3, SO-INV-1 (key-field
+    annotation).
+
+    \item \textbf{1b. Two-class receipt split.} Introduce
+    \texttt{CanonicalReceipt} and \texttt{OperationalReceipt}
+    types, with the fields of \S\ref{sec:receipt-classes};
+    \texttt{owner\_signature} stub-implemented (signing scheme
+    choice from \S\ref{sec:owner-sig}). Discharges TR-INV-1,
+    TR-INV-2, TR-INV-5, RC-INV-1, RC-INV-2, TA-INV-1.
+
+    \item \textbf{1c. \texttt{principal/} caller URI parser and
+    classifier.} Extend \texttt{envelope.caller} parser; add a
+    fail-fast classifier; ensure scope-check distinguishes
+    \texttt{agent/} from \texttt{principal/}. Discharges TR-INV-12.
+
+    \item \textbf{1d. Minimal blob store.} A local content-addressed
+    blob store implementing \texttt{put}/\texttt{get}/\texttt{exists};
+    GC and ref-counting stubbed (resolved in RFC-007). Discharges
+    TR-INV-10, CSH-INV-2.
+
+    \item \textbf{1e. State-key receipt index.} Index the receipt
+    log by state key in addition to receipt id; expose URA-keyed
+    enumeration. Discharges TR-INV-11.
+\end{enumerate}
+
+The first reference state machine atop these primitives is
+\texttt{easynet.page} (Appendix~A of the companion document, to be
+drafted). The pressure-test machine is \texttt{easynet.web\_app}
+(Appendix~B of the companion document, already drafted). View
+projection (\S\ref{sec:view-projection}) and
+\texttt{caller\_context} (\S\ref{sec:caller-context}) are exercised
+end-to-end only when the Hub-class deployment is built; the
+protocol surface is complete before that engineering work begins.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Closing}
+\label{sec:closing}
+
+The intent of this RFC is not to specify every detail of a
+stateful agent network; it is to specify the smallest surface a
+conformant implementation must implement before further work can
+proceed. Where the appendix pressure-tests revealed an invariant,
+the main body addresses it; where the implementation work plan
+requires a primitive, the main body defines it. Everything else
+--- formal theorems, hub deployment, web reference machines,
+cross-binding multi-realm consistency --- is deferred to companion
+artefacts.
+
+\paragraph{Companion artefacts.}
+\begin{itemize}[leftmargin=2em,itemsep=0.2em]
+    \item \texttt{AXON-RFC-006-stateful-easynet.md} ---
+    Appendix~B (\texttt{easynet.web\_app}) and the thirteen
+    TR-INV-* invariants this main body satisfies.
+    \item Appendix~A (\texttt{easynet.page}, the simple worked
+    example) --- \deferred{} to a follow-up commit on the
+    companion document.
+    \item RFC-007 --- blob store interface and GC rules.
+    \item RFC-008 --- delegated execution authorisation tokens
+    and threshold-signature ownership.
+\end{itemize}
+
+\paragraph{Bindingness.}
+Sections marked \normsv{} are binding on every Phase~1 (and
+later) implementation. Sections marked \derived{} are negotiable
+only by showing the derivation incorrect. Sections marked
+\deferred{} name the artefact that resolves them; an
+implementation that needs the resolution sooner than that
+artefact lands must request an out-of-band exception.
+
+\vfill
+\hrule
+\vspace{0.4em}
+\noindent\small
+\textit{This document is a pre-implementation minimal normative
+core. It is paired with the companion appendix (Appendix~B) which
+served as its pressure test. If a future revision of either
+document creates a conflict between them, the appendix wins on
+matters of invariant coverage and the main body wins on matters
+of normative form; reconciliation is a separate alignment round.}
+
+\end{document}

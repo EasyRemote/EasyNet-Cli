@@ -190,6 +190,43 @@ fn escape_toml_basic(s: &str) -> String {
     out
 }
 
+/// RFC-006 metadata for one published ability. Drives the
+/// descriptor renderer's `class` / `transition` columns and lets
+/// discovery surfaces classify abilities by execution shape
+/// without re-deriving it from the ability name.
+///
+/// Both fields are `Option` because RFC-006 lands incrementally:
+///
+///   * `class` is `None` for abilities that pre-date the RFC and
+///     have not been classified yet (the descriptor renderer
+///     omits the column for those rows). Producers that DO know
+///     their class set `Some(AbilityClass::*)`.
+///
+///   * `transition` is `None` for every ability today — the
+///     transition-receipt subsystem is reserved for RFC-006 v2.
+///     The field exists so consumer code can already pattern-match
+///     against it and so the eventual v2 producer can populate it
+///     without re-shaping the struct.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Rfc006Metadata {
+    /// Execution shape (Query / Stream / Transition). See
+    /// `AbilityClass` for the contract on each.
+    pub class: Option<crate::runtime::ability_descriptor::AbilityClass>,
+    /// Reserved for RFC-006 v2 transition receipts. `None` today;
+    /// the carrier is `TransitionMetadata` so v2 producers can
+    /// land a real shape without breaking the consumer match
+    /// expressions in v1.
+    pub transition: Option<TransitionMetadata>,
+}
+
+/// Stub for RFC-006 v2 transition-receipt metadata. v1 callers
+/// only ever observe `Rfc006Metadata { transition: None, .. }`,
+/// so the inner shape is reserved. v2 lands the real fields
+/// (pre/post state digests, chain pointer, etc.) without breaking
+/// any v1 consumer that pattern-matches on `Option`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TransitionMetadata;
+
 #[cfg(test)]
 mod tests {
     use super::*;

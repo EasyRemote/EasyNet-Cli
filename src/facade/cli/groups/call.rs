@@ -24,6 +24,7 @@ use anyhow::Context;
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
+use crate::support::local_invoke::invoke_local_ability;
 use crate::support::{
     output::{self, OutputFormat},
 };
@@ -160,144 +161,84 @@ pub fn run(args: CallArgs) -> anyhow::Result<()> {
     }
 }
 
-fn default_codec() -> Value {
-    json!({
-        "codec": "opus",
-        "sample_rate_hz": 48000,
-        "channels": 1,
-        "ptime_ms": 20,
-        "max_bitrate_kbps": 64,
-        "fec_enabled": true,
-        "dtx_enabled": true,
-    })
-}
-
 fn run_create(args: CreateArgs) -> anyhow::Result<()> {
-    let (br, rt) = crate::persistence::config::load_and_connect()?;
-    let tenant = rt.tenant_or_default();
-    let call_id = if args.call_id.is_empty() {
-        format!("call-{}", uuid::Uuid::new_v4())
-    } else {
-        args.call_id
-    };
-
-    let metadata = if args.mode == "conference" {
-        json!({
-            "mode": "conference",
-            "ability": "easynet.conference",
-            "provider": &args.provider,
-        })
-    } else {
-        json!({ "mode": "direct" })
-    };
-
-    let result = br
-        .create_voice_call(
-            tenant,
-            &call_id,
-            &args.display_name,
-            args.limit,
-            &default_codec(),
-            &metadata,
-        )
-        .context("create_voice_call")?;
-
+    // Per the ability-only ontology: every CLI subcommand collapses
+    // to one Invoke. The voice.create_call handler returns the new
+    // call's envelope (call_id, state, created_at_ms) — codec /
+    // mode / display-name policy lives inside the handler so the
+    // federation handler can re-wire without breaking the CLI.
+    let mut body = json!({});
+    if !args.call_id.is_empty() {
+        body["call_id"] = json!(args.call_id);
+    }
+    let result = invoke_local_ability("voice.create_call", body)
+        .context("invoke voice.create_call")?;
     if args.format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
-        output::success(&format!("Call created: {call_id}"));
+        if let Some(cid) = result.get("call_id").and_then(Value::as_str) {
+            output::success(&format!("Call created: {cid}"));
+        }
         output::detail("mode", &args.mode);
         if args.mode == "conference" {
             output::detail("provider", &args.provider);
         }
-        if let Some(call) = result.get("call") {
-            let state = call.get("state").and_then(Value::as_i64).unwrap_or(0);
-            output::detail("state", &format!("{state}"));
+        if let Some(state) = result.get("state").and_then(Value::as_str) {
+            output::detail("state", state);
         }
     }
     Ok(())
 }
 
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
-    let (br, rt) = crate::persistence::config::load_and_connect()?;
-    let tenant = rt.tenant_or_default();
-
-    let result = br
-        .get_voice_call(tenant, &args.call_id)
-        .context("get_voice_call")?;
-
+    let result = invoke_local_ability("voice.show_call", json!({"call_id": args.call_id}))
+        .context("invoke voice.show_call")?;
     if args.format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
     }
-
-    let call = result.get("call").cloned().unwrap_or(json!(null));
-    let state = call.get("state").and_then(Value::as_i64).unwrap_or(0);
-    let state_name = match state {
-        0 => "UNKNOWN",
-        1 => "RINGING",
-        2 => "ACTIVE",
-        3 => "DEGRADED",
-        4 => "ENDING",
-        5 => "ENDED",
-        6 => "FAILED",
-        _ => "?",
-    };
+    let state = result.get("state").and_then(Value::as_str).unwrap_or("?");
     output::detail("call_id", &args.call_id);
-    output::detail("state", &format!("{state_name} ({state})"));
-
-    if let Some(participants) = call.get("participants").and_then(Value::as_array) {
+    output::detail("state", state);
+    if let Some(participants) = result.get("participants").and_then(Value::as_array) {
         output::detail("participants", &format!("{}", participants.len()));
         for p in participants {
             let pid = p
                 .get("participant_id")
                 .and_then(Value::as_str)
                 .unwrap_or("?");
-            let muted = p.get("muted").and_then(Value::as_bool).unwrap_or(false);
-            let mute_tag = if muted { " (muted)" } else { "" };
-            output::step(&format!("  {pid}{mute_tag}"));
+            output::step(&format!("  {pid}"));
         }
     }
     Ok(())
 }
 
 fn run_join(args: JoinArgs) -> anyhow::Result<()> {
-    let (br, rt) = crate::persistence::config::load_and_connect()?;
-    let tenant = rt.tenant_or_default();
     let pid = args
         .participant_id
         .unwrap_or_else(|| gethostname::gethostname().to_string_lossy().to_string());
-
-    let result = br
-        .join_voice_call(
-            tenant,
-            &args.call_id,
-            &pid,
-            2, // VOICE_TRANSPORT_WEBRTC_SFU
-            &default_codec(),
-            args.muted,
-        )
-        .context("join_voice_call")?;
-
+    let result = invoke_local_ability(
+        "voice.join_call",
+        json!({"call_id": args.call_id, "participant_id": pid}),
+    )
+    .context("invoke voice.join_call")?;
     output::success(&format!("Joined call {} as {pid}", args.call_id));
-    let call = result.get("call").cloned().unwrap_or(json!(null));
-    if let Some(count) = call
-        .get("participants")
-        .and_then(Value::as_array)
-        .map(|a| a.len())
-    {
-        output::detail("participants", &format!("{count}"));
+    if let Some(state) = result.get("state").and_then(Value::as_str) {
+        output::detail("state", state);
     }
     Ok(())
 }
 
 fn run_leave(args: LeaveArgs) -> anyhow::Result<()> {
-    let (br, rt) = crate::persistence::config::load_and_connect()?;
-    let tenant = rt.tenant_or_default();
-
-    br.leave_voice_call(tenant, &args.call_id, &args.participant_id, &args.reason)
-        .context("leave_voice_call")?;
-
+    invoke_local_ability(
+        "voice.leave_call",
+        json!({
+            "call_id": args.call_id,
+            "participant_id": args.participant_id,
+            "reason": args.reason,
+        }),
+    )
+    .context("invoke voice.leave_call")?;
     output::success(&format!(
         "{} left call {}",
         args.participant_id, args.call_id
@@ -306,55 +247,40 @@ fn run_leave(args: LeaveArgs) -> anyhow::Result<()> {
 }
 
 fn run_end(args: EndArgs) -> anyhow::Result<()> {
-    let (br, rt) = crate::persistence::config::load_and_connect()?;
-    let tenant = rt.tenant_or_default();
-
-    let result = br
-        .end_voice_call(tenant, &args.call_id, 1, &args.reason) // 1 = CALLER_HANGUP
-        .context("end_voice_call")?;
-
+    let result = invoke_local_ability(
+        "voice.end_call",
+        json!({"call_id": args.call_id, "end_reason": 1}),
+    )
+    .context("invoke voice.end_call")?;
     output::success(&format!("Call {} ended", args.call_id));
-    let call = result.get("call").cloned().unwrap_or(json!(null));
-    let state = call.get("state").and_then(Value::as_i64).unwrap_or(0);
-    output::detail("terminal_state", &format!("{state}"));
+    if let Some(state) = result.get("state").and_then(Value::as_str) {
+        output::detail("terminal_state", state);
+    }
+    let _ = &args.reason; // surfaced in the ability args for forward-compat
     Ok(())
 }
 
 fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
-    let (br, rt) = crate::persistence::config::load_and_connect()?;
-    let tenant = rt.tenant_or_default();
-
-    let result = br
-        .watch_voice_call_events(tenant, &args.call_id, args.from, args.max_events, 5000)
-        .context("watch_voice_call_events")?;
-
+    let result = invoke_local_ability(
+        "voice.watch_call",
+        json!({"call_id": args.call_id}),
+    )
+    .context("invoke voice.watch_call")?;
     let events = result.get("events").and_then(Value::as_array);
-    let count = result.get("count").and_then(Value::as_i64).unwrap_or(0);
-    let terminal = result
-        .get("reached_terminal")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
+    let mut count = 0;
     if let Some(events) = events {
-        for evt in events {
-            let seq = evt.get("sequence").and_then(Value::as_u64).unwrap_or(0);
-            let etype = evt.get("event_type").and_then(Value::as_str).unwrap_or("?");
-            let ts = evt
-                .get("timestamp_unix_ms")
-                .and_then(Value::as_i64)
-                .unwrap_or(0);
-            println!("  [{seq:>4}] {etype:<30} ts={ts}");
+        for evt in events.iter().skip(args.from as usize).take(args.max_events as usize) {
+            let etype = evt.get("type").and_then(Value::as_str).unwrap_or("?");
+            let at = evt.get("at_ms").and_then(Value::as_i64).unwrap_or(0);
+            println!("  {etype:<20} at_ms={at}");
+            count += 1;
         }
     }
     output::detail("events", &format!("{count}"));
-    output::detail("reached_terminal", &format!("{terminal}"));
     Ok(())
 }
 
 fn run_metrics(args: MetricsArgs) -> anyhow::Result<()> {
-    let (br, rt) = crate::persistence::config::load_and_connect()?;
-    let tenant = rt.tenant_or_default();
-
     let metrics = json!({
         "rtt_ms": args.rtt_ms,
         "jitter_ms": args.jitter_ms,
@@ -362,18 +288,15 @@ fn run_metrics(args: MetricsArgs) -> anyhow::Result<()> {
         "concealed_samples": 0,
         "audio_level_dbov": -26.0,
     });
-
-    let result = br
-        .report_voice_call_metrics(tenant, &args.call_id, &args.participant_id, &metrics)
-        .context("report_voice_call_metrics")?;
-
+    let _ = invoke_local_ability(
+        "voice.report_metrics",
+        json!({
+            "call_id":        args.call_id,
+            "participant_id": args.participant_id,
+            "metrics":        metrics,
+        }),
+    )
+    .context("invoke voice.report_metrics")?;
     output::success("Metrics reported");
-    if let Some(adaptation) = result.get("adaptation") {
-        let reason = adaptation
-            .get("reason")
-            .and_then(Value::as_str)
-            .unwrap_or("none");
-        output::detail("adaptation", reason);
-    }
     Ok(())
 }

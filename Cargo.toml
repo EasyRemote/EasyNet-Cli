@@ -1,6 +1,6 @@
 [package]
 name = "easynet"
-version = "1.19.12"
+version = "1.22.18"
 edition = "2021"
 description = "EasyNet CLI + Hub MCP server + EAL (EasyNet Ability Language)."
 license = "Apache-2.0"
@@ -87,7 +87,53 @@ rayon = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+# Used by `runtime::publish::derive_owner_public_key_b64` to mirror
+# the SDK's deterministic key derivation — the daemon must pass the
+# runtime the SAME key the bridge will later sign under, or
+# `verify_easynet_subject_key_binding` rejects every Invoke. Version
+# pinned to match the SDK's transitive use.
+ed25519-dalek = "2"
+# RFC-002 keyring: AES-GCM encrypts private keys at rest under a master
+# key derived from OS keychain (preferred) or passphrase (fallback).
+aes-gcm = "0.10"
+# Argon2id KDF for passphrase-fallback master key derivation.
+argon2 = { version = "0.5", default-features = false, features = ["std", "alloc", "password-hash"] }
+# CSPRNG for keypair generation, AES-GCM nonces, master-key salts.
+rand = "0.8"
+# Locate $XDG_CONFIG_HOME / ~/.config with platform fallbacks.
+dirs = "5"
 termimad = "0.31"
+# Pure-Rust JPEG encoder. Used by `camera.snapshot` /
+# `screen.snapshot` (RFC-005 v3.2 A3 / A8) to produce a real JPEG
+# byte stream. PR3a uses it with a synthetic frame buffer (no
+# hardware dep — the real cpal/nokhwa backends land later); the
+# encode path itself is the same for synthetic and real frames.
+# Picked over `image` because we only need encoding (no decoders,
+# no PNG/GIF/WebP) and want the smallest extra build surface.
+jpeg-encoder = { version = "0.7", default-features = false }
+# RFC-005 v3.2 A1, A5 — physical audio capture (mic.subscribe) and
+# playback (speaker.publish). cpal is the only Rust crate that
+# spans CoreAudio + WASAPI + ALSA + PulseAudio with comparable
+# maturity; per AXON-RFC-005-device-backend-selection the macOS
+# default-device sample-rate may diverge from the schema's
+# 16/24/48 kHz set, so a downsampler is added in a follow-up.
+cpal = "0.15"
+# RFC-005 v3.2 A2, A3 — physical camera capture
+# (camera.subscribe / camera.snapshot). nokhwa wraps AVFoundation
+# (macOS), V4L2 (Linux) and MediaFoundation (Windows). Windows
+# back-end is known fragile; only macOS + Linux land in CI.
+# `input-native` opts into the platform-direct backends and
+# avoids the heavyweight image-pipeline backends.
+nokhwa = { version = "0.10", features = ["input-native"] }
+# RFC-005 v3.2 A4, A8 — physical screen capture
+# (screen.subscribe / screen.snapshot). xcap was picked over
+# `screenshots` and `scrap` for active maintenance and a usable
+# Window/Monitor abstraction (so subject ∈ {display, window,
+# application} maps cleanly). On macOS the first call triggers a
+# system-modal Screen Recording permission dialog; the handler
+# surfaces the permission-denied case as
+# reason="resource_unavailable" rather than a panic.
+xcap = "0.9"
 toml = "0.8"
 toml_edit = "0.23"
 # Tokio adopted in PR-7 (Commit 1) as a transitive-to-direct dependency.
@@ -104,6 +150,10 @@ futures = "0.3"
 # bytes::BytesMut backing the codec.
 bytes = "1"
 ureq = { version = "2", features = ["json"] }
+# Percent-encoding for HTTP-executor URL templating. The `[exec]
+# kind = "http"` path encodes substituted values automatically so
+# an arg containing a space or non-ASCII char doesn't break the URL.
+urlencoding = "2"
 uuid = { version = "1", features = ["v4"] }
 # Cron expression parsing for PR-SCHED. The crate parses
 # `0 9 * * *`-style strings into a `Schedule` and computes the

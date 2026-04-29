@@ -210,25 +210,17 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
         }
     };
 
-    let reg_resp = bridge
-        .register_node_with_options(
-            &creds.tenant_id,
-            &creds.node_id,
-            &hostname,
-            easynet_axon::dendrite_bridge::RegisterNodeOptions { labels, role: None },
-        )
-        .context("register node")?;
-
-    let heartbeat_ms = reg_resp
-        .get("heartbeat_interval_ms")
-        .and_then(serde_json::Value::as_u64)
-        .filter(|&v| v > 0)
-        .unwrap_or(heartbeat::DEFAULT_HEARTBEAT_MS);
-
-    output::success(&format!(
-        "Node registered: {} (heartbeat every {}ms)",
-        creds.node_id, heartbeat_ms
-    ));
+    // RFC-001 P1.5 collapsed the legacy RegisterNode RPC. The
+    // federation-side bookkeeping (directory advertisement,
+    // visibility on peers) is now done entirely through
+    // `federation.advertise_agent` / `federation.advertise_abilities`
+    // ability invocations, which `republish_via_federation_best_effort`
+    // (called below) issues. We default the heartbeat interval since
+    // the deprecated RPC was the only place the runtime ever told us
+    // a per-node value; future `federation.heartbeat` may surface one
+    // and we'll thread it then.
+    let _ = labels; // a2a labels travel through federation.advertise_abilities now
+    let heartbeat_ms = heartbeat::DEFAULT_HEARTBEAT_MS;
 
     // Re-publish every registered agent's manifests to the freshly
     // started axon-runtime. The runtime-local tool registry is
@@ -245,13 +237,24 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     // discovery just degrades to "this node has no abilities yet"
     // until a successful re-publish lands. A subsequent
     // `easynet agent add` against a healthy runtime fixes it.
-    // RFC-001 P4.8: federation.advertise_* path replaces both the
-    // legacy per-agent publish and the legacy system-abilities
-    // publish. Driven by `runtime::publish::republish_abilities_via_advertise`
-    // which: (1) bootstraps URAs into local-agents.json, (2)
-    // advertises the device-profile + each hosted profile, (3)
-    // advertises descriptors for each Agent. Best-effort: per-row
-    // failures are warned but never abort startup.
+    // Spawn the IPC daemon (`easynet-daemon`) before re-publishing.
+    // The daemon owns:
+    //   * `~/.easynet/control.sock` — length-delimited JSON IPC for
+    //     CLI/library callers and the local stdio MCP server.
+    //   * `~/.easynet/runtime-dispatch.sock` — newline-delimited UDS
+    //     responder axon-runtime opens when forwarding Invokes for
+    //     daemon-owned abilities (`runtime_local_tools` route, Step 3
+    //     of the cross-repo plan).
+    //
+    // `republish_via_federation_best_effort` immediately below calls
+    // `runtime.register_local_tool` for every daemon-owned ability —
+    // those registrations name the dispatch socket above. If the
+    // daemon is not running, the registrations succeed at the runtime
+    // (it just stores the endpoint) but every actual Invoke falls
+    // through to `connect refused` until the daemon catches up. Spawning
+    // here closes that gap so the path is hot the moment the runtime
+    // starts accepting calls.
+    let _daemon_handle = spawn_easynet_daemon(&creds.node_id);
     republish_via_federation_best_effort(&bridge, &creds);
 
     if args.foreground {
@@ -275,6 +278,94 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
 ///   3. Render outcomes — one warn per failed advertise; one
 ///      info line summarising successes.
 ///
+/// Spawn the easynet-daemon child process so its UDS listeners are
+/// up before `runtime.register_local_tool` advertises their paths to
+/// the runtime. Returns the spawned `Child` so the caller (or its
+/// drop on shutdown) can terminate it; v1 leaves orphaning to the
+/// process supervisor (operators usually run this in a session that
+/// gets SIGTERMed on Ctrl-C, which propagates to the child).
+///
+/// Best-effort: a spawn failure is logged but never aborts startup.
+/// In that degraded state, the runtime accepts register calls and
+/// the registered endpoint is recorded, but every actual Invoke
+/// falling back to `runtime_local_tools` will fail at the UDS
+/// connect step until the operator manually starts the daemon.
+fn spawn_easynet_daemon(node_id: &str) -> Option<std::process::Child> {
+    // Resolve the daemon binary: env override > sibling of current
+    // exe > PATH. The env override exists because the test stack
+    // uses an out-of-tree build; production installers drop both
+    // binaries into /usr/local/bin so the sibling lookup wins.
+    let bin_path = std::env::var_os("EASYNET_DAEMON_BIN")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join("easynet-daemon")))
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("easynet-daemon"));
+
+    let mut cmd = std::process::Command::new(&bin_path);
+    cmd.env("EASYNET_NODE_ID", node_id);
+    // Daemon's IPC + dispatch logs go to a known file so operators
+    // can tail without guessing where stderr landed.
+    let log_dir = std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+        .join(".easynet")
+        .join("logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join("easynet-daemon.log");
+    if let Ok(f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        if let Ok(f2) = f.try_clone() {
+            cmd.stdout(std::process::Stdio::from(f2));
+        }
+        cmd.stderr(std::process::Stdio::from(f));
+    }
+    match cmd.spawn() {
+        Ok(child) => {
+            // Record the daemon's pid so `easynet runtime stop` can
+            // signal it deterministically. Best-effort: a write
+            // failure means stop will fall back to the (correct)
+            // pgrep-style sweep, but we want the pidfile to be the
+            // authoritative path so a second `runtime start` doesn't
+            // race with a still-alive ghost daemon (load-bearing —
+            // the runtime-dispatch socket bind is one-process and a
+            // second daemon's responder exits silently, leaving a
+            // half-broken setup that swallows chat connections).
+            let pid = child.id();
+            let pid_path = crate::persistence::config::easynet_daemon_pid_path();
+            if let Some(parent) = pid_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = std::fs::write(&pid_path, pid.to_string()) {
+                output::warn(&format!(
+                    "could not write daemon pidfile {}: {e}; \
+                     `runtime stop` will fall back to pgrep",
+                    pid_path.display()
+                ));
+            }
+            output::detail(
+                "daemon",
+                &format!(
+                    "spawned {} (pid {pid}; log: {})",
+                    bin_path.display(),
+                    log_path.display()
+                ),
+            );
+            Some(child)
+        }
+        Err(e) => {
+            output::warn(&format!(
+                "failed to spawn easynet-daemon ({}): {e}; control.sock + runtime-dispatch.sock will not be available",
+                bin_path.display()
+            ));
+            None
+        }
+    }
+}
+
 /// Best-effort by contract — daemon startup completes regardless
 /// of advertise failures so heartbeat, federation join, and other
 /// surfaces stay reachable. The directory just degrades until a
@@ -290,7 +381,44 @@ fn republish_via_federation_best_effort(
             return;
         }
     };
-    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::new(bridge);
+    // Pin the caller URI for hub-shaped federation calls so the
+    // bridge stamps `envelope.caller.uri` to a canonical URA —
+    // `plan.host_device_uri` already carries that shape (see
+    // `build_bootstrap_plan_from`).
+    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+        bridge,
+        plan.host_device_uri.clone(),
+    );
+
+    // Bootstrap self-identity FIRST. Every subsequent signed Invoke
+    // (federation.advertise_*, runtime.register_local_tool, anything)
+    // carries an `easynet.public_key` derived from the daemon's
+    // identity; the runtime rejects them with
+    // AXON_EASYNET_SUBJECT_KEY_UNREGISTERED until that key is
+    // recorded in `state.identity.node_keys` for this node. Calling
+    // bootstrap_self_identity here populates that table once per
+    // runtime lifetime; it is a no-op on subsequent calls (the
+    // first-writer-wins guard returns replaced_prior=true).
+    if !plan.realm.is_empty() {
+        let identity_outcome = crate::runtime::publish::bootstrap_self_identity_via_runtime(
+            &invoker,
+            &creds.tenant_id,
+            &plan.realm,
+            &creds.node_id,
+        );
+        match &identity_outcome.result {
+            Ok(_) => output::detail(
+                "runtime-identity",
+                &format!("bootstrapped trusted-key material for {}", creds.node_id),
+            ),
+            Err(msg) => output::warn(&format!(
+                "runtime.bootstrap_self_identity failed: {msg}; signed Invokes will fail until \
+                 the runtime accepts this node's key (federation.advertise_* + every \
+                 frontend Invoke depend on this)"
+            )),
+        }
+    }
+
     let outcomes = crate::runtime::publish::republish_abilities_via_advertise(
         &invoker,
         &creds.tenant_id,
@@ -401,11 +529,14 @@ pub(crate) fn build_bootstrap_plan_from(
         // The credentials' realm field maps to the tenant for now;
         // a future config split will separate them.
         realm: tenant_id.to_string(),
-        // node_id from credentials is the device-profile URA. Pre-
-        // RFC daemons used it as a node identifier; same string,
-        // RFC-001 reuses it as an Agent URA at the §1.3 Model A
-        // anchor. P5 backend SDK rewrite confirms the shape.
-        host_device_uri: node_id.to_string(),
+        // node_id from credentials is the local node identifier
+        // (`en-...`). Wrap it in the canonical URA shape so every
+        // downstream consumer (advertise_self_signed_device,
+        // BridgeAbilityInvoker::with_caller_uri, hub
+        // self-signed-must-equal-caller check) sees one form. The
+        // bare node_id remains accessible separately via
+        // `creds.node_id` when an entry path needs it.
+        host_device_uri: format!("easynet:///r/{tenant_id}/agent/{node_id}"),
         // Defaults match plan §1's "default-on consent on
         // interactive hosts"; policy + mcp default off until
         // [profiles] config wiring lands.
@@ -541,16 +672,32 @@ fn run_foreground_with_heartbeat(
         &shutdown,
     );
 
-    if let Err(e) = bridge.deregister_node(&creds.tenant_id, &creds.node_id, outcome.reason()) {
-        // Failing to deregister leaves a phantom node in the Hub view
-        // until the next stale-node sweep. The local shutdown still
-        // proceeds, but the operator should know the federation is in
-        // an inconsistent state.
-        output::warn(&format!(
-            "deregister_node failed for {} ({}): {e}",
-            creds.node_id,
+    // Federation shutdown: remove this daemon's directory entry via
+    // `federation.revoke`. Replaces the deprecated
+    // `bridge.deregister_node` gRPC RPC (removed by AXON-RFC-001
+    // P1.5). Best-effort — a hub-side failure leaves a phantom
+    // entry until the next stale-node sweep, which is the same
+    // semantics the legacy RPC had.
+    {
+        let plan_realm = &creds.tenant_id; // realm == tenant in v1 (see build_bootstrap_plan_from)
+        let device_uri = format!("easynet:///r/{}/agent/{}", creds.tenant_id, creds.node_id);
+        let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+            bridge,
+            device_uri.clone(),
+        );
+        if let Err(e) = crate::runtime::advertise::revoke_agent(
+            &invoker,
+            &creds.tenant_id,
+            plan_realm,
+            &device_uri,
             outcome.reason(),
-        ));
+        ) {
+            output::warn(&format!(
+                "federation.revoke failed for {} ({}): {e}",
+                creds.node_id,
+                outcome.reason(),
+            ));
+        }
     }
     drop(srv);
     config::remove()?;
@@ -940,7 +1087,10 @@ mod tests {
         let creds = test_creds();
         let plan = build_bootstrap_plan(&creds).expect("plan must build");
         assert_eq!(plan.realm, "tenant-test");
-        assert_eq!(plan.host_device_uri, "node-test");
+        assert_eq!(
+            plan.host_device_uri,
+            "easynet:///r/tenant-test/agent/node-test"
+        );
         assert!(plan.consent, "consent default-on per plan §1");
         assert!(!plan.policy);
         assert!(!plan.mcp);
@@ -953,11 +1103,18 @@ mod tests {
         // build_bootstrap_plan_from is what agent.rs uses — it
         // takes pre-extracted (tenant, node) pair so callers don't
         // re-load credentials. Behavior must match build_bootstrap_plan
-        // for the same inputs.
+        // for the same inputs. Plan wraps the raw node id into the
+        // canonical `easynet:///r/<realm>/agent/<node>` resource URA
+        // for downstream Hub-tier signing — that wrapping is exactly
+        // what the federation Invoke surface consumes, so the test
+        // pins the wrapped form rather than the raw bare id.
         let plan = build_bootstrap_plan_from("tenant-test", "node-test")
             .expect("plan must build");
         assert_eq!(plan.realm, "tenant-test");
-        assert_eq!(plan.host_device_uri, "node-test");
+        assert_eq!(
+            plan.host_device_uri,
+            "easynet:///r/tenant-test/agent/node-test"
+        );
     }
 
     #[test]

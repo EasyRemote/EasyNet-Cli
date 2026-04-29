@@ -70,7 +70,6 @@
 mod parser;
 mod walker;
 
-pub use parser::{parse_root, ParseError};
 pub use walker::parse_for_security;
 
 /// A redirect operator and its target word, as extracted from a
