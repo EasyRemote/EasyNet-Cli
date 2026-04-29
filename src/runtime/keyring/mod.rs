@@ -22,6 +22,10 @@ pub mod handle;
 pub mod abilities;
 pub mod resolver;
 pub mod forward;
+/// RFC-002.2 production wiring: real CliForwardInvoker backed by
+/// the daemon's DendriteBridge. Daemon boot constructs one and
+/// installs it via forward::set_forward_invoker.
+pub mod bridge_forward;
 
 pub use handle::KeyringHandle;
 pub use store::{Entry, KeyRing, KeyStatus, MasterKeyKind, PeerEntry, PeerStatus};
