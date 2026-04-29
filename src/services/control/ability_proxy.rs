@@ -249,7 +249,51 @@ impl AbilityProxy {
                 ability,
                 args,
             } => {
-                let frames = self.handle_invoke(request_id, ability, args);
+                // Wrap the (synchronous) ability dispatch in
+                // `catch_unwind` so a panic anywhere downstream — most
+                // commonly from the chat handler's `eprintln!` path
+                // when stderr fd state is unexpected — does not take
+                // out the per-connection tokio task. Without the
+                // catch, the panic unwinds the future, drops `out`,
+                // and the writer observes EOF — the client sees
+                // "daemon closed the connection before responding"
+                // instead of a typed error frame.
+                //
+                // The dispatcher itself is a closed crate-internal
+                // surface; it has no async state (handle_invoke is
+                // sync), so AssertUnwindSafe is sound: there's no
+                // borrow we'd be holding across an await.
+                let request_id_for_err = request_id.clone();
+                let ability_for_err = ability.clone();
+                let frames = match std::panic::catch_unwind(
+                    std::panic::AssertUnwindSafe(|| {
+                        self.handle_invoke(request_id, ability, args)
+                    }),
+                ) {
+                    Ok(frames) => frames,
+                    Err(panic_payload) => {
+                        let msg = if let Some(s) =
+                            panic_payload.downcast_ref::<&'static str>()
+                        {
+                            (*s).to_string()
+                        } else if let Some(s) =
+                            panic_payload.downcast_ref::<String>()
+                        {
+                            s.clone()
+                        } else {
+                            "non-string panic payload".to_string()
+                        };
+                        eprintln!(
+                            "[ability_proxy] handle_invoke {ability_for_err:?} panicked: {msg}"
+                        );
+                        vec![OutgoingFrame::Error {
+                            request_id: Some(request_id_for_err),
+                            subscription_id: None,
+                            code: codes::ABILITY_FAILED.into(),
+                            message: format!("ability handler panicked: {msg}"),
+                        }]
+                    }
+                };
                 for f in frames {
                     if out.send(f).await.is_err() {
                         return;

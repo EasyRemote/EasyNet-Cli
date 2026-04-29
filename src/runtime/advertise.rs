@@ -256,23 +256,42 @@ impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
         // first the URI-vs-subject check at canonicalize fails,
         // never even reaching the topology key lookup.
         let subject_id = subject_id_from_resource_uri(resource_uri);
-        // Hub-shaped subject + a configured override → pin the
-        // caller URI on the metadata bag so the bridge's unsigned-
-        // invoke path doesn't synthesise the broken
-        // `agents/easynet:prv:hub:<realm>` literal. Other shapes
-        // (agent subjects, or hub subjects without an override —
-        // tests, pre-join callers) fall back to the SDK default.
-        let mut metadata: Option<std::collections::HashMap<String, String>> = None;
+        // The metadata bag carries TWO load-bearing entries:
+        //
+        // 1. `easynet.resource_uri` — every call sets this. It lets
+        //    axon's `verify_easynet_invocation_metadata` recover the
+        //    ability name when the caller didn't fill `target.ability_name`
+        //    or `function_name` (the bridge's `ability_call_raw` path
+        //    doesn't fill those). Without it axon's pre-ability-name
+        //    extraction falls through to "" and the `runtime.*` /
+        //    `federation.*` security exemptions never fire — so a
+        //    `runtime.register_local_tool` (which is daemon-internal,
+        //    same-process admin) gets rejected with
+        //    AXON_EASYNET_SUBJECT_MISMATCH because the verifier expects
+        //    `agent.<owner>` shaped subjects but the URI is hub-shaped.
+        //    Pre-fix this caused 0/N runtime.register_local_tool calls
+        //    to succeed at boot — the daemon's local abilities were
+        //    advertised to peers but not dispatchable cross-process.
+        //
+        // 2. `easynet.caller_uri_override` — only set for hub-shaped
+        //    subjects when the daemon has a joined caller URI to
+        //    pin. Without it the bridge's unsigned-invoke path
+        //    synthesises `agents/easynet:prv:hub:<realm>` which the
+        //    runtime's caller-URI check rejects.
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "easynet.resource_uri".to_string(),
+            resource_uri.to_string(),
+        );
         if subject_id.as_deref().map(|s| s.contains(":hub:")).unwrap_or(false)
             && !self.caller_uri_for_hub.is_empty()
         {
-            let mut map = std::collections::HashMap::new();
             map.insert(
                 "easynet.caller_uri_override".to_string(),
                 self.caller_uri_for_hub.clone(),
             );
-            metadata = Some(map);
         }
+        let metadata: Option<std::collections::HashMap<String, String>> = Some(map);
         self.bridge
             .ability_call_raw(
                 tenant_id,

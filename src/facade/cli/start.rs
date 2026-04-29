@@ -325,12 +325,32 @@ fn spawn_easynet_daemon(node_id: &str) -> Option<std::process::Child> {
     }
     match cmd.spawn() {
         Ok(child) => {
+            // Record the daemon's pid so `easynet runtime stop` can
+            // signal it deterministically. Best-effort: a write
+            // failure means stop will fall back to the (correct)
+            // pgrep-style sweep, but we want the pidfile to be the
+            // authoritative path so a second `runtime start` doesn't
+            // race with a still-alive ghost daemon (load-bearing —
+            // the runtime-dispatch socket bind is one-process and a
+            // second daemon's responder exits silently, leaving a
+            // half-broken setup that swallows chat connections).
+            let pid = child.id();
+            let pid_path = crate::persistence::config::easynet_daemon_pid_path();
+            if let Some(parent) = pid_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = std::fs::write(&pid_path, pid.to_string()) {
+                output::warn(&format!(
+                    "could not write daemon pidfile {}: {e}; \
+                     `runtime stop` will fall back to pgrep",
+                    pid_path.display()
+                ));
+            }
             output::detail(
                 "daemon",
                 &format!(
-                    "spawned {} (pid {}; log: {})",
+                    "spawned {} (pid {pid}; log: {})",
                     bin_path.display(),
-                    child.id(),
                     log_path.display()
                 ),
             );

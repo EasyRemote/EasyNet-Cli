@@ -69,6 +69,30 @@ const ENV_HB_ENDPOINT: &str = "_EASYNET_HB_ENDPOINT";
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
+    // Refuse non-empty argv. `easynet-daemon` does not parse
+    // subcommand arguments at all; an invocation like
+    // `easynet-daemon mcp serve --tenant ... --agent ...` would
+    // ignore the args, run the full daemon main, and (most
+    // dangerously) re-bind the control.sock file via the
+    // bind_at() unconditional unlink + bind path — silently
+    // taking over the parent daemon's accept loop. If a host AI
+    // client's `.mcp.json` is misconfigured to call this binary
+    // for MCP serving (the previous bug fixed in `resolve_easynet_binary`),
+    // we want a hard error, not silent socket hijacking.
+    //
+    // The narrow exception is empty argv (the runtime starter
+    // case) — that's the only legitimate use.
+    let argv: Vec<String> = std::env::args().collect();
+    if argv.len() > 1 {
+        eprintln!(
+            "[easynet-daemon] this binary takes no command arguments and ignores subcommands. \
+             You probably want `easynet {}` instead — `easynet-daemon` is the IPC daemon \
+             child spawned by `easynet runtime start`.",
+            argv[1..].join(" ")
+        );
+        std::process::exit(2);
+    }
+
     // v1: a Kernel wrapping a NoopGateway is sufficient for the
     // proxy to construct Receipts. The daemon installs the
     // SubscriberBroker permission variant so a Client UI
