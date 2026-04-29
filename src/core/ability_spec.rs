@@ -341,6 +341,14 @@ pub enum AbilityExec {
     /// `{{ city }}` of `"São Paulo"` becomes `S%C3%A3o%20Paulo` so
     /// the call doesn't fail mid-fetch on a control character.
     Http(HttpExec),
+    /// Run a small EAL program as the ability's implementation. The
+    /// `source` field carries the EAL text with `{{ name }}` template
+    /// placeholders rendered against call args BEFORE the parser
+    /// runs. Lets a curator-published ability compose existing
+    /// abilities into a reusable workflow without inventing a second
+    /// orchestration surface — same EAL the human operator already
+    /// uses with `easynet.run`.
+    Eal(EalExec),
 }
 
 /// Configuration for the `shell` executor.
@@ -412,6 +420,34 @@ pub struct HttpExec {
     /// compat shape as `ShellExec.stdout`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub response: Option<String>,
+}
+
+/// Configuration for the `eal` executor — an ability whose
+/// implementation is a small EAL program composing other
+/// abilities. The `source` field is rendered with `{{ name }}`
+/// substitution against call args BEFORE the parser runs, then
+/// passed to `mission_runs::run_mission_inproc`.
+///
+/// Why we cap source size + reject empty
+/// -------------------------------------
+/// An empty source compiles to an empty mission (legal but
+/// useless); we reject so a typo in `ability.publish` surfaces at
+/// validate-time. The size cap (1 MiB) prevents an accidental
+/// stamp of a huge document into an ability — by far the more
+/// common manifest mistake than a deliberately large EAL
+/// program.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EalExec {
+    /// EAL source, with `{{ name }}` placeholders substituted
+    /// against the caller's `args` JSON before the parser runs.
+    pub source: String,
+    /// Optional binding name whose value becomes the ability's
+    /// final result. When set, the executor extracts
+    /// `mission_run.bound_vars[binding]` and returns it as the
+    /// envelope's `result` field. When absent, the executor
+    /// returns the entire `bound_vars` map as `result`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub result_binding: Option<String>,
 }
 
 impl AbilityManifest {
@@ -638,6 +674,7 @@ impl AbilityExec {
         match self {
             AbilityExec::Shell(s) => s.validate(),
             AbilityExec::Http(h) => h.validate(),
+            AbilityExec::Eal(e) => e.validate(),
         }
     }
 }
@@ -723,6 +760,44 @@ impl HttpExec {
                      known values: {:?}",
                     mode,
                     KNOWN
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+impl EalExec {
+    /// Soft cap on EAL `source` size embedded in a manifest. 1 MiB
+    /// is generous compared to anything an author would type by hand
+    /// (a curator-published workflow tends to be a few hundred lines)
+    /// while still small enough that a paste-the-wrong-thing accident
+    /// — dropping a transcript or binary blob into `source` — fails
+    /// loud at `from_toml_str` instead of silently bloating the on-
+    /// disk manifest.
+    const MAX_SOURCE_BYTES: usize = 1024 * 1024;
+
+    fn validate(&self) -> anyhow::Result<()> {
+        if self.source.trim().is_empty() {
+            anyhow::bail!(
+                "ability.toml [exec] kind=\"eal\" requires a non-empty `source` (the \
+                 EAL program text)"
+            );
+        }
+        if self.source.len() > Self::MAX_SOURCE_BYTES {
+            anyhow::bail!(
+                "ability.toml [exec] kind=\"eal\" `source` is {} bytes which exceeds \
+                 the {}-byte cap; split the workflow into smaller abilities or call \
+                 them via `easynet.run` directly",
+                self.source.len(),
+                Self::MAX_SOURCE_BYTES
+            );
+        }
+        if let Some(binding) = &self.result_binding {
+            if binding.trim().is_empty() {
+                anyhow::bail!(
+                    "ability.toml [exec.eal] `result_binding`, when set, must be a \
+                     non-empty binding name"
                 );
             }
         }
@@ -1660,6 +1735,91 @@ url = "{{ base }}/path"
 "#;
         let m = AbilityManifest::from_toml_str(toml).expect("templated URL must parse");
         assert!(matches!(m.exec(), Some(AbilityExec::Http(_))));
+    }
+
+    #[test]
+    fn eal_exec_round_trips_through_toml() {
+        // The EAL executor variant must parse from on-disk TOML and
+        // round-trip back unchanged. This pins the wire shape:
+        // `kind = "eal"`, `source = "..."`, optional
+        // `result_binding = "..."`. Without a round-trip test a
+        // serialization rename (e.g. accidentally renaming `source`
+        // to `program`) would silently break every published EAL
+        // ability without surfacing in any other test.
+        let toml = r#"
+schema_version = "1"
+name = "summarise_then_review"
+description = "summarise + judge in one call"
+[input_schema]
+type = "object"
+[exec]
+kind = "eal"
+source = """
+mission "x" {
+  let s = call "summarise" on "device" with { text = "{{ text }}" }
+}
+"""
+result_binding = "s"
+"#;
+        let m = AbilityManifest::from_toml_str(toml).expect("EAL manifest must parse");
+        match m.exec() {
+            Some(AbilityExec::Eal(e)) => {
+                assert!(e.source.contains("mission"));
+                assert!(e.source.contains("{{ text }}"));
+                assert_eq!(e.result_binding.as_deref(), Some("s"));
+            }
+            other => panic!("expected Eal, got {other:?}"),
+        }
+        // Round-trip: serialise and re-parse; the second parse must
+        // succeed and preserve the same binding.
+        let written = m.to_toml_string().expect("serialise");
+        let m2 = AbilityManifest::from_toml_str(&written).expect("re-parse");
+        match m2.exec() {
+            Some(AbilityExec::Eal(e)) => {
+                assert_eq!(e.result_binding.as_deref(), Some("s"));
+            }
+            other => panic!("round-trip lost the EAL variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eal_exec_rejects_empty_source() {
+        let toml = r#"
+schema_version = "1"
+name = "x"
+description = ""
+[input_schema]
+type = "object"
+[exec]
+kind = "eal"
+source = ""
+"#;
+        let err = AbilityManifest::from_toml_str(toml).unwrap_err();
+        assert!(
+            format!("{err}").contains("source"),
+            "validator must call out empty source: {err}"
+        );
+    }
+
+    #[test]
+    fn eal_exec_rejects_empty_result_binding_when_present() {
+        // `result_binding` is optional; absence is fine. But when
+        // the author writes `result_binding = ""` they almost
+        // certainly meant to delete the line — fail loud rather
+        // than silently treating it as "no binding".
+        let toml = r#"
+schema_version = "1"
+name = "x"
+description = ""
+[input_schema]
+type = "object"
+[exec]
+kind = "eal"
+source = "mission \"x\" {}"
+result_binding = ""
+"#;
+        let err = AbilityManifest::from_toml_str(toml).unwrap_err();
+        assert!(format!("{err}").contains("result_binding"));
     }
 
     #[test]

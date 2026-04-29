@@ -365,6 +365,22 @@ impl AgentDirectory {
         Ok(())
     }
 
+    /// Update the spec's `model` field and persist. The chokepoint
+    /// for `easynet agent set --model …`. Keeping this as a
+    /// dedicated method (rather than exposing `spec_mut()`) lets a
+    /// future per-runtime model validator hook here without
+    /// touching every call site.
+    ///
+    /// `model = None` clears the field, falling the agent back to
+    /// the underlying CLI's own default model. That symmetry with
+    /// `agent add` (where `--model` is optional and absence means
+    /// "let the CLI pick") is the load-bearing reason we accept
+    /// `Option` rather than `&str`.
+    pub fn set_model(&mut self, model: Option<String>) -> anyhow::Result<()> {
+        self.spec.model = model;
+        self.save_spec()
+    }
+
     /// Enumerate every `*.ability.toml` under `abilities/`, parsed
     /// and validated. Returned in sorted order by on-disk file name
     /// so `agent abilities` and `agent publish --dry-run` print

@@ -83,6 +83,12 @@ pub mod process_exec_ability;
 /// `support/shellguard/`, this module is the thin
 /// agent-dispatch wiring on top.
 pub mod shell_run_ability;
+/// `{{ var }}` template substitution shared by every executor that
+/// consumes `[exec]`-bound ability manifests (shell argv, EAL
+/// source, …). Pulled out so the substitution model — including
+/// missing-arg / unclosed-brace error shapes — has one canonical
+/// implementation and one test surface.
+pub mod template;
 /// shell_executor — backs `[exec] kind = "shell"` on agent-authored
 /// ability manifests. Distinct from `shell_run_ability` (the
 /// daemon-owned `shell.run` baseline locomotion ability): this
@@ -90,6 +96,12 @@ pub mod shell_run_ability;
 /// concrete argv contract, bypassing chat translation. See module
 /// docstring for substitution model + injection-safety argument.
 pub mod shell_executor;
+/// eal_executor — backs `[exec] kind = "eal"` on agent-authored
+/// ability manifests. Lets an ability's implementation be a small
+/// EAL program that composes other abilities. Sibling of
+/// shell_executor; both consume `template` for `{{ var }}`
+/// substitution before dispatching.
+pub mod eal_executor;
 /// http.request — outbound HTTP client. Last member of the
 /// Baseline Locomotion Profile. Issues one request per call,
 /// captures status / headers / body up to a cap, redacts
@@ -99,6 +111,26 @@ pub mod shell_executor;
 /// rejected; redirect / timeout / body caps enforced.
 pub mod http_executor;
 pub mod http_request_ability;
+/// ability.publish + ability.unpublish — root meta-abilities that
+/// let a curator session (spawned by mission.think) materialise a
+/// new ability into a registered agent's abilities/ directory, or
+/// delete an existing one. Sibling of skill.publish (Phase 3); the
+/// two surfaces are how judge-validated experience is sunk back
+/// into the ability/skill ontology.
+pub mod ability_publish_ability;
+/// skill.publish + skill.unpublish + skill.list — sibling of
+/// ability_publish_ability. Where ability.publish sinks a
+/// generally-useful experience as a published ability (device-
+/// visible), skill.publish sinks an agent-private experience as a
+/// skill (lives in the agent's own skill pool). The judge's
+/// `value_kind` field picks between the two.
+pub mod skill_publish_ability;
+/// mission.think — long-running worker+judge orchestration. Lets a
+/// task outgrow Claude Code's per-session ~200-step limit by
+/// resuming the worker's session_id across cycles, with an
+/// independent judge session emitting a memory-classification
+/// verdict per cycle (consumed by the Phase 5 curator).
+pub mod think_ability;
 pub mod context_loaders;
 pub mod discover_ability;
 pub mod discuss_ability;
@@ -300,6 +332,8 @@ pub fn build_registry_with_services(
     // when both are present).
     media_abilities::register(&mut reg);
     media::camera_snapshot::register(&mut reg);
+    media::screen_snapshot::register(&mut reg);
+    media::mic_subscribe::register(&mut reg);
     list_resources_ability::register(&mut reg);
     // fleet.start_agent / fleet.stop_agent — Invoke-side mirror
     // of `easynet agent add/remove`. LLM sub-agents are registry
@@ -356,6 +390,22 @@ pub fn build_registry_with_services(
     );
     skill_ability::register(&mut reg);
     skill_install_ability::register(&mut reg);
+    // ability.publish + ability.unpublish — root meta-abilities. See
+    // module preamble for trust model and on-disk layout. Stateless
+    // handlers (no captured registry handle), so order vs other
+    // registrations is irrelevant.
+    ability_publish_ability::register(&mut reg);
+    // skill.publish + skill.unpublish + skill.list — sibling of
+    // ability_publish_ability. Same statelessness; same order
+    // independence. Must register AFTER skill_ability so the
+    // facade list_handler delegate finds its private helper.
+    skill_publish_ability::register(&mut reg);
+    // mission.think — long-running worker+judge orchestration.
+    // Consumes the shared dispatch_registry_handle so per-cycle
+    // <agent>.chat invocations stay in-process; same rationale as
+    // mission.discuss_round (going back through the IPC client
+    // would deadlock the daemon's accept loop).
+    think_ability::register(&mut reg, Arc::clone(&local_registry_handle));
     // mcp.bridge.{list_tools, call_tool} — MCP edge adapter.
     //
     // list_tools projects local AbilityDescriptors to the MCP
@@ -762,6 +812,12 @@ pub fn description_for(name: &str) -> &'static str {
         "voice.watch_call" => voice_call_ability::watch_call_description(),
         "voice.report_metrics" => voice_call_ability::report_metrics_description(),
         "admin.status" => admin_status_ability::description(),
+        "ability.publish" => ability_publish_ability::publish_description(),
+        "ability.unpublish" => ability_publish_ability::unpublish_description(),
+        "skill.publish" => skill_publish_ability::publish_description(),
+        "skill.unpublish" => skill_publish_ability::unpublish_description(),
+        "skill.list" => skill_publish_ability::list_description(),
+        "mission.think" => think_ability::description(),
         // RFC-005 v3.2 A1–A8 — media abilities. `media_abilities`
         // owns the single source of truth (the `ABILITIES` table);
         // the projection here is one Option lookup, no per-name
@@ -864,6 +920,12 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "voice.watch_call" => voice_call_ability::watch_call_input_schema(),
         "voice.report_metrics" => voice_call_ability::report_metrics_input_schema(),
         "admin.status" => admin_status_ability::input_schema(),
+        "ability.publish" => ability_publish_ability::publish_input_schema(),
+        "ability.unpublish" => ability_publish_ability::unpublish_input_schema(),
+        "skill.publish" => skill_publish_ability::publish_input_schema(),
+        "skill.unpublish" => skill_publish_ability::unpublish_input_schema(),
+        "skill.list" => skill_publish_ability::list_input_schema(),
+        "mission.think" => think_ability::input_schema(),
         // RFC-005 v3.2 A1–A8 — media abilities. Same single-source
         // -of-truth pattern as `description_for` above.
         n if media_abilities::input_schema(n).is_some() => {
@@ -955,7 +1017,11 @@ mod tests {
             // Pure read; same Introspection class as schedule.list.
             | "discuss.list_turns"
             | "schedule.list"
-            | "loop.status" => Some(AbilityLayer::Introspection),
+            | "loop.status"
+            // skill.list — facade over fleet.list_abilities for the
+            // curator path. Pure read; Introspection like every other
+            // *.list verb.
+            | "skill.list" => Some(AbilityLayer::Introspection),
             // ── Control / decision ──────────────────────────────
             "policy.evaluate"
             | "policy.simulate"
@@ -996,6 +1062,11 @@ mod tests {
             // (running one human-bracketed sub-turn of a
             // multi-agent discussion).
             | "mission.discuss_round"
+            // mission.think — long-running worker+judge loop. Same
+            // Operational rationale: the ability IS the work
+            // (running an N-cycle reflective loop with two
+            // independent chat sessions).
+            | "mission.think"
             // voice.* call signaling abilities. State-mutating
             // (create / join / leave / end / report_metrics) and
             // state-reading (show / watch) — Operational by intent
@@ -1041,6 +1112,16 @@ mod tests {
             | "easynet.run"
             | "mission.run"
             | "easynet.cancel"
+            // ability.publish / ability.unpublish / skill.publish /
+            // skill.unpublish — curator-driven sinks for judge-validated
+            // experience. State-mutating (writes/removes manifests under
+            // an agent's workspace). Operational because the ability IS
+            // the work, in the same class as fleet.deploy_ability /
+            // fleet.skill_install.
+            | "ability.publish"
+            | "ability.unpublish"
+            | "skill.publish"
+            | "skill.unpublish"
             // AXIOM §"Tier 2.5" Baseline Locomotion Profile,
             // filesystem half. fs.read is technically read-only
             // but it returns business content, not just metadata

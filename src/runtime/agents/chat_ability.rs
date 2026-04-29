@@ -295,6 +295,11 @@ pub(crate) fn build_agent_ability_handler(
                             spec, &args, timeout,
                         )
                     }
+                    crate::core::ability_spec::AbilityExec::Eal(spec) => {
+                        crate::runtime::agents::eal_executor::run_eal_exec(
+                            spec, &args, timeout,
+                        )
+                    }
                 };
             }
         }

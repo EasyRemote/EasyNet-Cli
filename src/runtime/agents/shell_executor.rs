@@ -270,123 +270,13 @@ const MACOS_PURE_COMPUTE_PROFILE: &str = r#"
 (allow sysctl-read)
 "#;
 
-/// Render each argv element by substituting `{{ name }}` with the
-/// matching JSON arg. Whitespace inside the braces is tolerated.
-/// Missing names raise an error rather than silently rendering
-/// empty — catches a typo in the manifest at the call site instead
-/// of producing a malformed command.
+/// Thin wrapper over the shared template engine. Kept as a
+/// dedicated function so the call site in `run_shell_exec` reads
+/// at a glance and so the test below can pin "argv-shaped"
+/// rendering separately from "single-string" rendering even
+/// though both go through the same engine today.
 fn render_argv(argv: &[String], args: &Value) -> anyhow::Result<Vec<String>> {
-    let bindings = match args {
-        Value::Object(map) => map,
-        Value::Null => {
-            // No args object. If any argv element references a
-            // placeholder we'll error below; otherwise the call is
-            // valid (e.g. `argv = ["date"]`).
-            return argv
-                .iter()
-                .map(|s| {
-                    if s.contains("{{") {
-                        anyhow::bail!(
-                            "shell executor: argv element {:?} references a placeholder \
-                             but the call passed no args",
-                            s
-                        );
-                    } else {
-                        Ok(s.clone())
-                    }
-                })
-                .collect();
-        }
-        other => anyhow::bail!(
-            "shell executor: args must be a JSON object (got {})",
-            short_kind(other)
-        ),
-    };
-
-    argv.iter()
-        .map(|element| render_one(element, bindings))
-        .collect()
-}
-
-fn render_one(
-    template: &str,
-    bindings: &serde_json::Map<String, Value>,
-) -> anyhow::Result<String> {
-    let mut out = String::with_capacity(template.len());
-    let mut cursor = 0usize;
-    let bytes = template.as_bytes();
-    while cursor < bytes.len() {
-        if cursor + 1 < bytes.len() && bytes[cursor] == b'{' && bytes[cursor + 1] == b'{' {
-            // Find the matching `}}`.
-            let rest = &template[cursor + 2..];
-            let end = rest.find("}}").ok_or_else(|| {
-                anyhow::anyhow!(
-                    "shell executor: argv template {:?} has an unclosed `{{{{`",
-                    template
-                )
-            })?;
-            let key = rest[..end].trim();
-            if key.is_empty() {
-                anyhow::bail!(
-                    "shell executor: argv template {:?} contains an empty `{{{{ }}}}` \
-                     placeholder",
-                    template
-                );
-            }
-            let val = bindings.get(key).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "shell executor: argv template {:?} references arg `{}` which \
-                     is not present in the call's arguments (provided keys: {:?})",
-                    template,
-                    key,
-                    bindings.keys().collect::<Vec<_>>()
-                )
-            })?;
-            out.push_str(&stringify_arg(val));
-            cursor += 2 + end + 2;
-        } else {
-            // Pass the byte through. Safe because we only matched
-            // ASCII `{` boundaries; multi-byte UTF-8 chars start with
-            // a non-`{` byte so they never get split here.
-            let ch_end = next_char_boundary(template, cursor);
-            out.push_str(&template[cursor..ch_end]);
-            cursor = ch_end;
-        }
-    }
-    Ok(out)
-}
-
-fn next_char_boundary(s: &str, from: usize) -> usize {
-    let mut i = from + 1;
-    while i < s.len() && !s.is_char_boundary(i) {
-        i += 1;
-    }
-    i.min(s.len())
-}
-
-fn stringify_arg(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        // Numbers, bools, null, arrays, objects — JSON-encode so the
-        // representation is unambiguous. A consumer that wants a bare
-        // numeric will get `42`; one that wants a JSON object gets
-        // `{...}`. Strings round-trip without quoting because we
-        // special-cased them above (otherwise `{{ name }}` would emit
-        // `"alice"` with the JSON quotes, which is rarely what the
-        // ability author wants).
-        other => other.to_string(),
-    }
-}
-
-fn short_kind(v: &Value) -> &'static str {
-    match v {
-        Value::Null => "null",
-        Value::Bool(_) => "bool",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
+    crate::runtime::agents::template::render_each(argv, args, "shell executor")
 }
 
 fn decode_stdout(bytes: &[u8], mode: Option<&str>) -> anyhow::Result<String> {

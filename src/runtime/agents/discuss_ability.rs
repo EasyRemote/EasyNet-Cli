@@ -31,6 +31,15 @@ use crate::runtime::execution::discuss::DiscussService;
 pub const ABILITY_CREATE: &str = "discuss.create";
 pub const ABILITY_POST: &str = "discuss.post";
 pub const ABILITY_SUBSCRIBE: &str = "discuss.subscribe";
+/// `discuss.list_turns` — snapshot of every turn in a room as an
+/// RPC. Sibling of `discuss.subscribe` (the streaming variant);
+/// callers that only need the current state without holding a
+/// long-lived connection (CLI rendering after a sub-turn, EAL
+/// programs reading transcripts as data) use this instead. The
+/// schema mirrors subscribe's snapshot half — same `turns` array
+/// shape, same field names — so a future caller upgrading from
+/// list_turns to subscribe gets the same data layout.
+pub const ABILITY_LIST_TURNS: &str = "discuss.list_turns";
 
 pub fn register(reg: &mut LocalAbilityRegistry, svc: Arc<DiscussService>) {
     let a = Arc::clone(&svc);
@@ -43,10 +52,29 @@ pub fn register(reg: &mut LocalAbilityRegistry, svc: Arc<DiscussService>) {
         ABILITY_POST,
         Arc::new(move |args: Value| post_handler(&b, args)),
     );
+    let c = Arc::clone(&svc);
+    reg.register_rpc(
+        ABILITY_LIST_TURNS,
+        Arc::new(move |args: Value| list_turns_handler(&c, args)),
+    );
     reg.register_stream(
         ABILITY_SUBSCRIBE,
         Arc::new(move |args: Value| subscribe_handler(&svc, args)),
     );
+}
+
+fn list_turns_handler(svc: &DiscussService, args: Value) -> anyhow::Result<Value> {
+    let room_id = args
+        .get("room_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("discuss.list_turns: `room_id` is required"))?;
+    let since_seq = args.get("since_seq").and_then(Value::as_i64).unwrap_or(0);
+    let turns = svc.turns_from(&RoomId::new(room_id), since_seq)?;
+    let serialised: Vec<Value> = turns
+        .into_iter()
+        .map(|t| serde_json::to_value(t).unwrap_or(Value::Null))
+        .collect();
+    Ok(json!({ "room_id": room_id, "turns": serialised }))
 }
 
 fn create_handler(svc: &DiscussService, args: Value) -> anyhow::Result<Value> {
@@ -173,6 +201,24 @@ pub fn post_description() -> &'static str {
 
 pub fn subscribe_description() -> &'static str {
     "Subscribe to a room's turn stream. Replays every turn ≥ `since_seq` (default 0). v1 returns a snapshot; live tail lands with PR-INVOCATION-EXEC-UNITY."
+}
+
+pub fn list_turns_description() -> &'static str {
+    "Snapshot every turn in a room from `since_seq` (default 0) onwards as a one-shot \
+     RPC. Sibling of `discuss.subscribe` for callers that don't need a long-lived stream \
+     — CLI rendering after a sub-turn, EAL programs reading transcripts as data."
+}
+
+pub fn list_turns_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["room_id"],
+        "properties": {
+            "room_id":   { "type": "string" },
+            "since_seq": { "type": "integer", "minimum": 0 }
+        }
+    })
 }
 
 #[cfg(test)]

@@ -1321,6 +1321,105 @@ fn real_fleet_skill_upgrade_routes_for_unknown_name() {
     }
 }
 
+// ── ability.publish / skill.publish / skill.list ───────────────────
+//
+// These five abilities back the curator path that mission.think
+// drives. They are stateless root verbs: arg parsing fails with a
+// clear error before any disk write happens, which is exactly what
+// the "real-invoke" coverage guard wants — we confirm the
+// dispatcher routes by passing deliberately-incomplete args and
+// asserting the error is a *handler* error, not a "no rpc handler"
+// dispatcher miss.
+
+#[test]
+fn real_ability_publish_routes_with_missing_args() {
+    let (reg, _g) = registry_with_temp_home();
+    let d = dispatcher_for(reg);
+    let r = d.execute_rpc(target("ability.publish", json!({})));
+    match r {
+        Ok(_) => {}
+        Err(e) => assert!(
+            !format!("{e}").to_ascii_lowercase().contains("no rpc handler"),
+            "ability.publish must be routed: {e}"
+        ),
+    }
+}
+
+#[test]
+fn real_ability_unpublish_routes_with_missing_args() {
+    let (reg, _g) = registry_with_temp_home();
+    let d = dispatcher_for(reg);
+    let r = d.execute_rpc(target("ability.unpublish", json!({})));
+    match r {
+        Ok(_) => {}
+        Err(e) => assert!(
+            !format!("{e}").to_ascii_lowercase().contains("no rpc handler"),
+            "ability.unpublish must be routed: {e}"
+        ),
+    }
+}
+
+#[test]
+fn real_skill_publish_routes_with_missing_args() {
+    let (reg, _g) = registry_with_temp_home();
+    let d = dispatcher_for(reg);
+    let r = d.execute_rpc(target("skill.publish", json!({})));
+    match r {
+        Ok(_) => {}
+        Err(e) => assert!(
+            !format!("{e}").to_ascii_lowercase().contains("no rpc handler"),
+            "skill.publish must be routed: {e}"
+        ),
+    }
+}
+
+#[test]
+fn real_skill_unpublish_routes_with_missing_args() {
+    let (reg, _g) = registry_with_temp_home();
+    let d = dispatcher_for(reg);
+    let r = d.execute_rpc(target("skill.unpublish", json!({})));
+    match r {
+        Ok(_) => {}
+        Err(e) => assert!(
+            !format!("{e}").to_ascii_lowercase().contains("no rpc handler"),
+            "skill.unpublish must be routed: {e}"
+        ),
+    }
+}
+
+#[test]
+fn real_mission_think_routes_with_missing_args() {
+    // mission.think rejects missing owner_agent_id / prompt with a
+    // typed error. This test confirms the dispatcher routes the
+    // verb (the handler is registered) and that arg validation
+    // fires before any chat call attempts to spawn — important
+    // because a mis-routed mission.think with a real LLM agent
+    // could otherwise burn a token budget before failing.
+    let (reg, _g) = registry_with_temp_home();
+    let d = dispatcher_for(reg);
+    let r = d.execute_rpc(target("mission.think", json!({})));
+    match r {
+        Ok(_) => panic!("mission.think with empty args must error"),
+        Err(e) => assert!(
+            !format!("{e}").to_ascii_lowercase().contains("no rpc handler"),
+            "mission.think must be routed: {e}"
+        ),
+    }
+}
+
+#[test]
+fn real_skill_list_returns_items_array_under_temp_home() {
+    // Same shape as fleet.list_abilities (the underlying walk it
+    // delegates to). Empty under temp HOME but the field shape
+    // must hold.
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target("skill.list", json!({})))
+        .expect("skill.list");
+    assert!(resp.get("items").and_then(Value::as_array).is_some(),
+        "skill.list must return an `items` array; got {resp}");
+}
+
 // ════════════════════════════════════════════════════════════════
 // Category D: process / shell with real binaries
 // ════════════════════════════════════════════════════════════════

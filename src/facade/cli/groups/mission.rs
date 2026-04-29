@@ -18,7 +18,8 @@ use clap::{Args, Subcommand};
 use console::style;
 
 use crate::facade::cli::mission_runs::{self, CancelOutcome, MissionRunOpts};
-use crate::facade::cli::{discuss as discuss_cmd, think as think_cmd};
+use crate::facade::cli::discuss as discuss_cmd;
+use crate::facade::cli::think as think_cmd;
 use crate::eal;
 use crate::support::output::{self, OutputFormat};
 
@@ -42,7 +43,12 @@ pub enum MissionAction {
     Cancel(CancelArgs),
     /// Multi-agent orchestration pattern (round-robin discussion).
     Discuss(discuss_cmd::DiscussArgs),
-    /// Iterative planning loop pattern (think → act → observe → repeat).
+    /// Long-running task with worker+judge+curator sessions. The
+    /// worker resumes its session_id across cycles to outgrow
+    /// per-session step limits; the judge classifies whether
+    /// anything from the run is worth saving as a published
+    /// ability or private skill; the curator authors the
+    /// deliverable and dispatches publish.
     Think(think_cmd::ThinkArgs),
 }
 
@@ -98,11 +104,20 @@ pub fn run(args: MissionArgs) -> anyhow::Result<()> {
         MissionAction::List(a) => run_list(a),
         MissionAction::Show(a) => run_show(a),
         MissionAction::Cancel(a) => run_cancel(a),
-        // Mission patterns: both `discuss` and `think` are special-shaped
-        // External EAL missions (multi-agent orchestration; iterative
-        // planning loop). They are *not* agent-instance methods, so this
-        // is their canonical home — the `agent` group only keeps them as
-        // deprecated aliases. See ARCHITECTURE.md §8 #5.
+        // Mission patterns: `discuss` is a special-shaped external EAL
+        // mission (multi-agent round-robin orchestration). `think` is
+        // the long-running counterpart: a worker/judge/curator triple
+        // that lets a task outgrow Claude Code's per-session step
+        // limit and, when the judge identifies a sinkable lesson, has
+        // the curator author + publish a real ability or skill. Both
+        // live here because they are not agent-instance methods.
+        //
+        // History note: an earlier `think` was deleted (modern agent
+        // runtimes already do think-act-observe internally inside
+        // chat). This rewrite restores the verb with a different
+        // contract: it is no longer a stand-in for chat's inner loop;
+        // it is the loop that runs ABOVE chat to author durable
+        // abilities/skills from cross-session experience.
         MissionAction::Discuss(a) => discuss_cmd::run(a),
         MissionAction::Think(a) => think_cmd::run(a),
     }
