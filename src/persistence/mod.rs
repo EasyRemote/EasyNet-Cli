@@ -42,7 +42,10 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-pub(crate) mod config;
+// Public so integration tests + future external embedders can
+// construct `Credentials`. Inner field visibility on the struct
+// itself is already `pub`.
+pub mod config;
 pub(crate) mod local_agents;
 /// Local resources registry — `~/.easynet/resources.json`. Maps a
 /// stable hardware identifier (CoreAudio/PulseAudio device UID, USB
