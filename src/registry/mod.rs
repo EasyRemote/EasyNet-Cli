@@ -40,4 +40,8 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub(crate) mod a2a_labels;
-pub(crate) mod agents;
+// Public so integration tests + future external embedders can
+// construct AgentRegistry / AgentEntry. Field visibility on the
+// types themselves stays pub(crate) — external callers go through
+// the typed builders.
+pub mod agents;

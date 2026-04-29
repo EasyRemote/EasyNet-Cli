@@ -71,28 +71,29 @@ pub fn is_federation_target(target: &str) -> bool {
     target.starts_with("easynet:///r/")
 }
 
-/// Cfg-test routing slot. Tests install a closure here; the static
+/// Test routing slot. Tests install a closure here; the static
 /// `TestSinkInvoker` (registered at first test that touches it) calls
 /// into the slot. This works around the OnceLock set-once nature so
 /// any number of tests can share routing without contending for the
 /// global.
-#[cfg(test)]
-pub(crate) struct TestSinkInvoker;
+///
+/// **Why not cfg(test)**: integration tests in `tests/` link the lib
+/// in non-test config and need to drive these helpers, so we expose
+/// them publicly. The guard against production misuse is the
+/// `set_test_router` name itself plus the fact that no production
+/// boot path calls it. A future RFC can split this into a dedicated
+/// `test-support` feature when we want a stricter compile-time gate.
+pub struct TestSinkInvoker;
 
-#[cfg(test)]
 type TestRouter = Box<
     dyn Fn(&str, &str, Value) -> anyhow::Result<Value> + Send + Sync,
 >;
 
-#[cfg(test)]
 type TestKnower = Box<dyn Fn(&str) -> bool + Send + Sync>;
 
-#[cfg(test)]
 static TEST_ROUTER: OnceLock<std::sync::Mutex<Option<TestRouter>>> = OnceLock::new();
-#[cfg(test)]
 static TEST_KNOWER: OnceLock<std::sync::Mutex<Option<TestKnower>>> = OnceLock::new();
 
-#[cfg(test)]
 impl CliForwardInvoker for TestSinkInvoker {
     fn knows_target(&self, target_uri: &str) -> bool {
         let lock = TEST_KNOWER.get_or_init(|| std::sync::Mutex::new(None));
@@ -116,13 +117,11 @@ impl CliForwardInvoker for TestSinkInvoker {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn install_test_sink_once() {
+pub fn install_test_sink_once() {
     let _ = FORWARD_INVOKER.set(Arc::new(TestSinkInvoker));
 }
 
-#[cfg(test)]
-pub(crate) fn set_test_router<F>(router: F)
+pub fn set_test_router<F>(router: F)
 where
     F: Fn(&str, &str, Value) -> anyhow::Result<Value> + Send + Sync + 'static,
 {
@@ -131,8 +130,7 @@ where
     *lock.lock().unwrap() = Some(Box::new(router));
 }
 
-#[cfg(test)]
-pub(crate) fn set_test_knower<F>(knower: F)
+pub fn set_test_knower<F>(knower: F)
 where
     F: Fn(&str) -> bool + Send + Sync + 'static,
 {
@@ -141,8 +139,7 @@ where
     *lock.lock().unwrap() = Some(Box::new(knower));
 }
 
-#[cfg(test)]
-pub(crate) fn clear_test_routing() {
+pub fn clear_test_routing() {
     if let Some(l) = TEST_ROUTER.get() {
         *l.lock().unwrap() = None;
     }
@@ -154,8 +151,7 @@ pub(crate) fn clear_test_routing() {
 /// Serialize tests that mutate the global forward routing. Cargo
 /// runs tests in parallel by default; without this guard, two tests
 /// touching the router would race and produce flaky failures.
-#[cfg(test)]
-pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+pub fn test_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| std::sync::Mutex::new(()))
         .lock()
