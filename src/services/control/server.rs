@@ -52,7 +52,7 @@ use crate::services::control::discovery::{
     self, flags, ControlDiscovery, IpcVersionRange, IPC_VERSION_V1,
 };
 use crate::services::control::frames::{IncomingFrame, OutgoingFrame};
-use crate::services::control::transport::{self, ControlAddress, ControlListener};
+use crate::services::control::transport::{self, ControlListener};
 
 /// Bind, advertise, and run the Control-plane accept loop until the
 /// listener is dropped.

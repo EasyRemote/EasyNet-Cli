@@ -31,7 +31,7 @@
 use clap::Args;
 
 use crate::persistence::config;
-use crate::support::{self, net, output};
+use crate::support::{net, output};
 
 #[derive(Debug, Args)]
 pub struct ResetArgs {

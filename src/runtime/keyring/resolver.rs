@@ -14,7 +14,6 @@
 // Email:  silan.hu@u.nus.edu
 // Copyright (c) 2026-2027 easynet. All rights reserved.
 
-use anyhow::Result;
 use ed25519_dalek::VerifyingKey;
 use std::sync::Arc;
 

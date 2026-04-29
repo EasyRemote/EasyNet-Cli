@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 use super::crypto::{
     aead_decrypt, aead_encrypt, derive_master_key_from_passphrase, ed25519_sign, fingerprint,
-    fresh_ed25519_keypair, fresh_salt, MasterKey, WrappedSecret, ARGON2_SALT_LEN,
+    fresh_ed25519_keypair, fresh_salt, MasterKey, WrappedSecret,
 };
 
 pub const KEYRING_FILE_NAME: &str = "keyring.json";

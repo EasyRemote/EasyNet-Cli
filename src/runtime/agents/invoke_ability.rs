@@ -151,6 +151,18 @@ pub fn dispatch(
         if crate::runtime::keyring::forward::is_federation_target(target) {
             if let Some(invoker) = crate::runtime::keyring::forward::forward_invoker() {
                 if invoker.knows_target(target) {
+                    // Emit the trace ID at stderr so an operator
+                    // tailing the daemon log can correlate the
+                    // forward hop with the originating HTTP request.
+                    // Matches the rest of this file's "best-effort
+                    // observability via eprintln!" convention — see
+                    // audit_invoke. Empty request_id → emit nothing.
+                    if !parsed.metadata.request_id.is_empty() {
+                        eprintln!(
+                            "[easynet trace] forward_invoke begin request_id={} target={} ability={}",
+                            parsed.metadata.request_id, target, parsed.ability
+                        );
+                    }
                     let started_fwd = Instant::now();
                     let result =
                         invoker.invoke(target, &parsed.ability, parsed.args.clone());
@@ -162,6 +174,7 @@ pub fn dispatch(
                         &parsed.args,
                         result.as_ref().map_err(|e| e),
                         elapsed_ms,
+                        &parsed.metadata,
                     );
                     let inner = result?;
                     return Ok(json!({
@@ -243,6 +256,7 @@ pub fn dispatch(
         &parsed.args,
         dispatch_result.as_ref(),
         elapsed_ms,
+        &parsed.metadata,
     );
 
     let inner = dispatch_result?;
@@ -293,11 +307,26 @@ fn audit_invoke(
     args: &Value,
     dispatch_result: Result<&Value, &anyhow::Error>,
     elapsed_ms: u64,
+    metadata: &InvokeMetadata,
 ) {
     use std::io::Write;
     let (outcome, error_message, result_hash) = match dispatch_result {
         Ok(v) => ("ok", None, Some(sha256_hex_of_json(v))),
         Err(e) => ("error", Some(format!("{e}")), None),
+    };
+    // Emit metadata fields only when populated. An empty `request_id`
+    // is the legacy / non-HTTP path (e.g. an EAL step or a peer agent
+    // calling directly without going through the backend); recording
+    // a literal `""` would make grep noisier without adding signal.
+    let request_id = if metadata.request_id.is_empty() {
+        Value::Null
+    } else {
+        Value::String(metadata.request_id.clone())
+    };
+    let caller_uri = if metadata.caller_uri.is_empty() {
+        Value::Null
+    } else {
+        Value::String(metadata.caller_uri.clone())
     };
     let line = json!({
         "ts": chrono::Utc::now().to_rfc3339(),
@@ -309,6 +338,8 @@ fn audit_invoke(
         "outcome": outcome,
         "error": error_message,
         "elapsed_ms": elapsed_ms,
+        "request_id": request_id,
+        "caller_uri": caller_uri,
     });
 
     let path = audit_log_path();
@@ -383,11 +414,45 @@ fn lookup_access_policy(
 
 /// Parsed invocation args. Pulled out so parse-time validation lives
 /// in one place and the test cases can construct it directly.
+///
+/// `metadata` carries `_`-prefixed sidecar fields that backends pass
+/// through the IPC frame but that DO NOT enter the inner ability call
+/// (so they don't perturb args_digest / canonical bytes). The
+/// EasyNet-backend cliipc adapter sets at minimum:
+///
+///   * `_caller_uri`       — original HTTP caller's URA
+///   * `_request_id`       — `req-…` correlation token from the HTTP
+///                            edge; flows into the audit row + the
+///                            forward_invoke hop
+///   * `_idempotency_key`  — RFC-001 idempotency key (M1 metadata)
+///   * `_timeout_ms`       — RFC-001 timeout (M2 metadata)
+///
+/// Unknown `_`-prefixed fields are accepted silently and ignored —
+/// this is the forward-compat slot for future metadata. Unknown
+/// fields WITHOUT the underscore prefix still hard-fail per the
+/// canonical schema (see `parse`).
 #[derive(Debug, Clone, PartialEq)]
 struct InvokeArgs {
     target: Option<String>,
     ability: String,
     args: Value,
+    metadata: InvokeMetadata,
+}
+
+/// Subset of sidecar metadata the handler actually consults. Other
+/// `_`-prefixed fields are accepted and dropped — keeping this struct
+/// small avoids growing the parse code for fields nobody reads.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct InvokeMetadata {
+    /// Frontend-minted correlation ID (`req-` + 16 hex). Empty when
+    /// the caller did not pass one. Not validated for charset here —
+    /// the HTTP middleware already constrains the inbound shape; we
+    /// just guard against empty / non-string.
+    request_id: String,
+    /// Original HTTP caller's URA. Recorded in the audit row so the
+    /// device-side log can identify the operator behind a backend
+    /// request without grepping the backend log.
+    caller_uri: String,
 }
 
 impl InvokeArgs {
@@ -447,20 +512,51 @@ impl InvokeArgs {
         // operators would write `arguments:` instead of `args:`
         // and wonder why the call did nothing — fail loud to make
         // typos surface here.
+        //
+        // Exception: `_`-prefixed fields are reserved as the
+        // sidecar-metadata slot (the EasyNet backend adapter uses
+        // `_caller_uri`, `_request_id`, `_idempotency_key`,
+        // `_timeout_ms`). These flow through IPC for observability
+        // and routing context but DO NOT enter args_digest or the
+        // signed envelope. Unknown `_`-prefixed fields are
+        // accepted-and-dropped so adding new metadata at a later
+        // backend version doesn't require a CLI bump.
         const KNOWN: &[&str] = &["target", "ability", "args"];
         for key in obj.keys() {
-            if !KNOWN.contains(&key.as_str()) {
-                anyhow::bail!(
-                    "invalid_args: unknown field {key:?}; known: {:?}",
-                    KNOWN
-                );
+            if KNOWN.contains(&key.as_str()) {
+                continue;
             }
+            if key.starts_with('_') {
+                continue;
+            }
+            anyhow::bail!(
+                "invalid_args: unknown field {key:?}; known: {:?} \
+                 (sidecar metadata fields must start with `_`)",
+                KNOWN
+            );
         }
+
+        // Pluck the two sidecar fields the handler actually reads.
+        // Tolerate non-string values silently (caller passed garbage
+        // → we drop it), since metadata is non-load-bearing.
+        let metadata = InvokeMetadata {
+            request_id: obj
+                .get("_request_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            caller_uri: obj
+                .get("_caller_uri")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        };
 
         Ok(InvokeArgs {
             target,
             ability,
             args,
+            metadata,
         })
     }
 }
@@ -602,6 +698,71 @@ mod tests {
         }))
         .unwrap_err();
         assert!(format!("{err}").contains("unknown field"));
+    }
+
+    #[test]
+    fn parse_accepts_underscore_prefixed_sidecar_fields() {
+        // Backend cliipc adapter ships `_caller_uri`, `_request_id`,
+        // `_idempotency_key`, `_timeout_ms` as IPC-only sidecars.
+        // The handler must accept them silently — they don't enter
+        // args_digest / canonical bytes / signed envelope.
+        let parsed = InvokeArgs::parse(&json!({
+            "ability": "weather",
+            "_caller_uri": "easynet:///r/silan.localhost/agent/backend",
+            "_request_id": "req-deadbeef00112233",
+            "_idempotency_key": "idem-abc",
+            "_timeout_ms": 5000,
+            "_future_field_we_dont_read_yet": "value",
+        })).expect("sidecar fields must not be rejected");
+        assert_eq!(parsed.metadata.request_id, "req-deadbeef00112233");
+        assert_eq!(
+            parsed.metadata.caller_uri,
+            "easynet:///r/silan.localhost/agent/backend",
+        );
+        // Sidecars MUST NOT bleed into the inner ability args; the
+        // signed args_digest covers `args` exclusively.
+        assert_eq!(parsed.args, json!({}));
+    }
+
+    #[test]
+    fn parse_drops_unread_underscore_fields_silently() {
+        // Forward-compat: a future backend version adding new
+        // `_*` metadata must not require a CLI bump.
+        let parsed = InvokeArgs::parse(&json!({
+            "ability": "weather",
+            "_brand_new_metadata_v3": {"nested": true},
+        })).unwrap();
+        // Default empty strings, not panic / not error.
+        assert_eq!(parsed.metadata.request_id, "");
+        assert_eq!(parsed.metadata.caller_uri, "");
+    }
+
+    #[test]
+    fn parse_tolerates_non_string_sidecar_values() {
+        // Caller passed garbage (e.g. number where string expected).
+        // Metadata is non-load-bearing — silently coerce to "" rather
+        // than crash, since rejecting would mean a typo in operator
+        // tooling could lock out the entire invoke surface.
+        let parsed = InvokeArgs::parse(&json!({
+            "ability": "weather",
+            "_request_id": 12345,
+            "_caller_uri": null,
+        })).unwrap();
+        assert_eq!(parsed.metadata.request_id, "");
+        assert_eq!(parsed.metadata.caller_uri, "");
+    }
+
+    #[test]
+    fn parse_still_rejects_unknown_field_without_underscore_prefix() {
+        // Underscore-prefix carve-out must not weaken the typo guard.
+        let err = InvokeArgs::parse(&json!({
+            "ability": "weather",
+            "arguments": {"x": 1},
+        })).unwrap_err();
+        assert!(format!("{err}").contains("unknown field"));
+        // Hint should mention the underscore convention so a future
+        // operator reading the error knows the proper slot.
+        assert!(format!("{err}").contains("_"), "error should hint at the `_` prefix convention; got: {err}");
     }
 
     #[test]

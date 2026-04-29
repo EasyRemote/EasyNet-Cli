@@ -56,7 +56,6 @@
 // Email: silan.hu@u.nus.edu
 // Copyright (c) 2026-2027 easynet. All rights reserved.
 
-use std::collections::HashMap;
 use std::io::Read;
 use std::sync::Arc;
 use std::time::Duration;

@@ -49,7 +49,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use anyhow::{bail, Context};
+use anyhow::bail;
 use clap::Args;
 use serde_json::Value;
 

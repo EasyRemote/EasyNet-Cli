@@ -13,7 +13,7 @@
 
 use anyhow::Context;
 
-use easynet_axon::dendrite_bridge::{DendriteBridge, RegisterNodeOptions};
+use easynet_axon::dendrite_bridge::DendriteBridge;
 use easynet_axon::error::Result as AxonResult;
 use easynet_axon::reconnect::{ReconnectConfig, ReconnectHook, ReconnectingBridge};
 
