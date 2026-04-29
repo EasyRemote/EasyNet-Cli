@@ -141,6 +141,40 @@ pub fn dispatch(
     // error to the user.
     let agents = agent_registry_provider();
     if target != caller && !agents.agents.contains_key(target) {
+        // RFC-002 §5.2: when the target is not local but a CLI
+        // forward invoker is registered AND the target shape is a
+        // federation URA, route through `federation.forward_invoke`
+        // before bailing. This keeps the local-only fast path
+        // unchanged (no fed daemon = no remote dispatch attempts)
+        // while letting peer-aware deployments transparently route
+        // cross-device invokes.
+        if crate::runtime::keyring::forward::is_federation_target(target) {
+            if let Some(invoker) = crate::runtime::keyring::forward::forward_invoker() {
+                if invoker.knows_target(target) {
+                    let started_fwd = Instant::now();
+                    let result =
+                        invoker.invoke(target, &parsed.ability, parsed.args.clone());
+                    let elapsed_ms = started_fwd.elapsed().as_millis() as u64;
+                    audit_invoke(
+                        caller,
+                        target,
+                        &qualified,
+                        &parsed.args,
+                        result.as_ref().map_err(|e| e),
+                        elapsed_ms,
+                    );
+                    let inner = result?;
+                    return Ok(json!({
+                        "result": inner,
+                        "fulfilled_by": "federation_forward",
+                        "target": target,
+                        "ability": parsed.ability,
+                        "qualified_name": qualified,
+                        "elapsed_ms": elapsed_ms,
+                    }));
+                }
+            }
+        }
         anyhow::bail!(
             "target_not_registered: agent {target:?} is not registered on this device; \
              call <self>.discover first to see what's reachable"
@@ -797,6 +831,97 @@ mod tests {
         let dispatch = fixture(&[("claude.weather", failing)], AgentRegistry::default());
         let err = dispatch(json!({"ability": "weather"})).unwrap_err();
         assert!(format!("{err}").contains("upstream_failed"));
+    }
+
+    // ── EXP-3: federation forward_invoke routing ────────────────────
+    //
+    // These tests install a fake CliForwardInvoker via the test sink
+    // and verify the dispatch layer routes federation-shaped targets
+    // through it instead of returning target_not_registered.
+
+    use crate::runtime::keyring::forward as fwd;
+
+    #[test]
+    fn forward_invoke_routes_federation_target_through_invoker() {
+        let _g = fwd::test_lock();
+        fwd::set_test_knower(|uri| uri.starts_with("easynet:///r/"));
+        fwd::set_test_router(|target, ability, args| {
+            assert_eq!(target, "easynet:///r/exp-realm/agent/alice-node");
+            assert_eq!(ability, "ping");
+            assert_eq!(args["from"], "silan");
+            Ok(json!({"echo": "from-alice", "ability": ability}))
+        });
+
+        let dispatch = fixture(&[], AgentRegistry::default());
+        let resp = dispatch(json!({
+            "target": "easynet:///r/exp-realm/agent/alice-node",
+            "ability": "ping",
+            "args": {"from": "silan"}
+        }))
+        .unwrap();
+        // Forward path returns the inner result Value verbatim — the
+        // dispatch layer wraps that with the standard envelope.
+        assert_eq!(resp["target"], "easynet:///r/exp-realm/agent/alice-node");
+        assert_eq!(resp["qualified_name"], "easynet:///r/exp-realm/agent/alice-node.ping");
+        assert_eq!(resp["result"]["echo"], "from-alice");
+
+        fwd::clear_test_routing();
+    }
+
+    #[test]
+    fn forward_invoke_falls_through_when_invoker_does_not_know_target() {
+        let _g = fwd::test_lock();
+        fwd::set_test_knower(|_uri| false); // invoker rejects every target
+        fwd::set_test_router(|_t, _a, _x| panic!("router must not be called"));
+
+        let dispatch = fixture(&[], AgentRegistry::default());
+        let err = dispatch(json!({
+            "target": "easynet:///r/exp-realm/agent/unknown",
+            "ability": "ping",
+        }))
+        .unwrap_err();
+        assert!(format!("{err}").contains("target_not_registered"));
+
+        fwd::clear_test_routing();
+    }
+
+    #[test]
+    fn forward_invoke_propagates_typed_remote_error() {
+        let _g = fwd::test_lock();
+        fwd::set_test_knower(|uri| uri.starts_with("easynet:///r/"));
+        fwd::set_test_router(|_t, _a, _x| {
+            Err(anyhow::anyhow!("AXON_TARGET_OFFLINE: peer unreachable"))
+        });
+
+        let dispatch = fixture(&[], AgentRegistry::default());
+        let err = dispatch(json!({
+            "target": "easynet:///r/exp-realm/agent/down",
+            "ability": "ping"
+        }))
+        .unwrap_err();
+        assert!(format!("{err}").contains("AXON_TARGET_OFFLINE"));
+
+        fwd::clear_test_routing();
+    }
+
+    #[test]
+    fn forward_invoke_skipped_for_non_federation_targets() {
+        // Bare names (legacy local target) MUST stay on the
+        // target_not_registered path even if the router claims to
+        // know them, because is_federation_target rejects bare names.
+        let _g = fwd::test_lock();
+        fwd::set_test_knower(|_uri| true);
+        fwd::set_test_router(|_t, _a, _x| panic!("router must not be called for non-federation targets"));
+
+        let dispatch = fixture(&[], AgentRegistry::default());
+        let err = dispatch(json!({
+            "target": "phantom-bare-name",
+            "ability": "ping"
+        }))
+        .unwrap_err();
+        assert!(format!("{err}").contains("target_not_registered"));
+
+        fwd::clear_test_routing();
     }
 
     #[test]

@@ -116,6 +116,12 @@ pub mod fleet_ops_ability;
 /// report_metrics). v1 stores call state in-process; persistence
 /// + federation fan-out land with the RFC-006 follow-up.
 pub mod voice_call_ability;
+/// mission.discuss / mission.think — round-robin and think-act-
+/// observe orchestration abilities. The `easynet mission discuss`
+/// and `easynet mission think` CLI subcommands invoke these,
+/// keeping a single ability-only path for both EAL programs and
+/// the operator CLI.
+pub mod orchestration_ability;
 pub mod loop_ability;
 pub mod mcp_bridge_ability;
 pub mod mcp_client_ability;
@@ -317,7 +323,7 @@ pub fn build_registry_with_services(
     policy_ability::register(&mut reg);
     session_ability::register(&mut reg, sessions);
     permission_ability::register(&mut reg, perms);
-    discuss_ability::register(&mut reg, discuss);
+    discuss_ability::register(&mut reg, Arc::clone(&discuss));
     schedule_ability::register(&mut reg, schedule);
     loop_ability::register(&mut reg, loop_svc);
     // The shared OnceLock seam consumed by every ability that needs
@@ -330,6 +336,18 @@ pub fn build_registry_with_services(
     // — can close over it. Set once after `Arc::new(reg)` below.
     let local_registry_handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>> =
         Arc::new(std::sync::OnceLock::new());
+    // mission.discuss_round — sub-turn orchestration ability.
+    // The CLI `easynet mission discuss …` and any EAL caller drive
+    // multi-agent discussions through this name. Shares the
+    // DiscussService with the discuss.* triple (same room state)
+    // and consumes the shared registry handle so per-cycle
+    // <agent>.chat invocations stay in-process — going through
+    // IPC would deadlock the daemon's accept loop.
+    orchestration_ability::register(
+        &mut reg,
+        Arc::clone(&discuss),
+        Arc::clone(&local_registry_handle),
+    );
     chat_ability::register(
         &mut reg,
         agents,
@@ -405,6 +423,36 @@ pub fn build_registry_with_services(
             move || snapshot_for_invoke.clone(),
             Arc::clone(&local_registry_handle),
         );
+    }
+
+    // RFC-002 §3.3: register `<self>.keyring.*` for the daemon's
+    // own self-bundle, scoped under the literal owner `<self>`.
+    // The daemon publishes its 10 keyring abilities under this
+    // namespace so any local agent can call them through the
+    // standard dispatch path. Auto-init the on-disk store when
+    // absent — passphrase comes from EASYNET_KEYRING_PASS or
+    // falls back to a fixed deterministic local pass for the
+    // local-fast default. Failures here MUST NOT block daemon
+    // boot; we log the error and skip keyring registration. The
+    // resolver layer copes with absence by treating every URA
+    // as Unknown.
+    //
+    // EASYNET_KEYRING_DISABLE=1 skips auto-init entirely. Tests
+    // that don't want side effects on the user's real keyring
+    // file set this; production daemons leave it unset.
+    if std::env::var("EASYNET_KEYRING_DISABLE").is_err() {
+        match init_keyring_for_daemon() {
+            Ok(handle) => {
+                crate::runtime::keyring::abilities::register_for_owner(
+                    &mut reg, "<self>", handle,
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "warn: keyring auto-init failed; <self>.keyring.* unavailable: {e}"
+                );
+            }
+        }
     }
     // meta.{describe,list_abilities} — Agent self-introspection on
     // the same descriptor catalogue PLUS the live registry. describe
@@ -511,6 +559,34 @@ pub fn build_registry_with_services(
 ///   caller hand-build the chain or get silently empty
 ///   `context_used`.
 ///
+/// RFC-002 §3.2 keyring auto-init for the daemon. Locates the
+/// keyring file at `$XDG_CONFIG_HOME/easynet/keyring.json` (or
+/// platform fallback), opens it under the passphrase from
+/// `EASYNET_KEYRING_PASS` env var, and falls back to a deterministic
+/// local-only passphrase when none is set. The local fallback is
+/// fine for the `.localhost` default — federation peers never see
+/// the master key, and the file is mode 0o600.
+///
+/// Returns `Err` only on filesystem / decode / KDF errors; absence
+/// of an existing file is the happy path (creates a fresh ring).
+fn init_keyring_for_daemon() -> anyhow::Result<std::sync::Arc<crate::runtime::keyring::KeyringHandle>> {
+    use crate::runtime::keyring::store::default_keyring_path;
+    use crate::runtime::keyring::KeyringHandle;
+    let path = std::env::var("EASYNET_KEYRING_PATH")
+        .map(std::path::PathBuf::from)
+        .ok()
+        .map_or_else(|| default_keyring_path(), |p| Ok(p))?;
+    let pass = std::env::var("EASYNET_KEYRING_PASS").unwrap_or_else(|_| {
+        // Local-fast default. Operators wanting stronger isolation
+        // set EASYNET_KEYRING_PASS to a real secret. The literal
+        // here is NOT a security boundary — the threat model for
+        // local-fast assumes the host filesystem is the trust
+        // boundary anyway. RFC-002 §3.2.
+        "easynet-local-default-passphrase-v1".into()
+    });
+    Ok(std::sync::Arc::new(KeyringHandle::open_or_create(path, &pass)?))
+}
+
 /// Exists so `bin/easynet-daemon.rs` does not have to reach into the
 /// `pub(crate) registry::agents` module — that module's visibility is
 /// intentionally crate-private.
@@ -582,6 +658,12 @@ pub fn published_abilities() -> Vec<SystemAbilityMetadata> {
     published_ability_names()
         .into_iter()
         .filter(|name| !name.ends_with(".chat"))
+        // RFC-002 §3.3 keyring abilities are owner-namespaced under
+        // `<self>` and self-described by `keyring::abilities` — they
+        // don't go through the system descriptor table. Filter them
+        // for the same reason `<agent>.chat` is filtered: their
+        // schema lives inside the registering module, not here.
+        .filter(|name| !name.starts_with("<self>.keyring."))
         .map(|name| SystemAbilityMetadata {
             description: description_for(&name),
             input_schema: input_schema_for(&name),
@@ -613,6 +695,7 @@ pub fn description_for(name: &str) -> &'static str {
         "discuss.create" => discuss_ability::create_description(),
         "discuss.post" => discuss_ability::post_description(),
         "discuss.subscribe" => discuss_ability::subscribe_description(),
+        "discuss.list_turns" => discuss_ability::list_turns_description(),
         "schedule.add" => schedule_ability::add_description(),
         "schedule.list" => schedule_ability::list_description(),
         "schedule.remove" => schedule_ability::remove_description(),
@@ -670,6 +753,7 @@ pub fn description_for(name: &str) -> &'static str {
         "fleet.exec_remote" => fleet_ops_ability::exec_remote_description(),
         "fleet.register_self" => fleet_ops_ability::register_self_description(),
         "fleet.deregister_self" => fleet_ops_ability::deregister_self_description(),
+        "mission.discuss_round" => orchestration_ability::discuss_round_description(),
         "voice.create_call" => voice_call_ability::create_call_description(),
         "voice.show_call" => voice_call_ability::show_call_description(),
         "voice.join_call" => voice_call_ability::join_call_description(),
@@ -718,6 +802,7 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "discuss.create" => discuss_ability::create_input_schema(),
         "discuss.post" => discuss_ability::post_input_schema(),
         "discuss.subscribe" => discuss_ability::subscribe_input_schema(),
+        "discuss.list_turns" => discuss_ability::list_turns_input_schema(),
         "schedule.add" => schedule_ability::add_input_schema(),
         "schedule.list" => schedule_ability::list_input_schema(),
         "schedule.remove" => schedule_ability::remove_input_schema(),
@@ -770,6 +855,7 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "fleet.exec_remote" => fleet_ops_ability::exec_remote_input_schema(),
         "fleet.register_self" => fleet_ops_ability::register_self_input_schema(),
         "fleet.deregister_self" => fleet_ops_ability::deregister_self_input_schema(),
+        "mission.discuss_round" => orchestration_ability::discuss_round_input_schema(),
         "voice.create_call" => voice_call_ability::create_call_input_schema(),
         "voice.show_call" => voice_call_ability::show_call_input_schema(),
         "voice.join_call" => voice_call_ability::join_call_input_schema(),
@@ -865,6 +951,9 @@ mod tests {
             // the local resources table (same shape as
             // meta.list_abilities); Introspection by definition.
             | "meta.list_resources"
+            // discuss.list_turns — RPC snapshot of a room transcript.
+            // Pure read; same Introspection class as schedule.list.
+            | "discuss.list_turns"
             | "schedule.list"
             | "loop.status" => Some(AbilityLayer::Introspection),
             // ── Control / decision ──────────────────────────────
@@ -901,6 +990,12 @@ mod tests {
             | "fleet.exec_remote"
             | "fleet.register_self"
             | "fleet.deregister_self"
+            // mission.discuss_round — sub-turn orchestration
+            // ability. Same Operational class as easynet.run /
+            // mission.run because the ability IS the work
+            // (running one human-bracketed sub-turn of a
+            // multi-agent discussion).
+            | "mission.discuss_round"
             // voice.* call signaling abilities. State-mutating
             // (create / join / leave / end / report_metrics) and
             // state-reading (show / watch) — Operational by intent
@@ -999,6 +1094,10 @@ mod tests {
         let names = published_ability_names();
         let unclassified: Vec<String> = names
             .iter()
+            // <self>.keyring.* abilities have their own ontology
+            // (RFC-002 §3.3) and are not classified by the system
+            // ability layer table.
+            .filter(|n| !n.starts_with("<self>.keyring."))
             .filter(|n| classify_ability(n).is_none())
             .cloned()
             .collect();
@@ -1365,6 +1464,12 @@ mod tests {
             if name.ends_with(".chat") {
                 continue;
             }
+            // `<self>.keyring.*` abilities are RFC-002-owner-scoped;
+            // their metadata lives in `keyring::abilities`, not the
+            // system descriptor table. Same exception shape as chat.
+            if name.starts_with("<self>.keyring.") {
+                continue;
+            }
             let desc = description_for(&name);
             assert_ne!(
                 desc, "(system ability)",
@@ -1426,5 +1531,68 @@ mod tests {
             names.iter().any(|n| n == "bob.chat"),
             "bob.chat must be registered; got {names:?}"
         );
+    }
+
+    #[test]
+    fn build_registry_registers_keyring_abilities_when_not_disabled() {
+        // Run in a child-process-style isolation: redirect the
+        // keyring file path to a tempdir + clear DISABLE so the
+        // auto-init path runs. The default tests set DISABLE.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("keyring.json");
+        let prev_disable = std::env::var_os("EASYNET_KEYRING_DISABLE");
+        let prev_path = std::env::var_os("EASYNET_KEYRING_PATH");
+        let prev_pass = std::env::var_os("EASYNET_KEYRING_PASS");
+        std::env::remove_var("EASYNET_KEYRING_DISABLE");
+        std::env::set_var("EASYNET_KEYRING_PATH", &path);
+        std::env::set_var("EASYNET_KEYRING_PASS", "test-pass-keyring-init");
+
+        let agents = AgentRegistry::default();
+        let reg = build_registry_with_services(
+            Arc::new(SessionService::new()),
+            Arc::new(PermissionService::new()),
+            Arc::new(DiscussService::new()),
+            Arc::new(ScheduleService::new()),
+            Arc::new(LoopService::new()),
+            &agents,
+            Arc::new(Vec::new()),
+        );
+        let names = reg.list_abilities();
+
+        // Restore env before assertions so a panic doesn't leak
+        // environment changes into other tests in the same binary.
+        match prev_disable {
+            Some(v) => std::env::set_var("EASYNET_KEYRING_DISABLE", v),
+            None => std::env::remove_var("EASYNET_KEYRING_DISABLE"),
+        }
+        match prev_path {
+            Some(v) => std::env::set_var("EASYNET_KEYRING_PATH", v),
+            None => std::env::remove_var("EASYNET_KEYRING_PATH"),
+        }
+        match prev_pass {
+            Some(v) => std::env::set_var("EASYNET_KEYRING_PASS", v),
+            None => std::env::remove_var("EASYNET_KEYRING_PASS"),
+        }
+
+        // All 10 abilities must be present under <self>.keyring.*.
+        for verb in [
+            "create",
+            "list",
+            "get_public",
+            "sign",
+            "rotate",
+            "revoke",
+            "expire_set",
+            "bind_subject",
+            "peer_add",
+            "peer_list",
+        ] {
+            let want = format!("<self>.keyring.{verb}");
+            assert!(
+                names.iter().any(|n| n == &want),
+                "{want} must be registered; got {names:?}"
+            );
+        }
+        assert!(path.exists(), "keyring file must have been auto-created");
     }
 }

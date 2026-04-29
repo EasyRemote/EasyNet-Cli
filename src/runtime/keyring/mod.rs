@@ -21,6 +21,7 @@ pub mod store;
 pub mod handle;
 pub mod abilities;
 pub mod resolver;
+pub mod forward;
 
 pub use handle::KeyringHandle;
 pub use store::{Entry, KeyRing, KeyStatus, MasterKeyKind, PeerEntry, PeerStatus};

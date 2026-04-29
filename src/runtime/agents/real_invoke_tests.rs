@@ -559,6 +559,69 @@ fn real_voice_report_metrics_appends_event() {
     assert_eq!(r.get("ack"), Some(&json!(true)));
 }
 
+// ── mission.discuss_round ───────────────────────────────────────
+//
+// `mission.discuss_round` is the sub-turn orchestrator backing
+// `easynet mission discuss …`. We can't drive a full round in a
+// unit test (the inner per-cycle loop calls `<agent>.chat` over
+// IPC, which needs a daemon + real chat driver), but we CAN pin
+// the validation contract — the same shape of guard every other
+// CLI surface uses for arg-shape errors. A regression that, say,
+// silently accepts `agents: []` would let callers waste minutes
+// in a no-op sub-turn.
+
+#[test]
+fn real_discuss_list_turns_returns_empty_for_fresh_room() {
+    // discuss.list_turns is the snapshot RPC sibling of
+    // discuss.subscribe. A fresh room (one that hasn't been
+    // posted to) returns `{room_id, turns: []}`. We don't
+    // actually create a room here (DiscussService is internal
+    // — registry_with_temp_home doesn't expose its registration
+    // on the dispatcher unless services are wired through). The
+    // test asserts the validation error path: missing `room_id`
+    // surfaces a precise error, same shape as every other CLI
+    // surface.
+    let (reg, _g) = registry_with_temp_home();
+    let result = dispatcher_for(reg).execute_rpc(target("discuss.list_turns", json!({})));
+    let err = result.expect_err("discuss.list_turns must require room_id");
+    assert!(format!("{err}").contains("room_id"));
+}
+
+#[test]
+fn real_mission_discuss_round_rejects_missing_room_id() {
+    let (reg, _g) = registry_with_temp_home();
+    let result = dispatcher_for(reg)
+        .execute_rpc(target("mission.discuss_round", json!({"agents": ["a"]})));
+    let err = result.expect_err("missing room_id must fail");
+    assert!(format!("{err}").contains("room_id"));
+}
+
+#[test]
+fn real_mission_discuss_round_rejects_empty_agents() {
+    let (reg, _g) = registry_with_temp_home();
+    let result = dispatcher_for(reg).execute_rpc(target(
+        "mission.discuss_round",
+        json!({"room_id": "room-x", "agents": []}),
+    ));
+    let err = result.expect_err("empty agents must fail");
+    assert!(format!("{err}").contains("agents"));
+}
+
+#[test]
+fn real_mission_discuss_round_rejects_zero_max_cycles() {
+    let (reg, _g) = registry_with_temp_home();
+    let result = dispatcher_for(reg).execute_rpc(target(
+        "mission.discuss_round",
+        json!({
+            "room_id":    "room-x",
+            "agents":     ["a"],
+            "max_cycles": 0,
+        }),
+    ));
+    let err = result.expect_err("zero max_cycles must fail");
+    assert!(format!("{err}").contains("max_cycles"));
+}
+
 #[test]
 fn real_fleet_list_abilities_returns_items_array_under_temp_home() {
     // NOTE: despite the name, fleet.list_abilities lists
@@ -1492,6 +1555,10 @@ fn every_published_ability_has_a_real_invoke_test() {
         .list_abilities()
         .into_iter()
         .filter(|n| !n.ends_with(".chat")) // dynamic per-agent, not in this catalog
+        // RFC-002 §3.3: keyring abilities are owner-namespaced and
+        // covered by their own unit tests in
+        // `runtime::keyring::abilities::tests`.
+        .filter(|n| !n.starts_with("<self>.keyring."))
         .collect();
     let mut covered: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     // Walk every quoted string in the file. A token that matches
