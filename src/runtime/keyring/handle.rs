@@ -20,10 +20,16 @@ use std::sync::Mutex;
 
 use super::crypto::{fingerprint, MasterKey};
 use super::store::{
-    build_entry, entry_fingerprint, entry_public_key, fresh_keyring, load_keyring,
+    build_entry, fresh_keyring, load_keyring,
     save_keyring, sign_with_entry, ulid_like, unlock_master_key, validate_fingerprint, Entry,
     KeyRing, KeyStatus, MasterKeyKind, PeerEntry, PeerStatus,
 };
+// Re-import the entry projection helpers — handle.rs's tests use
+// them. The linter trimmed them from the active code-path imports
+// because nothing under `impl KeyringHandle` references them
+// directly today; the test module needs them.
+#[cfg(test)]
+use super::store::{entry_fingerprint, entry_public_key};
 
 fn b64_encode(bytes: &[u8]) -> String {
     use base64::engine::general_purpose::STANDARD;

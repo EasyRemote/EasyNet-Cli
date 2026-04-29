@@ -399,16 +399,32 @@ impl StepDispatcher for BorrowedBridgeDispatcher<'_> {
         timeout_ms: Option<u64>,
     ) -> Result<Value, EalError> {
         match target {
-            IrTarget::Device { node_id } => self
-                .bridge
-                .call_mcp_tool_with_timeout(
-                    tenant,
-                    ability.as_str(),
-                    node_id,
-                    arguments,
-                    timeout_ms,
-                )
-                .map_err(EalError::from),
+            IrTarget::Device { node_id } => {
+                // RFC-001 P1.5 + RFC-002.2: the legacy MCP-shaped
+                // device-targeted RPC the SDK exposed
+                // (`call_mcp_tool_with_timeout`) was deleted along
+                // with the rest of the legacy gRPC surface. The
+                // canonical replacement for "EAL step targeting
+                // a remote device's ability" is
+                // `federation.forward_invoke` against the device
+                // URA — the same path
+                // `<self>.invoke(target=remote_uri)` takes. EAL's
+                // dispatcher does not yet construct that envelope
+                // (it would need keyring + tenant + realm in the
+                // dispatcher's scope, which today's `BorrowedBridgeDispatcher`
+                // is intentionally lighter than). Surface a typed
+                // Unavailable error pointing operators at the path
+                // that DOES work: the LLM-driven `<self>.invoke`
+                // surface or `mcp.bridge.call_tool` for in-process.
+                let _ = (tenant, ability, node_id, arguments, timeout_ms);
+                Err(EalError::Unavailable(
+                    "EAL device-targeted dispatch via the legacy MCP RPC was \
+                     removed by RFC-001 P1.5; route through \
+                     `<self>.invoke(target=<device-ura>)` (RFC-002.2 forward_invoke) \
+                     or `mcp.bridge.call_tool` for in-process MCP shapes."
+                        .to_string(),
+                ))
+            }
             // Agent target on a Device-only dispatcher is a planner /
             // call-site contract violation, not a transient failure —
             // categorise as Validation so retries don't fire and so
@@ -511,28 +527,24 @@ impl StepDispatcher for AgentAwareDispatcher {
                 dispatch_to_agent(&self.registry, agent_id, ability, arguments)
             }
             IrTarget::Device { node_id } => {
-                // Both pool checkout and the subsequent bridge call are
-                // transport-class failures — categorise explicitly as
-                // `Unavailable` at each site rather than relying on a
-                // default-via-`From` impl. Explicit categorisation is
-                // cheap (one constructor per site) and makes the error
-                // category visible in the source, which is the whole
-                // point of the typed-error migration.
-                let guard = self
-                    .pool
-                    .checkout()
-                    .map_err(|e| EalError::Unavailable(format!("bridge pool: {e}")))?;
-                guard
-                    .bridge()
-                    .call_mcp_tool_with_timeout(
-                        tenant,
-                        ability.as_str(),
-                        node_id,
-                        arguments,
-                        timeout_ms,
-                    )
-                    .map_err(EalError::from)
-                // guard drops here → bridge returned to pool
+                // RFC-001 P1.5 + RFC-002.2: see BorrowedBridgeDispatcher
+                // for the migration rationale. The legacy MCP RPC was
+                // deleted; route remote-device EAL steps through
+                // `<self>.invoke(target=<device-ura>)` (forward_invoke).
+                // Today's AgentAwareDispatcher does not synthesize
+                // that envelope — it would need keyring + tenant +
+                // realm in scope which the dispatcher trait doesn't
+                // carry. Surface a typed Unavailable so EAL programs
+                // see a stable error name and operators can grep
+                // for the migration reason.
+                let _ = (tenant, ability, arguments, timeout_ms, node_id);
+                Err(EalError::Unavailable(
+                    "EAL device-targeted dispatch via the legacy MCP RPC was \
+                     removed by RFC-001 P1.5; route through \
+                     `<self>.invoke(target=<device-ura>)` (RFC-002.2 forward_invoke) \
+                     or `mcp.bridge.call_tool` for in-process MCP shapes."
+                        .to_string(),
+                ))
             }
         }
     }
@@ -581,23 +593,20 @@ impl StepDispatcher for PooledBridgeDispatcher {
     ) -> Result<Value, EalError> {
         match target {
             IrTarget::Device { node_id } => {
-                // Explicit `Unavailable` categorisation at each site —
-                // see `AgentAwareDispatcher::dispatch` for the rationale
-                // on why we do not rely on a blanket `From<String>` impl.
-                let guard = self
-                    .pool
-                    .checkout()
-                    .map_err(|e| EalError::Unavailable(format!("bridge pool: {e}")))?;
-                guard
-                    .bridge()
-                    .call_mcp_tool_with_timeout(
-                        tenant,
-                        ability.as_str(),
-                        node_id,
-                        arguments,
-                        timeout_ms,
-                    )
-                    .map_err(EalError::from)
+                // RFC-001 P1.5 + RFC-002.2: see BorrowedBridgeDispatcher
+                // for the migration rationale. The legacy MCP RPC is
+                // gone; route through forward_invoke or
+                // mcp.bridge.call_tool. Pool is intentionally not
+                // checked out — surfacing the typed error fast keeps
+                // the caller's diagnostic clean.
+                let _ = (tenant, ability, arguments, timeout_ms, node_id, &self.pool);
+                Err(EalError::Unavailable(
+                    "EAL device-targeted dispatch via the legacy MCP RPC was \
+                     removed by RFC-001 P1.5; route through \
+                     `<self>.invoke(target=<device-ura>)` (RFC-002.2 forward_invoke) \
+                     or `mcp.bridge.call_tool` for in-process MCP shapes."
+                        .to_string(),
+                ))
             }
             // See note on `BorrowedBridgeDispatcher`: agent target on a
             // device-only dispatcher is a contract violation.
@@ -678,6 +687,12 @@ fn dispatch_to_agent(
                         spec, arguments, timeout,
                     )
                     .map_err(|e| EalError::Unavailable(format!("http exec: {e}")))
+                }
+                crate::core::ability_spec::AbilityExec::Eal(spec) => {
+                    crate::runtime::agents::eal_executor::run_eal_exec(
+                        spec, arguments, timeout,
+                    )
+                    .map_err(|e| EalError::Unavailable(format!("eal exec: {e}")))
                 }
             };
         }

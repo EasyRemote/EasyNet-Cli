@@ -123,3 +123,8 @@ pub mod keyring;
 // RFC-002 tenant suffix resolver: maps tenant_id to admission mode +
 // URA scope + hub endpoints.
 pub mod resolver;
+/// RFC-002.2 daemon-side federation initialisation. Pure decision
+/// over (Credentials, KeyringHandle, Bridge?) → install + record
+/// outcome. Daemon boot calls one function; the status probe
+/// surfaces the result for operators.
+pub mod federation_init;
