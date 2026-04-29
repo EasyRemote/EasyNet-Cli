@@ -46,7 +46,7 @@
 use clap::{Args, Subcommand};
 use console::style;
 
-use crate::facade::cli::{agent as agent_cmd, agent_sessions, discuss as discuss_cmd, think as think_cmd};
+use crate::facade::cli::{agent as agent_cmd, agent_sessions, discuss as discuss_cmd};
 use crate::support::output;
 
 #[derive(Debug, Args)]
@@ -77,6 +77,10 @@ pub enum AgentAction {
     Session(SessionArgs),
     /// List the abilities declared under `<agent-root>/abilities/`.
     Abilities(agent_cmd::AbilitiesArgs),
+    /// Update fields of a registered agent in place. Currently
+    /// supports `--model`. Mutates `agent.toml` + the registry row;
+    /// preserves label, abilities, skills, runs.
+    Set(agent_cmd::SetArgs),
     /// Dry-run: show the `<agent>.<ability>` tools that a future live
     /// publish would register. No Axon calls, no mutation.
     Publish(agent_cmd::PublishArgs),
@@ -89,8 +93,6 @@ pub enum AgentAction {
     Refresh,
     /// DEPRECATED: use `easynet mission discuss`.
     Discuss(discuss_cmd::DiscussArgs),
-    /// DEPRECATED: use `easynet mission think`.
-    Think(think_cmd::ThinkArgs),
 }
 
 #[derive(Debug, Args)]
@@ -162,6 +164,9 @@ pub fn run(args: AgentArgs) -> anyhow::Result<()> {
         AgentAction::Abilities(a) => agent_cmd::run(agent_cmd::AgentArgs {
             action: agent_cmd::AgentAction::Abilities(a),
         }),
+        AgentAction::Set(a) => agent_cmd::run(agent_cmd::AgentArgs {
+            action: agent_cmd::AgentAction::Set(a),
+        }),
         AgentAction::Refresh => agent_cmd::run(agent_cmd::AgentArgs {
             action: agent_cmd::AgentAction::Refresh,
         }),
@@ -177,14 +182,11 @@ pub fn run(args: AgentArgs) -> anyhow::Result<()> {
             );
             discuss_cmd::run(a)
         }
-        AgentAction::Think(a) => {
-            eprintln!(
-                "  {} {}",
-                style("deprecated:").yellow(),
-                style("`easynet agent think` → use `easynet mission think`").dim()
-            );
-            think_cmd::run(a)
-        }
+        // The pre-rewrite `easynet agent think` deprecated alias was
+        // removed alongside `easynet mission think` and the
+        // `mission.think` ability: modern agent runtimes already do
+        // think-act-observe inside `<agent>.chat`, so the outer loop
+        // was redundant.
     }
 }
 
