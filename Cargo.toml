@@ -111,6 +111,29 @@ termimad = "0.31"
 # Picked over `image` because we only need encoding (no decoders,
 # no PNG/GIF/WebP) and want the smallest extra build surface.
 jpeg-encoder = { version = "0.7", default-features = false }
+# RFC-005 v3.2 A1, A5 — physical audio capture (mic.subscribe) and
+# playback (speaker.publish). cpal is the only Rust crate that
+# spans CoreAudio + WASAPI + ALSA + PulseAudio with comparable
+# maturity; per AXON-RFC-005-device-backend-selection the macOS
+# default-device sample-rate may diverge from the schema's
+# 16/24/48 kHz set, so a downsampler is added in a follow-up.
+cpal = "0.15"
+# RFC-005 v3.2 A2, A3 — physical camera capture
+# (camera.subscribe / camera.snapshot). nokhwa wraps AVFoundation
+# (macOS), V4L2 (Linux) and MediaFoundation (Windows). Windows
+# back-end is known fragile; only macOS + Linux land in CI.
+# `input-native` opts into the platform-direct backends and
+# avoids the heavyweight image-pipeline backends.
+nokhwa = { version = "0.10", features = ["input-native"] }
+# RFC-005 v3.2 A4, A8 — physical screen capture
+# (screen.subscribe / screen.snapshot). xcap was picked over
+# `screenshots` and `scrap` for active maintenance and a usable
+# Window/Monitor abstraction (so subject ∈ {display, window,
+# application} maps cleanly). On macOS the first call triggers a
+# system-modal Screen Recording permission dialog; the handler
+# surfaces the permission-denied case as
+# reason="resource_unavailable" rather than a panic.
+xcap = "0.9"
 toml = "0.8"
 toml_edit = "0.23"
 # Tokio adopted in PR-7 (Commit 1) as a transitive-to-direct dependency.

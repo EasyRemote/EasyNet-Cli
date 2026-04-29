@@ -82,6 +82,12 @@ const MAX_INLINE_BYTES: usize = 256 * 1024;
 pub const REASON_SUBJECT_REQUIRED: &str = "subject_required";
 pub const REASON_RESOURCE_NOT_FOUND: &str = "resource_not_found";
 pub const REASON_RESOURCE_TYPE_MISMATCH: &str = "resource_type_mismatch";
+/// Camera was in the resources table at scan time but is now
+/// busy / unplugged / permission-denied. Distinct from
+/// `resource_not_found` per INV-RESOURCE-VALIDITY: the URA
+/// resolves to an entry, but the underlying device cannot serve
+/// a frame right now.
+pub const REASON_RESOURCE_UNAVAILABLE: &str = "resource_unavailable";
 pub const REASON_IMAGE_TOO_LARGE: &str = "image_too_large_for_inline";
 
 // ── Backend trait ────────────────────────────────────────────
@@ -105,7 +111,94 @@ pub struct EncodedFrame {
     pub height: u32,
 }
 
-// ── Synthetic backend (PR3a) ─────────────────────────────────
+// ── Nokhwa backend (real, PR3) ───────────────────────────────
+
+/// Real camera backend backed by `nokhwa`. Opens the platform's
+/// default backend (AVFoundation on macOS, V4L2 on Linux), grabs
+/// one frame at the camera's chosen "absolute highest resolution"
+/// format, decodes to RGB, and re-encodes as JPEG to match the
+/// receipt body shape camera.snapshot promises.
+///
+/// `hardware_id` ↔ camera index mapping
+/// ------------------------------------
+/// v1 ignores `entry.hardware_id` and grabs the default camera
+/// (CameraIndex::Index(0)). The mint-an-index-per-camera scan
+/// happens in the daemon's first-boot resource scan, but the
+/// stable mapping back to a `CameraIndex` is platform-specific
+/// and not yet plumbed through `ResourceEntry.metadata`. As soon
+/// as the scan records the index, this backend reads it from
+/// `entry.metadata["camera_index"]`.
+///
+/// Failure mapping
+/// ---------------
+/// Every `NokhwaError` becomes `reason="resource_unavailable"` —
+/// the camera was in the resources table at scan time but is now
+/// busy / unplugged / permission-denied. This matches
+/// INV-RESOURCE-VALIDITY's split between
+/// `resource_not_found` (handled by the dispatch layer above)
+/// and `resource_unavailable` (this branch).
+#[derive(Debug, Default)]
+pub struct NokhwaBackend;
+
+impl SnapshotBackend for NokhwaBackend {
+    fn capture_jpeg(&self, entry: &ResourceEntry) -> anyhow::Result<EncodedFrame> {
+        use nokhwa::pixel_format::RgbFormat;
+        use nokhwa::utils::{
+            CameraIndex, RequestedFormat, RequestedFormatType,
+        };
+        use nokhwa::Camera;
+
+        let index = entry
+            .metadata
+            .get("camera_index")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u32)
+            .unwrap_or(0);
+
+        let req = RequestedFormat::new::<RgbFormat>(
+            RequestedFormatType::AbsoluteHighestResolution,
+        );
+        let mut cam = Camera::new(CameraIndex::Index(index), req).map_err(|e| {
+            anyhow::anyhow!(
+                "{ABILITY_CAMERA_SNAPSHOT}: nokhwa Camera::new(index={index}) failed: \
+                 {e}; reason={REASON_RESOURCE_UNAVAILABLE}"
+            )
+        })?;
+        cam.open_stream().map_err(|e| {
+            anyhow::anyhow!(
+                "{ABILITY_CAMERA_SNAPSHOT}: nokhwa open_stream failed: {e}; \
+                 reason={REASON_RESOURCE_UNAVAILABLE}"
+            )
+        })?;
+        let buf = cam.frame().map_err(|e| {
+            anyhow::anyhow!(
+                "{ABILITY_CAMERA_SNAPSHOT}: nokhwa frame() failed: {e}; \
+                 reason={REASON_RESOURCE_UNAVAILABLE}"
+            )
+        })?;
+        let rgb_image = buf.decode_image::<RgbFormat>().map_err(|e| {
+            anyhow::anyhow!(
+                "{ABILITY_CAMERA_SNAPSHOT}: nokhwa decode_image failed: {e}; \
+                 reason={REASON_RESOURCE_UNAVAILABLE}"
+            )
+        })?;
+        let width = rgb_image.width();
+        let height = rgb_image.height();
+        let rgb = rgb_image.into_raw();
+        let mut jpeg = Vec::new();
+        let encoder = jpeg_encoder::Encoder::new(&mut jpeg, 80);
+        encoder
+            .encode(&rgb, width as u16, height as u16, jpeg_encoder::ColorType::Rgb)
+            .map_err(|e| anyhow::anyhow!("jpeg encode failed: {e}"))?;
+        Ok(EncodedFrame {
+            jpeg_bytes: jpeg,
+            width,
+            height,
+        })
+    }
+}
+
+// ── Synthetic backend (PR3a, kept for tests) ─────────────────
 
 /// Deterministic synthetic-frame backend. Produces a 64×48
 /// solid-colour JPEG seeded from the `hardware_id` so two
@@ -185,12 +278,15 @@ pub fn register_with_backend(
     );
 }
 
-/// Register with the default `SyntheticBackend` (PR3a). Convenience
-/// for the daemon boot path, which calls
-/// `media::camera_snapshot::register(reg)` after
-/// `media_abilities::register(reg)`.
+/// Register with the real `NokhwaBackend` (PR3 default). The
+/// daemon boot path calls this after `media_abilities::register`
+/// so the envelope-aware variant supersedes the args-only stub.
+/// Tests that need a hardware-free path call
+/// `register_with_backend(reg, Arc::new(SyntheticBackend))`
+/// instead — the trait keeps the dispatch / receipt code
+/// backend-agnostic.
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    register_with_backend(reg, Arc::new(SyntheticBackend));
+    register_with_backend(reg, Arc::new(NokhwaBackend));
 }
 
 // ── Handler core ─────────────────────────────────────────────
@@ -311,6 +407,15 @@ mod tests {
         )
     }
 
+    /// Test register helper. Tests use SyntheticBackend so the
+    /// suite runs hardware-free (CI / Linux-without-camera). The
+    /// daemon's `register(reg)` defaults to `NokhwaBackend` which
+    /// only works against a real `/dev/video*` or AVFoundation
+    /// device.
+    fn register_synthetic(reg: &mut LocalAbilityRegistry) {
+        register_with_backend(reg, Arc::new(SyntheticBackend));
+    }
+
     /// Synthetic-backend smoke: capture against a hand-built
     /// ResourceEntry, assert the bytes look like a JPEG (magic
     /// number 0xff 0xd8) and the dimensions match.
@@ -379,7 +484,7 @@ mod tests {
         resources::save(&file).unwrap();
 
         let mut reg = LocalAbilityRegistry::new();
-        register(&mut reg);
+        register_synthetic(&mut reg);
         let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
         let target = InvocationTarget {
             scope: TargetScope::Local,
@@ -429,7 +534,7 @@ mod tests {
     fn handler_rejects_missing_subject_with_subject_required_reason() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let mut reg = LocalAbilityRegistry::new();
-        register(&mut reg);
+        register_synthetic(&mut reg);
         let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
         let target = InvocationTarget {
             scope: TargetScope::Local,
@@ -457,7 +562,7 @@ mod tests {
         // rather than picking up some prior test's state.
         resources::save(&ResourcesFile::default()).unwrap();
         let mut reg = LocalAbilityRegistry::new();
-        register(&mut reg);
+        register_synthetic(&mut reg);
         let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
         let target = InvocationTarget {
             scope: TargetScope::Local,
@@ -496,7 +601,7 @@ mod tests {
         resources::save(&file).unwrap();
 
         let mut reg = LocalAbilityRegistry::new();
-        register(&mut reg);
+        register_synthetic(&mut reg);
         let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
         let target = InvocationTarget {
             scope: TargetScope::Local,
@@ -521,7 +626,7 @@ mod tests {
     fn handler_rejects_subject_in_args_even_on_envelope_path() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let mut reg = LocalAbilityRegistry::new();
-        register(&mut reg);
+        register_synthetic(&mut reg);
         let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
         let target = InvocationTarget {
             scope: TargetScope::Local,

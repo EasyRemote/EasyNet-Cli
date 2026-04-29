@@ -34,3 +34,16 @@
 /// frame backend (no hardware); the real cpal/nokhwa swap is a
 /// later PR.
 pub mod camera_snapshot;
+
+/// `screen.snapshot` (RFC-005 v3.2 A8) — real handler. PR3
+/// vertical slice mirroring `camera_snapshot`'s shape. Real
+/// backend (`XcapBackend`) captures the primary monitor; tests
+/// use `SyntheticScreenBackend` so the suite runs hardware-free.
+pub mod screen_snapshot;
+
+/// `mic.subscribe` (RFC-005 v3.2 A1) — real handler. cpal-backed
+/// `CpalMicBackend` opens the default input device on a
+/// dedicated thread and broadcasts S16LE PCM frames through a
+/// `tokio::sync::broadcast`. Tests use `SyntheticMicBackend`
+/// which emits a single zero-filled frame.
+pub mod mic_subscribe;
