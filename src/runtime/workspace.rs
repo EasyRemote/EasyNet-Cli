@@ -81,9 +81,10 @@ use crate::runtime::directory::AgentDirectory;
 /// absence of `.git/`.
 ///
 /// Behaviour per runtime (branching on `AgentSpec::runtime`):
-/// * `ClaudeCode`: writes `.mcp.json` + `CLAUDE.md` + `AGENTS.md`.
+/// * `ClaudeCode`: writes `.mcp.json` + `CLAUDE.md` + `AGENTS.md`,
+///   seeds `.claude/skills/easynet-collaborate/SKILL.md`.
 /// * `Codex` / `CodexAppServer`: additionally writes
-///   `.codex/config.toml` + `.agents/skills/easynet-ability-crud/*`
+///   `.codex/config.toml` + `.agents/skills/easynet-collaborate/*`
 ///   and runs `git init` if `.git/` is absent.
 pub fn ensure_from_directory(dir: &AgentDirectory) -> anyhow::Result<PathBuf> {
     // Guarantee the four spec-adjacent subdirs exist. Covers the
@@ -152,24 +153,27 @@ pub fn ensure_from_directory(dir: &AgentDirectory) -> anyhow::Result<PathBuf> {
         }
     }
 
-    // Seed the ability-CRUD skill for every runtime. Claude Code
-    // discovers it via --plugin-dir <root>/skills/<name>/ (see
-    // drivers::claude_code::invoke); Codex via the legacy
-    // .agents/skills/ convention. Writing to both makes the skill
-    // visible no matter which runtime spawns.
+    // Seed the `easynet-collaborate` skill so a freshly-installed
+    // agent knows how to discover and invoke abilities on the device /
+    // federation before falling back to "I can't do that". Single
+    // seed, single source of truth (`skills/easynet-collaborate/`
+    // in this repo via include_str!).
     //
-    // Pre-fix this seeded ONLY for Codex, and the content named
-    // MCP tools (deploy_ability, run_mission, list_devices) that
-    // do not exist in the current MCP surface. Surfaced when an
-    // audit asked whether agents knew how to author abilities at
-    // all — claude workspaces had no skill, codex had a skill that
-    // pointed at ghost tools.
-    write_ability_crud_skill(&root)?;
-    // Pair skill: how to USE existing abilities, walking a
-    // discovery ladder (self → device → easynet) before falling
-    // back to "I can't do that". The CRUD skill teaches how to
-    // GROW the network; this one teaches how to consume it.
-    write_delegate_skill(&root)?;
+    // Two skills used to be seeded here (`easynet-ability-crud` for
+    // authoring + `delegate` for using). They were merged: ability
+    // authoring became `easynet-author` (user-installed, not seeded —
+    // it's an event-driven need, not every-call muscle memory), and
+    // `delegate` was renamed `easynet-collaborate` so the EasyNet
+    // family has a uniform `easynet-` prefix and an action-shaped
+    // name.
+    //
+    // Path is runtime-aware: claude-code reads `<root>/.claude/skills/`
+    // (Anthropic project-local skill convention — load-bearing),
+    // codex reads `<root>/.agents/skills/`. Earlier code wrote to
+    // `<root>/skills/` for both, which Claude Code's loader did not
+    // scan — the seed existed but never activated. Same path-routing
+    // pattern as `skill.publish` in `runtime::agents::skill_publish_ability`.
+    write_collaborate_seed(&root, runtime)?;
 
     Ok(root)
 }
@@ -246,7 +250,11 @@ fn spec_from_entry(agent_name: &str, entry: &AgentEntry) -> crate::core::agent_s
     let mut spec = crate::core::agent_spec::AgentSpec::new(agent_name, runtime);
     spec.model = entry.model.clone();
     // Match migration's "only persist non-default timeout" rule.
-    if entry.timeout_secs != 300 {
+    // Read the current default through the registry function rather
+    // than hardcoding so a default bump (5 min → 1 hour, 2026-04)
+    // does not silently turn this comparison into a "always persist"
+    // path.
+    if entry.timeout_secs != crate::registry::agents::default_timeout_for_new_rows() {
         spec.timeout_secs = Some(entry.timeout_secs);
     }
     if let Some(label) = &entry.label {
@@ -341,58 +349,57 @@ fn write_codex_config(
     Ok(())
 }
 
-/// Seed the `easynet-ability-crud` skill so a freshly-installed
-/// agent knows how to author / validate / deploy / invoke / remove
-/// abilities through EasyNet's actual MCP surface and CLI.
+/// Seed the `easynet-collaborate` skill so a freshly-installed
+/// agent knows how to walk the discovery ladder (own abilities →
+/// other agents on this device → published abilities on EasyNet)
+/// before falling back to "I can't do that" or a generic web search.
 ///
-/// We write to TWO locations on purpose:
+/// Source of truth: `<repo>/skills/easynet-collaborate/SKILL.md`,
+/// included at compile time. Operators editing the skill body edit
+/// the markdown file; Rust does not need to recompile until the
+/// next release cuts.
 ///
-///   * `<workspace>/skills/easynet-ability-crud/SKILL.md` — picked
-///     up by Claude Code via `--plugin-dir <workspace>/skills/...`
-///     (drivers::claude_code::invoke walks this directory at spawn
-///     time and adds one --plugin-dir per plugin-shaped subdir).
-///   * `<workspace>/.agents/skills/easynet-ability-crud/SKILL.md`
-///     — the legacy Codex/Agent-Skills convention.
+/// Path picking
+/// ------------
+/// Claude Code's skill loader scans `<cwd>/.claude/skills/` per
+/// Anthropic's project-local convention. Codex reads
+/// `<cwd>/.agents/skills/` (the historical Agent-Skills convention).
+/// Writing to the right path is load-bearing — earlier seeds wrote
+/// to `<cwd>/skills/` for both runtimes; the file existed but the
+/// loader never matched it.
 ///
-/// Both files have identical content. The duplication costs ~3 KiB
-/// per workspace and means the same skill works under whichever
-/// runtime ends up dispatching, without a runtime branch here.
-fn write_ability_crud_skill(ws: &Path) -> anyhow::Result<()> {
-    write_seed_skill(ws, "easynet-ability-crud", ABILITY_CRUD_SKILL_MD)
-}
-
-/// Seed the `delegate` skill so a freshly-installed agent knows how
-/// to walk the discovery ladder (own abilities → other agents on
-/// this device → published abilities on EasyNet) before falling back
-/// to "I can't do that" or a generic web search.
-///
-/// The skill replaces the previous `easynet-collaboration` seed,
-/// which only covered the device tier and tied the workflow to
-/// specific tool names. The new content frames discovery as a
-/// general-purpose ladder so the skill stays useful when the
-/// federation tier ships and when alternative discover providers are
-/// installed.
-///
-/// Same dual-location pattern as `write_ability_crud_skill` — see
-/// that function's doc comment for why both `skills/` and
-/// `.agents/skills/` get a copy.
-fn write_delegate_skill(ws: &Path) -> anyhow::Result<()> {
-    write_seed_skill(ws, "delegate", DELEGATE_SKILL_MD)
-}
-
-/// Write the same SKILL.md body into both seed-skill locations
-/// (`skills/<name>/SKILL.md` and `.agents/skills/<name>/SKILL.md`).
-/// Pulled out so every seed function shares the identical layout
-/// rules — a future skill that lands in only one of the two paths
-/// would be invisible to whichever runtime expected the other.
-fn write_seed_skill(ws: &Path, name: &str, body: &str) -> anyhow::Result<()> {
-    for relative in ["skills", ".agents/skills"] {
-        let skill_dir = ws.join(relative).join(name);
-        fs::create_dir_all(&skill_dir)?;
-        config::atomic_write(&skill_dir.join("SKILL.md"), body.as_bytes())?;
-    }
+/// Mirrors the routing in
+/// `runtime::agents::skill_publish_ability::skills_dir_for` so a
+/// curator-published skill and a freshly-seeded skill both land in
+/// the location the runtime actually scans.
+fn write_collaborate_seed(ws: &Path, runtime: RuntimeKind) -> anyhow::Result<()> {
+    let skill_dir = collaborate_seed_dir(ws, runtime);
+    fs::create_dir_all(&skill_dir)?;
+    config::atomic_write(
+        &skill_dir.join("SKILL.md"),
+        COLLABORATE_SKILL_MD.as_bytes(),
+    )?;
     Ok(())
 }
+
+/// Pick the seed-skill directory for a given runtime. Pulled out so
+/// the seed function and the workspace tests stay in sync.
+fn collaborate_seed_dir(ws: &Path, runtime: RuntimeKind) -> PathBuf {
+    let parent = match runtime {
+        RuntimeKind::ClaudeCode => ws.join(".claude").join("skills"),
+        RuntimeKind::Codex | RuntimeKind::CodexAppServer => {
+            ws.join(".agents").join("skills")
+        }
+    };
+    parent.join("easynet-collaborate")
+}
+
+/// `easynet-collaborate` seed body — the source of truth lives at
+/// `skills/easynet-collaborate/SKILL.md` in this repo. Included via
+/// `include_str!` so editing the markdown is enough; no Rust recompile
+/// is needed for a content change in the same release.
+const COLLABORATE_SKILL_MD: &str =
+    include_str!("../../skills/easynet-collaborate/SKILL.md");
 
 // ── Shared ───────────────────────────────────────────────────────────────────
 
@@ -429,12 +436,51 @@ fn write_seed_skill(ws: &Path, name: &str, body: &str) -> anyhow::Result<()> {
 fn resolve_easynet_binary() -> String {
     let current = std::env::current_exe().ok();
 
-    // Step 1: current_exe is `easynet` or `easynet-daemon`.
+    // Step 1: if current_exe is `easynet` (the CLI binary that DOES
+    // parse `mcp serve`), use it directly. Doing this preserves the
+    // dev-build path (target/debug/easynet) — the production
+    // installer drops both binaries into /usr/local/bin so PATH
+    // resolution would also work, but using the absolute path
+    // skips the lookup and guarantees the same binary version
+    // gets re-spawned for MCP.
+    //
+    // We deliberately do NOT use `easynet-daemon` even when the
+    // current process IS easynet-daemon. `easynet-daemon` does not
+    // parse subcommand args at all — it always boots the full
+    // daemon (binds control.sock + runtime-dispatch.sock). When
+    // `.mcp.json` invokes `easynet-daemon mcp serve …` to satisfy
+    // the host AI client's MCP request, the spawned subprocess
+    // forcibly removes the parent daemon's control.sock file
+    // (transport.rs::bind_at line 146-147) and binds its own.
+    // From that point forward, all chat dispatches land on the
+    // ghost daemon (which has no chat handler registered) and
+    // hang or close. Real behaviour observed: first chat works,
+    // every subsequent chat returns "daemon closed the connection
+    // before responding" instantly.
+    //
+    // The right binary for `.mcp.json` is always `easynet` (which
+    // routes `mcp serve` through `cli::mcp_server::run`). Resolve
+    // it from the current_exe's parent directory first (production
+    // installs side-by-side); fall back to PATH lookup; final
+    // fallback: bare name and let exec() find it.
     if let Some(p) = current.as_ref() {
         if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-            if stem == "easynet" || stem == "easynet-daemon" {
+            if stem == "easynet" {
                 if let Some(s) = p.to_str() {
                     return s.to_string();
+                }
+            }
+            if stem == "easynet-daemon" {
+                // We are the daemon writing .mcp.json. Look for the
+                // sibling `easynet` binary so the spawned MCP subprocess
+                // hits the CLI parser, not a second daemon.
+                if let Some(parent) = p.parent() {
+                    let sibling = parent.join("easynet");
+                    if sibling.is_file() {
+                        if let Some(s) = sibling.to_str() {
+                            return s.to_string();
+                        }
+                    }
                 }
             }
         }
@@ -704,540 +750,6 @@ easynet device list                     # list hosting substrates
     .to_string()
 }
 
-/// Default skill seeded into every freshly-provisioned workspace.
-///
-/// The frontmatter follows the Agent-Skills convention (Anthropic
-/// Skills, Claude Code plugins, Codex `.agents/skills/`): `name`,
-/// `description`, `allowed-tools`, `when_to_use`. The body is
-/// structured as Goal → numbered Steps with explicit Success
-/// criteria — the layout AliveCode's `skillify` template uses, and
-/// the layout the EasyNet ability scaffolder itself emits when it
-/// writes `SKILL.md` next to a new ability.
-///
-/// Tool names referenced inside MUST be tools the workspace's MCP
-/// server actually advertises (from `easynet mcp serve --agent <n>
-/// tools/list`). The stale predecessor of this file referenced
-/// `deploy_ability`, `run_mission`, `list_devices`, etc — none of
-/// which exist in the current MCP surface. Audit caught that an
-/// agent reading the seed skill would try those names and get a
-/// MethodNotFound on every call.
-const ABILITY_CRUD_SKILL_MD: &str = r#"---
-name: easynet-ability-crud
-description: Author, register, invoke, and remove agent-owned EasyNet abilities by writing `.ability.toml` files into the workspace `abilities/` directory.
-allowed-tools:
-  - mcp__easynet
-  - Bash(easynet:*)
-  - Bash(ls:*)
-  - Bash(cat:*)
-  - Read
-  - Write
-  - Edit
-when_to_use: |
-  Use when the user asks you to learn a new ability, publish an ability, or
-  invoke / remove an existing one in your own workspace. Trigger phrases:
-  "learn how to <do X>", "make a <verb> ability", "save this as an ability",
-  "publish <name>", "what abilities do I have", "remove the <name> ability".
----
-
-# EasyNet Ability Authoring
-
-You are an EasyNet agent. Every ability you own lives as one TOML file
-under `<your-workspace>/abilities/<verb>.ability.toml`. The daemon
-hot-reloads new files — you do not have to restart anything to make a
-new ability callable. Once registered, every other agent on the same
-node can call it via `easynet.invoke` (or `easynet.run`'s EAL with
-the `<your-agent-name>.<verb>(...)` member-call form), and you can
-call it on yourself.
-
-## Two kinds of ability — pick the right one
-
-EasyNet supports two execution paths, chosen by whether your
-`<verb>.ability.toml` declares an `[exec]` section.
-
-### A. Deterministic ability — `[exec] kind = "shell"` (PREFER THIS)
-
-When the work is "run THIS exact command and return its output" —
-hitting an HTTP endpoint, formatting a date, transforming text via a
-trusted binary — write a `[exec]` section. The daemon spawns the argv
-DIRECTLY. No LLM is in the loop, the call returns in milliseconds,
-and the output is byte-for-byte identical every time.
-
-Example (`weather.ability.toml`):
-
-```toml
-schema_version = "1"
-name = "weather"
-description = "Fetch the current weather for a location via wttr.in."
-
-[input_schema]
-type = "object"
-additionalProperties = false
-required = ["location"]
-[input_schema.properties.location]
-type = "string"
-description = "City name, URL-safe."
-
-[exec]
-kind = "shell"
-argv = [
-  "curl",
-  "--silent",
-  "--fail",
-  "--max-time", "5",
-  "https://wttr.in/{{ location }}?format=%l:+%C+%t+%w+%h",
-]
-```
-
-How `argv` substitution works:
-- `{{ name }}` is replaced with the value of `args["name"]` for each
-  call. Whitespace inside the braces is tolerated (`{{ name }}` and
-  `{{name}}` both work).
-- Strings substitute as their bare value; other JSON types
-  substitute as JSON (e.g. `{{ count }}` with `count = 42` becomes
-  `42`, with `count = [1,2]` becomes `[1,2]`).
-- `argv` is a vector — each element is passed as ONE argv slot.
-  Because the daemon does NOT shell-interpret the line, a value that
-  contains a space or `;` cannot break out into a second token.
-  Command injection is structurally impossible — no escaping needed.
-- A missing `args` key referenced by `{{ name }}` errors loudly
-  before the subprocess is spawned.
-
-The envelope returned by a shell ability is:
-
-```json
-{ "result": "<stdout, utf-8 trimmed>",
-  "fulfilled_by": "shell",
-  "exit_code": 0,
-  "elapsed_ms": 47 }
-```
-
-Fail loud: a non-zero exit code becomes a dispatch error (the
-caller's `easynet.invoke` returns Err). Don't paper over upstream
-failures with `|| true`.
-
-### B. LLM-driven ability — no `[exec]` section
-
-Use this ONLY when the work genuinely needs your reasoning — drafting
-copy, summarising, classifying open-ended text. The daemon falls back
-to your `<agent>.chat` handler, which embeds the manifest's
-`description` field as the contract you must fulfil. This path costs
-seconds (LLM cold start + tool search + reply), is non-deterministic,
-and is rate-limited by your provider quota.
-
-**Default to A. Only choose B when A genuinely cannot capture the
-contract** (e.g. "summarise this article" — there is no curl that
-does that).
-
-## Steps
-
-### 1. Discover existing abilities
-
-Call `meta.list_abilities` (or its alias `easynet.discover`) to see
-every ability registered on this node, yours and other agents'.
-Cross-reference before you write — duplicating a peer's ability is
-wasteful, and your callers can already invoke theirs.
-
-### 2. Decide kind A vs kind B
-
-Ask yourself in order:
-
-1. Is there ONE shell command that does the whole job? → kind A.
-2. Is there a single HTTP endpoint that returns the answer? → kind A
-   with `argv = ["curl", ...]` until the dedicated HTTP executor
-   ships.
-3. Does the work require reading-then-deciding (LLM judgment)? →
-   kind B.
-
-If you are choosing B, document WHY in the manifest's `description`
-so a future maintainer can revisit when a deterministic path becomes
-available.
-
-### 3. Author the manifest
-
-Write directly to `<your-workspace>/abilities/<verb>.ability.toml`
-using the `Write` tool. The verb portion of the file name (before
-`.ability.toml`) MUST equal the `name` field inside.
-
-Required top-level fields:
-- `schema_version = "1"`
-- `name` — bare verb, no agent prefix. The qualified name on the
-  wire is built as `<your-agent-name>.<verb>` automatically.
-- `description` — one paragraph. Surfaced in `meta.list_abilities`
-  so other agents can decide whether to invoke you.
-- `[input_schema]` — JSON Schema, top-level `type = "object"`. Be
-  strict: list `required` fields, set `additionalProperties = false`,
-  bound string lengths and number ranges where you can. A loose
-  schema admits malformed calls that crash mid-execution.
-
-Optional:
-- `[output_schema]` — only for abilities with a typed return.
-  Omit for chat-style results.
-- `timeout_seconds` — per-call ceiling. Default is the daemon-wide
-  setting; pin it here for an ability that must finish fast (e.g.
-  health probes) or one that legitimately runs longer.
-- `[exec]` — see kind A above.
-
-### 4. Verify the manifest parses
-
-```bash
-ls -la <your-workspace>/abilities/
-cat <your-workspace>/abilities/<verb>.ability.toml
-```
-
-Then call `meta.list_abilities` again — your new ability MUST appear
-in the list under `<your-agent-name>.<verb>`. If it does not, the
-TOML failed to parse; the daemon log (`~/.easynet/logs/easynet-daemon.log`)
-will name the offending file and the parse error.
-
-### 5. Smoke-test
-
-Call your ability through `easynet.invoke`:
-
-```
-easynet.invoke({
-  "ability": "<verb>",
-  "args": { ... }   // shape per your input_schema
-})
-```
-
-(Or, equivalently, ask another agent to invoke
-`<your-agent-name>.<verb>` via `easynet.run`'s EAL.)
-
-For a kind A ability, you should see `fulfilled_by: "shell"` and the
-call should return in well under a second. For a kind B ability,
-`fulfilled_by: "agent_chat"` and several seconds of latency are
-expected.
-
-### 6. Iterate on the contract
-
-If a caller's args don't match your `input_schema` you'll get a
-validation error before the executor runs — tighten or relax the
-schema until valid calls go through and invalid ones fail clearly.
-Edit the TOML in place; the next call uses the new manifest, no
-restart.
-
-### 7. Remove
-
-Delete the file:
-
-```bash
-rm <your-workspace>/abilities/<verb>.ability.toml
-```
-
-The next call to `<your-agent-name>.<verb>` will return
-`not_found`. There is no "soft delete" — be sure no caller still
-needs the ability before removing it.
-
-## Rules
-
-- One ability = one file under `abilities/`. Do not nest, do not
-  combine multiple manifests in one TOML.
-- The `name` field MUST match the file stem. A drift here makes
-  `<agent>.<file-stem>` and `<agent>.<name>` two different wire
-  identifiers — a confusing half-state.
-- Never invent MCP tool names. If a tool you want is not in
-  `meta.list_abilities`, the right move is to author it (Steps 3-5),
-  not to call a name and hope it routes.
-- For kind A: prefer `argv` arrays to shell strings. The daemon does
-  not run `sh -c`; values with spaces or metacharacters stay in one
-  argv slot, by design.
-- For kind B: embed the contract in `description` verbatim. The
-  chat-translation path puts that text in front of the LLM as the
-  brief; a vague description produces vague results.
-- The agent's own `<self>.chat` is intentionally NOT exposed in the
-  MCP tool list (recursion guard). Reach for sibling agents' chats
-  via `easynet.invoke({ target: "<peer>", ability: "chat", ... })`.
-"#;
-
-/// Seed text for the `delegate` skill. Teaches the agent to walk a
-/// three-tier discovery ladder (self abilities → other agents on the
-/// same device → abilities published to the EasyNet federation)
-/// before saying "I can't do that". Paired with `easynet-ability-crud`
-/// (the authoring counterpart) so an agent that finds a gap can
-/// either consume an existing ability or grow a new one.
-///
-/// Naming
-/// ------
-/// The skill is named `delegate` rather than `easynet-collaboration`
-/// because cross-agent borrowing is only one tier of the ladder; the
-/// general action is "delegate this work to a more specific tool",
-/// which spans calling your own published ability, a peer's, or one
-/// from the federation. A short verb-shaped name reads well in the
-/// LLM's tool-picker context.
-///
-/// Tool names referenced inside MUST resolve on the live ability
-/// registry — `<self>.discover` and `<self>.invoke` are owner-namespaced
-/// per the ability-only model: every agent owns its own copy of the
-/// self bundle, with `<self>` substituted by the runtime. The
-/// `<self>.discover` ability accepts a `scope` argument
-/// (`self | device | easynet`) and surfaces typed errors per tier
-/// failure mode: `federation_not_joined` (daemon hasn't run
-/// `device join`) and `federation_unavailable` (hub call failed)
-/// for `easynet`. The federation tier is wired against the realm's
-/// hub via `federation.resolve` (Hub-profile, RFC-001 §A14).
-const DELEGATE_SKILL_MD: &str = r#"---
-name: delegate
-description: Walk a three-tier discovery ladder (your own abilities → other agents on this device → abilities published to EasyNet) and delegate work to whichever existing ability fits, before falling back to "I can't do that" or a generic web search.
-allowed-tools:
-  - mcp__easynet
-when_to_use: |
-  Trigger this skill BEFORE you fall back to "I can't do that", a
-  generic web search, or a fabricated answer. Concretely:
-    - The user asks for live data you cannot produce on your own
-      (weather, exchange rates, news, anything that needs a fresh
-      fetch you don't already have a tool for).
-    - The user names a domain you have no skill for ("transcribe
-      audio", "render a CAD drawing", "compile this Rust").
-    - The user explicitly addresses another agent ("ask codex", "have
-      claude do it", "the other agent").
-    - You see a task you'd normally do, but an existing published
-      ability would obviously be cheaper, faster, or more precise.
-  Do NOT trigger when: the user wants your opinion, references your
-  own previous turn, or asks for purely conversational output.
----
-
-# Delegate
-
-You are part of an EasyNet device. Three tiers of abilities are
-reachable from inside your chat — try them in this order before you
-reach for plain reasoning or a web search.
-
-The whole loop runs through two MCP tools, already in your tool list
-under the `easynet` server:
-
-  - `mcp__easynet__<self>.discover` — search for an ability that fits.
-  - `mcp__easynet__<self>.invoke`   — call it once you've picked one.
-
-`<self>` is your own agent name (claude, codex, …). The two tools are
-yours; they delegate downstream as needed. Do NOT start a second MCP
-server, do NOT shell out to a peer's CLI, do NOT assume an ability
-exists without searching first.
-
-## Discovery ladder
-
-Walk the tiers in order; stop at the first tier that returns a usable
-match.
-
-### Tier 1 — your own abilities (fastest, fully trusted)
-
-```
-Tool: mcp__easynet__<self>.discover
-Args: { "scope": "self", "query": "<short task description>" }
-```
-
-Use this first. If the user asks for something close to a verb you've
-already published as `<self>.<verb>`, you don't need anyone else.
-
-### Tier 2 — other agents on this device (fast, same user)
-
-```
-Tool: mcp__easynet__<self>.discover
-Args: { "scope": "device", "query": "<short task description>" }
-```
-
-Other agents on this same device share the user's trust boundary.
-Their abilities default to device-visibility, so you can see and
-invoke any peer ability whose author chose `[access].visibility`
-of `device` or `public`.
-
-### Tier 3 — EasyNet federation (network call, lower trust)
-
-```
-Tool: mcp__easynet__<self>.discover
-Args: { "scope": "easynet", "query": "<short task description>" }
-```
-
-Other users have published `[access].visibility = "public"` abilities
-to the federation. Reaching this tier costs a network round-trip
-(typically 100–500ms against the realm hub) and the publisher is
-outside your user's trust boundary — prefer Tier 1 or 2 when they
-have a usable match.
-
-Each candidate carries `fulfilled_by: "federation"` so you can tell
-at a glance the call won't run on this device. When you invoke a
-federation candidate, the daemon signs a DelegationProof on your
-behalf, the hub routes to the publishing device, and the receipt
-comes back with the same envelope shape the local tiers use.
-
-> Typed errors (degrade-gracefully cases):
->   * `federation_not_joined`   — the daemon hasn't joined a realm
->                                  yet. Tell the user once; don't
->                                  retry within the turn.
->   * `federation_unavailable`  — hub call failed (transport / hub
->                                  rejection). Fall back to telling
->                                  the user no public ability matched.
-
-## Discover output (all tiers share this shape)
-
-```
-Returns:
-{
-  "candidates": [
-    {
-      "qualified_name": "claude.weather",
-      "owner": "claude",
-      "ability": "weather",
-      "description": "Fetch current weather...",
-      "score": 0.93,
-      "reason": "title match + tag match",
-      "input_schema": { "type": "object", "required": ["location"], ... },
-      "visibility": "device",
-      "trust": "same_device",
-      "fulfilled_by": "shell"
-    },
-    ...
-  ]
-}
-```
-
-`score` is the discover provider's relevance score (0..1). `reason` is
-a short explanation. `fulfilled_by`, when present, distinguishes a
-deterministic executor (`shell`, sub-second) from an agent chat
-handler (`agent_chat`, several seconds, non-deterministic).
-
-**Filtering rule (apply yourself):**
-
-  - Pick the candidate whose `description` and `input_schema` best
-    match the user's intent.
-  - Skip your own `<self>.chat` — that's how callers reach you, not
-    how you reach others.
-  - Skip daemon-internal namespaces unless you specifically need
-    them (`runtime.*`, `fleet.*`, `mcp.bridge.*`, `a2a.bridge.*`).
-  - Host primitives (`fs.*`, `shell.*`, `http.*`, `process.exec`)
-    are fine when you need a raw operation rather than a domain
-    ability.
-
-Tip: cache the discover result for the current turn — the registry
-doesn't change mid-turn unless someone explicitly adds or removes
-an ability.
-
-## Choosing a discover provider
-
-By default `<self>.discover` is the daemon's builtin keyword matcher
-(BM25-lite over name/description/tags). If a more specialised
-discover provider is installed (e.g. `userx.semantic_discover`), it
-shows up in your ability list under `*.discover`. Pick the most
-specific provider for your task — semantic providers handle vague
-queries better; keyword providers are predictable and fast.
-
-## Invoke
-
-```
-Tool: mcp__easynet__<self>.invoke
-Args: {
-  "ability": "weather",
-  "target":  "claude",
-  "args":    { "location": "Beijing" }
-}
-
-Returns (success):
-{
-  "result": "Beijing: Clear +18°C ↗5km/h 58%",
-  "fulfilled_by": "shell",
-  "exit_code": 0,
-  "elapsed_ms": 312
-}
-```
-
-Field rules:
-
-  - `ability` — required, the bare verb portion (no agent prefix).
-  - `target` — optional. Omit to call your own ability of that
-    name; pass `"<peer>"` to call the peer's. The full wire name
-    `<target>.<ability>` is built for you.
-  - `args` — must satisfy the target ability's `input_schema`. If
-    you got the schema wrong the daemon returns a validation error
-    BEFORE the executor runs.
-
-Read the inner result out of `result`. That's what you compose your
-final answer around. **Do not paste the raw envelope back to the
-user** — they want a natural reply, not a JSON dump.
-
-## Decision flow
-
-```
-user asks for <X>
-   │
-   ├── Tier 1: <self>.discover(scope:"self", query:"<X>")
-   │     │
-   │     └── match? ──yes──► <self>.invoke({ ability, args })          ← fastest path
-   │
-   ├── Tier 2: <self>.discover(scope:"device", query:"<X>")
-   │     │
-   │     └── match? ──yes──► <self>.invoke({ ability, target, args })
-   │
-   ├── Tier 3: <self>.discover(scope:"easynet", query:"<X>")
-   │     │
-   │     ├── federation_not_joined? ──► stop, fall through (tell user
-   │     │                              the daemon isn't in a realm yet)
-   │     ├── federation_unavailable? ──► stop, fall through
-   │     │
-   │     └── match? ──yes──► <self>.invoke({ ability, target, args })
-   │
-   └── all tiers exhausted with no match:
-         (a) attempt with your own reasoning if it's safe to do so, OR
-         (b) offer to author the missing ability via the
-             `easynet-ability-crud` skill, OR
-         (c) tell the user honestly that no published ability exists
-             for this. Do not fabricate.
-```
-
-## Example — User asks "what's the weather in Beijing?"
-
-```
-Tier 1 (you):  mcp__easynet__<self>.discover
-                 { "scope": "self", "query": "weather" }
-Tier 1 result: { "candidates": [] }            ← nothing of yours fits
-
-Tier 2 (you):  mcp__easynet__<self>.discover
-                 { "scope": "device", "query": "weather" }
-Tier 2 result: { "candidates":
-                   [{ "qualified_name": "claude.weather",
-                      "owner": "claude",
-                      "ability": "weather",
-                      "score": 0.92,
-                      "fulfilled_by": "shell",
-                      "description": "Fetch current weather..." }] }
-
-Invoke (you):  mcp__easynet__<self>.invoke
-                 { "ability": "weather",
-                   "target":  "claude",
-                   "args":    { "location": "Beijing" } }
-Invoke result: { "result": "Beijing: Clear +18°C ↗5km/h 58%",
-                 "fulfilled_by": "shell",
-                 "elapsed_ms": 312 }
-
-You reply:     "Beijing is 18°C with clear skies right now."
-```
-
-## What NOT to do
-
-- ❌ Skip the ladder. Always run `<self>.discover` before invoking;
-  abilities come and go and your tool list is a stale snapshot.
-- ❌ Jump straight to `scope:"easynet"`. Tier 3 is a network call to
-  someone outside your user's trust boundary — earn your way there
-  by exhausting Tier 1 and Tier 2 first.
-- ❌ Invoke `<peer>.chat`. That's just chatting at the other agent,
-  which is wasteful, recursive, and bypasses the deterministic
-  ability they actually published.
-- ❌ Loop discover → invoke more than ~3 times in one turn. If
-  nothing fits, surface that to the user.
-- ❌ Promise the user a result without actually calling. Always
-  invoke before replying.
-- ❌ Ignore an `Err` from `<self>.invoke`. Either retry once with
-  better arguments (read the validation message), or tell the user
-  the call failed and why.
-
-## Pairing with ability authoring
-
-If the user says "from now on, when I ask for weather, use claude" —
-that's a publishing request. Hand off to `easynet-ability-crud`:
-that skill walks you through writing the `<verb>.ability.toml`
-manifest (with `[exec] kind = "shell"` whenever the work is a fixed
-command, and `[access].visibility = "device"` when peers should be
-able to discover it). The two skills compose: `delegate` consumes
-the network; `easynet-ability-crud` grows it.
-"#;
 
 #[cfg(test)]
 mod tests {
@@ -1392,32 +904,20 @@ mod tests {
         // ClaudeCode runtime — the branch in the projection is
         // what enforces the size/shape of the workspace.
         assert!(!root.join(".codex/config.toml").exists());
-        // Ability-CRUD skill is seeded for EVERY runtime now (P6 audit
-        // fix): pre-fix the seeder ran only for Codex, leaving Claude
-        // workspaces with no idea that EasyNet exposed an ability
-        // CRUD surface at all. Both runtimes get the same SKILL.md
-        // at <root>/skills/easynet-ability-crud/SKILL.md so Claude
-        // Code's --plugin-dir scan picks it up.
+        // Single seed: easynet-collaborate. Claude Code reads
+        // <root>/.claude/skills/ per the Anthropic project-local
+        // skill convention; that's the load-bearing path.
         assert!(root
-            .join("skills/easynet-ability-crud/SKILL.md")
+            .join(".claude/skills/easynet-collaborate/SKILL.md")
             .is_file());
-        // The legacy Codex path is also written for both runtimes —
-        // harmless duplication that keeps the seed visible no matter
-        // which runtime convention the consumer follows.
-        assert!(root
-            .join(".agents/skills/easynet-ability-crud/SKILL.md")
-            .is_file());
-        // The `delegate` skill is the consume-side counterpart of
-        // the CRUD (author-side) skill — both halves of the
-        // discovery+publish loop must land in the same workspace so
-        // an agent that can't solve a task knows to walk the
-        // self → device → easynet ladder before giving up.
-        assert!(root
-            .join("skills/delegate/SKILL.md")
-            .is_file());
-        assert!(root
-            .join(".agents/skills/delegate/SKILL.md")
-            .is_file());
+        // Negative: pre-rewrite the seeder also wrote to
+        // <root>/skills/ and <root>/.agents/skills/ for both
+        // runtimes; that produced files Claude Code's loader did
+        // not scan. Confirm the legacy paths are gone for the
+        // claude-code branch.
+        assert!(!root.join("skills/easynet-collaborate/SKILL.md").exists());
+        assert!(!root.join("skills/delegate/SKILL.md").exists());
+        assert!(!root.join("skills/easynet-ability-crud/SKILL.md").exists());
         cleanup(&root);
     }
 
@@ -1428,120 +928,47 @@ mod tests {
         assert!(root.join("CLAUDE.md").is_file());
         assert!(root.join(".mcp.json").is_file());
         assert!(root.join(".codex/config.toml").is_file());
+        // Codex reads <root>/.agents/skills/ — the historical Agent-
+        // Skills convention. Single seed lands there.
         assert!(root
-            .join(".agents/skills/easynet-ability-crud/SKILL.md")
+            .join(".agents/skills/easynet-collaborate/SKILL.md")
             .is_file());
-        // Codex workspace also gets the Claude-style skills/ path
-        // so the seed survives a runtime swap (e.g. an operator
-        // reuses the workspace to test claude-code).
-        assert!(root
-            .join("skills/easynet-ability-crud/SKILL.md")
-            .is_file());
-        // Both halves of the discovery+publish pair must land
-        // regardless of runtime — same rationale as the claude-code
-        // test above.
-        assert!(root
-            .join("skills/delegate/SKILL.md")
-            .is_file());
-        assert!(root
-            .join(".agents/skills/delegate/SKILL.md")
-            .is_file());
+        // Negative: legacy paths are not written.
+        assert!(!root.join("skills/easynet-collaborate/SKILL.md").exists());
+        assert!(!root.join(".claude/skills/easynet-collaborate/SKILL.md").exists());
         cleanup(&root);
     }
 
     #[test]
-    fn ability_crud_skill_md_references_only_real_mcp_tools() {
-        // The seed text MUST NOT name MCP tools that don't exist on
-        // the live workspace MCP server — pre-fix the const named
-        // `deploy_ability`, `run_mission`, `list_devices`, etc, none
-        // of which are advertised today, so any agent following the
-        // skill's instructions hit MethodNotFound on every call.
-        // Audit caught this when we probed `tools/list` and compared.
-        let dead = [
-            "deploy_ability",
-            "run_mission",
-            "list_devices",
-            "invoke_ability",
-            "execute_command",
-            "list_all_abilities",
-            "uninstall_ability",
-            "hub_status",
-        ];
-        for name in dead {
-            assert!(
-                !ABILITY_CRUD_SKILL_MD.contains(name),
-                "seed skill still references the stale tool name {name:?}; \
-                 pick a name from `easynet mcp serve --agent <n> tools/list` instead"
-            );
-        }
-        // Sanity: keywords that MUST appear in the seed (proof the
-        // new content has substance and stays aligned with the
-        // current authoring path — write a `.ability.toml` directly
-        // into the workspace, with `[exec]` for deterministic kinds
-        // and chat fallback for LLM-driven kinds).
-        for keyword in [
-            "meta.list_abilities",
-            ".ability.toml",
-            "[exec]",
-            "kind = \"shell\"",
-            "argv",
-            "easynet.invoke",
-        ] {
-            assert!(
-                ABILITY_CRUD_SKILL_MD.contains(keyword),
-                "seed skill must walk the agent through {keyword:?}; missing"
-            );
-        }
-    }
-
-    #[test]
-    fn delegate_skill_md_uses_current_discovery_ladder() {
-        // The skill replaces the older `easynet-collaboration` text
-        // that pinned the workflow to `easynet.discover` /
-        // `easynet.invoke` (a single-tier device-only model). The
-        // rewrite (a) drops the AXON-RFC-001 P1.5 victims
-        // (`mcp.bridge.*`) along with any remaining references to
-        // the canonical-but-non-owner-namespaced `easynet.<verb>`
-        // form, and (b) walks the agent through a three-tier ladder
-        // (self → device → easynet) using the owner-namespaced
-        // `<self>.discover` / `<self>.invoke` self bundle.
-        let dead = [
-            "mcp.bridge.call_tool",
-            "mcp.bridge.list_tools",
-            "deploy_ability",
-            "run_mission",
-            // Pre-rewrite the SKILL.md hardcoded `easynet.discover`
-            // and `easynet.invoke`. The owner-namespaced form
-            // (`<self>.discover` / `<self>.invoke`) is the canonical
-            // one under the ability-only model — every agent owns
-            // its own self bundle and the bare `easynet.*` names are
-            // not registered as such.
-            "easynet.discover",
-            "easynet.invoke",
-        ];
-        for name in dead {
-            assert!(
-                !DELEGATE_SKILL_MD.contains(name),
-                "delegate skill still references the stale tool {name:?}; \
-                 the ladder must walk through `<self>.discover` / `<self>.invoke`"
-            );
-        }
-        for keyword in [
+    fn collaborate_seed_has_canonical_skill_structure() {
+        // The seed body is included from
+        // skills/easynet-collaborate/SKILL.md at compile time. Pin
+        // the load-bearing parts of the Anthropic-canonical skill
+        // structure here so a regression to the markdown source
+        // (dropping front matter, the activation section, the
+        // "Use when" hint) trips this test instead of silently
+        // shipping an inert seed.
+        for required in [
+            "name: easynet-collaborate",
+            "description:",
+            "allowed-tools:",
+            "## When This Skill Activates",
             "<self>.discover",
             "<self>.invoke",
-            "scope",
-            "\"self\"",
-            "\"device\"",
-            "\"easynet\"",
-            "federation_not_joined",
-            "federation_unavailable",
-            "candidates",
         ] {
             assert!(
-                DELEGATE_SKILL_MD.contains(keyword),
-                "delegate skill must walk the agent through {keyword:?}; missing"
+                COLLABORATE_SKILL_MD.contains(required),
+                "seed must contain {required:?} for activation / canonical structure"
             );
         }
+        // The "Use when" hint is the activation-decision phrase the
+        // Claude Code skill loader matches against incoming prompts.
+        // Without it the skill lands on disk but never activates.
+        let lower = COLLABORATE_SKILL_MD.to_ascii_lowercase();
+        assert!(
+            lower.contains("use when"),
+            "description must contain 'Use when …' so the loader has an activation hint"
+        );
     }
 
     #[test]

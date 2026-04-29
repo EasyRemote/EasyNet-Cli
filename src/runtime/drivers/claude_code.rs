@@ -263,8 +263,30 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
         // Pre-fix the skill files were dropped on disk but the
         // adapter never told claude to look at them. The skill
         // was inert.
-        let skills_dir = cwd.join("skills");
-        if skills_dir.is_dir() {
+        // Two skill directories to scan:
+        //
+        //   * `<cwd>/.claude/skills/` — the Anthropic project-local
+        //     skill convention. This is where curator publishes
+        //     (`skill.publish` for claude-code agents) and where the
+        //     workspace seed (`easynet-collaborate`) lands. Claude
+        //     Code auto-scans this path inside the running subprocess
+        //     for plain SKILL.md files; passing `--plugin-dir` for
+        //     plugin-shaped subdirs gives it the entry hint when the
+        //     skill ships extra plugin assets.
+        //   * `<cwd>/skills/` — legacy EasyNet path, kept for
+        //     backward compatibility with skills installed via
+        //     `easynet skill install` against the pre-fix layout.
+        //     Walked for plugin-shaped subdirs only.
+        //
+        // Pre-fix only `<cwd>/skills/` was scanned; the workspace
+        // seed wrote to `<cwd>/skills/` too which Claude Code's
+        // own auto-loader did not reach for SKILL-only skills.
+        // The 2026-04-29 fix routes seeds + curator publishes to
+        // `.claude/skills/`; this scan adds discovery for both.
+        for skills_dir in [cwd.join(".claude").join("skills"), cwd.join("skills")] {
+            if !skills_dir.is_dir() {
+                continue;
+            }
             // Each subdirectory of skills/ is a candidate plugin.
             // Only push --plugin-dir entries for ones that look
             // plugin-shaped (contain a SKILL.md or plugin.json,
