@@ -145,12 +145,18 @@ pub fn dispatch(
     let query = parse_query(&args);
     let top_k = parse_top_k(&args)?;
 
-    if matches!(scope, Scope::Easynet) {
-        // Tier 3 — federation. Dial the realm's hub via
+    if scope.is_federated() {
+        // Tier 3 — federation. Dial the daemon's hub via
         // `federation.resolve`, project the receipt into the same
         // `Candidate[]` shape the local tiers return so the LLM
         // sees a uniform output regardless of where the candidate
         // came from.
+        //
+        // `User` scope passes the auto-fill empty filter so the hub
+        // scopes results to the caller's own tenant — the answer
+        // to "what agents do I have on my account, across all my
+        // devices". `Public` scope passes the explicit `*` literal
+        // to opt into cross-tenant catalog browsing.
         //
         // Three failure modes, all surfaced as a typed envelope so
         // the LLM falls through gracefully (no Err that the
@@ -164,7 +170,7 @@ pub fn dispatch(
         //                                  all. Surfaced as ok with
         //                                  `candidates = []`, not as
         //                                  an error.
-        return resolve_via_federation(query.as_deref(), top_k);
+        return resolve_via_federation(scope, query.as_deref(), top_k);
     }
 
     let agents = agent_registry_provider();
@@ -264,10 +270,10 @@ fn strip_provider_field(args: &Value) -> Value {
 /// hot, swap to a stashed `BridgePool` here without touching
 /// callers.
 fn resolve_via_federation(
+    scope: Scope,
     query: Option<&str>,
     top_k: usize,
 ) -> anyhow::Result<Value> {
-    let scope = Scope::Easynet;
 
     let (bridge, state) = match crate::persistence::config::load_and_connect() {
         Ok(pair) => pair,
@@ -328,8 +334,15 @@ fn resolve_via_federation(
         &bridge,
         device_caller_uri,
     );
-    let resolved = match crate::runtime::advertise::resolve_agents(
-        &invoker, tenant, &realm, "", true,
+    // Tenant_filter wire shape mirrors RFC-002 §5 update:
+    //   * User scope → None: hub auto-fills caller_tenant.
+    //   * Public scope → "*": cross-tenant catalog listing.
+    let tenant_filter = match scope {
+        Scope::Public => Some("*".to_string()),
+        _ => None,
+    };
+    let resolved = match crate::runtime::advertise::resolve_agents_with_filter(
+        &invoker, tenant, &realm, "", true, tenant_filter,
     ) {
         Ok(r) => r,
         Err(e) => {
@@ -382,7 +395,7 @@ fn resolve_via_federation(
                 description,
                 input_schema,
                 visibility: Visibility::Public,
-                scope_matched: Scope::Easynet,
+                scope_matched: scope,
                 score: 0.0,
                 reason: String::new(),
                 fulfilled_by: Some("federation"),
@@ -421,7 +434,14 @@ fn resolve_via_federation(
 enum Scope {
     Selfish,
     Device,
-    Easynet,
+    /// All agents under the calling daemon's tenant. Includes
+    /// other devices owned by the same user. The default federation
+    /// query — what "scope: easynet" actually means in practice.
+    User,
+    /// Cross-tenant hub catalog. Returns every advertised agent
+    /// regardless of tenant. Opt-in for explicit cross-user
+    /// discovery; not the default.
+    Public,
 }
 
 impl Scope {
@@ -429,8 +449,16 @@ impl Scope {
         match self {
             Scope::Selfish => "self",
             Scope::Device => "device",
-            Scope::Easynet => "easynet",
+            Scope::User => "user",
+            Scope::Public => "public",
         }
+    }
+
+    /// True when the scope dispatches through the federation hub
+    /// rather than the local agent registry. User and Public both
+    /// fan out to the hub; Selfish and Device stay local.
+    fn is_federated(self) -> bool {
+        matches!(self, Scope::User | Scope::Public)
     }
 }
 
@@ -439,9 +467,17 @@ fn parse_scope(args: &Value) -> anyhow::Result<Scope> {
     match raw {
         "self" => Ok(Scope::Selfish),
         "device" => Ok(Scope::Device),
-        "easynet" => Ok(Scope::Easynet),
+        // RFC-002 §5 update: `easynet` is the historical name for
+        // the federation tier. We retain it as an alias for `user`
+        // — the scope users actually want when they ask "what's on
+        // my account" — so existing callers keep working. New
+        // callers should prefer `user` for self-tenant queries and
+        // `public` for cross-tenant.
+        "easynet" | "user" => Ok(Scope::User),
+        "public" => Ok(Scope::Public),
         other => anyhow::bail!(
-            "discover: scope = {other:?} is not one of \"self\", \"device\", \"easynet\""
+            "discover: scope = {other:?} is not one of \"self\", \"device\", \
+             \"user\" / \"easynet\", or \"public\""
         ),
     }
 }
@@ -534,7 +570,12 @@ fn push_candidate(
         (Scope::Selfish, Scope::Selfish) => true,
         (Scope::Selfish, _) => false,
         (Scope::Device, _) => true,
-        (Scope::Easynet, _) => true,
+        // User and Public are federation-only; the local fan-in
+        // path doesn't run for them but is_federated() guards make
+        // sure we never reach this match arm under those scopes.
+        // Keep the arms exhaustive for the compiler.
+        (Scope::User, _) => true,
+        (Scope::Public, _) => true,
     };
     if !allowed {
         return;
@@ -769,6 +810,71 @@ mod tests {
     }
 
     #[test]
+    fn parse_scope_recognises_user_and_public_aliases() {
+        // RFC-002 §5: "user" is the new canonical name for what
+        // "easynet" used to mean. "public" is opt-in cross-tenant.
+        // Both must be accepted; "easynet" stays as a back-compat
+        // alias mapping to User.
+        let s = parse_scope(&json!({"scope": "user"})).unwrap();
+        assert_eq!(s.as_str(), "user");
+        assert!(s.is_federated());
+        let s = parse_scope(&json!({"scope": "easynet"})).unwrap();
+        assert_eq!(s.as_str(), "user", "easynet alias must canonicalise to user");
+        assert!(s.is_federated());
+        let s = parse_scope(&json!({"scope": "public"})).unwrap();
+        assert_eq!(s.as_str(), "public");
+        assert!(s.is_federated());
+        // Self / device unchanged.
+        assert!(!parse_scope(&json!({"scope": "self"})).unwrap().is_federated());
+        assert!(!parse_scope(&json!({"scope": "device"})).unwrap().is_federated());
+        // Unknown still rejected.
+        assert!(parse_scope(&json!({"scope": "fleet"})).is_err());
+    }
+
+    #[test]
+    fn user_scope_falls_through_when_not_joined() {
+        // Same shape as easynet_scope_unjoined_returns_typed_error_envelope
+        // but exercising the new "user" name explicitly so a future
+        // refactor that drops the alias still has direct coverage.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let mut reg = LocalAbilityRegistry::new();
+        register_for_agent(
+            &mut reg,
+            "claude".into(),
+            AgentRegistry::default,
+            Arc::new(std::sync::OnceLock::new()),
+        );
+        let h = reg.get_rpc("claude.discover").unwrap();
+        let resp = h(json!({"scope": "user"})).unwrap();
+        let code = resp["error"]["code"].as_str().unwrap_or("");
+        assert!(
+            code == "federation_not_joined" || code == "federation_unavailable",
+            "expected federation_* typed code, got {code:?}; full resp: {resp:#?}"
+        );
+        assert_eq!(resp["scope"], "user");
+    }
+
+    #[test]
+    fn public_scope_falls_through_when_not_joined() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let mut reg = LocalAbilityRegistry::new();
+        register_for_agent(
+            &mut reg,
+            "claude".into(),
+            AgentRegistry::default,
+            Arc::new(std::sync::OnceLock::new()),
+        );
+        let h = reg.get_rpc("claude.discover").unwrap();
+        let resp = h(json!({"scope": "public"})).unwrap();
+        let code = resp["error"]["code"].as_str().unwrap_or("");
+        assert!(
+            code == "federation_not_joined" || code == "federation_unavailable",
+            "expected federation_* typed code, got {code:?}; full resp: {resp:#?}"
+        );
+        assert_eq!(resp["scope"], "public");
+    }
+
+    #[test]
     fn easynet_scope_unjoined_returns_typed_error_envelope() {
         // No ~/.easynet/credentials.json under HomeGuard tmp HOME →
         // resolve_via_federation sees the unjoined state and returns
@@ -790,7 +896,11 @@ mod tests {
             "expected federation_* typed code, got {code:?}; full resp: {resp:#?}"
         );
         assert_eq!(resp["candidates"].as_array().unwrap().len(), 0);
-        assert_eq!(resp["scope"], "easynet");
+        // RFC-002 §5 update: scope: "easynet" is the alias; it
+        // canonicalises to "user" in the echo so callers can grep
+        // the new name. Both scope values reach the same federation
+        // path; only the echoed string differs.
+        assert_eq!(resp["scope"], "user");
     }
 
     #[test]

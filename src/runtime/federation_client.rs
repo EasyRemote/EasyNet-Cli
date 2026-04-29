@@ -176,6 +176,15 @@ pub struct ResolveFilter {
     /// to true so the LLM sees what each peer offers.
     #[serde(skip_serializing_if = "std::ops::Not::not", default)]
     pub include_abilities: bool,
+    /// Tenant scoping (RFC-002 §5 update).
+    ///   * `None` or `Some("")` → hub auto-fills with caller tenant
+    ///                            (the safe "show me my own agents"
+    ///                            default for `scope: "user"`).
+    ///   * `Some("*")`           → cross-tenant catalog listing
+    ///                            (`scope: "public"`).
+    ///   * any other literal     → exact match on advertised tenant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tenant_filter: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -328,6 +337,7 @@ mod tests {
             filter: Some(ResolveFilter {
                 agent_uri_prefix: Some("easynet:///r/acme/".into()),
                 include_abilities: false,
+                tenant_filter: None,
             }),
         };
         let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();

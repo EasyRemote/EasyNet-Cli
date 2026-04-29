@@ -429,8 +429,24 @@ pub fn resolve_agents<I: AbilityInvoker>(
     prefix: &str,
     include_abilities: bool,
 ) -> Result<Vec<ResolvedAgent>, String> {
+    resolve_agents_with_filter(invoker, tenant_id, realm, prefix, include_abilities, None)
+}
+
+/// RFC-002 §5 variant: pass an explicit tenant_filter so callers can
+/// request "scope to caller's tenant" (None / "") or "cross-tenant
+/// catalog listing" ("*"). The hub-side default is auto-fill from
+/// envelope tenant; CLI's `<self>.discover(scope: "user")` therefore
+/// passes None and the hub fills in the right value.
+pub fn resolve_agents_with_filter<I: AbilityInvoker>(
+    invoker: &I,
+    tenant_id: &str,
+    realm: &str,
+    prefix: &str,
+    include_abilities: bool,
+    tenant_filter: Option<String>,
+) -> Result<Vec<ResolvedAgent>, String> {
     let resource_uri = resolve_resource_uri(realm, tenant_id);
-    let filter = if prefix.is_empty() && !include_abilities {
+    let filter = if prefix.is_empty() && !include_abilities && tenant_filter.is_none() {
         None
     } else {
         Some(ResolveFilter {
@@ -440,6 +456,7 @@ pub fn resolve_agents<I: AbilityInvoker>(
                 Some(prefix.to_string())
             },
             include_abilities,
+            tenant_filter,
         })
     };
     let args = ResolveArgs { filter };
