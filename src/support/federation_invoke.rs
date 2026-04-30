@@ -76,9 +76,8 @@ pub fn parse_node_uri(node: &str) -> anyhow::Result<String> {
         bail!(
             "--node `{trimmed}` is not a canonical EasyNet agent URI. \
              Expected shape: easynet:///r/<tenant>/agent/<node>. \
-             A bare hostname or `https://...` URL is not accepted — \
-             pass the URI you got from `easynet discover` or your \
-             pairing flow."
+             A bare hostname or `https://...` URL is not accepted. \
+             {URI_DISCOVERY_HINT}"
         );
     }
     // Past the `r/` prefix, require at least `<tenant>/agent/<node>`
@@ -95,11 +94,36 @@ pub fn parse_node_uri(node: &str) -> anyhow::Result<String> {
         bail!(
             "--node `{trimmed}` does not parse as easynet:///r/<tenant>/agent/<node>. \
              Got tenant={tenant:?}, segment={agent_keyword:?}, node={node_id:?}. \
-             Pass the canonical URI from `easynet discover`."
+             {URI_DISCOVERY_HINT}"
         );
     }
     Ok(trimmed.to_string())
 }
+
+/// Operator-actionable hint appended to every `--node` parse-
+/// failure error. Names the four places a real URI can come from
+/// today, ordered most-helpful-first. Centralised so the wording
+/// stays byte-identical across both `parse_node_uri` failure
+/// arms — operators can grep one substring across logs.
+///
+/// **晓雯 letter 65 attack round 3 catch**: PR-N1 ships the
+/// CLI invocation surface (commit 8/N) but cross-hub URI
+/// discovery from machine A without manual config is PR-N3
+/// territory (cross-realm directory federation, not yet shipped).
+/// Until PR-N3 lands, operators construct URIs by hand from
+/// the sources below; the error message points at them.
+const URI_DISCOVERY_HINT: &str = "Where to find a canonical URI today (until PR-N3 cross-realm \
+     directory federation ships): \
+     (1) `cat ~/.easynet/credentials.json` on the target machine — \
+     concat `easynet:///r/<tenant_id>/agent/<node_id>` from the fields. \
+     (2) `cat ~/.easynet/daemon-config.toml` and read the \
+     `[daemon.federated_peers]` table — keys are tenant ids the \
+     local daemon already trusts. \
+     (3) `cat /etc/easynet/realm-trust.toml` and read \
+     `[[trusted_agent]]` blocks with `role = \"hub\"` — those \
+     are the peer hubs the cross-hub dialer can reach. \
+     (4) `easynet ability invoke easynet.discover` — local-realm only \
+     today; cross-realm enumeration ships in PR-N3.";
 
 /// Dispatch `(ability, args)` against `node_uri` via the local
 /// daemon's `federation.forward_invoke` ability. Synchronous
@@ -323,6 +347,46 @@ mod tests {
         let err = parse_node_uri("easynet:///r/realm-b/device/n1")
             .expect_err("wrong keyword rejected");
         assert!(format!("{err}").contains("does not parse"));
+    }
+
+    #[test]
+    fn parse_node_uri_failure_message_includes_discovery_hint() {
+        // 晓雯 letter 65 attack round 3 catch: operators have no
+        // zero-config way to discover a peer's canonical URI today
+        // (PR-N3 territory). Until PR-N3 ships, the error message
+        // tells them where to look — credentials.json, daemon-
+        // config.toml's federated_peers table, /etc/easynet/realm-
+        // trust.toml's hub entries, easynet.discover (local-realm).
+        // Both rejection arms (non-easynet scheme + structural
+        // mismatch) MUST cite the discovery hint so a typo'd
+        // command surfaces the same operator-actionable next step.
+        let err_scheme = parse_node_uri("not-an-easynet-uri").expect_err("rejected");
+        let msg_scheme = format!("{err_scheme}");
+        assert!(
+            msg_scheme.contains("credentials.json"),
+            "scheme-arm error must cite credentials.json discovery path; got: {msg_scheme}"
+        );
+        assert!(
+            msg_scheme.contains("daemon-config.toml"),
+            "scheme-arm error must cite daemon-config.toml discovery path; got: {msg_scheme}"
+        );
+        assert!(
+            msg_scheme.contains("realm-trust.toml"),
+            "scheme-arm error must cite realm-trust.toml discovery path; got: {msg_scheme}"
+        );
+        assert!(
+            msg_scheme.contains("easynet.discover"),
+            "scheme-arm error must cite easynet.discover ability; got: {msg_scheme}"
+        );
+
+        let err_struct =
+            parse_node_uri("easynet:///r/realm-b/device/n1").expect_err("rejected");
+        let msg_struct = format!("{err_struct}");
+        assert!(
+            msg_struct.contains("credentials.json")
+                && msg_struct.contains("daemon-config.toml"),
+            "structural-arm error must cite the same discovery hint; got: {msg_struct}"
+        );
     }
 
     #[test]
