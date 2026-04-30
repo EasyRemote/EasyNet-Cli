@@ -79,6 +79,11 @@ use crate::pb::axon::v1::invocation_server::InvocationServer;
 use crate::persistence::daemon_config::{DaemonConfig, DaemonMode, DEFAULT_DAEMON_CONFIG_PATH};
 use crate::services::axon_serve::admission_facade::AdmissionFacade;
 use crate::services::axon_serve::daemon_invocation_service::DaemonInvocationService;
+use crate::services::axon_serve::invoke_remote_initiator::SessionDispatch;
+use crate::services::axon_serve::session_initiator::{
+    run_session_supervisor, SessionDispatchError, SessionFrameDispatcher,
+};
+use crate::services::pending_dispatch::PendingDispatchMap;
 use crate::services::presence_registry::PresenceRegistry;
 use crate::services::realm_trust_anchor::{RealmTrustAnchor, DEFAULT_REALM_TRUST_PATH};
 
@@ -107,22 +112,16 @@ pub fn start_axon_serve_sidecar() -> anyhow::Result<()> {
     let daemon_uri = load_daemon_uri();
     let trust_anchor = load_trust_anchor();
     let presence = Arc::new(PresenceRegistry::new());
-    let admission = AdmissionFacade::new(Arc::new(trust_anchor), daemon_uri);
-    let service = DaemonInvocationService::new(Arc::clone(&presence), admission);
+    let pending = Arc::new(PendingDispatchMap::new());
+    let admission = AdmissionFacade::new(Arc::new(trust_anchor), daemon_uri.clone());
+    let service = DaemonInvocationService::new(Arc::clone(&presence), admission)
+        .with_pending(Arc::clone(&pending));
 
     spawn_uds_listener(&config, service)?;
 
+    // Hub-mode TCP+TLS — staged for PR-10 (cert material required).
     if matches!(config.mode(), DaemonMode::Hub | DaemonMode::Both) {
         if let Some(listen_tcp) = config.listen_tcp() {
-            // PR-1 staging: log that hub-mode TCP+TLS is configured
-            // but defer the actual TLS listener wiring to a focused
-            // follow-up. The daemon-config.toml invariants are
-            // already validated; the remaining work is constructing
-            // a `tonic::transport::ServerTlsConfig` from the cert/
-            // key paths and spawning a second tonic Server. Both
-            // pieces are <30 lines but require operator-side cert
-            // material to test meaningfully — that is a PR-10
-            // canary concern, not a PR-1 lib-layer one.
             eprintln!(
                 "[axon-serve] hub-mode TCP+TLS configured at {listen_tcp} but PR-1 ships the \
                  UDS listener only; TCP+TLS lands alongside PR-10 production canary \
@@ -131,7 +130,161 @@ pub fn start_axon_serve_sidecar() -> anyhow::Result<()> {
         }
     }
 
+    // Device-mode: dial the configured hub and hold a long-lived
+    // `<self>.session` bidi open for the daemon's lifetime. This is
+    // what makes "device 连 hub + 保活" a real-world fact rather than
+    // a library-level capability. Spec §1.3 ties the outbound dial
+    // to device mode only.
+    if matches!(config.mode(), DaemonMode::Device) {
+        if let (Some(hub_endpoint), Some(caller_uri)) =
+            (config.hub_endpoint().map(str::to_string), daemon_uri)
+        {
+            spawn_session_supervisor(hub_endpoint, caller_uri);
+        } else {
+            eprintln!(
+                "[axon-serve] device-mode daemon missing either hub_endpoint or \
+                 credentials.json agent_uri; outbound `<self>.session` not started"
+            );
+        }
+    }
+
     Ok(())
+}
+
+/// Spawn the long-lived device-side `<self>.session` supervisor. The
+/// supervisor dials the hub at boot, holds the bidi open, and
+/// reconnects with exponential backoff on failure (250ms → 30s).
+/// Runs forever on the daemon's tokio runtime; cancelled implicitly
+/// when the runtime shuts down (the `cancel` oneshot we hand it is
+/// dropped, which the supervisor treats the same as a cancel signal).
+fn spawn_session_supervisor(hub_endpoint: String, caller_uri: String) {
+    eprintln!(
+        "[axon-serve] device-mode: dialing `<self>.session` against {hub_endpoint} as {caller_uri}"
+    );
+    // Cancel oneshot held forever — the supervisor exits when the
+    // tokio runtime drops it during shutdown. PR-7 wires real
+    // graceful-shutdown via SIGTERM signal handler.
+    let (_cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    let dispatcher = Arc::new(StagingSessionDispatcher);
+    tokio::spawn(run_session_supervisor(
+        hub_endpoint,
+        caller_uri,
+        dispatcher,
+        cancel_rx,
+    ));
+    // Intentionally leak the cancel sender via std::mem::forget
+    // semantics (we never drop it explicitly). Production daemons
+    // call this once at boot so the supervisor lives as long as the
+    // process. PR-7 replaces this with a proper shutdown signal
+    // wire-up.
+    std::mem::forget(_cancel_tx);
+}
+
+/// PR-1 staging dispatcher for the device-side
+/// `<self>.session` bidi. Receives `SessionDispatch::Dispatch`
+/// frames pushed by the hub (because `<self>.invoke_remote` or
+/// `federation.forward_invoke` targeted this device), and replies
+/// with a `SessionDispatch::Result` carrying an explicit "not yet
+/// wired in PR-1 staging" error.
+///
+/// This is the simplest possible dispatcher that exercises the
+/// full wire path:
+///
+///   1. Hub `dispatch_invoke_remote` → `pending.register_pending`
+///      → `target_sender.try_send(DispatchFrame)`
+///   2. Tonic delivers the frame down the bidi
+///   3. THIS DISPATCHER receives it, parses
+///      `SessionDispatch::Dispatch{call_id, ability, args}`, and
+///      builds a reply `SessionDispatch::Result{call_id, payload,
+///      error: Some("not-yet-wired")}`
+///   4. Reply travels back up the bidi
+///   5. Hub `drain_session_up_stream` parses the reply, calls
+///      `pending.complete(call_id, ...)`, the originating
+///      `<self>.invoke_remote` caller's `await_reply` wakes
+///
+/// The whole transport plane is exercised end-to-end. The actual
+/// ability dispatch (running `ability` against the local
+/// `LocalAbilityRegistry`) is a follow-up commit's job — that
+/// requires threading the registry through the boot helper, which
+/// in turn requires resolving the existing daemon's
+/// `AbilityDispatcher` ↔ new `axon_serve` boundary. That is a
+/// focused commit's worth of design; this commit ships the
+/// transport plane proof-of-life.
+struct StagingSessionDispatcher;
+
+#[async_trait::async_trait]
+impl SessionFrameDispatcher for StagingSessionDispatcher {
+    async fn handle_down(
+        &self,
+        frame: crate::pb::axon::v1::InvokeBidiDown,
+        outbound: &tokio::sync::mpsc::Sender<crate::pb::axon::v1::InvokeBidiUp>,
+    ) -> Result<(), SessionDispatchError> {
+        use crate::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
+        use crate::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+        use crate::pb::axon::v1::{BinaryChunk, InvokeBidiUp};
+
+        // Only BinaryChunk frames carry SessionDispatch; ignore
+        // Receipt / Control frames silently.
+        let DownPayload::BinaryChunk(chunk) = frame.payload.ok_or_else(|| {
+            SessionDispatchError::Other("session down frame had no payload".to_string())
+        })?
+        else {
+            return Ok(());
+        };
+
+        let dispatch: SessionDispatch =
+            serde_json::from_slice(&chunk.data).map_err(|err| {
+                SessionDispatchError::Other(format!(
+                    "session down BinaryChunk is not valid SessionDispatch JSON: {err}"
+                ))
+            })?;
+
+        let SessionDispatch::Dispatch {
+            call_id,
+            ability,
+            args: _args,
+        } = dispatch
+        else {
+            // We received a Result frame from the hub side. That
+            // is meaningless — Results flow up the stream, not
+            // down. Log and ignore.
+            return Ok(());
+        };
+
+        eprintln!(
+            "[session-dispatch] received Dispatch call_id={call_id} ability={ability}; \
+             replying with PR-1 staging not-yet-wired error"
+        );
+
+        let result = SessionDispatch::Result {
+            call_id,
+            payload: Vec::new(),
+            terminal: true,
+            error: Some(format!(
+                "<self>.invoke_remote target ability `{ability}` is not yet dispatchable on \
+                 this device; PR-1 staging only proves wire connectivity. Real LocalAbilityRegistry \
+                 dispatch ships in a follow-up commit (PR-2 binary integration step 2)."
+            )),
+        };
+
+        let payload = serde_json::to_vec(&result).map_err(|err| {
+            SessionDispatchError::Other(format!("encode SessionDispatch::Result: {err}"))
+        })?;
+
+        let reply_frame = InvokeBidiUp {
+            sequence: 0,
+            payload: Some(UpPayload::BinaryChunk(BinaryChunk {
+                data: payload,
+                ..BinaryChunk::default()
+            })),
+            ..InvokeBidiUp::default()
+        };
+
+        outbound
+            .send(reply_frame)
+            .await
+            .map_err(|_| SessionDispatchError::Other("outbound channel closed".to_string()))
+    }
 }
 
 fn spawn_uds_listener(
