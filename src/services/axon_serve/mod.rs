@@ -55,5 +55,6 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub mod daemon_invocation_service;
+pub mod federation_wrappers;
 
 pub use daemon_invocation_service::DaemonInvocationService;
