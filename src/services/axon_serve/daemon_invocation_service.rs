@@ -262,8 +262,71 @@ impl DaemonInvocationService {
         arguments: &[u8],
     ) -> Result<Response<InvokeResponse>, Status> {
         let request: federation_wrappers::ForwardInvokeRequest = parse_json_args(arguments)?;
-        let response = federation_wrappers::handle_forward_invoke(&request, &self.presence);
+        let target_online = self.try_push_forward_invoke_frame(&request)?;
+        let response = federation_wrappers::ForwardInvokeResponse { target_online };
         wrap_json_response(&response)
+    }
+
+    /// Real reverse-channel push for `federation.forward_invoke`.
+    ///
+    /// Looks up `request.target_uri` in the presence registry and
+    /// pushes a `BinaryChunk` containing the inner-envelope bytes
+    /// down the target's `<self>.session` `DispatchSender`.
+    /// Returns `Ok(true)` when the frame was queued for delivery,
+    /// `Ok(false)` when the target was offline, and
+    /// `failed_precondition` when the dispatch sender's channel is
+    /// full (treated as offline-by-backpressure per spec §3
+    /// Invariant 4 — slow consumer is removed and the call surfaces
+    /// the eviction).
+    ///
+    /// PR-1 staging keeps the JSON response shape
+    /// `{ target_online: bool }` rather than the spec-§4-final
+    /// `{ result_bytes, correlation_call_id }` shape — DEC-003
+    /// Reading A pinned the staging shape; the final shape lands
+    /// alongside PR-3's `<self>.invoke_remote` per-call dispatch
+    /// because the correlated reply path needs the
+    /// `pending_dispatch` correlation table that PR-3 introduces.
+    fn try_push_forward_invoke_frame(
+        &self,
+        request: &federation_wrappers::ForwardInvokeRequest,
+    ) -> Result<bool, Status> {
+        let Some(sender) = self.presence.lookup(&request.target_uri) else {
+            return Ok(false);
+        };
+
+        let inner_bytes = decode_inner_envelope(&request.inner_envelope_b64)?;
+        let frame = build_forward_invoke_dispatch_frame(inner_bytes);
+
+        match sender.try_send(Ok(frame)) {
+            Ok(()) => Ok(true),
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                // Bounded backpressure (Invariant 4 in
+                // `services::presence_registry`). A full channel is
+                // a slow consumer; the canonical recovery is to
+                // remove the device with `OfflineReason::SendFailed`
+                // — that emits the matching presence event and
+                // future calls observe a clean `target_online=false`.
+                self.presence.remove(
+                    &request.target_uri,
+                    crate::services::presence_registry::OfflineReason::SendFailed,
+                );
+                Err(Status::failed_precondition(format!(
+                    "federation.forward_invoke: target `{}` channel full; \
+                     removed from registry with OfflineReason::SendFailed",
+                    request.target_uri,
+                )))
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                // Receiver dropped without explicit removal — the
+                // channel is dead. Symmetric removal so the next
+                // lookup returns None.
+                self.presence.remove(
+                    &request.target_uri,
+                    crate::services::presence_registry::OfflineReason::StreamClosed,
+                );
+                Ok(false)
+            }
+        }
     }
 
     fn dispatch_federation_subscribe_directory_initial(
@@ -275,16 +338,151 @@ impl DaemonInvocationService {
                 "federation.subscribe_directory: failed to encode initial snapshot: {err}"
             ))
         })?;
-        let chunk = InvokeStreamChunk {
+        let initial_chunk = InvokeStreamChunk {
             content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
             payload: initial_bytes,
             ..InvokeStreamChunk::default()
         };
-        // PR-1 staging: emit the initial frame and close. Commit 8/9
-        // attaches a `broadcast::Receiver<PresenceEvent>` to keep the
-        // stream open and emit incremental events.
-        let stream = futures::stream::once(async move { Ok(chunk) });
-        Ok(Response::new(Box::pin(stream) as BoxedDownStream<InvokeStreamChunk>))
+
+        // Real broadcast pump: emit the initial snapshot frame, then
+        // forward every subsequent `PresenceEvent` as one frame
+        // until every broadcast sender drops. `Lagged` errors
+        // collapse to a re-snapshot frame so a slow consumer can
+        // recover without tearing the stream down (per spec §3.2
+        // capacity rationale).
+        //
+        // We capture the registry by `Weak` rather than `Arc` so the
+        // pump itself does not keep the broadcast sender alive: when
+        // the daemon-owned `Arc<PresenceRegistry>` is dropped (last
+        // service shutdown, test teardown), the broadcast `Sender`
+        // drops, the receiver returns `RecvError::Closed`, and the
+        // pump terminates. Holding an `Arc` here would deadlock the
+        // shutdown path.
+        let events = self.presence.subscribe_events();
+        let presence_weak = Arc::downgrade(&self.presence);
+
+        let initial_stream = futures::stream::once(async move { Ok(initial_chunk) });
+        let event_stream = futures::stream::unfold(
+            (events, presence_weak),
+            |(mut events, presence_weak)| async move {
+                use tokio::sync::broadcast::error::RecvError;
+
+                loop {
+                    match events.recv().await {
+                        Ok(event) => {
+                            let payload =
+                                serde_json::to_vec(&PresenceEventDelta::from(event)).ok()?;
+                            let chunk = InvokeStreamChunk {
+                                content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+                                payload,
+                                ..InvokeStreamChunk::default()
+                            };
+                            return Some((Ok(chunk), (events, presence_weak)));
+                        }
+                        Err(RecvError::Lagged(_)) => {
+                            // Re-snapshot recovery: emit a fresh
+                            // initial frame so the subscriber's
+                            // state converges with the registry.
+                            // If the registry has been dropped under
+                            // us, end the stream gracefully.
+                            let presence = presence_weak.upgrade()?;
+                            let snapshot =
+                                federation_wrappers::build_subscribe_directory_initial(
+                                    &presence,
+                                );
+                            drop(presence);
+                            let payload = serde_json::to_vec(&snapshot).ok()?;
+                            let chunk = InvokeStreamChunk {
+                                content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+                                payload,
+                                ..InvokeStreamChunk::default()
+                            };
+                            return Some((Ok(chunk), (events, presence_weak)));
+                        }
+                        Err(RecvError::Closed) => return None,
+                    }
+                }
+            },
+        );
+
+        let combined = futures::StreamExt::chain(initial_stream, event_stream);
+        Ok(Response::new(
+            Box::pin(combined) as BoxedDownStream<InvokeStreamChunk>
+        ))
+    }
+}
+
+/// Wire shape for an incremental presence event delivered by the
+/// `federation.subscribe_directory` server-stream after the initial
+/// snapshot frame.
+///
+/// Mirrors `services::presence_registry::PresenceEvent` but with
+/// `serde::Serialize`-friendly field naming so the JSON encoding
+/// is stable for PR-4's schema-compat captures.
+#[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum PresenceEventDelta {
+    Online {
+        canonical_agent_uri: String,
+    },
+    Offline {
+        canonical_agent_uri: String,
+        reason: &'static str,
+    },
+}
+
+impl From<crate::services::presence_registry::PresenceEvent> for PresenceEventDelta {
+    fn from(event: crate::services::presence_registry::PresenceEvent) -> Self {
+        use crate::services::presence_registry::{OfflineReason, PresenceEvent};
+        match event {
+            PresenceEvent::Online { uri } => Self::Online {
+                canonical_agent_uri: uri,
+            },
+            PresenceEvent::Offline { uri, reason } => Self::Offline {
+                canonical_agent_uri: uri,
+                reason: match reason {
+                    OfflineReason::StreamClosed => "stream_closed",
+                    OfflineReason::StreamReset => "stream_reset",
+                    OfflineReason::SendFailed => "send_failed",
+                    OfflineReason::AdminRevoked => "admin_revoked",
+                },
+            },
+        }
+    }
+}
+
+/// Decode the base64-encoded inner envelope carried by
+/// `federation.forward_invoke`. Errors map to
+/// `Status::invalid_argument` with a useful message.
+fn decode_inner_envelope(b64: &str) -> Result<Vec<u8>, Status> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    if b64.is_empty() {
+        return Ok(Vec::new());
+    }
+    STANDARD.decode(b64).map_err(|err| {
+        Status::invalid_argument(format!(
+            "federation.forward_invoke: inner_envelope_b64 is not valid base64: {err}"
+        ))
+    })
+}
+
+/// Wrap the inner envelope bytes into a `DispatchFrame` heading
+/// down a target's `<self>.session` reverse channel.
+fn build_forward_invoke_dispatch_frame(
+    inner_bytes: Vec<u8>,
+) -> crate::services::presence_registry::DispatchFrame {
+    use crate::pb::axon::v1::invoke_bidi_down::Payload;
+    use crate::pb::axon::v1::{BinaryChunk, InvokeBidiDown};
+
+    let chunk = BinaryChunk {
+        data: inner_bytes,
+        ..BinaryChunk::default()
+    };
+    crate::services::presence_registry::DispatchFrame {
+        frame: InvokeBidiDown {
+            payload: Some(Payload::BinaryChunk(chunk)),
+            ..InvokeBidiDown::default()
+        },
     }
 }
 
@@ -498,10 +696,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invoke_stream_dispatches_subscribe_directory_initial_frame() {
+    async fn invoke_stream_dispatches_subscribe_directory_initial_frame_then_pump() {
         use futures::StreamExt;
 
-        let svc = make_service();
+        // Build the service with our own presence Arc so the test
+        // can drive the broadcast sender's close behaviour via Arc
+        // drop (the pump only ends when *every* sender drops; the
+        // pump itself holds a Weak so dropping the last Arc here
+        // closes the channel cleanly).
+        let presence = Arc::new(PresenceRegistry::new());
+        let admission = AdmissionFacade::new(
+            Arc::new(RealmTrustAnchor::default()),
+            Some(TEST_DAEMON_URI.to_string()),
+        );
+        let svc = DaemonInvocationService::new(Arc::clone(&presence), admission);
+
         let resp = svc
             .invoke_stream(Request::new(InvokeServerStreamRequest {
                 envelope: Some(test_envelope()),
@@ -512,6 +721,8 @@ mod tests {
             .expect("subscribe_directory initial frame returns Ok");
 
         let mut stream = resp.into_inner();
+
+        // Frame 1 — the initial empty snapshot.
         let first = stream
             .next()
             .await
@@ -519,12 +730,43 @@ mod tests {
             .expect("frame is Ok");
         assert_eq!(first.content_type, FEDERATION_RESULT_CONTENT_TYPE);
         let initial: federation_wrappers::SubscribeDirectoryInitial =
-            serde_json::from_slice(&first.payload).expect("decodes");
+            serde_json::from_slice(&first.payload).expect("decodes initial");
         assert!(initial.agents.is_empty());
 
-        // PR-1 staging closes the stream after the initial frame.
-        // Commit 8/9 attaches the broadcast pump.
-        assert!(stream.next().await.is_none());
+        // Frame 2 — an Online delta after a registry insert is
+        // pumped through the broadcast subscriber.
+        let (sender, _rx) = tokio::sync::mpsc::channel::<
+            Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
+        >(1);
+        presence.insert("easynet:///r/test-realm/agent/n1".to_string(), sender);
+
+        let second = stream
+            .next()
+            .await
+            .expect("delta frame after insert")
+            .expect("frame is Ok");
+        let delta: serde_json::Value = serde_json::from_slice(&second.payload).expect("decodes");
+        assert_eq!(delta.get("kind").and_then(|v| v.as_str()), Some("online"));
+        assert_eq!(
+            delta.get("canonical_agent_uri").and_then(|v| v.as_str()),
+            Some("easynet:///r/test-realm/agent/n1"),
+        );
+
+        // Drop both Arcs holding the broadcast sender so the pump
+        // sees `RecvError::Closed` on its next poll and yields None.
+        // Without this the stream is intentionally infinite.
+        drop(svc);
+        drop(presence);
+
+        // Now the pump must close. Bound the wait so a real bug
+        // here surfaces as a test failure, not a CI hang.
+        let close = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            stream.next(),
+        )
+        .await
+        .expect("pump closes within 2 s after senders drop");
+        assert!(close.is_none(), "stream must terminate once all senders drop");
     }
 
     #[tokio::test]
