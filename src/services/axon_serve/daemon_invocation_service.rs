@@ -370,8 +370,22 @@ impl DaemonInvocationService {
                 loop {
                     match events.recv().await {
                         Ok(event) => {
-                            let payload =
-                                serde_json::to_vec(&PresenceEventDelta::from(event)).ok()?;
+                            // `PresenceEventDelta` is `Online { String }` /
+                            // `Offline { String, &'static str }` — both
+                            // variants are statically `Serialize` and
+                            // never fail to encode. `expect` rather than
+                            // `.ok()?` so a future field that introduces
+                            // a fallible serialise mode trips a panic
+                            // with a self-documenting message instead of
+                            // silently terminating the stream — the
+                            // subscriber's `Closed` is otherwise
+                            // indistinguishable from a normal shutdown.
+                            let payload = serde_json::to_vec(&PresenceEventDelta::from(event))
+                                .expect(
+                                    "PresenceEventDelta is statically Serialize; a serialise \
+                                     failure here means the type grew a fallible field — update \
+                                     this site to surface Status::internal instead of panicking",
+                                );
                             let chunk = InvokeStreamChunk {
                                 content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
                                 payload,
@@ -391,7 +405,16 @@ impl DaemonInvocationService {
                                     &presence,
                                 );
                             drop(presence);
-                            let payload = serde_json::to_vec(&snapshot).ok()?;
+                            // `SubscribeDirectoryInitial` is statically
+                            // `Serialize` (Vec<AgentSummary> of two
+                            // String fields). Same `expect` rationale as
+                            // the `Ok(event)` arm above.
+                            let payload = serde_json::to_vec(&snapshot).expect(
+                                "SubscribeDirectoryInitial is statically Serialize; a \
+                                 serialise failure here means the snapshot type grew a \
+                                 fallible field — update this site to surface Status::internal \
+                                 instead of panicking",
+                            );
                             let chunk = InvokeStreamChunk {
                                 content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
                                 payload,
