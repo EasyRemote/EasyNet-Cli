@@ -56,6 +56,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -83,6 +84,7 @@ use crate::services::axon_serve::federation_wrappers::{
     ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN, ABILITY_FEDERATION_RESOLVE,
     ABILITY_FEDERATION_REVOKE, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
 };
+use crate::services::federation_client::FederationClient;
 use crate::services::axon_serve::invoke_remote_initiator::{
     InvokeRemoteDown, InvokeRemoteUp, SessionDispatch, ABILITY_INVOKE_REMOTE,
     INVOKE_REMOTE_STREAM_ID,
@@ -124,7 +126,7 @@ const FEDERATION_RESULT_CONTENT_TYPE: &str = "application/json";
 /// same service surface on a second tonic `Server` without holding
 /// the original instance hostage. All fields are `Arc`/`Option<Arc>`/
 /// `Option<String>`; clone is cheap.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DaemonInvocationService {
     presence: Arc<PresenceRegistry>,
     admission: AdmissionFacade,
@@ -151,6 +153,36 @@ pub struct DaemonInvocationService {
     /// a narrow unit test) and the extra PR-2 defense-in-depth check
     /// is skipped.
     session_realm: Option<String>,
+    /// **PR-N1 commit 3a/N**. Cross-hub federation client. `None`
+    /// until `with_federation_client(...)` wires one; absence
+    /// means `federation.forward_invoke` for cross-tenant targets
+    /// falls back to the legacy `target_online: false` shape (no
+    /// dial). Commit 3b/N rewrites the `forward_invoke` dispatcher
+    /// to consume this field; commit 3a/N only plumbs it through.
+    federation_client: Option<Arc<dyn FederationClient>>,
+    /// **PR-N1 commit 3a/N**. Operator-curated `tenant → hub_uri`
+    /// map per `DaemonConfig::federated_peers`. Empty map ⇒ no
+    /// cross-tenant routing configured; the dispatcher returns
+    /// the legacy shape. PR-N3 will replace this hand-curated
+    /// map with auto-discovered cross-realm directory entries.
+    federated_peers: BTreeMap<String, String>,
+}
+
+impl std::fmt::Debug for DaemonInvocationService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DaemonInvocationService")
+            .field("presence", &self.presence)
+            .field("admission", &self.admission)
+            .field("pending", &self.pending)
+            .field("register_pubkey", &self.register_pubkey)
+            .field("session_realm", &self.session_realm)
+            .field(
+                "federation_client",
+                &self.federation_client.as_ref().map(|_| "<dyn FederationClient>"),
+            )
+            .field("federated_peers_count", &self.federated_peers.len())
+            .finish()
+    }
 }
 
 /// Tuple wired by `with_register_pubkey(...)`. Cloning is cheap
@@ -182,6 +214,8 @@ impl DaemonInvocationService {
             pending: None,
             register_pubkey: None,
             session_realm: None,
+            federation_client: None,
+            federated_peers: BTreeMap::new(),
         }
     }
 
@@ -227,6 +261,31 @@ impl DaemonInvocationService {
     #[must_use]
     pub fn with_session_realm(mut self, daemon_realm: impl Into<String>) -> Self {
         self.session_realm = Some(daemon_realm.into());
+        self
+    }
+
+    /// **PR-N1 commit 3a/N**. Attach the cross-hub federation
+    /// client. Daemons booted without one fall back to the legacy
+    /// `target_online: false` shape for cross-tenant
+    /// `federation.forward_invoke` calls. PR-N1 commit 3b/N
+    /// rewrites the dispatcher to consume the client; commit
+    /// 3a/N only stores it as a field so that rewrite has a stable
+    /// constructor surface to thread through.
+    #[must_use]
+    pub fn with_federation_client(mut self, client: Arc<dyn FederationClient>) -> Self {
+        self.federation_client = Some(client);
+        self
+    }
+
+    /// **PR-N1 commit 3a/N**. Attach the operator-curated
+    /// `tenant → hub_uri` map. Empty map (the default from
+    /// `DaemonInvocationService::new`) means no cross-tenant
+    /// routing is configured; the dispatcher's cross-tenant arm
+    /// then refuses to dial regardless of `federation_client`
+    /// presence — peer-not-trusted by absence of operator intent.
+    #[must_use]
+    pub fn with_federated_peers(mut self, peers: BTreeMap<String, String>) -> Self {
+        self.federated_peers = peers;
         self
     }
 }
@@ -1140,6 +1199,34 @@ fn wrap_json_response<T: serde::Serialize>(
     Ok(Response::new(invoke_response))
 }
 
+/// **PR-N1 commit 3a/N**. Extract the tenant component from a
+/// canonical EasyNet URI (`easynet:///r/{tenant_id}/agent/...`).
+/// Returns `None` for URIs that do not match the canonical shape;
+/// callers treat that as "cannot route — fall back to legacy
+/// shape".
+///
+/// Pure function so it composes well into the cross-tenant
+/// routing branch landing in commit 3b/N: the dispatcher reads
+/// `request.target_uri`, calls `parse_tenant_from_uri`, and
+/// looks the tenant up in `federated_peers` to obtain a hub
+/// URI. The function deliberately does not allocate — it returns
+/// a `&str` borrowed from the input.
+pub(crate) fn parse_tenant_from_uri(uri: &str) -> Option<&str> {
+    // Expected shape: `easynet:///r/<tenant>/agent/<node>` or
+    // `easynet:///r/<tenant>/agent/<node>/...`. We reject anything
+    // that does not start with `easynet:///r/` so a typo URL is
+    // not silently accepted as `tenant = ""`.
+    let after_scheme = uri.strip_prefix("easynet:///r/")?;
+    // The first path component up to the next `/` is the tenant.
+    // An empty first component (the URI starts `easynet:///r//...`)
+    // is a malformed URI and rejected.
+    let tenant_end = after_scheme.find('/').unwrap_or(after_scheme.len());
+    if tenant_end == 0 {
+        return None;
+    }
+    Some(&after_scheme[..tenant_end])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1678,4 +1765,74 @@ mod tests {
     //     which is integration-tested
     //   * pending oneshot dropped → covered by pending_dispatch
     //     `dropped_completer_surfaces_to_handle_as_recv_error`
+
+    // ── PR-N1 commit 3a/N: federation client plumbing tests ──
+
+    #[test]
+    fn parse_tenant_from_uri_extracts_tenant_component() {
+        assert_eq!(
+            parse_tenant_from_uri("easynet:///r/realm-a/agent/laptop-1"),
+            Some("realm-a")
+        );
+        assert_eq!(
+            parse_tenant_from_uri("easynet:///r/peer-realm/agent/peer-hub"),
+            Some("peer-realm")
+        );
+    }
+
+    #[test]
+    fn parse_tenant_from_uri_handles_uri_with_extra_path_segments() {
+        // RFC-N PR-N4 user-binding URIs may carry extra segments
+        // after `agent/<node>`. The tenant is still the first
+        // path component after `r/`.
+        assert_eq!(
+            parse_tenant_from_uri("easynet:///r/realm-a/agent/n1/skill/foo"),
+            Some("realm-a")
+        );
+    }
+
+    #[test]
+    fn parse_tenant_from_uri_rejects_non_easynet_scheme() {
+        assert_eq!(parse_tenant_from_uri("https://example.com/foo"), None);
+        assert_eq!(parse_tenant_from_uri("file:///r/realm/agent/x"), None);
+    }
+
+    #[test]
+    fn parse_tenant_from_uri_rejects_empty_tenant() {
+        // Malformed URI with empty tenant component must reject —
+        // never silently treat as `tenant = ""` which would always
+        // miss the federated_peers map and surface as
+        // "tenant unknown" instead of "URI malformed".
+        assert_eq!(parse_tenant_from_uri("easynet:///r//agent/n1"), None);
+    }
+
+    #[test]
+    fn with_federation_client_attaches_client_field() {
+        use crate::services::federation_client::CrossHubDialer;
+
+        let svc = make_service();
+        assert!(svc.federation_client.is_none());
+
+        let dialer = Arc::new(CrossHubDialer::new(Arc::new(RealmTrustAnchor::default())));
+        let svc = svc.with_federation_client(dialer.clone() as Arc<dyn FederationClient>);
+        assert!(svc.federation_client.is_some());
+    }
+
+    #[test]
+    fn with_federated_peers_attaches_map_field() {
+        let svc = make_service();
+        assert!(svc.federated_peers.is_empty());
+
+        let mut peers = BTreeMap::new();
+        peers.insert(
+            "peer-realm".to_string(),
+            "https://peer-hub.example:50443".to_string(),
+        );
+        let svc = svc.with_federated_peers(peers);
+        assert_eq!(svc.federated_peers.len(), 1);
+        assert_eq!(
+            svc.federated_peers.get("peer-realm").map(String::as_str),
+            Some("https://peer-hub.example:50443")
+        );
+    }
 }

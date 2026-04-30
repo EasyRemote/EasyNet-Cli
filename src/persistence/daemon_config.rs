@@ -67,6 +67,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -125,6 +126,19 @@ pub struct DaemonConfig {
     tls_cert_pem: Option<PathBuf>,
     tls_key_pem: Option<PathBuf>,
     uds_path: PathBuf,
+    /// **PR-N1 commit 3a/N**. Operator-curated `tenant → hub_uri`
+    /// map the federation dispatcher consults when `federation.
+    /// forward_invoke` targets a tenant whose realm is not local.
+    /// Empty = no cross-tenant routing configured (legacy
+    /// `target_online: false` fallback). PR-N3 will replace this
+    /// hand-curated map with the auto-discovered cross-realm
+    /// directory; until then the map is the operator's manual
+    /// statement of "these are the peer realms I federate with".
+    ///
+    /// `BTreeMap` over `HashMap` for stable iteration order (TOML
+    /// dump in operator audit + `cargo test` byte-stable
+    /// expectation).
+    federated_peers: BTreeMap<String, String>,
 }
 
 impl DaemonConfig {
@@ -144,12 +158,11 @@ impl DaemonConfig {
             source,
         })?;
 
-        let parsed: RawDaemonConfig = toml::from_str(&raw).map_err(|source| {
-            DaemonConfigError::ParseFailed {
+        let parsed: RawDaemonConfig =
+            toml::from_str(&raw).map_err(|source| DaemonConfigError::ParseFailed {
                 path: path.to_path_buf(),
                 source,
-            }
-        })?;
+            })?;
 
         Self::from_raw(parsed)
     }
@@ -167,6 +180,7 @@ impl DaemonConfig {
             tls_cert_pem,
             tls_key_pem,
             uds_path,
+            federated_peers,
         } = daemon;
 
         if realm.trim().is_empty() {
@@ -203,6 +217,7 @@ impl DaemonConfig {
             tls_cert_pem: tls_cert_pem.map(PathBuf::from),
             tls_key_pem: tls_key_pem.map(PathBuf::from),
             uds_path,
+            federated_peers: federated_peers.unwrap_or_default(),
         })
     }
 
@@ -271,6 +286,15 @@ impl DaemonConfig {
     pub fn uds_path(&self) -> &Path {
         &self.uds_path
     }
+
+    /// **PR-N1 commit 3a/N**. Operator-curated cross-tenant
+    /// dispatch map. Empty when the operator did not configure
+    /// any federation peers — the federation dispatcher then
+    /// falls back to the legacy `target_online: false` shape
+    /// for cross-tenant `federation.forward_invoke` calls.
+    pub fn federated_peers(&self) -> &BTreeMap<String, String> {
+        &self.federated_peers
+    }
 }
 
 /// Internal deserialisation shape. Pub-within-crate only so unit
@@ -294,6 +318,12 @@ pub(crate) struct RawDaemonSection {
     pub(crate) tls_key_pem: Option<String>,
     #[serde(default)]
     pub(crate) uds_path: Option<String>,
+    /// PR-N1 commit 3a/N: operator-curated `tenant → hub_uri`
+    /// map for cross-tenant `federation.forward_invoke` routing.
+    /// `#[serde(default)]` so legacy daemon-config.toml files
+    /// load unchanged (empty map).
+    #[serde(default)]
+    pub(crate) federated_peers: Option<BTreeMap<String, String>>,
 }
 
 /// Every way `DaemonConfig::load` can fail. Each variant maps to a
@@ -361,6 +391,7 @@ mod tests {
                 tls_cert_pem: cert.map(str::to_string),
                 tls_key_pem: key.map(str::to_string),
                 uds_path: None,
+                federated_peers: None,
             },
         }
     }
@@ -538,9 +569,6 @@ mod tests {
         ))
         .expect("valid hub config");
 
-        assert_eq!(
-            cfg.uds_path().to_str(),
-            Some(DEFAULT_DAEMON_UDS_PATH)
-        );
+        assert_eq!(cfg.uds_path().to_str(), Some(DEFAULT_DAEMON_UDS_PATH));
     }
 }
