@@ -67,9 +67,12 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Default location the daemon reads the realm trust anchor from.
@@ -81,7 +84,7 @@ pub const DEFAULT_REALM_TRUST_PATH: &str = "/etc/easynet/realm-trust.toml";
 /// Role a trusted agent plays in the realm. Used by audit log
 /// formatters and by PR-7's pairing-flow validation; the admission
 /// gate itself does not branch on role today.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TrustedAgentRole {
     /// EasyNet backend service running alongside the hub-mode daemon.
@@ -96,7 +99,7 @@ pub enum TrustedAgentRole {
 /// One entry in `realm-trust.toml`. Public so the admission gate
 /// facade (commit 7b/9) and PR-7's pairing flow can consume the
 /// shape directly.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TrustedAgent {
     /// Canonical agent URI per spec §5.1
     /// (`easynet:///r/{tenant_id}/agent/{node_id}`).
@@ -114,7 +117,7 @@ pub struct TrustedAgent {
 
 /// Internal TOML shape; private so the public `RealmTrustAnchor`
 /// owns its index data structure choice.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 struct RawTrustAnchor {
     #[serde(default)]
     trusted_agent: Vec<TrustedAgent>,
@@ -219,6 +222,133 @@ impl RealmTrustAnchor {
     pub fn is_empty(&self) -> bool {
         self.by_uri.is_empty()
     }
+
+    /// Append a single trusted agent entry. Per Invariant 1
+    /// (URI uniqueness) the same `agent_uri` cannot appear twice;
+    /// a duplicate returns `RealmTrustError::DuplicateUri` so the
+    /// caller (PR-7's pairing flow) can surface a structured
+    /// "device already paired" error.
+    ///
+    /// `append_agent` is the in-memory mutation; persist with
+    /// [`save`](#method.save) after the append succeeds. The two
+    /// steps are split so the pairing flow can validate +
+    /// transactionally roll the in-memory state forward (a partial
+    /// disk write would be a recovery problem; the mutation +
+    /// atomic-rename pair below addresses that).
+    pub fn append_agent(&mut self, entry: TrustedAgent) -> Result<(), RealmTrustError> {
+        if self.by_uri.contains_key(&entry.agent_uri) {
+            return Err(RealmTrustError::DuplicateUri {
+                agent_uri: entry.agent_uri,
+            });
+        }
+        self.by_uri.insert(entry.agent_uri.clone(), entry);
+        Ok(())
+    }
+
+    /// Snapshot of the trust set as a sorted slice. Sort order is
+    /// `agent_uri` lexicographic so [`save`](#method.save) writes
+    /// a stable file across restarts (a hash-map iteration order
+    /// would diff every save). Used by tests to assert content
+    /// without iterating the private `by_uri` map.
+    #[must_use]
+    pub fn entries_sorted(&self) -> Vec<TrustedAgent> {
+        let mut out: Vec<TrustedAgent> = self.by_uri.values().cloned().collect();
+        out.sort_by(|a, b| a.agent_uri.cmp(&b.agent_uri));
+        out
+    }
+
+    /// Persist the trust anchor to `path` atomically: write to a
+    /// sibling tempfile (`<path>.tmp`), fsync, then `rename(2)` on
+    /// top of the existing file. POSIX guarantees rename is atomic
+    /// for same-filesystem replacements, so a power failure mid-
+    /// write leaves either the prior file or the new file —
+    /// never a partial truncation.
+    ///
+    /// PR-7 commit 5/N's `<self>.register_device_pubkey` ability
+    /// calls `save` after each successful `append_agent` and then
+    /// signals SIGHUP to the daemon to trigger reload (the daemon
+    /// boot loop's signal handler re-runs `load_or_empty` against
+    /// the same path).
+    ///
+    /// Per `RawTrustAnchor`'s sort discipline (entries_sorted), the
+    /// resulting TOML is byte-stable across saves with the same
+    /// content — operator diffing actually shows real changes.
+    pub fn save(&self, path: &Path) -> Result<(), RealmTrustError> {
+        let raw = RawTrustAnchor {
+            trusted_agent: self.entries_sorted(),
+        };
+        let body = toml::to_string_pretty(&raw).map_err(|source| {
+            RealmTrustError::SerializeFailed {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+
+        // Write to <path>.tmp in the same directory so `rename` is
+        // a same-filesystem atomic operation. Different temp dirs
+        // (e.g. /tmp vs /etc) cross filesystems, which downgrades
+        // the rename to copy-then-unlink and loses atomicity.
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        let tmp_name = match path.file_name() {
+            Some(name) => {
+                let mut s = name.to_os_string();
+                s.push(".tmp");
+                s
+            }
+            None => {
+                return Err(RealmTrustError::WriteFailed {
+                    path: path.to_path_buf(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "path has no file name component",
+                    ),
+                });
+            }
+        };
+        let tmp_path = parent.join(tmp_name);
+
+        // Open with O_CREAT | O_TRUNC | O_WRONLY semantics. Mode
+        // 0600 on Unix — trust anchor contains public keys (not
+        // secrets), but the file is admin-owned and operator
+        // convention for /etc/easynet/* is owner-only.
+        // Windows builds skip the mode bit (file ACL is the
+        // platform's analog; daemon doesn't ship there yet).
+        {
+            let mut opts = fs::OpenOptions::new();
+            opts.write(true).create(true).truncate(true);
+            #[cfg(unix)]
+            opts.mode(0o600);
+            let mut file = opts.open(&tmp_path).map_err(|source| {
+                RealmTrustError::WriteFailed {
+                    path: tmp_path.clone(),
+                    source,
+                }
+            })?;
+            file.write_all(body.as_bytes()).map_err(|source| {
+                RealmTrustError::WriteFailed {
+                    path: tmp_path.clone(),
+                    source,
+                }
+            })?;
+            file.sync_all().map_err(|source| {
+                RealmTrustError::WriteFailed {
+                    path: tmp_path.clone(),
+                    source,
+                }
+            })?;
+        }
+        fs::rename(&tmp_path, path).map_err(|source| {
+            // Best-effort cleanup of the tmpfile; if rename failed,
+            // leaving an orphan is the lesser evil (operators can
+            // grep for `.tmp` and clean up).
+            let _ = fs::remove_file(&tmp_path);
+            RealmTrustError::WriteFailed {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+        Ok(())
+    }
 }
 
 /// Every way the loader can fail. `ReadFailed` covers I/O errors
@@ -246,6 +376,20 @@ pub enum RealmTrustError {
          once. PR-7 pairing-flow writes must enforce uniqueness."
     )]
     DuplicateUri { agent_uri: String },
+
+    #[error("failed to write realm trust anchor at {path}: {source}")]
+    WriteFailed {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to serialize realm trust anchor for {path}: {source}")]
+    SerializeFailed {
+        path: PathBuf,
+        #[source]
+        source: toml::ser::Error,
+    },
 }
 
 #[cfg(test)]
@@ -386,5 +530,145 @@ added_at_unix_ms = 1714492800000
         assert_eq!(anchor.len(), 2);
         assert!(anchor.lookup("easynet:///r/realm/agent/a").is_some());
         assert!(anchor.lookup("easynet:///r/realm/agent/b").is_some());
+    }
+
+    // ── PR-7 commit 3/N: write-side tests ──────────────────────
+
+    #[test]
+    fn append_agent_adds_new_entry() {
+        let mut anchor = RealmTrustAnchor::default();
+        anchor
+            .append_agent(entry("easynet:///r/realm/agent/n1"))
+            .expect("append Ok");
+        assert_eq!(anchor.len(), 1);
+        assert!(anchor.lookup("easynet:///r/realm/agent/n1").is_some());
+    }
+
+    #[test]
+    fn append_agent_rejects_duplicate_uri() {
+        let mut anchor = RealmTrustAnchor::default();
+        anchor
+            .append_agent(entry("easynet:///r/realm/agent/n1"))
+            .expect("first append Ok");
+
+        match anchor.append_agent(entry("easynet:///r/realm/agent/n1")) {
+            Err(RealmTrustError::DuplicateUri { agent_uri }) => {
+                assert_eq!(agent_uri, "easynet:///r/realm/agent/n1");
+            }
+            other => panic!("expected DuplicateUri, got {other:?}"),
+        }
+        // The map's first entry must still be present unchanged —
+        // a failed append doesn't pollute the trust set.
+        assert_eq!(anchor.len(), 1);
+    }
+
+    #[test]
+    fn save_then_load_round_trip_preserves_entries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("realm-trust.toml");
+
+        let mut anchor = RealmTrustAnchor::default();
+        anchor
+            .append_agent(entry("easynet:///r/realm/agent/backend"))
+            .expect("append backend");
+        anchor
+            .append_agent(TrustedAgent {
+                agent_uri: "easynet:///r/realm/agent/laptop-1".to_string(),
+                public_key_b64: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA="
+                    .to_string(),
+                role: TrustedAgentRole::Device,
+                added_at_unix_ms: 1_714_492_801_234,
+            })
+            .expect("append laptop-1");
+
+        anchor.save(&path).expect("save Ok");
+
+        let loaded = RealmTrustAnchor::try_load_strict(&path).expect("strict load Ok");
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(
+            loaded
+                .lookup("easynet:///r/realm/agent/backend")
+                .map(|e| e.role),
+            Some(TrustedAgentRole::Device),
+        );
+        assert_eq!(
+            loaded
+                .lookup("easynet:///r/realm/agent/laptop-1")
+                .map(|e| e.role),
+            Some(TrustedAgentRole::Device),
+        );
+    }
+
+    #[test]
+    fn save_is_atomic_no_partial_file_on_disk() {
+        // After save() returns Ok, the target path exists and is
+        // fully formed; the sibling .tmp file is gone.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("realm-trust.toml");
+        let tmp = dir.path().join("realm-trust.toml.tmp");
+
+        let mut anchor = RealmTrustAnchor::default();
+        anchor
+            .append_agent(entry("easynet:///r/realm/agent/n1"))
+            .expect("append Ok");
+        anchor.save(&path).expect("save Ok");
+
+        assert!(path.exists(), "target file should exist after save");
+        assert!(!tmp.exists(), ".tmp file must not be left behind on success");
+    }
+
+    #[test]
+    fn save_produces_stable_byte_output_under_same_content() {
+        // Append the same entries in different insertion orders;
+        // saved bytes must be identical because entries_sorted()
+        // sorts on agent_uri. Operator diffing depends on this.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path_a = dir.path().join("a.toml");
+        let path_b = dir.path().join("b.toml");
+
+        let mut anchor_a = RealmTrustAnchor::default();
+        anchor_a
+            .append_agent(entry("easynet:///r/realm/agent/a"))
+            .expect("a");
+        anchor_a
+            .append_agent(entry("easynet:///r/realm/agent/b"))
+            .expect("b");
+
+        let mut anchor_b = RealmTrustAnchor::default();
+        anchor_b
+            .append_agent(entry("easynet:///r/realm/agent/b"))
+            .expect("b");
+        anchor_b
+            .append_agent(entry("easynet:///r/realm/agent/a"))
+            .expect("a");
+
+        anchor_a.save(&path_a).expect("save a");
+        anchor_b.save(&path_b).expect("save b");
+
+        let bytes_a = fs::read(&path_a).expect("read a");
+        let bytes_b = fs::read(&path_b).expect("read b");
+        assert_eq!(
+            bytes_a, bytes_b,
+            "save() must be order-stable so operator diffs surface real changes only",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_sets_owner_only_mode_on_unix() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("realm-trust.toml");
+
+        let mut anchor = RealmTrustAnchor::default();
+        anchor
+            .append_agent(entry("easynet:///r/realm/agent/n1"))
+            .expect("append Ok");
+        anchor.save(&path).expect("save Ok");
+
+        let metadata = fs::metadata(&path).expect("stat");
+        let mode = metadata.permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "trust anchor file must be 0600 on disk");
     }
 }
