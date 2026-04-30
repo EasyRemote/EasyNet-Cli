@@ -323,6 +323,7 @@ impl Invocation for DaemonInvocationService {
             ABILITY_FEDERATION_REVOKE => self.dispatch_federation_revoke(&inner.arguments),
             ABILITY_FEDERATION_FORWARD_INVOKE => {
                 self.dispatch_federation_forward_invoke(&inner.arguments)
+                    .await
             }
             ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY => Err(Status::invalid_argument(
                 "federation.subscribe_directory is a server-stream ability and must be invoked \
@@ -524,14 +525,134 @@ impl DaemonInvocationService {
         wrap_json_response(&response)
     }
 
-    fn dispatch_federation_forward_invoke(
+    /// **PR-N1 commit 3b/N rewrite.** Tenant-aware
+    /// `federation.forward_invoke` dispatch:
+    ///
+    /// 1. Parse `target_uri` to extract its tenant component.
+    /// 2. **Local-tenant fast path**: when the tenant matches
+    ///    `self.session_realm` (or no realm context is wired —
+    ///    test daemons), push the inner-envelope frame down the
+    ///    target's `<self>.session` reverse channel via
+    ///    `try_push_forward_invoke_frame` exactly as PR-1 staging
+    ///    did. Local routing is the historic behavior, kept
+    ///    unchanged.
+    /// 3. **Cross-tenant route**: when the tenant differs AND
+    ///    both `federation_client` and a matching
+    ///    `federated_peers[tenant]` entry are wired, forward the
+    ///    request to the peer hub by re-issuing the same
+    ///    `federation.forward_invoke` ability against the peer
+    ///    daemon. The peer-side dispatcher then performs its own
+    ///    local fast-path lookup. Returns the peer's
+    ///    `target_online` outcome verbatim — the caller cannot
+    ///    distinguish a local-on-peer hit from a local-on-self
+    ///    hit by the wire shape.
+    /// 4. **Cross-tenant fall-through**: missing federation
+    ///    client OR missing peer entry OR malformed target URI
+    ///    all surface as `target_online: false`. Legacy callers
+    ///    treat that as "target offline" and fall through to
+    ///    their own retry policy.
+    ///
+    /// What this commit does NOT carry yet:
+    /// - AXIOM mapping rewrite (caller=self_hub, callee=
+    ///   target_hub, subject=original_caller). The peer's local
+    ///   presence registry resolves the inner envelope's
+    ///   target_uri directly today; cross-realm admission key
+    ///   resolution is PR-N2's job. PR-N1 commit 3b/N forwards
+    ///   the request unchanged.
+    /// - Envelope re-sign with `daemon_identity.signing_seed`.
+    ///   Same reason — cross-realm admission lands in PR-N2.
+    /// - Timeout + circuit-breaker on the cross-hub call. PR-N1
+    ///   commit 4/N wraps the federation client with
+    ///   `tower::timeout::Timeout`.
+    async fn dispatch_federation_forward_invoke(
         &self,
         arguments: &[u8],
     ) -> Result<Response<InvokeResponse>, Status> {
         let request: federation_wrappers::ForwardInvokeRequest = parse_json_args(arguments)?;
-        let target_online = self.try_push_forward_invoke_frame(&request)?;
-        let response = federation_wrappers::ForwardInvokeResponse { target_online };
-        wrap_json_response(&response)
+
+        let target_tenant = parse_tenant_from_uri(&request.target_uri);
+        let local_tenant = self.session_realm.as_deref();
+
+        let is_local_tenant = match (target_tenant, local_tenant) {
+            (Some(target), Some(local)) => target == local,
+            // Daemon has no realm context wired (smoke-test
+            // build) — preserve PR-1 staging behavior and treat
+            // every target as local.
+            (_, None) => true,
+            // Malformed target URI — fall through to legacy
+            // shape so a typo never accidentally hits the
+            // cross-hub path.
+            (None, Some(_)) => true,
+        };
+
+        if is_local_tenant {
+            let target_online = self.try_push_forward_invoke_frame(&request)?;
+            let response = federation_wrappers::ForwardInvokeResponse { target_online };
+            return wrap_json_response(&response);
+        }
+
+        // Cross-tenant path. Both the federation client and a
+        // matching `federated_peers` entry must be wired or the
+        // request collapses to `target_online: false`.
+        let Some(client) = self.federation_client.as_ref() else {
+            let response = federation_wrappers::ForwardInvokeResponse {
+                target_online: false,
+            };
+            return wrap_json_response(&response);
+        };
+        let Some(target_tenant) = target_tenant else {
+            // Already handled by the `is_local_tenant` branch
+            // above (None tenant collapses to local fast-path).
+            // This is defensive — the `let Some` reads as a
+            // contract reminder for future maintainers.
+            let response = federation_wrappers::ForwardInvokeResponse {
+                target_online: false,
+            };
+            return wrap_json_response(&response);
+        };
+        let Some(target_hub_uri) = self.federated_peers.get(target_tenant) else {
+            let response = federation_wrappers::ForwardInvokeResponse {
+                target_online: false,
+            };
+            return wrap_json_response(&response);
+        };
+
+        // Re-issue the same `federation.forward_invoke` ability
+        // against the peer hub. The peer-side dispatcher
+        // performs its own local fast-path lookup and returns
+        // the same `{target_online}` JSON shape, which we
+        // forward verbatim. PR-N2 inserts the AXIOM mapping +
+        // sign envelope step before the dial; PR-N1 forwards
+        // the original args.
+        let peer_request = InvokeRequest {
+            envelope: None,
+            function_name: ABILITY_FEDERATION_FORWARD_INVOKE.to_string(),
+            arguments: arguments.to_vec(),
+            ..InvokeRequest::default()
+        };
+
+        match client.forward_invoke(target_hub_uri, peer_request).await {
+            Ok(peer_response) => Ok(Response::new(peer_response)),
+            // Treat any cross-hub failure as legacy
+            // `target_online: false` rather than bubbling the
+            // peer status to the caller. The caller's contract
+            // is the same shape every reachable peer would
+            // return; surfacing peer-side admission rejection
+            // as `target_online: false` is the spec-§4 staging
+            // shape's natural behavior.
+            //
+            // PR-N1 commit 4/N (timeout + circuit-breaker) +
+            // PR-N1 commit 5/N (e2e) refine this — circuit-
+            // open will surface a typed
+            // `failed_precondition` so operators can tell apart
+            // "peer rejected" from "peer is down".
+            Err(_err) => {
+                let response = federation_wrappers::ForwardInvokeResponse {
+                    target_online: false,
+                };
+                wrap_json_response(&response)
+            }
+        }
     }
 
     /// Real reverse-channel push for `federation.forward_invoke`.
@@ -1833,6 +1954,193 @@ mod tests {
         assert_eq!(
             svc.federated_peers.get("peer-realm").map(String::as_str),
             Some("https://peer-hub.example:50443")
+        );
+    }
+
+    // ── PR-N1 commit 3b/N: tenant-aware forward_invoke tests ──
+
+    /// Test fixture: a `FederationClient` that records every
+    /// `forward_invoke` call and returns a canned response. Lets
+    /// tests assert the cross-tenant arm dialed the right peer
+    /// hub with the right ability + arguments.
+    struct RecordingFederationClient {
+        recorded: std::sync::Mutex<Vec<(crate::services::federation_client::HubUri, InvokeRequest)>>,
+        canned: InvokeResponse,
+    }
+
+    impl RecordingFederationClient {
+        fn new(canned: InvokeResponse) -> Self {
+            Self {
+                recorded: std::sync::Mutex::new(Vec::new()),
+                canned,
+            }
+        }
+
+        fn calls(&self) -> Vec<(crate::services::federation_client::HubUri, InvokeRequest)> {
+            self.recorded.lock().expect("mutex").clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl FederationClient for RecordingFederationClient {
+        async fn forward_invoke(
+            &self,
+            target_hub: &crate::services::federation_client::HubUri,
+            request: InvokeRequest,
+        ) -> Result<InvokeResponse, crate::services::federation_client::FederationClientError> {
+            self.recorded
+                .lock()
+                .expect("mutex")
+                .push((target_hub.clone(), request));
+            Ok(self.canned.clone())
+        }
+    }
+
+    fn forward_invoke_args(target_uri: &str) -> Vec<u8> {
+        format!(
+            r#"{{"target_uri":"{target_uri}","inner_envelope_b64":"AAAA"}}"#
+        )
+        .into_bytes()
+    }
+
+    #[tokio::test]
+    async fn forward_invoke_local_tenant_takes_fast_path() {
+        // When `target_uri` tenant matches the daemon's own
+        // realm, the local presence-registry path runs (and
+        // returns target_online: false because no presence
+        // entry was inserted in this test). Critical: the
+        // federation client is NEVER called even though one is
+        // wired.
+        let canned = InvokeResponse {
+            result: br#"{"target_online":true}"#.to_vec(),
+            result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            state: InvocationState::Completed as i32,
+            ..InvokeResponse::default()
+        };
+        let recorder = Arc::new(RecordingFederationClient::new(canned));
+
+        let svc = make_service()
+            .with_session_realm("test-realm")
+            .with_federation_client(recorder.clone() as Arc<dyn FederationClient>);
+
+        let resp = svc
+            .dispatch_federation_forward_invoke(&forward_invoke_args(
+                "easynet:///r/test-realm/agent/local-target",
+            ))
+            .await
+            .expect("local fast-path returns Ok");
+        let body: federation_wrappers::ForwardInvokeResponse = parse_response_body(resp);
+        assert!(!body.target_online, "no presence entry for local target");
+        assert!(
+            recorder.calls().is_empty(),
+            "federation client must NOT be called on local-tenant fast-path"
+        );
+    }
+
+    #[tokio::test]
+    async fn forward_invoke_cross_tenant_with_no_client_returns_legacy_shape() {
+        // Cross-tenant target + no federation client wired ⇒
+        // legacy `target_online: false`. Daemons that have not
+        // opted into cross-hub routing keep their existing wire
+        // behavior.
+        let svc = make_service().with_session_realm("test-realm");
+
+        let resp = svc
+            .dispatch_federation_forward_invoke(&forward_invoke_args(
+                "easynet:///r/peer-realm/agent/peer-target",
+            ))
+            .await
+            .expect("cross-tenant without client returns Ok");
+        let body: federation_wrappers::ForwardInvokeResponse = parse_response_body(resp);
+        assert!(
+            !body.target_online,
+            "cross-tenant without federation client must collapse to legacy shape"
+        );
+    }
+
+    #[tokio::test]
+    async fn forward_invoke_cross_tenant_with_no_peer_entry_returns_legacy_shape() {
+        // Federation client is wired but the operator-curated
+        // `federated_peers` map has no entry for the target's
+        // tenant ⇒ legacy `target_online: false`. The map is
+        // the operator's explicit statement of "these are the
+        // peer realms I federate with"; an unmapped tenant is
+        // not dialable.
+        let canned = InvokeResponse {
+            result: br#"{"target_online":true}"#.to_vec(),
+            result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            state: InvocationState::Completed as i32,
+            ..InvokeResponse::default()
+        };
+        let recorder = Arc::new(RecordingFederationClient::new(canned));
+
+        let svc = make_service()
+            .with_session_realm("test-realm")
+            .with_federation_client(recorder.clone() as Arc<dyn FederationClient>);
+
+        let resp = svc
+            .dispatch_federation_forward_invoke(&forward_invoke_args(
+                "easynet:///r/unmapped-realm/agent/peer-target",
+            ))
+            .await
+            .expect("unmapped tenant returns Ok");
+        let body: federation_wrappers::ForwardInvokeResponse = parse_response_body(resp);
+        assert!(!body.target_online);
+        assert!(
+            recorder.calls().is_empty(),
+            "federation client must NOT be called when peer entry is missing"
+        );
+    }
+
+    #[tokio::test]
+    async fn forward_invoke_cross_tenant_with_peer_entry_dials_via_federation_client() {
+        // Cross-tenant + federation client wired + peer entry
+        // present ⇒ federation client called with the peer's
+        // hub URI + the ability `federation.forward_invoke` +
+        // the original request bytes.
+        let canned = InvokeResponse {
+            result: br#"{"target_online":true}"#.to_vec(),
+            result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            state: InvocationState::Completed as i32,
+            ..InvokeResponse::default()
+        };
+        let recorder = Arc::new(RecordingFederationClient::new(canned));
+
+        let mut peers = BTreeMap::new();
+        peers.insert(
+            "peer-realm".to_string(),
+            "https://peer-hub.example:50443".to_string(),
+        );
+
+        let svc = make_service()
+            .with_session_realm("test-realm")
+            .with_federation_client(recorder.clone() as Arc<dyn FederationClient>)
+            .with_federated_peers(peers);
+
+        let target_uri = "easynet:///r/peer-realm/agent/peer-target";
+        let args = forward_invoke_args(target_uri);
+        let resp = svc
+            .dispatch_federation_forward_invoke(&args)
+            .await
+            .expect("cross-tenant returns Ok");
+
+        // Response is the peer's canned shape forwarded
+        // verbatim — the caller cannot tell apart local-on-peer
+        // hit from local-on-self hit by the wire bytes.
+        let body: federation_wrappers::ForwardInvokeResponse = parse_response_body(resp);
+        assert!(body.target_online, "peer canned target_online=true forwarded");
+
+        let calls = recorder.calls();
+        assert_eq!(calls.len(), 1, "exactly one cross-hub dial");
+        assert_eq!(calls[0].0, "https://peer-hub.example:50443");
+        assert_eq!(
+            calls[0].1.function_name,
+            ABILITY_FEDERATION_FORWARD_INVOKE,
+            "peer dispatcher receives federation.forward_invoke ability"
+        );
+        assert_eq!(
+            calls[0].1.arguments, args,
+            "peer receives the original ForwardInvokeRequest JSON verbatim"
         );
     }
 }
