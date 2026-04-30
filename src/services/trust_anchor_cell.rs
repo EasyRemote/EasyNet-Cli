@@ -112,6 +112,9 @@ mod tests {
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             role: TrustedAgentRole::Backend,
             added_at_unix_ms: 1_714_492_800_000,
+            origin_tenant_id: None,
+            hub_uri: None,
+            tls_ca_pem_path: None,
         }
     }
 

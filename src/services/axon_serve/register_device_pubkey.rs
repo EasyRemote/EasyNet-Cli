@@ -147,6 +147,16 @@ pub fn handle(
         public_key_b64: args.public_key_b64.clone(),
         role,
         added_at_unix_ms: now_unix_ms(),
+        // Cross-hub federation fields (PR-N1 schema-B) only apply
+        // to operator-curated `[[trusted_agent]] role = "hub"` entries
+        // authored by hand at peer-pairing time. The
+        // `<self>.register_device_pubkey` flow registers Backend /
+        // Device entries from the device-pairing path; those never
+        // dial cross-hub, so the federation fields are always
+        // `None` here.
+        origin_tenant_id: None,
+        hub_uri: None,
+        tls_ca_pem_path: None,
     };
 
     // Build the next anchor by snapshotting current entries +

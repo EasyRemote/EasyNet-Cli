@@ -91,14 +91,25 @@ pub enum TrustedAgentRole {
     Backend,
     /// Consumer device daemon dialing in over TLS.
     Device,
-    /// Cross-realm hub federate. Out of RFC-003 scope; reserved for
-    /// RFC-005.
+    /// Cross-realm hub federate. RFC-N PR-N1 cross-hub dial gate
+    /// requires `role == Hub` AND `origin_tenant_id.is_some()`.
+    /// DEC-N1 schema-B `origin_tenant_id` field added in PR-N1
+    /// commit 2/N below; PR-N2 fills in cross-realm admission key
+    /// resolution against the same entry.
     Hub,
 }
 
 /// One entry in `realm-trust.toml`. Public so the admission gate
 /// facade (commit 7b/9) and PR-7's pairing flow can consume the
 /// shape directly.
+///
+/// PR-N1 commit 2/N adds three optional fields used only by the
+/// cross-hub federation dialer (`role = Hub` entries):
+/// `origin_tenant_id`, `hub_uri`, `tls_ca_pem_path`. Backend /
+/// Device entries leave them `None`; missing fields in older TOML
+/// files deserialize to `None` via `#[serde(default)]` so PR-1+
+/// trust files load unchanged on a PR-N1 daemon (DEC-N1 schema-B
+/// backwards-compat).
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TrustedAgent {
     /// Canonical agent URI per spec §5.1
@@ -113,6 +124,33 @@ pub struct TrustedAgent {
     /// Timestamp the entry was added by the pairing flow (PR-7).
     /// Surface only — admission does not policy-check on age.
     pub added_at_unix_ms: u64,
+    /// **PR-N1 schema-B**. Tenant id this peer hub serves, in the
+    /// form embedded in `easynet:///r/{tenant_id}/agent/...`. Set
+    /// only on `role = Hub` entries; the admission gate uses this
+    /// to resolve `caller.uri.tenant() → peer hub URI` when an
+    /// invoke targets a tenant outside the local realm. `None` on
+    /// Backend/Device entries and on legacy Hub entries written
+    /// before PR-N1; the dialer fail-closes when this is `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_tenant_id: Option<String>,
+    /// **PR-N1 schema-B**. Concrete dial URL for the peer hub,
+    /// e.g. `"https://hub-b.example.com:50443"`. `Endpoint::
+    /// from_shared(hub_uri)` is the only place this string is
+    /// parsed — keep it operator-pasteable, not a structured URI.
+    /// `None` ⇒ peer is not dial-eligible (not a federation peer
+    /// or a legacy entry); the dialer surfaces `PeerNotTrusted`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hub_uri: Option<String>,
+    /// **PR-N1 schema-B**. Filesystem path the cross-hub dialer
+    /// reads to obtain the operator-pinned CA certificate that
+    /// must sign the peer's TLS leaf. The path is read once per
+    /// dial-cache miss; the contents are passed verbatim to
+    /// `tonic::transport::Certificate::from_pem`. `None` ⇒ no
+    /// pinning configured; the dialer refuses to dial without an
+    /// explicit pin (no system-CA fallback by design — DEC-N1's
+    /// "operator-controlled trust set" rule).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_ca_pem_path: Option<PathBuf>,
 }
 
 /// Internal TOML shape; private so the public `RealmTrustAnchor`
@@ -206,6 +244,27 @@ impl RealmTrustAnchor {
     #[must_use]
     pub fn lookup(&self, agent_uri: &str) -> Option<&TrustedAgent> {
         self.by_uri.get(agent_uri)
+    }
+
+    /// PR-N1 commit 2/N: cross-hub dialer peer lookup. Returns the
+    /// `TrustedAgent` whose `hub_uri == target_hub` AND whose
+    /// `role == Hub` AND whose `origin_tenant_id.is_some()`. The
+    /// triple gate is the federation peer trust contract from
+    /// DEC-N1 schema-B + PR-N1 spec §commit 2/N: the dialer never
+    /// dials a peer that is not all three of operator-pinned,
+    /// federation-roled, and tenant-tagged.
+    ///
+    /// Linear scan over the trust set. The federation peer
+    /// population is operator-curated (tens of entries, not
+    /// thousands), so a secondary index would be over-engineering.
+    /// Re-evaluate if the scan ever shows up in admission profiles.
+    #[must_use]
+    pub fn lookup_peer_hub(&self, target_hub: &str) -> Option<&TrustedAgent> {
+        self.by_uri.values().find(|a| {
+            a.role == TrustedAgentRole::Hub
+                && a.origin_tenant_id.is_some()
+                && a.hub_uri.as_deref() == Some(target_hub)
+        })
     }
 
     /// Number of trusted agents in the anchor. Used by the daemon
@@ -406,6 +465,9 @@ mod tests {
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             role: TrustedAgentRole::Device,
             added_at_unix_ms: 1_714_492_800_000,
+            origin_tenant_id: None,
+            hub_uri: None,
+            tls_ca_pem_path: None,
         }
     }
 
@@ -574,6 +636,9 @@ added_at_unix_ms = 1714492800000
                 public_key_b64: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA=".to_string(),
                 role: TrustedAgentRole::Device,
                 added_at_unix_ms: 1_714_492_801_234,
+                origin_tenant_id: None,
+                hub_uri: None,
+                tls_ca_pem_path: None,
             })
             .expect("append laptop-1");
 
@@ -669,5 +734,152 @@ added_at_unix_ms = 1714492800000
         let metadata = fs::metadata(&path).expect("stat");
         let mode = metadata.permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "trust anchor file must be 0600 on disk");
+    }
+
+    // ── PR-N1 commit 2/N: schema-B federation peer lookup ─────
+
+    #[test]
+    fn legacy_toml_without_schema_b_fields_loads() {
+        // A `realm-trust.toml` written by a PR-1..PR-7 daemon
+        // does not carry `origin_tenant_id` / `hub_uri` /
+        // `tls_ca_pem_path`. PR-N1 daemons must load it
+        // unchanged (DEC-N1 schema-B backwards-compat). Asserts
+        // both the deserialise path AND that the schema-B fields
+        // default to `None`.
+        let toml_content = r#"
+[[trusted_agent]]
+agent_uri = "easynet:///r/realm/agent/backend"
+public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+role = "backend"
+added_at_unix_ms = 1714492800000
+"#;
+        let file = write_temp(toml_content);
+        let anchor = RealmTrustAnchor::load_or_empty(file.path())
+            .expect("legacy toml must load on a PR-N1 daemon");
+        let entry = anchor
+            .lookup("easynet:///r/realm/agent/backend")
+            .expect("legacy entry present");
+        assert_eq!(entry.origin_tenant_id, None);
+        assert_eq!(entry.hub_uri, None);
+        assert_eq!(entry.tls_ca_pem_path, None);
+    }
+
+    #[test]
+    fn schema_b_hub_entry_loads_with_all_three_fields() {
+        let toml_content = r#"
+[[trusted_agent]]
+agent_uri = "easynet:///r/peer-realm/agent/peer-hub"
+public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+role = "hub"
+added_at_unix_ms = 1714492800000
+origin_tenant_id = "peer-realm"
+hub_uri = "https://peer-hub.example:50443"
+tls_ca_pem_path = "/etc/easynet/peer-hub-ca.pem"
+"#;
+        let file = write_temp(toml_content);
+        let anchor = RealmTrustAnchor::load_or_empty(file.path()).expect("schema-B loads");
+        let entry = anchor
+            .lookup("easynet:///r/peer-realm/agent/peer-hub")
+            .expect("schema-B entry present");
+        assert_eq!(entry.origin_tenant_id.as_deref(), Some("peer-realm"));
+        assert_eq!(
+            entry.hub_uri.as_deref(),
+            Some("https://peer-hub.example:50443")
+        );
+        assert_eq!(
+            entry.tls_ca_pem_path.as_deref(),
+            Some(Path::new("/etc/easynet/peer-hub-ca.pem")),
+        );
+    }
+
+    #[test]
+    fn lookup_peer_hub_finds_matching_federation_entry() {
+        let target_hub = "https://peer-hub.example:50443";
+        let mut entry = entry("easynet:///r/peer-realm/agent/peer-hub");
+        entry.role = TrustedAgentRole::Hub;
+        entry.origin_tenant_id = Some("peer-realm".to_string());
+        entry.hub_uri = Some(target_hub.to_string());
+        entry.tls_ca_pem_path = Some(PathBuf::from("/tmp/peer-ca.pem"));
+
+        let anchor = RealmTrustAnchor::from_entries(vec![entry]).expect("anchor");
+        let found = anchor.lookup_peer_hub(target_hub).expect("peer found");
+        assert_eq!(found.role, TrustedAgentRole::Hub);
+        assert_eq!(found.origin_tenant_id.as_deref(), Some("peer-realm"));
+    }
+
+    #[test]
+    fn lookup_peer_hub_skips_non_hub_role() {
+        let target_hub = "https://peer-hub.example:50443";
+        let mut entry = entry("easynet:///r/peer-realm/agent/peer-hub");
+        // Backend role with a hub_uri set — operator typo. Must
+        // not be returned by `lookup_peer_hub`.
+        entry.role = TrustedAgentRole::Backend;
+        entry.origin_tenant_id = Some("peer-realm".to_string());
+        entry.hub_uri = Some(target_hub.to_string());
+        entry.tls_ca_pem_path = Some(PathBuf::from("/tmp/peer-ca.pem"));
+
+        let anchor = RealmTrustAnchor::from_entries(vec![entry]).expect("anchor");
+        assert!(anchor.lookup_peer_hub(target_hub).is_none());
+    }
+
+    #[test]
+    fn lookup_peer_hub_skips_entry_missing_origin_tenant_id() {
+        let target_hub = "https://peer-hub.example:50443";
+        let mut entry = entry("easynet:///r/peer-realm/agent/peer-hub");
+        entry.role = TrustedAgentRole::Hub;
+        entry.origin_tenant_id = None;
+        entry.hub_uri = Some(target_hub.to_string());
+        entry.tls_ca_pem_path = Some(PathBuf::from("/tmp/peer-ca.pem"));
+
+        let anchor = RealmTrustAnchor::from_entries(vec![entry]).expect("anchor");
+        assert!(anchor.lookup_peer_hub(target_hub).is_none());
+    }
+
+    #[test]
+    fn lookup_peer_hub_returns_none_when_hub_uri_does_not_match() {
+        let mut entry = entry("easynet:///r/peer-realm/agent/peer-hub");
+        entry.role = TrustedAgentRole::Hub;
+        entry.origin_tenant_id = Some("peer-realm".to_string());
+        entry.hub_uri = Some("https://peer-hub.example:50443".to_string());
+        entry.tls_ca_pem_path = Some(PathBuf::from("/tmp/peer-ca.pem"));
+
+        let anchor = RealmTrustAnchor::from_entries(vec![entry]).expect("anchor");
+        assert!(anchor
+            .lookup_peer_hub("https://different-hub.example:50443")
+            .is_none());
+    }
+
+    #[test]
+    fn save_round_trips_schema_b_fields() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("realm-trust.toml");
+
+        let mut anchor = RealmTrustAnchor::default();
+        anchor
+            .append_agent(TrustedAgent {
+                agent_uri: "easynet:///r/peer-realm/agent/peer-hub".to_string(),
+                public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+                role: TrustedAgentRole::Hub,
+                added_at_unix_ms: 1_714_492_800_000,
+                origin_tenant_id: Some("peer-realm".to_string()),
+                hub_uri: Some("https://peer-hub.example:50443".to_string()),
+                tls_ca_pem_path: Some(PathBuf::from("/etc/easynet/peer-hub-ca.pem")),
+            })
+            .expect("append hub entry");
+
+        anchor.save(&path).expect("save Ok");
+        let loaded = RealmTrustAnchor::try_load_strict(&path).expect("load Ok");
+        let entry = loaded
+            .lookup("easynet:///r/peer-realm/agent/peer-hub")
+            .expect("hub entry present");
+        assert_eq!(entry.origin_tenant_id.as_deref(), Some("peer-realm"));
+        assert_eq!(
+            entry.hub_uri.as_deref(),
+            Some("https://peer-hub.example:50443")
+        );
+        assert_eq!(
+            entry.tls_ca_pem_path.as_deref(),
+            Some(Path::new("/etc/easynet/peer-hub-ca.pem")),
+        );
     }
 }

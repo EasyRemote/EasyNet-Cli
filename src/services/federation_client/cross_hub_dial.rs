@@ -1,21 +1,39 @@
-// EasyNet CLI — cross-hub gRPC outbound dialer (PR-N1 commit 1/N)
+// EasyNet CLI — cross-hub gRPC outbound dialer (PR-N1 commit 2/N)
 // =================================================================
 //
 // File: src/services/federation_client/cross_hub_dial.rs
 //
-// PR-N1 commit 1/N skeleton — `FederationClient` trait + tonic-
-// backed `CrossHubDialer` skeleton + typed `FederationClientError`.
-// No real outbound I/O yet; that lands in commits 2/N (TLS pin) +
-// 3/N (`handle_forward_invoke` rewrite) + 4/N (timeout / circuit-
-// breaker).
+// PR-N1 commit 2/N — TLS-pinned cross-hub dial + peer trust gate.
+// Replaces the skeleton "not implemented" body shipped by commit
+// 1/N (`207cc92`) with the real outbound path:
 //
-// Boot wiring (commit 3/N+) plumbs one `Arc<dyn FederationClient>`
-// through `start_axon_serve_sidecar` to the `federation_wrappers`
-// dispatcher so `handle_forward_invoke` can call the concrete
-// dialer when target tenant != self realm. PR-N1 commit 1/N keeps
-// `forward_invoke` returning `FederationClientError::DialFailed`
-// so call sites can already type-check against the trait without
-// the real network surface.
+//   forward_invoke(target_hub, req)
+//     ├─ trust_anchor.lookup_peer_hub(target_hub)?  ← schema-B gate
+//     │     (role == Hub && origin_tenant_id.is_some()
+//     │      && hub_uri == target_hub && tls_ca_pem_path.is_some())
+//     ├─ resolve_peer_channel(target_hub) → cached or new TLS-pinned
+//     │     tonic Channel  (CA from TrustedAgent.tls_ca_pem_path)
+//     └─ InvocationClient::new(channel).invoke(req).await
+//
+// What is NOT in this commit
+// --------------------------
+// - mTLS outbound identity. The dialer presents no client cert;
+//   peer-side admission verifies the AXIOM signature in the
+//   envelope, not the TLS layer. Cross-realm admission key
+//   resolution is PR-N2 territory.
+// - Timeout + circuit-breaker. PR-N1 commit 4/N wraps the
+//   `Channel` with `tower::timeout::Timeout` and per-peer breaker
+//   state; commit 2/N's bare `Endpoint::connect` blocks until OS-
+//   level connect timeout (typically 60-120s).
+// - `handle_forward_invoke` integration — federation_wrappers.rs
+//   still returns the stub `target_online: false`. That switches
+//   in PR-N1 commit 3/N when the wrapper accepts an
+//   `Arc<dyn FederationClient>` and routes cross-realm tenants
+//   through this dialer.
+// - DaemonConfig::federated_peers operator map — the dialer's
+//   caller passes the peer hub URI directly. PR-N1 commit 3/N
+//   adds the `tenant → hub_uri` resolution layer above this
+//   trait.
 //
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -24,8 +42,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
-use tonic::transport::Channel;
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 
+use crate::pb::axon::v1::invocation_client::InvocationClient;
 use crate::pb::axon::v1::{InvokeRequest, InvokeResponse};
 use crate::services::realm_trust_anchor::RealmTrustAnchor;
 
@@ -115,22 +134,21 @@ pub trait FederationClient: Send + Sync {
 
 /// tonic-backed concrete implementation. Holds:
 /// - `trust_anchor` — read-only handle to the daemon's
-///   `RealmTrustAnchor`. Used in commit 2/N for the
-///   `PeerNotTrusted` gate; commit 1/N captures the field so the
-///   constructor signature is stable.
+///   `RealmTrustAnchor`. The peer trust gate (`lookup_peer_hub`)
+///   reads this on every dial; the field is wrapped in `Arc` so
+///   admission-side reloads via the trust-anchor cell continue to
+///   reach the dialer through the cell's `Arc::make_mut` rotate.
 /// - `channels` — `Arc<DashMap<HubUri, Channel>>` peer-channel
-///   cache (PR-N1 spec INV-5). Lock-free — every commit beyond
-///   1/N reads on the hot path so `RwLock<HashMap>` would be a
-///   regression vs. PresenceRegistry's existing pattern.
+///   cache (PR-N1 spec INV-5). Lock-free — the hot path reads the
+///   map on every cross-hub call so `RwLock<HashMap>` would be a
+///   regression vs. `PresenceRegistry`'s existing pattern.
 ///
 /// Constructed once per daemon process at boot (alongside the
 /// inbound `start_axon_serve_sidecar` listener) and cloned
 /// cheaply into per-RPC dispatch tasks.
 #[derive(Clone)]
 pub struct CrossHubDialer {
-    #[allow(dead_code)] // commit 2/N reads
     trust_anchor: Arc<RealmTrustAnchor>,
-    #[allow(dead_code)] // commit 2/N populates
     channels: Arc<DashMap<HubUri, Channel>>,
 }
 
@@ -143,13 +161,10 @@ impl std::fmt::Debug for CrossHubDialer {
 }
 
 impl CrossHubDialer {
-    /// Construct a fresh dialer. PR-N1 commit 1/N: skeleton; no
-    /// peer dial occurs until commit 2/N. The dialer's behaviour
-    /// in this commit is "every call returns
-    /// `FederationClientError::DialFailed("not implemented in PR-N1
-    /// commit 1/N")`". The constructor + cache + types ship now
-    /// so commit 3/N can wire the dispatcher against a stable
-    /// trait surface without forward-references.
+    /// Construct a fresh dialer. The dialer holds the trust anchor
+    /// by `Arc` so the cell-based reload path (PR-7
+    /// `register_device_pubkey` + the federation-side equivalent
+    /// when it lands) does not require reconstructing the dialer.
     #[must_use]
     pub fn new(trust_anchor: Arc<RealmTrustAnchor>) -> Self {
         Self {
@@ -163,6 +178,70 @@ impl CrossHubDialer {
     pub fn cached_peer_count(&self) -> usize {
         self.channels.len()
     }
+
+    /// Resolve a `tonic::transport::Channel` for `target_hub`,
+    /// reusing a cached channel when the peer has been dialed
+    /// before. The trust-anchor entry the caller already verified
+    /// supplies the operator-pinned CA path; the channel is built
+    /// with `ClientTlsConfig::new().ca_certificate(...)`. There is
+    /// no system-CA fallback by design (DEC-N1: trust set is
+    /// authoritative).
+    ///
+    /// Cache semantics: `DashMap::entry::or_try_insert_with` is
+    /// the natural fit but tonic's `Channel` is `Clone` so a
+    /// straightforward "miss → build → insert" works. A second
+    /// concurrent miss may build a duplicate channel that loses
+    /// the insert race; the loser is dropped with no observable
+    /// harm (TLS handshake cost is the lone waste — bounded by
+    /// the number of concurrent first-cross-hub calls per peer
+    /// at boot).
+    fn resolve_peer_channel(
+        &self,
+        target_hub: &HubUri,
+        ca_pem_path: &std::path::Path,
+    ) -> Result<Channel, FederationClientError> {
+        if let Some(cached) = self.channels.get(target_hub) {
+            return Ok(cached.clone());
+        }
+
+        let ca_pem = std::fs::read(ca_pem_path).map_err(|err| {
+            FederationClientError::DialFailed {
+                hub: target_hub.clone(),
+                detail: format!(
+                    "read tls_ca_pem_path `{}`: {err}",
+                    ca_pem_path.display()
+                ),
+            }
+        })?;
+        let ca = Certificate::from_pem(&ca_pem);
+        let tls = ClientTlsConfig::new().ca_certificate(ca);
+
+        let endpoint = Endpoint::from_shared(target_hub.clone())
+            .map_err(|err| FederationClientError::DialFailed {
+                hub: target_hub.clone(),
+                detail: format!("invalid hub_uri `{target_hub}`: {err}"),
+            })?
+            .tls_config(tls)
+            .map_err(|err| FederationClientError::DialFailed {
+                hub: target_hub.clone(),
+                detail: format!("apply tls_config: {err}"),
+            })?;
+
+        // `connect_lazy` defers the real TCP+TLS handshake until
+        // the first RPC. Two reasons we prefer it here:
+        //  1. Boot does not stall on unreachable peers — the
+        //     cross-hub call surfaces the dial error as the
+        //     RPC's failure, not as a daemon startup failure.
+        //  2. The `Endpoint` is single-use; `connect()` would
+        //     consume `self` and force re-building the TLS
+        //     config for every retry. `connect_lazy` returns a
+        //     Channel that retries internally on a per-RPC
+        //     basis, matching the trait's "no retry on
+        //     forward_invoke" contract.
+        let channel = endpoint.connect_lazy();
+        self.channels.insert(target_hub.clone(), channel.clone());
+        Ok(channel)
+    }
 }
 
 #[async_trait]
@@ -170,39 +249,60 @@ impl FederationClient for CrossHubDialer {
     async fn forward_invoke(
         &self,
         target_hub: &HubUri,
-        _request: InvokeRequest,
+        request: InvokeRequest,
     ) -> Result<InvokeResponse, FederationClientError> {
-        // PR-N1 commit 1/N intentionally returns the typed
-        // "skeleton" error. commit 2/N replaces this body with
-        // real TLS-pinned dial + cached channel reuse + inner
-        // tonic Invoke. The error variant + message are chosen so
-        // operators / tests can grep on the literal string
-        // "not implemented in PR-N1 commit 1/N" if a stray call
-        // hits this code path during the rollout window.
-        Err(FederationClientError::DialFailed {
-            hub: target_hub.clone(),
-            detail:
-                "not implemented in PR-N1 commit 1/N — real cross-hub dial \
-                 lands in commit 2/N (TLS pin) + 3/N (handle_forward_invoke \
-                 rewrite). See pr-drafts/PR-N1-spec-hub-to-hub-grpc-outbound.md."
-                    .to_string(),
-        })
+        // ── 1. Trust gate ────────────────────────────────────
+        // `lookup_peer_hub` enforces the schema-B contract:
+        // role == Hub AND origin_tenant_id.is_some() AND
+        // hub_uri == target_hub. A peer that fails any of those
+        // is `PeerNotTrusted`. We additionally require
+        // `tls_ca_pem_path.is_some()` since DEC-N1 forbids the
+        // dialer from falling back to system CAs.
+        let entry = self
+            .trust_anchor
+            .lookup_peer_hub(target_hub)
+            .ok_or_else(|| FederationClientError::PeerNotTrusted(target_hub.clone()))?;
+        let ca_path = entry
+            .tls_ca_pem_path
+            .as_deref()
+            .ok_or_else(|| FederationClientError::PeerNotTrusted(target_hub.clone()))?;
+
+        // ── 2. Resolve channel (cached or fresh TLS-pinned) ──
+        let channel = self.resolve_peer_channel(target_hub, ca_path)?;
+
+        // ── 3. Inner Invoke ──────────────────────────────────
+        let mut client = InvocationClient::new(channel);
+        let response = client
+            .invoke(request)
+            .await
+            .map_err(|status| FederationClientError::InnerInvokeFailed {
+                hub: target_hub.clone(),
+                status: format!("code={:?} message={}", status.code(), status.message()),
+            })?;
+        Ok(response.into_inner())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    //! Trait-shape pin tests for PR-N1 commit 1/N. The dialer's
-    //! real I/O is exercised in commit 2/N+ tests; this module
-    //! only proves the trait API + types compile cleanly and
-    //! that a `MockFederationClient` can be substituted for the
-    //! concrete `CrossHubDialer` so call-site tests in commit
-    //! 3/N (`handle_forward_invoke` rewrite) can stand on a
-    //! stable foundation.
+    //! PR-N1 commit 2/N tests:
+    //! - Trust gate: peer not in anchor / wrong role / missing
+    //!   `origin_tenant_id` / missing `tls_ca_pem_path` all surface
+    //!   as `PeerNotTrusted` (DEC-N1 schema-B).
+    //! - Channel cache: a configured peer dialed twice produces a
+    //!   single cache entry; second call reuses the channel.
+    //! - TLS plumbing: a malformed or unreadable CA path surfaces
+    //!   as a typed `DialFailed`, never a panic.
+    //! - Real cross-hub round-trip with a self-signed CA + tonic
+    //!   server is deferred to PR-N1 commit 5/N's e2e suite, which
+    //!   spawns 2 daemons; this module's unit tests focus on the
+    //!   gate + cache + plumbing surface.
 
     use super::*;
     use crate::pb::axon::v1::{InvocationState, ResponseHeader};
+    use crate::services::realm_trust_anchor::{TrustedAgent, TrustedAgentRole};
     use std::collections::HashMap;
+    use std::path::PathBuf;
     use std::sync::Mutex;
 
     /// Test-only canned-response client. Lookup key is
@@ -278,29 +378,214 @@ mod tests {
         }
     }
 
+    /// Build a fully-populated federation peer entry. Each test
+    /// then mutates one field to exercise a specific reject reason.
+    fn fed_peer_entry(target_hub: &str, ca_path: PathBuf) -> TrustedAgent {
+        TrustedAgent {
+            agent_uri: "easynet:///r/peer-realm/agent/peer-hub".to_string(),
+            public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            role: TrustedAgentRole::Hub,
+            added_at_unix_ms: 1_714_492_800_000,
+            origin_tenant_id: Some("peer-realm".to_string()),
+            hub_uri: Some(target_hub.to_string()),
+            tls_ca_pem_path: Some(ca_path),
+        }
+    }
+
+    /// Build a 1-entry trust anchor wrapping the given trusted
+    /// agent. Each gate-test uses this to drive `lookup_peer_hub`.
+    fn anchor_with(entry: TrustedAgent) -> Arc<RealmTrustAnchor> {
+        Arc::new(RealmTrustAnchor::from_entries(vec![entry]).expect("anchor"))
+    }
+
     #[tokio::test]
-    async fn skeleton_dialer_returns_typed_dial_failed_with_commit_marker() {
-        // PR-N1 commit 1/N contract: skeleton returns the typed
-        // "not implemented" error with the literal commit marker
-        // string so a stray call during rollout is debuggable
-        // by grep, not by guessing.
+    async fn peer_not_trusted_when_anchor_empty() {
+        // No federation peer in the trust set ⇒ the dialer must
+        // reject with PeerNotTrusted, never reach the dial
+        // primitive. Empty anchor is the most common operator
+        // mis-configuration on a fresh hub-mode daemon.
         let dialer = CrossHubDialer::new(empty_anchor());
         let target = "https://peer-hub.example:50443".to_string();
         let err = dialer
             .forward_invoke(&target, sample_request("test.echo"))
             .await
-            .expect_err("commit 1/N skeleton must not succeed");
+            .expect_err("empty anchor must reject");
+        match err {
+            FederationClientError::PeerNotTrusted(hub) => assert_eq!(hub, target),
+            other => panic!("expected PeerNotTrusted, got: {other:?}"),
+        }
+        assert_eq!(dialer.cached_peer_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn peer_not_trusted_when_role_is_not_hub() {
+        // A Backend-role entry whose `hub_uri` matches the target
+        // is still rejected. `lookup_peer_hub` filters on role +
+        // origin_tenant_id, so a misconfigured TOML that put a
+        // backend's URL into hub_uri does not accidentally make
+        // it dialable.
+        let target = "https://peer-hub.example:50443".to_string();
+        let mut entry = fed_peer_entry(&target, PathBuf::from("/dev/null"));
+        entry.role = TrustedAgentRole::Backend;
+        let anchor = anchor_with(entry);
+
+        let dialer = CrossHubDialer::new(anchor);
+        let err = dialer
+            .forward_invoke(&target, sample_request("test.echo"))
+            .await
+            .expect_err("non-hub role must reject");
+        assert!(matches!(
+            err,
+            FederationClientError::PeerNotTrusted(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn peer_not_trusted_when_origin_tenant_id_missing() {
+        // A legacy hub entry written before PR-N1 schema-B has
+        // `origin_tenant_id = None`. The dialer must fail closed —
+        // a hub entry without a tenant tag is structurally
+        // unsuitable for cross-realm admission key resolution
+        // (PR-N2's prerequisite).
+        let target = "https://peer-hub.example:50443".to_string();
+        let mut entry = fed_peer_entry(&target, PathBuf::from("/dev/null"));
+        entry.origin_tenant_id = None;
+        let anchor = anchor_with(entry);
+
+        let dialer = CrossHubDialer::new(anchor);
+        let err = dialer
+            .forward_invoke(&target, sample_request("test.echo"))
+            .await
+            .expect_err("missing origin_tenant_id must reject");
+        assert!(matches!(
+            err,
+            FederationClientError::PeerNotTrusted(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn peer_not_trusted_when_tls_ca_pem_path_missing() {
+        // `tls_ca_pem_path = None` is DEC-N1's "no system-CA
+        // fallback" rule: the dialer refuses to touch the network
+        // without an operator-pinned CA, even if every other gate
+        // field is set.
+        let target = "https://peer-hub.example:50443".to_string();
+        let mut entry = fed_peer_entry(&target, PathBuf::from("/dev/null"));
+        entry.tls_ca_pem_path = None;
+        let anchor = anchor_with(entry);
+
+        let dialer = CrossHubDialer::new(anchor);
+        let err = dialer
+            .forward_invoke(&target, sample_request("test.echo"))
+            .await
+            .expect_err("missing tls_ca_pem_path must reject");
+        assert!(matches!(
+            err,
+            FederationClientError::PeerNotTrusted(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn dial_failed_when_tls_ca_pem_path_unreadable() {
+        // A trust entry that names a non-existent file must
+        // surface a typed `DialFailed`, not panic. Operators see
+        // the underlying io::Error verbatim — the message
+        // includes the path so a typo is fixable from the log.
+        let target = "https://peer-hub.example:50443".to_string();
+        let bogus = PathBuf::from("/tmp/easynet-tls-ca-does-not-exist-xyz");
+        let entry = fed_peer_entry(&target, bogus.clone());
+        let anchor = anchor_with(entry);
+
+        let dialer = CrossHubDialer::new(anchor);
+        let err = dialer
+            .forward_invoke(&target, sample_request("test.echo"))
+            .await
+            .expect_err("unreadable CA must surface as DialFailed");
         match err {
             FederationClientError::DialFailed { hub, detail } => {
                 assert_eq!(hub, target);
                 assert!(
-                    detail.contains("not implemented in PR-N1 commit 1/N"),
-                    "skeleton error must carry the rollout marker; got: {detail}"
+                    detail.contains("read tls_ca_pem_path"),
+                    "DialFailed.detail must cite the read step; got: {detail}"
+                );
+                assert!(
+                    detail.contains(&bogus.display().to_string()),
+                    "DialFailed.detail must cite the offending path; got: {detail}"
                 );
             }
             other => panic!("expected DialFailed, got: {other:?}"),
         }
     }
+
+    #[tokio::test]
+    async fn resolve_peer_channel_caches_per_peer() {
+        // Two consecutive forward_invoke calls to the same peer
+        // must populate exactly one channel-cache entry. The
+        // second call's failure path (peer is unreachable) is
+        // expected; we assert only that the cache fills once and
+        // stays at one entry.
+        let target = "https://127.0.0.1:1".to_string(); // black-hole port
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, SELF_SIGNED_CA_PEM).expect("seed ca");
+
+        let entry = fed_peer_entry(&target, ca_path);
+        let anchor = anchor_with(entry);
+
+        let dialer = CrossHubDialer::new(anchor);
+        // The first call may surface DialFailed (handshake) or
+        // InnerInvokeFailed (channel constructed but RPC dispatch
+        // fails) depending on tonic's connect_lazy behaviour. We
+        // do not assert the variant — we assert the cache
+        // populated.
+        let _ = dialer
+            .forward_invoke(&target, sample_request("test.echo"))
+            .await;
+        assert_eq!(
+            dialer.cached_peer_count(),
+            1,
+            "first call must populate the channel cache"
+        );
+
+        let _ = dialer
+            .forward_invoke(&target, sample_request("test.echo"))
+            .await;
+        assert_eq!(
+            dialer.cached_peer_count(),
+            1,
+            "second call must reuse the cached channel"
+        );
+    }
+
+    /// Self-signed CA used by the cache test. Embedded so the
+    /// unit test does not require an external `rcgen` dep or a
+    /// runtime cert-generation fixture. Generated once with
+    /// `openssl req -x509 -newkey rsa:2048 -nodes` and cited as a
+    /// build-time fixture, never validated against a real peer
+    /// (the test exercises the trust gate + cache mechanics, not
+    /// TLS handshake success — full handshake lives in the e2e
+    /// suite at commit 5/N where two daemons share a real CA).
+    const SELF_SIGNED_CA_PEM: &str = "\
+-----BEGIN CERTIFICATE-----
+MIIDIzCCAgugAwIBAgIUWSDP0u/rTbKiKyiecmz54C99DsUwDQYJKoZIhvcNAQEL
+BQAwIDEeMBwGA1UEAwwVRWFzeU5ldCBQUi1OMSBUZXN0IENBMCAXDTI2MDQzMDE5
+MzExOVoYDzIxMjYwNDA2MTkzMTE5WjAgMR4wHAYDVQQDDBVFYXN5TmV0IFBSLU4x
+IFRlc3QgQ0EwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDE5dWIWW5P
+y5Kxb7x+5fAhJhCHIGnvIXAjFsXNdxzVBVeVZs+cJRewjNqa18FQMzZ+7BO5o8Z7
+aFboujGZJF1DcEP1gq69Z8Wn5qp9n2PEBjtcPygg5AeEC4/4m4rhHs9U5nKOYHhY
+dkkNop4VKl/WDGwX44a+mNARrjPPxm+BhWA03cgrcGQne0UGXVDI/SXCoYOaPHbS
+bNY9FuhgEtaUPkiAo0U+xHkY0ITJorKGssAApn/k5XExS8SQNrvwZgQjfqLYPkTP
+LjwfpJqS/jbPj3cYg7y0IJvTmuskP7JpyMTIM8tzJ4dT1/u1N4fNgCXtwj6r639D
+rWD/xMmyz+xVAgMBAAGjUzBRMB0GA1UdDgQWBBTxh0O/FuznnDBiTSHTu3ue+ba1
+xzAfBgNVHSMEGDAWgBTxh0O/FuznnDBiTSHTu3ue+ba1xzAPBgNVHRMBAf8EBTAD
+AQH/MA0GCSqGSIb3DQEBCwUAA4IBAQCKdj6fwsRArmqVE5WVqqqyQt9Lq2gBLGdI
+4jhBRq0l6dwpcTb76B2QncTd6LGsfiWgIOUI1gC0yZpJnFewfBvrflNF3tpwgCUA
+n5pEQsCZWFEM6+adkK80AX/TusX+31vb1s6ue5Mkh305YT8orguTFsajF1HpT/12
+SxYwtVK19IHR+6r7EBBCBg5D0fpPsH/xFsEWhdKVscezZ/W6m2iSQASUsCqSuQ22
+6i81muHeKZjGAV1Tv0GJ7dXH1hVGF3mnQYSgTPMI3A5LWmjIiJY7jDKH2iwDeF6Z
+30/lrNkD1+uxFboKf5XC1ySO8OysZ8qee2aV0LiP0hUYPiVMoRxl
+-----END CERTIFICATE-----
+";
 
     #[test]
     fn dialer_starts_with_zero_cached_peer_channels() {
