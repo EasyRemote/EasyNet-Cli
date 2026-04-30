@@ -159,12 +159,20 @@ pub fn start_axon_serve_sidecar() -> anyhow::Result<()> {
 /// dropped, which the supervisor treats the same as a cancel signal).
 fn spawn_session_supervisor(hub_endpoint: String, caller_uri: String) {
     eprintln!(
-        "[axon-serve] device-mode: dialing `<self>.session` against {hub_endpoint} as {caller_uri}"
+        "[axon-serve] STAGING: device-mode dialing `<self>.session` against {hub_endpoint} as \
+         {caller_uri}; SessionDispatch::Dispatch frames receive a typed \"not-yet-wired\" \
+         error reply until the LocalAbilityRegistry adapter lands (follow-up of PR-2)"
     );
-    // Cancel oneshot held forever — the supervisor exits when the
-    // tokio runtime drops it during shutdown. PR-7 wires real
-    // graceful-shutdown via SIGTERM signal handler.
-    let (_cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    // Cancel oneshot held for the daemon process's lifetime — the
+    // supervisor exits when the cancel sender drops, which happens
+    // when the tokio runtime tears down at process shutdown. PR-7
+    // wires real graceful-shutdown via the SIGTERM signal handler;
+    // until then `Box::leak` is the idiomatic "this thing lives as
+    // long as the process" expression (clearer than
+    // `std::mem::forget` because it makes the leak the explicit
+    // intent rather than a side-effect of forgetting to drop).
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    Box::leak(Box::new(cancel_tx));
     let dispatcher = Arc::new(StagingSessionDispatcher);
     tokio::spawn(run_session_supervisor(
         hub_endpoint,
@@ -172,12 +180,6 @@ fn spawn_session_supervisor(hub_endpoint: String, caller_uri: String) {
         dispatcher,
         cancel_rx,
     ));
-    // Intentionally leak the cancel sender via std::mem::forget
-    // semantics (we never drop it explicitly). Production daemons
-    // call this once at boot so the supervisor lives as long as the
-    // process. PR-7 replaces this with a proper shutdown signal
-    // wire-up.
-    std::mem::forget(_cancel_tx);
 }
 
 /// PR-1 staging dispatcher for the device-side
@@ -364,6 +366,15 @@ fn spawn_uds_listener(
 /// admission facade falls back to "every external caller must be in
 /// the realm trust set" — the safest default before PR-7 wires the
 /// real identity bootstrap.
+///
+// TODO(pr7): replace this stringly-typed `serde_json::Value` lookup
+// with `easynet_cli::persistence::config::Credentials` (typed
+// loader, ed25519 seed validation, atomic-write semantics). The
+// staging shape here is intentionally minimal so PR-1's binary
+// integration unblocks without depending on PR-7's identity
+// bootstrap; the Credentials struct already exists in the
+// persistence layer and is the right consumer for both this
+// loader and the eventual envelope-signing path.
 fn load_daemon_uri() -> Option<String> {
     let path = expand_home("~/.easynet/credentials.json");
     let raw = std::fs::read_to_string(&path).ok()?;
