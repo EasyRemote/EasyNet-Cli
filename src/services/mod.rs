@@ -67,3 +67,10 @@ pub mod presence_registry;
 /// only consumers in `axon_serve` need the proto plumbing the
 /// `axon-pb` feature gates.
 pub mod realm_trust_anchor;
+
+/// Cross-call correlation table for `<self>.invoke_remote` (PR-3
+/// writer) and `<self>.session` (PR-2 completer). Outside
+/// `presence_registry` because the concerns differ: presence is
+/// "who is online right now"; pending_dispatch is "outstanding
+/// cross-device calls awaiting reply". Pure data — no feature gate.
+pub mod pending_dispatch;
