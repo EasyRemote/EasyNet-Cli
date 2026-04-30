@@ -46,6 +46,11 @@
 // construct `Credentials`. Inner field visibility on the struct
 // itself is already `pub`.
 pub mod config;
+/// Daemon-side configuration for the gRPC InvocationServer
+/// (`~/.easynet/daemon-config.toml`). Authored by RFC-003 PR-1; see
+/// `pr-drafts/PR-0-spec-daemon-invocation-server.md §1` for the
+/// listener invariants this module enforces at load time.
+pub mod daemon_config;
 pub(crate) mod local_agents;
 /// Local resources registry — `~/.easynet/resources.json`. Maps a
 /// stable hardware identifier (CoreAudio/PulseAudio device UID, USB
