@@ -127,10 +127,11 @@ use easynet_axon::invocation::{
 };
 
 use crate::pb::axon::v1::{
-    causal_context, CausalContext as PbCausalContext, Envelope, EnvelopeOpen, InvokeRequest,
-    InvokeServerStreamRequest,
+    causal_context, CausalContext as PbCausalContext, Envelope, EnvelopeOpen, InvocationState,
+    InvokeRequest, InvokeServerStreamRequest,
 };
 use crate::services::nonce_replay_store::SharedNonceReplayStore;
+use crate::services::receipt_store::SharedReceiptStore;
 use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgentRole};
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
 
@@ -152,6 +153,13 @@ pub struct AdmissionFacade {
     trust_anchor: SharedTrustAnchor,
     daemon_uri: Option<String>,
     replay_store: SharedNonceReplayStore,
+    /// Bounded ring buffer where the strict-success path records a
+    /// signed `InvocationReceipt` per accepted call (PR-10 commit
+    /// 3/N — RFC 001 §5.3 + DEC-012 close). Production daemons
+    /// thread one shared store from `start_axon_serve_sidecar`;
+    /// tests / smoke runs default to a fresh empty store. INV-5
+    /// is honoured by construction: `record` never errors.
+    receipt_store: SharedReceiptStore,
 }
 
 impl AdmissionFacade {
@@ -191,7 +199,28 @@ impl AdmissionFacade {
             trust_anchor,
             daemon_uri,
             replay_store: SharedNonceReplayStore::new(),
+            receipt_store: SharedReceiptStore::new(),
         }
+    }
+
+    /// Builder seam: set the daemon-shared receipt store
+    /// (PR-10 commit 3/N). Production callers thread one store
+    /// per daemon process from `start_axon_serve_sidecar`; tests
+    /// pass a tighter-bounded store to exercise eviction paths.
+    #[must_use]
+    pub fn with_receipt_store(mut self, receipt_store: SharedReceiptStore) -> Self {
+        self.receipt_store = receipt_store;
+        self
+    }
+
+    /// Snapshot the daemon-shared receipt store. Used by PR-10
+    /// commit 5/N's e2e to assert that a signed-success
+    /// admission produced a recorded receipt; future audit
+    /// query (RFC-N PR-N5) will replace this borrow with a
+    /// richer subscription API.
+    #[must_use]
+    pub fn receipt_store(&self) -> &SharedReceiptStore {
+        &self.receipt_store
     }
 
     /// Construct a facade with a caller-supplied replay store. Used
@@ -209,6 +238,7 @@ impl AdmissionFacade {
             trust_anchor: SharedTrustAnchor::new(trust_anchor),
             daemon_uri,
             replay_store,
+            receipt_store: SharedReceiptStore::new(),
         }
     }
 
@@ -359,7 +389,11 @@ impl AdmissionFacade {
     /// Bridges proto → axiom domain types and dispatches into
     /// `easynet_axon::invocation::admission::run_admission` with a
     /// snapshot-backed `KeyResolver` and the daemon-shared replay
-    /// store.
+    /// store. On success, records an `InvocationReceipt` into the
+    /// daemon-shared receipt store (PR-10 commit 3/N — RFC 001
+    /// §5.3 + DEC-012 close). Receipt emission is best-effort per
+    /// PR-10 spec INV-5: a poisoned-lock recovery never bubbles
+    /// up as an admission failure.
     fn run_strict_admission(
         &self,
         envelope: &Envelope,
@@ -390,7 +424,85 @@ impl AdmissionFacade {
             )
         });
 
-        result.map_err(axon_error_to_status)
+        match result {
+            Ok(()) => {
+                self.record_admission_receipt(envelope, ability, args);
+                Ok(())
+            }
+            Err(err) => Err(axon_error_to_status(err)),
+        }
+    }
+
+    /// PR-10 commit 3/N: build and record a minimum-viable
+    /// `InvocationReceipt` for an accepted strict-path admission.
+    /// The receipt carries:
+    /// - `receipt_type = "admitted"` (audit pipelines grep on this)
+    /// - identity bindings (caller / callee / subject) copied
+    ///   from the envelope; these prove which call this receipt
+    ///   attests to
+    /// - `invocation_nonce` echoed for audit-side dedup
+    /// - `state = INVOCATION_STATE_COMPLETED` (admitted at this
+    ///   gate; downstream dispatch outcome rides a follow-up
+    ///   receipt in RFC-N PR-N5's chain)
+    /// - `payload_digest = sha256(args)` — same digest the
+    ///   admission gate computed for §5.2 step 1
+    /// - `timestamp_unix_ms = axon_now_ms()` (same clock the
+    ///   replay store uses, monotonic guaranteed by store)
+    ///
+    /// What this receipt does NOT carry yet (deferred to follow-up):
+    /// - `callee_signature` — receipt signing key wiring lands in
+    ///   a follow-up commit; v1 emits unsigned receipts so the
+    ///   audit pipeline at least sees the call happen
+    /// - `prev_receipt_hash` chain — single-receipt-per-call
+    ///   for v1 means root-only chain
+    /// - `causal_binding` — copied verbatim from envelope is
+    ///   straightforward but not load-bearing for the first
+    ///   minimum-viable emission
+    ///
+    /// INV-5 honoured: this method never errors. A poisoned
+    /// receipt-store lock recovers via `into_inner` inside
+    /// `record`.
+    fn record_admission_receipt(&self, envelope: &Envelope, ability: &str, args: &[u8]) {
+        use crate::pb::axon::v1::InvocationReceipt;
+        use sha2::Digest;
+
+        let mut hasher = Sha256::new();
+        hasher.update(args);
+        let payload_digest = hasher.finalize().to_vec();
+
+        let invocation_id = format!(
+            "{}:{}:{}",
+            envelope
+                .caller
+                .as_ref()
+                .map(|c| c.uri.as_str())
+                .unwrap_or(""),
+            ability,
+            hex_lower(&envelope.invocation_nonce),
+        );
+
+        let receipt = InvocationReceipt {
+            index: 0,
+            invocation_id,
+            receipt_type: "admitted".to_string(),
+            state: InvocationState::Completed as i32,
+            timestamp_unix_ms: axon_now_ms(),
+            prev_receipt_hash: vec![0u8; 32],
+            self_hash: Vec::new(),
+            payload: Vec::new(),
+            payload_content_type: String::new(),
+            cleanup_complete: true,
+            reason: String::new(),
+            child_invocation_id: String::new(),
+            caller_binding: envelope.caller.clone(),
+            callee_binding: envelope.callee.clone(),
+            subject_binding: envelope.subject.clone(),
+            invocation_nonce: envelope.invocation_nonce.clone(),
+            causal_binding: envelope.causal_context.clone(),
+            callee_signature: None,
+            ..InvocationReceipt::default()
+        };
+        self.receipt_store.record(receipt);
     }
 
     fn is_loopback(&self, caller_uri: &str) -> bool {
@@ -402,6 +514,17 @@ impl AdmissionFacade {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
+
+/// Lowercase-hex a byte slice. Receipt invocation_id construction
+/// uses this to render the 16-byte invocation nonce. Inlined here
+/// rather than pulling `hex` as a dep because it's a one-off use.
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(&format!("{:02x}", byte));
+    }
+    out
+}
 
 /// Extract `caller.uri` and reject as `invalid_argument` if absent
 /// or empty. Shared by every entrypoint so the wire-level
@@ -896,6 +1019,85 @@ mod tests {
         facade.verify_invoke(&req).expect("signed caller admitted");
         // Replay store retains exactly this nonce.
         assert_eq!(facade.replay_store.len(), 1);
+    }
+
+    /// PR-10 commit 3/N receipt emission: every strict-path
+    /// success records an `InvocationReceipt` into the daemon-
+    /// shared receipt store. The receipt's identity bindings
+    /// echo the envelope; the receipt_type is `"admitted"` so
+    /// audit pipelines can grep.
+    #[test]
+    fn strict_admission_records_receipt() {
+        let signing_key = SigningKey::from_bytes(&[0x55u8; 32]);
+        let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
+
+        let caller_uri = "easynet:///r/realm/agent/receipt-emitter";
+        let callee_uri = "easynet:///r/realm/agent/this-daemon";
+        let trust = Arc::new(
+            RealmTrustAnchor::from_entries(vec![backend_entry(
+                caller_uri,
+                pub_key_b64,
+            )])
+            .expect("anchor"),
+        );
+        let facade = AdmissionFacade::new(trust, Some(callee_uri.to_string()));
+        assert!(facade.receipt_store().is_empty());
+
+        let (req, _digest) = signed_request_with_nonce(
+            caller_uri,
+            callee_uri,
+            "self.echo",
+            b"{}",
+            &signing_key,
+            [0x77u8; 16],
+        );
+        facade.verify_invoke(&req).expect("signed caller admitted");
+
+        // Exactly one receipt recorded for the one accepted call.
+        assert_eq!(facade.receipt_store().len(), 1);
+        let recent = facade.receipt_store().snapshot_recent(1);
+        let receipt = recent.into_iter().next().expect("one receipt");
+        assert_eq!(receipt.receipt_type, "admitted");
+        assert_eq!(
+            receipt
+                .caller_binding
+                .as_ref()
+                .expect("caller_binding present")
+                .uri,
+            caller_uri
+        );
+        assert_eq!(
+            receipt
+                .callee_binding
+                .as_ref()
+                .expect("callee_binding present")
+                .uri,
+            callee_uri
+        );
+        assert_eq!(receipt.invocation_nonce, vec![0x77u8; 16]);
+        assert!(
+            !receipt.invocation_id.is_empty(),
+            "invocation_id derived from caller+ability+nonce"
+        );
+    }
+
+    /// Loopback-bypass admissions DO NOT record receipts
+    /// (loopback caller is the daemon talking to itself; the
+    /// receipt would have no audit value). Pin the contract.
+    #[test]
+    fn loopback_admission_does_not_record_receipt() {
+        let facade = AdmissionFacade::new(
+            Arc::new(RealmTrustAnchor::default()),
+            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+        );
+        let req = invoke_request(Some(envelope_with_caller(
+            "easynet:///r/realm/agent/this-daemon",
+        )));
+        facade.verify_invoke(&req).expect("loopback admitted");
+        assert!(
+            facade.receipt_store().is_empty(),
+            "loopback bypass must not pollute the receipt store"
+        );
     }
 
     #[test]
