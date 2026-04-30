@@ -137,7 +137,7 @@ pub struct JoinRequest {
 }
 
 /// Response payload for `federation.join`.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct JoinResponse {
     /// The caller's claimed URI, echoed back unchanged. Deterministic.
     pub canonical_agent_uri: String,
@@ -190,7 +190,7 @@ pub struct AdvertiseAgentRequest {
 }
 
 /// Response payload for `federation.advertise_agent`.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AdvertiseAgentResponse {
     /// Always `true` when this wrapper returns; rejection paths run
     /// in the admission gate before this function is called.
@@ -224,7 +224,7 @@ pub struct HeartbeatRequest {
 }
 
 /// Response payload for `federation.heartbeat`.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HeartbeatResponse {
     /// Always `"active"` in the new architecture. Deterministic.
     pub membership_status: String,
@@ -265,7 +265,7 @@ pub struct ResolveRequest {
 
 /// One agent in a resolve response. Mirrors
 /// `FederatedNodeEntry`'s deterministic subset.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentSummary {
     /// The agent's URI; deterministic.
     pub canonical_agent_uri: String,
@@ -274,7 +274,7 @@ pub struct AgentSummary {
 }
 
 /// Response payload for `federation.resolve`.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResolveResponse {
     /// Sorted ascending by `canonical_agent_uri` so byte-identical
     /// responses come from byte-identical state.
@@ -309,7 +309,7 @@ pub struct RevokeRequest {
 }
 
 /// Response payload for `federation.revoke`.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RevokeResponse {
     /// Always `true` when this wrapper returns; deterministic.
     pub ack: bool,
@@ -347,7 +347,7 @@ pub struct ForwardInvokeRequest {
 }
 
 /// Response payload for `federation.forward_invoke`.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ForwardInvokeResponse {
     /// Whether the target had an open `<self>.session` at lookup
     /// time. The actual frame push and pending-oneshot correlation
@@ -381,7 +381,7 @@ pub fn handle_forward_invoke(
 /// Initial snapshot frame on a `federation.subscribe_directory`
 /// stream. The first frame; subsequent frames (added in commit
 /// 6/9) carry incremental events.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SubscribeDirectoryInitial {
     /// Sorted ascending so byte-identical bytes land on the wire
     /// from byte-identical state.

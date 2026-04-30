@@ -14,51 +14,50 @@
 // struct holds them by `Arc` so individual RPC method calls clone
 // cheaply.
 //
-// PR-1 staging — what is and is not implemented in this commit
-// ------------------------------------------------------------
-// This commit lands the *shape* of the service:
+// What this commit lands
+// ----------------------
+// Commit 6/9: dispatcher wiring. The service now holds an
+// `Arc<PresenceRegistry>` injected at construction; the three RPC
+// methods route by `InvokeRequest.function_name`:
 //
-//   - The struct and constructor exist and accept the dependency
-//     types this module's later commits will inject
-//   - The trait impl compiles against the tonic-generated
-//     `Invocation` trait
-//   - Every RPC method returns `Status::unimplemented(<descriptive
-//     message>)` so a probing client gets a precise reason for
-//     refusal during the staging period
-//   - Streaming associated types (`InvokeStreamStream`,
-//     `InvokeBidiStream`) bind to a small empty-stream type so the
-//     trait impl is shape-correct
+//   - `Invoke`:   federation.{join, advertise_agent, heartbeat,
+//                 resolve, revoke, forward_invoke} → federation
+//                 wrappers; anything else returns Unimplemented
+//                 with a follow-up commit (admission gate facade,
+//                 LocalAbilityRegistry forwarding) note
+//   - `InvokeStream`: `federation.subscribe_directory` →
+//                 initial-snapshot frame from
+//                 `build_subscribe_directory_initial`; the
+//                 broadcast pump for incremental events lands in
+//                 commit 7/9 alongside the LocalAbilityRegistry
+//                 stream forward path
+//   - `InvokeBidi`: still returns Unimplemented; PR-2 implements
+//                 `<self>.session` accept and PR-3 implements
+//                 `<self>.invoke_remote`
 //
-// The actual ability dispatch — admission verification, federation
-// wrapper routing, PresenceRegistry lookup, LocalAbilityRegistry
-// forwarding — lands in commits 4 through 7 of PR-1 on this branch
-// (see `team-work/checklists/PR-1-checklist.md`). Each subsequent
-// commit replaces one method body at a time, keeping the trait impl
-// compilable at every step (CTO directive 06 §3.5).
+// What the dispatcher does NOT yet do
+// -----------------------------------
+// - Run the admission gate (commit 7/9, alongside the realm-trust
+//   loader and `easynet-axon` admission helpers integration)
+// - Forward unmatched abilities to LocalAbilityRegistry (commit 7/9)
+// - Push frames down `<self>.session` reverse channels for
+//   `federation.forward_invoke` (commit 8/9)
+// - Spawn the broadcast pump for `subscribe_directory` incremental
+//   events (commit 8/9)
 //
-// Invariants
-// ----------
-// - The service is safe to construct and register with
-//   `tonic::transport::Server` even before the real dispatch wires
-//   in; clients hitting it during the PR-1 window receive
-//   `Status::unimplemented` and can retry against a future build
-// - The service does not own the gRPC listener — that is the
-//   daemon binary's `main` job. This struct can be tested in
-//   isolation by constructing it and calling its methods directly
-//
-// Out of scope for the file in this commit
-// ----------------------------------------
-// - Real `<self>.session` accept logic (PR-2)
-// - Real `<self>.invoke_remote` per-call dispatch (PR-3)
-// - federation.* wrapper routing (later commit, this PR)
-// - LocalAbilityRegistry forwarding (later commit, this PR)
-// - Admission gate verification (later commit, this PR)
-// - PresenceRegistry and its construction (later commit, this PR)
+// Result content type
+// -------------------
+// All `federation.*` wrappers serialise their typed response with
+// `serde_json::to_vec` into `InvokeResponse.result` and set
+// `result_content_type = "application/json"`. This matches the
+// JSON-encoded shape captured by PR-4's schema-compat baselines
+// per DEC-001 + DEC-003.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::pin::Pin;
+use std::sync::Arc;
 
 use futures::Stream;
 use tonic::{Request, Response, Status, Streaming};
@@ -68,131 +67,445 @@ use crate::pb::axon::v1::{
     InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeResponse, InvokeServerStreamRequest,
     InvokeStreamChunk,
 };
+use crate::services::axon_serve::federation_wrappers::{
+    self, ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_FEDERATION_FORWARD_INVOKE,
+    ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN, ABILITY_FEDERATION_RESOLVE,
+    ABILITY_FEDERATION_REVOKE, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
+};
+use crate::services::presence_registry::PresenceRegistry;
+
+/// Content type the federation wrappers emit on `InvokeResponse.result`.
+/// Centralised here so call sites cannot drift away from the value
+/// PR-4's baselines expect.
+const FEDERATION_RESULT_CONTENT_TYPE: &str = "application/json";
 
 /// gRPC `Invocation` service hosted by `easynet-daemon`.
 ///
-/// Currently an empty struct. Fields land in commit 6/9 once
-/// `PresenceRegistry`, the federation wrappers, and the admission
-/// gate facade are all available to inject. Final shape:
+/// Holds the dependencies the three RPC methods need:
 ///
-/// ```ignore
-/// pub struct DaemonInvocationService {
-///     admission: Arc<AdmissionGate>,
-///     presence: Arc<PresenceRegistry>,
-///     ability_dispatch: Arc<LocalAbilityRegistry>,
-/// }
-/// ```
+/// - `presence` — the `PresenceRegistry` consulted by federation
+///   wrappers (resolve / forward_invoke / revoke / heartbeat /
+///   subscribe_directory) and by the future `<self>.session` accept
+///   path in PR-2
 ///
-/// CTO directive 06 §一.5 "invariant docstrings" applies once the
-/// struct has state to guard; until then, the only invariant is
-/// "trivially constructible".
-#[derive(Debug, Default)]
-pub struct DaemonInvocationService;
+/// Future-shape (commit 7/9 onward) will add:
+/// `admission: Arc<AdmissionGate>`,
+/// `ability_dispatch: Arc<LocalAbilityRegistry>`. Construction will
+/// switch to `new(presence, admission, ability_dispatch)` then.
+#[derive(Debug)]
+pub struct DaemonInvocationService {
+    presence: Arc<PresenceRegistry>,
+}
 
 impl DaemonInvocationService {
-    /// Construct an empty service. Callers obtain one via the daemon
-    /// binary's boot sequence; tests construct one directly.
-    ///
-    /// The signature is intentionally argument-free in this commit.
-    /// Subsequent commits replace it with `new(admission, presence,
-    /// federation, ability_dispatch)`; call sites updated together
-    /// with the field additions.
+    /// Construct a service against the supplied presence registry.
+    /// Production callers wire one registry per daemon process and
+    /// share it via `Arc` between the service, the `<self>.session`
+    /// accept loop (PR-2), and any audit-log subscriber.
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(presence: Arc<PresenceRegistry>) -> Self {
+        Self { presence }
     }
 }
 
-/// Empty stream type used by both `InvokeStreamStream` and
-/// `InvokeBidiStream` associated types during the PR-1 staging
-/// window.
-///
-/// A full implementation will replace this with concrete pinned
-/// boxed streams driven by the federation wrappers (subscribe_directory
-/// pump) and the `<self>.session` / `<self>.invoke_remote` reverse
-/// channels. Until then, this type satisfies the trait shape and
-/// produces no items because every RPC method returns
-/// `Status::unimplemented` before constructing one.
-type EmptyStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
+/// Boxed pinned stream type used for both server-stream and
+/// bidirectional response stream associated types.
+type BoxedDownStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
 
 #[tonic::async_trait]
 impl Invocation for DaemonInvocationService {
-    /// Spec §2.1 reference. Real impl lands once admission gate +
-    /// federation wrappers + LocalAbilityRegistry forwarding are
-    /// wired (later commits in PR-1).
+    /// Spec §2.1 + §4.1 reference. Routes by
+    /// `InvokeRequest.function_name`:
+    ///
+    /// - `federation.join` / `federation.advertise_agent` /
+    ///   `federation.heartbeat` / `federation.resolve` /
+    ///   `federation.revoke` / `federation.forward_invoke` →
+    ///   federation wrapper
+    /// - anything else → Unimplemented with a "PR-1 staging" note;
+    ///   commit 7/9 wires LocalAbilityRegistry as the fall-through
     async fn invoke(
         &self,
-        _request: Request<InvokeRequest>,
+        request: Request<InvokeRequest>,
     ) -> Result<Response<InvokeResponse>, Status> {
-        Err(Status::unimplemented(
-            "easynet-daemon: Invoke is not yet wired in this build; \
-             dispatch implementation lands later in RFC-003 PR-1 \
-             (see team-work/checklists/PR-1-checklist.md §2)",
-        ))
+        let inner = request.into_inner();
+        let function = inner.function_name.as_str();
+
+        match function {
+            ABILITY_FEDERATION_JOIN => self.dispatch_federation_join(&inner.arguments),
+            ABILITY_FEDERATION_ADVERTISE_AGENT => {
+                self.dispatch_federation_advertise_agent(&inner.arguments)
+            }
+            ABILITY_FEDERATION_HEARTBEAT => self.dispatch_federation_heartbeat(&inner.arguments),
+            ABILITY_FEDERATION_RESOLVE => self.dispatch_federation_resolve(&inner.arguments),
+            ABILITY_FEDERATION_REVOKE => self.dispatch_federation_revoke(&inner.arguments),
+            ABILITY_FEDERATION_FORWARD_INVOKE => {
+                self.dispatch_federation_forward_invoke(&inner.arguments)
+            }
+            ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY => Err(Status::invalid_argument(
+                "federation.subscribe_directory is a server-stream ability and must be invoked \
+                 via InvokeStream, not Invoke",
+            )),
+            other => Err(Status::unimplemented(format!(
+                "easynet-daemon: ability `{other}` is not handled by the federation wrappers; \
+                 LocalAbilityRegistry fallback wires in RFC-003 PR-1 commit 7/9 \
+                 (see team-work/checklists/PR-1-checklist.md §5)"
+            ))),
+        }
     }
 
-    type InvokeStreamStream = EmptyStream<InvokeStreamChunk>;
+    type InvokeStreamStream = BoxedDownStream<InvokeStreamChunk>;
 
-    /// Spec §2.1 reference. The `federation.subscribe_directory`
-    /// pump and the LocalAbilityRegistry stream handlers route
-    /// through here once their dependencies are introduced.
+    /// Spec §4 reference. Routes by
+    /// `InvokeServerStreamRequest.function_name`. PR-1 staging
+    /// supports `federation.subscribe_directory` with the initial
+    /// snapshot frame only; the broadcast pump for subsequent
+    /// transitions lands in commit 8/9 alongside
+    /// `federation.forward_invoke` reverse-channel push.
     async fn invoke_stream(
         &self,
-        _request: Request<InvokeServerStreamRequest>,
+        request: Request<InvokeServerStreamRequest>,
     ) -> Result<Response<Self::InvokeStreamStream>, Status> {
-        Err(Status::unimplemented(
-            "easynet-daemon: InvokeStream is not yet wired in this build; \
-             dispatch implementation lands later in RFC-003 PR-1 \
-             (see team-work/checklists/PR-1-checklist.md §2)",
-        ))
+        let inner = request.into_inner();
+        let function = inner.function_name.as_str();
+
+        match function {
+            ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY => {
+                self.dispatch_federation_subscribe_directory_initial()
+            }
+            other => Err(Status::unimplemented(format!(
+                "easynet-daemon: server-stream ability `{other}` is not handled in PR-1; \
+                 LocalAbilityRegistry stream fallback wires in commit 7/9, broadcast pump \
+                 for federation.subscribe_directory wires in commit 8/9 \
+                 (see team-work/checklists/PR-1-checklist.md §5)"
+            ))),
+        }
     }
 
-    type InvokeBidiStream = EmptyStream<InvokeBidiDown>;
+    type InvokeBidiStream = BoxedDownStream<InvokeBidiDown>;
 
-    /// Spec §2.1 reference. The `<self>.session` and
-    /// `<self>.invoke_remote` accept paths, plus LocalAbilityRegistry
-    /// bidi forwarding, route through this method once
-    /// PresenceRegistry exists.
+    /// Spec §2.1 reference. PR-1 returns Unimplemented; PR-2
+    /// implements `<self>.session` accept (莫浩) and PR-3 implements
+    /// `<self>.invoke_remote` (海峰).
     async fn invoke_bidi(
         &self,
         _request: Request<Streaming<InvokeBidiUp>>,
     ) -> Result<Response<Self::InvokeBidiStream>, Status> {
         Err(Status::unimplemented(
-            "easynet-daemon: InvokeBidi is not yet wired in this build; \
-             <self>.session real handler is RFC-003 PR-2 deliverable; \
-             see team-work/checklists/PR-1-checklist.md §2 + \
-             checklists/PR-2-checklist.md §1",
+            "easynet-daemon: InvokeBidi is the `<self>.session` and `<self>.invoke_remote` \
+             entry point; real handlers are RFC-003 PR-2 (`<self>.session`, 莫浩) and PR-3 \
+             (`<self>.invoke_remote`, 海峰); see checklists/PR-2-checklist.md and \
+             checklists/PR-3-checklist.md",
         ))
     }
+}
+
+impl DaemonInvocationService {
+    fn dispatch_federation_join(
+        &self,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let request: federation_wrappers::JoinRequest = parse_json_args(arguments)?;
+        let response = federation_wrappers::handle_join(&request);
+        wrap_json_response(&response)
+    }
+
+    fn dispatch_federation_advertise_agent(
+        &self,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let request: federation_wrappers::AdvertiseAgentRequest = parse_json_args(arguments)?;
+        let response = federation_wrappers::handle_advertise_agent(&request);
+        wrap_json_response(&response)
+    }
+
+    fn dispatch_federation_heartbeat(
+        &self,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let request: federation_wrappers::HeartbeatRequest = parse_json_args(arguments)?;
+        let response = federation_wrappers::handle_heartbeat(&request, &self.presence);
+        wrap_json_response(&response)
+    }
+
+    fn dispatch_federation_resolve(
+        &self,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let request: federation_wrappers::ResolveRequest = parse_json_args(arguments)?;
+        let response = federation_wrappers::handle_resolve(&request, &self.presence);
+        wrap_json_response(&response)
+    }
+
+    fn dispatch_federation_revoke(
+        &self,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let request: federation_wrappers::RevokeRequest = parse_json_args(arguments)?;
+        let response = federation_wrappers::handle_revoke(&request, &self.presence);
+        wrap_json_response(&response)
+    }
+
+    fn dispatch_federation_forward_invoke(
+        &self,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let request: federation_wrappers::ForwardInvokeRequest = parse_json_args(arguments)?;
+        let response = federation_wrappers::handle_forward_invoke(&request, &self.presence);
+        wrap_json_response(&response)
+    }
+
+    fn dispatch_federation_subscribe_directory_initial(
+        &self,
+    ) -> Result<Response<<Self as Invocation>::InvokeStreamStream>, Status> {
+        let initial = federation_wrappers::build_subscribe_directory_initial(&self.presence);
+        let initial_bytes = serde_json::to_vec(&initial).map_err(|err| {
+            Status::internal(format!(
+                "federation.subscribe_directory: failed to encode initial snapshot: {err}"
+            ))
+        })?;
+        let chunk = InvokeStreamChunk {
+            content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            payload: initial_bytes,
+            ..InvokeStreamChunk::default()
+        };
+        // PR-1 staging: emit the initial frame and close. Commit 8/9
+        // attaches a `broadcast::Receiver<PresenceEvent>` to keep the
+        // stream open and emit incremental events.
+        let stream = futures::stream::once(async move { Ok(chunk) });
+        Ok(Response::new(Box::pin(stream) as BoxedDownStream<InvokeStreamChunk>))
+    }
+}
+
+/// Parse a JSON-encoded request body, mapping any error to
+/// `Status::invalid_argument` with a useful message. Centralised so
+/// every wrapper dispatch site reports parse failures the same way.
+fn parse_json_args<T: serde::de::DeserializeOwned>(arguments: &[u8]) -> Result<T, Status> {
+    serde_json::from_slice(arguments).map_err(|err| {
+        Status::invalid_argument(format!(
+            "federation wrapper: failed to decode JSON arguments: {err}"
+        ))
+    })
+}
+
+/// Encode a typed federation response into `InvokeResponse.result`
+/// with `result_content_type = "application/json"`. Mapping any
+/// serialisation error to `Status::internal` because the wrappers
+/// use serde-derived types — failure here is a programmer bug, not
+/// a caller bug.
+fn wrap_json_response<T: serde::Serialize>(
+    response: &T,
+) -> Result<Response<InvokeResponse>, Status> {
+    let bytes = serde_json::to_vec(response).map_err(|err| {
+        Status::internal(format!(
+            "federation wrapper: failed to encode JSON response: {err}"
+        ))
+    })?;
+    let invoke_response = InvokeResponse {
+        result: bytes,
+        result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+        ..InvokeResponse::default()
+    };
+    Ok(Response::new(invoke_response))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn invoke_returns_unimplemented_during_pr1_staging() {
-        let svc = DaemonInvocationService::new();
-        let req = Request::new(InvokeRequest::default());
-        let err = svc.invoke(req).await.expect_err("must be unimplemented");
-        assert_eq!(err.code(), tonic::Code::Unimplemented);
-        assert!(
-            err.message().contains("RFC-003 PR-1"),
-            "expected message to cite RFC-003 PR-1; got: {}",
-            err.message()
-        );
+    fn make_service() -> DaemonInvocationService {
+        DaemonInvocationService::new(Arc::new(PresenceRegistry::new()))
+    }
+
+    fn invoke_request(function_name: &str, args_json: &str) -> Request<InvokeRequest> {
+        Request::new(InvokeRequest {
+            function_name: function_name.to_string(),
+            arguments: args_json.as_bytes().to_vec(),
+            ..InvokeRequest::default()
+        })
+    }
+
+    fn parse_response_body<T: serde::de::DeserializeOwned>(resp: Response<InvokeResponse>) -> T {
+        let body = resp.into_inner();
+        assert_eq!(body.result_content_type, FEDERATION_RESULT_CONTENT_TYPE);
+        serde_json::from_slice(&body.result).expect("response body deserialises")
     }
 
     #[tokio::test]
-    async fn invoke_stream_returns_unimplemented_during_pr1_staging() {
-        let svc = DaemonInvocationService::new();
-        let req = Request::new(InvokeServerStreamRequest::default());
-        // The success type is `Response<Pin<Box<dyn Stream + ...>>>`
-        // which does not implement `Debug`, so `Result::expect_err`
-        // is unavailable. Match the variants explicitly instead.
-        match svc.invoke_stream(req).await {
-            Err(err) => assert_eq!(err.code(), tonic::Code::Unimplemented),
-            Ok(_) => panic!("must be unimplemented"),
+    async fn invoke_dispatches_federation_join_to_wrapper() {
+        let svc = make_service();
+        let resp = svc
+            .invoke(invoke_request(
+                ABILITY_FEDERATION_JOIN,
+                r#"{"canonical_agent_uri":"easynet:///r/realm/agent/n1","realm":"realm"}"#,
+            ))
+            .await
+            .expect("dispatch returns Ok");
+        let body: federation_wrappers::JoinResponse = parse_response_body(resp);
+        assert_eq!(body.canonical_agent_uri, "easynet:///r/realm/agent/n1");
+        assert_eq!(body.realm, "realm");
+        assert_eq!(body.join_receipt_hash.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn invoke_dispatches_federation_advertise_agent() {
+        let svc = make_service();
+        let resp = svc
+            .invoke(invoke_request(
+                ABILITY_FEDERATION_ADVERTISE_AGENT,
+                r#"{"agent_uri":"easynet:///r/realm/agent/n1"}"#,
+            ))
+            .await
+            .expect("dispatch returns Ok");
+        let body: federation_wrappers::AdvertiseAgentResponse = parse_response_body(resp);
+        assert!(body.ack);
+        assert!(!body.replaced_prior);
+    }
+
+    #[tokio::test]
+    async fn invoke_dispatches_federation_heartbeat() {
+        let svc = make_service();
+        let resp = svc
+            .invoke(invoke_request(
+                ABILITY_FEDERATION_HEARTBEAT,
+                r#"{"agent_uri":"easynet:///r/realm/agent/n1"}"#,
+            ))
+            .await
+            .expect("dispatch returns Ok");
+        let body: federation_wrappers::HeartbeatResponse = parse_response_body(resp);
+        assert_eq!(body.membership_status, "active");
+        assert_eq!(body.realm_directory_size, 0);
+    }
+
+    #[tokio::test]
+    async fn invoke_dispatches_federation_resolve_with_no_filter() {
+        let svc = make_service();
+        let resp = svc
+            .invoke(invoke_request(ABILITY_FEDERATION_RESOLVE, "{}"))
+            .await
+            .expect("dispatch returns Ok");
+        let body: federation_wrappers::ResolveResponse = parse_response_body(resp);
+        assert!(body.agents.is_empty());
+    }
+
+    #[tokio::test]
+    async fn invoke_dispatches_federation_revoke() {
+        let svc = make_service();
+        let resp = svc
+            .invoke(invoke_request(
+                ABILITY_FEDERATION_REVOKE,
+                r#"{"target_uri":"easynet:///r/realm/agent/missing"}"#,
+            ))
+            .await
+            .expect("dispatch returns Ok");
+        let body: federation_wrappers::RevokeResponse = parse_response_body(resp);
+        assert!(body.ack);
+        assert!(!body.was_active);
+    }
+
+    #[tokio::test]
+    async fn invoke_dispatches_federation_forward_invoke() {
+        let svc = make_service();
+        let resp = svc
+            .invoke(invoke_request(
+                ABILITY_FEDERATION_FORWARD_INVOKE,
+                r#"{"target_uri":"easynet:///r/realm/agent/missing","inner_envelope_b64":""}"#,
+            ))
+            .await
+            .expect("dispatch returns Ok");
+        let body: federation_wrappers::ForwardInvokeResponse = parse_response_body(resp);
+        assert!(!body.target_online);
+    }
+
+    #[tokio::test]
+    async fn invoke_rejects_subscribe_directory_via_unary_invoke() {
+        let svc = make_service();
+        match svc
+            .invoke(invoke_request(ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY, "{}"))
+            .await
+        {
+            Err(err) => {
+                assert_eq!(err.code(), tonic::Code::InvalidArgument);
+                assert!(err.message().contains("server-stream"));
+            }
+            Ok(_) => panic!("subscribe_directory must be rejected on unary Invoke"),
+        }
+    }
+
+    #[tokio::test]
+    async fn invoke_unknown_ability_returns_unimplemented_with_pr1_note() {
+        let svc = make_service();
+        match svc
+            .invoke(invoke_request("custom.ability.x", "{}"))
+            .await
+        {
+            Err(err) => {
+                assert_eq!(err.code(), tonic::Code::Unimplemented);
+                assert!(
+                    err.message().contains("commit 7/9"),
+                    "should cite the commit that wires LocalAbilityRegistry; got: {}",
+                    err.message()
+                );
+            }
+            Ok(_) => panic!("unknown ability must be rejected"),
+        }
+    }
+
+    #[tokio::test]
+    async fn invoke_returns_invalid_argument_on_bad_json() {
+        let svc = make_service();
+        match svc
+            .invoke(invoke_request(ABILITY_FEDERATION_JOIN, "not-json"))
+            .await
+        {
+            Err(err) => assert_eq!(err.code(), tonic::Code::InvalidArgument),
+            Ok(_) => panic!("malformed JSON must be rejected"),
+        }
+    }
+
+    #[tokio::test]
+    async fn invoke_stream_dispatches_subscribe_directory_initial_frame() {
+        use futures::StreamExt;
+
+        let svc = make_service();
+        let resp = svc
+            .invoke_stream(Request::new(InvokeServerStreamRequest {
+                function_name: ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY.to_string(),
+                ..InvokeServerStreamRequest::default()
+            }))
+            .await
+            .expect("subscribe_directory initial frame returns Ok");
+
+        let mut stream = resp.into_inner();
+        let first = stream
+            .next()
+            .await
+            .expect("at least one frame")
+            .expect("frame is Ok");
+        assert_eq!(first.content_type, FEDERATION_RESULT_CONTENT_TYPE);
+        let initial: federation_wrappers::SubscribeDirectoryInitial =
+            serde_json::from_slice(&first.payload).expect("decodes");
+        assert!(initial.agents.is_empty());
+
+        // PR-1 staging closes the stream after the initial frame.
+        // Commit 8/9 attaches the broadcast pump.
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn invoke_stream_unknown_function_returns_unimplemented_with_pr1_note() {
+        let svc = make_service();
+        match svc
+            .invoke_stream(Request::new(InvokeServerStreamRequest {
+                function_name: "custom.stream.ability".to_string(),
+                ..InvokeServerStreamRequest::default()
+            }))
+            .await
+        {
+            Err(err) => {
+                assert_eq!(err.code(), tonic::Code::Unimplemented);
+                assert!(err.message().contains("commit 7/9"));
+            }
+            Ok(_) => panic!("unknown stream ability must be rejected"),
         }
     }
 
@@ -209,13 +522,5 @@ mod tests {
         // result line surfaces the gap rather than passing
         // vacuously.
         unreachable!();
-    }
-
-    #[test]
-    fn service_constructs_with_default() {
-        // Default is the constructor we expose today; switching to
-        // a fielded `new(...)` is a later commit's job and the test
-        // moves with it.
-        let _svc = DaemonInvocationService::default();
     }
 }
