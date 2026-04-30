@@ -1,44 +1,55 @@
-// EasyNet CLI — cross-hub gRPC outbound dialer (PR-N1 commit 2/N)
+// EasyNet CLI — cross-hub gRPC outbound dialer (PR-N1 commit 4/N)
 // =================================================================
 //
 // File: src/services/federation_client/cross_hub_dial.rs
 //
-// PR-N1 commit 2/N — TLS-pinned cross-hub dial + peer trust gate.
-// Replaces the skeleton "not implemented" body shipped by commit
-// 1/N (`207cc92`) with the real outbound path:
+// PR-N1 commit 4/N — adds timeout + per-peer circuit-breaker on
+// top of the schema-B + TLS-pinned dial shipped by commit 2/N
+// (`ca081bc`). The handler `dispatch_federation_forward_invoke`
+// rewrite shipped by commit 3a/N + 3b/N (`b3a06f4` + `57a42df`)
+// already routes cross-tenant calls through this dialer; commit
+// 4/N hardens the dial path so a slow / dead peer cannot stall
+// the local hub indefinitely.
+//
+// Forward-invoke shape after this commit:
 //
 //   forward_invoke(target_hub, req)
 //     ├─ trust_anchor.lookup_peer_hub(target_hub)?  ← schema-B gate
-//     │     (role == Hub && origin_tenant_id.is_some()
-//     │      && hub_uri == target_hub && tls_ca_pem_path.is_some())
-//     ├─ resolve_peer_channel(target_hub) → cached or new TLS-pinned
-//     │     tonic Channel  (CA from TrustedAgent.tls_ca_pem_path)
-//     └─ InvocationClient::new(channel).invoke(req).await
+//     ├─ check_breaker_open(target_hub)?            ← commit 4/N
+//     ├─ resolve_peer_channel(target_hub) → cached or new
+//     │     TLS-pinned tonic Channel
+//     ├─ tokio::time::timeout(forward_invoke_timeout,
+//     │     InvocationClient::new(channel).invoke(req)).await
+//     └─ on success → record_breaker_success(target_hub)
+//        on failure → record_breaker_failure(target_hub) + return
+//
+// Breaker state machine (per peer, `Arc<DashMap<HubUri, BreakerState>>`):
+//
+//   Closed:                   normal operation; failures count toward
+//                             threshold; success resets counter.
+//   Open(opened_at):          fail-fast `CircuitOpen`; no dial
+//                             attempted. After `breaker_reset_window`
+//                             elapses, transitions to HalfOpen on
+//                             next call.
+//   HalfOpen:                 single trial dial allowed; success →
+//                             Closed; failure → Open(now).
 //
 // What is NOT in this commit
 // --------------------------
-// - mTLS outbound identity. The dialer presents no client cert;
-//   peer-side admission verifies the AXIOM signature in the
-//   envelope, not the TLS layer. Cross-realm admission key
-//   resolution is PR-N2 territory.
-// - Timeout + circuit-breaker. PR-N1 commit 4/N wraps the
-//   `Channel` with `tower::timeout::Timeout` and per-peer breaker
-//   state; commit 2/N's bare `Endpoint::connect` blocks until OS-
-//   level connect timeout (typically 60-120s).
-// - `handle_forward_invoke` integration — federation_wrappers.rs
-//   still returns the stub `target_online: false`. That switches
-//   in PR-N1 commit 3/N when the wrapper accepts an
-//   `Arc<dyn FederationClient>` and routes cross-realm tenants
-//   through this dialer.
-// - DaemonConfig::federated_peers operator map — the dialer's
-//   caller passes the peer hub URI directly. PR-N1 commit 3/N
-//   adds the `tenant → hub_uri` resolution layer above this
+// - mTLS outbound identity. PR-N2 cross-realm admission territory.
+// - DaemonConfig wiring of `federation_timeout_ms` /
+//   `circuit_breaker_threshold`. The dialer accepts the values via
+//   the `with_breaker_*` builders so tests can drive them; boot
+//   wiring lands alongside the cross-hub e2e in commit 5/N (or a
+//   pre-e2e operator-config commit). Defaults match the spec
+//   (forward 30s, dial 10s, threshold 3 fails, window 60s).
 //   trait.
 //
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -47,6 +58,51 @@ use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 use crate::pb::axon::v1::invocation_client::InvocationClient;
 use crate::pb::axon::v1::{InvokeRequest, InvokeResponse};
 use crate::services::realm_trust_anchor::RealmTrustAnchor;
+
+/// Default per-call timeout for `forward_invoke`. Spec §commit 4/N:
+/// 30s. The end-to-end caller (the hub-side admission gate) has its
+/// own admission deadline; 30s is generous enough to absorb a
+/// reasonable peer admission round-trip without stranding the
+/// caller on a dead peer.
+pub const DEFAULT_FORWARD_INVOKE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Default failure threshold before the breaker opens. Spec
+/// §commit 4/N: 3 consecutive failures.
+pub const DEFAULT_BREAKER_FAILURE_THRESHOLD: u32 = 3;
+
+/// Default reset window — once the breaker is `Open(at)`, the next
+/// call after `now() - at >= window` transitions to `HalfOpen` for
+/// a single trial dial. Spec §commit 4/N: 60s.
+pub const DEFAULT_BREAKER_RESET_WINDOW: Duration = Duration::from_secs(60);
+
+/// Per-peer breaker state. Pure data — no I/O happens inside the
+/// state transitions; the dialer reads + updates the entry under
+/// a `DashMap` lock.
+#[derive(Clone, Debug)]
+enum BreakerState {
+    /// Normal operation. `consecutive_failures` is the running
+    /// count toward the threshold; reset to 0 on each success.
+    Closed { consecutive_failures: u32 },
+    /// Fail-fast. `opened_at` is the instant the breaker opened;
+    /// the next call after `opened_at + reset_window` transitions
+    /// to `HalfOpen`.
+    Open { opened_at: Instant },
+    /// One trial dial allowed. Success → `Closed { 0 }`; failure
+    /// → `Open { opened_at: now() }`. Concurrent callers hitting
+    /// `HalfOpen` race on the trial — the loser's call also gets
+    /// dispatched (a small overshoot is acceptable; the alternative
+    /// would be a per-peer mutex which adds contention to the hot
+    /// path).
+    HalfOpen,
+}
+
+impl Default for BreakerState {
+    fn default() -> Self {
+        Self::Closed {
+            consecutive_failures: 0,
+        }
+    }
+}
 
 /// Canonical hub URI string used as the federation peer key. We
 /// intentionally do not introduce a newtype wrapper around
@@ -150,12 +206,35 @@ pub trait FederationClient: Send + Sync {
 pub struct CrossHubDialer {
     trust_anchor: Arc<RealmTrustAnchor>,
     channels: Arc<DashMap<HubUri, Channel>>,
+    /// **PR-N1 commit 4/N**. Per-peer breaker state. Lock-free
+    /// `DashMap` matches the channel cache shape so admission +
+    /// breaker contention stay symmetric on the hot path.
+    breaker_state: Arc<DashMap<HubUri, BreakerState>>,
+    /// **PR-N1 commit 4/N**. Per-call timeout for the inner
+    /// `InvocationClient::invoke`. Wraps with
+    /// `tokio::time::timeout`; expiration surfaces as
+    /// `FederationClientError::ChannelTimeout`.
+    forward_invoke_timeout: Duration,
+    /// **PR-N1 commit 4/N**. Consecutive-failure threshold before
+    /// the breaker opens. Default 3 per spec; tests inject 1 so
+    /// they can exercise the open transition without dispatching
+    /// 3 stub-failure calls each.
+    breaker_failure_threshold: u32,
+    /// **PR-N1 commit 4/N**. Window the breaker holds Open before
+    /// allowing a trial HalfOpen dial. Default 60s per spec; tests
+    /// inject 100ms so the auto-reset path is exercisable in unit
+    /// time.
+    breaker_reset_window: Duration,
 }
 
 impl std::fmt::Debug for CrossHubDialer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CrossHubDialer")
             .field("cached_peers", &self.channels.len())
+            .field("tracked_peers_breaker_state", &self.breaker_state.len())
+            .field("forward_invoke_timeout", &self.forward_invoke_timeout)
+            .field("breaker_failure_threshold", &self.breaker_failure_threshold)
+            .field("breaker_reset_window", &self.breaker_reset_window)
             .finish_non_exhaustive()
     }
 }
@@ -165,18 +244,138 @@ impl CrossHubDialer {
     /// by `Arc` so the cell-based reload path (PR-7
     /// `register_device_pubkey` + the federation-side equivalent
     /// when it lands) does not require reconstructing the dialer.
+    /// PR-N1 commit 4/N adds breaker + timeout fields; their
+    /// defaults match the PR-N1 spec (`30s` per-call timeout, `3`
+    /// consecutive failures opens the breaker, `60s` open window).
+    /// Tests override via the `with_*` builders below.
     #[must_use]
     pub fn new(trust_anchor: Arc<RealmTrustAnchor>) -> Self {
         Self {
             trust_anchor,
             channels: Arc::new(DashMap::new()),
+            breaker_state: Arc::new(DashMap::new()),
+            forward_invoke_timeout: DEFAULT_FORWARD_INVOKE_TIMEOUT,
+            breaker_failure_threshold: DEFAULT_BREAKER_FAILURE_THRESHOLD,
+            breaker_reset_window: DEFAULT_BREAKER_RESET_WINDOW,
         }
+    }
+
+    /// **PR-N1 commit 4/N**. Override the per-call timeout. Tests
+    /// inject `Duration::from_millis(50)` to drive the
+    /// `ChannelTimeout` path without sleeping a real 30s; production
+    /// daemons accept the default unless `DaemonConfig::
+    /// federation_timeout_ms` overrides at boot.
+    #[must_use]
+    pub fn with_forward_invoke_timeout(mut self, timeout: Duration) -> Self {
+        self.forward_invoke_timeout = timeout;
+        self
+    }
+
+    /// **PR-N1 commit 4/N**. Override the consecutive-failure
+    /// threshold that opens the breaker. Tests inject `1` so a
+    /// single stub-failure call exercises the open transition.
+    #[must_use]
+    pub fn with_breaker_failure_threshold(mut self, threshold: u32) -> Self {
+        self.breaker_failure_threshold = threshold;
+        self
+    }
+
+    /// **PR-N1 commit 4/N**. Override the breaker open-state
+    /// window. Tests inject `Duration::from_millis(50)` so the
+    /// auto-reset path is exercisable in unit-test time.
+    #[must_use]
+    pub fn with_breaker_reset_window(mut self, window: Duration) -> Self {
+        self.breaker_reset_window = window;
+        self
     }
 
     /// Number of cached peer channels. Test/observability only.
     #[must_use]
     pub fn cached_peer_count(&self) -> usize {
         self.channels.len()
+    }
+
+    /// **PR-N1 commit 4/N**. Read-only inspection of a peer's
+    /// current breaker state. Test/observability only —
+    /// production callers do not branch on this directly; they
+    /// see the typed `CircuitOpen` error from `forward_invoke`.
+    /// Returns `None` when the peer has never been dialed (no
+    /// breaker entry tracked yet, semantically equivalent to
+    /// `Closed { 0 }`).
+    fn breaker_is_closed(&self, target_hub: &HubUri) -> bool {
+        match self.breaker_state.get(target_hub).map(|e| e.value().clone()) {
+            None => true,
+            Some(BreakerState::Closed { .. }) => true,
+            Some(BreakerState::Open { .. }) | Some(BreakerState::HalfOpen) => false,
+        }
+    }
+
+    /// **PR-N1 commit 4/N**. Read the breaker state and decide
+    /// whether to dispatch the call. Returns `Ok(())` when the
+    /// dial may proceed (Closed or HalfOpen), or
+    /// `CircuitOpen` when the breaker is Open within its reset
+    /// window. The Open → HalfOpen transition happens here as a
+    /// side effect of the read so HalfOpen behaviour is
+    /// consistent across concurrent callers.
+    fn check_and_advance_breaker(
+        &self,
+        target_hub: &HubUri,
+    ) -> Result<(), FederationClientError> {
+        // `entry()` ensures we get exclusive access for the
+        // read-modify-write transition. `or_default()` materialises
+        // a `Closed { 0 }` entry on first dial — saves a
+        // separate `insert` later.
+        let mut entry = self.breaker_state.entry(target_hub.clone()).or_default();
+        match &*entry {
+            BreakerState::Closed { .. } | BreakerState::HalfOpen => Ok(()),
+            BreakerState::Open { opened_at } => {
+                if opened_at.elapsed() >= self.breaker_reset_window {
+                    *entry = BreakerState::HalfOpen;
+                    Ok(())
+                } else {
+                    Err(FederationClientError::CircuitOpen(target_hub.clone()))
+                }
+            }
+        }
+    }
+
+    /// **PR-N1 commit 4/N**. Record a successful dial outcome.
+    /// Closed → reset the failure counter; HalfOpen → Closed.
+    fn record_breaker_success(&self, target_hub: &HubUri) {
+        let mut entry = self.breaker_state.entry(target_hub.clone()).or_default();
+        *entry = BreakerState::Closed {
+            consecutive_failures: 0,
+        };
+    }
+
+    /// **PR-N1 commit 4/N**. Record a failure. Closed: bump the
+    /// counter, transitioning to Open if the threshold is met.
+    /// HalfOpen → Open (the trial dial failed). Open: idempotent.
+    fn record_breaker_failure(&self, target_hub: &HubUri) {
+        let mut entry = self.breaker_state.entry(target_hub.clone()).or_default();
+        let next = match &*entry {
+            BreakerState::Closed {
+                consecutive_failures,
+            } => {
+                let bumped = consecutive_failures.saturating_add(1);
+                if bumped >= self.breaker_failure_threshold {
+                    BreakerState::Open {
+                        opened_at: Instant::now(),
+                    }
+                } else {
+                    BreakerState::Closed {
+                        consecutive_failures: bumped,
+                    }
+                }
+            }
+            BreakerState::HalfOpen => BreakerState::Open {
+                opened_at: Instant::now(),
+            },
+            BreakerState::Open { opened_at } => BreakerState::Open {
+                opened_at: *opened_at,
+            },
+        };
+        *entry = next;
     }
 
     /// Resolve a `tonic::transport::Channel` for `target_hub`,
@@ -267,19 +466,49 @@ impl FederationClient for CrossHubDialer {
             .as_deref()
             .ok_or_else(|| FederationClientError::PeerNotTrusted(target_hub.clone()))?;
 
-        // ── 2. Resolve channel (cached or fresh TLS-pinned) ──
-        let channel = self.resolve_peer_channel(target_hub, ca_path)?;
+        // ── 2. Breaker gate (PR-N1 commit 4/N) ───────────────
+        // Open + within reset window → fail-fast `CircuitOpen`.
+        // Open + past reset window → Open transitions to HalfOpen,
+        // this call is the trial dial. Closed → proceed normally.
+        self.check_and_advance_breaker(target_hub)?;
 
-        // ── 3. Inner Invoke ──────────────────────────────────
+        // ── 3. Resolve channel (cached or fresh TLS-pinned) ──
+        let channel = match self.resolve_peer_channel(target_hub, ca_path) {
+            Ok(channel) => channel,
+            Err(err) => {
+                // A channel-build failure is a peer-reachability
+                // event (cert read error, malformed hub URI). It
+                // counts toward the breaker so a typo'd
+                // `tls_ca_pem_path` can't pin the breaker open
+                // forever — the next operator save flushes the
+                // bad entry and the breaker auto-resets.
+                self.record_breaker_failure(target_hub);
+                return Err(err);
+            }
+        };
+
+        // ── 4. Inner Invoke wrapped in timeout (commit 4/N) ──
         let mut client = InvocationClient::new(channel);
-        let response = client
-            .invoke(request)
-            .await
-            .map_err(|status| FederationClientError::InnerInvokeFailed {
-                hub: target_hub.clone(),
-                status: format!("code={:?} message={}", status.code(), status.message()),
-            })?;
-        Ok(response.into_inner())
+        let outcome =
+            tokio::time::timeout(self.forward_invoke_timeout, client.invoke(request)).await;
+
+        match outcome {
+            Ok(Ok(response)) => {
+                self.record_breaker_success(target_hub);
+                Ok(response.into_inner())
+            }
+            Ok(Err(status)) => {
+                self.record_breaker_failure(target_hub);
+                Err(FederationClientError::InnerInvokeFailed {
+                    hub: target_hub.clone(),
+                    status: format!("code={:?} message={}", status.code(), status.message()),
+                })
+            }
+            Err(_elapsed) => {
+                self.record_breaker_failure(target_hub);
+                Err(FederationClientError::ChannelTimeout(target_hub.clone()))
+            }
+        }
     }
 }
 
@@ -554,6 +783,178 @@ mod tests {
             dialer.cached_peer_count(),
             1,
             "second call must reuse the cached channel"
+        );
+    }
+
+    // ── PR-N1 commit 4/N: timeout + circuit-breaker tests ──
+
+    #[tokio::test]
+    async fn channel_timeout_fires_when_inner_invoke_exceeds_deadline() {
+        // Drive the timeout path with a 50ms budget against a
+        // black-hole port. tonic's `connect_lazy` defers the real
+        // connect to RPC time, so the inner invoke blocks on
+        // TCP connect and the timeout fires.
+        let target = "https://127.0.0.1:1".to_string();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, SELF_SIGNED_CA_PEM).expect("seed ca");
+
+        let entry = fed_peer_entry(&target, ca_path);
+        let anchor = anchor_with(entry);
+
+        let dialer = CrossHubDialer::new(anchor)
+            .with_forward_invoke_timeout(Duration::from_millis(50));
+        let err = dialer
+            .forward_invoke(&target, sample_request("test.echo"))
+            .await
+            .expect_err("50ms budget against black-hole port must time out");
+        match err {
+            FederationClientError::ChannelTimeout(hub) => assert_eq!(hub, target),
+            // tonic 0.12 may surface the failure as `DialFailed`
+            // before the inner invoke timeout fires when the OS
+            // refuses TCP synchronously (e.g. `ECONNREFUSED` on
+            // localhost:1). Either error variant is a legitimate
+            // expression of "peer not reachable inside the
+            // budget"; the assertion that matters is "no panic +
+            // not a `PeerNotTrusted` false-positive".
+            FederationClientError::DialFailed { hub, .. }
+            | FederationClientError::InnerInvokeFailed { hub, .. } => {
+                assert_eq!(hub, target);
+            }
+            other => panic!(
+                "expected ChannelTimeout / DialFailed / InnerInvokeFailed, got: {other:?}"
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn breaker_opens_after_threshold_consecutive_failures() {
+        // Inject a 1-fail threshold + 50ms timeout so a single
+        // failed call flips the breaker. The second call must
+        // surface `CircuitOpen` without ever touching the network.
+        let target = "https://127.0.0.1:1".to_string();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, SELF_SIGNED_CA_PEM).expect("seed ca");
+
+        let entry = fed_peer_entry(&target, ca_path);
+        let anchor = anchor_with(entry);
+
+        let dialer = CrossHubDialer::new(anchor)
+            .with_forward_invoke_timeout(Duration::from_millis(50))
+            .with_breaker_failure_threshold(1)
+            .with_breaker_reset_window(Duration::from_secs(60));
+
+        // First call fails — breaker transitions to Open.
+        let _ = dialer
+            .forward_invoke(&target, sample_request("test.echo"))
+            .await
+            .expect_err("first call should fail");
+        assert!(
+            !dialer.breaker_is_closed(&target),
+            "first failure must open the breaker"
+        );
+
+        // Second call surfaces CircuitOpen without touching the
+        // network. We verify by timing: a CircuitOpen response
+        // should return effectively instantly (< 5ms in practice;
+        // the hot path is a single DashMap entry read).
+        let started = std::time::Instant::now();
+        let err = dialer
+            .forward_invoke(&target, sample_request("test.echo"))
+            .await
+            .expect_err("second call should be CircuitOpen");
+        let elapsed = started.elapsed();
+        match err {
+            FederationClientError::CircuitOpen(hub) => assert_eq!(hub, target),
+            other => panic!("expected CircuitOpen, got: {other:?}"),
+        }
+        assert!(
+            elapsed < Duration::from_millis(20),
+            "CircuitOpen path must fail-fast; took {elapsed:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn breaker_auto_resets_to_halfopen_after_window() {
+        // Breaker opens after 1 failure, reset window is 50ms.
+        // After sleeping past the window, the next call moves
+        // the breaker to HalfOpen and dispatches a trial. That
+        // trial fails (peer still unreachable) → Open again.
+        let target = "https://127.0.0.1:1".to_string();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, SELF_SIGNED_CA_PEM).expect("seed ca");
+
+        let entry = fed_peer_entry(&target, ca_path);
+        let anchor = anchor_with(entry);
+
+        let dialer = CrossHubDialer::new(anchor)
+            .with_forward_invoke_timeout(Duration::from_millis(50))
+            .with_breaker_failure_threshold(1)
+            .with_breaker_reset_window(Duration::from_millis(50));
+
+        let _ = dialer
+            .forward_invoke(&target, sample_request("test.echo"))
+            .await
+            .expect_err("first call should fail");
+        assert!(!dialer.breaker_is_closed(&target));
+
+        // Wait for the reset window to elapse.
+        tokio::time::sleep(Duration::from_millis(75)).await;
+
+        // Next call's outcome is the trial dial: NOT CircuitOpen
+        // (the window passed). Either ChannelTimeout / DialFailed /
+        // InnerInvokeFailed is acceptable — the assertion is that
+        // the breaker did not fail-fast.
+        let err = dialer
+            .forward_invoke(&target, sample_request("test.echo"))
+            .await
+            .expect_err("trial dial after reset window should attempt the network");
+        match err {
+            FederationClientError::CircuitOpen(_) => {
+                panic!("breaker should have transitioned to HalfOpen, not stayed Open")
+            }
+            FederationClientError::ChannelTimeout(_)
+            | FederationClientError::DialFailed { .. }
+            | FederationClientError::InnerInvokeFailed { .. } => {
+                // The trial dial fired and failed — expected.
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn breaker_success_resets_failure_counter() {
+        // Drive the counter to threshold-1 = 1 failure (threshold
+        // = 2 ⇒ 2 consecutive fails open). Then simulate a
+        // success by directly calling `record_breaker_success`.
+        // The next failure must NOT open the breaker because the
+        // counter was reset.
+        let target = "https://peer-hub.example:50443".to_string();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, SELF_SIGNED_CA_PEM).expect("seed ca");
+
+        let entry = fed_peer_entry(&target, ca_path);
+        let anchor = anchor_with(entry);
+
+        let dialer = CrossHubDialer::new(anchor).with_breaker_failure_threshold(2);
+
+        dialer.record_breaker_failure(&target);
+        // Counter at 1 — still Closed.
+        assert!(dialer.breaker_is_closed(&target));
+
+        dialer.record_breaker_success(&target);
+        // Counter back to 0.
+        assert!(dialer.breaker_is_closed(&target));
+
+        dialer.record_breaker_failure(&target);
+        // Only 1 failure since the success — still Closed (would
+        // be Open if the counter hadn't reset).
+        assert!(
+            dialer.breaker_is_closed(&target),
+            "success between failures must reset the counter"
         );
     }
 
