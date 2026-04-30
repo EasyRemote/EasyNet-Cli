@@ -2143,4 +2143,182 @@ mod tests {
             "peer receives the original ForwardInvokeRequest JSON verbatim"
         );
     }
+
+    // ── PR-N1 commit 5/N: 2-daemon in-process cross-hub e2e ──
+
+    #[tokio::test]
+    async fn cross_hub_forward_invoke_e2e_in_process() {
+        // ── Setup: two daemons in distinct realms ─────────
+        // daemon_a: realm "realm-a", knows about daemon_b's
+        //           realm via federated_peers + federation_client.
+        // daemon_b: realm "realm-b", peer dispatches through to
+        //           its own local presence registry.
+        //
+        // Limit honesty for PR-N1: this exercise stops at the
+        // point of `daemon_a.invoke()` building a peer_request
+        // and handing it to the federation client. Going one
+        // step further (the federation client invoking
+        // `daemon_b.invoke()`) requires daemon B's admission
+        // gate to admit the request, which under PR-N1 today
+        // means daemon A's URI must be in daemon B's trust
+        // anchor as a Hub-role peer. PR-N2 lands the
+        // FederatedKeyResolver that resolves daemon A's signing
+        // key out of daemon B's trust set; without that the
+        // cross-realm strict admission would reject the
+        // signature step. Either way, the in-process e2e here
+        // proves the routing chain works; full TLS handshake +
+        // cross-realm admission is the operator-side smoke test.
+        const REALM_A: &str = "realm-a";
+        const REALM_B: &str = "realm-b";
+        const DAEMON_A_URI: &str = "easynet:///r/realm-a/agent/daemon-a";
+        const DAEMON_B_URI: &str = "easynet:///r/realm-b/agent/daemon-b";
+        const TARGET_DEVICE_URI: &str = "easynet:///r/realm-b/agent/target-device";
+        const PEER_HUB_URI: &str = "https://daemon-b.example:50443";
+
+        // Daemon B's trust anchor: pre-populated with daemon A
+        // as a Backend-role entry so daemon B's admission gate
+        // admits a request whose envelope.caller.uri is daemon
+        // A's URI. URI-only no-op admission today (Backend role
+        // skips the strict signature path? — no, Backend goes
+        // strict. Use Device for URI-only no-op so the e2e
+        // doesn't depend on PR-N2 cross-realm sig verify).
+        // DEC-013 path-conditional admission lets Device entries
+        // pass URI-only — exactly what we need for the in-
+        // process e2e under PR-N1.
+        let daemon_a_in_b_trust = vec![crate::services::realm_trust_anchor::TrustedAgent {
+            agent_uri: DAEMON_A_URI.to_string(),
+            public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            role: crate::services::realm_trust_anchor::TrustedAgentRole::Device,
+            added_at_unix_ms: 1_714_492_800_000,
+            origin_tenant_id: None,
+            hub_uri: None,
+            tls_ca_pem_path: None,
+        }];
+        let daemon_b_anchor = Arc::new(
+            RealmTrustAnchor::from_entries(daemon_a_in_b_trust)
+                .expect("anchor"),
+        );
+
+        // Daemon B: presence registry contains the target device;
+        // try_send-into-an-mpsc surfaces `target_online: true` if
+        // the channel still has receiver capacity. We hold the
+        // receiver to keep it open for the test's lifetime.
+        let daemon_b_presence = Arc::new(PresenceRegistry::new());
+        let (target_tx, _target_rx) = tokio::sync::mpsc::channel(8);
+        daemon_b_presence
+            .insert(TARGET_DEVICE_URI.to_string(), target_tx);
+
+        let daemon_b_admission =
+            AdmissionFacade::new(daemon_b_anchor, Some(DAEMON_B_URI.to_string()));
+        let daemon_b = Arc::new(
+            DaemonInvocationService::new(daemon_b_presence, daemon_b_admission)
+                .with_session_realm(REALM_B),
+        );
+
+        // Daemon A: empty presence registry; cross-tenant target
+        // routes via the InProcessPeerClient → daemon B. We
+        // forward the envelope verbatim from the test request so
+        // daemon B sees `envelope.caller.uri = DAEMON_A_URI` and
+        // resolves the URI-only Device admission against the
+        // pre-staged trust entry above.
+        let daemon_a_admission = AdmissionFacade::new(
+            Arc::new(RealmTrustAnchor::default()),
+            Some(DAEMON_A_URI.to_string()),
+        );
+        let federation_client: Arc<dyn FederationClient> = Arc::new(
+            ForwardingPeerClient {
+                peer: daemon_b,
+                envelope: test_envelope_with_uri(DAEMON_A_URI),
+            },
+        );
+        let mut peers = BTreeMap::new();
+        peers.insert(REALM_B.to_string(), PEER_HUB_URI.to_string());
+
+        let daemon_a = DaemonInvocationService::new(
+            Arc::new(PresenceRegistry::new()),
+            daemon_a_admission,
+        )
+        .with_session_realm(REALM_A)
+        .with_federation_client(federation_client)
+        .with_federated_peers(peers);
+
+        // ── Drive: daemon_a receives a federation.forward_invoke ──
+        // The request targets a device in realm B. Daemon A
+        // should: parse the tenant → "realm-b" != "realm-a" →
+        // cross-tenant arm → look up "realm-b" in federated_peers
+        // → dial PEER_HUB_URI via InProcessPeerClient → daemon B's
+        // dispatcher resolves the target locally → returns
+        // `target_online: true`.
+        let forward_args = format!(
+            r#"{{"target_uri":"{}","inner_envelope_b64":"AAAA"}}"#,
+            TARGET_DEVICE_URI
+        );
+        let req = Request::new(InvokeRequest {
+            envelope: Some(test_envelope_with_uri(DAEMON_A_URI)),
+            function_name: ABILITY_FEDERATION_FORWARD_INVOKE.to_string(),
+            arguments: forward_args.into_bytes(),
+            ..InvokeRequest::default()
+        });
+
+        let response = daemon_a
+            .invoke(req)
+            .await
+            .expect("e2e forward_invoke returns Ok");
+        let body: federation_wrappers::ForwardInvokeResponse =
+            parse_response_body(response);
+
+        // ── Assert: daemon B's local fast-path resolved the target ──
+        assert!(
+            body.target_online,
+            "daemon B's presence registry holds the target device; \
+             cross-hub forward_invoke should report target_online=true"
+        );
+    }
+
+    /// Like `InProcessPeerClient` but stamps an envelope onto the
+    /// peer request so daemon B's admission gate sees a caller URI
+    /// it can admit. Real PR-N2 path will sign + AXIOM-rewrite the
+    /// envelope; this test fixture just stamps the original
+    /// envelope verbatim, sufficient for the URI-only Device
+    /// admission gate the e2e leans on.
+    struct ForwardingPeerClient {
+        peer: Arc<DaemonInvocationService>,
+        envelope: Envelope,
+    }
+
+    #[async_trait::async_trait]
+    impl FederationClient for ForwardingPeerClient {
+        async fn forward_invoke(
+            &self,
+            _target_hub: &crate::services::federation_client::HubUri,
+            mut request: InvokeRequest,
+        ) -> Result<InvokeResponse, crate::services::federation_client::FederationClientError> {
+            request.envelope = Some(self.envelope.clone());
+            let response = self
+                .peer
+                .invoke(Request::new(request))
+                .await
+                .map_err(|status| {
+                    crate::services::federation_client::FederationClientError::InnerInvokeFailed {
+                        hub: "in-process-peer".to_string(),
+                        status: format!(
+                            "code={:?} message={}",
+                            status.code(),
+                            status.message()
+                        ),
+                    }
+                })?;
+            Ok(response.into_inner())
+        }
+    }
+
+    fn test_envelope_with_uri(uri: &str) -> Envelope {
+        Envelope {
+            caller: Some(AgentIdentity {
+                uri: uri.to_string(),
+                ..AgentIdentity::default()
+            }),
+            ..Envelope::default()
+        }
+    }
 }
