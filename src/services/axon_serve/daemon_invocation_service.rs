@@ -74,7 +74,7 @@ use tonic::{Request, Response, Status, Streaming};
 use crate::pb::axon::v1::invocation_server::Invocation;
 use crate::pb::axon::v1::{
     invoke_bidi_down::Payload as DownPayload, invoke_bidi_up::Payload as UpPayload, BinaryChunk,
-    EnvelopeOpen, InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeResponse,
+    EnvelopeOpen, InvocationState, InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeResponse,
     InvokeServerStreamRequest, InvokeStreamChunk,
 };
 use crate::services::axon_serve::admission_facade::AdmissionFacade;
@@ -421,6 +421,7 @@ impl DaemonInvocationService {
         Ok(Response::new(InvokeResponse {
             result: body,
             result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            state: InvocationState::Completed as i32,
             ..InvokeResponse::default()
         }))
     }
@@ -1073,6 +1074,14 @@ fn parse_json_args<T: serde::de::DeserializeOwned>(arguments: &[u8]) -> Result<T
 /// serialisation error to `Status::internal` because the wrappers
 /// use serde-derived types — failure here is a programmer bug, not
 /// a caller bug.
+///
+/// `state` is set to `INVOCATION_STATE_COMPLETED` so unary callers
+/// that grep on `resp.state == "completed"` (Go-side
+/// `stateString` mapping) see the expected wire-visible success
+/// signal. Without this the proto default-zero value
+/// (`INVOCATION_STATE_UNSPECIFIED`) collapses to `"failed"` on the
+/// Go side per `stateString`'s default arm — silent failure-look-
+/// like under what the dispatcher considers a clean dispatch.
 fn wrap_json_response<T: serde::Serialize>(
     response: &T,
 ) -> Result<Response<InvokeResponse>, Status> {
@@ -1084,6 +1093,7 @@ fn wrap_json_response<T: serde::Serialize>(
     let invoke_response = InvokeResponse {
         result: bytes,
         result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+        state: InvocationState::Completed as i32,
         ..InvokeResponse::default()
     };
     Ok(Response::new(invoke_response))

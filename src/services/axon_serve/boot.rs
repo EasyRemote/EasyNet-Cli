@@ -69,7 +69,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tokio_stream::wrappers::UnixListenerStream;
@@ -111,7 +111,15 @@ pub fn start_axon_serve_sidecar() -> anyhow::Result<()> {
     };
 
     let daemon_uri = load_daemon_uri();
-    let trust_anchor = load_trust_anchor();
+    // PR-7 commit 7/N adds an env-override seam: production deploys
+    // use `/etc/easynet/realm-trust.toml`; tests / smoke runs set
+    // `EASYNET_REALM_TRUST_PATH` to a tempdir-rooted path so the
+    // daemon writes its trust set under the test's HOME instead of
+    // requiring `/etc/easynet/` write permission. The override is
+    // intentionally narrow (one path, no other behaviour change) so
+    // production paths cannot diverge accidentally.
+    let trust_anchor_path = trust_anchor_path_from_env_or_default();
+    let trust_anchor = load_trust_anchor_from(&trust_anchor_path);
     // PR-7 commit 5/N: wrap the boot-time anchor in a reload-friendly
     // cell. The same cell is handed to the admission facade *and* to
     // `<self>.register_device_pubkey`'s handler context — a successful
@@ -119,7 +127,6 @@ pub fn start_axon_serve_sidecar() -> anyhow::Result<()> {
     // cell so the next admission sees the new entry without a daemon
     // restart.
     let trust_anchor_cell = SharedTrustAnchor::new(Arc::new(trust_anchor));
-    let trust_anchor_path = expand_home(DEFAULT_REALM_TRUST_PATH);
     let presence = Arc::new(PresenceRegistry::new());
     let pending = Arc::new(PendingDispatchMap::new());
     let admission = AdmissionFacade::with_trust_anchor_cell(
@@ -399,9 +406,19 @@ fn load_daemon_uri() -> Option<String> {
     json.get("agent_uri")?.as_str().map(str::to_string)
 }
 
-fn load_trust_anchor() -> RealmTrustAnchor {
-    let path = expand_home(DEFAULT_REALM_TRUST_PATH);
-    match RealmTrustAnchor::load_or_empty(&path) {
+/// Resolve the realm-trust file path from the env override or fall
+/// back to `/etc/easynet/realm-trust.toml`. The override is the one
+/// seam the PR-7 commit 7/N e2e test uses to redirect the daemon's
+/// trust write to a tempdir; production callers leave it unset.
+fn trust_anchor_path_from_env_or_default() -> PathBuf {
+    if let Some(override_path) = std::env::var_os("EASYNET_REALM_TRUST_PATH") {
+        return expand_home(override_path.to_string_lossy().as_ref());
+    }
+    expand_home(DEFAULT_REALM_TRUST_PATH)
+}
+
+fn load_trust_anchor_from(path: &Path) -> RealmTrustAnchor {
+    match RealmTrustAnchor::load_or_empty(path) {
         Ok(anchor) => {
             if anchor.is_empty() {
                 eprintln!(
