@@ -241,6 +241,14 @@ hyper-util = "0.1"
 # a panicked test doesn't leak the dir.
 tempfile = "3"
 
+# PR-N1 commit 7/N integration test: generates a self-signed CA +
+# leaf cert pair for two daemon binaries to share at test time.
+# Dev-only — production daemons receive cert/key paths from
+# operator-authored daemon-config.toml. Pinned to 0.13 (the most
+# recent line that does not pull in the `aws-lc-rs` cryptographic
+# dep, which would require build tooling we don't otherwise need).
+rcgen = "0.13"
+
 # Protobuf schema tooling — gated behind `proto-gen` feature.
 # Plan v10.5 R1 pins Protobuf as the single source of truth for
 # cross-language schemas (Client bindings in Go / Python / Node /
