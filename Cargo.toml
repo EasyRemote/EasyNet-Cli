@@ -93,6 +93,12 @@ ctrlc = "3"
 # lookups across thousands of devices — is documented in
 # `services/presence_registry.rs` module docs.
 dashmap = "6"
+# async-trait — required by RFC-003 PR-2's `SessionFrameDispatcher`
+# trait so trait method bodies can be `async fn`. Already pulled in
+# transitively via tonic; declared direct so the daemon's surface
+# use is documented.
+async-trait = "0.1"
+
 # tokio-stream wrappers used by RFC-003 PR-1:
 #  - `sync` feature: BroadcastStream for the
 #    `federation.subscribe_directory` server-stream pump (spec §4)

@@ -59,6 +59,7 @@ pub mod boot;
 pub mod daemon_invocation_service;
 pub mod federation_wrappers;
 pub mod invoke_remote_initiator;
+pub mod session_initiator;
 
 pub use admission_facade::AdmissionFacade;
 pub use boot::start_axon_serve_sidecar;
