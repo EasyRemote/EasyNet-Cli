@@ -12,11 +12,11 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use clap::Args;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::persistence::config;
 use crate::support::local_invoke::invoke_local_ability;
-use crate::support::output;
+use crate::support::{node, output};
 
 #[derive(Debug, Args)]
 pub struct StatusArgs {}
@@ -48,6 +48,15 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
     if state.credential_verified == Some(false) {
         output::info("Credential: NOT VERIFIED (Hub was unreachable at startup)");
     }
+    match invoke_local_ability("observe.health", json!({"source": "runtime.status"})) {
+        Ok(_) => {}
+        Err(e) => {
+            output::warn(&format!(
+                "Local daemon is not responding to observe.health despite runtime metadata: {e}"
+            ));
+            return Ok(());
+        }
+    }
 
     // Fleet view — go through fleet.list_nodes (the canonical
     // ability surface) so the daemon's federation_view metadata
@@ -64,15 +73,7 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let online = nodes
-        .iter()
-        .filter(|n| {
-            n.get("state")
-                .and_then(Value::as_str)
-                .map(|s| matches!(s, "HEALTHY" | "REGISTERED" | "STANDALONE"))
-                .unwrap_or(false)
-        })
-        .count();
+    let online = nodes.iter().filter(|n| node::is_online(n)).count();
     let offline = nodes.len() - online;
     output::info(&format!("Nodes: {online} online, {offline} offline"));
     if let Some(view) = nodes_envelope
@@ -80,10 +81,11 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
         .and_then(Value::as_str)
     {
         if view == "local_only" {
-            output::info(
-                "Federation: local-only view (the federation Invoke replacement \
-                 for AXON-RFC-001 P1.5 list_nodes ships in a follow-up).",
-            );
+            let reason = nodes_envelope
+                .get("federation_view_reason")
+                .and_then(Value::as_str)
+                .unwrap_or("only the local daemon is visible from this runtime");
+            output::info(&format!("Federation: local-only view ({reason})"));
         }
     }
 

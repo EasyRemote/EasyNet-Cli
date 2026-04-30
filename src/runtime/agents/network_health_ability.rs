@@ -9,54 +9,36 @@
 // posture: who do we believe we're joined to, what hosted Agents are
 // alive locally, is dendrite reachable.
 //
-// What v1 returns
+// What v2 returns
 // ---------------
 //   {
-//     "joined":              bool,         // credentials present
-//     "host_device_uri":     string|null,  // canonical URA after join
+//     "joined":              bool,
+//     "host_device_uri":     string|null,
 //     "hosted_agent_count":  number,
-//     "links": [                            // §18 contract field
-//       {"target": "<hub-or-realm hint>", "status": "...", ...}
+//     "peer_count":          number,
+//     "links": [
+//       {"target": "local-daemon", "status": "reachable", ...},
+//       {"target": "realm-hub", "status": "reachable" | "unreachable", ...},
+//       {"target": "<peer-agent-uri>", "status": "reachable" | "probe_failed", ...}
 //     ],
-//     "latency_ms":          null,         // §18 contract field; not yet probed
-//     "schema":              "v1",
-//     "view":                "snapshot"    // observation-layer contract
+//     "latency_ms":          number|null,  // federation.resolve latency
+//     "schema":              "v2",
+//     "view":                "live"
 //   }
 //
-// Snapshot vs live (per AXON-RFC-001-ability-layers.md §3)
-// --------------------------------------------------------
-// `view: "snapshot"` is load-bearing: this ability returns a
-// per-call read of `~/.easynet/local-agents.json` and does NOT
-// subscribe to membership change events. A `federation.heartbeat`
-// in flight when the read happens may not be reflected. Callers
-// that need "currently joined" with bounded staleness MUST poll
-// or wait for the future `view: "live"` enrichment (which will
-// introduce a TTL field and surface the bound explicitly).
+// Probe scope
+// -----------
+// The point of this ability is operator truth, not a complete graph
+// crawler. One call performs:
 //
-// Setting `view` per response — rather than baking it into the
-// ability's identity — lets the eventual live-probing variant ride
-// the same name without breaking existing parsers: they see
-// `view: "live"` and either keep using snapshot semantics
-// (under-treating fresh data, harmless) or switch on the field.
+//   * local daemon liveness (the handler itself),
+//   * one federation.resolve,
+//   * at most one direct observe.health probe per discovered
+//     device-profile Agent.
 //
-// What v1 does NOT do
-// -------------------
-// Probe live link latency, count active gRPC streams, or assert
-// dendrite reachability. The daemon doesn't currently retain a
-// handle the agents/ layer can read those off of, and the work to
-// thread one through is its own milestone (probably bundled with the
-// future `admin.status` lift in C-M13-B1). For now the `links` array
-// is a single entry derived from the membership state — accurate and
-// useful, just thin.
-//
-// Why ship a thin v1 vs. defer
-// ----------------------------
-// §18 names this ability; deferring it leaves the row blank in the
-// description_for / input_schema_for tables and slows the audit. The
-// contract is "structured response, not rich response." A caller
-// that needs richer data can still call observe.health for liveness
-// + meta.describe for ability-side state; this row exists so the
-// network-side question has *some* answer.
+// That is enough to answer the CLI-facing question "is this daemon
+// alive, is the realm reachable, and which peers are directly
+// callable from here?" without building a second monitoring stack.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet.
@@ -66,6 +48,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::agents::federation_probe;
 
 pub const ABILITY_NETWORK_HEALTH: &str = "observe.network_health";
 
@@ -75,37 +58,65 @@ pub fn register(reg: &mut LocalAbilityRegistry) {
 
 fn handler() -> anyhow::Result<Value> {
     let local = crate::persistence::local_agents::load().unwrap_or_default();
-    let joined = !local.host_device_agent_uri.is_empty();
-    let host_uri: Value = if joined {
+    let view = federation_probe::collect_fleet_view();
+    let self_node = view.nodes.iter().find(|n| n.is_self);
+    let joined =
+        self_node.map(|n| n.paired).unwrap_or(false) || !local.host_device_agent_uri.is_empty();
+    let host_uri: Value = if !local.host_device_agent_uri.is_empty() {
         Value::String(local.host_device_agent_uri.clone())
+    } else if let Some(uri) = self_node.and_then(|n| n.agent_uri.clone()) {
+        Value::String(uri)
     } else {
         Value::Null
     };
-
-    // Single membership-derived link entry. status="joined" reads
-    // straight off credentials presence; "unjoined" is the pre-pair
-    // state. A future enrichment pass adds gRPC liveness, RTT, and
-    // per-peer entries — the array shape is already the right one
-    // for that growth.
-    let link_status = if joined { "joined" } else { "unjoined" };
-    let links = json!([
-        {
-            "target": "realm-hub",
-            "status": link_status,
-        }
-    ]);
+    let mut links = Vec::new();
+    if let Some(node) = self_node {
+        links.push(json!({
+            "target": "local-daemon",
+            "node_id": node.node_id.clone(),
+            "status": "reachable",
+            "state": node.state.clone(),
+        }));
+    }
+    links.push(json!({
+        "target": "realm-hub",
+        "status": if !joined {
+            "unjoined"
+        } else if view.federation_view == "federated" {
+            "reachable"
+        } else {
+            "unreachable"
+        },
+        "latency_ms": view.resolve_latency_ms,
+        "detail": view.federation_view_reason.clone(),
+    }));
+    for node in view.nodes.iter().filter(|n| !n.is_self) {
+        links.push(json!({
+            "target": node.agent_uri.clone(),
+            "node_id": node.node_id.clone(),
+            "status": node.probe_status.clone(),
+            "state": node.state.clone(),
+            "online": node.online,
+            "latency_ms": node.latency_ms,
+            "error": node.probe_error.clone(),
+        }));
+    }
+    let peer_count = view.nodes.iter().filter(|n| !n.is_self).count();
+    let resolve_latency_ms = view.resolve_latency_ms;
+    let federation_view = view.federation_view;
+    let federation_view_reason = view.federation_view_reason;
 
     Ok(json!({
         "joined": joined,
         "host_device_uri": host_uri,
         "hosted_agent_count": local.hosted_agents.len(),
-        "links": links,
-        "latency_ms": Value::Null,
-        "schema": "v1",
-        // Per AXON-RFC-001-ability-layers.md §3: observation-layer
-        // abilities MUST mark snapshot vs live so a downstream
-        // consumer can reason about staleness. v1 is snapshot only.
-        "view": "snapshot",
+        "peer_count": peer_count,
+        "links": Value::Array(links),
+        "latency_ms": resolve_latency_ms,
+        "schema": "v2",
+        "view": "live",
+        "federation_view": federation_view,
+        "federation_view_reason": federation_view_reason,
     }))
 }
 
@@ -118,9 +129,9 @@ pub fn input_schema() -> Value {
 }
 
 pub fn description() -> &'static str {
-    "Report the daemon's network posture (membership status, hosted \
-     Agent count, link summary). v1 returns membership-derived state; \
-     live link probing lands with the broader admin.status work."
+    "Report the daemon's live network posture: local daemon reachability, \
+     realm-directory reachability, and direct observe.health probe status \
+     for each discovered peer device."
 }
 
 #[cfg(test)]
@@ -136,27 +147,34 @@ mod tests {
 
     #[test]
     fn handler_returns_structurally_complete_response() {
-        // Whatever the membership state on the test host happens to
-        // be, every §18-contract field MUST be present. A regression
-        // that elided a field would let a downstream caller hit a
-        // null-ref on what should be a typed-null.
+        // Whatever the local membership state happens to be, the
+        // operator-facing response must stay structurally complete.
         let resp = handler().unwrap();
-        for field in ["joined", "host_device_uri", "hosted_agent_count",
-                      "links", "latency_ms", "schema", "view"] {
+        for field in [
+            "joined",
+            "host_device_uri",
+            "hosted_agent_count",
+            "links",
+            "latency_ms",
+            "schema",
+            "view",
+            "federation_view",
+        ] {
             assert!(
                 resp.get(field).is_some(),
                 "response missing required field {field}"
             );
         }
-        assert_eq!(resp["schema"], "v1");
-        assert_eq!(
-            resp["view"], "snapshot",
-            "v1 MUST be snapshot semantics per layers doc §3 — a future \
-             live-probing variant flips this to `live` and adds a TTL field"
+        assert_eq!(resp["schema"], "v2");
+        assert_eq!(resp["view"], "live");
+        assert!(
+            resp["links"].is_array(),
+            "links must be an array even when empty"
         );
-        assert!(resp["links"].is_array(), "links must be an array even when empty");
-        assert!(!resp["links"].as_array().unwrap().is_empty(),
-                "v1 always emits at least the realm-hub link entry");
+        assert!(
+            !resp["links"].as_array().unwrap().is_empty(),
+            "network health must emit at least local-daemon + realm-hub links"
+        );
     }
 
     #[test]
