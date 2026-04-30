@@ -68,7 +68,8 @@ use easynet_cli::services::presence_registry::PresenceRegistry;
 use easynet_cli::services::realm_trust_anchor::RealmTrustAnchor;
 use futures::StreamExt;
 use tokio::net::UnixListener;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
 use tokio_stream::wrappers::{ReceiverStream, UnixListenerStream};
 use tonic::transport::{Channel, Endpoint, Server, Uri};
 use tonic::Request;
@@ -87,12 +88,58 @@ const STEP_TIMEOUT: Duration = Duration::from_secs(5);
 /// stream.
 const REPLY_MARKER: &[u8] = b"hello-from-device-b";
 
-/// Spawn a real tonic InvocationServer on a tempfile UDS, return
-/// the path. The server runs forever on the tokio runtime; the
-/// test does not need to shut it down (the runtime drops at
-/// test exit). The hub admits both DEVICE_A_URI and DEVICE_B_URI
-/// via a synthetic realm trust anchor.
-async fn start_in_process_hub() -> std::path::PathBuf {
+/// Owns every resource the in-process hub holds open so the test
+/// can deterministically tear them down before the tokio runtime
+/// drops. Each field is load-bearing for "cargo test never leaves
+/// orphan binaries":
+///
+/// - `tempdir` keeps the UDS path + trust file alive; held here
+///   instead of `Box::leak`'d so it is removed on Drop.
+/// - `shutdown` triggers `serve_with_incoming_shutdown` to return,
+///   which exits the spawned server task on demand instead of "when
+///   the runtime drops".
+/// - `server` is the JoinHandle for that task; on Drop we send the
+///   shutdown signal and abort() the handle as a safety net, so the
+///   task is gone before the runtime tears down.
+struct TestHub {
+    socket_path: std::path::PathBuf,
+    _tempdir: tempfile::TempDir,
+    shutdown: Option<oneshot::Sender<()>>,
+    server: Option<JoinHandle<()>>,
+}
+
+impl TestHub {
+    fn socket_path(&self) -> &std::path::Path {
+        &self.socket_path
+    }
+}
+
+impl Drop for TestHub {
+    fn drop(&mut self) {
+        if let Some(tx) = self.shutdown.take() {
+            // Receiver lives on the spawned server task. send() may
+            // fail if the task already exited (panic, bind error);
+            // either way we abort below to guarantee the task is
+            // gone before this guard is dropped.
+            let _ = tx.send(());
+        }
+        if let Some(handle) = self.server.take() {
+            // We are inside Drop, possibly on a tokio worker thread.
+            // block_on inside a worker would panic ("Cannot start a
+            // runtime from within a runtime"), so we abort instead.
+            // serve_with_incoming_shutdown's future has already been
+            // signalled above; abort is the safety net for tasks
+            // stuck on a downstream await (e.g. a slow client).
+            handle.abort();
+        }
+    }
+}
+
+/// Spawn a real tonic InvocationServer on a tempfile UDS. Returns
+/// a `TestHub` guard whose Drop signals the server to shut down
+/// and joins the spawned task. The hub admits both DEVICE_A_URI
+/// and DEVICE_B_URI via a synthetic realm trust anchor.
+async fn start_in_process_hub() -> TestHub {
     use std::io::Write;
 
     let tempdir = tempfile::tempdir().expect("tempdir");
@@ -124,10 +171,6 @@ added_at_unix_ms = 0
     let trust_anchor =
         RealmTrustAnchor::try_load_strict(&trust_path).expect("load trust anchor");
 
-    // Leak the tempdir AFTER the trust file is loaded so the UDS
-    // path stays valid for the test duration; the process exit
-    // cleans up.
-    Box::leak(Box::new(tempdir));
     let presence = Arc::new(PresenceRegistry::new());
     let pending = Arc::new(PendingDispatchMap::new());
     let admission = AdmissionFacade::new(Arc::new(trust_anchor), None);
@@ -137,10 +180,13 @@ added_at_unix_ms = 0
     let listener = UnixListener::bind(&socket_path).expect("bind UDS");
     let incoming = UnixListenerStream::new(listener);
 
-    tokio::spawn(async move {
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let server = tokio::spawn(async move {
         let _ = Server::builder()
             .add_service(InvocationServer::new(service))
-            .serve_with_incoming(incoming)
+            .serve_with_incoming_shutdown(incoming, async {
+                let _ = shutdown_rx.await;
+            })
             .await;
     });
 
@@ -150,7 +196,12 @@ added_at_unix_ms = 0
     // tokio runtime.
     tokio::time::sleep(Duration::from_millis(20)).await;
 
-    socket_path
+    TestHub {
+        socket_path,
+        _tempdir: tempdir,
+        shutdown: Some(shutdown_tx),
+        server: Some(server),
+    }
 }
 
 /// Connect to the hub's UDS and return a tonic `Channel` ready
@@ -170,7 +221,43 @@ async fn connect_to_hub(socket_path: &std::path::Path) -> Channel {
         .expect("connect to hub")
 }
 
-async fn open_device_session(channel: Channel, caller_uri: &str) -> mpsc::Sender<InvokeBidiUp> {
+/// A device-side `<self>.session` bidi held open for the duration
+/// of the test. Owns the up-stream sender (so the test can push
+/// frames) and the JoinHandle of the spawned drain task. On Drop
+/// the up-sender is dropped first — tonic closes the request stream
+/// which exits the drain loop's `while let Some(_) = down.next()`
+/// — and abort() then guarantees the task is collected even if the
+/// server side is wedged. Replaces the old "spawn forever, runtime
+/// drops at process exit" pattern that produced 5h+ orphan binaries
+/// when test parents died abnormally.
+struct DeviceSession {
+    up_tx: Option<mpsc::Sender<InvokeBidiUp>>,
+    drain: Option<JoinHandle<()>>,
+}
+
+impl DeviceSession {
+    fn up(&self) -> &mpsc::Sender<InvokeBidiUp> {
+        self.up_tx.as_ref().expect("up_tx not yet dropped")
+    }
+}
+
+impl Drop for DeviceSession {
+    fn drop(&mut self) {
+        // Drop the up-stream sender first: this closes the request
+        // stream tonic is reading from, the bidi tears down, and
+        // the drain task's `while let Some(_) = down.next().await`
+        // exits cleanly. abort() afterwards is the safety net for a
+        // drain stuck waiting on the server side; we cannot
+        // block_on a JoinHandle from inside Drop because the worker
+        // thread is already running a runtime.
+        self.up_tx.take();
+        if let Some(handle) = self.drain.take() {
+            handle.abort();
+        }
+    }
+}
+
+async fn open_device_session(channel: Channel, caller_uri: &str) -> DeviceSession {
     let mut client = InvocationClient::new(channel);
 
     // Build a frame-0 EnvelopeOpen identifying this device.
@@ -203,28 +290,23 @@ async fn open_device_session(channel: Channel, caller_uri: &str) -> mpsc::Sender
 
     let outbound = ReceiverStream::new(up_rx);
 
-    // Spawn a task that holds the bidi open: send the request,
-    // and forever drain the down-stream into a Vec we never read
-    // back. The test does its assertions through the auxiliary
-    // hub-side channels (the device-A `<self>.session` is just a
-    // presence holder; the device-B session participates in the
-    // round-trip by listening on a SHARED down-frame consumer
-    // we set up separately for B below).
-    tokio::spawn(async move {
+    let drain = tokio::spawn(async move {
         let response = client.invoke_bidi(Request::new(outbound)).await;
         if let Ok(response) = response {
             let mut down = response.into_inner();
-            // Drain forever; in this test the bidi stays open
-            // until the test exits and the runtime drops it.
             while let Some(_frame) = down.next().await {
-                // Nothing to do for device A; device B's session
-                // is opened via `open_device_session_with_drain`
-                // below if it needs to inspect frames.
+                // Device A is presence-only; device B's session
+                // uses open_device_session_with_drain. Either way
+                // the loop exits when the bidi is torn down by
+                // up-sender drop in DeviceSession::drop.
             }
         }
     });
 
-    up_tx
+    DeviceSession {
+        up_tx: Some(up_tx),
+        drain: Some(drain),
+    }
 }
 
 /// Like `open_device_session` but also returns a receiver over
@@ -233,10 +315,7 @@ async fn open_device_session(channel: Channel, caller_uri: &str) -> mpsc::Sender
 async fn open_device_session_with_drain(
     channel: Channel,
     caller_uri: &str,
-) -> (
-    mpsc::Sender<InvokeBidiUp>,
-    mpsc::Receiver<InvokeBidiDown>,
-) {
+) -> (DeviceSession, mpsc::Receiver<InvokeBidiDown>) {
     let mut client = InvocationClient::new(channel);
 
     let envelope_open = InvokeBidiUp {
@@ -268,14 +347,16 @@ async fn open_device_session_with_drain(
     let outbound = ReceiverStream::new(up_rx);
 
     let (down_tx, down_rx) = mpsc::channel::<InvokeBidiDown>(8);
-    tokio::spawn(async move {
+    let drain = tokio::spawn(async move {
         let response = client.invoke_bidi(Request::new(outbound)).await;
         if let Ok(response) = response {
             let mut down = response.into_inner();
             while let Some(frame) = down.next().await {
                 match frame {
                     Ok(f) => {
-                        let _ = down_tx.send(f).await;
+                        if down_tx.send(f).await.is_err() {
+                            break;
+                        }
                     }
                     Err(_) => break,
                 }
@@ -283,23 +364,43 @@ async fn open_device_session_with_drain(
         }
     });
 
-    (up_tx, down_rx)
+    (
+        DeviceSession {
+            up_tx: Some(up_tx),
+            drain: Some(drain),
+        },
+        down_rx,
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cross_device_invoke_remote_round_trip() {
-    let socket_path = start_in_process_hub().await;
+    // Outer 60s timeout: any future spawn-without-cancel regression
+    // surfaces as a test failure within bound, never as a multi-hour
+    // orphan binary holding target/. The body's own STEP_TIMEOUTs
+    // will fire first on a real bug; this is the belt-and-braces
+    // catch for unknown unknowns.
+    tokio::time::timeout(Duration::from_secs(60), async {
+        run_round_trip().await;
+    })
+    .await
+    .expect("test completes within 60 s");
+}
+
+async fn run_round_trip() {
+    let hub = start_in_process_hub().await;
+    let socket_path = hub.socket_path();
 
     // Step 1: open device A's `<self>.session`. Hub registers
     // DEVICE_A_URI in its PresenceRegistry.
-    let channel_a = connect_to_hub(&socket_path).await;
-    let _device_a_up = open_device_session(channel_a.clone(), DEVICE_A_URI).await;
+    let channel_a = connect_to_hub(socket_path).await;
+    let _device_a = open_device_session(channel_a.clone(), DEVICE_A_URI).await;
 
     // Step 2: open device B's `<self>.session` with a drain so
     // we can see the SessionDispatch::Dispatch frame the hub
     // pushes when device A invokes ability on B.
-    let channel_b = connect_to_hub(&socket_path).await;
-    let (device_b_up, mut device_b_down) =
+    let channel_b = connect_to_hub(socket_path).await;
+    let (device_b, mut device_b_down) =
         open_device_session_with_drain(channel_b, DEVICE_B_URI).await;
 
     // Brief settle so PresenceRegistry sees both inserts before
@@ -308,7 +409,10 @@ async fn cross_device_invoke_remote_round_trip() {
 
     // Step 3: spawn device B's reply task. As soon as a
     // BinaryChunk SessionDispatch::Dispatch arrives, device B
-    // sends back SessionDispatch::Result with REPLY_MARKER.
+    // sends back SessionDispatch::Result with REPLY_MARKER. The
+    // up-sender is borrowed via Clone so DeviceSession still owns
+    // the original and tears the bidi down on Drop.
+    let device_b_up_for_reply = device_b.up().clone();
     let reply_task_handle = tokio::spawn(async move {
         // Wait for the dispatch frame from the hub.
         let frame = tokio::time::timeout(STEP_TIMEOUT, device_b_down.recv())
@@ -349,14 +453,17 @@ async fn cross_device_invoke_remote_round_trip() {
             })),
             ..InvokeBidiUp::default()
         };
-        device_b_up.send(reply_frame).await.expect("send reply up");
+        device_b_up_for_reply
+            .send(reply_frame)
+            .await
+            .expect("send reply up");
 
         ability
     });
 
     // Step 4: device A invokes <self>.invoke_remote(target=B,
     // ability=test.echo, args=...). Open a per-call bidi.
-    let channel_caller = connect_to_hub(&socket_path).await;
+    let channel_caller = connect_to_hub(socket_path).await;
     let mut caller_client = InvocationClient::new(channel_caller);
 
     let invoke_remote_request = InvokeRemoteUp::Request {
