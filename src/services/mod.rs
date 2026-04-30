@@ -49,3 +49,12 @@ pub mod control;
 /// `pr-drafts/PR-0-spec-daemon-invocation-server.md §2`.
 #[cfg(feature = "axon-pb")]
 pub mod axon_serve;
+
+/// In-memory registry of live `<self>.session` reverse-channel
+/// senders keyed by caller URI. RFC-003 PR-1 spec §3 — hub-side
+/// liveness model that replaces unary heartbeats. Gated on `axon-pb`
+/// because the dispatch sender type holds the proto-generated
+/// `InvokeBidiDown` frame and the rejection path uses `tonic::Status`;
+/// neither is available off-feature.
+#[cfg(feature = "axon-pb")]
+pub mod presence_registry;

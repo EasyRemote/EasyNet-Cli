@@ -86,6 +86,13 @@ comfy-table = "7"
 console = "0.15"
 crossbeam-queue = "0.3"
 ctrlc = "3"
+# Concurrent shard-locked map. PresenceRegistry (RFC-003 PR-1 spec §3)
+# uses one DashMap<device_uri, DispatchSender> with shard count
+# tuned via `with_shard_amount(num_cpus * 4)`. The full feature
+# justification — bounded backpressure, shard-locked sub-millisecond
+# lookups across thousands of devices — is documented in
+# `services/presence_registry.rs` module docs.
+dashmap = "6"
 easynet-axon = { path = "../EasyNet-Axon/sdk/rust" }
 # Skill-install adapter needs tarball extraction + hex encoding of
 # the content_hash digest. Kept as direct deps (not via easynet-axon)
