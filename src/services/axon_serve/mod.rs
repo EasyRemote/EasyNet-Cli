@@ -55,11 +55,13 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub mod admission_facade;
+pub mod boot;
 pub mod daemon_invocation_service;
 pub mod federation_wrappers;
 pub mod invoke_remote_initiator;
 
 pub use admission_facade::AdmissionFacade;
+pub use boot::start_axon_serve_sidecar;
 pub use daemon_invocation_service::DaemonInvocationService;
 pub use invoke_remote_initiator::{
     invoke_remote, InvokeRemoteDown, InvokeRemoteFrame, InvokeRemoteUp,

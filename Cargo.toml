@@ -93,14 +93,15 @@ ctrlc = "3"
 # lookups across thousands of devices — is documented in
 # `services/presence_registry.rs` module docs.
 dashmap = "6"
-# tokio-stream's BroadcastStream wrapper turns a
-# `broadcast::Receiver<PresenceEvent>` into a `Stream` that the
-# `federation.subscribe_directory` server-stream pump tails (RFC-003
-# PR-1 spec §4). The `sync` feature pulls in the broadcast adapter
-# without dragging in tokio-stream's full set of wrappers. Promoted
-# from a transitive dep (already pulled in via tonic) to a direct
-# dep so the daemon's surface use is documented in Cargo.toml.
-tokio-stream = { version = "0.1", features = ["sync"] }
+# tokio-stream wrappers used by RFC-003 PR-1:
+#  - `sync` feature: BroadcastStream for the
+#    `federation.subscribe_directory` server-stream pump (spec §4)
+#  - `net` feature: UnixListenerStream so the daemon binary's
+#    gRPC InvocationServer can serve over UDS via
+#    `Server::serve_with_incoming(...)` (spec §1.1 — daemon.sock)
+# Promoted from a transitive dep (already pulled in via tonic) to a
+# direct dep so the daemon's surface use is documented in Cargo.toml.
+tokio-stream = { version = "0.1", features = ["sync", "net"] }
 easynet-axon = { path = "../EasyNet-Axon/sdk/rust" }
 # Skill-install adapter needs tarball extraction + hex encoding of
 # the content_hash digest. Kept as direct deps (not via easynet-axon)

@@ -245,6 +245,21 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // RFC-003 PR-1 sidecar: gRPC InvocationServer (transport plane).
+    // Distinct UDS from `control.sock` (length-delimited JSON IPC) and
+    // `runtime-dispatch.sock` (newline-delimited JSON) because tonic
+    // gRPC frames cannot share either socket. The sidecar is a soft
+    // dependency of the daemon: if `~/.easynet/daemon-config.toml` is
+    // absent (legacy device) or malformed, we log and skip without
+    // tearing down the legacy daemon subsystems. PR-7 + PR-10 finish
+    // the production rollout; PR-1 ships the listener only.
+    #[cfg(feature = "axon-pb")]
+    {
+        if let Err(e) = easynet_cli::services::axon_serve::start_axon_serve_sidecar() {
+            eprintln!("[axon-serve] sidecar boot failed: {e:#}");
+        }
+    }
+
     // Foreground: Control-plane IPC server. Returns when the listener
     // is dropped (i.e. never, in v1 — we exit on SIGTERM via the OS).
     server::run(proxy).await
