@@ -90,3 +90,12 @@ pub mod nonce_replay_store;
 /// once at boot and shared by clone between the admission facade
 /// and the register-pubkey handler. DEC-010 mechanism layer.
 pub mod trust_anchor_cell;
+
+/// Bounded in-memory store the admission gate records signed
+/// `InvocationReceipt`s into. PR-10 commit 2/N introduces the
+/// surface; commit 3/N hooks `run_strict_admission` to emit a
+/// receipt per accepted call. RFC 001 §5.3 best-effort semantics —
+/// receipt write failure does not fail admission (PR-10 spec
+/// INV-5). Persistence is a future RFC concern; v1 is in-memory
+/// FIFO at `DEFAULT_RECEIPT_CAPACITY`.
+pub mod receipt_store;
