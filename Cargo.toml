@@ -26,6 +26,9 @@ axon-pb = [
     "dep:prost-types",
     "dep:tonic-build",
     "dep:prost-build",
+    # PR-N1 commit 8/N CLI bridge needs the UDS-over-tonic adapters.
+    "dep:tower",
+    "dep:hyper-util",
 ]
 
 # v10.5 R1 (PR-DAEMON): split historical binary-only crate into a
@@ -223,6 +226,22 @@ tree-sitter-bash = "0.25"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# PR-N1 commit 8/N: CLI bridge for `easynet ability invoke --node`
+# uses a tonic UDS gRPC client to reach the local daemon's
+# Invocation server with `function_name="federation.forward_invoke"`.
+# `tower::service_fn` adapts the `tokio::net::UnixStream` connector
+# tonic's `Endpoint::connect_with_connector` accepts; `hyper_util::
+# rt::TokioIo` wraps the stream into hyper-compatible IO. Both are
+# already in the transitive dep graph via tonic; declared direct
+# so the call site in `support/federation_invoke.rs` imports them
+# cleanly. Gated to the `axon-pb` feature alongside tonic.
+[dependencies.tower]
+version = "0.5"
+optional = true
+[dependencies.hyper-util]
+version = "0.1"
+optional = true
 
 [dev-dependencies]
 # Used by `tests/cross_device_invoke_remote_e2e.rs` to construct

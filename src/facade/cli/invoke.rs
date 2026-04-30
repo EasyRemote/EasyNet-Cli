@@ -95,25 +95,34 @@ pub struct InvokeArgs {
 }
 
 pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
-    // --node is reserved-but-not-implemented after the AXON-RFC-001
-    // P1.5 cull. Reject it loudly with the same message everywhere
-    // so a script that depended on the old federation path sees a
-    // single, searchable error string. Treat empty `--node ""` as
-    // a shell-expansion accident, same as before.
-    match invoke_args.node.as_deref().map(str::trim) {
-        None => {} // local dispatch — the only supported path today
+    // PR-N1 commit 8/N: `--node` is now wired against the local
+    // daemon's `federation.forward_invoke` ability via the
+    // `support::federation_invoke` helper. The path requires the
+    // `axon-pb` feature (production builds) — minimal builds still
+    // bail with the legacy message.
+    let node_uri: Option<String> = match invoke_args.node.as_deref().map(str::trim) {
+        None => None,
         Some("") => bail!(
             "--node was given but empty; omit the flag to dispatch locally, \
-             or pass a real node id once federation Invoke is wired"
+             or pass a real `easynet:///r/<tenant>/agent/<node>` URI"
         ),
-        Some(_) => bail!(
-            "remote pinning via --node is not wired in this build. The \
-             federation bridge that backed it was removed by AXON-RFC-001 \
-             P1.5; the replacement (Invoke against an Agent ability on the \
-             realm) ships in a follow-up. Until then, omit --node to \
-             dispatch against the local daemon."
-        ),
-    }
+        Some(node) => {
+            #[cfg(feature = "axon-pb")]
+            {
+                Some(crate::support::federation_invoke::parse_node_uri(node)?)
+            }
+            #[cfg(not(feature = "axon-pb"))]
+            {
+                let _ = node;
+                bail!(
+                    "remote pinning via --node requires the `axon-pb` feature, \
+                     which is not enabled in this build. Re-build with \
+                     `--features axon-pb` (production builds always do) \
+                     and try again."
+                )
+            }
+        }
+    };
 
     let arguments: Value = match invoke_args.args.as_deref() {
         Some(s) => serde_json::from_str(s).context("parse --args JSON")?,
@@ -126,12 +135,34 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
     // what `easynet mission run` / `agent send` already enforce.
     let _timeout_ms = timeouts::effective_ms(invoke_args.timeout).map_err(anyhow::Error::msg)?;
 
-    // One ability invocation. The shared helper owns the
-    // control.json lookup, the IPC dance, and the daemon-error
-    // rendering — every CLI subcommand goes through this same
-    // function per the AXON-RFC-001 ontology that says "every
-    // action is an ability invocation".
-    let result = invoke_local_ability(&invoke_args.ability, arguments)?;
+    // Cross-hub dispatch when `--node` is set; local dispatch
+    // otherwise. Both paths surface the same unwrap-or-raw result
+    // shape so a script piping to `jq` doesn't have to branch.
+    let (result, fulfilled_label) = match node_uri.as_deref() {
+        #[cfg(feature = "axon-pb")]
+        Some(target) => {
+            let value = crate::support::federation_invoke::invoke_via_federation_forward(
+                &invoke_args.ability,
+                arguments,
+                target,
+                None,
+            )?;
+            (value, format!("federation.forward_invoke target={target}"))
+        }
+        // The `not(axon-pb)` arm of `--node` already bailed above;
+        // this match is reachable only via `node_uri == None`.
+        #[cfg(not(feature = "axon-pb"))]
+        Some(_) => unreachable!("--node bail handled above when axon-pb is off"),
+        None => {
+            // One ability invocation. The shared helper owns the
+            // control.json lookup, the IPC dance, and the daemon-error
+            // rendering — every CLI subcommand goes through this same
+            // function per the AXON-RFC-001 ontology that says "every
+            // action is an ability invocation".
+            let value = invoke_local_ability(&invoke_args.ability, arguments)?;
+            (value, "local daemon".to_string())
+        }
+    };
 
     let to_print = if invoke_args.raw {
         result
@@ -147,7 +178,7 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
         Value::String(s) => println!("{s}"),
         _ => println!("{}", serde_json::to_string_pretty(&to_print)?),
     }
-    output::success(&format!("{} → ok (local daemon)", invoke_args.ability));
+    output::success(&format!("{} → ok ({fulfilled_label})", invoke_args.ability));
     Ok(())
 }
 
@@ -184,12 +215,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pinned_node_returns_a_precise_actionable_error() {
-        // `--node` is reserved-but-not-implemented post P1.5. The
-        // CLI MUST refuse rather than silently auto-routing — a
-        // script that previously pinned to a real federation node
-        // and now gets local-only dispatch behind its back would
-        // produce wrong results without warning.
+    fn non_canonical_node_uri_returns_actionable_error() {
+        // PR-N1 commit 8/N: `--node` now accepts the cross-hub URI
+        // shape `easynet:///r/<tenant>/agent/<node>`. A non-
+        // canonical input (bare hostname, https URL, etc.) is
+        // rejected with a typed error before any IPC, so a typo
+        // never accidentally hits the wire.
         let res = run(InvokeArgs {
             ability: "observe.health".into(),
             node: Some("some-node-id".into()),
@@ -197,11 +228,17 @@ mod tests {
             timeout: 60,
             raw: false,
         });
-        let err = res.expect_err("must reject --node");
+        let err = res.expect_err("must reject non-canonical --node");
         let msg = format!("{err}");
+        // axon-pb on: parse_node_uri error mentions canonical URI
+        // shape. axon-pb off: the legacy "not wired" message still
+        // mentions `--node`. Either is acceptable as an operator-
+        // actionable error.
         assert!(
-            msg.contains("federation") || msg.contains("--node"),
-            "error must mention --node / federation status, got: {msg}"
+            msg.contains("--node")
+                || msg.contains("canonical")
+                || msg.contains("axon-pb"),
+            "error must surface a --node-related message, got: {msg}"
         );
     }
 
@@ -248,7 +285,10 @@ mod tests {
             "elapsed_ms": 700,
         });
         let unwrapped = unwrap_envelope(envelope);
-        assert_eq!(unwrapped, serde_json::Value::String("tokyo: Clear +20C".into()));
+        assert_eq!(
+            unwrapped,
+            serde_json::Value::String("tokyo: Clear +20C".into())
+        );
     }
 
     #[test]
