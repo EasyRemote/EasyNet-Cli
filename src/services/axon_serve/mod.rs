@@ -64,6 +64,6 @@ pub use admission_facade::AdmissionFacade;
 pub use boot::start_axon_serve_sidecar;
 pub use daemon_invocation_service::DaemonInvocationService;
 pub use invoke_remote_initiator::{
-    invoke_remote, InvokeRemoteDown, InvokeRemoteFrame, InvokeRemoteUp,
+    invoke_remote, InvokeRemoteDown, InvokeRemoteFrame, InvokeRemoteUp, SessionDispatch,
     ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID,
 };

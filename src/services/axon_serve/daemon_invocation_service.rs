@@ -60,12 +60,21 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use futures::Stream;
+// `StreamExt` brings `.next().await` into scope. Aliased to `_`
+// because we use the trait method only — we don't reference the
+// trait by name. Per letter 22 §4 b: avoid the name-collision risk
+// 莫浩 hit when bringing both `futures::StreamExt` and
+// `tokio_stream::StreamExt` into scope.
+use futures::StreamExt as _;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::pb::axon::v1::invocation_server::Invocation;
 use crate::pb::axon::v1::{
-    InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeResponse, InvokeServerStreamRequest,
-    InvokeStreamChunk,
+    invoke_bidi_down::Payload as DownPayload, invoke_bidi_up::Payload as UpPayload, BinaryChunk,
+    EnvelopeOpen, InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeResponse,
+    InvokeServerStreamRequest, InvokeStreamChunk,
 };
 use crate::services::axon_serve::admission_facade::AdmissionFacade;
 use crate::services::axon_serve::federation_wrappers::{
@@ -73,7 +82,12 @@ use crate::services::axon_serve::federation_wrappers::{
     ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN, ABILITY_FEDERATION_RESOLVE,
     ABILITY_FEDERATION_REVOKE, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
 };
-use crate::services::presence_registry::PresenceRegistry;
+use crate::services::axon_serve::invoke_remote_initiator::{
+    InvokeRemoteDown, InvokeRemoteUp, SessionDispatch, ABILITY_INVOKE_REMOTE,
+    INVOKE_REMOTE_STREAM_ID,
+};
+use crate::services::pending_dispatch::{DispatchResult, PendingDispatchMap};
+use crate::services::presence_registry::{DispatchFrame, OfflineReason, PresenceRegistry};
 
 /// Content type the federation wrappers emit on `InvokeResponse.result`.
 /// Centralised here so call sites cannot drift away from the value
@@ -100,6 +114,15 @@ const FEDERATION_RESULT_CONTENT_TYPE: &str = "application/json";
 pub struct DaemonInvocationService {
     presence: Arc<PresenceRegistry>,
     admission: AdmissionFacade,
+    /// Cross-call correlation table for `<self>.invoke_remote`
+    /// per-call dispatches awaiting a target-device reply on its
+    /// `<self>.session` reverse channel. `None` until
+    /// `with_pending(...)` wires it; absence means
+    /// `<self>.invoke_remote` is unavailable on this daemon (returned
+    /// as `Status::failed_precondition`). PR-3 owns the map's
+    /// shape; production daemons attach one at boot once PR-2
+    /// `<self>.session` accept handler also consumes it.
+    pending: Option<Arc<PendingDispatchMap>>,
 }
 
 impl DaemonInvocationService {
@@ -109,12 +132,33 @@ impl DaemonInvocationService {
     /// service, the `<self>.session` accept loop (PR-2), and any
     /// audit-log subscriber. The admission facade is constructed
     /// from `RealmTrustAnchor::load_or_empty(...)` at daemon boot.
+    ///
+    /// `<self>.invoke_remote` requires an additional
+    /// `PendingDispatchMap`; use `with_pending(...)` to attach one.
+    /// Daemons constructed without it reject `<self>.invoke_remote`
+    /// calls as not-configured rather than crashing.
     #[must_use]
     pub fn new(presence: Arc<PresenceRegistry>, admission: AdmissionFacade) -> Self {
         Self {
             presence,
             admission,
+            pending: None,
         }
+    }
+
+    /// Attach a `PendingDispatchMap` for `<self>.invoke_remote`
+    /// dispatch correlation. Builder-style so existing
+    /// `DaemonInvocationService::new(presence, admission)` callers
+    /// stay source-compatible.
+    ///
+    /// PR-3 ownership: 海峰 (this commit). PR-2's `<self>.session`
+    /// accept handler will share the same `Arc<PendingDispatchMap>`
+    /// to call `complete(call_id, ...)` when target devices send
+    /// `Result` frames back up their session streams.
+    #[must_use]
+    pub fn with_pending(mut self, pending: Arc<PendingDispatchMap>) -> Self {
+        self.pending = Some(pending);
+        self
     }
 }
 
@@ -195,19 +239,74 @@ impl Invocation for DaemonInvocationService {
 
     type InvokeBidiStream = BoxedDownStream<InvokeBidiDown>;
 
-    /// Spec §2.1 reference. PR-1 returns Unimplemented; PR-2
-    /// implements `<self>.session` accept (莫浩) and PR-3 implements
-    /// `<self>.invoke_remote` (海峰).
+    /// Spec §2.1 reference. Routes by frame-0
+    /// `EnvelopeOpen.target.ability_name`:
+    ///
+    /// - `<self>.invoke_remote` → cross-device dispatch handler
+    ///   (PR-3 commit 1/3, this commit). Requires `with_pending(...)`
+    ///   to have wired a `PendingDispatchMap`; otherwise returns
+    ///   `Status::failed_precondition` with explicit reason.
+    /// - `<self>.session` → PR-2 (莫浩); arm added when PR-2 lands
+    /// - anything else → `Status::unimplemented` citing PR-2/PR-3
     async fn invoke_bidi(
         &self,
-        _request: Request<Streaming<InvokeBidiUp>>,
+        request: Request<Streaming<InvokeBidiUp>>,
     ) -> Result<Response<Self::InvokeBidiStream>, Status> {
-        Err(Status::unimplemented(
-            "easynet-daemon: InvokeBidi is the `<self>.session` and `<self>.invoke_remote` \
-             entry point; real handlers are RFC-003 PR-2 (`<self>.session`, 莫浩) and PR-3 \
-             (`<self>.invoke_remote`, 海峰); see checklists/PR-2-checklist.md and \
-             checklists/PR-3-checklist.md",
-        ))
+        let mut up = request.into_inner();
+        let frame0 = match up.next().await {
+            Some(Ok(f)) => f,
+            Some(Err(err)) => {
+                return Err(Status::internal(format!("InvokeBidi frame 0 recv: {err}")))
+            }
+            None => return Err(Status::invalid_argument("InvokeBidi: empty up stream")),
+        };
+
+        let envelope_open = extract_envelope_open(&frame0)?;
+        match envelope_open.envelope.as_ref() {
+            Some(envelope) => self.admission.verify_envelope(envelope)?,
+            None => {
+                return Err(Status::invalid_argument(
+                    "InvokeBidi frame 0 missing envelope; admission requires envelope.caller.uri",
+                ))
+            }
+        }
+
+        let ability_name = envelope_open
+            .target
+            .as_ref()
+            .map(|t| t.ability_name.as_str())
+            .filter(|n| !n.is_empty())
+            .ok_or_else(|| {
+                Status::invalid_argument(
+                    "InvokeBidi frame 0 missing target.ability_name; cannot dispatch",
+                )
+            })?;
+
+        match ability_name {
+            ABILITY_INVOKE_REMOTE => self.dispatch_invoke_remote(envelope_open, up).await,
+            other => Err(Status::unimplemented(format!(
+                "easynet-daemon: InvokeBidi ability `{other}` is not yet wired; \
+                 `<self>.session` lands in RFC-003 PR-2 (莫浩); \
+                 LocalAbilityRegistry bidi fallback in commit 7/9+ \
+                 (see team-work/checklists/PR-2-checklist.md)"
+            ))),
+        }
+    }
+}
+
+/// Pull the `EnvelopeOpen` payload out of frame 0 of an
+/// `InvokeBidi` up stream. Returns `Status::invalid_argument` for
+/// any non-EnvelopeOpen first frame, since the axon protocol
+/// mandates frame 0 is the EnvelopeOpen.
+fn extract_envelope_open(frame: &InvokeBidiUp) -> Result<&EnvelopeOpen, Status> {
+    match frame.payload.as_ref() {
+        Some(UpPayload::EnvelopeOpen(eo)) => Ok(eo),
+        Some(_) => Err(Status::invalid_argument(
+            "InvokeBidi frame 0 must be EnvelopeOpen, not BinaryChunk or Control",
+        )),
+        None => Err(Status::invalid_argument(
+            "InvokeBidi frame 0 carries no payload",
+        )),
     }
 }
 
@@ -433,6 +532,136 @@ impl DaemonInvocationService {
             Box::pin(combined) as BoxedDownStream<InvokeStreamChunk>
         ))
     }
+
+    /// Hub-side `<self>.invoke_remote` handler. Drives the per-call
+    /// cross-device dispatch flow:
+    ///
+    /// 1. Parse the frame-0 `EnvelopeOpen.initial_args` as
+    ///    `InvokeRemoteUp::Request { subject_device, ability, args }`
+    /// 2. Confirm a `PendingDispatchMap` is wired (else
+    ///    `Status::failed_precondition` — daemon is in a half-built
+    ///    configuration; calling without `with_pending` is a boot
+    ///    bug, not a caller bug)
+    /// 3. Look up `subject_device` in `PresenceRegistry` (else
+    ///    `Status::not_found`)
+    /// 4. Register a pending-reply slot (`PendingHandle` carries a
+    ///    `call_id`)
+    /// 5. Push a `DispatchDown` frame down the target session
+    ///    carrying `(call_id, ability, args)` JSON. Backpressure +
+    ///    closed-receiver paths collapse into presence transitions
+    ///    per spec §3 Invariant 4 (same shape as
+    ///    `try_push_forward_invoke_frame` from commit 8/9).
+    /// 6. Return a server-stream of one terminal frame: when the
+    ///    target's reply arrives via `PendingDispatchMap::complete`
+    ///    (PR-2 session-receive task — pending), translate
+    ///    `DispatchResult` into `InvokeRemoteDown::Result` and emit;
+    ///    if the pending sender is dropped (target session crashed
+    ///    mid-call), surface as `error: Some("...")` Result frame.
+    ///
+    /// PR-1+2+3 binary integration: PR-2's session task plugs into
+    /// `PendingDispatchMap::complete(call_id, DispatchResult)` to
+    /// fulfil the wait. Until PR-2 lands, the wait will time out
+    /// (or hang if no caller-side timeout) — integration tests must
+    /// wrap `await_reply()` in `tokio::time::timeout`.
+    async fn dispatch_invoke_remote(
+        &self,
+        envelope_open: &EnvelopeOpen,
+        _up: Streaming<InvokeBidiUp>,
+    ) -> Result<Response<<Self as Invocation>::InvokeBidiStream>, Status> {
+        let request: InvokeRemoteUp = serde_json::from_slice(&envelope_open.initial_args)
+            .map_err(|err| {
+                Status::invalid_argument(format!(
+                    "<self>.invoke_remote: frame-0 initial_args is not valid \
+                     InvokeRemoteUp JSON: {err}"
+                ))
+            })?;
+
+        let InvokeRemoteUp::Request {
+            subject_device,
+            ability,
+            args,
+        } = request;
+
+        let pending = self.pending.as_ref().ok_or_else(|| {
+            Status::failed_precondition(
+                "<self>.invoke_remote: daemon was constructed without a \
+                 PendingDispatchMap; call DaemonInvocationService::with_pending(...) \
+                 at boot to enable cross-device invocation",
+            )
+        })?;
+
+        let target_sender = self.presence.lookup(&subject_device).ok_or_else(|| {
+            Status::not_found(format!(
+                "<self>.invoke_remote: target `{subject_device}` is not in PresenceRegistry; \
+                 either offline or never connected to this hub"
+            ))
+        })?;
+
+        // Register pending entry BEFORE pushing the dispatch frame —
+        // otherwise the target could reply faster than we can register
+        // and the reply would land as a no-op `complete`.
+        let handle = pending.register_pending();
+        let call_id = handle.call_id();
+
+        let dispatch_frame = build_invoke_remote_dispatch_frame(call_id, &ability, &args)?;
+        match target_sender.try_send(Ok(dispatch_frame)) {
+            Ok(()) => {}
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                // Bounded backpressure → presence transition (same
+                // policy as forward_invoke commit 8/9).
+                self.presence
+                    .remove(&subject_device, OfflineReason::SendFailed);
+                return Err(Status::failed_precondition(format!(
+                    "<self>.invoke_remote: target `{subject_device}` channel full; \
+                     removed from registry with OfflineReason::SendFailed"
+                )));
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                self.presence
+                    .remove(&subject_device, OfflineReason::StreamClosed);
+                return Err(Status::not_found(format!(
+                    "<self>.invoke_remote: target `{subject_device}` receiver closed \
+                     between lookup and dispatch; removed from registry"
+                )));
+            }
+        }
+
+        // The down stream: a single terminal frame yielded after the
+        // target's reply arrives (or sender drops, signalling the
+        // target session ended mid-call).
+        let (down_tx, down_rx) = mpsc::channel::<Result<InvokeBidiDown, Status>>(1);
+        tokio::spawn(async move {
+            let frame = match handle.await_reply().await {
+                Ok(DispatchResult { payload, error }) => {
+                    let down = InvokeRemoteDown::Result { payload, error };
+                    match build_invoke_remote_terminal_frame(&down) {
+                        Ok(f) => Ok(f),
+                        Err(status) => Err(status),
+                    }
+                }
+                Err(_recv_err) => {
+                    // Sender dropped without complete — target session
+                    // task crashed or daemon shutdown mid-call.
+                    let down = InvokeRemoteDown::Result {
+                        payload: Vec::new(),
+                        error: Some(format!(
+                            "target session disconnected before reply (call_id={call_id})"
+                        )),
+                    };
+                    match build_invoke_remote_terminal_frame(&down) {
+                        Ok(f) => Ok(f),
+                        Err(status) => Err(status),
+                    }
+                }
+            };
+            let _ = down_tx.send(frame).await;
+        });
+
+        let stream = ReceiverStream::new(down_rx);
+        Ok(Response::new(
+            Box::pin(stream) as BoxedDownStream<InvokeBidiDown>
+        ))
+    }
 }
 
 /// Wire shape for an incremental presence event delivered by the
@@ -507,6 +736,61 @@ fn build_forward_invoke_dispatch_frame(
             ..InvokeBidiDown::default()
         },
     }
+}
+
+/// Build a `DispatchFrame` carrying a `SessionDispatch::Dispatch` JSON
+/// payload, ready to push down a target's `<self>.session` reverse
+/// channel. Encoding failure is impossible for the current variant
+/// (call_id u64, owned String, owned Vec<u8>) but mapped to
+/// `Status::internal` for forward-compatibility per letter 25 §"flag".
+fn build_invoke_remote_dispatch_frame(
+    call_id: u64,
+    ability: &str,
+    args: &[u8],
+) -> Result<DispatchFrame, Status> {
+    let payload = SessionDispatch::Dispatch {
+        call_id,
+        ability: ability.to_string(),
+        args: args.to_vec(),
+    };
+    let bytes = serde_json::to_vec(&payload).map_err(|err| {
+        Status::internal(format!(
+            "<self>.invoke_remote: encode SessionDispatch::Dispatch: {err}"
+        ))
+    })?;
+    let chunk = BinaryChunk {
+        stream_id: INVOKE_REMOTE_STREAM_ID,
+        data: bytes,
+        ..BinaryChunk::default()
+    };
+    Ok(DispatchFrame {
+        frame: InvokeBidiDown {
+            payload: Some(DownPayload::BinaryChunk(chunk)),
+            ..InvokeBidiDown::default()
+        },
+    })
+}
+
+/// Build the terminal `InvokeBidiDown` frame the
+/// `<self>.invoke_remote` caller's down stream yields. Carries the
+/// `InvokeRemoteDown::Result` JSON in `BinaryChunk.data`.
+fn build_invoke_remote_terminal_frame(
+    down: &InvokeRemoteDown,
+) -> Result<InvokeBidiDown, Status> {
+    let bytes = serde_json::to_vec(down).map_err(|err| {
+        Status::internal(format!(
+            "<self>.invoke_remote: encode InvokeRemoteDown: {err}"
+        ))
+    })?;
+    let chunk = BinaryChunk {
+        stream_id: INVOKE_REMOTE_STREAM_ID,
+        data: bytes,
+        ..BinaryChunk::default()
+    };
+    Ok(InvokeBidiDown {
+        payload: Some(DownPayload::BinaryChunk(chunk)),
+        ..InvokeBidiDown::default()
+    })
 }
 
 /// Parse a JSON-encoded request body, mapping any error to
@@ -881,4 +1165,166 @@ mod tests {
         // vacuously.
         unreachable!();
     }
+
+    // ── PR-3 commit 1/3 — <self>.invoke_remote helpers + early returns ────
+
+    use crate::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+    use crate::pb::axon::v1::{BidiControl, EnvelopeOpen, InvocationTarget, InvokeBidiUp};
+    use crate::services::axon_serve::invoke_remote_initiator::{
+        InvokeRemoteUp, ABILITY_INVOKE_REMOTE,
+    };
+    use crate::services::pending_dispatch::PendingDispatchMap;
+
+    fn make_envelope_open(ability: &str, initial_args: Vec<u8>) -> EnvelopeOpen {
+        EnvelopeOpen {
+            envelope: Some(test_envelope()),
+            target: Some(InvocationTarget {
+                ability_name: ability.to_string(),
+                ..InvocationTarget::default()
+            }),
+            initial_args,
+            args_content_type: "application/json".to_string(),
+            ..EnvelopeOpen::default()
+        }
+    }
+
+    #[test]
+    fn extract_envelope_open_returns_inner_for_envelope_open_frame() {
+        let frame = InvokeBidiUp {
+            sequence: 0,
+            mac: Vec::new(),
+            payload: Some(UpPayload::EnvelopeOpen(make_envelope_open(
+                ABILITY_INVOKE_REMOTE,
+                b"{}".to_vec(),
+            ))),
+        };
+        let eo = extract_envelope_open(&frame).expect("extracted");
+        assert_eq!(
+            eo.target.as_ref().unwrap().ability_name,
+            ABILITY_INVOKE_REMOTE
+        );
+    }
+
+    #[test]
+    fn extract_envelope_open_rejects_binary_chunk_first_frame() {
+        let frame = InvokeBidiUp {
+            sequence: 0,
+            mac: Vec::new(),
+            payload: Some(UpPayload::BinaryChunk(BinaryChunk::default())),
+        };
+        let err = extract_envelope_open(&frame).expect_err("must reject");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains("EnvelopeOpen"));
+    }
+
+    #[test]
+    fn extract_envelope_open_rejects_control_first_frame() {
+        let frame = InvokeBidiUp {
+            sequence: 0,
+            mac: Vec::new(),
+            payload: Some(UpPayload::Control(BidiControl::default())),
+        };
+        let err = extract_envelope_open(&frame).expect_err("must reject");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn extract_envelope_open_rejects_payload_none() {
+        let frame = InvokeBidiUp {
+            sequence: 0,
+            mac: Vec::new(),
+            payload: None,
+        };
+        let err = extract_envelope_open(&frame).expect_err("must reject");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains("no payload"));
+    }
+
+    #[test]
+    fn build_invoke_remote_dispatch_frame_carries_session_dispatch_json() {
+        let frame = build_invoke_remote_dispatch_frame(42, "echo", b"hello").expect("built");
+        let payload = match frame.frame.payload.expect("frame has payload") {
+            DownPayload::BinaryChunk(chunk) => chunk,
+            _ => panic!("expected BinaryChunk"),
+        };
+        assert_eq!(payload.stream_id, INVOKE_REMOTE_STREAM_ID);
+        let parsed: SessionDispatch =
+            serde_json::from_slice(&payload.data).expect("decode SessionDispatch");
+        match parsed {
+            SessionDispatch::Dispatch {
+                call_id,
+                ability,
+                args,
+            } => {
+                assert_eq!(call_id, 42);
+                assert_eq!(ability, "echo");
+                assert_eq!(args, b"hello");
+            }
+            _ => panic!("expected Dispatch variant"),
+        }
+    }
+
+    #[test]
+    fn build_invoke_remote_terminal_frame_round_trips_done_payload() {
+        let down = InvokeRemoteDown::Result {
+            payload: b"the-reply".to_vec(),
+            error: None,
+        };
+        let frame = build_invoke_remote_terminal_frame(&down).expect("built");
+        let chunk = match frame.payload.expect("frame has payload") {
+            DownPayload::BinaryChunk(c) => c,
+            _ => panic!("expected BinaryChunk"),
+        };
+        assert_eq!(chunk.stream_id, INVOKE_REMOTE_STREAM_ID);
+        let parsed: InvokeRemoteDown = serde_json::from_slice(&chunk.data).expect("decode");
+        assert_eq!(parsed, down);
+    }
+
+    #[test]
+    fn invoke_remote_up_request_serde_round_trip_via_session_dispatch_pin() {
+        // Pins the invariant that PR-3 sub-spec §2.1 frame-0 JSON
+        // (InvokeRemoteUp::Request) and PR-3 sub-spec §2.3 session
+        // dispatch JSON (SessionDispatch::Dispatch) are *separate*
+        // wire shapes. A regression that conflates them would let
+        // a frame from one side decode into the other type — this
+        // test asserts they don't.
+        let req_json = serde_json::to_vec(&InvokeRemoteUp::Request {
+            subject_device: "easynet:///r/realm/agent/dev-B".into(),
+            ability: "echo".into(),
+            args: b"hi".to_vec(),
+        })
+        .unwrap();
+        // Decoding as the wrong type must fail.
+        let mistaken: Result<SessionDispatch, _> = serde_json::from_slice(&req_json);
+        assert!(
+            mistaken.is_err(),
+            "InvokeRemoteUp::Request must NOT decode as SessionDispatch — \
+             the discriminator tags differ ('request' vs 'dispatch')"
+        );
+    }
+
+    // dispatch_invoke_remote happy/sad-path integration tests
+    // require a real `tonic::Streaming<InvokeBidiUp>` which is
+    // gRPC-codegen-only constructible (no public `new_empty()`
+    // ctor). The same constraint that `#[ignore]`-marked
+    // `invoke_bidi_test_deferred_to_pr2_tier1` above applies here:
+    // those paths land as Tier 1 integration tests once PR-2's
+    // `<self>.session` accept enables a real round-trip. Until
+    // then the helpers below pin the units this method composes.
+    //
+    // Coverage assertion: every early-return code path of
+    // `dispatch_invoke_remote` is reachable from the helpers
+    // tested above:
+    //   * malformed initial_args → serde_json::from_slice (covered
+    //     by invoke_remote_up_request_serde_round_trip in
+    //     `invoke_remote_initiator::tests`)
+    //   * pending map None → trivial Option::ok_or_else (no-op
+    //     to test in isolation)
+    //   * target offline → PresenceRegistry::lookup returns None
+    //     (covered by presence_registry tests)
+    //   * try_send Full / Closed → matched by literal pattern,
+    //     same shape as commit 8/9's try_push_forward_invoke_frame
+    //     which is integration-tested
+    //   * pending oneshot dropped → covered by pending_dispatch
+    //     `dropped_completer_surfaces_to_handle_as_recv_error`
 }

@@ -137,6 +137,38 @@ pub enum InvokeRemoteFrame {
     Done(Vec<u8>),
 }
 
+/// Wire shape of a frame the hub's `<self>.invoke_remote` handler
+/// pushes down a target device's `<self>.session` reverse channel,
+/// and of the matching reply the target device sends back up its
+/// session stream.
+///
+/// MVP-style framing per PR-3 sub-spec §2.3 (decision recorded in
+/// `team-work/letters/2026-04-30-16-haifeng-to-mohao-pr1-review-commit-6-and-fixup-ack.md`).
+/// Public so PR-2's `<self>.session` accept handler (莫浩) imports
+/// the same type to recognise these frames in the session stream.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SessionDispatch {
+    /// Hub → target device. "Run this ability locally and reply
+    /// with `call_id` so I can route the reply back to the
+    /// `<self>.invoke_remote` caller."
+    Dispatch {
+        call_id: u64,
+        ability: String,
+        args: Vec<u8>,
+    },
+    /// Target device → hub. The target ran the ability and is
+    /// returning the reply. PR-2's session task sees this on the
+    /// session up stream and routes it via
+    /// `PendingDispatchMap::complete(call_id, …)`.
+    Result {
+        call_id: u64,
+        payload: Vec<u8>,
+        terminal: bool,
+        error: Option<String>,
+    },
+}
+
 /// Open an `<self>.invoke_remote` bidi stream against the local
 /// daemon on `channel` and return a stream of result frames.
 ///
