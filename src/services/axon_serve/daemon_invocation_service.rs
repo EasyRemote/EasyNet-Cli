@@ -60,7 +60,7 @@
 
 use std::pin::Pin;
 
-use tonic::codegen::tokio_stream::Stream;
+use futures::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::pb::axon::v1::invocation_server::Invocation;
@@ -71,32 +71,23 @@ use crate::pb::axon::v1::{
 
 /// gRPC `Invocation` service hosted by `easynet-daemon`.
 ///
-/// Intentionally an empty struct in this commit. Subsequent commits
-/// in PR-1 grow it to hold:
+/// Currently an empty struct. Fields land in commit 6/9 once
+/// `PresenceRegistry`, the federation wrappers, and the admission
+/// gate facade are all available to inject. Final shape:
 ///
-/// - `admission: Arc<AdmissionGate>` — applied at the start of
-///   every RPC method's first frame
-/// - `presence: Arc<PresenceRegistry>` — owned reverse-channel
-///   senders for `<self>.session` and `<self>.invoke_remote`
-/// - `federation: Arc<FederationWrappers>` — six `federation.*`
-///   thin-wrapper handlers
-/// - `ability_dispatch: Arc<LocalAbilityRegistry>` — fall-through
-///   for any ability not handled above
+/// ```ignore
+/// pub struct DaemonInvocationService {
+///     admission: Arc<AdmissionGate>,
+///     presence: Arc<PresenceRegistry>,
+///     ability_dispatch: Arc<LocalAbilityRegistry>,
+/// }
+/// ```
 ///
-/// Construction will be `DaemonInvocationService::new(admission,
-/// presence, federation, ability_dispatch)` once those types exist.
-/// The placeholder constructor below documents the intended shape
-/// without committing to the field set; CTO directive 06 §一.5
-/// "invariant docstrings" applies once the struct has state to
-/// guard.
+/// CTO directive 06 §一.5 "invariant docstrings" applies once the
+/// struct has state to guard; until then, the only invariant is
+/// "trivially constructible".
 #[derive(Debug, Default)]
-pub struct DaemonInvocationService {
-    // Field intentionally blank in this commit. Adding fields is the
-    // next commit's job. `_marker` would defeat the trait coherence
-    // we want; using `Default` keeps the struct trivially
-    // constructible while a real constructor is being designed.
-    _placeholder: (),
-}
+pub struct DaemonInvocationService;
 
 impl DaemonInvocationService {
     /// Construct an empty service. Callers obtain one via the daemon
@@ -205,17 +196,19 @@ mod tests {
         }
     }
 
+    #[ignore = "PR-1 staging — bidi accept/dispatch covered by PR-2 Tier 1 cases 1-11 unignore"]
     #[tokio::test]
-    async fn invoke_bidi_returns_unimplemented_during_pr1_staging() {
-        // Constructing a real `Streaming` requires a full tonic
-        // stack. The trait method itself does not consult the
-        // stream until it dispatches; PR-1 staging returns
-        // `Unimplemented` before reading any frame, so a
-        // synthetic empty `Streaming` is unnecessary — we only
-        // need to exercise the method's early return path.
-        // Skipping this test in PR-1 is intentional; the bidi
-        // path is fully covered by Tier 1 cases 1-11 once PR-2
-        // un-ignores them.
+    async fn invoke_bidi_test_deferred_to_pr2_tier1() {
+        // Constructing a real `tonic::Streaming<InvokeBidiUp>`
+        // requires the full tonic codegen scaffolding. The
+        // unimplemented path returns before reading any frame,
+        // so a synthetic empty `Streaming` would not exercise
+        // anything beyond the trait dispatch table — exactly
+        // what PR-2 Tier 1 cases 1-11 cover end-to-end via real
+        // gRPC roundtrip. Marking this `#[ignore]` so the test
+        // result line surfaces the gap rather than passing
+        // vacuously.
+        unreachable!();
     }
 
     #[test]
