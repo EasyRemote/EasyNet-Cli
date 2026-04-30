@@ -15,6 +15,19 @@ build = "build.rs"
 # to use the generated types (that is a follow-up commit / PR-SYS).
 proto-gen = ["dep:prost", "dep:prost-types", "dep:prost-build"]
 
+# Compile axon `axon/v1/*.proto` into a `pb` module exposing the
+# tonic server-side `Invocation` trait that RFC-003 PR-1 implements.
+# Off by default — daemon-side `axon_serve` module gates its build on
+# this feature to keep the no-protoc developer path working. Pulls in
+# tonic-build (build) + tonic + prost (runtime).
+axon-pb = [
+    "dep:tonic",
+    "dep:prost",
+    "dep:prost-types",
+    "dep:tonic-build",
+    "dep:prost-build",
+]
+
 # v10.5 R1 (PR-DAEMON): split historical binary-only crate into a
 # library + multiple bins. The library target carries all the
 # business modules and (future) C ABI exports; bins are thin entry
@@ -213,4 +226,22 @@ optional = true
 
 [build-dependencies.prost-build]
 version = "0.13"
+optional = true
+
+# tonic-build generates the server-side `Invocation` trait + types
+# from `axon/v1/*.proto` under the `axon-pb` feature. Path resolution
+# in build.rs is `../EasyNet-Axon/core/runtime-rs/client-sdk/proto` —
+# the same path the EasyNet-Federation-MVP `common/build.rs` uses;
+# kept consistent so the two crates compile against bytewise-identical
+# proto sets. RFC-003 spec §0 forbids modifying axon repo, and this
+# build-system entry honours that — we read the canonical .proto only.
+[build-dependencies.tonic-build]
+version = "0.12"
+optional = true
+
+# tonic runtime dependency for the generated Invocation server +
+# tonic::Status etc. Only needed when `axon-pb` is on.
+[dependencies.tonic]
+version = "0.12"
+features = ["transport", "tls"]
 optional = true

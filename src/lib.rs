@@ -48,3 +48,28 @@ pub mod registry;
 pub mod runtime;
 pub mod services;
 pub mod support;
+
+/// Generated tonic + prost types for axon's `axon.v1.*` protos.
+///
+/// Populated by `build.rs` when the `axon-pb` feature is enabled
+/// (RFC-003 PR-1, see `pr-drafts/PR-0-spec-daemon-invocation-server.md
+/// §2`). The proto declares `package axon.v1;`, so the tonic-emitted
+/// file lands at `axon.v1.rs` and is included here.
+///
+/// Callers reach the server-side `Invocation` trait via
+/// `easynet_cli::pb::axon::v1::invocation_server::Invocation`. Off
+/// by default so developers without `protoc` on PATH still build
+/// the CLI.
+///
+/// Out of scope for the commit that adds this entry: the actual
+/// `DaemonInvocationService` implementation. This module exists
+/// only to make the trait importable; the impl lands in a
+/// follow-up commit on the same `rfc-001-impl` branch.
+#[cfg(feature = "axon-pb")]
+pub mod pb {
+    pub mod axon {
+        pub mod v1 {
+            tonic::include_proto!("axon.v1");
+        }
+    }
+}
