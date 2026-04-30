@@ -68,7 +68,6 @@
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -77,12 +76,11 @@ use tonic::transport::Server;
 
 use crate::pb::axon::v1::invocation_server::InvocationServer;
 use crate::persistence::daemon_config::{DaemonConfig, DaemonMode, DEFAULT_DAEMON_CONFIG_PATH};
+use crate::runtime::ability_dispatch::AbilityDispatcher;
 use crate::services::axon_serve::admission_facade::AdmissionFacade;
 use crate::services::axon_serve::daemon_invocation_service::DaemonInvocationService;
-use crate::services::axon_serve::invoke_remote_initiator::SessionDispatch;
-use crate::services::axon_serve::session_initiator::{
-    run_session_supervisor, SessionDispatchError, SessionFrameDispatcher,
-};
+use crate::services::axon_serve::local_ability_dispatcher::LocalAbilityDispatcher;
+use crate::services::axon_serve::session_initiator::run_session_supervisor;
 use crate::services::pending_dispatch::PendingDispatchMap;
 use crate::services::presence_registry::PresenceRegistry;
 use crate::services::realm_trust_anchor::{RealmTrustAnchor, DEFAULT_REALM_TRUST_PATH};
@@ -97,7 +95,7 @@ use crate::services::trust_anchor_cell::SharedTrustAnchor;
 /// listeners do come up, they run on the caller's tokio runtime as
 /// detached tasks; they own their `PresenceRegistry` Arc and stay
 /// alive until the runtime shuts down.
-pub fn start_axon_serve_sidecar() -> anyhow::Result<()> {
+pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::Result<()> {
     let config_path = expand_home(DEFAULT_DAEMON_CONFIG_PATH);
     let config = match DaemonConfig::load(&config_path) {
         Ok(cfg) => cfg,
@@ -129,10 +127,8 @@ pub fn start_axon_serve_sidecar() -> anyhow::Result<()> {
     let trust_anchor_cell = SharedTrustAnchor::new(Arc::new(trust_anchor));
     let presence = Arc::new(PresenceRegistry::new());
     let pending = Arc::new(PendingDispatchMap::new());
-    let admission = AdmissionFacade::with_trust_anchor_cell(
-        trust_anchor_cell.clone(),
-        daemon_uri.clone(),
-    );
+    let admission =
+        AdmissionFacade::with_trust_anchor_cell(trust_anchor_cell.clone(), daemon_uri.clone());
     let service = DaemonInvocationService::new(Arc::clone(&presence), admission)
         .with_pending(Arc::clone(&pending))
         .with_register_pubkey(
@@ -163,7 +159,7 @@ pub fn start_axon_serve_sidecar() -> anyhow::Result<()> {
         if let (Some(hub_endpoint), Some(caller_uri)) =
             (config.hub_endpoint().map(str::to_string), daemon_uri)
         {
-            spawn_session_supervisor(hub_endpoint, caller_uri);
+            spawn_session_supervisor(hub_endpoint, caller_uri, dispatcher);
         } else {
             eprintln!(
                 "[axon-serve] device-mode daemon missing either hub_endpoint or \
@@ -181,11 +177,16 @@ pub fn start_axon_serve_sidecar() -> anyhow::Result<()> {
 /// Runs forever on the daemon's tokio runtime; cancelled implicitly
 /// when the runtime shuts down (the `cancel` oneshot we hand it is
 /// dropped, which the supervisor treats the same as a cancel signal).
-fn spawn_session_supervisor(hub_endpoint: String, caller_uri: String) {
+fn spawn_session_supervisor(
+    hub_endpoint: String,
+    caller_uri: String,
+    dispatcher: Arc<AbilityDispatcher>,
+) {
     eprintln!(
         "[axon-serve] STAGING: device-mode dialing `<self>.session` against {hub_endpoint} as \
-         {caller_uri}; SessionDispatch::Dispatch frames receive a typed \"not-yet-wired\" \
-         error reply until the LocalAbilityRegistry adapter lands (follow-up of PR-2)"
+         {caller_uri}; LocalAbilityDispatcher now holds the boot-threaded AbilityDispatcher Arc, \
+         but SessionDispatch::Dispatch frames still receive a typed \"not-yet-wired\" error \
+         reply until PR-2 commit 2/N wires real LocalAbilityRegistry dispatch"
     );
     // Cancel oneshot held for the daemon process's lifetime — the
     // supervisor exits when the cancel sender drops, which happens
@@ -197,120 +198,13 @@ fn spawn_session_supervisor(hub_endpoint: String, caller_uri: String) {
     // intent rather than a side-effect of forgetting to drop).
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
     Box::leak(Box::new(cancel_tx));
-    let dispatcher = Arc::new(StagingSessionDispatcher);
+    let dispatcher = Arc::new(LocalAbilityDispatcher::new(dispatcher));
     tokio::spawn(run_session_supervisor(
         hub_endpoint,
         caller_uri,
         dispatcher,
         cancel_rx,
     ));
-}
-
-/// PR-1 staging dispatcher for the device-side
-/// `<self>.session` bidi. Receives `SessionDispatch::Dispatch`
-/// frames pushed by the hub (because `<self>.invoke_remote` or
-/// `federation.forward_invoke` targeted this device), and replies
-/// with a `SessionDispatch::Result` carrying an explicit "not yet
-/// wired in PR-1 staging" error.
-///
-/// This is the simplest possible dispatcher that exercises the
-/// full wire path:
-///
-///   1. Hub `dispatch_invoke_remote` → `pending.register_pending`
-///      → `target_sender.try_send(DispatchFrame)`
-///   2. Tonic delivers the frame down the bidi
-///   3. THIS DISPATCHER receives it, parses
-///      `SessionDispatch::Dispatch{call_id, ability, args}`, and
-///      builds a reply `SessionDispatch::Result{call_id, payload,
-///      error: Some("not-yet-wired")}`
-///   4. Reply travels back up the bidi
-///   5. Hub `drain_session_up_stream` parses the reply, calls
-///      `pending.complete(call_id, ...)`, the originating
-///      `<self>.invoke_remote` caller's `await_reply` wakes
-///
-/// The whole transport plane is exercised end-to-end. The actual
-/// ability dispatch (running `ability` against the local
-/// `LocalAbilityRegistry`) is a follow-up commit's job — that
-/// requires threading the registry through the boot helper, which
-/// in turn requires resolving the existing daemon's
-/// `AbilityDispatcher` ↔ new `axon_serve` boundary. That is a
-/// focused commit's worth of design; this commit ships the
-/// transport plane proof-of-life.
-struct StagingSessionDispatcher;
-
-#[async_trait::async_trait]
-impl SessionFrameDispatcher for StagingSessionDispatcher {
-    async fn handle_down(
-        &self,
-        frame: crate::pb::axon::v1::InvokeBidiDown,
-        outbound: &tokio::sync::mpsc::Sender<crate::pb::axon::v1::InvokeBidiUp>,
-    ) -> Result<(), SessionDispatchError> {
-        use crate::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
-        use crate::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
-        use crate::pb::axon::v1::{BinaryChunk, InvokeBidiUp};
-
-        // Only BinaryChunk frames carry SessionDispatch; ignore
-        // Receipt / Control frames silently.
-        let DownPayload::BinaryChunk(chunk) = frame.payload.ok_or_else(|| {
-            SessionDispatchError::Other("session down frame had no payload".to_string())
-        })?
-        else {
-            return Ok(());
-        };
-
-        let dispatch: SessionDispatch =
-            serde_json::from_slice(&chunk.data).map_err(|err| {
-                SessionDispatchError::Other(format!(
-                    "session down BinaryChunk is not valid SessionDispatch JSON: {err}"
-                ))
-            })?;
-
-        let SessionDispatch::Dispatch {
-            call_id,
-            ability,
-            args: _args,
-        } = dispatch
-        else {
-            // We received a Result frame from the hub side. That
-            // is meaningless — Results flow up the stream, not
-            // down. Log and ignore.
-            return Ok(());
-        };
-
-        eprintln!(
-            "[session-dispatch] received Dispatch call_id={call_id} ability={ability}; \
-             replying with PR-1 staging not-yet-wired error"
-        );
-
-        let result = SessionDispatch::Result {
-            call_id,
-            payload: Vec::new(),
-            terminal: true,
-            error: Some(format!(
-                "<self>.invoke_remote target ability `{ability}` is not yet dispatchable on \
-                 this device; PR-1 staging only proves wire connectivity. Real LocalAbilityRegistry \
-                 dispatch ships in a follow-up commit (PR-2 binary integration step 2)."
-            )),
-        };
-
-        let payload = serde_json::to_vec(&result).map_err(|err| {
-            SessionDispatchError::Other(format!("encode SessionDispatch::Result: {err}"))
-        })?;
-
-        let reply_frame = InvokeBidiUp {
-            sequence: 0,
-            payload: Some(UpPayload::BinaryChunk(BinaryChunk {
-                data: payload,
-                ..BinaryChunk::default()
-            })),
-            ..InvokeBidiUp::default()
-        };
-
-        outbound
-            .send(reply_frame)
-            .await
-            .map_err(|_| SessionDispatchError::Other("outbound channel closed".to_string()))
-    }
 }
 
 fn spawn_uds_listener(
@@ -468,7 +362,10 @@ mod tests {
     fn expand_home_with_tilde_uses_home_env() {
         std::env::set_var("HOME", "/tmp/easynet-test-home");
         let expanded = expand_home("~/.easynet/daemon.sock");
-        assert_eq!(expanded, PathBuf::from("/tmp/easynet-test-home/.easynet/daemon.sock"));
+        assert_eq!(
+            expanded,
+            PathBuf::from("/tmp/easynet-test-home/.easynet/daemon.sock")
+        );
     }
 
     #[test]
@@ -484,8 +381,12 @@ mod tests {
         // for any device that has not yet been migrated to PR-1.
         let temp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", temp.path());
+        let registry = Arc::new(crate::runtime::ability_dispatch::LocalAbilityRegistry::default());
+        let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
+            Arc::new(crate::runtime::gateway::NoopGateway::new());
+        let dispatcher = Arc::new(AbilityDispatcher::new(registry, gateway));
 
         // No panic, no error — soft skip is the contract.
-        start_axon_serve_sidecar().expect("missing config is a soft skip");
+        start_axon_serve_sidecar(dispatcher).expect("missing config is a soft skip");
     }
 }

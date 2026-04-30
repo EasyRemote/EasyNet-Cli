@@ -59,6 +59,7 @@ pub mod boot;
 pub mod daemon_invocation_service;
 pub mod federation_wrappers;
 pub mod invoke_remote_initiator;
+pub mod local_ability_dispatcher;
 pub mod register_device_pubkey;
 pub mod session_initiator;
 
