@@ -99,3 +99,15 @@ pub mod trust_anchor_cell;
 /// INV-5). Persistence is a future RFC concern; v1 is in-memory
 /// FIFO at `DEFAULT_RECEIPT_CAPACITY`.
 pub mod receipt_store;
+
+/// Cross-hub federation transport (RFC-N PR-N1 onwards). The
+/// outbound dial counterpart to PR-10 commit 1/N's inbound
+/// TCP+TLS listener — when a `federation.forward_invoke`
+/// targets a peer realm, this module's `FederationClient` carries
+/// the call across the hub-to-hub TLS channel. PR-N1 commit 1/N
+/// lands the skeleton (trait + types + channel cache);
+/// commits 2-5/N wire real I/O, `handle_forward_invoke`
+/// integration, and the timeout / circuit-breaker / e2e suite
+/// per `pr-drafts/PR-N1-spec-hub-to-hub-grpc-outbound.md`.
+#[cfg(feature = "axon-pb")]
+pub mod federation_client;
