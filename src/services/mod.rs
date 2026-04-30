@@ -58,3 +58,12 @@ pub mod axon_serve;
 /// neither is available off-feature.
 #[cfg(feature = "axon-pb")]
 pub mod presence_registry;
+
+/// On-disk trust set (`/etc/easynet/realm-trust.toml`) the daemon
+/// admission gate consults to answer "is this caller permitted to
+/// join this realm". RFC-003 PR-1 spec §5.2 — PR-1 reads, PR-7
+/// authors via the device-pairing flow. Always built into the
+/// library since the data structure is pure data + std crates;
+/// only consumers in `axon_serve` need the proto plumbing the
+/// `axon-pb` feature gates.
+pub mod realm_trust_anchor;
