@@ -322,6 +322,7 @@ pub struct RevokeResponse {
 /// target session and records whether the target was online at
 /// revoke time so the caller can distinguish a real revoke from a
 /// no-op.
+#[must_use]
 pub fn handle_revoke(request: &RevokeRequest, registry: &PresenceRegistry) -> RevokeResponse {
     let was_active = registry.lookup(&request.target_uri).is_some();
     let _displaced = registry.force_revoke(&request.target_uri);
@@ -347,12 +348,32 @@ pub struct ForwardInvokeRequest {
 }
 
 /// Response payload for `federation.forward_invoke`.
+///
+/// **PR-1 staging shape only.** Spec §4 defines the final wire shape
+/// as a *dispatch result* (the inner invocation's correlated reply,
+/// carrying the target's response bytes plus the call_id used to
+/// correlate). PR-1 ships this `target_online` shape during the
+/// staging window because:
+///
+/// 1. The presence-registry lookup is implementable at PR-1 commit
+///    5/9; the actual frame push down a `<self>.session` reverse
+///    channel needs the broadcast-pump infrastructure that lands in
+///    commit 8/9
+/// 2. PR-4's schema-compat suite is *informational, not gating*
+///    until commit 8/9 (see `checklists/PR-4-checklist.md §6.5`),
+///    so an interim shape does not break the bisect-bisect-merge
+///    plan
+/// 3. Replacing the response shape later is one struct edit + a
+///    test update — `ForwardInvokeResponse` is not on the path of
+///    any consumer outside this commit's tests
+///
+/// Final shape (lands in commit 8/9): `result_bytes: Vec<u8>` +
+/// `correlation_call_id: String` + a `target_offline` error variant
+/// communicated via `Status::failed_precondition`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ForwardInvokeResponse {
-    /// Whether the target had an open `<self>.session` at lookup
-    /// time. The actual frame push and pending-oneshot correlation
-    /// arrive in commit 6/9 when the dispatcher injects the registry
-    /// into the service.
+    /// PR-1 staging field; whether the target had an open
+    /// `<self>.session` at lookup time. Replaced in commit 8/9.
     pub target_online: bool,
 }
 
