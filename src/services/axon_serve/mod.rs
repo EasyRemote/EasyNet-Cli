@@ -54,7 +54,9 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+pub mod admission_facade;
 pub mod daemon_invocation_service;
 pub mod federation_wrappers;
 
+pub use admission_facade::AdmissionFacade;
 pub use daemon_invocation_service::DaemonInvocationService;

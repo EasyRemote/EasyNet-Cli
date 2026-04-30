@@ -67,6 +67,7 @@ use crate::pb::axon::v1::{
     InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeResponse, InvokeServerStreamRequest,
     InvokeStreamChunk,
 };
+use crate::services::axon_serve::admission_facade::AdmissionFacade;
 use crate::services::axon_serve::federation_wrappers::{
     self, ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_FEDERATION_FORWARD_INVOKE,
     ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN, ABILITY_FEDERATION_RESOLVE,
@@ -87,24 +88,33 @@ const FEDERATION_RESULT_CONTENT_TYPE: &str = "application/json";
 ///   wrappers (resolve / forward_invoke / revoke / heartbeat /
 ///   subscribe_directory) and by the future `<self>.session` accept
 ///   path in PR-2
+/// - `admission` — the `AdmissionFacade` consulted at the start of
+///   every RPC method, before any dispatch. Rejects callers whose
+///   URI is not in the realm trust anchor (per spec §5)
 ///
-/// Future-shape (commit 7/9 onward) will add:
-/// `admission: Arc<AdmissionGate>`,
-/// `ability_dispatch: Arc<LocalAbilityRegistry>`. Construction will
-/// switch to `new(presence, admission, ability_dispatch)` then.
+/// Future-shape (commit 8/9 onward) will add:
+/// `ability_dispatch: Arc<LocalAbilityRegistry>` for the unmatched-
+/// ability fallthrough. Construction will switch to
+/// `new(presence, admission, ability_dispatch)` then.
 #[derive(Debug)]
 pub struct DaemonInvocationService {
     presence: Arc<PresenceRegistry>,
+    admission: AdmissionFacade,
 }
 
 impl DaemonInvocationService {
-    /// Construct a service against the supplied presence registry.
-    /// Production callers wire one registry per daemon process and
-    /// share it via `Arc` between the service, the `<self>.session`
-    /// accept loop (PR-2), and any audit-log subscriber.
+    /// Construct a service against the supplied presence registry
+    /// and admission facade. Production callers wire one registry
+    /// per daemon process and share it via `Arc` between the
+    /// service, the `<self>.session` accept loop (PR-2), and any
+    /// audit-log subscriber. The admission facade is constructed
+    /// from `RealmTrustAnchor::load_or_empty(...)` at daemon boot.
     #[must_use]
-    pub fn new(presence: Arc<PresenceRegistry>) -> Self {
-        Self { presence }
+    pub fn new(presence: Arc<PresenceRegistry>, admission: AdmissionFacade) -> Self {
+        Self {
+            presence,
+            admission,
+        }
     }
 }
 
@@ -128,6 +138,7 @@ impl Invocation for DaemonInvocationService {
         request: Request<InvokeRequest>,
     ) -> Result<Response<InvokeResponse>, Status> {
         let inner = request.into_inner();
+        self.admission.verify_invoke(&inner)?;
         let function = inner.function_name.as_str();
 
         match function {
@@ -166,6 +177,7 @@ impl Invocation for DaemonInvocationService {
         request: Request<InvokeServerStreamRequest>,
     ) -> Result<Response<Self::InvokeStreamStream>, Status> {
         let inner = request.into_inner();
+        self.admission.verify_invoke_stream(&inner)?;
         let function = inner.function_name.as_str();
 
         match function {
@@ -312,12 +324,35 @@ fn wrap_json_response<T: serde::Serialize>(
 mod tests {
     use super::*;
 
+    use crate::pb::axon::v1::{AgentIdentity, Envelope};
+    use crate::services::realm_trust_anchor::RealmTrustAnchor;
+
+    /// Test helper daemon URI — admitted by the test admission
+    /// facade via the loopback bypass. Tests that exercise
+    /// admission rejection construct a different facade.
+    const TEST_DAEMON_URI: &str = "easynet:///r/test-realm/agent/test-daemon";
+
     fn make_service() -> DaemonInvocationService {
-        DaemonInvocationService::new(Arc::new(PresenceRegistry::new()))
+        let admission = AdmissionFacade::new(
+            Arc::new(RealmTrustAnchor::default()),
+            Some(TEST_DAEMON_URI.to_string()),
+        );
+        DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
+    }
+
+    fn test_envelope() -> Envelope {
+        Envelope {
+            caller: Some(AgentIdentity {
+                uri: TEST_DAEMON_URI.to_string(),
+                ..AgentIdentity::default()
+            }),
+            ..Envelope::default()
+        }
     }
 
     fn invoke_request(function_name: &str, args_json: &str) -> Request<InvokeRequest> {
         Request::new(InvokeRequest {
+            envelope: Some(test_envelope()),
             function_name: function_name.to_string(),
             arguments: args_json.as_bytes().to_vec(),
             ..InvokeRequest::default()
@@ -469,6 +504,7 @@ mod tests {
         let svc = make_service();
         let resp = svc
             .invoke_stream(Request::new(InvokeServerStreamRequest {
+                envelope: Some(test_envelope()),
                 function_name: ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY.to_string(),
                 ..InvokeServerStreamRequest::default()
             }))
@@ -496,6 +532,7 @@ mod tests {
         let svc = make_service();
         match svc
             .invoke_stream(Request::new(InvokeServerStreamRequest {
+                envelope: Some(test_envelope()),
                 function_name: "custom.stream.ability".to_string(),
                 ..InvokeServerStreamRequest::default()
             }))
@@ -503,9 +540,65 @@ mod tests {
         {
             Err(err) => {
                 assert_eq!(err.code(), tonic::Code::Unimplemented);
-                assert!(err.message().contains("commit 7/9"));
+                // 7/9 wired admission; the LocalAbilityRegistry stream
+                // fall-through is the next staging step.
+                assert!(err.message().contains("commit"));
             }
             Ok(_) => panic!("unknown stream ability must be rejected"),
+        }
+    }
+
+    #[tokio::test]
+    async fn invoke_rejects_caller_not_in_trust_anchor() {
+        // Build a service whose admission facade has no daemon URI
+        // and an empty trust anchor — every external caller is
+        // rejected.
+        let svc = DaemonInvocationService::new(
+            Arc::new(PresenceRegistry::new()),
+            AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None),
+        );
+        match svc
+            .invoke(Request::new(InvokeRequest {
+                envelope: Some(Envelope {
+                    caller: Some(AgentIdentity {
+                        uri: "easynet:///r/realm/agent/external".to_string(),
+                        ..AgentIdentity::default()
+                    }),
+                    ..Envelope::default()
+                }),
+                function_name: ABILITY_FEDERATION_HEARTBEAT.to_string(),
+                arguments: br#"{"agent_uri":"easynet:///r/realm/agent/external"}"#.to_vec(),
+                ..InvokeRequest::default()
+            }))
+            .await
+        {
+            Err(err) => assert_eq!(err.code(), tonic::Code::PermissionDenied),
+            Ok(_) => panic!("caller outside trust anchor must be rejected"),
+        }
+    }
+
+    #[tokio::test]
+    async fn invoke_stream_rejects_caller_not_in_trust_anchor() {
+        let svc = DaemonInvocationService::new(
+            Arc::new(PresenceRegistry::new()),
+            AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None),
+        );
+        match svc
+            .invoke_stream(Request::new(InvokeServerStreamRequest {
+                envelope: Some(Envelope {
+                    caller: Some(AgentIdentity {
+                        uri: "easynet:///r/realm/agent/external".to_string(),
+                        ..AgentIdentity::default()
+                    }),
+                    ..Envelope::default()
+                }),
+                function_name: ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY.to_string(),
+                ..InvokeServerStreamRequest::default()
+            }))
+            .await
+        {
+            Err(err) => assert_eq!(err.code(), tonic::Code::PermissionDenied),
+            Ok(_) => panic!("stream caller outside trust anchor must be rejected"),
         }
     }
 
