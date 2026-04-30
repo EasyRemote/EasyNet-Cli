@@ -76,7 +76,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tokio_stream::wrappers::UnixListenerStream;
-use tonic::transport::Server;
+use tonic::transport::{Identity, Server, ServerTlsConfig};
 
 use crate::pb::axon::v1::invocation_server::InvocationServer;
 use crate::persistence::daemon_config::{DaemonConfig, DaemonMode, DEFAULT_DAEMON_CONFIG_PATH};
@@ -146,16 +146,17 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
             trust_anchor_cell.clone(),
         );
 
-    spawn_uds_listener(&config, service)?;
+    spawn_uds_listener(&config, service.clone())?;
 
-    // Hub-mode TCP+TLS — staged for PR-10 (cert material required).
+    // Hub-mode TCP+TLS — PR-10 commit 1/N: real listener.
+    // `DaemonConfig` already enforces invariant 2 (TCP requires
+    // both cert and key); a missing cert/key file at boot is a
+    // hard error, not a silent skip. Cert/key are loaded once at
+    // boot — rotation requires a daemon restart. PR-10 spec INV-1
+    // is fail-closed for missing material.
     if matches!(config.mode(), DaemonMode::Hub | DaemonMode::Both) {
         if let Some(listen_tcp) = config.listen_tcp() {
-            eprintln!(
-                "[axon-serve] hub-mode TCP+TLS configured at {listen_tcp} but PR-1 ships the \
-                 UDS listener only; TCP+TLS lands alongside PR-10 production canary \
-                 (cert/key paths already validated by daemon_config invariants)"
-            );
+            spawn_tcp_tls_listener(&config, listen_tcp, service)?;
         }
     }
 
@@ -285,6 +286,75 @@ fn spawn_uds_listener(
             .await;
         if let Err(err) = result {
             eprintln!("[axon-serve] gRPC UDS server exited with error: {err:#}");
+        }
+    });
+
+    Ok(())
+}
+
+/// Spawn the hub-mode TCP+TLS gRPC listener (PR-10 commit 1/N).
+/// `DaemonConfig` already enforces invariant 2 ("TCP requires
+/// TLS"), so by the time we land here `tls_cert_pem` and
+/// `tls_key_pem` are both `Some`. We fail boot — not silently
+/// skip — if either file fails to load: PR-10 spec INV-1
+/// (fail-closed) governs.
+///
+/// Cert/key are loaded once at boot. Rotation today requires a
+/// daemon restart; an automated rotation surface (file watcher
+/// + tonic `serve_with_shutdown` swap) is a future concern that
+/// PR-10's runbook §"static cert lifecycle" covers as operator-
+/// owned.
+fn spawn_tcp_tls_listener(
+    config: &DaemonConfig,
+    listen_tcp: std::net::SocketAddr,
+    service: DaemonInvocationService,
+) -> anyhow::Result<()> {
+    let cert_path = config
+        .tls_cert_pem()
+        .ok_or_else(|| anyhow::anyhow!("PR-10 invariant 1: TCP listener requires tls_cert_pem"))?;
+    let key_path = config
+        .tls_key_pem()
+        .ok_or_else(|| anyhow::anyhow!("PR-10 invariant 1: TCP listener requires tls_key_pem"))?;
+
+    let cert_pem = std::fs::read(cert_path).map_err(|err| {
+        anyhow::anyhow!(
+            "axon-serve: failed to read tls_cert_pem at {}: {err}",
+            cert_path.display()
+        )
+    })?;
+    let key_pem = std::fs::read(key_path).map_err(|err| {
+        anyhow::anyhow!(
+            "axon-serve: failed to read tls_key_pem at {}: {err}",
+            key_path.display()
+        )
+    })?;
+
+    let identity = Identity::from_pem(&cert_pem, &key_pem);
+    let tls_config = ServerTlsConfig::new().identity(identity);
+
+    eprintln!(
+        "[axon-serve] gRPC InvocationServer listening on TCP+TLS {} (cert={}, key={})",
+        listen_tcp,
+        cert_path.display(),
+        key_path.display()
+    );
+
+    let mut builder = match Server::builder().tls_config(tls_config) {
+        Ok(b) => b,
+        Err(err) => {
+            return Err(anyhow::anyhow!(
+                "axon-serve: tls_config rejected by tonic: {err}"
+            ));
+        }
+    };
+
+    tokio::spawn(async move {
+        let result = builder
+            .add_service(InvocationServer::new(service))
+            .serve(listen_tcp)
+            .await;
+        if let Err(err) = result {
+            eprintln!("[axon-serve] gRPC TCP+TLS server exited with error: {err:#}");
         }
     });
 

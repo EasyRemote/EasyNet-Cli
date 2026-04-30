@@ -119,7 +119,12 @@ const FEDERATION_RESULT_CONTENT_TYPE: &str = "application/json";
 /// `ability_dispatch: Arc<LocalAbilityRegistry>` for the unmatched-
 /// ability fallthrough. Construction will switch to
 /// `new(presence, admission, ability_dispatch)` then.
-#[derive(Debug)]
+///
+/// `Clone` is derived so PR-10's TCP+TLS listener can register the
+/// same service surface on a second tonic `Server` without holding
+/// the original instance hostage. All fields are `Arc`/`Option<Arc>`/
+/// `Option<String>`; clone is cheap.
+#[derive(Debug, Clone)]
 pub struct DaemonInvocationService {
     presence: Arc<PresenceRegistry>,
     admission: AdmissionFacade,
