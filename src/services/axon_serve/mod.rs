@@ -57,6 +57,11 @@
 pub mod admission_facade;
 pub mod daemon_invocation_service;
 pub mod federation_wrappers;
+pub mod invoke_remote_initiator;
 
 pub use admission_facade::AdmissionFacade;
 pub use daemon_invocation_service::DaemonInvocationService;
+pub use invoke_remote_initiator::{
+    invoke_remote, InvokeRemoteDown, InvokeRemoteFrame, InvokeRemoteUp,
+    ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID,
+};
