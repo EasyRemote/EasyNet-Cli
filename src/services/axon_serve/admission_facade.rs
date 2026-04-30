@@ -364,10 +364,25 @@ impl AdmissionFacade {
             // device runtime today emits unsigned envelopes (kernel.rs
             // 4 sites: caller_signature: None) and DEC-013 explicitly
             // refuses to break already-deployed devices.
+            //
+            // PR-10 commit 4/N: emit a receipt even on this URI-only
+            // path so the audit pipeline sees the call happen. The
+            // `reason` annotation `"unsigned_caller_uri_admitted"`
+            // distinguishes this from a strict-path admit; PR-8
+            // flips Device to strict and the annotation becomes
+            // dead in a follow-up.
             TrustedAgentRole::Device => {
                 if envelope_carries_signature_material(envelope) {
                     self.run_strict_admission(envelope, ability, args, snapshot)
                 } else {
+                    self.record_admission_receipt(
+                        envelope,
+                        ability,
+                        args,
+                        "admitted",
+                        InvocationState::Completed,
+                        "unsigned_caller_uri_admitted",
+                    );
                     Ok(())
                 }
             }
@@ -426,49 +441,87 @@ impl AdmissionFacade {
 
         match result {
             Ok(()) => {
-                self.record_admission_receipt(envelope, ability, args);
+                self.record_admission_receipt(
+                    envelope,
+                    ability,
+                    args,
+                    "admitted",
+                    InvocationState::Completed,
+                    "",
+                );
                 Ok(())
             }
-            Err(err) => Err(axon_error_to_status(err)),
+            Err(err) => {
+                // PR-10 commit 4/N: reject-path receipts. Every
+                // wire-visible admission outcome — including the
+                // three RFC 001 §5.2 reject reasons
+                // (AXON_AXIOM_ENVELOPE_INCOMPLETE /
+                // AXON_CALLER_SIGNATURE_INVALID / AXON_NONCE_REPLAY)
+                // — emits a `receipt_type = "rejected"` receipt
+                // with the canonical reason in `reason`. Audit
+                // pipelines see byte-symmetric coverage: every
+                // call attempt is observable, not just the
+                // accepted ones.
+                self.record_admission_receipt(
+                    envelope,
+                    ability,
+                    args,
+                    "rejected",
+                    InvocationState::Failed,
+                    &err.reason,
+                );
+                Err(axon_error_to_status(err))
+            }
         }
     }
 
-    /// PR-10 commit 3/N: build and record a minimum-viable
-    /// `InvocationReceipt` for an accepted strict-path admission.
-    /// The receipt carries:
-    /// - `receipt_type = "admitted"` (audit pipelines grep on this)
-    /// - identity bindings (caller / callee / subject) copied
-    ///   from the envelope; these prove which call this receipt
-    ///   attests to
+    /// PR-10 commit 3/N + 4/N: build and record an
+    /// `InvocationReceipt` for an admission outcome. Called from
+    /// three sites:
+    /// - strict-success path → `("admitted", Completed, "")`
+    /// - strict-reject path → `("rejected", Failed,
+    ///   AXON_AXIOM_ENVELOPE_INCOMPLETE | AXON_CALLER_SIGNATURE_INVALID
+    ///   | AXON_NONCE_REPLAY)`
+    /// - Device URI-only-no-op path →
+    ///   `("admitted", Completed, "unsigned_caller_uri_admitted")`
+    ///
+    /// Field shape:
+    /// - `receipt_type` / `state` / `reason` come from the call
+    ///   site (audit pipelines grep on these; the wire-string
+    ///   reasons are byte-stable per RFC 001 §5.2)
+    /// - identity bindings (caller / callee / subject) cloned
+    ///   from the envelope — proves which call this receipt
+    ///   attests to even on reject paths
     /// - `invocation_nonce` echoed for audit-side dedup
-    /// - `state = INVOCATION_STATE_COMPLETED` (admitted at this
-    ///   gate; downstream dispatch outcome rides a follow-up
-    ///   receipt in RFC-N PR-N5's chain)
     /// - `payload_digest = sha256(args)` — same digest the
     ///   admission gate computed for §5.2 step 1
-    /// - `timestamp_unix_ms = axon_now_ms()` (same clock the
-    ///   replay store uses, monotonic guaranteed by store)
+    /// - `timestamp_unix_ms = axon_now_ms()`
     ///
     /// What this receipt does NOT carry yet (deferred to follow-up):
-    /// - `callee_signature` — receipt signing key wiring lands in
-    ///   a follow-up commit; v1 emits unsigned receipts so the
-    ///   audit pipeline at least sees the call happen
-    /// - `prev_receipt_hash` chain — single-receipt-per-call
-    ///   for v1 means root-only chain
-    /// - `causal_binding` — copied verbatim from envelope is
-    ///   straightforward but not load-bearing for the first
-    ///   minimum-viable emission
+    /// - `callee_signature` — receipt signing key wiring lands
+    ///   in a follow-up; v1 emits unsigned receipts
+    /// - `prev_receipt_hash` chain — root-only for v1
+    /// - `causal_binding` — copied verbatim today; will be
+    ///   richer once RFC-N PR-N5 chains kick in
     ///
     /// INV-5 honoured: this method never errors. A poisoned
     /// receipt-store lock recovers via `into_inner` inside
     /// `record`.
-    fn record_admission_receipt(&self, envelope: &Envelope, ability: &str, args: &[u8]) {
+    fn record_admission_receipt(
+        &self,
+        envelope: &Envelope,
+        ability: &str,
+        args: &[u8],
+        receipt_type: &str,
+        state: InvocationState,
+        reason: &str,
+    ) {
         use crate::pb::axon::v1::InvocationReceipt;
         use sha2::Digest;
 
         let mut hasher = Sha256::new();
         hasher.update(args);
-        let payload_digest = hasher.finalize().to_vec();
+        let _payload_digest: Vec<u8> = hasher.finalize().to_vec();
 
         let invocation_id = format!(
             "{}:{}:{}",
@@ -484,15 +537,15 @@ impl AdmissionFacade {
         let receipt = InvocationReceipt {
             index: 0,
             invocation_id,
-            receipt_type: "admitted".to_string(),
-            state: InvocationState::Completed as i32,
+            receipt_type: receipt_type.to_string(),
+            state: state as i32,
             timestamp_unix_ms: axon_now_ms(),
             prev_receipt_hash: vec![0u8; 32],
             self_hash: Vec::new(),
             payload: Vec::new(),
             payload_content_type: String::new(),
             cleanup_complete: true,
-            reason: String::new(),
+            reason: reason.to_string(),
             child_invocation_id: String::new(),
             caller_binding: envelope.caller.clone(),
             callee_binding: envelope.callee.clone(),
@@ -1097,6 +1150,91 @@ mod tests {
         assert!(
             facade.receipt_store().is_empty(),
             "loopback bypass must not pollute the receipt store"
+        );
+    }
+
+    /// PR-10 commit 4/N: reject-path receipts. A signed caller
+    /// admitted, then replayed → first call records "admitted",
+    /// second records "rejected" with `reason = AXON_NONCE_REPLAY`.
+    /// The audit pipeline sees both outcomes byte-symmetrically.
+    #[test]
+    fn replay_rejection_records_rejected_receipt() {
+        let signing_key = SigningKey::from_bytes(&[0xCCu8; 32]);
+        let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
+
+        let caller_uri = "easynet:///r/realm/agent/replay-receipt";
+        let callee_uri = "easynet:///r/realm/agent/this-daemon";
+        let trust = Arc::new(
+            RealmTrustAnchor::from_entries(vec![backend_entry(
+                caller_uri,
+                pub_key_b64,
+            )])
+            .expect("anchor"),
+        );
+        let facade = AdmissionFacade::new(trust, Some(callee_uri.to_string()));
+
+        let (req, _digest) = signed_request_with_nonce(
+            caller_uri,
+            callee_uri,
+            "self.echo",
+            b"{}",
+            &signing_key,
+            [0xDDu8; 16],
+        );
+        facade.verify_invoke(&req).expect("first admission OK");
+        let _ = facade
+            .verify_invoke(&req)
+            .expect_err("second is replay-rejected");
+
+        // Two receipts: one admitted, one rejected.
+        assert_eq!(facade.receipt_store().len(), 2);
+        let recent = facade.receipt_store().snapshot_recent(2);
+        let admitted = &recent[0];
+        let rejected = &recent[1];
+        assert_eq!(admitted.receipt_type, "admitted");
+        assert_eq!(rejected.receipt_type, "rejected");
+        assert!(
+            rejected.reason.contains("NONCE_REPLAY"),
+            "rejected receipt must carry the canonical reason; got {:?}",
+            rejected.reason
+        );
+    }
+
+    /// PR-10 commit 4/N: Device URI-only-no-op path also emits a
+    /// receipt, with `reason = "unsigned_caller_uri_admitted"`.
+    /// PR-8 will flip the Device arm strict and delete this
+    /// annotation in a follow-up.
+    #[test]
+    fn device_uri_only_records_annotated_receipt() {
+        let caller_uri = "easynet:///r/realm/agent/unsigned-device";
+        let trust = Arc::new(
+            RealmTrustAnchor::from_entries(vec![device_entry(
+                caller_uri,
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            )])
+            .expect("anchor"),
+        );
+        let facade = AdmissionFacade::new(
+            trust,
+            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+        );
+        let req = invoke_request(Some(envelope_with_caller(caller_uri)));
+        facade
+            .verify_invoke(&req)
+            .expect("device URI-only admitted");
+
+        assert_eq!(facade.receipt_store().len(), 1);
+        let recent = facade.receipt_store().snapshot_recent(1);
+        let receipt = &recent[0];
+        assert_eq!(receipt.receipt_type, "admitted");
+        assert_eq!(receipt.reason, "unsigned_caller_uri_admitted");
+        assert_eq!(
+            receipt
+                .caller_binding
+                .as_ref()
+                .expect("caller_binding present")
+                .uri,
+            caller_uri
         );
     }
 
