@@ -132,6 +132,7 @@ use crate::pb::axon::v1::{
 };
 use crate::services::nonce_replay_store::SharedNonceReplayStore;
 use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgentRole};
+use crate::services::trust_anchor_cell::SharedTrustAnchor;
 
 /// Per-RPC admission gate consulted by `DaemonInvocationService`
 /// before routing into a federation wrapper or fallthrough handler.
@@ -148,7 +149,7 @@ use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgentRole};
 /// `Option<String>`).
 #[derive(Debug, Clone)]
 pub struct AdmissionFacade {
-    trust_anchor: Arc<RealmTrustAnchor>,
+    trust_anchor: SharedTrustAnchor,
     daemon_uri: Option<String>,
     replay_store: SharedNonceReplayStore,
 }
@@ -159,12 +160,33 @@ impl AdmissionFacade {
     /// `credentials.json`-derived URI through; tests typically pass
     /// `None`.
     ///
+    /// The trust anchor is wrapped in a fresh `SharedTrustAnchor`
+    /// cell — every `verify_*` call snapshots the current anchor,
+    /// so a future writer (`<self>.register_device_pubkey`,
+    /// PR-7 commit 5/N) that holds a clone of the cell can publish
+    /// updates without restarting the facade. Callers that already
+    /// hold a `SharedTrustAnchor` and need to share it with the
+    /// register handler should use `with_trust_anchor_cell` instead.
+    ///
     /// The replay store is created fresh per facade — production
     /// builds one facade per daemon process, so this is also one
     /// store per daemon process (RFC 001 §5.2 step 4 invariant: one
     /// shared dedup window across the daemon's lifetime).
     #[must_use]
     pub fn new(trust_anchor: Arc<RealmTrustAnchor>, daemon_uri: Option<String>) -> Self {
+        Self::with_trust_anchor_cell(SharedTrustAnchor::new(trust_anchor), daemon_uri)
+    }
+
+    /// Construct a facade against a shared trust-anchor cell. Used
+    /// by `start_axon_serve_sidecar` so the same cell is shared
+    /// with the `<self>.register_device_pubkey` handler — a
+    /// successful register publishes the new anchor and the next
+    /// admission snapshot reflects it without daemon restart.
+    #[must_use]
+    pub fn with_trust_anchor_cell(
+        trust_anchor: SharedTrustAnchor,
+        daemon_uri: Option<String>,
+    ) -> Self {
         Self {
             trust_anchor,
             daemon_uri,
@@ -184,7 +206,7 @@ impl AdmissionFacade {
         replay_store: SharedNonceReplayStore,
     ) -> Self {
         Self {
-            trust_anchor,
+            trust_anchor: SharedTrustAnchor::new(trust_anchor),
             daemon_uri,
             replay_store,
         }
@@ -251,7 +273,8 @@ impl AdmissionFacade {
         if self.is_loopback(caller_uri) {
             return Ok(());
         }
-        if self.trust_anchor.lookup(caller_uri).is_some() {
+        let snapshot = self.trust_anchor.snapshot();
+        if snapshot.lookup(caller_uri).is_some() {
             return Ok(());
         }
         Err(permission_denied_unknown_caller(caller_uri))
@@ -290,14 +313,21 @@ impl AdmissionFacade {
             return Ok(());
         }
 
+        // Snapshot the trust anchor once per RPC. The snapshot is a
+        // cheap `Arc` clone; concurrent writers to the cell don't
+        // disturb the view we hold for the lookup + downstream
+        // resolver use. This is the structural reason the cell
+        // exists: a register-pubkey call mid-RPC can't make the
+        // current admission see a half-applied state.
+        let snapshot = self.trust_anchor.snapshot();
+
         // Trust-anchor membership precedes any structural check.
         // Unknown callers reject with `permission_denied` — the
         // DEC-013 entry contract says "URI-not-in-trust-set" surfaces
         // before any attempt at envelope/signature parsing, so an
         // unrelated caller cannot waste structure-validation cycles
         // and never has its (possibly malformed) nonce considered.
-        let trusted = self
-            .trust_anchor
+        let trusted = snapshot
             .lookup(caller_uri)
             .ok_or_else(|| permission_denied_unknown_caller(caller_uri))?;
 
@@ -311,23 +341,28 @@ impl AdmissionFacade {
 
             // Backend & Hub: strict 4-step admission. Backends sign
             // canonical bytes per PR-7 commit 2/N; hubs sign per
-            // PR-10's federation surface.
+            // PR-10's federation surface. The strict path resolves
+            // the caller's public key against the same snapshot we
+            // just consulted for membership — keeps "membership
+            // hit" and "key resolved" referring to the same anchor
+            // version.
             TrustedAgentRole::Backend | TrustedAgentRole::Hub => {
-                self.run_strict_admission(envelope, ability, args)
+                self.run_strict_admission(envelope, ability, args, snapshot)
             }
         }
     }
 
     /// Strict §5.2 admission for the Backend / Hub arms of DEC-013.
     /// Bridges proto → axiom domain types and dispatches into
-    /// `easynet_axon::invocation::admission::run_admission` with the
-    /// trust-anchor-backed `KeyResolver` and the daemon-shared replay
+    /// `easynet_axon::invocation::admission::run_admission` with a
+    /// snapshot-backed `KeyResolver` and the daemon-shared replay
     /// store.
     fn run_strict_admission(
         &self,
         envelope: &Envelope,
         ability: &str,
         args: &[u8],
+        trust_anchor: Arc<RealmTrustAnchor>,
     ) -> Result<(), Status> {
         if ability.is_empty() {
             return Err(Status::invalid_argument(
@@ -341,7 +376,7 @@ impl AdmissionFacade {
             .map_err(axon_error_to_status)?;
 
         let resolver: Box<dyn KeyResolver> = Box::new(TrustAnchorKeyResolver {
-            trust_anchor: Arc::clone(&self.trust_anchor),
+            trust_anchor,
         });
 
         let result = self.replay_store.with_inner(|store| {

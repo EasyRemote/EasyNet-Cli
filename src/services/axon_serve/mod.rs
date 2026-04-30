@@ -59,6 +59,7 @@ pub mod boot;
 pub mod daemon_invocation_service;
 pub mod federation_wrappers;
 pub mod invoke_remote_initiator;
+pub mod register_device_pubkey;
 pub mod session_initiator;
 
 pub use admission_facade::AdmissionFacade;
@@ -68,3 +69,4 @@ pub use invoke_remote_initiator::{
     invoke_remote, InvokeRemoteDown, InvokeRemoteFrame, InvokeRemoteUp, SessionDispatch,
     ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID,
 };
+pub use register_device_pubkey::ABILITY_SELF_REGISTER_DEVICE_PUBKEY;

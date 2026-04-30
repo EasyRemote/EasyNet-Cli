@@ -82,3 +82,11 @@ pub mod pending_dispatch;
 /// the admission upgrade. DEC-011 confirms RFC-003 ships in-memory
 /// only; persistence is a Week-5+ topic.
 pub mod nonce_replay_store;
+
+/// Reload-friendly wrapper around the daemon's `RealmTrustAnchor`.
+/// `<self>.register_device_pubkey` (PR-7 commit 5/N) appends an
+/// entry, persists via atomic rename, then `replace`s the cell so
+/// the admission gate's next read reflects the new entry. Built
+/// once at boot and shared by clone between the admission facade
+/// and the register-pubkey handler. DEC-010 mechanism layer.
+pub mod trust_anchor_cell;

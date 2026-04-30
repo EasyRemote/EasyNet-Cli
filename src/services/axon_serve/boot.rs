@@ -86,6 +86,7 @@ use crate::services::axon_serve::session_initiator::{
 use crate::services::pending_dispatch::PendingDispatchMap;
 use crate::services::presence_registry::PresenceRegistry;
 use crate::services::realm_trust_anchor::{RealmTrustAnchor, DEFAULT_REALM_TRUST_PATH};
+use crate::services::trust_anchor_cell::SharedTrustAnchor;
 
 /// Bring the RFC-003 transport plane online as a sidecar to the
 /// existing easynet-daemon process.
@@ -111,11 +112,27 @@ pub fn start_axon_serve_sidecar() -> anyhow::Result<()> {
 
     let daemon_uri = load_daemon_uri();
     let trust_anchor = load_trust_anchor();
+    // PR-7 commit 5/N: wrap the boot-time anchor in a reload-friendly
+    // cell. The same cell is handed to the admission facade *and* to
+    // `<self>.register_device_pubkey`'s handler context — a successful
+    // register call atomically writes the file and republishes the
+    // cell so the next admission sees the new entry without a daemon
+    // restart.
+    let trust_anchor_cell = SharedTrustAnchor::new(Arc::new(trust_anchor));
+    let trust_anchor_path = expand_home(DEFAULT_REALM_TRUST_PATH);
     let presence = Arc::new(PresenceRegistry::new());
     let pending = Arc::new(PendingDispatchMap::new());
-    let admission = AdmissionFacade::new(Arc::new(trust_anchor), daemon_uri.clone());
+    let admission = AdmissionFacade::with_trust_anchor_cell(
+        trust_anchor_cell.clone(),
+        daemon_uri.clone(),
+    );
     let service = DaemonInvocationService::new(Arc::clone(&presence), admission)
-        .with_pending(Arc::clone(&pending));
+        .with_pending(Arc::clone(&pending))
+        .with_register_pubkey(
+            config.realm().to_string(),
+            trust_anchor_path,
+            trust_anchor_cell,
+        );
 
     spawn_uds_listener(&config, service)?;
 

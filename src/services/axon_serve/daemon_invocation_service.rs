@@ -56,6 +56,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -89,7 +90,11 @@ use crate::services::axon_serve::invoke_remote_initiator::{
 use crate::services::axon_serve::session_initiator::{
     ABILITY_SELF_SESSION, SESSION_STREAM_ID,
 };
+use crate::services::axon_serve::register_device_pubkey::{
+    handle as handle_register_device_pubkey, ABILITY_SELF_REGISTER_DEVICE_PUBKEY,
+};
 use crate::services::pending_dispatch::{DispatchResult, PendingDispatchMap};
+use crate::services::trust_anchor_cell::SharedTrustAnchor;
 use crate::services::presence_registry::{
     DispatchFrame, DispatchSender, OfflineReason, PresenceRegistry, DISPATCH_CHANNEL_CAPACITY,
 };
@@ -128,6 +133,23 @@ pub struct DaemonInvocationService {
     /// shape; production daemons attach one at boot once PR-2
     /// `<self>.session` accept handler also consumes it.
     pending: Option<Arc<PendingDispatchMap>>,
+    /// `<self>.register_device_pubkey` handler context (PR-7
+    /// commit 5/N). `None` until `with_register_pubkey(...)` wires
+    /// it; absence means the ability returns
+    /// `Status::failed_precondition` (the daemon was booted without
+    /// the trust-write surface — typically a smoke-test setup).
+    /// Production daemons always attach one at boot from
+    /// `start_axon_serve_sidecar`.
+    register_pubkey: Option<RegisterPubkeyContext>,
+}
+
+/// Tuple wired by `with_register_pubkey(...)`. Cloning is cheap
+/// (the cell is `Arc`-shaped, the strings are short).
+#[derive(Debug, Clone)]
+struct RegisterPubkeyContext {
+    daemon_realm: String,
+    trust_anchor_path: PathBuf,
+    cell: SharedTrustAnchor,
 }
 
 impl DaemonInvocationService {
@@ -148,6 +170,7 @@ impl DaemonInvocationService {
             presence,
             admission,
             pending: None,
+            register_pubkey: None,
         }
     }
 
@@ -163,6 +186,26 @@ impl DaemonInvocationService {
     #[must_use]
     pub fn with_pending(mut self, pending: Arc<PendingDispatchMap>) -> Self {
         self.pending = Some(pending);
+        self
+    }
+
+    /// Attach the `<self>.register_device_pubkey` handler context
+    /// (PR-7 commit 5/N). The same `SharedTrustAnchor` cell is
+    /// also threaded into the `AdmissionFacade` so a successful
+    /// register-pubkey publish is visible to the next admission
+    /// without restarting the daemon.
+    #[must_use]
+    pub fn with_register_pubkey(
+        mut self,
+        daemon_realm: impl Into<String>,
+        trust_anchor_path: impl Into<PathBuf>,
+        cell: SharedTrustAnchor,
+    ) -> Self {
+        self.register_pubkey = Some(RegisterPubkeyContext {
+            daemon_realm: daemon_realm.into(),
+            trust_anchor_path: trust_anchor_path.into(),
+            cell,
+        });
         self
     }
 }
@@ -205,6 +248,9 @@ impl Invocation for DaemonInvocationService {
                 "federation.subscribe_directory is a server-stream ability and must be invoked \
                  via InvokeStream, not Invoke",
             )),
+            ABILITY_SELF_REGISTER_DEVICE_PUBKEY => {
+                self.dispatch_register_device_pubkey(&inner.arguments)
+            }
             other => Err(Status::unimplemented(format!(
                 "easynet-daemon: ability `{other}` is not handled by the federation wrappers; \
                  LocalAbilityRegistry fallback wires in RFC-003 PR-1 commit 7/9 \
@@ -353,6 +399,30 @@ impl DaemonInvocationService {
         let request: federation_wrappers::HeartbeatRequest = parse_json_args(arguments)?;
         let response = federation_wrappers::handle_heartbeat(&request, &self.presence);
         wrap_json_response(&response)
+    }
+
+    fn dispatch_register_device_pubkey(
+        &self,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let ctx = self.register_pubkey.as_ref().ok_or_else(|| {
+            Status::failed_precondition(
+                "<self>.register_device_pubkey: this daemon was booted without the trust-write \
+                 surface (use `with_register_pubkey(...)` at boot to enable). PR-7 production \
+                 daemons always wire this; an unwired daemon is a smoke-test or fixture build.",
+            )
+        })?;
+        let body = handle_register_device_pubkey(
+            arguments,
+            &ctx.daemon_realm,
+            &ctx.trust_anchor_path,
+            &ctx.cell,
+        )?;
+        Ok(Response::new(InvokeResponse {
+            result: body,
+            result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            ..InvokeResponse::default()
+        }))
     }
 
     fn dispatch_federation_resolve(
