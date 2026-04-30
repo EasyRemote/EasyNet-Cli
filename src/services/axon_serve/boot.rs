@@ -146,31 +146,47 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
             trust_anchor_cell.clone(),
         );
 
-    // PR-N1 commit 6/N (boot wiring follow-up): hub-mode daemons
-    // construct a `CrossHubDialer` and thread it as the daemon's
-    // `FederationClient`, plus the operator-curated `tenant →
-    // hub_uri` map from `DaemonConfig::federated_peers`. Together
-    // these enable cross-tenant `federation.forward_invoke` to
-    // route over the real cross-hub gRPC + TLS channel landed by
-    // PR-N1 commits 1-5/N. Device-mode daemons never originate
-    // federation calls (they dial a hub instead), so the dialer is
-    // wired only for `Hub` and `Both` modes.
+    // PR-N1 commit 6/N (boot wiring) + commit 9/N (SIGHUP-aware
+    // cell): hub-mode daemons construct a `CrossHubDialer` and
+    // thread it as the daemon's `FederationClient`, plus the
+    // operator-curated `tenant → hub_uri` map from
+    // `DaemonConfig::federated_peers`. Together these enable
+    // cross-tenant `federation.forward_invoke` to route over the
+    // real cross-hub gRPC + TLS channel landed by PR-N1 commits
+    // 1-5/N. Device-mode daemons never originate federation
+    // calls (they dial a hub instead), so the dialer is wired
+    // only for `Hub` and `Both` modes.
     //
-    // Boot-time snapshot: `CrossHubDialer::new` takes the trust
-    // anchor by `Arc<RealmTrustAnchor>` rather than the cell, so
-    // SIGHUP-triggered reloads do NOT republish into the dialer's
-    // peer-trust gate. Operators editing the federation peer set
+    // **PR-N1 commit 9/N change**: the dialer now holds the
+    // `SharedTrustAnchor` cell (live ref) instead of a boot-time
+    // snapshot, so SIGHUP-triggered `realm-trust.toml` reloads
+    // are visible to the next federation dispatch without a
+    // daemon restart. Operators editing the federation peer set
     // (adding `[[trusted_agent]] role = "hub"` entries with the
     // schema-B `origin_tenant_id` / `hub_uri` / `tls_ca_pem_path`
-    // fields) must restart the daemon for the dialer to pick up
-    // the new entries. A future commit may move the dialer to a
-    // cell-aware lookup; PR-N1 ships the simpler boot-snapshot
-    // shape so the federation transport plane lands behind a
-    // narrow, well-understood operator workflow first.
+    // fields) just `kill -HUP <daemon_pid>`; the next call sees
+    // the new entries within ~50ms (per PR-7 trust-anchor
+    // SIGHUP reload baseline + perf-notes/PR-N1-commit-6-perf
+    // -cross-pass-by-xiaowen.md). 晓雯 letter 67 attack round 4
+    // catch closed by 凉冰 LB-37 ship-now ratify.
+    //
+    // What this commit does NOT (yet) hot-reload:
+    // - `DaemonConfig::federated_peers` map. PR-N1 commit 6/N
+    //   already snapshots this at boot; commit 9/N keeps the
+    //   snapshot because there is no `DaemonConfigCell` cell
+    //   today (LB-37 §2.3 fallback Scope A). A follow-up commit
+    //   may mirror the `SharedTrustAnchor` pattern for
+    //   daemon-config; until then, operators editing
+    //   `[daemon.federated_peers]` still need a daemon restart.
+    //   The trust-anchor side is the more common edit (peer
+    //   add/remove); the federated_peers map is comparatively
+    //   stable once initially set.
     if matches!(config.mode(), DaemonMode::Hub | DaemonMode::Both) {
-        let dialer = Arc::new(crate::services::federation_client::CrossHubDialer::new(
-            trust_anchor_cell.snapshot(),
-        ));
+        let dialer = Arc::new(
+            crate::services::federation_client::CrossHubDialer::with_trust_anchor_cell(
+                trust_anchor_cell.clone(),
+            ),
+        );
         service = service
             .with_federation_client(
                 dialer

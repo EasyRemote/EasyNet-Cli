@@ -58,6 +58,53 @@ use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 use crate::pb::axon::v1::invocation_client::InvocationClient;
 use crate::pb::axon::v1::{InvokeRequest, InvokeResponse};
 use crate::services::realm_trust_anchor::RealmTrustAnchor;
+use crate::services::trust_anchor_cell::SharedTrustAnchor;
+
+/// PR-N1 commit 9/N: how the dialer reads the trust anchor on
+/// every dial. Two flavours:
+///
+/// - `Snapshot(Arc<RealmTrustAnchor>)` — the legacy boot-time
+///   snapshot wired by commits 2/N–6/N. SIGHUP-triggered
+///   reloads to `realm-trust.toml` do NOT propagate; operators
+///   must restart the daemon for the dialer to pick up new
+///   federation peer entries. Tests under `cross_hub_dial::tests`
+///   construct the dialer with this flavour.
+///
+/// - `Live(SharedTrustAnchor)` — the SIGHUP-aware cell PR-7's
+///   `register_device_pubkey` already wires for the admission
+///   facade. `lookup_peer_hub` snapshots the cell on every dial,
+///   so a cell `replace` (driven by SIGHUP reload or pairing
+///   flow) is visible to the next federation dispatch within
+///   the cell's per-RPC snapshot cost (~50ms per
+///   `perf-notes/PR-N1-commit-6-perf-cross-pass-by-xiaowen.md`).
+///   Production `start_axon_serve_sidecar` wires this flavour.
+///
+/// 晓雯 letter 67 attack round 4 catch: the boot-time snapshot
+/// pinned the daemon's federation-peer view at boot, blocking
+/// CTO's iterate-config-without-restart cadence. 凉冰 LB-37
+/// ratify ship-now of this enum so the same `Arc<dyn
+/// FederationClient>` surface stays — only the read-source
+/// changes.
+#[derive(Clone)]
+enum TrustSource {
+    Snapshot(Arc<RealmTrustAnchor>),
+    Live(SharedTrustAnchor),
+}
+
+impl TrustSource {
+    /// Take a stable view of the trust anchor for one dial. For
+    /// the snapshot flavour this is a `Arc::clone` (cheap); for
+    /// the live flavour this acquires the cell's `RwLock::read()`,
+    /// clones the inner `Arc`, and releases the lock before the
+    /// caller's lookup runs (mirrors the admission gate's
+    /// per-call pattern).
+    fn snapshot(&self) -> Arc<RealmTrustAnchor> {
+        match self {
+            TrustSource::Snapshot(anchor) => Arc::clone(anchor),
+            TrustSource::Live(cell) => cell.snapshot(),
+        }
+    }
+}
 
 /// Default per-call timeout for `forward_invoke`. Spec §commit 4/N:
 /// 30s. The end-to-end caller (the hub-side admission gate) has its
@@ -189,11 +236,14 @@ pub trait FederationClient: Send + Sync {
 }
 
 /// tonic-backed concrete implementation. Holds:
-/// - `trust_anchor` — read-only handle to the daemon's
-///   `RealmTrustAnchor`. The peer trust gate (`lookup_peer_hub`)
-///   reads this on every dial; the field is wrapped in `Arc` so
-///   admission-side reloads via the trust-anchor cell continue to
-///   reach the dialer through the cell's `Arc::make_mut` rotate.
+/// - `trust_source` — how the peer trust gate reads the
+///   `RealmTrustAnchor`. PR-N1 commit 9/N: either a boot-time
+///   snapshot (legacy / test fixtures) or a live `SharedTrustAnchor`
+///   cell (production), via the `TrustSource` enum above. The
+///   peer trust gate (`lookup_peer_hub`) calls
+///   `trust_source.snapshot()` on every dial so a SIGHUP-driven
+///   reload of `realm-trust.toml` is visible to the next
+///   federation dispatch without requiring a daemon restart.
 /// - `channels` — `Arc<DashMap<HubUri, Channel>>` peer-channel
 ///   cache (PR-N1 spec INV-5). Lock-free — the hot path reads the
 ///   map on every cross-hub call so `RwLock<HashMap>` would be a
@@ -204,7 +254,7 @@ pub trait FederationClient: Send + Sync {
 /// cheaply into per-RPC dispatch tasks.
 #[derive(Clone)]
 pub struct CrossHubDialer {
-    trust_anchor: Arc<RealmTrustAnchor>,
+    trust_source: TrustSource,
     channels: Arc<DashMap<HubUri, Channel>>,
     /// **PR-N1 commit 4/N**. Per-peer breaker state. Lock-free
     /// `DashMap` matches the channel cache shape so admission +
@@ -240,18 +290,43 @@ impl std::fmt::Debug for CrossHubDialer {
 }
 
 impl CrossHubDialer {
-    /// Construct a fresh dialer. The dialer holds the trust anchor
-    /// by `Arc` so the cell-based reload path (PR-7
-    /// `register_device_pubkey` + the federation-side equivalent
-    /// when it lands) does not require reconstructing the dialer.
+    /// Construct a dialer holding a boot-time `Arc<RealmTrustAnchor>`
+    /// snapshot. SIGHUP-triggered trust-anchor reloads do NOT
+    /// propagate; this constructor is the legacy / test-fixture
+    /// flavour. Production daemons use [`with_trust_anchor_cell`]
+    /// (PR-N1 commit 9/N) instead so the hot-reload cadence
+    /// 晓雯 letter 67 attack round 4 raised actually works.
+    ///
     /// PR-N1 commit 4/N adds breaker + timeout fields; their
     /// defaults match the PR-N1 spec (`30s` per-call timeout, `3`
     /// consecutive failures opens the breaker, `60s` open window).
     /// Tests override via the `with_*` builders below.
     #[must_use]
     pub fn new(trust_anchor: Arc<RealmTrustAnchor>) -> Self {
+        Self::from_trust_source(TrustSource::Snapshot(trust_anchor))
+    }
+
+    /// **PR-N1 commit 9/N**. Construct a dialer whose peer trust
+    /// gate snapshots the supplied `SharedTrustAnchor` cell on
+    /// every dial. SIGHUP-driven `realm-trust.toml` reloads are
+    /// visible to the next federation dispatch without
+    /// reconstructing the dialer or restarting the daemon.
+    ///
+    /// `services/axon_serve/boot.rs::start_axon_serve_sidecar`
+    /// uses this constructor in `Hub` / `Both` modes so operators
+    /// editing the federation peer set (adding `[[trusted_agent]]
+    /// role = "hub"` blocks with the schema-B `origin_tenant_id` /
+    /// `hub_uri` / `tls_ca_pem_path` fields) only need
+    /// `kill -HUP <daemon_pid>` — no restart, no in-flight
+    /// invoke loss.
+    #[must_use]
+    pub fn with_trust_anchor_cell(cell: SharedTrustAnchor) -> Self {
+        Self::from_trust_source(TrustSource::Live(cell))
+    }
+
+    fn from_trust_source(trust_source: TrustSource) -> Self {
         Self {
-            trust_anchor,
+            trust_source,
             channels: Arc::new(DashMap::new()),
             breaker_state: Arc::new(DashMap::new()),
             forward_invoke_timeout: DEFAULT_FORWARD_INVOKE_TIMEOUT,
@@ -457,8 +532,17 @@ impl FederationClient for CrossHubDialer {
         // is `PeerNotTrusted`. We additionally require
         // `tls_ca_pem_path.is_some()` since DEC-N1 forbids the
         // dialer from falling back to system CAs.
-        let entry = self
-            .trust_anchor
+        //
+        // PR-N1 commit 9/N: snapshot the trust source per-dial
+        // so a SIGHUP-driven `realm-trust.toml` reload (PR-7
+        // mechanism) is visible to the next dispatch without a
+        // daemon restart. The snapshot is one `Arc::clone`
+        // (legacy `Snapshot` source) or one `RwLock::read()` +
+        // `Arc::clone` (production `Live` source) — both cheap
+        // enough that hot-path latency stays inside the budget
+        // 晓雯 LB-31 §3.3 ratified.
+        let trust_snapshot = self.trust_source.snapshot();
+        let entry = trust_snapshot
             .lookup_peer_hub(target_hub)
             .ok_or_else(|| FederationClientError::PeerNotTrusted(target_hub.clone()))?;
         let ca_path = entry
@@ -922,6 +1006,121 @@ mod tests {
             }
             other => panic!("unexpected error variant: {other:?}"),
         }
+    }
+
+    // ── PR-N1 commit 9/N: SIGHUP-aware live trust anchor ──
+
+    #[tokio::test]
+    async fn live_trust_anchor_cell_picks_up_replace_without_dialer_rebuild() {
+        // 晓雯 letter 67 attack round 4 catch: commit 6/N's
+        // boot-time `Arc<RealmTrustAnchor>` snapshot froze the
+        // dialer's federation-peer view at boot, so SIGHUP-driven
+        // realm-trust.toml reloads required a daemon restart for
+        // the dialer to see them. Commit 9/N's
+        // `with_trust_anchor_cell` constructor wires the live
+        // `SharedTrustAnchor` cell so a `cell.replace(...)` is
+        // visible to the next `forward_invoke` dial.
+        //
+        // This test drives the assertion at the trust-gate layer
+        // (no real network) — the dialer rejects the target with
+        // `PeerNotTrusted` initially, then we publish a federation
+        // peer entry into the cell, and the next call accepts the
+        // peer (proceeds past the trust gate to the channel-build
+        // step, where it fails for an unrelated reason since the
+        // CA path is a non-existent file). The `PeerNotTrusted`
+        // → `DialFailed` transition is the bit that proves the
+        // live cell update reached the gate.
+
+        let target = "https://peer-hub.example:50443".to_string();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, SELF_SIGNED_CA_PEM).expect("seed ca");
+
+        // Cell starts empty (no federation peer entries).
+        let cell = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
+        let dialer = CrossHubDialer::with_trust_anchor_cell(cell.clone())
+            .with_forward_invoke_timeout(Duration::from_millis(50));
+
+        // First dial: empty cell → PeerNotTrusted.
+        let err = dialer
+            .forward_invoke(&target, sample_request("test.echo"))
+            .await
+            .expect_err("empty cell must reject");
+        assert!(
+            matches!(err, FederationClientError::PeerNotTrusted(_)),
+            "empty cell must surface PeerNotTrusted; got: {err:?}"
+        );
+
+        // Operator edits realm-trust.toml + SIGHUP. Production
+        // pathway calls `cell.replace(new_anchor)`; we simulate
+        // that here with a fresh anchor that includes the peer.
+        let new_anchor = anchor_with(fed_peer_entry(&target, ca_path));
+        cell.replace(new_anchor);
+
+        // Next dial: live cell snapshot picks up the new entry.
+        // The trust gate now passes; the call fails at the
+        // network layer (black-hole port) — but **not** with
+        // PeerNotTrusted, which is the contract this test is
+        // pinning.
+        let err2 = dialer
+            .forward_invoke(&target, sample_request("test.echo"))
+            .await
+            .expect_err("network-layer failure expected");
+        match err2 {
+            FederationClientError::PeerNotTrusted(_) => {
+                panic!(
+                    "live cell update must reach the trust gate; \
+                     PeerNotTrusted means the dialer did NOT see the cell.replace"
+                )
+            }
+            FederationClientError::DialFailed { .. }
+            | FederationClientError::ChannelTimeout(_)
+            | FederationClientError::InnerInvokeFailed { .. } => {
+                // Expected — gate passed, network layer refused.
+            }
+            FederationClientError::CircuitOpen(_) => {
+                panic!("breaker should not be open on the second dial")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn boot_time_snapshot_does_not_pick_up_anchor_replace() {
+        // Reverse-direction pin: the legacy `CrossHubDialer::new`
+        // constructor takes an `Arc<RealmTrustAnchor>` snapshot
+        // and is intentionally NOT cell-aware. A test fixture
+        // that mutates the original anchor (impossible — it's
+        // captured by-value) cannot affect the snapshot. This
+        // test documents that contract so a future refactor of
+        // `CrossHubDialer::new` to accept a live source has to
+        // update the test (and the operator-facing constructor
+        // doc) deliberately.
+
+        let target = "https://peer-hub.example:50443".to_string();
+        let empty_anchor = Arc::new(RealmTrustAnchor::default());
+        let dialer = CrossHubDialer::new(empty_anchor)
+            .with_forward_invoke_timeout(Duration::from_millis(50));
+
+        let err = dialer
+            .forward_invoke(&target, sample_request("test.echo"))
+            .await
+            .expect_err("snapshot must reject indefinitely");
+        assert!(matches!(
+            err,
+            FederationClientError::PeerNotTrusted(_)
+        ));
+
+        // No cell to mutate — the snapshot constructor's signature
+        // makes hot-reload impossible by construction. Call again
+        // and assert the same outcome to pin the contract.
+        let err2 = dialer
+            .forward_invoke(&target, sample_request("test.echo"))
+            .await
+            .expect_err("snapshot must reject indefinitely");
+        assert!(matches!(
+            err2,
+            FederationClientError::PeerNotTrusted(_)
+        ));
     }
 
     #[tokio::test]
