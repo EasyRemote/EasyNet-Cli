@@ -86,8 +86,13 @@ use crate::services::axon_serve::invoke_remote_initiator::{
     InvokeRemoteDown, InvokeRemoteUp, SessionDispatch, ABILITY_INVOKE_REMOTE,
     INVOKE_REMOTE_STREAM_ID,
 };
+use crate::services::axon_serve::session_initiator::{
+    ABILITY_SELF_SESSION, SESSION_STREAM_ID,
+};
 use crate::services::pending_dispatch::{DispatchResult, PendingDispatchMap};
-use crate::services::presence_registry::{DispatchFrame, OfflineReason, PresenceRegistry};
+use crate::services::presence_registry::{
+    DispatchFrame, DispatchSender, OfflineReason, PresenceRegistry, DISPATCH_CHANNEL_CAPACITY,
+};
 
 /// Content type the federation wrappers emit on `InvokeResponse.result`.
 /// Centralised here so call sites cannot drift away from the value
@@ -284,10 +289,23 @@ impl Invocation for DaemonInvocationService {
 
         match ability_name {
             ABILITY_INVOKE_REMOTE => self.dispatch_invoke_remote(envelope_open, up).await,
+            ABILITY_SELF_SESSION => {
+                let caller_uri = envelope_open
+                    .envelope
+                    .as_ref()
+                    .and_then(|e| e.caller.as_ref())
+                    .map(|c| c.uri.clone())
+                    .ok_or_else(|| {
+                        Status::invalid_argument(
+                            "<self>.session: envelope.caller.uri is required \
+                             (already verified by admission gate; this is a defensive check)",
+                        )
+                    })?;
+                self.dispatch_self_session_accept(caller_uri, up).await
+            }
             other => Err(Status::unimplemented(format!(
                 "easynet-daemon: InvokeBidi ability `{other}` is not yet wired; \
-                 `<self>.session` lands in RFC-003 PR-2 (莫浩); \
-                 LocalAbilityRegistry bidi fallback in commit 7/9+ \
+                 LocalAbilityRegistry bidi fallback is the next staging step \
                  (see team-work/checklists/PR-2-checklist.md)"
             ))),
         }
@@ -662,6 +680,183 @@ impl DaemonInvocationService {
             Box::pin(stream) as BoxedDownStream<InvokeBidiDown>
         ))
     }
+
+    /// Hub-side acceptor for `<self>.session`. The device opens a
+    /// long-lived `InvokeBidi` against the daemon at boot and holds
+    /// the stream open for the daemon process's lifetime; this is
+    /// the canonical reverse channel through which the hub pushes
+    /// `<self>.invoke_remote` `SessionDispatch::Dispatch` frames
+    /// and the device replies with `SessionDispatch::Result` frames.
+    ///
+    /// Liveness model (spec §3): registry membership = liveness.
+    /// Inserting the device's `DispatchSender` into the
+    /// `PresenceRegistry` is the act of "device is online"; removing
+    /// it (graceful close, transport reset, send-failure backpressure
+    /// eviction) is the act of "device is offline". No periodic
+    /// heartbeat — the bidi stream IS the heartbeat.
+    ///
+    /// Flow:
+    /// 1. Build a fresh mpsc `(tx, rx)` of capacity
+    ///    `DISPATCH_CHANNEL_CAPACITY` (256, spec §3.2)
+    /// 2. Insert `tx` into PresenceRegistry under the caller URI;
+    ///    any prior session for the same URI is displaced (the
+    ///    registry emits Offline-then-Online, the displaced
+    ///    receiver's mpsc dies → its outbound stream ends, that
+    ///    device reconnects)
+    /// 3. Spawn a task draining the device's up-stream:
+    ///    each frame is parsed as `SessionDispatch::Result` and
+    ///    routed via `pending.complete(call_id, result)` if a
+    ///    `<self>.invoke_remote` caller is awaiting; on stream
+    ///    close, remove the registry entry with the appropriate
+    ///    `OfflineReason`
+    /// 4. Return the down-stream wrapping `rx` so tonic pumps every
+    ///    `DispatchFrame` (BinaryChunk-wrapped `SessionDispatch::Dispatch`)
+    ///    pushed into `tx` back to the device
+    async fn dispatch_self_session_accept(
+        &self,
+        caller_uri: String,
+        up: Streaming<InvokeBidiUp>,
+    ) -> Result<Response<<Self as Invocation>::InvokeBidiStream>, Status> {
+        let (down_tx, down_rx): (DispatchSender, _) =
+            mpsc::channel::<Result<DispatchFrame, Status>>(DISPATCH_CHANNEL_CAPACITY);
+
+        // Step 1: register before spawning so a SessionDispatch::Dispatch
+        // arriving from `<self>.invoke_remote` immediately can find this
+        // sender. The PresenceRegistry handles displacement (Offline +
+        // Online emission ordering) under the hood.
+        let _displaced = self.presence.insert(caller_uri.clone(), down_tx);
+
+        // Step 2: spawn the up-stream consumer. Reads device replies
+        // (SessionDispatch::Result frames) and routes them to the
+        // PendingDispatchMap so the originating <self>.invoke_remote
+        // caller wakes up.
+        let presence_for_drain = Arc::clone(&self.presence);
+        let pending_for_drain = self.pending.clone();
+        let caller_uri_for_drain = caller_uri.clone();
+        tokio::spawn(async move {
+            drain_session_up_stream(
+                up,
+                caller_uri_for_drain,
+                presence_for_drain,
+                pending_for_drain,
+            )
+            .await
+        });
+
+        // Step 3: hand the down stream to tonic. Frames arrive in
+        // `down_tx` from <self>.invoke_remote dispatchers and from
+        // federation.forward_invoke pushers as `DispatchFrame`
+        // (presence_registry's newtype around `InvokeBidiDown`).
+        // The tonic trait wants raw `InvokeBidiDown`, so map each
+        // frame to unwrap the newtype.
+        let stream = ReceiverStream::new(down_rx).map(|item| match item {
+            Ok(frame) => Ok(frame.frame),
+            Err(status) => Err(status),
+        });
+        Ok(Response::new(
+            Box::pin(stream) as BoxedDownStream<InvokeBidiDown>
+        ))
+    }
+}
+
+/// Drain a device's `<self>.session` up-stream. Each up-frame is
+/// expected to be a `BinaryChunk` carrying a JSON-serialised
+/// `SessionDispatch::Result`; on parse the matching pending entry
+/// in the `PendingDispatchMap` is completed so the
+/// `<self>.invoke_remote` caller wakes up.
+///
+/// On stream close (any reason — graceful CloseSend, transport
+/// reset, RST_STREAM, peer crash) the device is removed from the
+/// presence registry with an appropriate `OfflineReason` so that
+/// future `lookup` calls see it as offline immediately.
+async fn drain_session_up_stream(
+    mut up: Streaming<InvokeBidiUp>,
+    caller_uri: String,
+    presence: Arc<PresenceRegistry>,
+    pending: Option<Arc<PendingDispatchMap>>,
+) {
+    use crate::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+
+    let mut close_reason = OfflineReason::StreamClosed;
+
+    while let Some(frame_result) = up.next().await {
+        let frame = match frame_result {
+            Ok(f) => f,
+            Err(status) => {
+                eprintln!(
+                    "[session-accept] up-stream error for {caller_uri}: {status}; \
+                     removing from registry"
+                );
+                close_reason = OfflineReason::StreamReset;
+                break;
+            }
+        };
+
+        let chunk = match frame.payload {
+            Some(UpPayload::BinaryChunk(c)) => c,
+            Some(other) => {
+                eprintln!(
+                    "[session-accept] {caller_uri} sent non-BinaryChunk up frame: {other:?}; \
+                     ignoring"
+                );
+                continue;
+            }
+            None => continue,
+        };
+
+        // Parse SessionDispatch::Result. A malformed frame is logged
+        // but does not tear down the session — the device may send
+        // future frames that are well-formed.
+        let dispatch: SessionDispatch = match serde_json::from_slice(&chunk.data) {
+            Ok(d) => d,
+            Err(err) => {
+                eprintln!(
+                    "[session-accept] {caller_uri} sent malformed SessionDispatch JSON: {err}; \
+                     ignoring frame"
+                );
+                continue;
+            }
+        };
+
+        match dispatch {
+            SessionDispatch::Result {
+                call_id,
+                payload,
+                terminal: _terminal,
+                error,
+            } => {
+                let Some(pending) = pending.as_ref() else {
+                    eprintln!(
+                        "[session-accept] {caller_uri} sent Result for call_id={call_id} but \
+                         daemon was constructed without PendingDispatchMap; ignoring"
+                    );
+                    continue;
+                };
+                let dispatch_result = DispatchResult { payload, error };
+                let completed = pending.complete(call_id, dispatch_result);
+                if !completed {
+                    eprintln!(
+                        "[session-accept] {caller_uri} sent Result for call_id={call_id} but \
+                         no pending entry matched (caller may have cancelled); silent no-op"
+                    );
+                }
+            }
+            SessionDispatch::Dispatch { call_id, .. } => {
+                // A device sending a Dispatch up its own session
+                // makes no sense — Dispatch is hub→device only.
+                eprintln!(
+                    "[session-accept] {caller_uri} sent unexpected Dispatch frame \
+                     (call_id={call_id}); ignoring"
+                );
+            }
+        }
+    }
+
+    presence.remove(&caller_uri, close_reason);
+    eprintln!(
+        "[session-accept] {caller_uri} session ended ({:?}); removed from registry",
+        close_reason
+    );
 }
 
 /// Wire shape for an incremental presence event delivered by the
