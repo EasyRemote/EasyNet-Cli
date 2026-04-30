@@ -225,6 +225,17 @@ tree-sitter-bash = "0.25"
 libc = "0.2"
 
 [dev-dependencies]
+# Used by `tests/cross_device_invoke_remote_e2e.rs` to construct
+# a `tower::service_fn` connector that adapts a `tokio::net::UnixStream`
+# into something tonic's `Endpoint::connect_with_connector` accepts.
+# tower itself is already pulled in transitively by tonic; declared
+# direct so the e2e test imports it cleanly.
+tower = "0.5"
+# Used by the same test to wrap a `tokio::net::UnixStream` into a
+# `hyper`-compatible IO via `hyper_util::rt::TokioIo`. Required by
+# tonic 0.12's UDS-over-`connect_with_connector` recipe.
+hyper-util = "0.1"
+
 # Tests for the McpClientService spawn a real subprocess against a
 # script written into a tempdir; tempfile gives us auto-cleanup so
 # a panicked test doesn't leak the dir.
