@@ -58,20 +58,21 @@
 //   the `dial_and_run_session` returns an error → wait → retry.
 //   Bounded jitter, capped maximum, never gives up.
 //
+// Signature model
+// ---------------
+// When boot supplies a deterministic per-device Ed25519 seed, frame 0
+// is signed over the same canonical invocation bytes the admission gate
+// verifies. Sparse legacy credentials that only carry `agent_uri` still
+// degrade to the unsigned PR-1/PR-2 behaviour so older tests and
+// partially-migrated devices do not fail hard during boot.
+//
 // What this commit does NOT do
 // ----------------------------
-// - Real signature on the EnvelopeOpen frame 0. PR-7 lands
-//   ed25519 keypair persistence + signing; until then this
-//   commit's signature is the empty `CallerSignature` shape that
-//   the hub admission gate (PR-1 commit 7b/9) accepts under the
-//   "URI in trust set" rule. PR-7 closes the loop with real
-//   signatures.
-// - LocalAbilityRegistry hookup. Frame dispatch goes through the
-//   `SessionFrameDispatcher` trait; production passes a real
-//   adapter, this commit ships the trait + a mock for tests.
-//   The adapter lands in PR-1+2 binary integration (the
-//   `easynet-daemon` boot path) once both PR-1 and PR-2 server
-//   sides are merged.
+// - LocalAbilityRegistry stream/unary multiplexing beyond the
+//   current RPC path. Production now wires
+//   `LocalAbilityDispatcher` at boot for local RPC abilities; true
+//   multi-frame stream forwarding stays out of PR-2 and belongs to
+//   the future streaming-ability surface.
 // - daemon-config integration. The supervisor takes a hub
 //   endpoint string directly today; the binary boot path will
 //   wire it up to `DaemonConfig::hub_endpoint()` in the
@@ -84,8 +85,15 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ed25519_dalek::{Signer as _, SigningKey};
+use easynet_axon::invocation::axiom::{
+    canonical_invocation_bytes, AgentIdentity as AxiomAgentIdentity, CausalContext,
+    InvocationEnvelope, SubjectIdentity as AxiomSubjectIdentity, UriProfile,
+};
 use futures::Stream;
 use futures::StreamExt as _;
+use rand::RngCore as _;
+use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::{Channel, Endpoint};
@@ -95,7 +103,7 @@ use crate::pb::axon::v1::invocation_client::InvocationClient;
 use crate::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 use crate::pb::axon::v1::{
     AgentIdentity, CallerSignature, Envelope, EnvelopeOpen, InvocationTarget, InvokeBidiDown,
-    InvokeBidiUp, StreamDescriptor,
+    InvokeBidiUp, StreamDescriptor, SubjectIdentity,
 };
 
 /// Daemon-side ability name this initiator targets. The hub's
@@ -130,6 +138,14 @@ pub const SESSION_BACKOFF_INITIAL: Duration = Duration::from_millis(250);
 /// matches the reconnect SLO the production deploy script
 /// configures for federation_client.
 pub const SESSION_BACKOFF_MAX: Duration = Duration::from_secs(30);
+
+/// Default URI profile used when the session frame carries a signed
+/// envelope. Empty profile fields canonicalise to the same value, but
+/// populating the string keeps the wire explicit and easier to inspect.
+const DEFAULT_URI_PROFILE: &str = "easynet-strict-v2";
+
+/// Optional deterministic Ed25519 seed used to sign frame 0.
+pub type SessionSigningSeed = [u8; 32];
 
 /// What a device does with each `InvokeBidiDown` frame the hub
 /// pushes to it: either translate the inner payload into a local
@@ -174,6 +190,7 @@ pub enum SessionDispatchError {
 pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
     hub_endpoint: String,
     caller_uri: String,
+    signing_seed: Option<SessionSigningSeed>,
     dispatcher: Arc<D>,
 ) -> Result<(), SessionError> {
     let endpoint = Endpoint::from_shared(hub_endpoint.clone())
@@ -198,22 +215,24 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
     let (up_tx, up_rx) = mpsc::channel::<InvokeBidiUp>(SESSION_UP_CHANNEL_CAPACITY);
 
     // Frame 0: EnvelopeOpen carrying caller URI + ability name
-    // `<self>.session`. PR-1 staging admission is URI-in-trust-set;
-    // signature is the empty shape that admission accepts.
-    let frame0 = build_session_envelope_open(&caller_uri);
+    // `<self>.session`. When boot resolved a deterministic device
+    // seed from credentials we sign the canonical bytes here; older
+    // sparse fixtures still degrade to the unsigned PR-2 shape.
+    let frame0 = build_session_envelope_open_with_seed(&caller_uri, signing_seed);
     up_tx
         .send(frame0)
         .await
         .map_err(|_| SessionError::SendFailed("frame 0 EnvelopeOpen"))?;
 
     let outbound = ReceiverStream::new(up_rx);
-    let response = client
-        .invoke_bidi(outbound)
-        .await
-        .map_err(|status| SessionError::HubRejected {
-            endpoint: hub_endpoint.clone(),
-            status,
-        })?;
+    let response =
+        client
+            .invoke_bidi(outbound)
+            .await
+            .map_err(|status| SessionError::HubRejected {
+                endpoint: hub_endpoint.clone(),
+                status,
+            })?;
 
     let mut down_stream = response.into_inner();
     let dispatcher = dispatcher;
@@ -247,6 +266,7 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
 pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
     hub_endpoint: String,
     caller_uri: String,
+    signing_seed: Option<SessionSigningSeed>,
     dispatcher: Arc<D>,
     mut cancel: tokio::sync::oneshot::Receiver<()>,
 ) {
@@ -260,6 +280,7 @@ pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
             result = dial_and_run_session(
                 hub_endpoint.clone(),
                 caller_uri.clone(),
+                signing_seed,
                 Arc::clone(&dispatcher),
             ) => {
                 match result {
@@ -306,24 +327,74 @@ fn next_backoff(current: Duration) -> Duration {
 /// device through the same shape.
 #[must_use]
 pub fn build_session_envelope_open(caller_uri: &str) -> InvokeBidiUp {
+    build_session_envelope_open_with_seed(caller_uri, None)
+}
+
+/// Build the frame-0 `EnvelopeOpen`, optionally signing it when a
+/// deterministic device seed is available.
+#[must_use]
+pub fn build_session_envelope_open_with_seed(
+    caller_uri: &str,
+    signing_seed: Option<SessionSigningSeed>,
+) -> InvokeBidiUp {
+    let initial_args = Vec::new();
+    let args_digest: [u8; 32] = Sha256::digest(&initial_args).into();
+
+    let mut envelope = Envelope {
+        caller: Some(AgentIdentity {
+            uri: caller_uri.to_string(),
+            profile: DEFAULT_URI_PROFILE.to_string(),
+        }),
+        // `<self>.session` is the device presenting its own long-
+        // lived reverse channel; callee + subject both point at the
+        // caller device so the signed tuple is stable and self-
+        // describing even before a future hub-URI contract lands.
+        callee: Some(AgentIdentity {
+            uri: caller_uri.to_string(),
+            profile: DEFAULT_URI_PROFILE.to_string(),
+        }),
+        subject: Some(SubjectIdentity {
+            uri: caller_uri.to_string(),
+            profile: DEFAULT_URI_PROFILE.to_string(),
+        }),
+        ..Envelope::default()
+    };
+
+    let mut mac = Vec::new();
+    if let Some(seed) = signing_seed {
+        let mut nonce = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut nonce);
+        envelope.invocation_nonce = nonce.to_vec();
+
+        let axiom_env = InvocationEnvelope {
+            caller: AxiomAgentIdentity::new(caller_uri, UriProfile::EasynetStrictV2),
+            callee: AxiomAgentIdentity::new(caller_uri, UriProfile::EasynetStrictV2),
+            subject: AxiomSubjectIdentity::new(caller_uri, UriProfile::EasynetStrictV2),
+            ability: ABILITY_SELF_SESSION.to_string(),
+            args_digest,
+            invocation_nonce: nonce,
+            causal_context: CausalContext::None,
+        };
+        let signing_key = SigningKey::from_bytes(&seed);
+        let signature = signing_key.sign(&canonical_invocation_bytes(&axiom_env));
+        mac = signature.to_bytes().to_vec();
+        envelope.caller_signature = Some(CallerSignature {
+            algorithm: "ed25519".to_string(),
+            signature: mac.clone(),
+            ..CallerSignature::default()
+        });
+    }
+
     InvokeBidiUp {
         sequence: 0,
+        mac,
         payload: Some(UpPayload::EnvelopeOpen(EnvelopeOpen {
-            envelope: Some(Envelope {
-                caller: Some(AgentIdentity {
-                    uri: caller_uri.to_string(),
-                    ..AgentIdentity::default()
-                }),
-                // PR-1 staging — empty signature on the envelope;
-                // PR-7 lands real ed25519 signing against the
-                // daemon's credentials.json key.
-                caller_signature: Some(CallerSignature::default()),
-                ..Envelope::default()
-            }),
+            envelope: Some(envelope),
             target: Some(InvocationTarget {
                 ability_name: ABILITY_SELF_SESSION.to_string(),
                 ..InvocationTarget::default()
             }),
+            initial_args,
             streams: vec![StreamDescriptor {
                 stream_id: SESSION_STREAM_ID,
                 content_type: "application/json".to_string(),
@@ -431,8 +502,42 @@ mod tests {
     }
 
     #[test]
+    fn build_session_envelope_open_with_seed_adds_signature_and_nonce() {
+        let seed = [0x42_u8; 32];
+        let frame = build_session_envelope_open_with_seed(
+            "easynet:///r/realm/agent/n1",
+            Some(seed),
+        );
+        assert_eq!(frame.sequence, 0);
+        assert_eq!(frame.mac.len(), 64);
+
+        let UpPayload::EnvelopeOpen(eo) = frame.payload.expect("payload") else {
+            panic!("payload");
+        };
+        let envelope = eo.envelope.expect("envelope");
+        assert_eq!(envelope.invocation_nonce.len(), 16);
+        let sig = envelope
+            .caller_signature
+            .as_ref()
+            .expect("signed caller signature");
+        assert_eq!(sig.algorithm, "ed25519");
+        assert_eq!(sig.signature, frame.mac);
+        assert_eq!(
+            envelope
+                .subject
+                .as_ref()
+                .map(|s| s.uri.as_str())
+                .unwrap_or(""),
+            "easynet:///r/realm/agent/n1",
+        );
+    }
+
+    #[test]
     fn next_backoff_doubles_until_cap() {
-        assert_eq!(next_backoff(SESSION_BACKOFF_INITIAL), Duration::from_millis(500));
+        assert_eq!(
+            next_backoff(SESSION_BACKOFF_INITIAL),
+            Duration::from_millis(500)
+        );
         assert_eq!(next_backoff(Duration::from_secs(1)), Duration::from_secs(2));
         assert_eq!(next_backoff(Duration::from_secs(20)), SESSION_BACKOFF_MAX);
         // Past the cap stays at the cap.
@@ -445,6 +550,7 @@ mod tests {
         let result = dial_and_run_session(
             "not a valid uri".to_string(),
             "easynet:///r/realm/agent/n1".to_string(),
+            None,
             dispatcher,
         )
         .await;
@@ -467,6 +573,7 @@ mod tests {
             dial_and_run_session(
                 "http://127.0.0.1:1".to_string(),
                 "easynet:///r/realm/agent/n1".to_string(),
+                None,
                 dispatcher,
             ),
         )
@@ -487,6 +594,7 @@ mod tests {
         let supervisor_handle = tokio::spawn(run_session_supervisor(
             "http://127.0.0.1:1".to_string(),
             "easynet:///r/realm/agent/n1".to_string(),
+            None,
             dispatcher,
             cancel_rx,
         ));

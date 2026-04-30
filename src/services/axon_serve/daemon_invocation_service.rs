@@ -87,17 +87,16 @@ use crate::services::axon_serve::invoke_remote_initiator::{
     InvokeRemoteDown, InvokeRemoteUp, SessionDispatch, ABILITY_INVOKE_REMOTE,
     INVOKE_REMOTE_STREAM_ID,
 };
-use crate::services::axon_serve::session_initiator::{
-    ABILITY_SELF_SESSION, SESSION_STREAM_ID,
-};
 use crate::services::axon_serve::register_device_pubkey::{
-    handle as handle_register_device_pubkey, ABILITY_SELF_REGISTER_DEVICE_PUBKEY,
+    handle as handle_register_device_pubkey, parse_realm_from_uri,
+    ABILITY_SELF_REGISTER_DEVICE_PUBKEY,
 };
+use crate::services::axon_serve::session_initiator::ABILITY_SELF_SESSION;
 use crate::services::pending_dispatch::{DispatchResult, PendingDispatchMap};
-use crate::services::trust_anchor_cell::SharedTrustAnchor;
 use crate::services::presence_registry::{
     DispatchFrame, DispatchSender, OfflineReason, PresenceRegistry, DISPATCH_CHANNEL_CAPACITY,
 };
+use crate::services::trust_anchor_cell::SharedTrustAnchor;
 
 /// Content type the federation wrappers emit on `InvokeResponse.result`.
 /// Centralised here so call sites cannot drift away from the value
@@ -141,6 +140,12 @@ pub struct DaemonInvocationService {
     /// Production daemons always attach one at boot from
     /// `start_axon_serve_sidecar`.
     register_pubkey: Option<RegisterPubkeyContext>,
+    /// Daemon realm carried explicitly for `<self>.session`
+    /// admission-time cross-realm rejection. `None` means the
+    /// service was constructed without the realm context (typically
+    /// a narrow unit test) and the extra PR-2 defense-in-depth check
+    /// is skipped.
+    session_realm: Option<String>,
 }
 
 /// Tuple wired by `with_register_pubkey(...)`. Cloning is cheap
@@ -171,6 +176,7 @@ impl DaemonInvocationService {
             admission,
             pending: None,
             register_pubkey: None,
+            session_realm: None,
         }
     }
 
@@ -206,6 +212,16 @@ impl DaemonInvocationService {
             trust_anchor_path: trust_anchor_path.into(),
             cell,
         });
+        self
+    }
+
+    /// Attach the daemon's own realm for `<self>.session`
+    /// cross-realm rejection. Kept as a dedicated builder so the
+    /// PR-2 guardrail does not depend on the presence of the PR-7
+    /// trust-write surface.
+    #[must_use]
+    pub fn with_session_realm(mut self, daemon_realm: impl Into<String>) -> Self {
+        self.session_realm = Some(daemon_realm.into());
         self
     }
 }
@@ -588,9 +604,7 @@ impl DaemonInvocationService {
                             // us, end the stream gracefully.
                             let presence = presence_weak.upgrade()?;
                             let snapshot =
-                                federation_wrappers::build_subscribe_directory_initial(
-                                    &presence,
-                                );
+                                federation_wrappers::build_subscribe_directory_initial(&presence);
                             drop(presence);
                             // `SubscribeDirectoryInitial` is statically
                             // `Serialize` (Vec<AgentSummary> of two
@@ -656,8 +670,8 @@ impl DaemonInvocationService {
         envelope_open: &EnvelopeOpen,
         _up: Streaming<InvokeBidiUp>,
     ) -> Result<Response<<Self as Invocation>::InvokeBidiStream>, Status> {
-        let request: InvokeRemoteUp = serde_json::from_slice(&envelope_open.initial_args)
-            .map_err(|err| {
+        let request: InvokeRemoteUp =
+            serde_json::from_slice(&envelope_open.initial_args).map_err(|err| {
                 Status::invalid_argument(format!(
                     "<self>.invoke_remote: frame-0 initial_args is not valid \
                      InvokeRemoteUp JSON: {err}"
@@ -787,6 +801,8 @@ impl DaemonInvocationService {
         caller_uri: String,
         up: Streaming<InvokeBidiUp>,
     ) -> Result<Response<<Self as Invocation>::InvokeBidiStream>, Status> {
+        validate_session_realm(&caller_uri, self.session_realm.as_deref())?;
+
         let (down_tx, down_rx): (DispatchSender, _) =
             mpsc::channel::<Result<DispatchFrame, Status>>(DISPATCH_CHANNEL_CAPACITY);
 
@@ -929,6 +945,28 @@ async fn drain_session_up_stream(
     );
 }
 
+fn validate_session_realm(caller_uri: &str, session_realm: Option<&str>) -> Result<(), Status> {
+    let Some(daemon_realm) = session_realm else {
+        return Ok(());
+    };
+
+    let caller_realm = parse_realm_from_uri(caller_uri).ok_or_else(|| {
+        Status::invalid_argument(format!(
+            "<self>.session: caller URI `{caller_uri}` does not match the canonical \
+             `easynet:///r/{{realm}}/agent/{{node}}` shape"
+        ))
+    })?;
+
+    if caller_realm != daemon_realm {
+        return Err(Status::permission_denied(format!(
+            "<self>.session: caller realm `{caller_realm}` does not match daemon realm \
+             `{daemon_realm}`; cross-realm session is blocked until RFC-N PR-N2 ships"
+        )));
+    }
+
+    Ok(())
+}
+
 /// Wire shape for an incremental presence event delivered by the
 /// `federation.subscribe_directory` server-stream after the initial
 /// snapshot frame.
@@ -1039,9 +1077,7 @@ fn build_invoke_remote_dispatch_frame(
 /// Build the terminal `InvokeBidiDown` frame the
 /// `<self>.invoke_remote` caller's down stream yields. Carries the
 /// `InvokeRemoteDown::Result` JSON in `BinaryChunk.data`.
-fn build_invoke_remote_terminal_frame(
-    down: &InvokeRemoteDown,
-) -> Result<InvokeBidiDown, Status> {
+fn build_invoke_remote_terminal_frame(down: &InvokeRemoteDown) -> Result<InvokeBidiDown, Status> {
     let bytes = serde_json::to_vec(down).map_err(|err| {
         Status::internal(format!(
             "<self>.invoke_remote: encode InvokeRemoteDown: {err}"
@@ -1248,10 +1284,7 @@ mod tests {
     #[tokio::test]
     async fn invoke_unknown_ability_returns_unimplemented_with_pr1_note() {
         let svc = make_service();
-        match svc
-            .invoke(invoke_request("custom.ability.x", "{}"))
-            .await
-        {
+        match svc.invoke(invoke_request("custom.ability.x", "{}")).await {
             Err(err) => {
                 assert_eq!(err.code(), tonic::Code::Unimplemented);
                 assert!(
@@ -1341,13 +1374,13 @@ mod tests {
 
         // Now the pump must close. Bound the wait so a real bug
         // here surfaces as a test failure, not a CI hang.
-        let close = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            stream.next(),
-        )
-        .await
-        .expect("pump closes within 2 s after senders drop");
-        assert!(close.is_none(), "stream must terminate once all senders drop");
+        let close = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+            .await
+            .expect("pump closes within 2 s after senders drop");
+        assert!(
+            close.is_none(),
+            "stream must terminate once all senders drop"
+        );
     }
 
     #[tokio::test]
@@ -1466,8 +1499,6 @@ mod tests {
     use crate::services::axon_serve::invoke_remote_initiator::{
         InvokeRemoteUp, ABILITY_INVOKE_REMOTE,
     };
-    use crate::services::pending_dispatch::PendingDispatchMap;
-
     fn make_envelope_open(ability: &str, initial_args: Vec<u8>) -> EnvelopeOpen {
         EnvelopeOpen {
             envelope: Some(test_envelope()),
@@ -1531,6 +1562,28 @@ mod tests {
         let err = extract_envelope_open(&frame).expect_err("must reject");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(err.message().contains("no payload"));
+    }
+
+    #[test]
+    fn validate_session_realm_accepts_same_realm() {
+        validate_session_realm("easynet:///r/realm-a/agent/device-1", Some("realm-a"))
+            .expect("same-realm caller must pass");
+    }
+
+    #[test]
+    fn validate_session_realm_rejects_cross_realm() {
+        let err = validate_session_realm("easynet:///r/realm-b/agent/device-1", Some("realm-a"))
+            .expect_err("cross-realm caller must be rejected");
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert!(err.message().contains("cross-realm session"));
+    }
+
+    #[test]
+    fn validate_session_realm_rejects_malformed_uri() {
+        let err = validate_session_realm("not-a-ura", Some("realm-a"))
+            .expect_err("malformed URI must be rejected");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains("canonical"));
     }
 
     #[test]

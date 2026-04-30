@@ -3,45 +3,32 @@
 //
 // File: src/services/axon_serve/local_ability_dispatcher.rs
 //
-// PR-2 commit 1/N skeleton (LB-12 dispatch). Replaces
-// `boot::StagingSessionDispatcher` (the `<self>.session` placeholder
-// that returned a hard-coded "not-yet-wired" error for every
-// inbound `SessionDispatch::Dispatch`) with a struct that holds the
-// daemon's real `AbilityDispatcher` Arc threaded in at boot.
+// PR-2 commit 2/N. Replaces `boot::StagingSessionDispatcher` (the
+// `<self>.session` placeholder that returned a hard-coded
+// "not-yet-wired" error for every inbound
+// `SessionDispatch::Dispatch`) with a dispatcher that executes local
+// RPC abilities through the daemon's boot-threaded
+// `AbilityDispatcher` Arc.
 //
-// Where this commit ends and commit 2/N picks up
-// ----------------------------------------------
-// This commit lands the boot threading + module skeleton. The
-// `handle_down` method still produces the staging "not-yet-wired"
-// error path so the wire-visible behaviour is unchanged from
-// PR-1's `StagingSessionDispatcher`. The actual `Kernel::invoke`
-// call into the local registry lands in commit 2/N once the
-// boot wiring is reviewer-verified — splitting the boot plumbing
-// from the dispatch logic per CTO directive 06 §3.5 "1 commit =
-// 1 logical change".
+// Historical split
+// ----------------
+// PR-2 commit 1/N landed the boot threading only: the daemon now
+// passes one process-wide `AbilityDispatcher` Arc into the
+// device-side session handler. This file is the follow-up that
+// spends that dependency for real work: decode
+// `SessionDispatch::Dispatch{call_id, ability, args}`, route the
+// ability through `AbilityDispatcher::execute_rpc`, then encode the
+// outcome back as `SessionDispatch::Result`.
 //
-// Why hold `AbilityDispatcher` (not `Kernel`)
-// -------------------------------------------
-// `AbilityDispatcher` is the dispatcher Arc the daemon's
-// `easynet-daemon.rs::main` already constructs and shares with
-// `Kernel::set_dispatcher`, the runtime-dispatch responder, and the
-// outbound A2A path. Threading the same Arc into the session
-// dispatcher means the device-side ability execution observes the
-// same `LocalAbilityRegistry` state every other dispatch path
-// observes — the U1 unity property the boot path already enforces.
-//
-// Why `handle_down` returns staging today
-// ---------------------------------------
-// PR-2 spec §"4-commit plan" pins commit 1/N as boot threading
-// only. Commit 2/N parses `SessionDispatch::Dispatch{call_id,
-// ability, args}`, builds an `Invocation` per AXIOM mapping
-// (caller=peer hub, callee=self device, subject=callee, fresh
-// nonce), calls `Kernel::invoke` via the dispatcher, encodes the
-// terminal `Receipt` back as `SessionDispatch::Result{call_id,
-// payload, terminal=true, error: Some(reason) if Failed}`, and
-// sends via `outbound`. The split is reversible — if a downstream
-// caller relies on the staging behaviour (none today, but future
-// test scaffolding might), the rollback is a single revert.
+// Args contract
+// -------------
+// `SessionDispatch::Dispatch.args` stays wire-opaque at the
+// `<self>.invoke_remote` layer, but the in-process local registry is
+// JSON-shaped today (`serde_json::Value`). The device-side session
+// handler therefore interprets the bytes as JSON exactly at the
+// final execution boundary. Malformed JSON is surfaced back to the
+// caller as a terminal `SessionDispatch::Result{error: ...}` rather
+// than as a transport reset.
 //
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -54,29 +41,25 @@ use crate::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
 use crate::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 use crate::pb::axon::v1::{BinaryChunk, InvokeBidiDown, InvokeBidiUp};
 use crate::runtime::ability_dispatch::AbilityDispatcher;
+use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use crate::services::axon_serve::invoke_remote_initiator::SessionDispatch;
 use crate::services::axon_serve::session_initiator::{
     SessionDispatchError, SessionFrameDispatcher,
 };
 
-/// Device-side `<self>.session` dispatcher. PR-2 commit 1/N: holds
-/// the boot-threaded `AbilityDispatcher` Arc but still emits the
-/// staging "not-yet-wired" error reply on inbound Dispatch frames.
-/// Commit 2/N replaces the staging body with a real
-/// `Kernel::invoke` call routed through `dispatcher`.
+/// Device-side `<self>.session` dispatcher. Holds the boot-threaded
+/// `AbilityDispatcher` Arc and executes inbound Dispatch frames
+/// against the local RPC registry, returning the result payload or
+/// typed failure over the existing `SessionDispatch::Result` wire
+/// shape.
 #[derive(Clone)]
 pub struct LocalAbilityDispatcher {
     /// The daemon's process-wide ability dispatcher. Cloned in at
     /// boot from `easynet-daemon.rs::main`'s
     /// `dispatcher_for_kernel` so this dispatcher and the rest of
-    /// the daemon (Kernel::invoke, runtime-dispatch responder,
-    /// outbound A2A) share one `LocalAbilityRegistry` view.
-    ///
-    /// Commit 1/N proves the boot threading only; commit 2/N is
-    /// the change that actually calls into this dispatcher. The
-    /// handler body below still takes a borrow of the field so the
-    /// boot-threaded dependency is part of the compiled code path
-    /// already, rather than hidden behind a lint suppression.
+    /// the daemon (runtime-dispatch responder, outbound A2A, future
+    /// `Kernel::invoke` callers) share one `LocalAbilityRegistry`
+    /// view.
     dispatcher: Arc<AbilityDispatcher>,
 }
 
@@ -86,31 +69,58 @@ impl LocalAbilityDispatcher {
     pub fn new(dispatcher: Arc<AbilityDispatcher>) -> Self {
         Self { dispatcher }
     }
+
+    fn execute_local_rpc(
+        &self,
+        ability: &str,
+        normalized_args: serde_json::Value,
+    ) -> Result<SessionDispatch, SessionDispatchError> {
+        let target = InvocationTarget {
+            scope: TargetScope::Local,
+            ability: ability.to_string(),
+            normalized_args,
+            call_mode: CallMode::Rpc,
+            subject: None,
+        };
+
+        let result = self.dispatcher.execute_rpc(target);
+
+        match result {
+            Ok(value) => {
+                let payload = serde_json::to_vec(&value).map_err(|err| {
+                    SessionDispatchError::Other(format!(
+                        "<self>.session: encode ability `{ability}` response JSON: {err}"
+                    ))
+                })?;
+                Ok(SessionDispatch::Result {
+                    call_id: 0,
+                    payload,
+                    terminal: true,
+                    error: None,
+                })
+            }
+            Err(err) => Ok(SessionDispatch::Result {
+                call_id: 0,
+                payload: Vec::new(),
+                terminal: true,
+                error: Some(format!("<self>.session: ability `{ability}` failed: {err}")),
+            }),
+        }
+    }
 }
 
 #[async_trait::async_trait]
 impl SessionFrameDispatcher for LocalAbilityDispatcher {
-    /// Receive a hub-pushed Dispatch frame and reply with a
-    /// staging "not-yet-wired" Result. Commit 2/N rewrites this
-    /// body to invoke the held `AbilityDispatcher`.
-    ///
-    /// The frame parsing logic is identical to the previous
-    /// `StagingSessionDispatcher::handle_down`; only the host
-    /// type is new. This makes commit 1/N a no-op at the wire
-    /// level — admission gate behaviour, presence-registry
-    /// state, and `SessionDispatch::Result` shape all
-    /// unchanged — which is the property reviewers verify when
-    /// approving the boot wiring split.
+    /// Receive a hub-pushed Dispatch frame, run the named ability
+    /// against the local dispatcher, and reply with a terminal
+    /// `SessionDispatch::Result`. Down-stream `Result` frames are
+    /// ignored: they flow up from device → hub, never down.
     async fn handle_down(
         &self,
         frame: InvokeBidiDown,
         outbound: &mpsc::Sender<InvokeBidiUp>,
     ) -> Result<(), SessionDispatchError> {
-        // Commit 1/N's contract is "the real dispatcher Arc is
-        // boot-threaded all the way into the session handler".
-        // Commit 2/N replaces the staging branch below with a
-        // real `Kernel::invoke`, but the dependency is live now.
-        let _boot_threaded_dispatcher = &self.dispatcher;
+        let sequence = frame.sequence;
 
         // Only `BinaryChunk` frames carry SessionDispatch; ignore
         // Receipt / Control frames silently (PR-1 semantics).
@@ -130,7 +140,7 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
         let SessionDispatch::Dispatch {
             call_id,
             ability,
-            args: _args,
+            args,
         } = dispatch
         else {
             // Result frames flow up from the device, not down. A
@@ -139,22 +149,33 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
             return Ok(());
         };
 
-        eprintln!(
-            "[local-ability-dispatcher] received Dispatch call_id={call_id} ability={ability}; \
-             replying with PR-2 commit 1/N staging not-yet-wired error \
-             (commit 2/N wires real Kernel::invoke)"
-        );
+        let result = match serde_json::from_slice(&args) {
+            Ok(normalized_args) => self.execute_local_rpc(&ability, normalized_args),
+            Err(err) => Ok(SessionDispatch::Result {
+                call_id,
+                payload: Vec::new(),
+                terminal: true,
+                error: Some(format!(
+                    "<self>.session: ability `{ability}` received non-JSON args bytes: {err}"
+                )),
+            }),
+        }?;
 
-        let result = SessionDispatch::Result {
-            call_id,
-            payload: Vec::new(),
-            terminal: true,
-            error: Some(format!(
-                "<self>.session target ability `{ability}` is not yet dispatchable on \
-                 this device; PR-2 commit 1/N proves boot threading only. Real \
-                 LocalAbilityRegistry dispatch ships in commit 2/N (see \
-                 team-work/pr-drafts/PR-2-spec-self-session-real-handler.md)."
-            )),
+        let result = match result {
+            SessionDispatch::Result {
+                payload,
+                terminal,
+                error,
+                ..
+            } => SessionDispatch::Result {
+                call_id,
+                payload,
+                terminal,
+                error,
+            },
+            SessionDispatch::Dispatch { .. } => {
+                unreachable!("local execution never returns Dispatch")
+            }
         };
 
         let payload = serde_json::to_vec(&result).map_err(|err| {
@@ -162,7 +183,7 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
         })?;
 
         let reply_frame = InvokeBidiUp {
-            sequence: 0,
+            sequence: sequence.saturating_add(1),
             payload: Some(UpPayload::BinaryChunk(BinaryChunk {
                 data: payload,
                 ..BinaryChunk::default()
@@ -180,24 +201,29 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use serde_json::json;
+
+    use crate::runtime::ability_dispatch::LocalAbilityRegistry;
     use crate::runtime::gateway::NoopGateway;
 
     fn build_dispatcher() -> Arc<AbilityDispatcher> {
-        // Construct a minimal AbilityDispatcher pointing at an
-        // empty LocalAbilityRegistry + NoopGateway. Commit 1/N's
-        // skeleton doesn't actually invoke the dispatcher; this
-        // helper exists so commit 2/N's tests can extend it.
-        let registry = Arc::new(crate::runtime::ability_dispatch::LocalAbilityRegistry::default());
+        let mut registry = LocalAbilityRegistry::new();
+        registry.register_rpc("test.echo", Arc::new(|args| Ok(args)));
+        registry.register_rpc(
+            "always.fails",
+            Arc::new(|_| anyhow::bail!("simulated failure from handler")),
+        );
         let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
             Arc::new(NoopGateway::new());
-        Arc::new(AbilityDispatcher::new(registry, gateway))
+        Arc::new(AbilityDispatcher::new(Arc::new(registry), gateway))
     }
 
-    fn dispatch_frame(call_id: u64, ability: &str) -> InvokeBidiDown {
+    fn dispatch_frame(call_id: u64, ability: &str, args: Vec<u8>) -> InvokeBidiDown {
         let dispatch = SessionDispatch::Dispatch {
             call_id,
             ability: ability.to_string(),
-            args: br#"{}"#.to_vec(),
+            args,
         };
         let payload = serde_json::to_vec(&dispatch).expect("encode dispatch");
         InvokeBidiDown {
@@ -211,39 +237,100 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatch_frame_replies_with_staging_error() {
-        // Commit 1/N contract: skeleton produces the same staging
-        // error reply that StagingSessionDispatcher did. Commit
-        // 2/N replaces the body with real ability invocation;
-        // this test rewrites then.
+    async fn dispatch_frame_executes_registered_rpc_and_returns_json_payload() {
         let disp = LocalAbilityDispatcher::new(build_dispatcher());
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
 
-        disp.handle_down(dispatch_frame(1, "test.echo"), &tx)
-            .await
-            .expect("handle_down returns Ok with staging reply queued");
+        disp.handle_down(
+            dispatch_frame(1, "test.echo", br#"{"echo":"args-from-A"}"#.to_vec()),
+            &tx,
+        )
+        .await
+        .expect("handle_down returns Ok with terminal reply queued");
 
-        let reply = rx.recv().await.expect("staging reply produced");
+        let reply = rx.recv().await.expect("reply produced");
         let chunk = match reply.payload {
             Some(UpPayload::BinaryChunk(c)) => c,
             other => panic!("expected BinaryChunk reply, got: {other:?}"),
         };
-        let parsed: SessionDispatch =
-            serde_json::from_slice(&chunk.data).expect("staging Result decodes");
+        let parsed: SessionDispatch = serde_json::from_slice(&chunk.data).expect("Result decodes");
         match parsed {
             SessionDispatch::Result {
                 call_id,
                 terminal,
                 error,
-                ..
+                payload,
             } => {
                 assert_eq!(call_id, 1);
-                assert!(terminal, "staging reply is terminal");
-                let err = error.expect("staging reply carries error");
-                assert!(
-                    err.contains("commit 1/N staging not-yet-wired") || err.contains("commit 2/N"),
-                    "staging error must reference commit-2/N follow-up; got: {err}"
-                );
+                assert!(terminal, "RPC reply is terminal");
+                assert_eq!(error, None, "test.echo must succeed");
+                let value: serde_json::Value =
+                    serde_json::from_slice(&payload).expect("payload decodes as JSON");
+                assert_eq!(value, json!({"echo": "args-from-A"}));
+            }
+            other => panic!("expected SessionDispatch::Result, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn unregistered_ability_returns_terminal_error() {
+        let disp = LocalAbilityDispatcher::new(build_dispatcher());
+        let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
+
+        disp.handle_down(dispatch_frame(7, "missing.ability", br#"{}"#.to_vec()), &tx)
+            .await
+            .expect("missing ability becomes a terminal wire error, not transport failure");
+
+        let reply = rx.recv().await.expect("reply produced");
+        let chunk = match reply.payload {
+            Some(UpPayload::BinaryChunk(c)) => c,
+            other => panic!("expected BinaryChunk reply, got: {other:?}"),
+        };
+        let parsed: SessionDispatch = serde_json::from_slice(&chunk.data).expect("Result decodes");
+        match parsed {
+            SessionDispatch::Result {
+                call_id,
+                terminal,
+                error,
+                payload,
+            } => {
+                assert_eq!(call_id, 7);
+                assert!(terminal, "error reply must be terminal");
+                assert!(payload.is_empty(), "failed dispatch carries no payload");
+                let err = error.expect("missing ability must surface error");
+                assert!(err.contains("missing.ability"));
+            }
+            other => panic!("expected SessionDispatch::Result, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_args_bytes_return_terminal_error() {
+        let disp = LocalAbilityDispatcher::new(build_dispatcher());
+        let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
+
+        disp.handle_down(dispatch_frame(9, "test.echo", b"not-json".to_vec()), &tx)
+            .await
+            .expect("bad args bytes must be surfaced as a terminal reply");
+
+        let reply = rx.recv().await.expect("reply produced");
+        let chunk = match reply.payload {
+            Some(UpPayload::BinaryChunk(c)) => c,
+            other => panic!("expected BinaryChunk reply, got: {other:?}"),
+        };
+        let parsed: SessionDispatch = serde_json::from_slice(&chunk.data).expect("Result decodes");
+        match parsed {
+            SessionDispatch::Result {
+                call_id,
+                terminal,
+                error,
+                payload,
+            } => {
+                assert_eq!(call_id, 9);
+                assert!(terminal, "malformed args error must be terminal");
+                assert!(payload.is_empty());
+                let err = error.expect("error message required");
+                assert!(err.contains("non-JSON args bytes"));
             }
             other => panic!("expected SessionDispatch::Result, got: {other:?}"),
         }
@@ -254,8 +341,7 @@ mod tests {
         // SessionDispatch::Result on the down stream is a wire
         // mistake (Results flow up, not down). The dispatcher
         // logs nothing and returns Ok without sending a reply
-        // frame. This pins the same behaviour the staging
-        // dispatcher had.
+        // frame.
         let disp = LocalAbilityDispatcher::new(build_dispatcher());
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
 
@@ -276,7 +362,6 @@ mod tests {
         };
 
         disp.handle_down(frame, &tx).await.expect("ignored cleanly");
-        // No reply frame should have been queued.
         match rx.try_recv() {
             Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
             Ok(unexpected) => {

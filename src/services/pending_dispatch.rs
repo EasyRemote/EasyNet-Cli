@@ -299,7 +299,7 @@ mod tests {
         let id = handle.call_id();
         let removed = map.inner.entries.remove(&id);
         assert!(removed.is_some(), "entry was present pre-drop");
-        // `removed` goes out of scope here, dropping the sender.
+        drop(removed);
 
         let result = handle.await_reply().await;
         assert!(result.is_err(), "dropped sender surfaces as RecvError");

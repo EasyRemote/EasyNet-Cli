@@ -319,7 +319,9 @@ fn map_one_frame(frame: &crate::pb::axon::v1::InvokeBidiDown) -> FrameOutcome {
         }
     };
     match parsed {
-        InvokeRemoteDown::Chunk { payload } => FrameOutcome::Yield(InvokeRemoteFrame::Chunk(payload)),
+        InvokeRemoteDown::Chunk { payload } => {
+            FrameOutcome::Yield(InvokeRemoteFrame::Chunk(payload))
+        }
         InvokeRemoteDown::Result {
             payload: _,
             error: Some(msg),
@@ -443,8 +445,14 @@ mod tests {
         let mut mapped = Box::pin(map_down_stream(down, up_tx));
 
         let first = mapped.next().await.expect("one frame");
-        assert_eq!(first.unwrap(), InvokeRemoteFrame::Done(b"the-reply".to_vec()));
-        assert!(mapped.next().await.is_none(), "stream should end after terminal");
+        assert_eq!(
+            first.unwrap(),
+            InvokeRemoteFrame::Done(b"the-reply".to_vec())
+        );
+        assert!(
+            mapped.next().await.is_none(),
+            "stream should end after terminal"
+        );
     }
 
     #[tokio::test]

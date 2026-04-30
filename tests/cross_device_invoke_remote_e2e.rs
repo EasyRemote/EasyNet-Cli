@@ -53,20 +53,24 @@ use easynet_cli::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
 use easynet_cli::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 use easynet_cli::pb::axon::v1::{
     AgentIdentity, BinaryChunk, Envelope, EnvelopeOpen, InvocationTarget, InvokeBidiDown,
-    InvokeBidiUp, StreamDescriptor,
+    InvokeBidiUp, InvokeServerStreamRequest, StreamDescriptor,
 };
+use easynet_cli::runtime::ability_dispatch::{AbilityDispatcher, LocalAbilityRegistry};
+use easynet_cli::runtime::gateway::NoopGateway;
 use easynet_cli::services::axon_serve::admission_facade::AdmissionFacade;
 use easynet_cli::services::axon_serve::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::services::axon_serve::invoke_remote_initiator::{
     InvokeRemoteUp, SessionDispatch, ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID,
 };
+use easynet_cli::services::axon_serve::local_ability_dispatcher::LocalAbilityDispatcher;
 use easynet_cli::services::axon_serve::session_initiator::{
-    ABILITY_SELF_SESSION, SESSION_STREAM_ID,
+    SessionFrameDispatcher, ABILITY_SELF_SESSION, SESSION_STREAM_ID,
 };
 use easynet_cli::services::pending_dispatch::PendingDispatchMap;
-use easynet_cli::services::presence_registry::PresenceRegistry;
+use easynet_cli::services::presence_registry::{OfflineReason, PresenceEvent, PresenceRegistry};
 use easynet_cli::services::realm_trust_anchor::RealmTrustAnchor;
 use futures::StreamExt;
+use serde_json::json;
 use tokio::net::UnixListener;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -103,6 +107,7 @@ const REPLY_MARKER: &[u8] = b"hello-from-device-b";
 ///   task is gone before the runtime tears down.
 struct TestHub {
     socket_path: std::path::PathBuf,
+    presence: Arc<PresenceRegistry>,
     _tempdir: tempfile::TempDir,
     shutdown: Option<oneshot::Sender<()>>,
     server: Option<JoinHandle<()>>,
@@ -111,6 +116,10 @@ struct TestHub {
 impl TestHub {
     fn socket_path(&self) -> &std::path::Path {
         &self.socket_path
+    }
+
+    fn presence(&self) -> Arc<PresenceRegistry> {
+        Arc::clone(&self.presence)
     }
 }
 
@@ -168,8 +177,7 @@ added_at_unix_ms = 0
     f.write_all(trust_toml.as_bytes()).expect("write");
     drop(f);
 
-    let trust_anchor =
-        RealmTrustAnchor::try_load_strict(&trust_path).expect("load trust anchor");
+    let trust_anchor = RealmTrustAnchor::try_load_strict(&trust_path).expect("load trust anchor");
 
     let presence = Arc::new(PresenceRegistry::new());
     let pending = Arc::new(PendingDispatchMap::new());
@@ -198,6 +206,7 @@ added_at_unix_ms = 0
 
     TestHub {
         socket_path,
+        presence,
         _tempdir: tempdir,
         shutdown: Some(shutdown_tx),
         server: Some(server),
@@ -219,6 +228,28 @@ async fn connect_to_hub(socket_path: &std::path::Path) -> Channel {
         }))
         .await
         .expect("connect to hub")
+}
+
+fn subscribe_directory_request(caller_uri: &str) -> Request<InvokeServerStreamRequest> {
+    Request::new(InvokeServerStreamRequest {
+        envelope: Some(Envelope {
+            caller: Some(AgentIdentity {
+                uri: caller_uri.to_string(),
+                ..AgentIdentity::default()
+            }),
+            ..Envelope::default()
+        }),
+        function_name: "federation.subscribe_directory".to_string(),
+        ..InvokeServerStreamRequest::default()
+    })
+}
+
+fn build_test_echo_dispatcher() -> Arc<AbilityDispatcher> {
+    let mut registry = LocalAbilityRegistry::new();
+    registry.register_rpc("test.echo", Arc::new(|args| Ok(args)));
+    let gateway: Arc<dyn easynet_cli::runtime::gateway_api::GatewayApi> =
+        Arc::new(NoopGateway::new());
+    Arc::new(AbilityDispatcher::new(Arc::new(registry), gateway))
 }
 
 /// A device-side `<self>.session` bidi held open for the duration
@@ -382,6 +413,242 @@ async fn cross_device_invoke_remote_round_trip() {
     // catch for unknown unknowns.
     tokio::time::timeout(Duration::from_secs(60), async {
         run_round_trip().await;
+    })
+    .await
+    .expect("test completes within 60 s");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cross_device_invoke_remote_round_trip_via_local_ability_dispatcher() {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        run_round_trip_via_local_dispatcher().await;
+    })
+    .await
+    .expect("test completes within 60 s");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_bidi_rejects_non_envelope_open_first_frame() {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let hub = start_in_process_hub().await;
+        let channel = connect_to_hub(hub.socket_path()).await;
+        let mut client = InvocationClient::new(channel);
+
+        let (up_tx, up_rx) = mpsc::channel::<InvokeBidiUp>(1);
+        up_tx
+            .send(InvokeBidiUp {
+                sequence: 0,
+                payload: Some(UpPayload::BinaryChunk(BinaryChunk {
+                    data: br#"{}"#.to_vec(),
+                    ..BinaryChunk::default()
+                })),
+                ..InvokeBidiUp::default()
+            })
+            .await
+            .expect("send malformed frame 0");
+        drop(up_tx);
+
+        let status = match client
+            .invoke_bidi(Request::new(ReceiverStream::new(up_rx)))
+            .await
+        {
+            Err(status) => status,
+            Ok(response) => match response.into_inner().next().await {
+                Some(Err(status)) => status,
+                Some(Ok(_)) => panic!("malformed frame 0 must not yield a down-stream frame"),
+                None => panic!("malformed frame 0 must surface an error status"),
+            },
+        };
+
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert!(
+            status.message().contains("EnvelopeOpen"),
+            "reject must name the frame-0 contract, got: {}",
+            status.message()
+        );
+        assert!(
+            hub.presence().snapshot().is_empty(),
+            "malformed frame 0 must not register a live session"
+        );
+    })
+    .await
+    .expect("test completes within 60 s");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_graceful_close_emits_stream_closed_offline() {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let hub = start_in_process_hub().await;
+        let presence = hub.presence();
+        let mut events = presence.subscribe_events();
+
+        let channel = connect_to_hub(hub.socket_path()).await;
+        let device = open_device_session(channel, DEVICE_A_URI).await;
+
+        match tokio::time::timeout(STEP_TIMEOUT, events.recv())
+            .await
+            .expect("online event arrives within bound")
+            .expect("online event is delivered")
+        {
+            PresenceEvent::Online { uri } => assert_eq!(uri, DEVICE_A_URI),
+            other => panic!("expected Online event, got {other:?}"),
+        }
+
+        drop(device);
+
+        match tokio::time::timeout(STEP_TIMEOUT, events.recv())
+            .await
+            .expect("offline event arrives within bound")
+            .expect("offline event is delivered")
+        {
+            PresenceEvent::Offline { uri, reason } => {
+                assert_eq!(uri, DEVICE_A_URI);
+                assert_eq!(reason, OfflineReason::StreamClosed);
+            }
+            other => panic!("expected Offline(StreamClosed), got {other:?}"),
+        }
+
+        assert!(
+            presence.lookup(DEVICE_A_URI).is_none(),
+            "graceful close must remove the device from PresenceRegistry"
+        );
+    })
+    .await
+    .expect("test completes within 60 s");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_duplicate_open_emits_displacement_transition() {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let hub = start_in_process_hub().await;
+        let presence = hub.presence();
+
+        let first_channel = connect_to_hub(hub.socket_path()).await;
+        let first = open_device_session(first_channel, DEVICE_A_URI).await;
+
+        let mut warmup = presence.subscribe_events();
+        match tokio::time::timeout(STEP_TIMEOUT, warmup.recv())
+            .await
+            .expect("initial online event arrives within bound")
+            .expect("initial online event is delivered")
+        {
+            PresenceEvent::Online { uri } => assert_eq!(uri, DEVICE_A_URI),
+            other => panic!("expected initial Online event, got {other:?}"),
+        }
+
+        let mut events = presence.subscribe_events();
+        let second_channel = connect_to_hub(hub.socket_path()).await;
+        let second = open_device_session(second_channel, DEVICE_A_URI).await;
+
+        match tokio::time::timeout(STEP_TIMEOUT, events.recv())
+            .await
+            .expect("displacement offline arrives within bound")
+            .expect("displacement offline is delivered")
+        {
+            PresenceEvent::Offline { uri, reason } => {
+                assert_eq!(uri, DEVICE_A_URI);
+                assert_eq!(reason, OfflineReason::StreamClosed);
+            }
+            other => panic!("expected displacement Offline(StreamClosed), got {other:?}"),
+        }
+
+        match tokio::time::timeout(STEP_TIMEOUT, events.recv())
+            .await
+            .expect("replacement online arrives within bound")
+            .expect("replacement online is delivered")
+        {
+            PresenceEvent::Online { uri } => assert_eq!(uri, DEVICE_A_URI),
+            other => panic!("expected replacement Online event, got {other:?}"),
+        }
+
+        assert!(
+            presence.lookup(DEVICE_A_URI).is_some(),
+            "replacement session must stay registered after displacement"
+        );
+
+        drop(second);
+        drop(first);
+    })
+    .await
+    .expect("test completes within 60 s");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn subscribe_directory_stream_tracks_real_session_online_and_offline() {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let hub = start_in_process_hub().await;
+        let channel = connect_to_hub(hub.socket_path()).await;
+        let mut client = InvocationClient::new(channel);
+
+        let response = tokio::time::timeout(
+            STEP_TIMEOUT,
+            client.invoke_stream(subscribe_directory_request(DEVICE_A_URI)),
+        )
+        .await
+        .expect("subscribe_directory opens within bound")
+        .expect("subscribe_directory request returns Ok");
+        let mut stream = response.into_inner();
+
+        let initial = tokio::time::timeout(STEP_TIMEOUT, stream.next())
+            .await
+            .expect("initial snapshot arrives within bound")
+            .expect("initial snapshot exists")
+            .expect("initial snapshot frame is Ok");
+        let initial_json: serde_json::Value =
+            serde_json::from_slice(&initial.payload).expect("initial payload decodes");
+        assert_eq!(
+            initial_json
+                .get("agents")
+                .and_then(|v| v.as_array())
+                .map(Vec::len),
+            Some(0),
+            "fresh hub starts with an empty directory snapshot"
+        );
+
+        let device_channel = connect_to_hub(hub.socket_path()).await;
+        let device = open_device_session(device_channel, DEVICE_B_URI).await;
+
+        let online = tokio::time::timeout(STEP_TIMEOUT, stream.next())
+            .await
+            .expect("online delta arrives within bound")
+            .expect("online delta exists")
+            .expect("online delta frame is Ok");
+        let online_json: serde_json::Value =
+            serde_json::from_slice(&online.payload).expect("online delta decodes");
+        assert_eq!(
+            online_json.get("kind").and_then(|v| v.as_str()),
+            Some("online")
+        );
+        assert_eq!(
+            online_json
+                .get("canonical_agent_uri")
+                .and_then(|v| v.as_str()),
+            Some(DEVICE_B_URI)
+        );
+
+        drop(device);
+
+        let offline = tokio::time::timeout(STEP_TIMEOUT, stream.next())
+            .await
+            .expect("offline delta arrives within bound")
+            .expect("offline delta exists")
+            .expect("offline delta frame is Ok");
+        let offline_json: serde_json::Value =
+            serde_json::from_slice(&offline.payload).expect("offline delta decodes");
+        assert_eq!(
+            offline_json.get("kind").and_then(|v| v.as_str()),
+            Some("offline")
+        );
+        assert_eq!(
+            offline_json
+                .get("canonical_agent_uri")
+                .and_then(|v| v.as_str()),
+            Some(DEVICE_B_URI)
+        );
+        assert_eq!(
+            offline_json.get("reason").and_then(|v| v.as_str()),
+            Some("stream_closed")
+        );
     })
     .await
     .expect("test completes within 60 s");
@@ -556,4 +823,113 @@ async fn run_round_trip() {
         ability, "test.echo",
         "device B must see the ability name device A invoked"
     );
+}
+
+async fn run_round_trip_via_local_dispatcher() {
+    let hub = start_in_process_hub().await;
+    let socket_path = hub.socket_path();
+
+    let channel_a = connect_to_hub(socket_path).await;
+    let _device_a = open_device_session(channel_a, DEVICE_A_URI).await;
+
+    let channel_b = connect_to_hub(socket_path).await;
+    let (device_b, mut device_b_down) =
+        open_device_session_with_drain(channel_b, DEVICE_B_URI).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let device_b_up_for_reply = device_b.up().clone();
+    let local_dispatcher = LocalAbilityDispatcher::new(build_test_echo_dispatcher());
+    let reply_task_handle = tokio::spawn(async move {
+        let frame = tokio::time::timeout(STEP_TIMEOUT, device_b_down.recv())
+            .await
+            .expect("device B receives dispatch within bound")
+            .expect("dispatch frame is Some");
+
+        local_dispatcher
+            .handle_down(frame, &device_b_up_for_reply)
+            .await
+            .expect("local ability dispatcher handles frame");
+    });
+
+    let channel_caller = connect_to_hub(socket_path).await;
+    let mut caller_client = InvocationClient::new(channel_caller);
+
+    let invoke_remote_request = InvokeRemoteUp::Request {
+        subject_device: DEVICE_B_URI.to_string(),
+        ability: "test.echo".to_string(),
+        args: br#"{"echo":"args-from-A"}"#.to_vec(),
+    };
+    let initial_args = serde_json::to_vec(&invoke_remote_request).expect("encode request");
+
+    let invoke_remote_open = InvokeBidiUp {
+        sequence: 0,
+        payload: Some(UpPayload::EnvelopeOpen(EnvelopeOpen {
+            envelope: Some(Envelope {
+                caller: Some(AgentIdentity {
+                    uri: DEVICE_A_URI.to_string(),
+                    ..AgentIdentity::default()
+                }),
+                ..Envelope::default()
+            }),
+            target: Some(InvocationTarget {
+                ability_name: ABILITY_INVOKE_REMOTE.to_string(),
+                ..InvocationTarget::default()
+            }),
+            initial_args,
+            streams: vec![StreamDescriptor {
+                stream_id: INVOKE_REMOTE_STREAM_ID,
+                content_type: "application/json".to_string(),
+                ..StreamDescriptor::default()
+            }],
+            ..EnvelopeOpen::default()
+        })),
+        ..InvokeBidiUp::default()
+    };
+
+    let (caller_up_tx, caller_up_rx) = mpsc::channel::<InvokeBidiUp>(2);
+    caller_up_tx
+        .send(invoke_remote_open)
+        .await
+        .expect("send invoke_remote frame 0");
+    let caller_outbound = ReceiverStream::new(caller_up_rx);
+
+    let response = tokio::time::timeout(
+        STEP_TIMEOUT,
+        caller_client.invoke_bidi(Request::new(caller_outbound)),
+    )
+    .await
+    .expect("invoke_bidi opens within bound")
+    .expect("invoke_remote bidi returns Ok");
+
+    let mut caller_down = response.into_inner();
+    let terminal = tokio::time::timeout(STEP_TIMEOUT, caller_down.next())
+        .await
+        .expect("caller receives reply within bound")
+        .expect("at least one frame")
+        .expect("frame is Ok");
+
+    let DownPayload::BinaryChunk(chunk) = terminal.payload.expect("payload") else {
+        panic!("caller expected BinaryChunk payload");
+    };
+
+    use easynet_cli::services::axon_serve::invoke_remote_initiator::InvokeRemoteDown;
+    let down: InvokeRemoteDown =
+        serde_json::from_slice(&chunk.data).expect("decode InvokeRemoteDown");
+
+    let InvokeRemoteDown::Result { payload, error } = down else {
+        panic!("caller expected Result variant");
+    };
+
+    assert!(
+        error.is_none(),
+        "expected no error from device B, got: {error:?}"
+    );
+    let value: serde_json::Value =
+        serde_json::from_slice(&payload).expect("device B payload decodes as JSON");
+    assert_eq!(value, json!({"echo": "args-from-A"}));
+
+    tokio::time::timeout(STEP_TIMEOUT, reply_task_handle)
+        .await
+        .expect("reply task completes within bound")
+        .expect("reply task did not panic");
 }

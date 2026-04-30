@@ -277,12 +277,11 @@ impl RealmTrustAnchor {
         let raw = RawTrustAnchor {
             trusted_agent: self.entries_sorted(),
         };
-        let body = toml::to_string_pretty(&raw).map_err(|source| {
-            RealmTrustError::SerializeFailed {
+        let body =
+            toml::to_string_pretty(&raw).map_err(|source| RealmTrustError::SerializeFailed {
                 path: path.to_path_buf(),
                 source,
-            }
-        })?;
+            })?;
 
         // Write to <path>.tmp in the same directory so `rename` is
         // a same-filesystem atomic operation. Different temp dirs
@@ -318,24 +317,22 @@ impl RealmTrustAnchor {
             opts.write(true).create(true).truncate(true);
             #[cfg(unix)]
             opts.mode(0o600);
-            let mut file = opts.open(&tmp_path).map_err(|source| {
-                RealmTrustError::WriteFailed {
+            let mut file = opts
+                .open(&tmp_path)
+                .map_err(|source| RealmTrustError::WriteFailed {
                     path: tmp_path.clone(),
                     source,
-                }
-            })?;
-            file.write_all(body.as_bytes()).map_err(|source| {
-                RealmTrustError::WriteFailed {
+                })?;
+            file.write_all(body.as_bytes())
+                .map_err(|source| RealmTrustError::WriteFailed {
                     path: tmp_path.clone(),
                     source,
-                }
-            })?;
-            file.sync_all().map_err(|source| {
-                RealmTrustError::WriteFailed {
+                })?;
+            file.sync_all()
+                .map_err(|source| RealmTrustError::WriteFailed {
                     path: tmp_path.clone(),
                     source,
-                }
-            })?;
+                })?;
         }
         fs::rename(&tmp_path, path).map_err(|source| {
             // Best-effort cleanup of the tmpfile; if rename failed,
@@ -574,8 +571,7 @@ added_at_unix_ms = 1714492800000
         anchor
             .append_agent(TrustedAgent {
                 agent_uri: "easynet:///r/realm/agent/laptop-1".to_string(),
-                public_key_b64: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA="
-                    .to_string(),
+                public_key_b64: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA=".to_string(),
                 role: TrustedAgentRole::Device,
                 added_at_unix_ms: 1_714_492_801_234,
             })
@@ -614,7 +610,10 @@ added_at_unix_ms = 1714492800000
         anchor.save(&path).expect("save Ok");
 
         assert!(path.exists(), "target file should exist after save");
-        assert!(!tmp.exists(), ".tmp file must not be left behind on success");
+        assert!(
+            !tmp.exists(),
+            ".tmp file must not be left behind on success"
+        );
     }
 
     #[test]

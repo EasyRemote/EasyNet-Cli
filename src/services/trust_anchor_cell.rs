@@ -157,7 +157,9 @@ mod tests {
         let cell = SharedTrustAnchor::new(Arc::clone(&initial));
 
         let snapshot = cell.snapshot();
-        assert!(snapshot.lookup("easynet:///r/realm/agent/initial").is_some());
+        assert!(snapshot
+            .lookup("easynet:///r/realm/agent/initial")
+            .is_some());
 
         let next = Arc::new(
             RealmTrustAnchor::from_entries(vec![agent("easynet:///r/realm/agent/next")])
@@ -166,7 +168,9 @@ mod tests {
         cell.replace(next);
 
         // Old snapshot still reflects the original anchor.
-        assert!(snapshot.lookup("easynet:///r/realm/agent/initial").is_some());
+        assert!(snapshot
+            .lookup("easynet:///r/realm/agent/initial")
+            .is_some());
         assert!(snapshot.lookup("easynet:///r/realm/agent/next").is_none());
         // Fresh snapshot reflects the replacement.
         let fresh = cell.snapshot();

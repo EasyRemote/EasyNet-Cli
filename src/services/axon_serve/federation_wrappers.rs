@@ -414,9 +414,7 @@ pub struct SubscribeDirectoryInitial {
 /// wiring lives in `daemon_invocation_service.rs` once the registry
 /// is injected.
 #[must_use]
-pub fn build_subscribe_directory_initial(
-    registry: &PresenceRegistry,
-) -> SubscribeDirectoryInitial {
+pub fn build_subscribe_directory_initial(registry: &PresenceRegistry) -> SubscribeDirectoryInitial {
     let agents = registry
         .snapshot()
         .into_iter()
@@ -444,7 +442,10 @@ mod tests {
         // names; changing them without updating PR-4 fixtures is
         // a wire-compat break.
         assert_eq!(ABILITY_FEDERATION_JOIN, "federation.join");
-        assert_eq!(ABILITY_FEDERATION_ADVERTISE_AGENT, "federation.advertise_agent");
+        assert_eq!(
+            ABILITY_FEDERATION_ADVERTISE_AGENT,
+            "federation.advertise_agent"
+        );
         assert_eq!(ABILITY_FEDERATION_HEARTBEAT, "federation.heartbeat");
         assert_eq!(ABILITY_FEDERATION_RESOLVE, "federation.resolve");
         assert_eq!(
@@ -452,7 +453,10 @@ mod tests {
             "federation.subscribe_directory"
         );
         assert_eq!(ABILITY_FEDERATION_REVOKE, "federation.revoke");
-        assert_eq!(ABILITY_FEDERATION_FORWARD_INVOKE, "federation.forward_invoke");
+        assert_eq!(
+            ABILITY_FEDERATION_FORWARD_INVOKE,
+            "federation.forward_invoke"
+        );
         assert_eq!(FEDERATION_ABILITIES.len(), 7);
     }
 
@@ -460,9 +464,14 @@ mod tests {
     fn join_receipt_hash_is_deterministic() {
         let a = derive_join_receipt_hash("easynet:///r/realm/agent/n1", "realm");
         let b = derive_join_receipt_hash("easynet:///r/realm/agent/n1", "realm");
-        assert_eq!(a, b, "byte-identical input must produce byte-identical hash");
+        assert_eq!(
+            a, b,
+            "byte-identical input must produce byte-identical hash"
+        );
         assert_eq!(a.len(), 64, "SHA-256 hex must be 64 characters");
-        assert!(a.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(a
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
     }
 
     #[test]
@@ -577,7 +586,10 @@ mod tests {
             &registry,
         );
         assert_eq!(resp.agents.len(), 1);
-        assert_eq!(resp.agents[0].canonical_agent_uri, "easynet:///r/realm-a/agent/x");
+        assert_eq!(
+            resp.agents[0].canonical_agent_uri,
+            "easynet:///r/realm-a/agent/x"
+        );
     }
 
     #[test]

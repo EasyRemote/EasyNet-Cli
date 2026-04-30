@@ -24,12 +24,11 @@
 //             `KeyResolver`                  (RFC 001 §5.2 step 3)
 //          d. `NonceReplayStore::check_and_record` against the
 //             daemon-shared store            (RFC 001 §5.2 step 4)
-//      - **Device** → URI-only no-op (the temporary boundary
-//        disclosed in DEC-013: deployed devices don't sign yet —
-//        kernel.rs has 4 sites emitting `caller_signature: None`.
-//        PR-8 device-side sign-on-send flips this arm to strict
-//        with a single source-line change, no feature flag, no
-//        ramp plan).
+//      - **Device** → URI-only for legacy unsigned callers; if the
+//        device already carries a real signature+nonce the same
+//        strict 4-step pipeline runs immediately. This keeps
+//        deployed unsigned devices alive while letting PR-2/PR-7
+//        device-session frame 0 exercise the real crypto path.
 //      - **Hub** → strict 4-step (cross-realm federation)
 // 5. Returns `Ok(())` for accept and a `tonic::Status` for reject —
 //    the only outcomes the dispatcher needs
@@ -92,11 +91,10 @@
 // `AXON_CALLER_SIGNATURE_INVALID`; a signature that fails to
 // verify against the trust anchor's public-key entry rejects with
 // the same reason; a nonce already observed inside the dedup
-// window rejects with `AXON_NONCE_REPLAY`. The `Device` path is
-// a deliberate exception (DEC-013): URI-in-trust-set is the only
-// admission check, no signature is required, no nonce is
-// recorded. PR-8 collapses this exception once devices learn to
-// sign.
+// window rejects with `AXON_NONCE_REPLAY`. The `Device` path keeps
+// URI-only admission for unsigned legacy callers, but any device
+// envelope that already carries signature material runs the same
+// strict pipeline immediately.
 //
 // **Invariant 4 (replay store mutation discipline)**: The replay
 // store is mutated only after `validate_envelope` and
@@ -124,7 +122,9 @@ use easynet_axon::invocation::axiom::{
     AgentIdentity as AxiomAgentIdentity, CallerSignature as AxiomCallerSignature, CausalContext,
     InvocationEnvelope, KeyResolver, ReceiptRef, SubjectIdentity, UriProfile,
 };
-use easynet_axon::invocation::{AxonError as InvocationError, AxonErrorKind as InvocationErrorKind};
+use easynet_axon::invocation::{
+    AxonError as InvocationError, AxonErrorKind as InvocationErrorKind,
+};
 
 use crate::pb::axon::v1::{
     causal_context, CausalContext as PbCausalContext, Envelope, EnvelopeOpen, InvokeRequest,
@@ -226,10 +226,7 @@ impl AdmissionFacade {
     /// Verify a server-stream `InvokeServerStreamRequest`. Same rule
     /// set as `verify_invoke`; the differing wrapper is just the
     /// proto type.
-    pub fn verify_invoke_stream(
-        &self,
-        request: &InvokeServerStreamRequest,
-    ) -> Result<(), Status> {
+    pub fn verify_invoke_stream(&self, request: &InvokeServerStreamRequest) -> Result<(), Status> {
         let envelope = request
             .envelope
             .as_ref()
@@ -337,7 +334,13 @@ impl AdmissionFacade {
             // device runtime today emits unsigned envelopes (kernel.rs
             // 4 sites: caller_signature: None) and DEC-013 explicitly
             // refuses to break already-deployed devices.
-            TrustedAgentRole::Device => Ok(()),
+            TrustedAgentRole::Device => {
+                if envelope_carries_signature_material(envelope) {
+                    self.run_strict_admission(envelope, ability, args, snapshot)
+                } else {
+                    Ok(())
+                }
+            }
 
             // Backend & Hub: strict 4-step admission. Backends sign
             // canonical bytes per PR-7 commit 2/N; hubs sign per
@@ -370,14 +373,12 @@ impl AdmissionFacade {
             ));
         }
 
-        let axiom_envelope = build_axiom_envelope(envelope, ability, args)
-            .map_err(axon_error_to_status)?;
+        let axiom_envelope =
+            build_axiom_envelope(envelope, ability, args).map_err(axon_error_to_status)?;
         let axiom_signature = build_axiom_signature(envelope.caller_signature.as_ref())
             .map_err(axon_error_to_status)?;
 
-        let resolver: Box<dyn KeyResolver> = Box::new(TrustAnchorKeyResolver {
-            trust_anchor,
-        });
+        let resolver: Box<dyn KeyResolver> = Box::new(TrustAnchorKeyResolver { trust_anchor });
 
         let result = self.replay_store.with_inner(|store| {
             run_admission(
@@ -588,6 +589,14 @@ fn reject_envelope(detail: &str) -> InvocationError {
     InvocationError::invalid_argument(REASON_ENVELOPE_INCOMPLETE).with_message(detail.to_string())
 }
 
+fn envelope_carries_signature_material(envelope: &Envelope) -> bool {
+    envelope
+        .caller_signature
+        .as_ref()
+        .map(|sig| !sig.algorithm.trim().is_empty() || !sig.signature.is_empty())
+        .unwrap_or(false)
+}
+
 // ── Resolver backed by the realm trust anchor ───────────────────────
 
 /// `KeyResolver` impl that maps `agent_uri → ed25519::VerifyingKey`
@@ -601,13 +610,10 @@ struct TrustAnchorKeyResolver {
 
 impl KeyResolver for TrustAnchorKeyResolver {
     fn resolve(&self, agent_uri: &str) -> Result<VerifyingKey, InvocationError> {
-        let entry = self
-            .trust_anchor
-            .lookup(agent_uri)
-            .ok_or_else(|| {
-                InvocationError::invalid_argument("unknown_agent_uri")
-                    .with_message(format!("agent_uri:{agent_uri}"))
-            })?;
+        let entry = self.trust_anchor.lookup(agent_uri).ok_or_else(|| {
+            InvocationError::invalid_argument("unknown_agent_uri")
+                .with_message(format!("agent_uri:{agent_uri}"))
+        })?;
         let raw = BASE64_STANDARD.decode(&entry.public_key_b64).map_err(|e| {
             InvocationError::invalid_argument("public_key_b64_decode_failed")
                 .with_message(format!("agent_uri:{agent_uri}:{e}"))
@@ -668,11 +674,7 @@ mod tests {
         }
     }
 
-    fn entry_with_role(
-        uri: &str,
-        public_key_b64: String,
-        role: TrustedAgentRole,
-    ) -> TrustedAgent {
+    fn entry_with_role(uri: &str, public_key_b64: String, role: TrustedAgentRole) -> TrustedAgent {
         TrustedAgent {
             agent_uri: uri.to_string(),
             public_key_b64,
@@ -921,9 +923,7 @@ mod tests {
             [0x22u8; 16],
         );
         facade.verify_invoke(&req).expect("first admitted");
-        let err = facade
-            .verify_invoke(&req)
-            .expect_err("replay must reject");
+        let err = facade.verify_invoke(&req).expect_err("replay must reject");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(
             err.message().contains(REASON_NONCE_REPLAY),
@@ -1128,14 +1128,46 @@ mod tests {
     }
 
     #[test]
+    fn device_role_uses_strict_path_when_signature_is_present() {
+        let signing_key = SigningKey::from_bytes(&[0xAB_u8; 32]);
+        let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
+        let caller_uri = "easynet:///r/realm/agent/device-signed";
+        let trust = Arc::new(
+            RealmTrustAnchor::from_entries(vec![device_entry(caller_uri, pub_key_b64)])
+                .expect("anchor"),
+        );
+        let facade = AdmissionFacade::new(
+            trust,
+            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+        );
+
+        let (req, _) = signed_request_with_nonce(
+            caller_uri,
+            caller_uri,
+            "<self>.session",
+            b"",
+            &signing_key,
+            [0x5Au8; 16],
+        );
+        facade
+            .verify_invoke(&req)
+            .expect("signed device caller admitted");
+        assert_eq!(facade.replay_store.len(), 1);
+
+        let err = facade
+            .verify_invoke(&req)
+            .expect_err("replayed signed device nonce must reject");
+        assert!(err.message().contains(REASON_NONCE_REPLAY));
+    }
+
+    #[test]
     fn role_dispatch_keeps_backend_strict_alongside_device_no_op() {
         // Two callers in the same anchor: one Backend, one Device.
         // The Backend caller still goes through strict §5.2; the
         // Device caller still no-ops. This is the dispatch axis
         // working — same trust anchor, two policies.
         let backend_signing = SigningKey::from_bytes(&[0xC0u8; 32]);
-        let backend_pub_b64 =
-            BASE64_STANDARD.encode(backend_signing.verifying_key().to_bytes());
+        let backend_pub_b64 = BASE64_STANDARD.encode(backend_signing.verifying_key().to_bytes());
         let backend_uri = "easynet:///r/realm/agent/backend-svc";
         let device_uri = "easynet:///r/realm/agent/device-C";
 
@@ -1161,8 +1193,7 @@ mod tests {
             .expect("device arm admits unsigned");
 
         // Backend caller, unsigned: rejects strict.
-        let backend_unsigned =
-            invoke_request(Some(envelope_with_caller(backend_uri)));
+        let backend_unsigned = invoke_request(Some(envelope_with_caller(backend_uri)));
         let err = facade
             .verify_invoke(&backend_unsigned)
             .expect_err("backend arm rejects unsigned");

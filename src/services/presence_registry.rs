@@ -284,7 +284,11 @@ impl PresenceRegistry {
     /// compat tests rely on that determinism.
     #[must_use]
     pub fn snapshot(&self) -> Vec<String> {
-        let mut uris: Vec<String> = self.by_uri.iter().map(|entry| entry.key().clone()).collect();
+        let mut uris: Vec<String> = self
+            .by_uri
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect();
         uris.sort();
         uris
     }
@@ -439,7 +443,10 @@ mod tests {
     #[test]
     fn remove_missing_uri_is_noop_and_returns_none() {
         let registry = PresenceRegistry::new();
-        let prior = registry.remove("easynet:///r/realm/agent/missing", OfflineReason::StreamClosed);
+        let prior = registry.remove(
+            "easynet:///r/realm/agent/missing",
+            OfflineReason::StreamClosed,
+        );
         assert!(prior.is_none());
         assert!(registry.snapshot().is_empty());
     }

@@ -155,8 +155,8 @@ pub fn handle(
     // `DuplicateUri`.
     let snapshot = cell.snapshot();
     let mut next_entries: Vec<TrustedAgent> = snapshot.entries_sorted();
-    let mut next_anchor = RealmTrustAnchor::from_entries(next_entries.split_off(0))
-        .map_err(realm_error_to_status)?;
+    let mut next_anchor =
+        RealmTrustAnchor::from_entries(next_entries.split_off(0)).map_err(realm_error_to_status)?;
     next_anchor
         .append_agent(entry.clone())
         .map_err(realm_error_to_status)?;
@@ -199,7 +199,7 @@ fn parse_role(raw: &str) -> Result<TrustedAgentRole, Status> {
 /// the canonical `easynet:///r/` prefix per RFC 001 §3.1; non-canon
 /// prefixes (`easynet://...`, query-stringed, etc.) fall through
 /// to `None` so a malformed URI reaches the user not the disk.
-fn parse_realm_from_uri(uri: &str) -> Option<&str> {
+pub(crate) fn parse_realm_from_uri(uri: &str) -> Option<&str> {
     let rest = uri.strip_prefix("easynet:///r/")?;
     let realm_end = rest.find('/')?;
     let realm = &rest[..realm_end];
@@ -273,11 +273,7 @@ mod tests {
     fn happy_path_appends_and_persists() {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
-        let args = args_bytes(
-            "easynet:///r/r1/agent/alpha",
-            TEST_PUB_B64,
-            "device",
-        );
+        let args = args_bytes("easynet:///r/r1/agent/alpha", TEST_PUB_B64, "device");
 
         let result = handle(&args, "r1", &path, &cell).expect("ok");
         let response: RegisterResponse = serde_json::from_slice(&result).expect("decode");
@@ -290,8 +286,7 @@ mod tests {
         assert!(matches!(entry.role, TrustedAgentRole::Device));
 
         // File on disk reflects the entry.
-        let from_disk =
-            RealmTrustAnchor::try_load_strict(&path).expect("disk load");
+        let from_disk = RealmTrustAnchor::try_load_strict(&path).expect("disk load");
         assert!(from_disk.lookup("easynet:///r/r1/agent/alpha").is_some());
     }
 
@@ -299,14 +294,9 @@ mod tests {
     fn cross_realm_uri_rejected_with_permission_denied() {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
-        let args = args_bytes(
-            "easynet:///r/r2/agent/intruder",
-            TEST_PUB_B64,
-            "device",
-        );
+        let args = args_bytes("easynet:///r/r2/agent/intruder", TEST_PUB_B64, "device");
 
-        let err = handle(&args, "r1", &path, &cell)
-            .expect_err("must reject cross-realm");
+        let err = handle(&args, "r1", &path, &cell).expect_err("must reject cross-realm");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
         assert!(err.message().contains("realm `r2` does not match"));
         // Cell unchanged.
@@ -321,8 +311,7 @@ mod tests {
         let cell = empty_cell();
         let args = args_bytes("not-a-ura-uri", TEST_PUB_B64, "device");
 
-        let err = handle(&args, "r1", &path, &cell)
-            .expect_err("must reject malformed URI");
+        let err = handle(&args, "r1", &path, &cell).expect_err("must reject malformed URI");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(err.message().contains("URA"));
     }
@@ -331,13 +320,8 @@ mod tests {
     fn unknown_role_rejected_with_invalid_argument() {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
-        let args = args_bytes(
-            "easynet:///r/r1/agent/x",
-            TEST_PUB_B64,
-            "supervisor",
-        );
-        let err = handle(&args, "r1", &path, &cell)
-            .expect_err("must reject unknown role");
+        let args = args_bytes("easynet:///r/r1/agent/x", TEST_PUB_B64, "supervisor");
+        let err = handle(&args, "r1", &path, &cell).expect_err("must reject unknown role");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(err.message().contains("supervisor"));
     }
@@ -346,14 +330,9 @@ mod tests {
     fn duplicate_uri_rejected_with_already_exists() {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
-        let args = args_bytes(
-            "easynet:///r/r1/agent/dup",
-            TEST_PUB_B64,
-            "device",
-        );
+        let args = args_bytes("easynet:///r/r1/agent/dup", TEST_PUB_B64, "device");
         handle(&args, "r1", &path, &cell).expect("first ok");
-        let err = handle(&args, "r1", &path, &cell)
-            .expect_err("second must reject as duplicate");
+        let err = handle(&args, "r1", &path, &cell).expect_err("second must reject as duplicate");
         assert_eq!(err.code(), tonic::Code::AlreadyExists);
     }
 
@@ -381,8 +360,8 @@ mod tests {
     fn malformed_json_rejected_with_invalid_argument() {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
-        let err = handle(b"{not json}", "r1", &path, &cell)
-            .expect_err("must reject malformed JSON");
+        let err =
+            handle(b"{not json}", "r1", &path, &cell).expect_err("must reject malformed JSON");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(err.message().contains("JSON decode failed"));
     }
@@ -395,22 +374,14 @@ mod tests {
         let cell = empty_cell();
 
         handle(
-            &args_bytes(
-                "easynet:///r/r1/agent/backend-svc",
-                TEST_PUB_B64,
-                "backend",
-            ),
+            &args_bytes("easynet:///r/r1/agent/backend-svc", TEST_PUB_B64, "backend"),
             "r1",
             &path,
             &cell,
         )
         .expect("backend ok");
         handle(
-            &args_bytes(
-                "easynet:///r/r1/agent/device-A",
-                TEST_PUB_B64,
-                "device",
-            ),
+            &args_bytes("easynet:///r/r1/agent/device-A", TEST_PUB_B64, "device"),
             "r1",
             &path,
             &cell,
@@ -419,8 +390,7 @@ mod tests {
 
         let snap = cell.snapshot();
         assert_eq!(snap.len(), 2);
-        let from_disk =
-            RealmTrustAnchor::try_load_strict(&path).expect("disk load");
+        let from_disk = RealmTrustAnchor::try_load_strict(&path).expect("disk load");
         assert_eq!(from_disk.len(), 2);
     }
 
@@ -430,7 +400,10 @@ mod tests {
             parse_realm_from_uri("easynet:///r/realm-x/agent/n1"),
             Some("realm-x")
         );
-        assert_eq!(parse_realm_from_uri("easynet:///r/abc/agent/foo@v1"), Some("abc"));
+        assert_eq!(
+            parse_realm_from_uri("easynet:///r/abc/agent/foo@v1"),
+            Some("abc")
+        );
         assert_eq!(parse_realm_from_uri("easynet:///r//agent/n1"), None);
         assert_eq!(parse_realm_from_uri("https://example.com"), None);
         assert_eq!(parse_realm_from_uri("easynet://r/x/agent/n1"), None); // missing third slash

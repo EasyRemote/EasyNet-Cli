@@ -128,9 +128,7 @@ mod tests {
 
         let handle_a = std::thread::spawn({
             let store = store.clone();
-            move || {
-                store.with_inner(|s| s.check_and_record("caller", "ability", nonce, 1_000))
-            }
+            move || store.with_inner(|s| s.check_and_record("caller", "ability", nonce, 1_000))
         });
         handle_a.join().unwrap().expect("first thread accepted");
 

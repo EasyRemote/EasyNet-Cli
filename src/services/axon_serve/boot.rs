@@ -25,6 +25,10 @@
 //    `RealmTrustAnchor::load_or_empty`. Empty fallback is fine for
 //    PR-1; PR-7 populates it via the pairing flow; PR-10 canary
 //    refuses to swap without a non-empty file.
+// 3.5 On unix, listens for SIGHUP and reloads the trust anchor from
+//     disk into the shared cell. This is the operator-facing "manual
+//     edit + hup" path PR-7 checklist requires before a future file
+//     watcher RFC exists.
 // 4. Constructs `Arc<PresenceRegistry>` and the
 ///    `DaemonInvocationService` with the admission facade injected.
 // 5. Spawns one or two tokio tasks:
@@ -77,9 +81,11 @@ use tonic::transport::Server;
 use crate::pb::axon::v1::invocation_server::InvocationServer;
 use crate::persistence::daemon_config::{DaemonConfig, DaemonMode, DEFAULT_DAEMON_CONFIG_PATH};
 use crate::runtime::ability_dispatch::AbilityDispatcher;
+use crate::runtime::publish::derive_subject_keypair;
 use crate::services::axon_serve::admission_facade::AdmissionFacade;
 use crate::services::axon_serve::daemon_invocation_service::DaemonInvocationService;
 use crate::services::axon_serve::local_ability_dispatcher::LocalAbilityDispatcher;
+use crate::services::axon_serve::session_initiator::SessionSigningSeed;
 use crate::services::axon_serve::session_initiator::run_session_supervisor;
 use crate::services::pending_dispatch::PendingDispatchMap;
 use crate::services::presence_registry::PresenceRegistry;
@@ -108,7 +114,8 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
         }
     };
 
-    let daemon_uri = load_daemon_uri();
+    let daemon_identity = load_daemon_identity();
+    let daemon_uri = daemon_identity.as_ref().map(|identity| identity.caller_uri.clone());
     // PR-7 commit 7/N adds an env-override seam: production deploys
     // use `/etc/easynet/realm-trust.toml`; tests / smoke runs set
     // `EASYNET_REALM_TRUST_PATH` to a tempdir-rooted path so the
@@ -125,16 +132,18 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     // cell so the next admission sees the new entry without a daemon
     // restart.
     let trust_anchor_cell = SharedTrustAnchor::new(Arc::new(trust_anchor));
+    spawn_trust_anchor_reload_task(trust_anchor_path.clone(), trust_anchor_cell.clone());
     let presence = Arc::new(PresenceRegistry::new());
     let pending = Arc::new(PendingDispatchMap::new());
     let admission =
         AdmissionFacade::with_trust_anchor_cell(trust_anchor_cell.clone(), daemon_uri.clone());
     let service = DaemonInvocationService::new(Arc::clone(&presence), admission)
         .with_pending(Arc::clone(&pending))
+        .with_session_realm(config.realm().to_string())
         .with_register_pubkey(
             config.realm().to_string(),
-            trust_anchor_path,
-            trust_anchor_cell,
+            trust_anchor_path.clone(),
+            trust_anchor_cell.clone(),
         );
 
     spawn_uds_listener(&config, service)?;
@@ -156,10 +165,10 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     // a library-level capability. Spec §1.3 ties the outbound dial
     // to device mode only.
     if matches!(config.mode(), DaemonMode::Device) {
-        if let (Some(hub_endpoint), Some(caller_uri)) =
-            (config.hub_endpoint().map(str::to_string), daemon_uri)
+        if let (Some(hub_endpoint), Some(identity)) =
+            (config.hub_endpoint().map(str::to_string), daemon_identity)
         {
-            spawn_session_supervisor(hub_endpoint, caller_uri, dispatcher);
+            spawn_session_supervisor(hub_endpoint, identity, dispatcher);
         } else {
             eprintln!(
                 "[axon-serve] device-mode daemon missing either hub_endpoint or \
@@ -179,14 +188,19 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
 /// dropped, which the supervisor treats the same as a cancel signal).
 fn spawn_session_supervisor(
     hub_endpoint: String,
-    caller_uri: String,
+    identity: DaemonIdentity,
     dispatcher: Arc<AbilityDispatcher>,
 ) {
+    let signing_state = if identity.signing_seed.is_some() {
+        "signed frame0"
+    } else {
+        "legacy unsigned frame0"
+    };
     eprintln!(
-        "[axon-serve] STAGING: device-mode dialing `<self>.session` against {hub_endpoint} as \
-         {caller_uri}; LocalAbilityDispatcher now holds the boot-threaded AbilityDispatcher Arc, \
-         but SessionDispatch::Dispatch frames still receive a typed \"not-yet-wired\" error \
-         reply until PR-2 commit 2/N wires real LocalAbilityRegistry dispatch"
+        "[axon-serve] device-mode dialing `<self>.session` against {hub_endpoint} as \
+         {}; {signing_state}; LocalAbilityDispatcher will execute inbound \
+         SessionDispatch::Dispatch frames through the boot-threaded AbilityDispatcher Arc",
+        identity.caller_uri,
     );
     // Cancel oneshot held for the daemon process's lifetime — the
     // supervisor exits when the cancel sender drops, which happens
@@ -201,7 +215,8 @@ fn spawn_session_supervisor(
     let dispatcher = Arc::new(LocalAbilityDispatcher::new(dispatcher));
     tokio::spawn(run_session_supervisor(
         hub_endpoint,
-        caller_uri,
+        identity.caller_uri,
+        identity.signing_seed,
         dispatcher,
         cancel_rx,
     ));
@@ -276,28 +291,107 @@ fn spawn_uds_listener(
     Ok(())
 }
 
-/// Resolve the daemon's own URI from `~/.easynet/credentials.json`.
+#[derive(Debug, Clone)]
+struct DaemonIdentity {
+    caller_uri: String,
+    signing_seed: Option<SessionSigningSeed>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct StoredDeviceIdentity {
+    #[serde(default)]
+    agent_uri: Option<String>,
+    #[serde(default)]
+    tenant_id: Option<String>,
+    #[serde(default)]
+    node_id: Option<String>,
+}
+
+/// Resolve the daemon's caller URI plus the optional deterministic
+/// signing seed from `~/.easynet/credentials.json`.
 ///
-/// PR-1 staging takes the simplest possible reading: load
-/// `credentials.json`, look for an `agent_uri` field, return it as
-/// `Some(String)` if present. Returns `None` on any failure so the
-/// admission facade falls back to "every external caller must be in
-/// the realm trust set" — the safest default before PR-7 wires the
-/// real identity bootstrap.
-///
-// TODO(pr7): replace this stringly-typed `serde_json::Value` lookup
-// with `easynet_cli::persistence::config::Credentials` (typed
-// loader, ed25519 seed validation, atomic-write semantics). The
-// staging shape here is intentionally minimal so PR-1's binary
-// integration unblocks without depending on PR-7's identity
-// bootstrap; the Credentials struct already exists in the
-// persistence layer and is the right consumer for both this
-// loader and the eventual envelope-signing path.
-fn load_daemon_uri() -> Option<String> {
+/// Compatibility rules:
+/// - legacy sparse fixtures that only carry `agent_uri` still load
+///   and boot; they simply omit the signing seed and therefore keep
+///   the old unsigned frame-0 behaviour
+/// - modern credentials with `(tenant_id, node_id)` derive the same
+///   deterministic Ed25519 seed the SDK uses for
+///   `easynet:prv:reg:agent.<node>`
+fn load_daemon_identity() -> Option<DaemonIdentity> {
     let path = expand_home("~/.easynet/credentials.json");
     let raw = std::fs::read_to_string(&path).ok()?;
-    let json: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    json.get("agent_uri")?.as_str().map(str::to_string)
+    let stored: StoredDeviceIdentity = serde_json::from_str(&raw).ok()?;
+
+    let caller_uri = stored
+        .agent_uri
+        .as_deref()
+        .map(str::trim)
+        .filter(|uri| !uri.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            let tenant_id = stored.tenant_id.as_deref()?.trim();
+            let node_id = stored.node_id.as_deref()?.trim();
+            if tenant_id.is_empty() || node_id.is_empty() {
+                return None;
+            }
+            Some(format!("easynet:///r/{tenant_id}/agent/{node_id}"))
+        })?;
+
+    let tenant_id = stored
+        .tenant_id
+        .clone()
+        .or_else(|| tenant_id_from_agent_uri(&caller_uri));
+    let node_id = stored
+        .node_id
+        .clone()
+        .or_else(|| node_id_from_agent_uri(&caller_uri));
+
+    let signing_seed = match (tenant_id.as_deref(), node_id.as_deref()) {
+        (Some(tenant), Some(node)) if !tenant.trim().is_empty() && !node.trim().is_empty() => {
+            let subject_id = format!("easynet:prv:reg:agent.{node}");
+            Some(derive_subject_keypair(tenant.trim(), &subject_id).0)
+        }
+        _ => None,
+    };
+
+    Some(DaemonIdentity {
+        caller_uri,
+        signing_seed,
+    })
+}
+
+fn tenant_id_from_agent_uri(uri: &str) -> Option<String> {
+    let rest = uri.strip_prefix("easynet:///r/")?;
+    let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let segments: Vec<&str> = path.split('/').filter(|segment| !segment.is_empty()).collect();
+    if segments.is_empty() {
+        return None;
+    }
+    if segments.len() >= 3 && segments[1] == "agent" {
+        return Some(segments[0].to_string());
+    }
+    if let Some(query_tenant) = query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("tenant_id=").map(str::to_string))
+    {
+        if !query_tenant.trim().is_empty() {
+            return Some(query_tenant);
+        }
+    }
+    Some(segments[0].to_string())
+}
+
+fn node_id_from_agent_uri(uri: &str) -> Option<String> {
+    let rest = uri.strip_prefix("easynet:///r/")?;
+    let path = rest.split('?').next().unwrap_or(rest);
+    let segments: Vec<&str> = path.split('/').filter(|segment| !segment.is_empty()).collect();
+    if segments.len() >= 3 && segments[1] == "agent" {
+        return Some(segments[2].to_string());
+    }
+    if segments.len() >= 3 && segments[1] == "reg" {
+        return segments[2].strip_prefix("agent.").map(str::to_string);
+    }
+    None
 }
 
 /// Resolve the realm-trust file path from the env override or fall
@@ -339,6 +433,55 @@ fn load_trust_anchor_from(path: &Path) -> RealmTrustAnchor {
         }
     }
 }
+
+fn reload_trust_anchor_cell_from(
+    path: &Path,
+    trust_anchor_cell: &SharedTrustAnchor,
+) -> anyhow::Result<usize> {
+    let next = RealmTrustAnchor::load_or_empty(path)
+        .map_err(|err| anyhow::anyhow!("load trust anchor from {}: {err}", path.display()))?;
+    let len = next.len();
+    trust_anchor_cell.replace(Arc::new(next));
+    Ok(len)
+}
+
+#[cfg(unix)]
+fn spawn_trust_anchor_reload_task(path: PathBuf, trust_anchor_cell: SharedTrustAnchor) {
+    tokio::spawn(async move {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let mut sighup = match signal(SignalKind::hangup()) {
+            Ok(stream) => stream,
+            Err(err) => {
+                eprintln!(
+                    "[axon-serve] failed to install SIGHUP trust-anchor reload handler: {err}"
+                );
+                return;
+            }
+        };
+
+        while sighup.recv().await.is_some() {
+            match reload_trust_anchor_cell_from(&path, &trust_anchor_cell) {
+                Ok(0) => eprintln!(
+                    "[axon-serve] SIGHUP reload completed: trust anchor at {} is now empty",
+                    path.display()
+                ),
+                Ok(len) => eprintln!(
+                    "[axon-serve] SIGHUP reload completed: trust anchor at {} now has {} entries",
+                    path.display(),
+                    len
+                ),
+                Err(err) => eprintln!(
+                    "[axon-serve] SIGHUP reload failed for {}: {err}; keeping previous trust set",
+                    path.display()
+                ),
+            }
+        }
+    });
+}
+
+#[cfg(not(unix))]
+fn spawn_trust_anchor_reload_task(_path: PathBuf, _trust_anchor_cell: SharedTrustAnchor) {}
 
 /// Expand a `~/...` prefix using the current user's HOME. Existing
 /// EasyNet code uses several different helpers for this (some via
@@ -388,5 +531,65 @@ mod tests {
 
         // No panic, no error — soft skip is the contract.
         start_axon_serve_sidecar(dispatcher).expect("missing config is a soft skip");
+    }
+
+    #[test]
+    fn reload_trust_anchor_cell_from_replaces_snapshot() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("realm-trust.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[trusted_agent]]
+agent_uri = "easynet:///r/realm/agent/backend"
+public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+role = "backend"
+added_at_unix_ms = 1714492800000
+"#,
+        )
+        .expect("write trust anchor");
+
+        let cell = SharedTrustAnchor::default();
+        let reloaded = reload_trust_anchor_cell_from(&path, &cell).expect("reload succeeds");
+        assert_eq!(reloaded, 1);
+        assert!(
+            cell.snapshot()
+                .lookup("easynet:///r/realm/agent/backend")
+                .is_some(),
+            "SIGHUP reload must publish the on-disk entry to future admissions"
+        );
+    }
+
+    #[test]
+    fn reload_trust_anchor_cell_from_keeps_previous_snapshot_on_parse_error() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("realm-trust.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[trusted_agent]]
+agent_uri = "easynet:///r/realm/agent/initial"
+public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+role = "backend"
+added_at_unix_ms = 1714492800000
+"#,
+        )
+        .expect("write initial trust anchor");
+
+        let cell = SharedTrustAnchor::default();
+        reload_trust_anchor_cell_from(&path, &cell).expect("initial reload succeeds");
+
+        std::fs::write(&path, "not valid toml = [").expect("corrupt trust anchor");
+        let err = reload_trust_anchor_cell_from(&path, &cell).expect_err("reload must fail");
+        assert!(
+            err.to_string().contains("load trust anchor"),
+            "error should name the reload path, got: {err}"
+        );
+        assert!(
+            cell.snapshot()
+                .lookup("easynet:///r/realm/agent/initial")
+                .is_some(),
+            "failed reload must keep the previously published trust anchor"
+        );
     }
 }
