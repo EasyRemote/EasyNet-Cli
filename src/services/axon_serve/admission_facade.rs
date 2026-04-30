@@ -6,43 +6,71 @@
 //              before routing into a federation wrapper or any
 //              ability handler.
 //
-// What this module does
-// ---------------------
+// What this module does (PR-7 commit 4/N — DEC-013 path-conditional)
+// ------------------------------------------------------------------
 // 1. Reads the `Envelope` from an inbound `pb::axon::v1::InvokeRequest`
 //    (or its server-stream / bidi counterpart)
-// 2. Confirms the caller URI is present in the daemon's
-//    `RealmTrustAnchor`
-// 3. Returns `Ok(())` for accept and a `tonic::Status` for reject —
+// 2. **Loopback bypass**: callers presenting the daemon's own URI
+//    are admitted without crypto — the daemon trusts itself
+// 3. **Trust-anchor membership** (always): unknown caller URIs are
+//    rejected with `permission_denied` before any structural work,
+//    so unrelated callers cannot push entries into the replay store
+// 4. **Path-conditional admission by `TrustedAgent.role`** (DEC-013
+//    Option D, see below):
+//      - **Backend** → strict 4-step §5.2 pipeline
+//          a. `validate_envelope`           (RFC 001 §5.2 step 1)
+//          b. `validate_signature_structure` (RFC 001 §5.2 step 2)
+//          c. `verify_signature` against the trust-anchor-backed
+//             `KeyResolver`                  (RFC 001 §5.2 step 3)
+//          d. `NonceReplayStore::check_and_record` against the
+//             daemon-shared store            (RFC 001 §5.2 step 4)
+//      - **Device** → URI-only no-op (the temporary boundary
+//        disclosed in DEC-013: deployed devices don't sign yet —
+//        kernel.rs has 4 sites emitting `caller_signature: None`.
+//        PR-8 device-side sign-on-send flips this arm to strict
+//        with a single source-line change, no feature flag, no
+//        ramp plan).
+//      - **Hub** → strict 4-step (cross-realm federation)
+// 5. Returns `Ok(())` for accept and a `tonic::Status` for reject —
 //    the only outcomes the dispatcher needs
+
+// Why path-conditional, not strict-everywhere
+// -------------------------------------------
+// PR-7 commit 4/N upgrades the gate from URI-only to strict crypto.
+// `kernel.rs:609/689/742/774` show 4 device-side call sites that
+// emit unsigned envelopes today; an unconditional strict gate
+// PermissionDenies every deployed device immediately, forcing
+// re-pair on every host. DEC-013 keeps the strict semantics on the
+// Backend/Hub paths (which do sign — PR-7 commit 2/N landed
+// backend signing) while leaving the Device path at the PR-1 URI-
+// only behaviour until PR-8 introduces device sign-on-send. The
+// `TrustedAgent.role` field (set at pairing time per PR-7 commit
+// 5/N's `<self>.register_device_pubkey`) is the dispatch axis;
+// the gate writes no new state to make path selection work.
 //
 // What this module does NOT do (yet)
 // ----------------------------------
-// PR-1 spec §5 sequences admission verification across multiple
-// PRs. This commit lands the URI-in-trust-set check only — the
-// minimum gate that surfaces "caller is unknown" to operators
-// while the trust set is still being populated by PR-7's pairing
-// flow. Specifically:
+// **Receipt emission** — RFC 001 §5.3 admission-emits-receipt. Per
+// DEC-012, receipt minting is deferred to PR-10 (production canary)
+// where the receipt store and the signing key are wired together.
+// PR-7 (this commit) intentionally leaves admission as a yes/no gate
+// — receipts on the InvokeResponse remain `None` for now.
 //
-// - **Full envelope canonical-bytes signature verification** —
-//   `easynet_axon::invocation::admission::run_admission` requires
-//   `InvocationEnvelope` + `CallerSignature` constructed from the
-//   proto Envelope fields. Constructing those domain types from
-//   the proto wire (especially the `CausalContext` oneof) is
-//   straightforward but not free; PR-7 lands it alongside the
-//   real signed payloads from the pairing flow
-// - **Nonce replay protection** — needs a long-lived
-//   `NonceReplayStore` shared across requests. Plumbing the
-//   shared mutex through the dispatcher is mechanical; PR-7 also
-//   adds this since real signed payloads are needed to test the
-//   replay protection meaningfully
-// - **Receipt emission** — RFC 001 §5.3 admission-emits-receipt.
-//   PR-1 does not emit; PR-7 wires receipt minting alongside the
-//   real signature verification
-//
-// This staging is consistent with spec §5 ("PR-1 to PR-7 admission
-// is permissive but URI-in-trust-set; PR-7 makes it strict") and
-// with DEC-002's runbook obligation that ties admission strictness
-// to the production canary's pre-conditions.
+// Cross-PR coupling note
+// ----------------------
+// **This commit makes the existing PR-6 e2e test (`go test
+// -tags=e2e`) fail until PR-7 commit 6/N lands.** The e2e test
+// formerly exercised an unsigned envelope and observed a
+// `PermissionDenied` from the URI-not-in-trust-anchor branch. With
+// the upgraded gate, an unsigned envelope from a non-loopback URI
+// fails `validate_signature_structure` (signature_algorithm_empty)
+// and the wire-visible reason changes from `permission_denied` to
+// `invalid_argument` with reason `AXON_CALLER_SIGNATURE_INVALID`.
+// The flip is by design — commit 6/N teaches the EasyNet backend's
+// `verifyCredentialLogic` to invoke the new `<self>.register_device_pubkey`
+// ability (PR-7 commit 5/N) so the trust set carries a real public
+// key the gate can verify against, and commit 7/N updates the e2e
+// to drive a signed envelope through the now-strict gate.
 //
 // Invariants
 // ----------
@@ -51,48 +79,78 @@
 // receives `Status::invalid_argument` for any RPC missing this; it
 // is a wire-level requirement, not a policy choice.
 //
-// **Invariant 2 (trust set membership)**: When the trust anchor is
-// non-empty, every `caller.uri` that is *not* in it is rejected
-// with `Status::permission_denied`. When the trust anchor *is*
-// empty (PR-1 fallback path), every external caller is rejected
-// with the same status; only the daemon's own loopback callers
-// (caller URI matching the daemon's configured URI) bypass the
-// check. This is the empty-trust-rejects-everyone default that
-// keeps the staging window safe.
+// **Invariant 2 (loopback bypass)**: When the caller URI matches
+// the daemon's configured URI, admission accepts without consulting
+// the trust anchor or the replay store. The daemon trusts itself —
+// `<self>.*` abilities and admin RPCs originate from the daemon's
+// own process and need not sign.
 //
-// **Invariant 3 (no ambient state)**: Every method takes the
-// envelope as an argument. The facade does not cache, persist, or
-// observe anything across calls beyond the `Arc<RealmTrustAnchor>`
-// it was constructed with. PR-7 will add a shared
-// `NonceReplayStore` mutex to support replay protection; until
-// then the facade is stateless modulo the trust set.
+// **Invariant 3 (path-conditional strict crypto)**: External
+// callers split into two paths by `TrustedAgent.role`. The
+// `Backend` and `Hub` paths run the full §5.2 pipeline end-to-end:
+// a missing/malformed `caller_signature` rejects with
+// `AXON_CALLER_SIGNATURE_INVALID`; a signature that fails to
+// verify against the trust anchor's public-key entry rejects with
+// the same reason; a nonce already observed inside the dedup
+// window rejects with `AXON_NONCE_REPLAY`. The `Device` path is
+// a deliberate exception (DEC-013): URI-in-trust-set is the only
+// admission check, no signature is required, no nonce is
+// recorded. PR-8 collapses this exception once devices learn to
+// sign.
+//
+// **Invariant 4 (replay store mutation discipline)**: The replay
+// store is mutated only after `validate_envelope` and
+// `validate_signature_structure` both pass — malformed callers
+// can never pollute the store. This is a property of
+// `easynet_axon::invocation::admission::run_admission`, which
+// orders the four steps so structure failures short-circuit before
+// the nonce hits the map.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::sync::Arc;
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use ed25519_dalek::VerifyingKey;
+use sha2::{Digest, Sha256};
 use tonic::Status;
 
-use crate::pb::axon::v1::{Envelope, InvokeRequest, InvokeServerStreamRequest};
-use crate::services::realm_trust_anchor::RealmTrustAnchor;
+use easynet_axon::invocation::admission::{
+    now_ms as axon_now_ms, run_admission, REASON_CALLER_SIGNATURE_INVALID,
+    REASON_ENVELOPE_INCOMPLETE, REASON_NONCE_REPLAY,
+};
+use easynet_axon::invocation::axiom::{
+    AgentIdentity as AxiomAgentIdentity, CallerSignature as AxiomCallerSignature, CausalContext,
+    InvocationEnvelope, KeyResolver, ReceiptRef, SubjectIdentity, UriProfile,
+};
+use easynet_axon::invocation::{AxonError as InvocationError, AxonErrorKind as InvocationErrorKind};
+
+use crate::pb::axon::v1::{
+    causal_context, CausalContext as PbCausalContext, Envelope, EnvelopeOpen, InvokeRequest,
+    InvokeServerStreamRequest,
+};
+use crate::services::nonce_replay_store::SharedNonceReplayStore;
+use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgentRole};
 
 /// Per-RPC admission gate consulted by `DaemonInvocationService`
 /// before routing into a federation wrapper or fallthrough handler.
 ///
-/// Holds an `Arc<RealmTrustAnchor>` — the trust set authored by
-/// PR-7's pairing flow and read at boot by the daemon binary.
+/// Holds:
+/// - `Arc<RealmTrustAnchor>` — the trust set authored by PR-7's
+///   pairing flow and read at boot by the daemon binary
+/// - `daemon_uri` — the daemon's own canonical URI (loopback bypass)
+/// - `replay_store` — the daemon-shared `SharedNonceReplayStore` so
+///   replay windows hold across all admissions
+///
 /// Constructed once per daemon process; cloned into per-request
-/// dispatcher tasks.
+/// dispatcher tasks (clone is cheap — all fields are `Arc` or
+/// `Option<String>`).
 #[derive(Debug, Clone)]
 pub struct AdmissionFacade {
     trust_anchor: Arc<RealmTrustAnchor>,
-    /// Daemon's own canonical URI (from `credentials.json` per
-    /// spec §5.1). Loopback callers presenting this URI bypass the
-    /// trust-anchor membership check — the daemon trusts itself.
-    /// `None` is permitted for tests; in that mode every external
-    /// caller must be in the trust anchor.
     daemon_uri: Option<String>,
+    replay_store: SharedNonceReplayStore,
 }
 
 impl AdmissionFacade {
@@ -100,28 +158,52 @@ impl AdmissionFacade {
     /// daemon URI. Production callers thread the daemon's
     /// `credentials.json`-derived URI through; tests typically pass
     /// `None`.
+    ///
+    /// The replay store is created fresh per facade — production
+    /// builds one facade per daemon process, so this is also one
+    /// store per daemon process (RFC 001 §5.2 step 4 invariant: one
+    /// shared dedup window across the daemon's lifetime).
     #[must_use]
     pub fn new(trust_anchor: Arc<RealmTrustAnchor>, daemon_uri: Option<String>) -> Self {
         Self {
             trust_anchor,
             daemon_uri,
+            replay_store: SharedNonceReplayStore::new(),
+        }
+    }
+
+    /// Construct a facade with a caller-supplied replay store. Used
+    /// by tests that need to drive multiple facades against a single
+    /// shared store, and reserved for the eventual PR-10 work that
+    /// might split admission across listeners but keep one daemon-
+    /// wide replay window.
+    #[must_use]
+    pub fn with_replay_store(
+        trust_anchor: Arc<RealmTrustAnchor>,
+        daemon_uri: Option<String>,
+        replay_store: SharedNonceReplayStore,
+    ) -> Self {
+        Self {
+            trust_anchor,
+            daemon_uri,
+            replay_store,
         }
     }
 
     /// Verify a unary `InvokeRequest`. Returns `Ok(())` when the
-    /// caller is admitted; otherwise a `tonic::Status` mapped by
-    /// the rule set in `verify_envelope`.
+    /// caller is admitted; otherwise a `tonic::Status` mapped per
+    /// the rule set in `run_full_admission`.
     pub fn verify_invoke(&self, request: &InvokeRequest) -> Result<(), Status> {
         let envelope = request
             .envelope
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("Invoke request missing envelope"))?;
-        self.verify_envelope(envelope)
+        self.run_full_admission(envelope, &request.function_name, &request.arguments)
     }
 
-    /// Verify a server-stream `InvokeServerStreamRequest`. Same
-    /// rule set as `verify_invoke`; the differing wrapper is just
-    /// the proto type.
+    /// Verify a server-stream `InvokeServerStreamRequest`. Same rule
+    /// set as `verify_invoke`; the differing wrapper is just the
+    /// proto type.
     pub fn verify_invoke_stream(
         &self,
         request: &InvokeServerStreamRequest,
@@ -130,58 +212,414 @@ impl AdmissionFacade {
             .envelope
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("InvokeStream request missing envelope"))?;
-        self.verify_envelope(envelope)
+        self.run_full_admission(envelope, &request.function_name, &request.arguments)
     }
 
-    /// Core check applied to a proto `Envelope`. Public so the
-    /// future bidi accept path (PR-2) can call the same rule set
-    /// against the EnvelopeOpen first frame.
-    pub fn verify_envelope(&self, envelope: &Envelope) -> Result<(), Status> {
-        let caller_uri = envelope
-            .caller
+    /// Verify the frame-0 `EnvelopeOpen` of an InvokeBidi stream.
+    /// The bidi path's "ability" is `target.ability_name`, and the
+    /// "args" feed for `args_digest` is `initial_args`. If either
+    /// is missing the gate rejects with `invalid_argument`.
+    pub fn verify_envelope_for_bidi(&self, open: &EnvelopeOpen) -> Result<(), Status> {
+        let envelope = open
+            .envelope
             .as_ref()
-            .map(|caller| caller.uri.as_str())
-            .filter(|uri| !uri.is_empty())
+            .ok_or_else(|| Status::invalid_argument("InvokeBidi frame 0 missing envelope"))?;
+        let ability = open
+            .target
+            .as_ref()
+            .map(|t| t.ability_name.as_str())
+            .filter(|n| !n.is_empty())
             .ok_or_else(|| {
                 Status::invalid_argument(
-                    "envelope.caller.uri is required (Invariant 1: caller URI required)",
+                    "InvokeBidi frame 0 missing target.ability_name; cannot dispatch",
                 )
             })?;
+        self.run_full_admission(envelope, ability, &open.initial_args)
+    }
 
-        if let Some(daemon_uri) = self.daemon_uri.as_deref() {
-            if caller_uri == daemon_uri {
-                return Ok(());
-            }
+    /// Direct-envelope entrypoint reserved for the PR-2 InvokeBidi
+    /// path that does NOT carry an EnvelopeOpen — surface kept stable
+    /// so existing callers compile. Defers to the loopback-only
+    /// fast path; full admission requires the (ability, args) tuple
+    /// the other entrypoints supply.
+    ///
+    /// PR-7 note: this is the URI-only legacy gate. The bidi path
+    /// has migrated to `verify_envelope_for_bidi`. Remove once
+    /// PR-2's session bidi handler also supplies (ability, args).
+    pub fn verify_envelope_uri_only(&self, envelope: &Envelope) -> Result<(), Status> {
+        let caller_uri = caller_uri_required(envelope)?;
+        if self.is_loopback(caller_uri) {
+            return Ok(());
         }
-
         if self.trust_anchor.lookup(caller_uri).is_some() {
             return Ok(());
         }
+        Err(permission_denied_unknown_caller(caller_uri))
+    }
 
-        Err(Status::permission_denied(format!(
-            "caller URI `{caller_uri}` is not in the realm trust anchor; \
-             pairing-flow registration is the PR-7 deliverable that \
-             populates the trust set",
-        )))
+    // ── Internal pipeline ────────────────────────────────────────
+
+    /// Path-conditional admission per DEC-013 Option D.
+    ///
+    /// Order:
+    /// 1. Caller URI required (Invariant 1).
+    /// 2. Loopback bypass (Invariant 2).
+    /// 3. Trust-anchor membership: unknown URI → `permission_denied`.
+    /// 4. Path by `TrustedAgent.role`:
+    ///    - `Backend`    → strict 4-step §5.2 pipeline (signs envelopes)
+    ///    - `Device`     → URI-only no-op (devices don't sign yet —
+    ///                     PR-8 flips this arm to strict once
+    ///                     device-side sign-on-send lands)
+    ///    - `Hub`        → strict 4-step (cross-realm federation)
+    ///
+    /// The Device arm is the temporary boundary disclosed in
+    /// DEC-013: PR-7 commit 4/N upgrades backend↔daemon to strict
+    /// crypto without invalidating already-deployed devices that
+    /// were never taught to sign. The arm collapses to strict in
+    /// PR-8 (one source-line flip, no feature flag, no ramp).
+    fn run_full_admission(
+        &self,
+        envelope: &Envelope,
+        ability: &str,
+        args: &[u8],
+    ) -> Result<(), Status> {
+        let caller_uri = caller_uri_required(envelope)?;
+
+        // Invariant 2: loopback bypass. Daemon trusts itself.
+        if self.is_loopback(caller_uri) {
+            return Ok(());
+        }
+
+        // Trust-anchor membership precedes any structural check.
+        // Unknown callers reject with `permission_denied` — the
+        // DEC-013 entry contract says "URI-not-in-trust-set" surfaces
+        // before any attempt at envelope/signature parsing, so an
+        // unrelated caller cannot waste structure-validation cycles
+        // and never has its (possibly malformed) nonce considered.
+        let trusted = self
+            .trust_anchor
+            .lookup(caller_uri)
+            .ok_or_else(|| permission_denied_unknown_caller(caller_uri))?;
+
+        match trusted.role {
+            // Device path: URI-only admission until PR-8 device-side
+            // sign-on-send lands. No envelope/signature/replay work —
+            // device runtime today emits unsigned envelopes (kernel.rs
+            // 4 sites: caller_signature: None) and DEC-013 explicitly
+            // refuses to break already-deployed devices.
+            TrustedAgentRole::Device => Ok(()),
+
+            // Backend & Hub: strict 4-step admission. Backends sign
+            // canonical bytes per PR-7 commit 2/N; hubs sign per
+            // PR-10's federation surface.
+            TrustedAgentRole::Backend | TrustedAgentRole::Hub => {
+                self.run_strict_admission(envelope, ability, args)
+            }
+        }
+    }
+
+    /// Strict §5.2 admission for the Backend / Hub arms of DEC-013.
+    /// Bridges proto → axiom domain types and dispatches into
+    /// `easynet_axon::invocation::admission::run_admission` with the
+    /// trust-anchor-backed `KeyResolver` and the daemon-shared replay
+    /// store.
+    fn run_strict_admission(
+        &self,
+        envelope: &Envelope,
+        ability: &str,
+        args: &[u8],
+    ) -> Result<(), Status> {
+        if ability.is_empty() {
+            return Err(Status::invalid_argument(
+                "envelope present but ability/function_name is empty; cannot run admission",
+            ));
+        }
+
+        let axiom_envelope = build_axiom_envelope(envelope, ability, args)
+            .map_err(axon_error_to_status)?;
+        let axiom_signature = build_axiom_signature(envelope.caller_signature.as_ref())
+            .map_err(axon_error_to_status)?;
+
+        let resolver: Box<dyn KeyResolver> = Box::new(TrustAnchorKeyResolver {
+            trust_anchor: Arc::clone(&self.trust_anchor),
+        });
+
+        let result = self.replay_store.with_inner(|store| {
+            run_admission(
+                &axiom_envelope,
+                &axiom_signature,
+                Some(resolver.as_ref()),
+                store,
+                axon_now_ms(),
+            )
+        });
+
+        result.map_err(axon_error_to_status)
+    }
+
+    fn is_loopback(&self, caller_uri: &str) -> bool {
+        match self.daemon_uri.as_deref() {
+            Some(self_uri) => caller_uri == self_uri,
+            None => false,
+        }
+    }
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────
+
+/// Extract `caller.uri` and reject as `invalid_argument` if absent
+/// or empty. Shared by every entrypoint so the wire-level
+/// "caller URI required" message is identical across surfaces.
+fn caller_uri_required(envelope: &Envelope) -> Result<&str, Status> {
+    envelope
+        .caller
+        .as_ref()
+        .map(|c| c.uri.as_str())
+        .filter(|u| !u.is_empty())
+        .ok_or_else(|| {
+            Status::invalid_argument(
+                "envelope.caller.uri is required (Invariant 1: caller URI required)",
+            )
+        })
+}
+
+fn permission_denied_unknown_caller(caller_uri: &str) -> Status {
+    Status::permission_denied(format!(
+        "caller URI `{caller_uri}` is not in the realm trust anchor; \
+         pairing-flow registration via `<self>.register_device_pubkey` \
+         (PR-7 commit 5/N) populates the trust set",
+    ))
+}
+
+/// Map an axon-SDK invocation `AxonError` (the kind admission
+/// emits) to a `tonic::Status`. The mapping preserves the canonical
+/// reason (e.g. `AXON_CALLER_SIGNATURE_INVALID`) inside the status
+/// message so audit pipelines and client-side metrics that grep on
+/// those strings continue to work.
+fn axon_error_to_status(err: InvocationError) -> Status {
+    let detail = if err.message.is_empty() {
+        err.reason.clone()
+    } else {
+        format!("{}:{}", err.reason, err.message)
+    };
+    match err.reason.as_str() {
+        REASON_ENVELOPE_INCOMPLETE => Status::invalid_argument(detail),
+        REASON_CALLER_SIGNATURE_INVALID => Status::invalid_argument(detail),
+        REASON_NONCE_REPLAY => Status::invalid_argument(detail),
+        _ => match err.kind {
+            InvocationErrorKind::InvalidArgument => Status::invalid_argument(detail),
+            InvocationErrorKind::PermissionDenied => Status::permission_denied(detail),
+            InvocationErrorKind::ResourceExhausted => Status::resource_exhausted(detail),
+            InvocationErrorKind::Unavailable => Status::unavailable(detail),
+            InvocationErrorKind::DeadlineExceeded => Status::deadline_exceeded(detail),
+            InvocationErrorKind::Cancelled => Status::cancelled(detail),
+            InvocationErrorKind::Internal => Status::internal(detail),
+        },
+    }
+}
+
+/// Bridge a proto `Envelope` (+ ability + args bytes) into an
+/// `InvocationEnvelope` ready for `run_admission`. The proto wire
+/// schema does NOT carry `args_digest` or `ability` directly — they
+/// derive from the surrounding `InvokeRequest.function_name` and
+/// `arguments`, so the bridge takes them as separate inputs.
+///
+/// `args_digest = SHA-256(arguments)` — this matches
+/// `daemon_grpc/canonical.go::CanonicalInvocationBytes` (Go side)
+/// and `axon::canonical_invocation_bytes` (Rust side) per DEC-009
+/// (verbatim SHA-256, no JCS).
+fn build_axiom_envelope(
+    envelope: &Envelope,
+    ability: &str,
+    args: &[u8],
+) -> Result<InvocationEnvelope, InvocationError> {
+    let caller = envelope
+        .caller
+        .as_ref()
+        .ok_or_else(|| reject_envelope("caller_missing"))?;
+    let callee = envelope
+        .callee
+        .as_ref()
+        .ok_or_else(|| reject_envelope("callee_missing"))?;
+    let subject = envelope
+        .subject
+        .as_ref()
+        .ok_or_else(|| reject_envelope("subject_missing"))?;
+
+    let caller_profile = parse_profile_or_default(&caller.profile)?;
+    let callee_profile = parse_profile_or_default(&callee.profile)?;
+    let subject_profile = parse_profile_or_default(&subject.profile)?;
+
+    let invocation_nonce: [u8; 16] = envelope
+        .invocation_nonce
+        .as_slice()
+        .try_into()
+        .map_err(|_| reject_envelope("invocation_nonce_wrong_length"))?;
+
+    let causal_context = match envelope.causal_context.as_ref() {
+        Some(ctx) => bridge_causal_context(ctx)?,
+        None => CausalContext::None,
+    };
+
+    let mut hasher = Sha256::new();
+    hasher.update(args);
+    let args_digest: [u8; 32] = hasher.finalize().into();
+
+    Ok(InvocationEnvelope {
+        caller: AxiomAgentIdentity::new(caller.uri.clone(), caller_profile),
+        callee: AxiomAgentIdentity::new(callee.uri.clone(), callee_profile),
+        subject: SubjectIdentity::new(subject.uri.clone(), subject_profile),
+        ability: ability.to_string(),
+        args_digest,
+        invocation_nonce,
+        causal_context,
+    })
+}
+
+/// Default a missing/empty profile field to the RFC 001 default
+/// (`easynet-strict-v2`). This mirrors the Go canonical encoder's
+/// behaviour — the proto wire allows the field to be empty when the
+/// default is in effect, and admission must produce the same
+/// canonical bytes either way.
+fn parse_profile_or_default(profile: &str) -> Result<UriProfile, InvocationError> {
+    if profile.is_empty() {
+        return Ok(UriProfile::EasynetStrictV2);
+    }
+    UriProfile::parse(profile)
+}
+
+fn bridge_causal_context(ctx: &PbCausalContext) -> Result<CausalContext, InvocationError> {
+    let Some(form) = ctx.form.as_ref() else {
+        return Ok(CausalContext::None);
+    };
+    match form {
+        causal_context::Form::None(_) => Ok(CausalContext::None),
+        causal_context::Form::Scalar(r) => {
+            let receipt_hash = receipt_hash_from_bytes(&r.receipt_hash)?;
+            Ok(CausalContext::Scalar(ReceiptRef {
+                receipt_hash,
+                receipt_uri: r.receipt_uri.clone(),
+            }))
+        }
+        causal_context::Form::List(list) => {
+            let mut out = Vec::with_capacity(list.prior.len());
+            for r in &list.prior {
+                out.push(ReceiptRef {
+                    receipt_hash: receipt_hash_from_bytes(&r.receipt_hash)?,
+                    receipt_uri: r.receipt_uri.clone(),
+                });
+            }
+            Ok(CausalContext::List(out))
+        }
+        causal_context::Form::Merkle(m) => {
+            let root = receipt_hash_from_bytes(&m.root)?;
+            Ok(CausalContext::Merkle {
+                root,
+                proof_uri: m.proof_uri.clone(),
+            })
+        }
+    }
+}
+
+fn receipt_hash_from_bytes(bytes: &[u8]) -> Result<[u8; 32], InvocationError> {
+    bytes
+        .try_into()
+        .map_err(|_| reject_envelope("receipt_hash_wrong_length"))
+}
+
+/// Build the axiom-side `CallerSignature` from the proto field. A
+/// missing field is the "no signature carried" case — admission
+/// step 2 (`validate_signature_structure`) will reject it with
+/// `signature_algorithm_empty`, which is the correct wire-visible
+/// outcome.
+fn build_axiom_signature(
+    proto: Option<&crate::pb::axon::v1::CallerSignature>,
+) -> Result<AxiomCallerSignature, InvocationError> {
+    Ok(match proto {
+        Some(sig) => AxiomCallerSignature {
+            algorithm: sig.algorithm.clone(),
+            signature: sig.signature.clone(),
+            key_id_hint: sig.key_id_hint.clone(),
+        },
+        None => AxiomCallerSignature {
+            algorithm: String::new(),
+            signature: Vec::new(),
+            key_id_hint: String::new(),
+        },
+    })
+}
+
+fn reject_envelope(detail: &str) -> InvocationError {
+    InvocationError::invalid_argument(REASON_ENVELOPE_INCOMPLETE).with_message(detail.to_string())
+}
+
+// ── Resolver backed by the realm trust anchor ───────────────────────
+
+/// `KeyResolver` impl that maps `agent_uri → ed25519::VerifyingKey`
+/// via the daemon's `RealmTrustAnchor`. Returns a stable error code
+/// when the URI is unknown; `easynet_axon::admission::verify_signature`
+/// repackages it as `AXON_CALLER_SIGNATURE_INVALID` for the wire.
+#[derive(Debug)]
+struct TrustAnchorKeyResolver {
+    trust_anchor: Arc<RealmTrustAnchor>,
+}
+
+impl KeyResolver for TrustAnchorKeyResolver {
+    fn resolve(&self, agent_uri: &str) -> Result<VerifyingKey, InvocationError> {
+        let entry = self
+            .trust_anchor
+            .lookup(agent_uri)
+            .ok_or_else(|| {
+                InvocationError::invalid_argument("unknown_agent_uri")
+                    .with_message(format!("agent_uri:{agent_uri}"))
+            })?;
+        let raw = BASE64_STANDARD.decode(&entry.public_key_b64).map_err(|e| {
+            InvocationError::invalid_argument("public_key_b64_decode_failed")
+                .with_message(format!("agent_uri:{agent_uri}:{e}"))
+        })?;
+        let arr: [u8; 32] = raw.as_slice().try_into().map_err(|_| {
+            InvocationError::invalid_argument("public_key_wrong_length").with_message(format!(
+                "agent_uri:{agent_uri}:expected_32_got_{}",
+                raw.len()
+            ))
+        })?;
+        VerifyingKey::from_bytes(&arr).map_err(|e| {
+            InvocationError::invalid_argument("public_key_parse_failed")
+                .with_message(format!("agent_uri:{agent_uri}:{e}"))
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pb::axon::v1::AgentIdentity;
+    use crate::pb::axon::v1::{
+        AgentIdentity as PbAgentIdentity, CallerSignature as PbCallerSignature,
+        SubjectIdentity as PbSubjectIdentity,
+    };
     use crate::services::realm_trust_anchor::{TrustedAgent, TrustedAgentRole};
+    use ed25519_dalek::{Signer, SigningKey};
 
-    fn agent(uri: &str) -> AgentIdentity {
-        AgentIdentity {
+    fn agent(uri: &str) -> PbAgentIdentity {
+        PbAgentIdentity {
             uri: uri.to_string(),
-            ..AgentIdentity::default()
+            ..PbAgentIdentity::default()
+        }
+    }
+
+    fn subject(uri: &str) -> PbSubjectIdentity {
+        PbSubjectIdentity {
+            uri: uri.to_string(),
+            ..PbSubjectIdentity::default()
         }
     }
 
     fn envelope_with_caller(uri: &str) -> Envelope {
         Envelope {
             caller: Some(agent(uri)),
+            callee: Some(agent("easynet:///r/realm/agent/callee")),
+            subject: Some(subject("easynet:///r/realm/agent/callee")),
+            invocation_nonce: vec![0x11u8; 16],
             ..Envelope::default()
         }
     }
@@ -189,96 +627,155 @@ mod tests {
     fn invoke_request(envelope: Option<Envelope>) -> InvokeRequest {
         InvokeRequest {
             envelope,
+            function_name: "self.echo".to_string(),
+            arguments: b"{}".to_vec(),
             ..InvokeRequest::default()
         }
     }
 
-    fn entry(uri: &str) -> TrustedAgent {
+    fn entry_with_role(
+        uri: &str,
+        public_key_b64: String,
+        role: TrustedAgentRole,
+    ) -> TrustedAgent {
         TrustedAgent {
             agent_uri: uri.to_string(),
-            public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
-            role: TrustedAgentRole::Device,
+            public_key_b64,
+            role,
             added_at_unix_ms: 1_714_492_800_000,
         }
     }
 
-    fn anchor_with(uris: &[&str]) -> Arc<RealmTrustAnchor> {
+    fn backend_entry(uri: &str, public_key_b64: String) -> TrustedAgent {
+        entry_with_role(uri, public_key_b64, TrustedAgentRole::Backend)
+    }
+
+    fn device_entry(uri: &str, public_key_b64: String) -> TrustedAgent {
+        entry_with_role(uri, public_key_b64, TrustedAgentRole::Device)
+    }
+
+    /// Anchor populated with `Backend`-role entries (zero-bytes
+    /// public key — tests that exercise the strict path supply a
+    /// real key separately). Backend role keeps the strict §5.2
+    /// pipeline live for these tests after DEC-013.
+    fn backend_anchor(uris: &[&str]) -> Arc<RealmTrustAnchor> {
         Arc::new(
-            RealmTrustAnchor::from_entries(uris.iter().map(|u| entry(u)).collect())
-                .expect("test anchor"),
+            RealmTrustAnchor::from_entries(
+                uris.iter()
+                    .map(|u| {
+                        backend_entry(
+                            u,
+                            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+                        )
+                    })
+                    .collect(),
+            )
+            .expect("test anchor"),
         )
     }
 
+    /// Build an envelope+signature pair that admits cleanly. `nonce`
+    /// is variable so distinct tests don't collide on the daemon-
+    /// shared replay store.
+    fn signed_request_with_nonce(
+        caller_uri: &str,
+        callee_uri: &str,
+        ability: &str,
+        args: &[u8],
+        signing_key: &SigningKey,
+        nonce: [u8; 16],
+    ) -> (InvokeRequest, [u8; 32]) {
+        // Build the canonical bytes the same way axon's encoder does
+        // so we sign over what admission will verify against.
+        use easynet_axon::invocation::axiom::canonical_invocation_bytes;
+
+        let mut hasher = Sha256::new();
+        hasher.update(args);
+        let args_digest: [u8; 32] = hasher.finalize().into();
+
+        let axiom_env = InvocationEnvelope {
+            caller: AxiomAgentIdentity::new(caller_uri, UriProfile::EasynetStrictV2),
+            callee: AxiomAgentIdentity::new(callee_uri, UriProfile::EasynetStrictV2),
+            subject: SubjectIdentity::new(callee_uri, UriProfile::EasynetStrictV2),
+            ability: ability.to_string(),
+            args_digest,
+            invocation_nonce: nonce,
+            causal_context: CausalContext::None,
+        };
+        let bytes = canonical_invocation_bytes(&axiom_env);
+        let sig = signing_key.sign(&bytes);
+
+        let envelope = Envelope {
+            caller: Some(PbAgentIdentity {
+                uri: caller_uri.to_string(),
+                profile: "easynet-strict-v2".to_string(),
+            }),
+            callee: Some(PbAgentIdentity {
+                uri: callee_uri.to_string(),
+                profile: "easynet-strict-v2".to_string(),
+            }),
+            subject: Some(PbSubjectIdentity {
+                uri: callee_uri.to_string(),
+                profile: "easynet-strict-v2".to_string(),
+            }),
+            invocation_nonce: nonce.to_vec(),
+            caller_signature: Some(PbCallerSignature {
+                algorithm: "ed25519".to_string(),
+                signature: sig.to_bytes().to_vec(),
+                key_id_hint: String::new(),
+            }),
+            ..Envelope::default()
+        };
+        (
+            InvokeRequest {
+                envelope: Some(envelope),
+                function_name: ability.to_string(),
+                arguments: args.to_vec(),
+                ..InvokeRequest::default()
+            },
+            args_digest,
+        )
+    }
+
+    // ── URI/loopback gate (preserved from PR-1) ────────────────────
+
     #[test]
     fn empty_anchor_rejects_external_caller_with_permission_denied() {
+        // DEC-013: trust-anchor membership is the first non-loopback
+        // check, so a URI not in the anchor short-circuits to
+        // permission_denied without ever exercising the §5.2
+        // pipeline.
         let facade = AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None);
-        let req = invoke_request(Some(envelope_with_caller("easynet:///r/r/agent/a")));
-        match facade.verify_invoke(&req) {
-            Err(err) => assert_eq!(err.code(), tonic::Code::PermissionDenied),
-            Ok(()) => panic!("empty anchor must reject external caller"),
-        }
-    }
-
-    #[test]
-    fn anchor_with_caller_uri_admits_caller() {
-        let anchor = anchor_with(&["easynet:///r/realm/agent/n1"]);
-        let facade = AdmissionFacade::new(anchor, None);
-        let req = invoke_request(Some(envelope_with_caller("easynet:///r/realm/agent/n1")));
-        facade.verify_invoke(&req).expect("admitted");
-    }
-
-    #[test]
-    fn anchor_without_caller_uri_rejects_with_permission_denied() {
-        let anchor = anchor_with(&["easynet:///r/realm/agent/n1"]);
-        let facade = AdmissionFacade::new(anchor, None);
-        let req = invoke_request(Some(envelope_with_caller("easynet:///r/realm/agent/n2")));
-        match facade.verify_invoke(&req) {
-            Err(err) => {
-                assert_eq!(err.code(), tonic::Code::PermissionDenied);
-                assert!(err.message().contains("not in the realm trust anchor"));
-            }
-            Ok(()) => panic!("non-trusted caller must be rejected"),
-        }
+        let req = invoke_request(Some(envelope_with_caller("easynet:///r/realm/agent/n")));
+        let err = facade.verify_invoke(&req).expect_err("must reject");
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert!(
+            err.message().contains("not in the realm trust anchor"),
+            "rejection message must call out membership miss, got: {}",
+            err.message()
+        );
     }
 
     #[test]
     fn missing_envelope_returns_invalid_argument() {
         let facade = AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None);
         let req = invoke_request(None);
-        match facade.verify_invoke(&req) {
-            Err(err) => {
-                assert_eq!(err.code(), tonic::Code::InvalidArgument);
-                assert!(err.message().contains("missing envelope"));
-            }
-            Ok(()) => panic!("missing envelope must be rejected"),
-        }
+        let err = facade.verify_invoke(&req).expect_err("must reject");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains("missing envelope"));
     }
 
     #[test]
     fn missing_caller_uri_returns_invalid_argument() {
         let facade = AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None);
         let req = invoke_request(Some(Envelope::default()));
-        match facade.verify_invoke(&req) {
-            Err(err) => {
-                assert_eq!(err.code(), tonic::Code::InvalidArgument);
-                assert!(err.message().contains("caller URI required"));
-            }
-            Ok(()) => panic!("missing caller URI must be rejected"),
-        }
+        let err = facade.verify_invoke(&req).expect_err("must reject");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains("caller URI required"));
     }
 
     #[test]
-    fn empty_caller_uri_returns_invalid_argument() {
-        let facade = AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None);
-        let req = invoke_request(Some(envelope_with_caller("")));
-        match facade.verify_invoke(&req) {
-            Err(err) => assert_eq!(err.code(), tonic::Code::InvalidArgument),
-            Ok(()) => panic!("empty caller URI must be rejected"),
-        }
-    }
-
-    #[test]
-    fn daemon_uri_loopback_bypasses_empty_anchor() {
+    fn daemon_uri_loopback_bypasses_anchor_and_replay() {
         let facade = AdmissionFacade::new(
             Arc::new(RealmTrustAnchor::default()),
             Some("easynet:///r/realm/agent/this-daemon".to_string()),
@@ -286,52 +783,373 @@ mod tests {
         let req = invoke_request(Some(envelope_with_caller(
             "easynet:///r/realm/agent/this-daemon",
         )));
-        facade.verify_invoke(&req).expect("daemon loopback admitted");
+        facade
+            .verify_invoke(&req)
+            .expect("daemon loopback admitted without crypto");
+        // Loopback must not pollute the replay store.
+        assert!(facade.replay_store.is_empty());
     }
 
     #[test]
-    fn daemon_uri_loopback_rejects_other_callers_when_anchor_empty() {
+    fn loopback_repeat_remains_admitted() {
+        // A daemon may invoke `<self>.foo` many times with the same
+        // body; loopback bypass is unconditional, so repeated calls
+        // never trigger the replay path.
         let facade = AdmissionFacade::new(
             Arc::new(RealmTrustAnchor::default()),
             Some("easynet:///r/realm/agent/this-daemon".to_string()),
         );
-        let req = invoke_request(Some(envelope_with_caller("easynet:///r/realm/agent/other")));
-        match facade.verify_invoke(&req) {
-            Err(err) => assert_eq!(err.code(), tonic::Code::PermissionDenied),
-            Ok(()) => panic!("non-loopback caller must be rejected when anchor empty"),
+        let req = invoke_request(Some(envelope_with_caller(
+            "easynet:///r/realm/agent/this-daemon",
+        )));
+        for _ in 0..3 {
+            facade.verify_invoke(&req).expect("every loopback admitted");
         }
+        assert!(facade.replay_store.is_empty());
+    }
+
+    // ── Full §5.2 pipeline ─────────────────────────────────────────
+
+    #[test]
+    fn unsigned_external_caller_rejected_with_signature_invalid_reason() {
+        // PR-7 LB-05 callout: this is the new wire-visible behaviour
+        // that breaks the unsigned-envelope PR-6 e2e until commit
+        // 7/N restores it with a signed payload.
+        let facade = AdmissionFacade::new(
+            backend_anchor(&["easynet:///r/realm/agent/external"]),
+            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+        );
+        let req = invoke_request(Some(envelope_with_caller(
+            "easynet:///r/realm/agent/external",
+        )));
+        let err = facade.verify_invoke(&req).expect_err("must reject");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message().contains(REASON_CALLER_SIGNATURE_INVALID),
+            "wire reason must be AXON_CALLER_SIGNATURE_INVALID, got: {}",
+            err.message()
+        );
     }
 
     #[test]
-    fn invoke_stream_uses_same_rule_set() {
-        let anchor = anchor_with(&["easynet:///r/realm/agent/n1"]);
-        let facade = AdmissionFacade::new(anchor, None);
+    fn signed_caller_with_trust_anchor_entry_admitted() {
+        let signing_key = SigningKey::from_bytes(&[0x42u8; 32]);
+        let pub_key = signing_key.verifying_key();
+        let pub_key_b64 = BASE64_STANDARD.encode(pub_key.to_bytes());
 
-        let admitted = InvokeServerStreamRequest {
-            envelope: Some(envelope_with_caller("easynet:///r/realm/agent/n1")),
-            ..InvokeServerStreamRequest::default()
-        };
-        facade.verify_invoke_stream(&admitted).expect("admitted");
+        let caller_uri = "easynet:///r/realm/agent/signer-A";
+        let trust = Arc::new(
+            RealmTrustAnchor::from_entries(vec![backend_entry(caller_uri, pub_key_b64)])
+                .expect("anchor"),
+        );
 
-        let rejected = InvokeServerStreamRequest {
-            envelope: Some(envelope_with_caller("easynet:///r/realm/agent/n2")),
-            ..InvokeServerStreamRequest::default()
-        };
-        match facade.verify_invoke_stream(&rejected) {
-            Err(err) => assert_eq!(err.code(), tonic::Code::PermissionDenied),
-            Ok(()) => panic!("non-trusted caller must be rejected on stream too"),
-        }
+        let facade = AdmissionFacade::new(
+            trust,
+            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+        );
+
+        let (req, _digest) = signed_request_with_nonce(
+            caller_uri,
+            "easynet:///r/realm/agent/this-daemon",
+            "self.echo",
+            b"{}",
+            &signing_key,
+            [0x11u8; 16],
+        );
+        facade.verify_invoke(&req).expect("signed caller admitted");
+        // Replay store retains exactly this nonce.
+        assert_eq!(facade.replay_store.len(), 1);
     }
 
     #[test]
-    fn verify_envelope_can_be_called_directly_for_bidi_path() {
-        // PR-2 will call `verify_envelope` against the EnvelopeOpen
-        // first frame of an InvokeBidi stream. Pin the surface here
-        // so PR-2 reviewers see the contract.
-        let anchor = anchor_with(&["easynet:///r/realm/agent/n1"]);
-        let facade = AdmissionFacade::new(anchor, None);
+    fn signed_caller_replay_rejected() {
+        let signing_key = SigningKey::from_bytes(&[0x99u8; 32]);
+        let pub_key = signing_key.verifying_key();
+        let pub_key_b64 = BASE64_STANDARD.encode(pub_key.to_bytes());
+
+        let caller_uri = "easynet:///r/realm/agent/replay";
+        let trust = Arc::new(
+            RealmTrustAnchor::from_entries(vec![backend_entry(caller_uri, pub_key_b64)])
+                .expect("anchor"),
+        );
+        let facade = AdmissionFacade::new(
+            trust,
+            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+        );
+
+        let (req, _) = signed_request_with_nonce(
+            caller_uri,
+            "easynet:///r/realm/agent/this-daemon",
+            "self.echo",
+            b"{}",
+            &signing_key,
+            [0x22u8; 16],
+        );
+        facade.verify_invoke(&req).expect("first admitted");
+        let err = facade
+            .verify_invoke(&req)
+            .expect_err("replay must reject");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message().contains(REASON_NONCE_REPLAY),
+            "wire reason must be AXON_NONCE_REPLAY, got: {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn signed_caller_with_wrong_key_rejected() {
+        // Trust anchor lists a different public key than the
+        // signer's. verify_signature fails; admission propagates
+        // AXON_CALLER_SIGNATURE_INVALID.
+        let signing_key = SigningKey::from_bytes(&[0x55u8; 32]);
+        let other_key = SigningKey::from_bytes(&[0x66u8; 32]);
+        let other_pub_b64 = BASE64_STANDARD.encode(other_key.verifying_key().to_bytes());
+
+        let caller_uri = "easynet:///r/realm/agent/wrong-key";
+        let trust = Arc::new(
+            RealmTrustAnchor::from_entries(vec![backend_entry(caller_uri, other_pub_b64)])
+                .expect("anchor"),
+        );
+        let facade = AdmissionFacade::new(
+            trust,
+            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+        );
+
+        let (req, _) = signed_request_with_nonce(
+            caller_uri,
+            "easynet:///r/realm/agent/this-daemon",
+            "self.echo",
+            b"{}",
+            &signing_key,
+            [0x33u8; 16],
+        );
+        let err = facade
+            .verify_invoke(&req)
+            .expect_err("wrong-key signature must reject");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains(REASON_CALLER_SIGNATURE_INVALID));
+        // Failed crypto verify must not record the nonce.
+        assert!(facade.replay_store.is_empty());
+    }
+
+    #[test]
+    fn signed_caller_unknown_uri_rejected_with_permission_denied() {
+        // DEC-013: a caller URI absent from the trust anchor never
+        // reaches the §5.2 pipeline; membership miss short-circuits
+        // to permission_denied. The signature is valid in shape but
+        // we never bother verifying it — the trust-anchor lookup is
+        // the gating check.
+        let signing_key = SigningKey::from_bytes(&[0x77u8; 32]);
+        let trust = Arc::new(RealmTrustAnchor::default());
+        let facade = AdmissionFacade::new(
+            trust,
+            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+        );
+
+        let (req, _) = signed_request_with_nonce(
+            "easynet:///r/realm/agent/uninvited",
+            "easynet:///r/realm/agent/this-daemon",
+            "self.echo",
+            b"{}",
+            &signing_key,
+            [0x44u8; 16],
+        );
+        let err = facade
+            .verify_invoke(&req)
+            .expect_err("unknown caller URI must reject");
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert!(err.message().contains("not in the realm trust anchor"));
+    }
+
+    #[test]
+    fn invoke_stream_uses_same_pipeline() {
+        let signing_key = SigningKey::from_bytes(&[0x88u8; 32]);
+        let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
+        let caller_uri = "easynet:///r/realm/agent/streamer";
+        let trust = Arc::new(
+            RealmTrustAnchor::from_entries(vec![backend_entry(caller_uri, pub_key_b64)])
+                .expect("anchor"),
+        );
+        let facade = AdmissionFacade::new(
+            trust,
+            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+        );
+
+        let (req, _) = signed_request_with_nonce(
+            caller_uri,
+            "easynet:///r/realm/agent/this-daemon",
+            "federation.subscribe_directory",
+            b"{}",
+            &signing_key,
+            [0x55u8; 16],
+        );
+        let stream_req = InvokeServerStreamRequest {
+            envelope: req.envelope.clone(),
+            function_name: req.function_name.clone(),
+            arguments: req.arguments.clone(),
+            ..InvokeServerStreamRequest::default()
+        };
         facade
-            .verify_envelope(&envelope_with_caller("easynet:///r/realm/agent/n1"))
-            .expect("admitted via direct verify_envelope");
+            .verify_invoke_stream(&stream_req)
+            .expect("admitted on stream too");
+    }
+
+    #[test]
+    fn shared_replay_store_serialises_dual_facades() {
+        // Two facades sharing one replay store reject each other's
+        // replays — the daemon-wide dedup window holds across any
+        // listener split that PR-10 might introduce.
+        let signing_key = SigningKey::from_bytes(&[0xAAu8; 32]);
+        let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
+        let caller_uri = "easynet:///r/realm/agent/shared";
+        let trust = Arc::new(
+            RealmTrustAnchor::from_entries(vec![backend_entry(caller_uri, pub_key_b64)])
+                .expect("anchor"),
+        );
+
+        let store = SharedNonceReplayStore::new();
+        let facade_a = AdmissionFacade::with_replay_store(
+            Arc::clone(&trust),
+            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+            store.clone(),
+        );
+        let facade_b = AdmissionFacade::with_replay_store(
+            Arc::clone(&trust),
+            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+            store.clone(),
+        );
+
+        let (req, _) = signed_request_with_nonce(
+            caller_uri,
+            "easynet:///r/realm/agent/this-daemon",
+            "self.echo",
+            b"{}",
+            &signing_key,
+            [0x66u8; 16],
+        );
+        facade_a.verify_invoke(&req).expect("facade A admits first");
+        let err = facade_b
+            .verify_invoke(&req)
+            .expect_err("facade B must reject the replayed nonce");
+        assert!(err.message().contains(REASON_NONCE_REPLAY));
+    }
+
+    // ── DEC-013 Option D: path-conditional admission by role ───────
+
+    /// Anchor with one Device-role entry. Public key is the all-zero
+    /// byte string — Device-arm callers never have their key resolved
+    /// (no signature verification under DEC-013), so the byte content
+    /// is immaterial.
+    fn device_anchor(uri: &str) -> Arc<RealmTrustAnchor> {
+        Arc::new(
+            RealmTrustAnchor::from_entries(vec![device_entry(
+                uri,
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            )])
+            .expect("anchor"),
+        )
+    }
+
+    #[test]
+    fn device_role_admits_unsigned_envelope_per_dec013() {
+        // The DEC-013 boundary: a device URI in the trust anchor
+        // admits without signature, without nonce recording, and
+        // without crypto. PR-8 will flip this arm to strict — for
+        // PR-7 ship, it preserves URI-only PR-1 semantics for
+        // already-deployed devices.
+        let caller_uri = "easynet:///r/realm/agent/device-A";
+        let facade = AdmissionFacade::new(
+            device_anchor(caller_uri),
+            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+        );
+        // Bare envelope, no signature — the kind kernel.rs emits today.
+        let req = invoke_request(Some(envelope_with_caller(caller_uri)));
+        facade
+            .verify_invoke(&req)
+            .expect("device path admits unsigned envelope under DEC-013");
+        assert!(
+            facade.replay_store.is_empty(),
+            "device path must not record nonces (PR-8 territory)",
+        );
+    }
+
+    #[test]
+    fn device_role_admits_repeated_unsigned_envelopes() {
+        // Replay protection only kicks in on the strict path; the
+        // device path is no-op so repeated identical envelopes admit
+        // every time. Once PR-8 lands and devices sign, this test
+        // flips its assertion (call 2 must reject as replay).
+        let caller_uri = "easynet:///r/realm/agent/device-B";
+        let facade = AdmissionFacade::new(
+            device_anchor(caller_uri),
+            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+        );
+        let req = invoke_request(Some(envelope_with_caller(caller_uri)));
+        for _ in 0..3 {
+            facade.verify_invoke(&req).expect("each device call admits");
+        }
+        assert!(facade.replay_store.is_empty());
+    }
+
+    #[test]
+    fn role_dispatch_keeps_backend_strict_alongside_device_no_op() {
+        // Two callers in the same anchor: one Backend, one Device.
+        // The Backend caller still goes through strict §5.2; the
+        // Device caller still no-ops. This is the dispatch axis
+        // working — same trust anchor, two policies.
+        let backend_signing = SigningKey::from_bytes(&[0xC0u8; 32]);
+        let backend_pub_b64 =
+            BASE64_STANDARD.encode(backend_signing.verifying_key().to_bytes());
+        let backend_uri = "easynet:///r/realm/agent/backend-svc";
+        let device_uri = "easynet:///r/realm/agent/device-C";
+
+        let trust = Arc::new(
+            RealmTrustAnchor::from_entries(vec![
+                backend_entry(backend_uri, backend_pub_b64),
+                device_entry(
+                    device_uri,
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+                ),
+            ])
+            .expect("anchor"),
+        );
+        let facade = AdmissionFacade::new(
+            trust,
+            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+        );
+
+        // Device caller: unsigned, admitted.
+        let device_req = invoke_request(Some(envelope_with_caller(device_uri)));
+        facade
+            .verify_invoke(&device_req)
+            .expect("device arm admits unsigned");
+
+        // Backend caller, unsigned: rejects strict.
+        let backend_unsigned =
+            invoke_request(Some(envelope_with_caller(backend_uri)));
+        let err = facade
+            .verify_invoke(&backend_unsigned)
+            .expect_err("backend arm rejects unsigned");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+
+        // Backend caller, properly signed: admits strict and records
+        // the nonce in the replay store.
+        let (backend_signed, _) = signed_request_with_nonce(
+            backend_uri,
+            "easynet:///r/realm/agent/this-daemon",
+            "self.echo",
+            b"{}",
+            &backend_signing,
+            [0xD0u8; 16],
+        );
+        facade
+            .verify_invoke(&backend_signed)
+            .expect("backend arm admits signed");
+        assert_eq!(
+            facade.replay_store.len(),
+            1,
+            "only the backend signed call should hit the replay store",
+        );
     }
 }

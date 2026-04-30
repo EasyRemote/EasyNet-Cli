@@ -267,14 +267,13 @@ impl Invocation for DaemonInvocationService {
         };
 
         let envelope_open = extract_envelope_open(&frame0)?;
-        match envelope_open.envelope.as_ref() {
-            Some(envelope) => self.admission.verify_envelope(envelope)?,
-            None => {
-                return Err(Status::invalid_argument(
-                    "InvokeBidi frame 0 missing envelope; admission requires envelope.caller.uri",
-                ))
-            }
-        }
+        // PR-7: full §5.2 admission for the bidi path. The facade
+        // checks envelope presence + caller URI, runs the four-step
+        // pipeline (envelope/structure/verify/replay), and rejects
+        // with the canonical wire reasons. Ability name + initial
+        // args feed `args_digest` exactly the way unary/server-stream
+        // requests do.
+        self.admission.verify_envelope_for_bidi(&envelope_open)?;
 
         let ability_name = envelope_open
             .target
@@ -1294,9 +1293,12 @@ mod tests {
 
     #[tokio::test]
     async fn invoke_rejects_caller_not_in_trust_anchor() {
-        // Build a service whose admission facade has no daemon URI
-        // and an empty trust anchor — every external caller is
-        // rejected.
+        // PR-7 commit 4/N (DEC-013 Option D): trust-anchor membership
+        // is the first non-loopback check. A URI absent from the
+        // anchor short-circuits to `permission_denied` before any
+        // §5.2 work — the gating reject, identical to the PR-1 URI-
+        // only behaviour for unknown callers. Same `PermissionDenied`
+        // wire code as before, refreshed message text.
         let svc = DaemonInvocationService::new(
             Arc::new(PresenceRegistry::new()),
             AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None),
@@ -1316,13 +1318,22 @@ mod tests {
             }))
             .await
         {
-            Err(err) => assert_eq!(err.code(), tonic::Code::PermissionDenied),
+            Err(err) => {
+                assert_eq!(err.code(), tonic::Code::PermissionDenied);
+                assert!(
+                    err.message().contains("not in the realm trust anchor"),
+                    "rejection must reference trust-set miss, got: {}",
+                    err.message()
+                );
+            }
             Ok(_) => panic!("caller outside trust anchor must be rejected"),
         }
     }
 
     #[tokio::test]
     async fn invoke_stream_rejects_caller_not_in_trust_anchor() {
+        // Same DEC-013 dispatch as `invoke_rejects_caller_not_in_trust_anchor`.
+        // Stream surface shares the same membership check.
         let svc = DaemonInvocationService::new(
             Arc::new(PresenceRegistry::new()),
             AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None),
@@ -1341,7 +1352,14 @@ mod tests {
             }))
             .await
         {
-            Err(err) => assert_eq!(err.code(), tonic::Code::PermissionDenied),
+            Err(err) => {
+                assert_eq!(err.code(), tonic::Code::PermissionDenied);
+                assert!(
+                    err.message().contains("not in the realm trust anchor"),
+                    "rejection must reference trust-set miss, got: {}",
+                    err.message()
+                );
+            }
             Ok(_) => panic!("stream caller outside trust anchor must be rejected"),
         }
     }

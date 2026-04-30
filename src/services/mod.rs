@@ -74,3 +74,11 @@ pub mod realm_trust_anchor;
 /// "who is online right now"; pending_dispatch is "outstanding
 /// cross-device calls awaiting reply". Pure data — no feature gate.
 pub mod pending_dispatch;
+
+/// Per-daemon nonce replay store (RFC 001 §5.2 step 4). Wraps the
+/// axon SDK's time-wheel store in `Arc<Mutex<…>>` so a single
+/// instance is shared across every concurrent invoke through the
+/// admission gate. PR-7 commit 4/N introduces the wrapper alongside
+/// the admission upgrade. DEC-011 confirms RFC-003 ships in-memory
+/// only; persistence is a Week-5+ topic.
+pub mod nonce_replay_store;
