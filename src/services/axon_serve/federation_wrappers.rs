@@ -424,13 +424,62 @@ pub struct ForwardInvokeRequest {
     /// §2.1 acceptance criterion. Empty when the caller's initiator
     /// has no prior receipts to chain (typical for the first call
     /// in a session).
-    #[serde(default)]
+    ///
+    /// Wire shape accepts BOTH a JSON array of byte values
+    /// (Rust-serde default for `Vec<u8>`) AND a base64-encoded
+    /// string (Go's default `[]byte` JSON shape). PR-4 conformance
+    /// captures across rust/go/python/java/node/swift/react each
+    /// pick whichever shape is idiomatic for their language; the
+    /// daemon's `deserialize_bytes_dual` collapses both to the same
+    /// `Vec<u8>` value.
+    #[serde(default, deserialize_with = "deserialize_bytes_dual")]
     pub causal_context_bytes: Vec<u8>,
     /// Caller-side remaining deadline in milliseconds. `0` is the
     /// sentinel for "no deadline supplied"; the peer applies its
     /// configured default in that case (DEC-N5 §3).
     #[serde(default)]
     pub forward_deadline_ms: u64,
+}
+
+/// Permissive bytes deserialiser accepting both the JSON-array
+/// shape `[1, 2, 3]` (Rust serde default) and the base64-string
+/// shape `"AQID"` (Go `[]byte` default JSON encoding). PR-4
+/// SDK-conformance vectors regenerate cleanly across both
+/// language families without forcing a single wire encoding.
+fn deserialize_bytes_dual<'de, D>(d: D) -> Result<Vec<u8>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use serde::de::{Error as DeError, Visitor};
+
+    struct DualVisitor;
+    impl<'de> Visitor<'de> for DualVisitor {
+        type Value = Vec<u8>;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a JSON array of byte values or a base64-encoded string")
+        }
+        fn visit_str<E: DeError>(self, v: &str) -> Result<Vec<u8>, E> {
+            if v.is_empty() {
+                return Ok(Vec::new());
+            }
+            STANDARD.decode(v).map_err(DeError::custom)
+        }
+        fn visit_string<E: DeError>(self, v: String) -> Result<Vec<u8>, E> {
+            self.visit_str(&v)
+        }
+        fn visit_seq<A>(self, mut seq: A) -> Result<Vec<u8>, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+            while let Some(b) = seq.next_element::<u8>()? {
+                out.push(b);
+            }
+            Ok(out)
+        }
+    }
+    d.deserialize_any(DualVisitor)
 }
 
 /// Response payload for `federation.forward_invoke` (DEC-N4 §2.1
