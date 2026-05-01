@@ -105,6 +105,7 @@ pub(crate) mod devices;
 pub(crate) mod discuss;
 pub(crate) mod doctor;
 pub(crate) mod exec;
+pub(crate) mod federation_peers;
 pub(crate) mod federation_wire;
 pub(crate) mod groups;
 pub(crate) mod heartbeat;
@@ -187,6 +188,12 @@ pub enum Command {
     #[command(display_order = 7)]
     Mcp(groups::mcp::McpArgs),
 
+    /// Federation — inspect cross-hub federation peers and trusted
+    /// hubs. Use `easynet federation peers` to list the URIs an
+    /// operator can pass to `--node` on `easynet ability invoke`.
+    #[command(display_order = 7)]
+    Federation(groups::federation::FederationArgs),
+
     // ── Tools ────────────────────────────────────────────────────────────
     /// Update, check version, or uninstall EasyNet CLI.
     #[command(display_order = 8, name = "self")]
@@ -230,6 +237,7 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         Command::Skill(args) => skill::run(args),
         Command::Runtime(args) => groups::runtime::run(args),
         Command::Mcp(args) => groups::mcp::run(args),
+        Command::Federation(args) => groups::federation::run(args),
         Command::Call(args) => groups::call::run(args),
 
         // Cross-cutting

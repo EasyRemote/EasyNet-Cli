@@ -27,6 +27,7 @@ pub mod ability;
 pub mod agent;
 pub mod call;
 pub mod device;
+pub mod federation;
 pub mod mcp;
 pub mod mission;
 pub mod runtime;
