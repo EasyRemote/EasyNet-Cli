@@ -141,11 +141,32 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
     let (result, fulfilled_label) = match node_uri.as_deref() {
         #[cfg(feature = "axon-pb")]
         Some(target) => {
+            // Resolve a real caller URI from credentials.json when
+            // available — the CLI's hardcoded fallback
+            // `easynet:///r/cli/agent/local` is rejected by the
+            // local daemon's admission gate the moment the device
+            // it runs against is paired (the daemon's realm-trust
+            // anchor knows about its own device URI but not about
+            // the generic CLI placeholder). Pass-through to
+            // `invoke_via_federation_forward`'s `caller_uri`
+            // surface; None there preserves the legacy default
+            // for unattended fixture scripts that have no
+            // credentials.json.
+            let caller_uri = crate::persistence::config::load_credentials()
+                .ok()
+                .filter(|c| !c.tenant_id.trim().is_empty() && !c.node_id.trim().is_empty())
+                .map(|c| {
+                    format!(
+                        "easynet:///r/{}/agent/{}",
+                        c.tenant_id.trim(),
+                        c.node_id.trim(),
+                    )
+                });
             let value = crate::support::federation_invoke::invoke_via_federation_forward(
                 &invoke_args.ability,
                 arguments,
                 target,
-                None,
+                caller_uri.as_deref(),
             )?;
             (value, format!("federation.forward_invoke target={target}"))
         }
