@@ -216,6 +216,14 @@ pub fn invoke_via_federation_forward(
     let resolved_caller_uri = caller_uri
         .unwrap_or("easynet:///r/cli/agent/local")
         .to_string();
+    // AXIOM §A1: `invocation_nonce` is a 16-byte random value the
+    // daemon's admission gate uses to dedup replays
+    // (`AXON_NONCE_REPLAY` rejects on a hit in the replay window).
+    // CLI-initiated calls are one-shot, so a fresh `OsRng` 16-byte
+    // sample per call is sufficient.
+    use rand::RngCore;
+    let mut invocation_nonce = vec![0u8; 16];
+    rand::rngs::OsRng.fill_bytes(&mut invocation_nonce);
     let envelope = Envelope {
         caller: Some(AgentIdentity {
             uri: resolved_caller_uri,
@@ -229,6 +237,7 @@ pub fn invoke_via_federation_forward(
             uri: node_uri.to_string(),
             ..SubjectIdentity::default()
         }),
+        invocation_nonce,
         ..Envelope::default()
     };
 
