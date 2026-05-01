@@ -136,7 +136,7 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     let presence = Arc::new(PresenceRegistry::new());
     let pending = Arc::new(PendingDispatchMap::new());
 
-    // **LB-43 §二 demo-only presence seed**. The
+    // **Demo-only presence seed**. The
     // `EASYNET_DEMO_PRESENCE_SEED` env var, when set to a URI,
     // registers a no-op `DispatchSender` under that URI in the
     // local presence registry. Lets `forward_invoke` targeting
