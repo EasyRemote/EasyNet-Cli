@@ -469,6 +469,22 @@ impl DirectoryView {
 #[derive(Clone, Debug)]
 pub struct SharedFederatedDirectoryView {
     inner: Arc<RwLock<Arc<BTreeMap<String, Arc<DirectoryView>>>>>,
+    /// **PR-N3 N3-streaming-10**. Peers currently being kept
+    /// up-to-date by the streaming supervisor. The poll task
+    /// (N3-3.1 fallback) skips entries in this set so the two
+    /// transports never race to publish into the same realm
+    /// slot. Streaming is the authoritative source whenever
+    /// the supervisor's stream is open; on stream-end the
+    /// supervisor removes its realm + the poll task picks up
+    /// the slack until the next reconnect.
+    ///
+    /// Wrapped in its own `RwLock` rather than folded into the
+    /// directory map's RwLock so streamed-set reads (the poll
+    /// task does this on every iteration) don't compete with
+    /// directory writes (the supervisor does this on every
+    /// applied frame). Two locks, two contended paths, no
+    /// cross-blocking.
+    streamed_peers: Arc<RwLock<std::collections::BTreeSet<String>>>,
 }
 
 impl SharedFederatedDirectoryView {
@@ -476,6 +492,7 @@ impl SharedFederatedDirectoryView {
     pub fn new(initial: BTreeMap<String, Arc<DirectoryView>>) -> Self {
         Self {
             inner: Arc::new(RwLock::new(Arc::new(initial))),
+            streamed_peers: Arc::new(RwLock::new(std::collections::BTreeSet::new())),
         }
     }
 
@@ -495,6 +512,41 @@ impl SharedFederatedDirectoryView {
     pub fn replace(&self, next: BTreeMap<String, Arc<DirectoryView>>) {
         let mut guard = self.inner.write().expect("rwlock poisoned");
         *guard = Arc::new(next);
+    }
+
+    /// **PR-N3 N3-streaming-10**. Mark a peer realm as actively
+    /// streamed. The streaming supervisor calls this after a
+    /// successful subscribe-stream open. The poll task
+    /// (`poll_once`) skips peers in the set so the two
+    /// transports never race to publish into the same realm
+    /// slot.
+    pub fn mark_streamed(&self, peer_realm: &str) {
+        self.streamed_peers
+            .write()
+            .expect("rwlock poisoned")
+            .insert(peer_realm.to_string());
+    }
+
+    /// **PR-N3 N3-streaming-10**. Unmark a peer realm.
+    /// Streaming supervisor calls this on every stream-end so
+    /// the poll task can pick up the slack until the next
+    /// reconnect.
+    pub fn unmark_streamed(&self, peer_realm: &str) {
+        self.streamed_peers
+            .write()
+            .expect("rwlock poisoned")
+            .remove(peer_realm);
+    }
+
+    /// **PR-N3 N3-streaming-10**. Is this peer realm currently
+    /// being kept fresh by the streaming supervisor? Used by
+    /// `poll_once` to skip peers whose stream is alive.
+    #[must_use]
+    pub fn is_streamed(&self, peer_realm: &str) -> bool {
+        self.streamed_peers
+            .read()
+            .expect("rwlock poisoned")
+            .contains(peer_realm)
     }
 }
 
@@ -630,6 +682,18 @@ pub async fn poll_once(
         (*directory_cell.snapshot()).clone();
 
     for (peer_realm, peer_hub_uri) in peers_snapshot.iter() {
+        // **PR-N3 N3-streaming-10**: skip peers whose stream
+        // is currently open. The streaming supervisor is the
+        // authoritative source of truth for those peers; the
+        // poll task is the fallback for peers without v2
+        // support or peers in reconnect-backoff. Skipping
+        // here prevents a stale poll snapshot from
+        // overwriting a fresh stream-emitted Upsert/Remove.
+        if directory_cell.is_streamed(peer_realm) {
+            outcome.successful_peers.push(peer_realm.clone());
+            continue;
+        }
+
         // Build a discover request with the daemon's own URI as
         // caller so the peer's loopback bypass / hub-trust check
         // admits (caller-side strict signing lands in N3-3.2 with
@@ -937,6 +1001,12 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
         {
             Ok(stream) => {
                 client.on_dial_ok();
+                // **PR-N3 N3-streaming-10**: claim authoritative
+                // ownership of this peer's directory slot while
+                // the stream is open. The poll task skips peers
+                // in this set so the two transports never race
+                // to publish.
+                cell.mark_streamed(&peer_realm);
                 // PR-N3 N3-streaming-7 + N3-streaming-8: enforce
                 // the spec §2.3 idle-timeout. Production cadence
                 // is 60s (= two missed 30s heartbeat windows);
@@ -973,9 +1043,20 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
                         }
                     }
                     _ = &mut cancel => {
+                        // Always release the stream-claim on
+                        // exit, even via cancel — otherwise a
+                        // peer-removal SIGHUP would leave a
+                        // stale claim that blocks the poll task
+                        // from picking up the realm in a
+                        // re-add cycle.
+                        cell.unmark_streamed(&peer_realm);
                         return;
                     }
                 }
+                // Stream ended (any outcome except cancel) —
+                // release the claim so the poll task picks up
+                // the slack until the next reconnect succeeds.
+                cell.unmark_streamed(&peer_realm);
             }
             Err(err) => {
                 eprintln!(
@@ -2549,6 +2630,80 @@ mod tests {
                     .is_some(),
                 "dial failure MUST NOT clear the previously-cached view"
             );
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn poll_once_skips_peers_marked_streamed() {
+            // PR-N3 N3-streaming-10. The streaming supervisor
+            // marks realm-b as streamed via cell.mark_streamed.
+            // The poll task must skip realm-b on every
+            // subsequent round so it cannot overwrite a fresh
+            // stream-emitted entry with a stale poll snapshot.
+            //
+            // Pre-populate the cell with a fresh entry the
+            // streaming supervisor would have written; the poll
+            // mock returns an empty discover response. If the
+            // poll task didn't skip, it would overwrite the
+            // realm-b view with the empty response and the
+            // entry would disappear. Skipping preserves the
+            // entry.
+            let cell = SharedFederatedDirectoryView::default();
+            let mut realm_b_view = DirectoryView::new("realm-b".to_string());
+            realm_b_view.apply_frame(&DirectoryEvent::Snapshot {
+                entries: vec![entry_with_claimed_origin(
+                    "easynet:///r/realm-b/agent/streamed",
+                    None,
+                )],
+            });
+            let mut prior_map = std::collections::BTreeMap::new();
+            prior_map.insert("realm-b".to_string(), Arc::new(realm_b_view));
+            cell.replace(prior_map);
+            cell.mark_streamed("realm-b");
+
+            // Mock returns an empty DiscoverResponse — if
+            // poll_once didn't skip, this would clear the view.
+            let client = CannedClient {
+                responses: Mutex::new(
+                    [(
+                        "https://hub-b.example:50443".to_string(),
+                        build_canned_response(vec![]),
+                    )]
+                    .into_iter()
+                    .collect(),
+                ),
+            };
+            let mut peers = std::collections::BTreeMap::new();
+            peers.insert(
+                "realm-b".to_string(),
+                "https://hub-b.example:50443".to_string(),
+            );
+
+            let outcome = poll_once(&client, &peers, None, &cell).await;
+            // realm-b is in successful_peers (no error) but
+            // the poll didn't actually dial or replace.
+            assert_eq!(outcome.successful_peers, vec!["realm-b".to_string()]);
+            assert!(outcome.failed_peers.is_empty());
+
+            // The pre-populated entry survives.
+            let snap = cell.snapshot();
+            assert!(
+                snap.get("realm-b")
+                    .and_then(|v| v.lookup("easynet:///r/realm-b/agent/streamed"))
+                    .is_some(),
+                "streamed peer's entry MUST NOT be cleared by a concurrent poll"
+            );
+        }
+
+        #[test]
+        fn streamed_marker_round_trips_via_cell_api() {
+            // Pure-data sanity test for mark/unmark/is_streamed.
+            let cell = SharedFederatedDirectoryView::default();
+            assert!(!cell.is_streamed("realm-b"));
+            cell.mark_streamed("realm-b");
+            assert!(cell.is_streamed("realm-b"));
+            assert!(!cell.is_streamed("realm-c"));
+            cell.unmark_streamed("realm-b");
+            assert!(!cell.is_streamed("realm-b"));
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
