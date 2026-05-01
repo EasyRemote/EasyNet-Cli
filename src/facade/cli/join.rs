@@ -68,9 +68,14 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
     let token = args.token.trim().to_string();
     validate_token_format(&token)?;
 
+    let hub_api_override = args
+        .hub_api
+        .as_ref()
+        .map(|s| s.trim_end_matches('/').to_string());
+    let validate_base = pick_validate_base(&args.hub, hub_api_override.as_deref());
     output::info("Validating pairing token...");
-    let mut creds = validate_pairing_token(&token, &args.hub)?;
-    creds.hub_api_base = args.hub_api.map(|s| s.trim_end_matches('/').to_string());
+    let mut creds = validate_pairing_token(&token, &validate_base)?;
+    creds.hub_api_base = hub_api_override;
     config::save_credentials(&creds)?;
 
     // Best-effort: if this device is also running a hub-mode
@@ -130,6 +135,20 @@ fn validate_pairing_response(creds: config::Credentials) -> anyhow::Result<confi
         anyhow::bail!("pairing response missing node_id");
     }
     Ok(creds)
+}
+
+/// Pick the REST-API base URL the pairing-token validation call
+/// should hit. Operators commonly run a self-hosted Hub where the
+/// user-facing portal (`--hub`) and the REST API (`--hub-api`)
+/// live on different hosts/ports — e.g. portal at
+/// `https://easynet.run`, REST API at `http://localhost:18080`.
+/// Without preferring `--hub-api` when set, the validation call
+/// hits the portal URL, gets a 404, and surfaces as "pairing
+/// token expired or already used" — a misleading error mode.
+fn pick_validate_base(hub: &str, hub_api_override: Option<&str>) -> String {
+    hub_api_override
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| hub.to_string())
 }
 
 fn validate_pairing_token(token: &str, hub_base: &str) -> anyhow::Result<config::Credentials> {
@@ -219,6 +238,18 @@ mod tests {
         };
         let err = validate_pairing_response(creds).expect_err("missing node_id must fail");
         assert!(err.to_string().contains("missing node_id"));
+    }
+
+    #[test]
+    fn pick_validate_base_prefers_hub_api_when_set() {
+        let chosen = pick_validate_base("https://easynet.run", Some("http://localhost:18080"));
+        assert_eq!(chosen, "http://localhost:18080");
+    }
+
+    #[test]
+    fn pick_validate_base_falls_back_to_hub_when_api_unset() {
+        let chosen = pick_validate_base("https://easynet.run", None);
+        assert_eq!(chosen, "https://easynet.run");
     }
 
     #[test]
