@@ -468,4 +468,105 @@ mod tests {
             }
         }
     }
+
+    // ── LB-52 Gap 2 — device-mode boot wiring exposes baseline-locomotion ──
+    //
+    // The hub-pushed Dispatch frame's ability name is resolved
+    // against the same `Arc<AbilityDispatcher>` the daemon binary
+    // constructs via `agents::build_registry_for_daemon` →
+    // `build_registry_with_services`. That path registers the
+    // AXIOM Tier 2.5 Baseline Locomotion Profile (fs.read /
+    // fs.write / fs.list / fs.edit / process.exec / shell.run /
+    // http.request) unconditionally, BEFORE the mode (hub /
+    // device / both) branch in easynet-daemon.rs. So the same
+    // ability surface lights up for device-mode daemons as for
+    // hub-mode — no separate `register_all_abilities_for_device`
+    // path is required.
+    //
+    // This test pins that invariant by walking the same boot
+    // path (real registry construction with empty sub-services)
+    // and pushing a real Dispatch frame for `fs.read` against
+    // a tempfile through `LocalAbilityDispatcher::handle_down`.
+    // Asserts the up-channel receives a terminal Result frame
+    // whose payload decodes to an `fs.read` response containing
+    // the file's bytes.
+
+    fn build_real_daemon_dispatcher() -> Arc<AbilityDispatcher> {
+        use crate::runtime::execution::discuss::DiscussService;
+        use crate::runtime::execution::loop_instance::LoopService;
+        use crate::runtime::execution::permission::PermissionService;
+        use crate::runtime::execution::schedule::ScheduleService;
+        use crate::runtime::execution::session::SessionService;
+        use crate::runtime::gateway::NoopGateway;
+        let registry = crate::runtime::agents::build_registry_with_services(
+            Arc::new(SessionService::new()),
+            Arc::new(PermissionService::new()),
+            Arc::new(DiscussService::new()),
+            Arc::new(ScheduleService::new()),
+            Arc::new(LoopService::new()),
+            &Default::default(),
+            Arc::new(Vec::new()),
+        );
+        let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
+            Arc::new(NoopGateway::new());
+        Arc::new(AbilityDispatcher::new(registry, gateway))
+    }
+
+    #[tokio::test]
+    async fn device_mode_dispatcher_executes_fs_read_through_baseline_locomotion_registry() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp.path().join("hello.txt");
+        std::fs::write(&target, "device-B-bytes-from-real-fs-read")
+            .expect("seed temp file");
+
+        let disp = LocalAbilityDispatcher::new(build_real_daemon_dispatcher());
+        let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
+
+        let args = serde_json::json!({
+            "path": target.to_string_lossy(),
+            "encoding": "utf8",
+        });
+        let frame = dispatch_frame(
+            42,
+            "fs.read",
+            serde_json::to_vec(&args).expect("encode args"),
+        );
+
+        disp.handle_down(frame, &tx)
+            .await
+            .expect("fs.read dispatches through device-mode registry");
+
+        let reply = rx.recv().await.expect("reply produced");
+        let chunk = match reply.payload {
+            Some(UpPayload::BinaryChunk(c)) => c,
+            other => panic!("expected BinaryChunk reply, got: {other:?}"),
+        };
+        let parsed: SessionDispatch =
+            serde_json::from_slice(&chunk.data).expect("Result decodes");
+        match parsed {
+            SessionDispatch::Result {
+                call_id,
+                terminal,
+                error,
+                payload,
+            } => {
+                assert_eq!(call_id, 42);
+                assert!(terminal, "fs.read RPC reply is terminal");
+                assert_eq!(error, None, "fs.read on a real file must succeed");
+                let value: serde_json::Value =
+                    serde_json::from_slice(&payload).expect("payload decodes as JSON");
+                let bytes = value
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| value.get("text").and_then(|v| v.as_str()))
+                    .expect("fs.read response carries content/text field");
+                assert_eq!(
+                    bytes, "device-B-bytes-from-real-fs-read",
+                    "payload bytes must come from the device-side filesystem, \
+                     not a daemon-internal stub"
+                );
+            }
+            other => panic!("expected SessionDispatch::Result, got: {other:?}"),
+        }
+    }
 }
