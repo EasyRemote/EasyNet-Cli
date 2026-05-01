@@ -89,7 +89,7 @@ use crate::services::axon_serve::federation_wrappers::{
 use crate::services::federated_peers_cell::SharedFederatedPeers;
 use crate::services::federation_client::FederationClient;
 use crate::services::axon_serve::invoke_remote_initiator::{
-    InvokeRemoteDown, InvokeRemoteUp, SessionDispatch, ABILITY_INVOKE_REMOTE,
+    call_id_hex, InvokeRemoteDown, InvokeRemoteUp, SessionDispatch, ABILITY_INVOKE_REMOTE,
     INVOKE_REMOTE_STREAM_ID,
 };
 use crate::services::axon_serve::register_device_pubkey::{
@@ -1708,6 +1708,31 @@ async fn drain_session_up_stream(
                 eprintln!(
                     "[session-accept] {caller_uri} sent unexpected Dispatch frame \
                      (call_id={call_id}); ignoring"
+                );
+            }
+            SessionDispatch::Request { call_id, ability, args: _ } => {
+                // PR-N6: device → hub forward_invoke escalation.
+                // Wire shape lands in C2 (this commit); the
+                // `dispatch_session_request` handler that resolves
+                // these against the hub's PresenceRegistry is C3.
+                // Until C3 ships, log the receipt with the locked
+                // marker the demo orchestration grep-asserts and
+                // drop the frame — the device-side `forward_invoke`
+                // sender will time out on no `RequestResult`,
+                // which is the honest behaviour for "wire shape
+                // landed but handler not yet wired".
+                let id_hex = call_id_hex(&call_id);
+                eprintln!(
+                    "[session-accept] received Request frame call_id={id_hex} ability={ability}"
+                );
+            }
+            SessionDispatch::RequestResult { call_id, .. } => {
+                // RequestResult is hub → device only; a device
+                // sending one up its own session is malformed.
+                let id_hex = call_id_hex(&call_id);
+                eprintln!(
+                    "[session-accept] {caller_uri} sent unexpected RequestResult frame \
+                     (call_id={id_hex}); ignoring"
                 );
             }
         }

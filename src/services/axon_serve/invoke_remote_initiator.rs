@@ -142,10 +142,19 @@ pub enum InvokeRemoteFrame {
 /// and of the matching reply the target device sends back up its
 /// session stream.
 ///
-/// MVP-style framing per PR-3 sub-spec §2.3 (decision recorded in
-/// `team-work/letters/2026-04-30-16-haifeng-to-mohao-pr1-review-commit-6-and-fixup-ack.md`).
-/// Public so PR-2's `<self>.session` accept handler imports
-/// the same type to recognise these frames in the session stream.
+/// MVP-style framing per PR-3 sub-spec §2.3. Public so the
+/// `<self>.session` accept handler imports the same type to
+/// recognise these frames in the session stream.
+///
+/// Direction discipline (per PR-N6 spec §"Direction discipline"):
+///
+///   `Dispatch`         hub → device only
+///   `Result`           device → hub only
+///   `Request`          device → hub only — escalates a
+///                      `forward_invoke` from a device-mode
+///                      daemon up to its hub
+///   `RequestResult`    hub → device only — answers a `Request`
+///                      with resolved bytes or a typed error
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionDispatch {
@@ -158,7 +167,7 @@ pub enum SessionDispatch {
         args: Vec<u8>,
     },
     /// Target device → hub. The target ran the ability and is
-    /// returning the reply. PR-2's session task sees this on the
+    /// returning the reply. The session task sees this on the
     /// session up stream and routes it via
     /// `PendingDispatchMap::complete(call_id, …)`.
     Result {
@@ -167,6 +176,85 @@ pub enum SessionDispatch {
         terminal: bool,
         error: Option<String>,
     },
+    /// Device → hub. A device-mode daemon emits this when its
+    /// CLI's `ability invoke --node` lands a `forward_invoke`
+    /// that the device's local PresenceRegistry cannot serve
+    /// (which is always the case for device-mode, since
+    /// device-mode only dials outbound `<self>.session` and
+    /// never accepts inbound bidi). The hub picks the frame up
+    /// on the existing `<self>.session` accept handler and runs
+    /// the same `forward_invoke` logic against the hub's
+    /// authoritative PresenceRegistry, then answers with a
+    /// matching `RequestResult` frame.
+    ///
+    /// `call_id` is a 16-byte OsRng nonce; concurrent in-flight
+    /// Requests are matched on `call_id` against an
+    /// `oneshot::Receiver` table. No fairness scheduling — devices
+    /// typically have ≤1 concurrent CLI invoke in flight.
+    Request {
+        call_id: [u8; 16],
+        ability: String,
+        args: Vec<u8>,
+    },
+    /// Hub → device. Reverse direction of `Request`. The hub
+    /// resolved the target via its PresenceRegistry (same-tenant
+    /// fast-path) or via cross-hub dial (target tenant differs)
+    /// and is returning the result bytes — or a typed error
+    /// describing why resolution failed.
+    RequestResult {
+        call_id: [u8; 16],
+        outcome: RequestOutcome,
+    },
+}
+
+/// Outcome of a `SessionDispatch::Request` resolved on the hub
+/// side. Matches PR-N6 spec §"Wire shape" exactly. Boundary type
+/// over a primitive `(Vec<u8>, Option<String>)` tuple so the
+/// discriminator is structural — a malformed wire frame can't
+/// produce an ambiguous "empty bytes plus empty error" state.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum RequestOutcome {
+    /// Hub resolved the target and returned bytes.
+    Ok { result_bytes: Vec<u8> },
+    /// Hub failed to resolve. The error is a typed enum so a
+    /// device-side script can distinguish the four common modes
+    /// without parsing free-form strings.
+    Err { error: SessionRequestError },
+}
+
+/// Why a `SessionDispatch::Request` failed on the hub side.
+/// Mirrors PR-N6 spec §"Wire shape" enum verbatim.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SessionRequestError {
+    /// Hub's PresenceRegistry has no entry for the target URI
+    /// (forwarding to a nonexistent device).
+    TargetOffline,
+    /// Hub-side `forward_invoke` admission rejected the call
+    /// (caller URI not in trust anchor, ability not known, etc.).
+    PermissionDenied { reason: String },
+    /// Hub's cross-hub dial failed (peer hub down, TLS handshake
+    /// failure, etc.).
+    UpstreamFailure { reason: String },
+    /// Hub timeout waiting for resolved bytes from upstream.
+    UpstreamTimeout,
+}
+
+/// Render a 16-byte `Request` / `RequestResult` `call_id` as a
+/// 32-character lowercase hex string for log-marker output.
+/// Used by the locked log lines in PR-N6 spec §"Locked log
+/// markers" (`[session-accept] received Request frame call_id=…`,
+/// `[axon-serve] forward_invoke escalated up <self>.session bidi:
+/// call_id=…`). Operator-facing: hex round-trips through any
+/// terminal without escaping.
+#[must_use]
+pub fn call_id_hex(call_id: &[u8; 16]) -> String {
+    let mut out = String::with_capacity(32);
+    for byte in call_id {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
 }
 
 /// Open an `<self>.invoke_remote` bidi stream against the local
@@ -584,5 +672,112 @@ mod tests {
         let status = first.expect_err("transport error must propagate");
         assert_eq!(status.code(), tonic::Code::Unavailable);
         assert!(status.message().contains("connection reset"));
+    }
+
+    #[test]
+    fn session_dispatch_request_round_trip() {
+        // PR-N6 wire shape (C2): Request frame device → hub.
+        let original = SessionDispatch::Request {
+            call_id: [0xab; 16],
+            ability: "fs.read".into(),
+            args: br#"{"path":"/etc/hosts"}"#.to_vec(),
+        };
+        let bytes = serde_json::to_vec(&original).expect("encode");
+        let recovered: SessionDispatch = serde_json::from_slice(&bytes).expect("decode");
+        assert_eq!(original, recovered);
+    }
+
+    #[test]
+    fn session_dispatch_request_result_ok_round_trip() {
+        let original = SessionDispatch::RequestResult {
+            call_id: [0x42; 16],
+            outcome: RequestOutcome::Ok {
+                result_bytes: b"127.0.0.1 localhost\n".to_vec(),
+            },
+        };
+        let bytes = serde_json::to_vec(&original).expect("encode");
+        let recovered: SessionDispatch = serde_json::from_slice(&bytes).expect("decode");
+        assert_eq!(original, recovered);
+    }
+
+    #[test]
+    fn session_dispatch_request_result_err_round_trip_each_variant() {
+        // Pin every SessionRequestError variant through the
+        // serde wire so a future field rename is caught here
+        // rather than producing silent decode failures on the
+        // device side at runtime.
+        let cases = vec![
+            SessionRequestError::TargetOffline,
+            SessionRequestError::PermissionDenied {
+                reason: "caller URI not in trust anchor".into(),
+            },
+            SessionRequestError::UpstreamFailure {
+                reason: "peer hub TLS handshake failed".into(),
+            },
+            SessionRequestError::UpstreamTimeout,
+        ];
+        for err in cases {
+            let original = SessionDispatch::RequestResult {
+                call_id: [0; 16],
+                outcome: RequestOutcome::Err {
+                    error: err.clone(),
+                },
+            };
+            let bytes = serde_json::to_vec(&original).expect("encode");
+            let recovered: SessionDispatch =
+                serde_json::from_slice(&bytes).expect("decode");
+            assert_eq!(
+                original, recovered,
+                "round-trip mismatch for SessionRequestError {err:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn session_dispatch_request_carries_distinct_tag_in_serialised_form() {
+        // The `Request` and `Dispatch` variants share the
+        // `(call_id, ability, args)` shape but flow on
+        // opposite directions. The wire-level discriminator
+        // is the `type` tag; an existing peer that never
+        // saw the new variants will see `{"type":"request",
+        // ...}` and reject it as unknown rather than
+        // misinterpreting it as a `Dispatch` frame. This test
+        // pins the tag value so a rename in
+        // `#[serde(rename_all = "snake_case")]` shows up here.
+        let req = SessionDispatch::Request {
+            call_id: [0; 16],
+            ability: "x".into(),
+            args: vec![],
+        };
+        let json = serde_json::to_string(&req).expect("encode");
+        assert!(
+            json.contains(r#""type":"request""#),
+            "serialised form must carry type=request tag, got {json}",
+        );
+
+        let res = SessionDispatch::RequestResult {
+            call_id: [0; 16],
+            outcome: RequestOutcome::Ok {
+                result_bytes: vec![],
+            },
+        };
+        let json = serde_json::to_string(&res).expect("encode");
+        assert!(
+            json.contains(r#""type":"request_result""#),
+            "serialised form must carry type=request_result tag, got {json}",
+        );
+    }
+
+    #[test]
+    fn call_id_hex_renders_32_lowercase_chars() {
+        assert_eq!(call_id_hex(&[0; 16]), "00000000000000000000000000000000");
+        assert_eq!(call_id_hex(&[0xff; 16]), "ffffffffffffffffffffffffffffffff");
+        // Mixed bytes round-trip through the deterministic
+        // 2-char-per-byte format the log markers reference.
+        let bytes = [
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f,
+        ];
+        assert_eq!(call_id_hex(&bytes), "000102030405060708090a0b0c0d0e0f");
     }
 }

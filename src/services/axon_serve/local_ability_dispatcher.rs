@@ -176,6 +176,18 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
             SessionDispatch::Dispatch { .. } => {
                 unreachable!("local execution never returns Dispatch")
             }
+            SessionDispatch::Request { .. } | SessionDispatch::RequestResult { .. } => {
+                // PR-N6 wire shape (C2) added these for the
+                // device → hub forward_invoke escalation path.
+                // LocalAbilityDispatcher only handles
+                // hub-pushed Dispatch frames + their Result
+                // replies; Request/RequestResult never reach
+                // this code path by construction.
+                unreachable!(
+                    "local execution never returns Request / RequestResult \
+                     (those flow on the device → hub direction handled by C3/C4)"
+                )
+            }
         };
 
         let payload = serde_json::to_vec(&result).map_err(|err| {
