@@ -849,7 +849,10 @@ fn spawn_federated_directory_streaming_supervisor(
     tokio::spawn(async move {
         // peer_realm -> oneshot::Sender that cancels the
         // supervisor when a peer is removed. The watcher
-        // reconciles this map against the cell every tick.
+        // reconciles this map against the cell every tick
+        // via `reconcile_streaming_supervisors` (PR-N3
+        // N3-streaming-9), which extracts the diff logic so
+        // it stays unit-testable.
         let mut active: std::collections::BTreeMap<
             String,
             tokio::sync::oneshot::Sender<()>,
@@ -861,48 +864,43 @@ fn spawn_federated_directory_streaming_supervisor(
             interval.tick().await;
             let snapshot = federated_peers_cell.snapshot();
 
-            // Spawn supervisors for newly-added peers.
-            for (peer_realm, peer_hub_uri) in snapshot.iter() {
-                if active.contains_key(peer_realm) {
-                    continue;
-                }
-                let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
-                let realm_owned = peer_realm.clone();
-                let uri_owned = peer_hub_uri.clone();
-                let client_clone = Arc::clone(&federation_client);
-                let cell_clone = federated_directory_cell.clone();
-                tokio::spawn(async move {
-                    crate::services::federation_directory::run_per_peer_supervisor(
-                        realm_owned,
-                        uri_owned,
-                        client_clone,
-                        cell_clone,
-                        cancel_rx,
-                    )
-                    .await;
-                });
-                active.insert(peer_realm.clone(), cancel_tx);
+            let federation_client_outer = Arc::clone(&federation_client);
+            let directory_cell_outer = federated_directory_cell.clone();
+            let (spawned, cancelled) =
+                crate::services::federation_directory::reconcile_streaming_supervisors(
+                    &snapshot,
+                    &mut active,
+                    |peer_realm, peer_hub_uri| {
+                        let (cancel_tx, cancel_rx) =
+                            tokio::sync::oneshot::channel();
+                        let realm_owned = peer_realm.to_string();
+                        let uri_owned = peer_hub_uri.to_string();
+                        let client_clone = Arc::clone(&federation_client_outer);
+                        let cell_clone = directory_cell_outer.clone();
+                        tokio::spawn(async move {
+                            crate::services::federation_directory::run_per_peer_supervisor(
+                                realm_owned,
+                                uri_owned,
+                                client_clone,
+                                cell_clone,
+                                cancel_rx,
+                            )
+                            .await;
+                        });
+                        cancel_tx
+                    },
+                );
+            for realm in spawned {
                 eprintln!(
                     "[federation_directory] streaming supervisor spawned for \
-                     peer realm={peer_realm:?} hub={peer_hub_uri:?}",
+                     peer realm={realm:?}",
                 );
             }
-
-            // Cancel supervisors for peers that have been
-            // removed from the cell.
-            let removed: Vec<String> = active
-                .keys()
-                .filter(|realm| !snapshot.contains_key(realm.as_str()))
-                .cloned()
-                .collect();
-            for realm in removed {
-                if let Some(cancel_tx) = active.remove(&realm) {
-                    let _ = cancel_tx.send(());
-                    eprintln!(
-                        "[federation_directory] streaming supervisor cancelled \
-                         for peer realm={realm:?} (no longer in federated_peers)",
-                    );
-                }
+            for realm in cancelled {
+                eprintln!(
+                    "[federation_directory] streaming supervisor cancelled \
+                     for peer realm={realm:?} (no longer in federated_peers)",
+                );
             }
         }
     });

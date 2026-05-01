@@ -834,6 +834,72 @@ pub async fn run_per_peer_supervisor(
     .await
 }
 
+/// **PR-N3 N3-streaming-9**. Reconcile a per-peer supervisor
+/// map against a fresh `SharedFederatedPeers` snapshot. Pure
+/// data shaping — the function:
+///
+///   - Iterates `snapshot.iter()` and for any peer realm not
+///     yet in `active`, calls `spawn(realm, hub_uri)` to start
+///     a fresh supervisor; stores the returned cancel sender
+///     in `active`.
+///   - Iterates `active.keys()` and for any realm no longer in
+///     the snapshot, fires `cancel_tx.send(())` and removes the
+///     entry from `active`.
+///
+/// Returns `(spawned, cancelled)` realm vectors for caller
+/// observability (eprintln traces in production, test assertions
+/// in unit tests). Decoupling the reconcile-step from the
+/// 2s-interval driver makes the contract testable without a
+/// tokio scheduler race.
+///
+/// `spawn` is a closure rather than a trait so callers can
+/// capture whatever per-peer state they own (federation_client
+/// Arc, directory cell, etc) without contorting through a
+/// generic parameter list. Production calls
+/// `tokio::spawn(run_per_peer_supervisor(...))` and returns the
+/// `cancel_tx`; tests record the call args + return a fresh
+/// oneshot::Sender that the test then awaits to confirm
+/// cancellation fired.
+pub fn reconcile_streaming_supervisors<F>(
+    snapshot: &std::collections::BTreeMap<String, String>,
+    active: &mut std::collections::BTreeMap<
+        String,
+        tokio::sync::oneshot::Sender<()>,
+    >,
+    mut spawn: F,
+) -> (Vec<String>, Vec<String>)
+where
+    F: FnMut(&str, &str) -> tokio::sync::oneshot::Sender<()>,
+{
+    let mut spawned = Vec::new();
+    let mut cancelled = Vec::new();
+
+    // Spawn supervisors for newly-added peers.
+    for (peer_realm, peer_hub_uri) in snapshot.iter() {
+        if active.contains_key(peer_realm) {
+            continue;
+        }
+        let cancel_tx = spawn(peer_realm, peer_hub_uri);
+        active.insert(peer_realm.clone(), cancel_tx);
+        spawned.push(peer_realm.clone());
+    }
+
+    // Cancel supervisors for peers no longer in the cell.
+    let removed: Vec<String> = active
+        .keys()
+        .filter(|realm| !snapshot.contains_key(realm.as_str()))
+        .cloned()
+        .collect();
+    for realm in removed {
+        if let Some(cancel_tx) = active.remove(&realm) {
+            let _ = cancel_tx.send(());
+            cancelled.push(realm);
+        }
+    }
+
+    (spawned, cancelled)
+}
+
 /// **PR-N3 N3-streaming-8**. Variant of
 /// `run_per_peer_supervisor` with a tunable idle-timeout
 /// window. Production callers stick with the default
@@ -1698,6 +1764,145 @@ mod tests {
             let result =
                 tokio::time::timeout(std::time::Duration::from_secs(5), task).await;
             assert!(result.is_ok(), "supervisor must honour cancel within 5s");
+        }
+
+        // ── PR-N3 N3-streaming-9 — reconcile_streaming_supervisors ──
+
+        #[test]
+        fn reconcile_spawns_for_new_peers() {
+            // Empty active map + 2-peer snapshot ⇒ 2 spawns,
+            // 0 cancels. Spawn closure records the calls.
+            let mut active: std::collections::BTreeMap<
+                String,
+                tokio::sync::oneshot::Sender<()>,
+            > = std::collections::BTreeMap::new();
+            let mut snapshot = std::collections::BTreeMap::new();
+            snapshot.insert("realm-b".to_string(), "https://hub-b.example:50443".to_string());
+            snapshot.insert("realm-c".to_string(), "https://hub-c.example:50443".to_string());
+
+            let mut spawn_calls: Vec<(String, String)> = Vec::new();
+            let (spawned, cancelled) = reconcile_streaming_supervisors(
+                &snapshot,
+                &mut active,
+                |peer_realm, peer_hub_uri| {
+                    spawn_calls.push((peer_realm.to_string(), peer_hub_uri.to_string()));
+                    let (tx, _rx) = tokio::sync::oneshot::channel();
+                    tx
+                },
+            );
+            assert_eq!(spawned.len(), 2);
+            assert!(spawned.contains(&"realm-b".to_string()));
+            assert!(spawned.contains(&"realm-c".to_string()));
+            assert!(cancelled.is_empty());
+            assert_eq!(spawn_calls.len(), 2);
+            assert!(active.contains_key("realm-b"));
+            assert!(active.contains_key("realm-c"));
+        }
+
+        #[test]
+        fn reconcile_skips_peers_already_active() {
+            // Pre-populate active with realm-b. Snapshot still
+            // has realm-b + new realm-c. Only realm-c spawns.
+            let mut active: std::collections::BTreeMap<
+                String,
+                tokio::sync::oneshot::Sender<()>,
+            > = std::collections::BTreeMap::new();
+            let (existing_tx, _existing_rx) = tokio::sync::oneshot::channel();
+            active.insert("realm-b".to_string(), existing_tx);
+
+            let mut snapshot = std::collections::BTreeMap::new();
+            snapshot.insert("realm-b".to_string(), "https://hub-b.example:50443".to_string());
+            snapshot.insert("realm-c".to_string(), "https://hub-c.example:50443".to_string());
+
+            let mut spawn_calls = 0u32;
+            let (spawned, cancelled) = reconcile_streaming_supervisors(
+                &snapshot,
+                &mut active,
+                |_, _| {
+                    spawn_calls += 1;
+                    let (tx, _rx) = tokio::sync::oneshot::channel();
+                    tx
+                },
+            );
+            assert_eq!(spawned, vec!["realm-c".to_string()]);
+            assert!(cancelled.is_empty());
+            assert_eq!(spawn_calls, 1, "must NOT respawn an already-active peer");
+        }
+
+        #[test]
+        fn reconcile_cancels_peers_no_longer_in_snapshot() {
+            // Pre-populate active with realm-b. Empty snapshot
+            // (peer was removed via SIGHUP). reconcile fires
+            // cancel + drops the entry from active. The cancel
+            // receiver should observe the signal — proves a
+            // real `oneshot::send` not a no-op.
+            let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel();
+            let mut active = std::collections::BTreeMap::new();
+            active.insert("realm-b".to_string(), cancel_tx);
+
+            let snapshot = std::collections::BTreeMap::new();
+            let (spawned, cancelled) = reconcile_streaming_supervisors(
+                &snapshot,
+                &mut active,
+                |_, _| {
+                    panic!("must NOT spawn for empty snapshot");
+                },
+            );
+            assert!(spawned.is_empty());
+            assert_eq!(cancelled, vec!["realm-b".to_string()]);
+            assert!(!active.contains_key("realm-b"));
+            // The supervisor side received the cancel signal.
+            assert!(cancel_rx.try_recv().is_ok());
+        }
+
+        #[test]
+        fn reconcile_handles_simultaneous_add_and_drop() {
+            // Realm-b active; snapshot replaces it with realm-c.
+            // reconcile spawns realm-c + cancels realm-b in
+            // one pass.
+            let (existing_tx, mut existing_rx) = tokio::sync::oneshot::channel();
+            let mut active = std::collections::BTreeMap::new();
+            active.insert("realm-b".to_string(), existing_tx);
+
+            let mut snapshot = std::collections::BTreeMap::new();
+            snapshot.insert("realm-c".to_string(), "https://hub-c.example:50443".to_string());
+
+            let (spawned, cancelled) = reconcile_streaming_supervisors(
+                &snapshot,
+                &mut active,
+                |_, _| {
+                    let (tx, _rx) = tokio::sync::oneshot::channel();
+                    tx
+                },
+            );
+            assert_eq!(spawned, vec!["realm-c".to_string()]);
+            assert_eq!(cancelled, vec!["realm-b".to_string()]);
+            assert!(active.contains_key("realm-c"));
+            assert!(!active.contains_key("realm-b"));
+            assert!(existing_rx.try_recv().is_ok());
+        }
+
+        #[test]
+        fn reconcile_no_op_when_active_matches_snapshot() {
+            // Active and snapshot identical ⇒ no spawn, no
+            // cancel.
+            let (existing_tx, _existing_rx) = tokio::sync::oneshot::channel();
+            let mut active = std::collections::BTreeMap::new();
+            active.insert("realm-b".to_string(), existing_tx);
+
+            let mut snapshot = std::collections::BTreeMap::new();
+            snapshot.insert("realm-b".to_string(), "https://hub-b.example:50443".to_string());
+
+            let (spawned, cancelled) = reconcile_streaming_supervisors(
+                &snapshot,
+                &mut active,
+                |_, _| {
+                    panic!("must NOT spawn");
+                },
+            );
+            assert!(spawned.is_empty());
+            assert!(cancelled.is_empty());
+            assert!(active.contains_key("realm-b"));
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
