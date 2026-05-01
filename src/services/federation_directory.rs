@@ -819,7 +819,34 @@ pub async fn run_per_peer_supervisor(
     peer_hub_uri: String,
     federation_client: std::sync::Arc<dyn crate::services::federation_client::FederationClient>,
     cell: SharedFederatedDirectoryView,
+    cancel: tokio::sync::oneshot::Receiver<()>,
+) {
+    // Default production cadence: 60s receiver-side idle
+    // timeout (spec §2.3 = two missed 30s heartbeat windows).
+    run_per_peer_supervisor_with_idle_timeout(
+        peer_realm,
+        peer_hub_uri,
+        federation_client,
+        cell,
+        cancel,
+        60_000,
+    )
+    .await
+}
+
+/// **PR-N3 N3-streaming-8**. Variant of
+/// `run_per_peer_supervisor` with a tunable idle-timeout
+/// window. Production callers stick with the default
+/// `run_per_peer_supervisor` (60 000ms); integration tests
+/// pass a sub-second value to drive the IdleTimeout reconnect
+/// path in real time.
+pub async fn run_per_peer_supervisor_with_idle_timeout(
+    peer_realm: String,
+    peer_hub_uri: String,
+    federation_client: std::sync::Arc<dyn crate::services::federation_client::FederationClient>,
+    cell: SharedFederatedDirectoryView,
     mut cancel: tokio::sync::oneshot::Receiver<()>,
+    idle_timeout_ms: u64,
 ) {
     use crate::pb::axon::v1::InvokeServerStreamRequest;
 
@@ -844,11 +871,11 @@ pub async fn run_per_peer_supervisor(
         {
             Ok(stream) => {
                 client.on_dial_ok();
-                // PR-N3 N3-streaming-7: enforce the spec §2.3
-                // 60s idle-timeout. The peer's heartbeat (N3-
-                // streaming-6) fires every 30s when idle; two
-                // missed windows = dead peer, reconnect.
-                let idle_timeout_ms = 60_000u64;
+                // PR-N3 N3-streaming-7 + N3-streaming-8: enforce
+                // the spec §2.3 idle-timeout. Production cadence
+                // is 60s (= two missed 30s heartbeat windows);
+                // integration tests pass a smaller window via
+                // `run_per_peer_supervisor_with_idle_timeout`.
                 let consume = consume_directory_event_stream_with_idle_timeout(
                     &mut client,
                     &cell,
@@ -1589,6 +1616,88 @@ mod tests {
                     }),
                 }
             }
+        }
+
+        /// Mock that returns a `pending` stream every time
+        /// `subscribe_directory_v2` is called. Each call
+        /// records into a counter so the test can assert the
+        /// supervisor reconnected.
+        struct StalledStreamingClient {
+            dial_count: Arc<Mutex<u32>>,
+        }
+
+        #[async_trait]
+        impl FederationClient for StalledStreamingClient {
+            async fn forward_invoke(
+                &self,
+                _target_hub: &HubUri,
+                _request: InvokeRequest,
+            ) -> Result<InvokeResponse, FederationClientError> {
+                Err(FederationClientError::Unimplemented("not used in test"))
+            }
+
+            async fn subscribe_directory_v2(
+                &self,
+                _target_hub: &HubUri,
+                _request: InvokeServerStreamRequest,
+            ) -> Result<DirectoryEventStream, FederationClientError> {
+                *self.dial_count.lock().unwrap() += 1;
+                Ok(Box::pin(futures::stream::pending::<DirectoryEvent>()))
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn supervisor_idle_timeout_drives_reconnect() {
+            // PR-N3 N3-streaming-8. Peer accepts the dial but
+            // never yields a frame. The receiver-side idle
+            // timeout (50ms in this test) fires; the supervisor
+            // logs IdleTimeout, sleeps the FSM backoff, dials
+            // again. Within the test's 1s budget we should
+            // observe at least 2 dials — proves the reconnect
+            // path through to the next subscribe call.
+            let cell = SharedFederatedDirectoryView::default();
+            let dial_count = Arc::new(Mutex::new(0u32));
+            let client = Arc::new(StalledStreamingClient {
+                dial_count: dial_count.clone(),
+            });
+            let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+
+            let cell_for_task = cell.clone();
+            let client_for_task: Arc<dyn FederationClient> = client.clone();
+            let task = tokio::spawn(async move {
+                run_per_peer_supervisor_with_idle_timeout(
+                    "realm-b".to_string(),
+                    "https://hub-b.example:50443".to_string(),
+                    client_for_task,
+                    cell_for_task,
+                    cancel_rx,
+                    50, // 50ms idle timeout
+                )
+                .await;
+            });
+
+            // Wait long enough for at least two dial cycles:
+            // 50ms idle + ≥1s FSM backoff (first redial) +
+            // 50ms idle + 2s backoff... realistically we need
+            // ~2.5s to see the second dial. Cap at 3s so a
+            // regression surfaces as a test timeout.
+            for _ in 0..120 {
+                if *dial_count.lock().unwrap() >= 2 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+            let final_count = *dial_count.lock().unwrap();
+            assert!(
+                final_count >= 2,
+                "expected ≥ 2 dials within 3s window (idle + backoff cycle); got {final_count}"
+            );
+
+            // Cancel the supervisor and confirm shutdown.
+            let _ = cancel_tx.send(());
+            let result =
+                tokio::time::timeout(std::time::Duration::from_secs(5), task).await;
+            assert!(result.is_ok(), "supervisor must honour cancel within 5s");
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
