@@ -80,9 +80,9 @@ use crate::pb::axon::v1::{
 };
 use crate::services::axon_serve::admission_facade::AdmissionFacade;
 use crate::services::axon_serve::federation_wrappers::{
-    self, ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_FEDERATION_FORWARD_INVOKE,
-    ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN, ABILITY_FEDERATION_RESOLVE,
-    ABILITY_FEDERATION_RESOLVE_KEY, ABILITY_FEDERATION_REVOKE,
+    self, ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_FEDERATION_DISCOVER,
+    ABILITY_FEDERATION_FORWARD_INVOKE, ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN,
+    ABILITY_FEDERATION_RESOLVE, ABILITY_FEDERATION_RESOLVE_KEY, ABILITY_FEDERATION_REVOKE,
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
 };
 use crate::services::federated_peers_cell::SharedFederatedPeers;
@@ -174,6 +174,15 @@ pub struct DaemonInvocationService {
     /// PR-N3 will replace this hand-curated map with auto-
     /// discovered cross-realm directory entries.
     federated_peers: SharedFederatedPeers,
+    /// **PR-N3 commit N3-3/N3-4**. Reload-friendly cell holding
+    /// the daemon-wide federated directory snapshot. Per-peer
+    /// `RemoteDirectoryClient` tasks (lands in N3-3.1) write
+    /// into this cell as Snapshot/Upsert/Remove frames arrive;
+    /// the `federation.discover` dispatch arm reads from it for
+    /// cross-realm URI lookup. Defaults to empty so single-realm
+    /// daemons gracefully report no federated entries.
+    federated_directory:
+        crate::services::federation_directory::SharedFederatedDirectoryView,
 }
 
 impl std::fmt::Debug for DaemonInvocationService {
@@ -227,6 +236,8 @@ impl DaemonInvocationService {
             session_realm: None,
             federation_client: None,
             federated_peers: SharedFederatedPeers::default(),
+            federated_directory:
+                crate::services::federation_directory::SharedFederatedDirectoryView::default(),
         }
     }
 
@@ -319,6 +330,23 @@ impl DaemonInvocationService {
         self.federated_peers = cell;
         self
     }
+
+    /// **PR-N3 commit N3-3/N3-4**. Attach the live
+    /// `SharedFederatedDirectoryView` cell so the
+    /// `federation.discover` dispatch arm reads the daemon-
+    /// wide cross-realm directory snapshot. Per-peer
+    /// `RemoteDirectoryClient` tasks (lands in N3-3.1) write
+    /// into the same cell as Snapshot/Upsert/Remove frames
+    /// arrive. Defaults to empty (single-realm daemons report
+    /// no federated entries — graceful degradation).
+    #[must_use]
+    pub fn with_federated_directory_cell(
+        mut self,
+        cell: crate::services::federation_directory::SharedFederatedDirectoryView,
+    ) -> Self {
+        self.federated_directory = cell;
+        self
+    }
 }
 
 /// Boxed pinned stream type used for both server-stream and
@@ -354,6 +382,7 @@ impl Invocation for DaemonInvocationService {
             ABILITY_FEDERATION_RESOLVE_KEY => {
                 self.dispatch_federation_resolve_key(&inner.arguments)
             }
+            ABILITY_FEDERATION_DISCOVER => self.dispatch_federation_discover(&inner.arguments),
             ABILITY_FEDERATION_REVOKE => self.dispatch_federation_revoke(&inner.arguments),
             ABILITY_FEDERATION_FORWARD_INVOKE => {
                 self.dispatch_federation_forward_invoke(
@@ -582,6 +611,23 @@ impl DaemonInvocationService {
                 request.agent_uri
             ))),
         }
+    }
+
+    /// **PR-N3 commit N3-4**. Cross-realm directory lookup
+    /// dispatch. Reads the daemon-wide
+    /// `SharedFederatedDirectoryView` cell snapshot, fans out
+    /// across federated peers per spec §3.2 (lex tie-break,
+    /// dedupe by agent_uri), returns matching `DirectoryEntry`
+    /// list. Pure read; no I/O — single-realm daemons that
+    /// haven't accumulated any peer views just return an empty
+    /// response, gracefully degrading to local-only behaviour.
+    fn dispatch_federation_discover(
+        &self,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let request: federation_wrappers::DiscoverRequest = parse_json_args(arguments)?;
+        let response = federation_wrappers::handle_discover(&request, &self.federated_directory);
+        wrap_json_response(&response)
     }
 
     fn dispatch_federation_revoke(
@@ -1808,6 +1854,120 @@ mod tests {
             .expect("dispatch returns Ok");
         let body: federation_wrappers::ResolveResponse = parse_response_body(resp);
         assert!(body.agents.is_empty());
+    }
+
+    #[tokio::test]
+    async fn invoke_dispatches_federation_discover_with_no_filter_returns_empty_when_no_peers() {
+        // PR-N3 N3-4: single-realm daemon (no federated peers)
+        // returns the empty discover list. Graceful degradation —
+        // the ability is callable on every daemon, just empty
+        // when nothing has been federated yet.
+        let svc = make_service();
+        let resp = svc
+            .invoke(invoke_request(ABILITY_FEDERATION_DISCOVER, "{}"))
+            .await
+            .expect("dispatch returns Ok");
+        let body: federation_wrappers::DiscoverResponse = parse_response_body(resp);
+        assert!(body.entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn invoke_dispatches_federation_discover_returns_peer_entries_when_view_populated() {
+        // PR-N3 N3-4: when the federated_directory cell holds
+        // entries (write side is the per-peer
+        // RemoteDirectoryClient task in N3-3.1 — for this unit
+        // test we manually `replace` the cell with a populated
+        // map), discover surfaces them with origin_realm
+        // stamped per §2.4.
+        use crate::services::federation_directory::{
+            DirectoryEntry, DirectoryEvent, DirectoryView, SharedFederatedDirectoryView,
+        };
+        use std::collections::BTreeMap;
+
+        let cell = SharedFederatedDirectoryView::default();
+        let mut peer_view = DirectoryView::new("realm-b".to_string());
+        peer_view.apply_frame(&DirectoryEvent::Snapshot {
+            entries: vec![DirectoryEntry {
+                agent_uri: "easynet:///r/realm-b/agent/peer-device".to_string(),
+                node_id: "peer-1".to_string(),
+                display_name: Some("silan-phone".to_string()),
+                status: "active".to_string(),
+                origin_realm: None, // peer omitted; rewrite stamps realm-b
+                hub_endpoint: Some("https://hub-b.example:50443".to_string()),
+                last_seen_unix_ms: Some(1_714_500_000_000),
+            }],
+        });
+        let mut peers = BTreeMap::new();
+        peers.insert("realm-b".to_string(), Arc::new(peer_view));
+        cell.replace(peers);
+
+        let svc = make_service().with_federated_directory_cell(cell);
+        let resp = svc
+            .invoke(invoke_request(ABILITY_FEDERATION_DISCOVER, "{}"))
+            .await
+            .expect("dispatch returns Ok");
+        let body: federation_wrappers::DiscoverResponse = parse_response_body(resp);
+        assert_eq!(body.entries.len(), 1);
+        assert_eq!(
+            body.entries[0].agent_uri,
+            "easynet:///r/realm-b/agent/peer-device"
+        );
+        assert_eq!(
+            body.entries[0].origin_realm.as_deref(),
+            Some("realm-b"),
+            "§2.4 origin_realm rewrite must show through to the discover response"
+        );
+    }
+
+    #[tokio::test]
+    async fn invoke_dispatches_federation_discover_with_uri_filter_returns_single_hit() {
+        use crate::services::federation_directory::{
+            DirectoryEntry, DirectoryEvent, DirectoryView, SharedFederatedDirectoryView,
+        };
+        use std::collections::BTreeMap;
+
+        let cell = SharedFederatedDirectoryView::default();
+        let mut peer_view = DirectoryView::new("realm-b".to_string());
+        peer_view.apply_frame(&DirectoryEvent::Snapshot {
+            entries: vec![
+                DirectoryEntry {
+                    agent_uri: "easynet:///r/realm-b/agent/match".to_string(),
+                    node_id: "n1".to_string(),
+                    display_name: None,
+                    status: "active".to_string(),
+                    origin_realm: None,
+                    hub_endpoint: None,
+                    last_seen_unix_ms: None,
+                },
+                DirectoryEntry {
+                    agent_uri: "easynet:///r/realm-b/agent/other".to_string(),
+                    node_id: "n2".to_string(),
+                    display_name: None,
+                    status: "active".to_string(),
+                    origin_realm: None,
+                    hub_endpoint: None,
+                    last_seen_unix_ms: None,
+                },
+            ],
+        });
+        let mut peers = BTreeMap::new();
+        peers.insert("realm-b".to_string(), Arc::new(peer_view));
+        cell.replace(peers);
+
+        let svc = make_service().with_federated_directory_cell(cell);
+        let resp = svc
+            .invoke(invoke_request(
+                ABILITY_FEDERATION_DISCOVER,
+                r#"{"agent_uri":"easynet:///r/realm-b/agent/match"}"#,
+            ))
+            .await
+            .expect("dispatch returns Ok");
+        let body: federation_wrappers::DiscoverResponse = parse_response_body(resp);
+        assert_eq!(body.entries.len(), 1);
+        assert_eq!(
+            body.entries[0].agent_uri,
+            "easynet:///r/realm-b/agent/match"
+        );
     }
 
     #[tokio::test]

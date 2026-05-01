@@ -430,6 +430,70 @@ impl Default for SharedFederatedDirectoryView {
     }
 }
 
+// ── Tier-3 fan-out (PR-N3 N3-3 / N3-4) ─────────────────────────────
+
+/// Look up `query_uri` across every federated peer's directory
+/// view. Returns the matching `DirectoryEntry` with the peer's
+/// `origin_realm` already stamped (the §2.4 chokepoint runs on
+/// the write side via `DirectoryView::apply_frame`, so reads are
+/// just lookup).
+///
+/// **Spec v2 §3.2 + DEC-N4 §2.3**. The fan-out semantics:
+/// - Iterate peers in lex order on `peer_realm` so tie-break is
+///   deterministic when two peers both claim a hit.
+/// - First-success-wins: the lowest-realm peer that has the URI
+///   returns its entry. The directory is a *projection*; if the
+///   same URI appeared on multiple peers it would indicate a
+///   misconfiguration anyway (each device has exactly one
+///   origin hub by construction).
+/// - Dedupe by `agent_uri` is implicit because we return on
+///   first hit.
+///
+/// Returns `None` when no peer has the URI. The caller (e.g. the
+/// `<self>.discover` Tier-3 arm or backend `listDevices`)
+/// projects the entry into its surface shape.
+#[must_use]
+pub fn lookup_in_federated_view(
+    cell: &SharedFederatedDirectoryView,
+    query_uri: &str,
+) -> Option<DirectoryEntry> {
+    let snapshot = cell.snapshot();
+    // BTreeMap iteration is naturally lex-sorted on the key
+    // (peer_realm), which gives the spec's deterministic tie-
+    // break for free.
+    for (_peer_realm, view) in snapshot.iter() {
+        if let Some(entry) = view.lookup(query_uri) {
+            return Some(entry.clone());
+        }
+    }
+    None
+}
+
+/// Project the entire federated directory into a flat
+/// `Vec<DirectoryEntry>` for surfaces that want to enumerate
+/// every reachable device — `easynet device list`,
+/// `<self>.discover` with no specific URI filter, the backend
+/// `listDevices` aggregation. Each entry already carries its
+/// `origin_realm` per §2.4.
+///
+/// Iteration order: peers in lex order on `peer_realm`, entries
+/// in lex order on `agent_uri` (BTreeMap value iteration). Stable
+/// across invocations on the same snapshot so the CLI prints
+/// in a deterministic order.
+#[must_use]
+pub fn flatten_federated_view(
+    cell: &SharedFederatedDirectoryView,
+) -> Vec<DirectoryEntry> {
+    let snapshot = cell.snapshot();
+    let mut out = Vec::new();
+    for (_peer_realm, view) in snapshot.iter() {
+        for entry in view.entries.values() {
+            out.push(entry.clone());
+        }
+    }
+    out
+}
+
 // ── RemoteDirectoryClient (PR-N3 N3-3 scaffold) ────────────────────
 
 /// Per-peer remote directory subscriber.
@@ -1034,6 +1098,91 @@ mod tests {
         assert_eq!(client.on_dial_err(), 2_000);
         assert_eq!(client.on_dial_err(), 4_000);
         assert_eq!(client.on_dial_err(), 8_000);
+    }
+
+    // ── Tier-3 fan-out (N3-4) ─────────────────────────────
+
+    fn populated_cell_with_two_peers() -> SharedFederatedDirectoryView {
+        // realm-b has device-X; realm-c has device-Y. Sorted
+        // iteration gives realm-b first.
+        let mut realm_b = DirectoryView::new("realm-b".to_string());
+        realm_b.apply_frame(&DirectoryEvent::Snapshot {
+            entries: vec![entry_with_claimed_origin(
+                "easynet:///r/realm-b/agent/device-X",
+                None,
+            )],
+        });
+        let mut realm_c = DirectoryView::new("realm-c".to_string());
+        realm_c.apply_frame(&DirectoryEvent::Snapshot {
+            entries: vec![entry_with_claimed_origin(
+                "easynet:///r/realm-c/agent/device-Y",
+                None,
+            )],
+        });
+        let mut peers = BTreeMap::new();
+        peers.insert("realm-b".to_string(), Arc::new(realm_b));
+        peers.insert("realm-c".to_string(), Arc::new(realm_c));
+        SharedFederatedDirectoryView::new(peers)
+    }
+
+    #[test]
+    fn lookup_in_federated_view_returns_hit_with_origin_realm_stamped() {
+        let cell = populated_cell_with_two_peers();
+        let entry =
+            lookup_in_federated_view(&cell, "easynet:///r/realm-b/agent/device-X").expect("hit");
+        assert_eq!(entry.agent_uri, "easynet:///r/realm-b/agent/device-X");
+        assert_eq!(entry.origin_realm.as_deref(), Some("realm-b"));
+    }
+
+    #[test]
+    fn lookup_in_federated_view_returns_none_when_not_found() {
+        let cell = populated_cell_with_two_peers();
+        assert!(lookup_in_federated_view(&cell, "easynet:///r/realm-x/agent/missing").is_none());
+    }
+
+    #[test]
+    fn lookup_in_federated_view_lex_tie_break_on_peer_realm() {
+        // Two peers both claim the same URI (would be a real
+        // misconfiguration in production, but the spec says the
+        // tie-break is "lex order on peer_realm" so we pick the
+        // earliest realm). BTreeMap iteration gives us this for
+        // free, but pin the contract with a test.
+        let mut realm_b = DirectoryView::new("realm-b".to_string());
+        realm_b.apply_frame(&DirectoryEvent::Upsert {
+            entry: entry_with_claimed_origin("easynet:///r/shared/agent/dup", None),
+        });
+        let mut realm_c = DirectoryView::new("realm-c".to_string());
+        realm_c.apply_frame(&DirectoryEvent::Upsert {
+            entry: entry_with_claimed_origin("easynet:///r/shared/agent/dup", None),
+        });
+        let mut peers = BTreeMap::new();
+        peers.insert("realm-c".to_string(), Arc::new(realm_c));
+        peers.insert("realm-b".to_string(), Arc::new(realm_b));
+        let cell = SharedFederatedDirectoryView::new(peers);
+
+        let entry = lookup_in_federated_view(&cell, "easynet:///r/shared/agent/dup").expect("hit");
+        // realm-b < realm-c, so realm-b wins.
+        assert_eq!(entry.origin_realm.as_deref(), Some("realm-b"));
+    }
+
+    #[test]
+    fn flatten_federated_view_returns_all_entries_in_lex_order() {
+        let cell = populated_cell_with_two_peers();
+        let entries = flatten_federated_view(&cell);
+        assert_eq!(entries.len(), 2);
+        // realm-b is iterated before realm-c by BTreeMap key
+        // order; within each realm there's only one entry so
+        // the inner order is moot.
+        assert_eq!(entries[0].agent_uri, "easynet:///r/realm-b/agent/device-X");
+        assert_eq!(entries[0].origin_realm.as_deref(), Some("realm-b"));
+        assert_eq!(entries[1].agent_uri, "easynet:///r/realm-c/agent/device-Y");
+        assert_eq!(entries[1].origin_realm.as_deref(), Some("realm-c"));
+    }
+
+    #[test]
+    fn flatten_federated_view_is_empty_when_no_peers() {
+        let cell = SharedFederatedDirectoryView::default();
+        assert!(flatten_federated_view(&cell).is_empty());
     }
 
     #[test]

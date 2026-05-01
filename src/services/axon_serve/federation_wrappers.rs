@@ -114,7 +114,19 @@ pub const ABILITY_FEDERATION_FORWARD_INVOKE: &str = "federation.forward_invoke";
 /// this hub's trust set.
 pub const ABILITY_FEDERATION_RESOLVE_KEY: &str = "federation.resolve_key";
 
-/// All eight federation.* ability names in deterministic order.
+/// `federation.discover` — cross-realm directory lookup
+/// (PR-N3 N3-4). Reads the daemon's `SharedFederatedDirectoryView`
+/// snapshot, fans out across every federated peer's view in lex
+/// order on `peer_realm`, and returns the matching
+/// `DirectoryEntry` (or every entry when no `agent_uri` filter
+/// is supplied). Lex tie-break is deterministic (first peer in
+/// alphabetical order wins). Returns the empty list when no peer
+/// has the URI; never errors. The §2.4 `origin_realm` rewrite
+/// chokepoint runs on the write side (`DirectoryView::apply_frame`)
+/// so reads here are pure lookup.
+pub const ABILITY_FEDERATION_DISCOVER: &str = "federation.discover";
+
+/// All nine federation.* ability names in deterministic order.
 /// Iteration order is the order PR-4's schema-compat matrix files
 /// land on disk, so changing this slice without updating PR-4
 /// fixtures is a wire-compat break.
@@ -124,6 +136,7 @@ pub const FEDERATION_ABILITIES: &[&str] = &[
     ABILITY_FEDERATION_HEARTBEAT,
     ABILITY_FEDERATION_RESOLVE,
     ABILITY_FEDERATION_RESOLVE_KEY,
+    ABILITY_FEDERATION_DISCOVER,
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
     ABILITY_FEDERATION_REVOKE,
     ABILITY_FEDERATION_FORWARD_INVOKE,
@@ -360,6 +373,52 @@ pub fn handle_resolve_key(
         .map(|entry| ResolveKeyResponse {
             public_key_b64: entry.public_key_b64.clone(),
         })
+}
+
+// ─── federation.discover (PR-N3 N3-4) ──────────────────────────────
+
+/// Request payload for `federation.discover`. PR-N3 N3-4 cross-
+/// realm directory lookup. When `agent_uri` is `Some`, the
+/// handler returns at most one entry (the lex-smallest peer's
+/// view of that URI). When `None`, the handler returns the
+/// flattened federated directory in deterministic order
+/// (peers in lex order on `peer_realm`, entries within each
+/// peer in lex order on `agent_uri`).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DiscoverRequest {
+    /// Optional URI to filter on. Absent ⇒ return every entry
+    /// in the federated directory.
+    #[serde(default)]
+    pub agent_uri: Option<String>,
+}
+
+/// Response payload for `federation.discover`. Each entry in
+/// `entries` carries its `origin_realm` already stamped via the
+/// §2.4 rewrite chokepoint, so callers can sort, group, or
+/// filter by realm without trusting the wire bytes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiscoverResponse {
+    /// Matching `DirectoryEntry`s. Empty when the `agent_uri`
+    /// filter misses every peer; also empty when no peers are
+    /// federated (single-realm daemons gracefully degrade).
+    pub entries: Vec<crate::services::federation_directory::DirectoryEntry>,
+}
+
+/// Handle a `federation.discover` invocation. Pure read against
+/// the supplied `SharedFederatedDirectoryView` snapshot — no I/O,
+/// no async — so the dispatcher can call it inline.
+#[must_use]
+pub fn handle_discover(
+    request: &DiscoverRequest,
+    view: &crate::services::federation_directory::SharedFederatedDirectoryView,
+) -> DiscoverResponse {
+    let entries = match request.agent_uri.as_deref() {
+        Some(uri) => crate::services::federation_directory::lookup_in_federated_view(view, uri)
+            .map(|e| vec![e])
+            .unwrap_or_default(),
+        None => crate::services::federation_directory::flatten_federated_view(view),
+    };
+    DiscoverResponse { entries }
 }
 
 // ─── federation.revoke ─────────────────────────────────────────────
@@ -602,7 +661,8 @@ mod tests {
             "federation.forward_invoke"
         );
         assert_eq!(ABILITY_FEDERATION_RESOLVE_KEY, "federation.resolve_key");
-        assert_eq!(FEDERATION_ABILITIES.len(), 8);
+        assert_eq!(ABILITY_FEDERATION_DISCOVER, "federation.discover");
+        assert_eq!(FEDERATION_ABILITIES.len(), 9);
     }
 
     #[test]
