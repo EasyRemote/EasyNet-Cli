@@ -132,7 +132,6 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     // cell so the next admission sees the new entry without a daemon
     // restart.
     let trust_anchor_cell = SharedTrustAnchor::new(Arc::new(trust_anchor));
-    spawn_trust_anchor_reload_task(trust_anchor_path.clone(), trust_anchor_cell.clone());
     let presence = Arc::new(PresenceRegistry::new());
     let pending = Arc::new(PendingDispatchMap::new());
 
@@ -152,7 +151,6 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
         crate::services::federated_peers_cell::SharedFederatedPeers::new(
             config.federated_peers().clone(),
         );
-    spawn_daemon_config_reload_task(config_path.clone(), federated_peers_cell.clone());
 
     // **PR-N3 commit N3-3 + N3-4**. The cross-realm directory
     // cell. Lives at the daemon scope so any consumer of the
@@ -196,11 +194,24 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     }
     // Grab a clone of the federated-key cache handle BEFORE
     // ownership of the AdmissionFacade moves into the service,
-    // so the SIGHUP-driven trust-anchor reload task can flush
+    // so the unified SIGHUP reload task (below) can flush
     // cached cross-realm pubkeys after every reload (key
     // rotation must not wait for the 5-min per-entry TTL).
     let federated_key_cache = admission.federated_key_cache();
-    spawn_federated_key_cache_flush_task(federated_key_cache);
+    // **Unified SIGHUP reload coordinator** (replaces the
+    // previous three independent tasks). One task, one signal
+    // listener, processes trust-anchor reload + federated_peers
+    // reload + key-cache flush in deterministic sequence per
+    // signal — eliminates the race window where a federated
+    // cross-realm admission could fire between the three
+    // reloads landing.
+    spawn_unified_sighup_reload_task(
+        trust_anchor_path.clone(),
+        trust_anchor_cell.clone(),
+        config_path.clone(),
+        federated_peers_cell.clone(),
+        federated_key_cache,
+    );
     let mut service = DaemonInvocationService::new(Arc::clone(&presence), admission)
         .with_pending(Arc::clone(&pending))
         .with_session_realm(config.realm().to_string())
@@ -671,59 +682,35 @@ fn maybe_seed_demo_presence(_presence: &Arc<PresenceRegistry>) {
     // is the signal — re-build with `--features demo-fixture`.
 }
 
-#[cfg(unix)]
-fn spawn_trust_anchor_reload_task(path: PathBuf, trust_anchor_cell: SharedTrustAnchor) {
-    tokio::spawn(async move {
-        use tokio::signal::unix::{signal, SignalKind};
-
-        let mut sighup = match signal(SignalKind::hangup()) {
-            Ok(stream) => stream,
-            Err(err) => {
-                eprintln!(
-                    "[axon-serve] failed to install SIGHUP trust-anchor reload handler: {err}"
-                );
-                return;
-            }
-        };
-
-        while sighup.recv().await.is_some() {
-            match reload_trust_anchor_cell_from(&path, &trust_anchor_cell) {
-                Ok(0) => eprintln!(
-                    "[axon-serve] SIGHUP reload completed: trust anchor at {} is now empty",
-                    path.display()
-                ),
-                Ok(len) => eprintln!(
-                    "[axon-serve] SIGHUP reload completed: trust anchor at {} now has {} entries",
-                    path.display(),
-                    len
-                ),
-                Err(err) => eprintln!(
-                    "[axon-serve] SIGHUP reload failed for {}: {err}; keeping previous trust set",
-                    path.display()
-                ),
-            }
-        }
-    });
-}
-
-#[cfg(not(unix))]
-fn spawn_trust_anchor_reload_task(_path: PathBuf, _trust_anchor_cell: SharedTrustAnchor) {}
-
-/// **C3b**. SIGHUP-driven flush of the federated-key TTL cache.
-/// On every SIGHUP, drop every cached cross-realm pubkey so the
-/// next admission re-resolves through `federation.resolve_key`
-/// against the (newly reloaded) peer hub. Without this, a key
-/// rotation by the operator (edit `realm-trust.toml` + SIGHUP)
-/// would not visibly take effect for up to the cache TTL —
-/// surprising operators who expect SIGHUP to be the universal
-/// "I rotated something" signal.
+/// Unified SIGHUP-driven reload coordinator. Replaces the previous
+/// three independent SIGHUP listeners (trust anchor, federated_peers,
+/// federated-key cache flush) with a single task that processes all
+/// three reloads sequentially per signal.
 ///
-/// The task runs on the same SIGHUP stream as the trust-anchor
-/// reload, but in a separate task to keep the two concerns
-/// independently observable in `eprintln` traces.
+/// **Why unified.** Three independent listeners on the same signal
+/// fire in non-deterministic order. Operator could observe a window
+/// where trust anchor is reloaded but federated_peers is still stale
+/// (or vice versa), and a federated cross-realm admission firing
+/// inside that window would resolve against an inconsistent
+/// snapshot. Unifying into one task gives "all-or-nothing per
+/// signal" atomicity at the SIGHUP boundary.
+///
+/// **Order matters within a signal**. Trust anchor first (operator's
+/// most-likely-edited file), then daemon-config (federated_peers
+/// table), then key-cache flush (so the next admission re-resolves
+/// against the new anchor + peers).
+///
+/// Each reload step is independently fault-tolerant: a TOML parse
+/// error in one step logs the error and continues to the next step
+/// rather than aborting the whole signal. The cell keeps its
+/// last-known-good value when a step fails.
 #[cfg(unix)]
-fn spawn_federated_key_cache_flush_task(
-    cache: crate::services::axon_serve::federated_key_resolver::SharedFederatedKeyCache,
+fn spawn_unified_sighup_reload_task(
+    trust_anchor_path: PathBuf,
+    trust_anchor_cell: SharedTrustAnchor,
+    daemon_config_path: PathBuf,
+    federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
+    federated_key_cache: crate::services::axon_serve::federated_key_resolver::SharedFederatedKeyCache,
 ) {
     tokio::spawn(async move {
         use tokio::signal::unix::{signal, SignalKind};
@@ -732,91 +719,65 @@ fn spawn_federated_key_cache_flush_task(
             Ok(stream) => stream,
             Err(err) => {
                 eprintln!(
-                    "[axon-serve] failed to install SIGHUP federated-key-cache flush handler: {err}"
+                    "[axon-serve] failed to install unified SIGHUP reload handler: {err}"
                 );
                 return;
             }
         };
 
         while sighup.recv().await.is_some() {
-            cache.flush();
+            // Step 1: trust anchor.
+            match reload_trust_anchor_cell_from(&trust_anchor_path, &trust_anchor_cell) {
+                Ok(0) => eprintln!(
+                    "[axon-serve] SIGHUP step 1/3: trust anchor at {} is now empty",
+                    trust_anchor_path.display()
+                ),
+                Ok(len) => eprintln!(
+                    "[axon-serve] SIGHUP step 1/3: trust anchor at {} now has {} entries",
+                    trust_anchor_path.display(),
+                    len
+                ),
+                Err(err) => eprintln!(
+                    "[axon-serve] SIGHUP step 1/3 failed for {}: {err}; keeping previous trust set",
+                    trust_anchor_path.display()
+                ),
+            }
+
+            // Step 2: daemon-config federated_peers.
+            match reload_federated_peers_cell_from(&daemon_config_path, &federated_peers_cell) {
+                Ok(0) => eprintln!(
+                    "[axon-serve] SIGHUP step 2/3: daemon-config federated_peers at {} is now empty",
+                    daemon_config_path.display()
+                ),
+                Ok(len) => eprintln!(
+                    "[axon-serve] SIGHUP step 2/3: daemon-config federated_peers at {} now has {} entries",
+                    daemon_config_path.display(),
+                    len
+                ),
+                Err(err) => eprintln!(
+                    "[axon-serve] SIGHUP step 2/3 failed for {}: {err}; keeping previous federated_peers map",
+                    daemon_config_path.display()
+                ),
+            }
+
+            // Step 3: flush federated-key TTL cache so the next
+            // admission re-resolves cross-realm pubkeys against
+            // the freshly-loaded trust anchor + peer map.
+            federated_key_cache.flush();
             eprintln!(
-                "[axon-serve] SIGHUP: federated-key cache flushed (cross-realm pubkeys will re-resolve on next admission)"
+                "[axon-serve] SIGHUP step 3/3: federated-key cache flushed (cross-realm pubkeys will re-resolve on next admission)"
             );
         }
     });
 }
 
 #[cfg(not(unix))]
-fn spawn_federated_key_cache_flush_task(
-    _cache: crate::services::axon_serve::federated_key_resolver::SharedFederatedKeyCache,
-) {
-}
-
-/// **PR-N1 commit 10/N**. SIGHUP-driven reload task for the
-/// daemon-config `[daemon.federated_peers]` table. Mirrors
-/// `spawn_trust_anchor_reload_task` (PR-7) but operates on the
-/// `SharedFederatedPeers` cell instead of the trust anchor.
-///
-/// On every SIGHUP, the task re-parses the daemon-config TOML
-/// at `path` and republishes only the `federated_peers` map into
-/// the cell. Other config fields (mode, listen_tcp, tls cert/key
-/// paths) are not hot-reloaded — those are bound at boot and
-/// require a daemon restart to change.
-///
-/// PR-N1 user-flow review (round 4) caught the SIGHUP gap; the
-/// trust-anchor side was closed by commit 9/N. The federated_peers
-/// cell was deferred at the time because no `DaemonConfigCell`
-/// infrastructure existed; commit 10/N ships the cell + this
-/// reload task.
-///
-/// Failure handling: if the TOML re-parse fails (operator typo
-/// during edit), the cell keeps the previously-published map and
-/// the daemon logs the error to stderr. The cross-tenant
-/// dispatcher continues to use the last-known-good map until the
-/// operator fixes the TOML and SIGHUPs again.
-#[cfg(unix)]
-fn spawn_daemon_config_reload_task(
-    path: PathBuf,
-    federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
-) {
-    tokio::spawn(async move {
-        use tokio::signal::unix::{signal, SignalKind};
-
-        let mut sighup = match signal(SignalKind::hangup()) {
-            Ok(stream) => stream,
-            Err(err) => {
-                eprintln!(
-                    "[axon-serve] failed to install SIGHUP daemon-config reload handler: {err}"
-                );
-                return;
-            }
-        };
-
-        while sighup.recv().await.is_some() {
-            match reload_federated_peers_cell_from(&path, &federated_peers_cell) {
-                Ok(0) => eprintln!(
-                    "[axon-serve] SIGHUP reload completed: daemon-config federated_peers at {} is now empty",
-                    path.display()
-                ),
-                Ok(len) => eprintln!(
-                    "[axon-serve] SIGHUP reload completed: daemon-config federated_peers at {} now has {} entries",
-                    path.display(),
-                    len
-                ),
-                Err(err) => eprintln!(
-                    "[axon-serve] SIGHUP daemon-config reload failed for {}: {err}; keeping previous federated_peers map",
-                    path.display()
-                ),
-            }
-        }
-    });
-}
-
-#[cfg(not(unix))]
-fn spawn_daemon_config_reload_task(
-    _path: PathBuf,
+fn spawn_unified_sighup_reload_task(
+    _trust_anchor_path: PathBuf,
+    _trust_anchor_cell: SharedTrustAnchor,
+    _daemon_config_path: PathBuf,
     _federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
+    _federated_key_cache: crate::services::axon_serve::federated_key_resolver::SharedFederatedKeyCache,
 ) {
 }
 
