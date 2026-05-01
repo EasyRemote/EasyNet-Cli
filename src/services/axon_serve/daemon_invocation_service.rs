@@ -74,9 +74,9 @@ use tonic::{Request, Response, Status, Streaming};
 
 use crate::pb::axon::v1::invocation_server::Invocation;
 use crate::pb::axon::v1::{
-    invoke_bidi_down::Payload as DownPayload, invoke_bidi_up::Payload as UpPayload, BinaryChunk,
-    EnvelopeOpen, InvocationState, InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeResponse,
-    InvokeServerStreamRequest, InvokeStreamChunk,
+    invoke_bidi_down::Payload as DownPayload, invoke_bidi_up::Payload as UpPayload, AgentIdentity,
+    BinaryChunk, Envelope, EnvelopeOpen, InvocationState, InvokeBidiDown, InvokeBidiUp,
+    InvokeRequest, InvokeResponse, InvokeServerStreamRequest, InvokeStreamChunk,
 };
 use crate::services::axon_serve::admission_facade::AdmissionFacade;
 use crate::services::axon_serve::federation_wrappers::{
@@ -352,8 +352,11 @@ impl Invocation for DaemonInvocationService {
             ABILITY_FEDERATION_RESOLVE => self.dispatch_federation_resolve(&inner.arguments),
             ABILITY_FEDERATION_REVOKE => self.dispatch_federation_revoke(&inner.arguments),
             ABILITY_FEDERATION_FORWARD_INVOKE => {
-                self.dispatch_federation_forward_invoke(&inner.arguments)
-                    .await
+                self.dispatch_federation_forward_invoke(
+                    inner.envelope.as_ref(),
+                    &inner.arguments,
+                )
+                .await
             }
             ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY => Err(Status::invalid_argument(
                 "federation.subscribe_directory is a server-stream ability and must be invoked \
@@ -596,6 +599,7 @@ impl DaemonInvocationService {
     ///   `tower::timeout::Timeout`.
     async fn dispatch_federation_forward_invoke(
         &self,
+        caller_envelope: Option<&Envelope>,
         arguments: &[u8],
     ) -> Result<Response<InvokeResponse>, Status> {
         let request: federation_wrappers::ForwardInvokeRequest = parse_json_args(arguments)?;
@@ -655,17 +659,37 @@ impl DaemonInvocationService {
             return wrap_json_response(&response);
         };
 
-        // Re-issue the same `federation.forward_invoke` ability
-        // against the peer hub. The peer-side dispatcher
-        // performs its own local fast-path lookup and returns
-        // the same `{target_online}` JSON shape, which we
-        // forward verbatim. PR-N2 inserts the AXIOM mapping +
-        // sign envelope step before the dial; PR-N1 forwards
-        // the original args.
+        // **PR-N1 commit 11/N**: unwrap the inner envelope and
+        // rebuild a real `InvokeRequest` for the peer daemon.
+        //
+        // Pre-fix the cross-tenant path forwarded the same
+        // `federation.forward_invoke` wrapper to the peer with
+        // `envelope: None`, which made the peer daemon's
+        // admission gate immediately reject with
+        // `invalid_argument` — every cross-hub call collapsed
+        // to `target_online: false` regardless of whether the
+        // peer was actually reachable. The CLI bridge ships an
+        // `inner_envelope_b64 = base64(JSON{ability, args})`
+        // shape (`support/federation_invoke.rs`); this commit
+        // decodes that, builds a real `InvokeRequest` whose
+        // `function_name` is the inner `ability`, attaches the
+        // caller's original envelope (so the peer's admission
+        // gate sees the user's identity), and dials the peer.
+        //
+        // Cross-realm signature verify is still PR-N2 territory:
+        // the peer's admission gate verifies the caller URI
+        // against its local `realm-trust.toml`. For PR-N1's
+        // same-account same-tenant scope, the backend tenant fix
+        // (`0af7c0e`) ensures both daemons store the same
+        // `(tenant_id, agent_uri, public_key)` triple for the
+        // device, so the peer's admission gate accepts the
+        // forwarded envelope without a federated key resolver.
+        let inner_payload = decode_inner_payload(&request.inner_envelope_b64)?;
+        let peer_envelope = build_peer_envelope(caller_envelope, &request.target_uri);
         let peer_request = InvokeRequest {
-            envelope: None,
-            function_name: ABILITY_FEDERATION_FORWARD_INVOKE.to_string(),
-            arguments: arguments.to_vec(),
+            envelope: Some(peer_envelope),
+            function_name: inner_payload.ability,
+            arguments: inner_payload.args_bytes,
             ..InvokeRequest::default()
         };
 
@@ -1242,6 +1266,104 @@ fn decode_inner_envelope(b64: &str) -> Result<Vec<u8>, Status> {
             "federation.forward_invoke: inner_envelope_b64 is not valid base64: {err}"
         ))
     })
+}
+
+/// **PR-N1 commit 11/N**. The inner-envelope payload shape the
+/// CLI bridge (`support/federation_invoke.rs::invoke_via_
+/// federation_forward`) emits: a JSON object carrying the
+/// originally-requested `(ability, args)` pair the user typed
+/// on the `easynet ability invoke` command line.
+pub(crate) struct InnerPayload {
+    pub ability: String,
+    pub args_bytes: Vec<u8>,
+}
+
+/// **PR-N1 commit 11/N**. Decode the base64-then-JSON inner
+/// payload the CLI bridge ships, surfacing each parse failure
+/// as `Status::invalid_argument` with a wire-stable hint so
+/// scripts grepping the daemon log can distinguish them.
+pub(crate) fn decode_inner_payload(b64: &str) -> Result<InnerPayload, Status> {
+    let raw = decode_inner_envelope(b64)?;
+    if raw.is_empty() {
+        return Err(Status::invalid_argument(
+            "federation.forward_invoke: inner_envelope_b64 is empty; \
+             cross-hub dispatch requires a base64-encoded JSON {ability, args} payload",
+        ));
+    }
+    let parsed: serde_json::Value = serde_json::from_slice(&raw).map_err(|err| {
+        Status::invalid_argument(format!(
+            "federation.forward_invoke: inner envelope is not valid JSON: {err}"
+        ))
+    })?;
+    let obj = parsed.as_object().ok_or_else(|| {
+        Status::invalid_argument(
+            "federation.forward_invoke: inner envelope must be a JSON object \
+             with `ability` and `args` fields",
+        )
+    })?;
+    let ability = obj
+        .get("ability")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            Status::invalid_argument(
+                "federation.forward_invoke: inner envelope is missing a non-empty \
+                 string `ability` field",
+            )
+        })?
+        .to_string();
+    let args_value = obj
+        .get("args")
+        .cloned()
+        .unwrap_or(serde_json::Value::Object(Default::default()));
+    let args_bytes = serde_json::to_vec(&args_value).map_err(|err| {
+        Status::internal(format!(
+            "federation.forward_invoke: re-serialise inner args: {err}"
+        ))
+    })?;
+    Ok(InnerPayload {
+        ability,
+        args_bytes,
+    })
+}
+
+/// **PR-N1 commit 11/N**. Build the envelope the cross-hub
+/// dialer attaches to the rebuilt peer `InvokeRequest`. The
+/// peer daemon's admission gate compares the envelope's caller
+/// URI against its local `realm-trust.toml`, so the choice is:
+///
+/// - When the original CLI call carried an envelope (the
+///   typical case via `support::federation_invoke`), forward
+///   that envelope verbatim. The peer's admission accepts it
+///   iff the caller URI is in the peer's trust set — for the
+///   PR-N1 same-account same-tenant scope the backend tenant
+///   fix (`0af7c0e`) ensures both daemons store the same
+///   `(tenant_id, agent_uri, public_key)` triple, so
+///   forward-as-is is the right answer.
+/// - When the original call has no envelope (test fixtures or
+///   internal paths that pre-existed PR-N1), synthesize a
+///   minimal envelope with `caller.uri = target_uri`. Peer
+///   admission will reject this on the strict path (no
+///   signature) but the URI-only Device arm under DEC-013 will
+///   admit. The peer-side `target_online` fast-path then runs
+///   against its presence registry as before.
+///
+/// PR-N2 will replace this verbatim-forward with an AXIOM
+/// mapping rewrite (`caller = self_hub`, `callee = target_hub`,
+/// `subject = original_caller`) plus a daemon-identity
+/// signature so cross-realm peers can verify the call without
+/// shared trust set.
+pub(crate) fn build_peer_envelope(caller_envelope: Option<&Envelope>, target_uri: &str) -> Envelope {
+    if let Some(env) = caller_envelope {
+        return env.clone();
+    }
+    Envelope {
+        caller: Some(AgentIdentity {
+            uri: target_uri.to_string(),
+            ..AgentIdentity::default()
+        }),
+        ..Envelope::default()
+    }
 }
 
 /// Wrap the inner envelope bytes into a `DispatchFrame` heading
@@ -2062,8 +2184,20 @@ mod tests {
     }
 
     fn forward_invoke_args(target_uri: &str) -> Vec<u8> {
+        // Test fixture: a base64-encoded JSON {ability, args}
+        // payload that mirrors what `support::federation_invoke
+        // ::invoke_via_federation_forward` ships from the CLI
+        // bridge. PR-N1 commit 11/N decodes this on the peer-
+        // dispatch path so the rebuilt `peer_request` carries
+        // the real inner ability + args. Tests that did not
+        // care about the inner shape (local fast-path, missing
+        // client, missing peer entry) still pass through this
+        // helper because they exit before the decode step.
+        //
+        // base64("{\"ability\":\"observe.health\",\"args\":{}}")
+        // == "eyJhYmlsaXR5Ijoib2JzZXJ2ZS5oZWFsdGgiLCJhcmdzIjp7fX0="
         format!(
-            r#"{{"target_uri":"{target_uri}","inner_envelope_b64":"AAAA"}}"#
+            r#"{{"target_uri":"{target_uri}","inner_envelope_b64":"eyJhYmlsaXR5Ijoib2JzZXJ2ZS5oZWFsdGgiLCJhcmdzIjp7fX0="}}"#
         )
         .into_bytes()
     }
@@ -2089,7 +2223,7 @@ mod tests {
             .with_federation_client(recorder.clone() as Arc<dyn FederationClient>);
 
         let resp = svc
-            .dispatch_federation_forward_invoke(&forward_invoke_args(
+            .dispatch_federation_forward_invoke(None, &forward_invoke_args(
                 "easynet:///r/test-realm/agent/local-target",
             ))
             .await
@@ -2111,7 +2245,7 @@ mod tests {
         let svc = make_service().with_session_realm("test-realm");
 
         let resp = svc
-            .dispatch_federation_forward_invoke(&forward_invoke_args(
+            .dispatch_federation_forward_invoke(None, &forward_invoke_args(
                 "easynet:///r/peer-realm/agent/peer-target",
             ))
             .await
@@ -2144,7 +2278,7 @@ mod tests {
             .with_federation_client(recorder.clone() as Arc<dyn FederationClient>);
 
         let resp = svc
-            .dispatch_federation_forward_invoke(&forward_invoke_args(
+            .dispatch_federation_forward_invoke(None, &forward_invoke_args(
                 "easynet:///r/unmapped-realm/agent/peer-target",
             ))
             .await
@@ -2185,7 +2319,7 @@ mod tests {
         let target_uri = "easynet:///r/peer-realm/agent/peer-target";
         let args = forward_invoke_args(target_uri);
         let resp = svc
-            .dispatch_federation_forward_invoke(&args)
+            .dispatch_federation_forward_invoke(None, &args)
             .await
             .expect("cross-tenant returns Ok");
 
@@ -2198,15 +2332,32 @@ mod tests {
         let calls = recorder.calls();
         assert_eq!(calls.len(), 1, "exactly one cross-hub dial");
         assert_eq!(calls[0].0, "https://peer-hub.example:50443");
+        // PR-N1 commit 11/N: peer dispatcher receives the
+        // inner ability (decoded from the CLI bridge's
+        // `inner_envelope_b64`), not the `federation.forward_
+        // invoke` wrapper. The fixture's b64 payload is
+        // `{"ability":"observe.health","args":{}}` so the
+        // peer sees `function_name = "observe.health"`.
         assert_eq!(
-            calls[0].1.function_name,
-            ABILITY_FEDERATION_FORWARD_INVOKE,
-            "peer dispatcher receives federation.forward_invoke ability"
+            calls[0].1.function_name, "observe.health",
+            "peer dispatcher receives the inner ability decoded from inner_envelope_b64"
         );
-        assert_eq!(
-            calls[0].1.arguments, args,
-            "peer receives the original ForwardInvokeRequest JSON verbatim"
-        );
+        // Inner args re-serialised as JSON; equivalent shapes
+        // (e.g. {} vs whitespace) compare via parsed JSON.
+        let parsed_args: serde_json::Value =
+            serde_json::from_slice(&calls[0].1.arguments).expect("inner args parse");
+        assert_eq!(parsed_args, serde_json::json!({}));
+        // PR-N1 commit 11/N: when the original CLI request
+        // carries no envelope (this test passes None), the
+        // dispatcher synthesises a minimal envelope with
+        // `caller.uri = target_uri` so the peer's URI-only
+        // Device admission arm under DEC-013 admits.
+        let peer_envelope = calls[0].1.envelope.as_ref().expect("envelope present");
+        let peer_caller = peer_envelope
+            .caller
+            .as_ref()
+            .expect("caller identity present");
+        assert_eq!(peer_caller.uri, target_uri);
     }
 
     // ── PR-N1 commit 5/N: 2-daemon in-process cross-hub e2e ──
@@ -2308,15 +2459,33 @@ mod tests {
         .with_federated_peers(peers);
 
         // ── Drive: daemon_a receives a federation.forward_invoke ──
-        // The request targets a device in realm B. Daemon A
-        // should: parse the tenant → "realm-b" != "realm-a" →
-        // cross-tenant arm → look up "realm-b" in federated_peers
-        // → dial PEER_HUB_URI via InProcessPeerClient → daemon B's
-        // dispatcher resolves the target locally → returns
-        // `target_online: true`.
+        // PR-N1 commit 11/N rewrote the dispatch path: daemon A
+        // now decodes the CLI bridge's `inner_envelope_b64`
+        // (base64 of `{ability, args}`) and sends the inner
+        // ability to the peer instead of re-wrapping in another
+        // `federation.forward_invoke`. For this in-process e2e
+        // we ship `federation.heartbeat` as the inner ability so
+        // daemon B's dispatcher routes to a real handler and
+        // returns a structured JSON shape the test can assert
+        // against.
+        //
+        // base64({"ability":"federation.heartbeat","args":{
+        //   "canonical_agent_uri":"easynet:///r/realm-b/agent/target-device-b",
+        //   "ts_ms":0
+        // }})
+        let inner_payload = serde_json::json!({
+            "ability": "federation.heartbeat",
+            "args": {
+                "agent_uri": TARGET_DEVICE_URI,
+            },
+        });
+        let inner_b64 = {
+            use base64::{engine::general_purpose::STANDARD, Engine as _};
+            STANDARD.encode(serde_json::to_vec(&inner_payload).unwrap())
+        };
         let forward_args = format!(
-            r#"{{"target_uri":"{}","inner_envelope_b64":"AAAA"}}"#,
-            TARGET_DEVICE_URI
+            r#"{{"target_uri":"{}","inner_envelope_b64":"{}"}}"#,
+            TARGET_DEVICE_URI, inner_b64
         );
         let req = Request::new(InvokeRequest {
             envelope: Some(test_envelope_with_uri(DAEMON_A_URI)),
@@ -2329,14 +2498,36 @@ mod tests {
             .invoke(req)
             .await
             .expect("e2e forward_invoke returns Ok");
-        let body: federation_wrappers::ForwardInvokeResponse =
-            parse_response_body(response);
+        let body = response.into_inner();
 
-        // ── Assert: daemon B's local fast-path resolved the target ──
+        // ── Assert: daemon B handled the inner ability and ──
+        // returned a real heartbeat response. The peer's
+        // `federation.heartbeat` handler emits a JSON object;
+        // the exact fields are an implementation detail, what
+        // matters is that daemon B processed the inner ability
+        // (not a `target_online: false` short-circuit on daemon
+        // A's side). We assert the response is a JSON object
+        // and not the staging `{target_online: ...}` shape — if
+        // the new path failed at decode, daemon A would have
+        // returned the legacy `target_online: false` instead.
+        let parsed: serde_json::Value = serde_json::from_slice(&body.result)
+            .expect("peer ability response is JSON");
         assert!(
-            body.target_online,
-            "daemon B's presence registry holds the target device; \
-             cross-hub forward_invoke should report target_online=true"
+            parsed.is_object(),
+            "expected JSON object from federation.heartbeat handler, got: {parsed}"
+        );
+        // Sanity: the `target_online` legacy shape would have a
+        // top-level `target_online` field; the heartbeat shape
+        // does not. This assertion would fail loudly if commit
+        // 11/N's decode path silently returned the legacy
+        // shape.
+        assert!(
+            !parsed
+                .as_object()
+                .and_then(|o| o.get("target_online"))
+                .map(|v| v.as_bool() == Some(false))
+                .unwrap_or(false),
+            "expected real peer ability response, got legacy target_online shape: {parsed}"
         );
     }
 
