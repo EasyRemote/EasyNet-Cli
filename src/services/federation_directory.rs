@@ -2057,6 +2057,115 @@ mod tests {
                 "supervisor must honour cancel within timeout"
             );
         }
+
+        // ── PR-N3 N3-streaming-11 — streamed-marker lifecycle ──
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn supervisor_marks_streamed_while_stream_open_unmarks_on_close() {
+            // Stream delivers a Snapshot then ends. Within the
+            // brief window between dial-ok and stream-end, the
+            // cell.is_streamed("realm-b") MUST be true. After
+            // the stream ends and the supervisor enters its
+            // reconnect-backoff sleep, the marker MUST be
+            // false (poll task can pick up the slack).
+            //
+            // Verifying mid-stream and post-close is racy with
+            // pure futures::iter (the stream completes
+            // synchronously). Use a delayed stream: yield the
+            // Snapshot, then await a small sleep before the
+            // None terminator so the test can poll
+            // is_streamed during the open window.
+            use futures::StreamExt;
+
+            struct DelayedStreamingClient {
+                served: Arc<Mutex<bool>>,
+            }
+
+            #[async_trait]
+            impl FederationClient for DelayedStreamingClient {
+                async fn forward_invoke(
+                    &self,
+                    _target_hub: &HubUri,
+                    _request: InvokeRequest,
+                ) -> Result<InvokeResponse, FederationClientError> {
+                    Err(FederationClientError::Unimplemented("not used"))
+                }
+
+                async fn subscribe_directory_v2(
+                    &self,
+                    _target_hub: &HubUri,
+                    _request: InvokeServerStreamRequest,
+                ) -> Result<DirectoryEventStream, FederationClientError> {
+                    if *self.served.lock().unwrap() {
+                        // Subsequent dials hang briefly so the
+                        // test can observe the unmark window
+                        // between stream-end and re-dial.
+                        return Ok(Box::pin(
+                            futures::stream::pending::<DirectoryEvent>(),
+                        ));
+                    }
+                    *self.served.lock().unwrap() = true;
+                    let snapshot = futures::stream::once(async {
+                        DirectoryEvent::Snapshot { entries: vec![] }
+                    });
+                    // Hold the stream open ~200ms before EOF so
+                    // the test has a window to poll is_streamed.
+                    let hold = futures::stream::once(async {
+                        tokio::time::sleep(std::time::Duration::from_millis(200))
+                            .await;
+                        DirectoryEvent::Heartbeat {
+                            sent_at_unix_ms: 1_000,
+                        }
+                    });
+                    Ok(Box::pin(snapshot.chain(hold)))
+                }
+            }
+
+            let cell = SharedFederatedDirectoryView::default();
+            let served = Arc::new(Mutex::new(false));
+            let client: Arc<dyn FederationClient> = Arc::new(DelayedStreamingClient {
+                served: served.clone(),
+            });
+            let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+
+            let cell_for_task = cell.clone();
+            let task = tokio::spawn(async move {
+                run_per_peer_supervisor(
+                    "realm-b".to_string(),
+                    "https://hub-b.example:50443".to_string(),
+                    client,
+                    cell_for_task,
+                    cancel_rx,
+                )
+                .await;
+            });
+
+            // Wait for the first dial to complete; mid-stream
+            // is_streamed must be true. The Snapshot frame +
+            // 200ms hold gives a generous observation window.
+            let mut saw_streamed = false;
+            for _ in 0..40 {
+                if *served.lock().unwrap() && cell.is_streamed("realm-b") {
+                    saw_streamed = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+            }
+            assert!(
+                saw_streamed,
+                "supervisor must mark realm-b streamed during the open window"
+            );
+
+            // Cancel before the supervisor can redial. The
+            // marker should be cleared on cancel-path exit so
+            // a re-add cycle isn't blocked by a stale claim.
+            let _ = cancel_tx.send(());
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), task).await;
+            assert!(
+                !cell.is_streamed("realm-b"),
+                "supervisor must unmark realm-b on cancel-path exit"
+            );
+        }
     }
 
     // ── PR-N3 N3-streaming-2 — consume_directory_event_stream ──
