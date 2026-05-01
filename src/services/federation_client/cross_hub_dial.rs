@@ -79,12 +79,12 @@ use crate::services::trust_anchor_cell::SharedTrustAnchor;
 ///   `perf-notes/PR-N1-commit-6-perf-cross-pass-by-xiaowen.md`).
 ///   Production `start_axon_serve_sidecar` wires this flavour.
 ///
-/// 晓雯 letter 67 attack round 4 catch: the boot-time snapshot
-/// pinned the daemon's federation-peer view at boot, blocking
-/// CTO's iterate-config-without-restart cadence. 凉冰 LB-37
-/// ratify ship-now of this enum so the same `Arc<dyn
-/// FederationClient>` surface stays — only the read-source
-/// changes.
+/// PR-N1 user-flow review (round 4) catch: the boot-time
+/// snapshot pinned the daemon's federation-peer view at boot,
+/// blocking the operator's iterate-config-without-restart
+/// cadence. The architect ratified ship-now of this enum so the
+/// same `Arc<dyn FederationClient>` surface stays — only the
+/// read-source changes.
 #[derive(Clone)]
 enum TrustSource {
     Snapshot(Arc<RealmTrustAnchor>),
@@ -295,7 +295,8 @@ impl CrossHubDialer {
     /// propagate; this constructor is the legacy / test-fixture
     /// flavour. Production daemons use [`with_trust_anchor_cell`]
     /// (PR-N1 commit 9/N) instead so the hot-reload cadence
-    /// 晓雯 letter 67 attack round 4 raised actually works.
+    /// the operator iterate-config cadence reviewed during PR-N1
+    /// actually works.
     ///
     /// PR-N1 commit 4/N adds breaker + timeout fields; their
     /// defaults match the PR-N1 spec (`30s` per-call timeout, `3`
@@ -540,7 +541,7 @@ impl FederationClient for CrossHubDialer {
         // (legacy `Snapshot` source) or one `RwLock::read()` +
         // `Arc::clone` (production `Live` source) — both cheap
         // enough that hot-path latency stays inside the budget
-        // 晓雯 LB-31 §3.3 ratified.
+        // ratified by the perf review.
         let trust_snapshot = self.trust_source.snapshot();
         let entry = trust_snapshot
             .lookup_peer_hub(target_hub)
@@ -1012,7 +1013,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_trust_anchor_cell_picks_up_replace_without_dialer_rebuild() {
-        // 晓雯 letter 67 attack round 4 catch: commit 6/N's
+        // PR-N1 user-flow review (round 4) catch: commit 6/N's
         // boot-time `Arc<RealmTrustAnchor>` snapshot froze the
         // dialer's federation-peer view at boot, so SIGHUP-driven
         // realm-trust.toml reloads required a daemon restart for

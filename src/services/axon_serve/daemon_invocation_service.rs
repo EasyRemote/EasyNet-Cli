@@ -65,7 +65,7 @@ use futures::Stream;
 // `StreamExt` brings `.next().await` into scope. Aliased to `_`
 // because we use the trait method only — we don't reference the
 // trait by name. Per letter 22 §4 b: avoid the name-collision risk
-// 莫浩 hit when bringing both `futures::StreamExt` and
+// Hit when bringing both `futures::StreamExt` and
 // `tokio_stream::StreamExt` into scope.
 use futures::StreamExt as _;
 use tokio::sync::mpsc;
@@ -234,7 +234,7 @@ impl DaemonInvocationService {
     /// `DaemonInvocationService::new(presence, admission)` callers
     /// stay source-compatible.
     ///
-    /// PR-3 ownership: 海峰 (this commit). PR-2's `<self>.session`
+    /// PR-3 ownership (this commit). PR-2's `<self>.session`
     /// accept handler will share the same `Arc<PendingDispatchMap>`
     /// to call `complete(call_id, ...)` when target devices send
     /// `Result` frames back up their session streams.
@@ -408,7 +408,7 @@ impl Invocation for DaemonInvocationService {
     ///   (PR-3 commit 1/3, this commit). Requires `with_pending(...)`
     ///   to have wired a `PendingDispatchMap`; otherwise returns
     ///   `Status::failed_precondition` with explicit reason.
-    /// - `<self>.session` → PR-2 (莫浩); arm added when PR-2 lands
+    /// - `<self>.session` → PR-2; arm added when PR-2 lands
     /// - anything else → `Status::unimplemented` citing PR-2/PR-3
     async fn invoke_bidi(
         &self,

@@ -14,13 +14,13 @@
 //
 // Where this fits in RFC-003
 // --------------------------
-// PR-1 (莫浩) lands the daemon-side InvocationServer.
-// PR-2 (莫浩, this commit) lands two halves of `<self>.session`:
+// PR-1 lands the daemon-side InvocationServer.
+// PR-2 (this commit) lands two halves of `<self>.session`:
 //
 //   commit 1/N  — hub-side acceptor: the `<self>.session` arm of
 //                 the daemon's `invoke_bidi` dispatcher. (Adjacent
 //                 file `daemon_invocation_service.rs`; coordinated
-//                 with PR-3 commit 1/3 海峰 is currently writing,
+//                 with PR-3 commit 1/3 currently being written,
 //                 lands together.)
 //
 //   commit 2/N  — device-side initiator (this file): the boot-time

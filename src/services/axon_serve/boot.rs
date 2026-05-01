@@ -167,8 +167,8 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     // fields) just `kill -HUP <daemon_pid>`; the next call sees
     // the new entries within ~50ms (per PR-7 trust-anchor
     // SIGHUP reload baseline + perf-notes/PR-N1-commit-6-perf
-    // -cross-pass-by-xiaowen.md). 晓雯 letter 67 attack round 4
-    // catch closed by 凉冰 LB-37 ship-now ratify.
+    // -cross-pass.md). The user-flow review catch is closed by
+    // this commit's hot-reload wiring.
     //
     // **PR-N1 commit 10/N change**: `DaemonConfig::federated_peers`
     // map now flows through a `SharedFederatedPeers` cell and
@@ -618,11 +618,11 @@ fn spawn_trust_anchor_reload_task(_path: PathBuf, _trust_anchor_cell: SharedTrus
 /// paths) are not hot-reloaded — those are bound at boot and
 /// require a daemon restart to change.
 ///
-/// **晓雯 letter 67 attack round 4** scope was the trust-anchor
-/// path; commit 9/N closed that. **凉冰 LB-37 §2.3 fallback Scope
-/// A** explicitly deferred the federated_peers cell because the
-/// `DaemonConfigCell` infrastructure didn't exist; commit 10/N
-/// ships the cell + this reload task.
+/// PR-N1 user-flow review (round 4) caught the SIGHUP gap; the
+/// trust-anchor side was closed by commit 9/N. The federated_peers
+/// cell was deferred at the time because no `DaemonConfigCell`
+/// infrastructure existed; commit 10/N ships the cell + this
+/// reload task.
 ///
 /// Failure handling: if the TOML re-parse fails (operator typo
 /// during edit), the cell keeps the previously-published map and

@@ -10,7 +10,7 @@
 //
 // Where this fits in RFC-003
 // --------------------------
-// PR-1 (莫浩) lands the daemon-side dispatcher. PR-3 (海峰, this
+// PR-1 lands the daemon-side dispatcher. PR-3 (this
 // commit) lands two halves of `<self>.invoke_remote`:
 //
 //   commit 2/3 (this file) — device-side initiator: a function any
@@ -48,7 +48,7 @@
 //   }
 //
 // The MVP-style framing is preserved verbatim (per PR-3 sub-spec §2.3
-// and letter 16 to 莫浩 — invoke_remote keeps MVP-shape, federation.forward_invoke
+// and letter 16 — invoke_remote keeps MVP-shape, federation.forward_invoke
 // keeps its base64 wrapping).
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
@@ -144,7 +144,7 @@ pub enum InvokeRemoteFrame {
 ///
 /// MVP-style framing per PR-3 sub-spec §2.3 (decision recorded in
 /// `team-work/letters/2026-04-30-16-haifeng-to-mohao-pr1-review-commit-6-and-fixup-ack.md`).
-/// Public so PR-2's `<self>.session` accept handler (莫浩) imports
+/// Public so PR-2's `<self>.session` accept handler imports
 /// the same type to recognise these frames in the session stream.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]

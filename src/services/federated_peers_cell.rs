@@ -16,9 +16,9 @@
 // dispatcher to see the new entries — the same SIGHUP gap commit
 // 9/N closed for `RealmTrustAnchor` via `SharedTrustAnchor`.
 //
-// 凉冰 LB-37 §2.3 fallback Scope A explicitly deferred this cell
-// because there was no `DaemonConfigCell` infrastructure at the
-// time; this commit ships the missing piece. Operators editing
+// An earlier review explicitly deferred this cell because there
+// was no `DaemonConfigCell` infrastructure at the time; this
+// commit ships the missing piece. Operators editing
 // `~/.easynet/daemon-config.toml` + `kill -HUP <daemon_pid>` now
 // see the new `federated_peers` map within ~50ms — same cadence
 // as the trust-anchor reload.

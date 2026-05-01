@@ -28,7 +28,7 @@
 //     "role":           "device" | "backend" | "hub"
 //   }
 //
-// Realm cross-boundary invariant (海峰 letter 40 §4.2)
+// Realm cross-boundary invariant
 // ---------------------------------------------------
 // `agent_uri` MUST belong to the daemon's own realm — i.e. its
 // canonical form must start with `easynet:///r/{daemon.realm}/`.

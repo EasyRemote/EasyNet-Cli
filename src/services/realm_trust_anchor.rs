@@ -10,7 +10,7 @@
 //
 // Where this fits in RFC-003
 // --------------------------
-// PR-7 (莫浩) authors `realm-trust.toml` via the device-pairing
+// PR-7 authors `realm-trust.toml` via the device-pairing
 // flow and the backend identity bootstrap. PR-1 (this commit, 7a/9)
 // only reads the file: at daemon boot we either find it and parse
 // every `[[trusted_agent]]` block or we fall back to an empty trust

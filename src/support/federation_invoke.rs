@@ -6,8 +6,9 @@
 //              --node <peer-uri>` to the local daemon's gRPC
 //              `Invocation::invoke` with `function_name="federation.
 //              forward_invoke"`. This is what unblocks the answer-
-//              sheet acceptance gate 晓雯 letter 61 + 海峰 letter 62 +
-//              凉冰 LB-35 raised: PR-N1 commits 1-7/N ship the
+//              sheet acceptance gate raised by perf-engineer +
+//              reviewer + architect during PR-N1 review:
+//              commits 1-7/N ship the
 //              daemon-to-daemon wire, this commit ships the user-
 //              CLI-command → daemon entry point.
 //
@@ -106,12 +107,12 @@ pub fn parse_node_uri(node: &str) -> anyhow::Result<String> {
 /// stays byte-identical across both `parse_node_uri` failure
 /// arms — operators can grep one substring across logs.
 ///
-/// **晓雯 letter 65 attack round 3 catch**: PR-N1 ships the
-/// CLI invocation surface (commit 8/N) but cross-hub URI
-/// discovery from machine A without manual config is PR-N3
+/// **PR-N1 user-flow review catch**: PR-N1 ships the CLI
+/// invocation surface (commit 8/N) but cross-hub URI discovery
+/// from a remote machine without manual config is PR-N3
 /// territory (cross-realm directory federation, not yet shipped).
-/// Until PR-N3 lands, operators construct URIs by hand from
-/// the sources below; the error message points at them.
+/// Until PR-N3 lands, operators construct URIs by hand from the
+/// sources below; the error message points at them.
 const URI_DISCOVERY_HINT: &str = "Where to find a canonical URI today (until PR-N3 cross-realm \
      directory federation ships): \
      (1) `cat ~/.easynet/credentials.json` on the target machine — \
@@ -351,7 +352,7 @@ mod tests {
 
     #[test]
     fn parse_node_uri_failure_message_includes_discovery_hint() {
-        // 晓雯 letter 65 attack round 3 catch: operators have no
+        // PR-N1 user-flow review catch: operators have no
         // zero-config way to discover a peer's canonical URI today
         // (PR-N3 territory). Until PR-N3 ships, the error message
         // tells them where to look — credentials.json, daemon-
