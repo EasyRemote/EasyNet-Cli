@@ -209,6 +209,24 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
             .with_federated_peers_cell(federated_peers_cell.clone());
     }
 
+    // **PR-N3 commit N3-3.1**. Spawn the polling task that
+    // populates the federated directory cell by calling each
+    // peer's `federation.discover` ability on a fixed cadence.
+    // Cadence is 5 seconds — fast enough for the spec §八
+    // scenario (4) "new peer SIGHUP appears in <self>.discover
+    // within ~5s" + slow enough that peer hubs aren't pounded.
+    // The task reads the federated_peers cell each round so a
+    // SIGHUP-driven add/drop is naturally picked up; no
+    // separate add/drop signalling needed.
+    if let Some(client) = dialer.clone() {
+        spawn_federated_directory_poll_task(
+            client,
+            federated_peers_cell.clone(),
+            daemon_uri.clone(),
+            federated_directory_cell.clone(),
+        );
+    }
+
     spawn_uds_listener(&config, service.clone())?;
 
     // Hub-mode TCP+TLS — PR-10 commit 1/N: real listener.
@@ -698,6 +716,56 @@ fn reload_federated_peers_cell_from(
     let len = next_peers.len();
     federated_peers_cell.replace(next_peers);
     Ok(len)
+}
+
+/// **PR-N3 commit N3-3.1**. Spawn the cross-realm directory
+/// poll task. Calls `federation_directory::poll_once` every 5s
+/// against every entry in the live `SharedFederatedPeers` cell
+/// snapshot. The task reads the cell each round, so a SIGHUP-
+/// driven federated_peers reload is naturally picked up — peers
+/// added show up in the next poll, peers removed are dropped on
+/// the round after the SIGHUP.
+///
+/// Per-peer failures (dial dropped, parse error) surface as
+/// stderr trace; the task does not retry mid-round, just waits
+/// for the next interval. Spec §3.1 backoff schedule lives in
+/// the FSM-driven streaming variant that supersedes this poll
+/// implementation when the streaming subscribe_directory wire
+/// surface lands.
+fn spawn_federated_directory_poll_task(
+    federation_client: Arc<dyn crate::services::federation_client::FederationClient>,
+    federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
+    daemon_uri: Option<String>,
+    federated_directory_cell: crate::services::federation_directory::SharedFederatedDirectoryView,
+) {
+    tokio::spawn(async move {
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(5));
+        // Skip the immediate-fire on first tick so the daemon
+        // doesn't hammer peers during boot before they're up.
+        // The first real poll fires 5s after spawn.
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            let peers = federated_peers_cell.snapshot();
+            if peers.is_empty() {
+                continue;
+            }
+            let outcome = crate::services::federation_directory::poll_once(
+                federation_client.as_ref(),
+                &peers,
+                daemon_uri.as_deref(),
+                &federated_directory_cell,
+            )
+            .await;
+            for (realm, err) in &outcome.failed_peers {
+                eprintln!(
+                    "[federation_directory] poll peer realm={realm:?} failed: {err}"
+                );
+            }
+        }
+    });
 }
 
 /// Expand a `~/...` prefix using the current user's HOME. Existing

@@ -494,6 +494,123 @@ pub fn flatten_federated_view(
     out
 }
 
+// ── Directory poll task (PR-N3 N3-3.1) ─────────────────────────────
+
+/// Outcome of a single poll cycle. Returned by `poll_once`
+/// rather than logged inside so the boot-time spawn task can
+/// surface a structured trace, and the unit tests can assert
+/// per-peer success/failure without scraping stderr.
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Default)]
+pub struct PollOutcome {
+    /// Peers whose discover call succeeded; their realms.
+    pub successful_peers: Vec<String>,
+    /// Peers whose discover call failed; (realm, error string).
+    pub failed_peers: Vec<(String, String)>,
+}
+
+/// Run one round of cross-realm directory polling against every
+/// federated peer in the supplied `peers_snapshot`, writing the
+/// resulting per-peer `DirectoryView` projections into the
+/// `directory_cell`.
+///
+/// **PR-N3 commit N3-3.1**. The polling-based integration that
+/// turns N3-3's data-plane scaffold into a real working chain.
+/// Called periodically from a tokio task spawned at daemon
+/// boot; calling cadence drives the
+/// "new peer appears in discover within ~5s" acceptance from
+/// PR-N3 spec §八 scenario (4).
+///
+/// Per peer the task:
+///   1. Builds an `InvokeRequest` for `federation.discover` with
+///      a loopback envelope (bypass admission via the daemon's
+///      own URI; the peer accepts). Future signed-envelope
+///      version uses PR-N5's audit-bound caller binding.
+///   2. Dials the peer's hub via the supplied `FederationClient`.
+///   3. Parses the `DiscoverResponse`, projects each entry into
+///      the peer's `DirectoryView` (the §2.4 origin_realm
+///      rewrite stamps the peer's authenticated realm).
+///   4. Writes the new view into the `directory_cell`. Other
+///      peers' views in the cell are preserved verbatim — the
+///      replace is per-peer, not whole-map.
+///
+/// Errors per peer surface in `PollOutcome.failed_peers`; one
+/// peer's failure does not abort the round. Spec §3.1 backoff
+/// schedule lives in the FSM-driven streaming variant (which
+/// supersedes this poll task whenever it lands); the poll task
+/// just retries on the next interval.
+#[cfg(feature = "axon-pb")]
+pub async fn poll_once(
+    federation_client: &dyn crate::services::federation_client::FederationClient,
+    peers_snapshot: &std::collections::BTreeMap<String, String>,
+    daemon_uri: Option<&str>,
+    directory_cell: &SharedFederatedDirectoryView,
+) -> PollOutcome {
+    use crate::pb::axon::v1::{AgentIdentity as PbAgentIdentity, Envelope, InvokeRequest};
+
+    let mut outcome = PollOutcome::default();
+    // Start from the current cell so per-peer replaces preserve
+    // entries from peers we don't poll this round (eg. removed
+    // from federated_peers between snapshot fetch and now).
+    let mut next_map: std::collections::BTreeMap<String, Arc<DirectoryView>> =
+        (*directory_cell.snapshot()).clone();
+
+    for (peer_realm, peer_hub_uri) in peers_snapshot.iter() {
+        // Build a discover request with the daemon's own URI as
+        // caller so the peer's loopback bypass / hub-trust check
+        // admits (caller-side strict signing lands in N3-3.2 with
+        // the cross-realm CallerBinding from PR-N5 audit chain).
+        let envelope = daemon_uri.map(|uri| Envelope {
+            caller: Some(PbAgentIdentity {
+                uri: uri.to_string(),
+                profile: "easynet-strict-v2".to_string(),
+            }),
+            ..Envelope::default()
+        });
+        let request = InvokeRequest {
+            envelope,
+            function_name:
+                crate::services::axon_serve::federation_wrappers::ABILITY_FEDERATION_DISCOVER
+                    .to_string(),
+            arguments: br#"{}"#.to_vec(),
+            ..InvokeRequest::default()
+        };
+
+        match federation_client.forward_invoke(peer_hub_uri, request).await {
+            Ok(response) => {
+                let parsed: Result<
+                    crate::services::axon_serve::federation_wrappers::DiscoverResponse,
+                    _,
+                > = serde_json::from_slice(&response.result);
+                match parsed {
+                    Ok(discover) => {
+                        let mut view = DirectoryView::new(peer_realm.clone());
+                        view.apply_frame(&DirectoryEvent::Snapshot {
+                            entries: discover.entries,
+                        });
+                        next_map.insert(peer_realm.clone(), Arc::new(view));
+                        outcome.successful_peers.push(peer_realm.clone());
+                    }
+                    Err(err) => {
+                        outcome.failed_peers.push((
+                            peer_realm.clone(),
+                            format!("response parse failed: {err}"),
+                        ));
+                    }
+                }
+            }
+            Err(err) => {
+                outcome
+                    .failed_peers
+                    .push((peer_realm.clone(), format!("dial failed: {err:?}")));
+            }
+        }
+    }
+
+    directory_cell.replace(next_map);
+    outcome
+}
+
 // ── RemoteDirectoryClient (PR-N3 N3-3 scaffold) ────────────────────
 
 /// Per-peer remote directory subscriber.
@@ -1183,6 +1300,190 @@ mod tests {
     fn flatten_federated_view_is_empty_when_no_peers() {
         let cell = SharedFederatedDirectoryView::default();
         assert!(flatten_federated_view(&cell).is_empty());
+    }
+
+    // ── PollOnce integration (N3-3.1) ─────────────────────────
+
+    #[cfg(feature = "axon-pb")]
+    mod poll_tests {
+        use super::*;
+        use crate::pb::axon::v1::{InvokeRequest, InvokeResponse};
+        use crate::services::federation_client::{
+            FederationClient, FederationClientError, HubUri,
+        };
+        use async_trait::async_trait;
+        use std::sync::Mutex;
+
+        /// Mock FederationClient. Returns canned discover
+        /// responses keyed by target_hub URI.
+        struct CannedClient {
+            responses: Mutex<std::collections::BTreeMap<String, Vec<u8>>>,
+        }
+
+        #[async_trait]
+        impl FederationClient for CannedClient {
+            async fn forward_invoke(
+                &self,
+                target_hub: &HubUri,
+                _request: InvokeRequest,
+            ) -> Result<InvokeResponse, FederationClientError> {
+                let bytes = self
+                    .responses
+                    .lock()
+                    .unwrap()
+                    .get(target_hub)
+                    .cloned()
+                    .unwrap_or_default();
+                Ok(InvokeResponse {
+                    result: bytes,
+                    ..Default::default()
+                })
+            }
+        }
+
+        struct DialFailedClient;
+        #[async_trait]
+        impl FederationClient for DialFailedClient {
+            async fn forward_invoke(
+                &self,
+                target_hub: &HubUri,
+                _request: InvokeRequest,
+            ) -> Result<InvokeResponse, FederationClientError> {
+                Err(FederationClientError::DialFailed {
+                    hub: target_hub.clone(),
+                    detail: "test-injected".to_string(),
+                })
+            }
+        }
+
+        fn build_canned_response(entries: Vec<DirectoryEntry>) -> Vec<u8> {
+            let resp =
+                crate::services::axon_serve::federation_wrappers::DiscoverResponse { entries };
+            serde_json::to_vec(&resp).unwrap()
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn poll_once_writes_per_peer_view_into_cell() {
+            let client = CannedClient {
+                responses: Mutex::new(
+                    [(
+                        "https://hub-b.example:50443".to_string(),
+                        build_canned_response(vec![entry_with_claimed_origin(
+                            "easynet:///r/realm-b/agent/peer-device",
+                            // peer claims wrong origin_realm; rewrite gate must fix it
+                            Some("trusted-bank"),
+                        )]),
+                    )]
+                    .into_iter()
+                    .collect(),
+                ),
+            };
+            let mut peers = std::collections::BTreeMap::new();
+            peers.insert(
+                "realm-b".to_string(),
+                "https://hub-b.example:50443".to_string(),
+            );
+            let cell = SharedFederatedDirectoryView::default();
+
+            let outcome = poll_once(
+                &client,
+                &peers,
+                Some("easynet:///r/realm-a/agent/daemon-a"),
+                &cell,
+            )
+            .await;
+
+            assert_eq!(outcome.successful_peers, vec!["realm-b".to_string()]);
+            assert!(outcome.failed_peers.is_empty());
+
+            let snap = cell.snapshot();
+            let realm_b_view = snap.get("realm-b").expect("realm-b in cell");
+            let entry = realm_b_view
+                .lookup("easynet:///r/realm-b/agent/peer-device")
+                .expect("entry in view");
+            // §2.4 chokepoint: receiving hub stamps peer's
+            // authenticated realm regardless of peer's claim.
+            assert_eq!(
+                entry.origin_realm.as_deref(),
+                Some("realm-b"),
+                "poll_once must enforce §2.4 origin_realm rewrite"
+            );
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn poll_once_dial_failure_records_in_outcome_and_preserves_old_view() {
+            let cell = SharedFederatedDirectoryView::default();
+            // Pre-populate realm-b's view (simulating an earlier
+            // successful poll). The next round fails to dial;
+            // the prior view MUST stay intact (no flicker).
+            let mut prior_view = DirectoryView::new("realm-b".to_string());
+            prior_view.apply_frame(&DirectoryEvent::Snapshot {
+                entries: vec![entry_with_claimed_origin(
+                    "easynet:///r/realm-b/agent/persisted",
+                    None,
+                )],
+            });
+            let mut prior_map = std::collections::BTreeMap::new();
+            prior_map.insert("realm-b".to_string(), Arc::new(prior_view));
+            cell.replace(prior_map);
+
+            let mut peers = std::collections::BTreeMap::new();
+            peers.insert(
+                "realm-b".to_string(),
+                "https://hub-b.example:50443".to_string(),
+            );
+
+            let outcome = poll_once(&DialFailedClient, &peers, None, &cell).await;
+
+            assert!(outcome.successful_peers.is_empty());
+            assert_eq!(outcome.failed_peers.len(), 1);
+            assert_eq!(outcome.failed_peers[0].0, "realm-b");
+
+            let snap = cell.snapshot();
+            assert!(
+                snap.get("realm-b")
+                    .expect("realm-b view preserved")
+                    .lookup("easynet:///r/realm-b/agent/persisted")
+                    .is_some(),
+                "dial failure MUST NOT clear the previously-cached view"
+            );
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn poll_once_with_empty_peers_clears_nothing() {
+            let cell = SharedFederatedDirectoryView::default();
+            // Pre-populate realm-b. Empty peers map ⇒ no dials,
+            // no replaces — the existing view stays.
+            let mut prior = DirectoryView::new("realm-b".to_string());
+            prior.apply_frame(&DirectoryEvent::Upsert {
+                entry: entry_with_claimed_origin("easynet:///r/realm-b/agent/x", None),
+            });
+            let mut prior_map = std::collections::BTreeMap::new();
+            prior_map.insert("realm-b".to_string(), Arc::new(prior));
+            cell.replace(prior_map);
+
+            let outcome = poll_once(
+                &CannedClient {
+                    responses: Mutex::new(std::collections::BTreeMap::new()),
+                },
+                &std::collections::BTreeMap::new(),
+                None,
+                &cell,
+            )
+            .await;
+            assert!(outcome.successful_peers.is_empty());
+            assert!(outcome.failed_peers.is_empty());
+
+            // Cell still holds the pre-poll view.
+            let snap = cell.snapshot();
+            assert!(
+                snap.get("realm-b")
+                    .is_some_and(|v| v
+                        .lookup("easynet:///r/realm-b/agent/x")
+                        .is_some()),
+                "empty peers map must not clear existing views"
+            );
+        }
     }
 
     #[test]
