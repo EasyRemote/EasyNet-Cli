@@ -60,7 +60,7 @@ use tonic::transport::{Endpoint, Uri};
 use tower::service_fn;
 
 use crate::pb::axon::v1::invocation_client::InvocationClient;
-use crate::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
+use crate::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest, SubjectIdentity};
 
 /// Default UDS path the daemon binds for its `Invocation` gRPC
 /// server. Mirrors `persistence::daemon_config::DEFAULT_DAEMON_UDS_PATH`
@@ -202,6 +202,17 @@ pub fn invoke_via_federation_forward(
     // admission gate has something to log; production deployments
     // will override this with the operator's identity once
     // PR-N2 cross-realm signing lands.
+    //
+    // AXIOM §A1 requires both `caller` and `callee`; the daemon's
+    // admission gate rejects an envelope missing either with
+    // `AXON_AXIOM_ENVELOPE_INCOMPLETE:callee_missing`. For a
+    // `federation.forward_invoke` call the inner ability's
+    // `target_uri` is the ultimate addressee, so we stamp it as
+    // both `callee` (intermediate routing hop addressee per A1
+    // "intermediate hops MAY repeat target") and `subject` (the
+    // identity the inner ability runs against). This matches the
+    // backend Go side's `daemon_grpc/invoke_remote.go` envelope
+    // convention.
     let resolved_caller_uri = caller_uri
         .unwrap_or("easynet:///r/cli/agent/local")
         .to_string();
@@ -209,6 +220,14 @@ pub fn invoke_via_federation_forward(
         caller: Some(AgentIdentity {
             uri: resolved_caller_uri,
             ..AgentIdentity::default()
+        }),
+        callee: Some(AgentIdentity {
+            uri: node_uri.to_string(),
+            ..AgentIdentity::default()
+        }),
+        subject: Some(SubjectIdentity {
+            uri: node_uri.to_string(),
+            ..SubjectIdentity::default()
         }),
         ..Envelope::default()
     };
