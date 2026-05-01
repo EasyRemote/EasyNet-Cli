@@ -300,7 +300,21 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
         if let (Some(hub_endpoint), Some(identity)) =
             (config.hub_endpoint().map(str::to_string), daemon_identity)
         {
-            spawn_session_supervisor(hub_endpoint, identity, dispatcher);
+            // Resolve the operator-pinned CA for this hub from
+            // realm-trust.toml. With a publicly-trusted hub cert
+            // (production deploy, Let's Encrypt etc.) the trust
+            // anchor has no entry whose `hub_uri` matches and we
+            // pass `None` — tonic falls back to the system trust
+            // store. With a self-signed hub cert (staging /
+            // single-machine demo) the operator has already
+            // pinned the CA via `[[trusted_agent]] role = "hub"`
+            // and `tls_ca_pem_path = ...`; we forward that path
+            // so the device-side dial can validate the leaf.
+            let hub_ca_pem_path = trust_anchor_cell
+                .snapshot()
+                .lookup_peer_hub(&hub_endpoint)
+                .and_then(|entry| entry.tls_ca_pem_path.clone());
+            spawn_session_supervisor(hub_endpoint, identity, hub_ca_pem_path, dispatcher);
         } else {
             eprintln!(
                 "[axon-serve] device-mode daemon missing either hub_endpoint or \
@@ -321,6 +335,7 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
 fn spawn_session_supervisor(
     hub_endpoint: String,
     identity: DaemonIdentity,
+    hub_ca_pem_path: Option<std::path::PathBuf>,
     dispatcher: Arc<AbilityDispatcher>,
 ) {
     let signing_state = if identity.signing_seed.is_some() {
@@ -328,10 +343,15 @@ fn spawn_session_supervisor(
     } else {
         "legacy unsigned frame0"
     };
+    let ca_state = match hub_ca_pem_path.as_deref() {
+        Some(path) => format!("pinned CA `{}`", path.display()),
+        None => "system trust roots".to_string(),
+    };
     eprintln!(
         "[axon-serve] device-mode dialing `<self>.session` against {hub_endpoint} as \
-         {}; {signing_state}; LocalAbilityDispatcher will execute inbound \
-         SessionDispatch::Dispatch frames through the boot-threaded AbilityDispatcher Arc",
+         {}; {signing_state}; tls={ca_state}; LocalAbilityDispatcher will execute \
+         inbound SessionDispatch::Dispatch frames through the boot-threaded \
+         AbilityDispatcher Arc",
         identity.caller_uri,
     );
     // Cancel oneshot held for the daemon process's lifetime — the
@@ -349,6 +369,7 @@ fn spawn_session_supervisor(
         hub_endpoint,
         identity.caller_uri,
         identity.signing_seed,
+        hub_ca_pem_path,
         dispatcher,
         cancel_rx,
     ));

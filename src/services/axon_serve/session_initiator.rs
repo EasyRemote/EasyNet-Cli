@@ -81,6 +81,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -96,7 +97,7 @@ use rand::RngCore as _;
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use tonic::transport::{Channel, Endpoint};
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 use tonic::Status;
 
 use crate::pb::axon::v1::invocation_client::InvocationClient;
@@ -187,13 +188,24 @@ pub enum SessionDispatchError {
 /// admits a missing `caller_signature` if the URI is in the
 /// hub's realm trust anchor (or matches the hub's own URI for
 /// loopback); PR-7 closes the loop with real ed25519 signing.
+///
+/// `hub_ca_pem_path` pins the hub's TLS CA when set, mirroring the
+/// pattern `cross_hub_dial::resolve_peer_channel` already uses for
+/// hub-to-hub dials. With `None`, tonic falls back to the system
+/// trust store (production deployments using publicly-trusted
+/// certs); with `Some(path)`, the PEM is loaded and supplied via
+/// `ClientTlsConfig::ca_certificate` so a self-signed hub cert
+/// rooted at an operator-pinned CA validates. Production daemons
+/// resolve the path from `realm-trust.toml`'s Hub-role entry whose
+/// `hub_uri` matches `hub_endpoint`.
 pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
     hub_endpoint: String,
     caller_uri: String,
     signing_seed: Option<SessionSigningSeed>,
+    hub_ca_pem_path: Option<&Path>,
     dispatcher: Arc<D>,
 ) -> Result<(), SessionError> {
-    let endpoint = Endpoint::from_shared(hub_endpoint.clone())
+    let mut endpoint = Endpoint::from_shared(hub_endpoint.clone())
         .map_err(|err| SessionError::InvalidEndpoint {
             endpoint: hub_endpoint.clone(),
             source: err,
@@ -201,6 +213,23 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
         // No timeout on the bidi itself — the stream is intended
         // to live forever. Connect timeout caps the dial step.
         .connect_timeout(Duration::from_secs(10));
+
+    if let Some(ca_path) = hub_ca_pem_path {
+        let ca_pem =
+            std::fs::read(ca_path).map_err(|err| SessionError::TlsCaRead {
+                path: ca_path.to_path_buf(),
+                source: err,
+            })?;
+        let ca = Certificate::from_pem(&ca_pem);
+        let tls = ClientTlsConfig::new().ca_certificate(ca);
+        endpoint =
+            endpoint
+                .tls_config(tls)
+                .map_err(|err| SessionError::TlsConfig {
+                    endpoint: hub_endpoint.clone(),
+                    source: err,
+                })?;
+    }
 
     let channel: Channel = endpoint
         .connect()
@@ -263,10 +292,18 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
 /// exponential backoff. Returns only when `cancel` resolves; the
 /// reconnect loop never exits on its own. Production daemons run
 /// this on a `tokio::spawn` at boot.
+///
+/// `hub_ca_pem_path` is forwarded to every dial attempt so a
+/// SIGHUP that swaps the trust anchor takes effect on the next
+/// reconnect. Today the supervisor is constructed once at boot;
+/// if a future change wires SIGHUP-driven trust reloads through
+/// the supervisor, this value should become a cell snapshot
+/// rather than an owned `PathBuf`.
 pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
     hub_endpoint: String,
     caller_uri: String,
     signing_seed: Option<SessionSigningSeed>,
+    hub_ca_pem_path: Option<PathBuf>,
     dispatcher: Arc<D>,
     mut cancel: tokio::sync::oneshot::Receiver<()>,
 ) {
@@ -281,6 +318,7 @@ pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
                 hub_endpoint.clone(),
                 caller_uri.clone(),
                 signing_seed,
+                hub_ca_pem_path.as_deref(),
                 Arc::clone(&dispatcher),
             ) => {
                 match result {
@@ -434,6 +472,20 @@ pub enum SessionError {
 
     #[error("internal: failed to enqueue {0} for hub send")]
     SendFailed(&'static str),
+
+    #[error("read tls_ca_pem_path `{path}`: {source}")]
+    TlsCaRead {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("apply ClientTlsConfig for hub `{endpoint}`: {source}")]
+    TlsConfig {
+        endpoint: String,
+        #[source]
+        source: tonic::transport::Error,
+    },
 }
 
 /// Boxed pinned stream alias used by the frame-handler trait
@@ -551,6 +603,7 @@ mod tests {
             "not a valid uri".to_string(),
             "easynet:///r/realm/agent/n1".to_string(),
             None,
+            None,
             dispatcher,
         )
         .await;
@@ -574,6 +627,7 @@ mod tests {
                 "http://127.0.0.1:1".to_string(),
                 "easynet:///r/realm/agent/n1".to_string(),
                 None,
+                None,
                 dispatcher,
             ),
         )
@@ -587,6 +641,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn missing_ca_path_returns_tls_ca_read() {
+        // Operator wires `tls_ca_pem_path` in realm-trust.toml to a
+        // file that doesn't exist (typo, broken symlink, deleted on
+        // disk). The dial must surface a structured `TlsCaRead` error
+        // naming the path so the supervisor's reconnect log makes
+        // the misconfig actionable rather than presenting it as a
+        // generic transport failure.
+        let dispatcher = Arc::new(RecordingDispatcher::default());
+        let bogus = std::path::PathBuf::from("/tmp/easynet-test-no-such-ca-file-xyz.pem");
+        let result = dial_and_run_session(
+            "https://127.0.0.1:1".to_string(),
+            "easynet:///r/realm/agent/n1".to_string(),
+            None,
+            Some(bogus.as_path()),
+            dispatcher,
+        )
+        .await;
+        match result {
+            Err(SessionError::TlsCaRead { path, .. }) => {
+                assert_eq!(path, bogus);
+            }
+            other => panic!("expected TlsCaRead, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn supervisor_exits_on_cancel() {
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
@@ -594,6 +674,7 @@ mod tests {
         let supervisor_handle = tokio::spawn(run_session_supervisor(
             "http://127.0.0.1:1".to_string(),
             "easynet:///r/realm/agent/n1".to_string(),
+            None,
             None,
             dispatcher,
             cancel_rx,
