@@ -435,6 +435,44 @@ pub fn handle_discover(
     DiscoverResponse { entries }
 }
 
+/// **PR-N4 N3-N4 bridge**. Variant of `handle_discover` that
+/// filters cross-realm entries through a `FederatedUserResolver`.
+/// Only entries whose URI either:
+///   - matches the local realm (`FederatedUserOutcome::Local`), or
+///   - has a recorded binding for the calling user
+///     (`BoundLocalUser`)
+/// pass through. Unbound (`NotBound`) and malformed
+/// (`Malformed`) URIs are filtered out.
+///
+/// This realises PR-N4 spec §commit 4/N's INV-5 privacy default:
+/// a calling user only sees cross-realm devices that have been
+/// explicitly opted into by a `<self>.keyring.consume_federate_
+/// user_token` round on this hub.
+#[must_use]
+pub fn handle_discover_with_user_filter(
+    request: &DiscoverRequest,
+    view: &crate::services::federation_directory::SharedFederatedDirectoryView,
+    resolver: &crate::runtime::keyring::resolver::FederatedUserResolver,
+) -> DiscoverResponse {
+    use crate::runtime::keyring::resolver::FederatedUserOutcome;
+    let raw = match request.agent_uri.as_deref() {
+        Some(uri) => crate::services::federation_directory::lookup_in_federated_view(view, uri)
+            .map(|e| vec![e])
+            .unwrap_or_default(),
+        None => crate::services::federation_directory::flatten_federated_view(view),
+    };
+    let entries = raw
+        .into_iter()
+        .filter(|entry| {
+            matches!(
+                resolver.resolve_user(&entry.agent_uri),
+                FederatedUserOutcome::Local | FederatedUserOutcome::BoundLocalUser(_)
+            )
+        })
+        .collect();
+    DiscoverResponse { entries }
+}
+
 // ─── federation.list_user_devices (PR-N3 N3-5) ────────────────────
 
 /// Request payload for `federation.list_user_devices`. The
@@ -919,6 +957,155 @@ mod tests {
             &anchor,
         );
         assert!(resp.is_none(), "miss must surface as None for caller status mapping");
+    }
+
+    // ── N3-N4 bridge: handle_discover_with_user_filter ─────────
+
+    fn populated_view_two_realms()
+        -> crate::services::federation_directory::SharedFederatedDirectoryView
+    {
+        use crate::services::federation_directory::{
+            DirectoryEntry, DirectoryEvent, DirectoryView, SharedFederatedDirectoryView,
+        };
+        let cell = SharedFederatedDirectoryView::default();
+        let mut realm_a = DirectoryView::new("realm-a".to_string());
+        realm_a.apply_frame(&DirectoryEvent::Snapshot {
+            entries: vec![DirectoryEntry {
+                agent_uri: "easynet:///r/realm-a/agent/user-c".to_string(),
+                node_id: "user-c".to_string(),
+                display_name: None,
+                status: "active".to_string(),
+                origin_realm: None,
+                hub_endpoint: None,
+                last_seen_unix_ms: None,
+            }],
+        });
+        let mut realm_c = DirectoryView::new("realm-c".to_string());
+        realm_c.apply_frame(&DirectoryEvent::Snapshot {
+            entries: vec![DirectoryEntry {
+                agent_uri: "easynet:///r/realm-c/agent/unbound".to_string(),
+                node_id: "unbound".to_string(),
+                display_name: None,
+                status: "active".to_string(),
+                origin_realm: None,
+                hub_endpoint: None,
+                last_seen_unix_ms: None,
+            }],
+        });
+        let mut peers = std::collections::BTreeMap::new();
+        peers.insert("realm-a".to_string(), std::sync::Arc::new(realm_a));
+        peers.insert("realm-c".to_string(), std::sync::Arc::new(realm_c));
+        cell.replace(peers);
+        cell
+    }
+
+    #[test]
+    fn discover_with_user_filter_keeps_bound_and_drops_unbound() {
+        use crate::runtime::keyring::federated_bindings::{
+            FederatedBindingsStore, FederatedUserBinding,
+        };
+        use crate::runtime::keyring::resolver::FederatedUserResolver;
+        use std::sync::Arc;
+
+        let bindings = Arc::new(FederatedBindingsStore::in_memory());
+        // Bind realm-a's user-c to local user-on-b. realm-c is
+        // NOT bound — its entry must be filtered out.
+        bindings
+            .record_binding(
+                FederatedUserBinding {
+                    source_realm: "realm-a".to_string(),
+                    source_user_uri: "easynet:///r/realm-a/agent/user-c".to_string(),
+                    source_user_pubkey_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        .to_string(),
+                    local_user_id: "user-on-b".to_string(),
+                    bound_at_unix_ms: 1_714_500_000_000,
+                },
+                "n".to_string(),
+            )
+            .unwrap();
+        let resolver = FederatedUserResolver::new("realm-b", bindings);
+        let view = populated_view_two_realms();
+
+        let resp = handle_discover_with_user_filter(
+            &DiscoverRequest { agent_uri: None },
+            &view,
+            &resolver,
+        );
+        assert_eq!(resp.entries.len(), 1);
+        assert_eq!(
+            resp.entries[0].agent_uri,
+            "easynet:///r/realm-a/agent/user-c"
+        );
+    }
+
+    #[test]
+    fn discover_with_user_filter_keeps_local_realm_unconditionally() {
+        // Calling daemon's own realm = realm-a; the realm-a
+        // entry surfaces as `Local` from the resolver and passes
+        // the filter without needing a binding.
+        use crate::runtime::keyring::federated_bindings::FederatedBindingsStore;
+        use crate::runtime::keyring::resolver::FederatedUserResolver;
+        use std::sync::Arc;
+
+        let bindings = Arc::new(FederatedBindingsStore::in_memory());
+        let resolver = FederatedUserResolver::new("realm-a", bindings);
+        let view = populated_view_two_realms();
+
+        let resp = handle_discover_with_user_filter(
+            &DiscoverRequest { agent_uri: None },
+            &view,
+            &resolver,
+        );
+        // realm-a entry passes (Local), realm-c does not (NotBound).
+        assert_eq!(resp.entries.len(), 1);
+        assert_eq!(
+            resp.entries[0].agent_uri,
+            "easynet:///r/realm-a/agent/user-c"
+        );
+    }
+
+    #[test]
+    fn discover_with_user_filter_drops_all_unbound_when_no_local_realm_match() {
+        // Resolver thinks we're realm-b; no binding exists.
+        // Both directory entries are cross-realm and unbound;
+        // result is empty.
+        use crate::runtime::keyring::federated_bindings::FederatedBindingsStore;
+        use crate::runtime::keyring::resolver::FederatedUserResolver;
+        use std::sync::Arc;
+
+        let bindings = Arc::new(FederatedBindingsStore::in_memory());
+        let resolver = FederatedUserResolver::new("realm-b", bindings);
+        let view = populated_view_two_realms();
+        let resp = handle_discover_with_user_filter(
+            &DiscoverRequest { agent_uri: None },
+            &view,
+            &resolver,
+        );
+        assert!(
+            resp.entries.is_empty(),
+            "no bindings + no local-realm match ⇒ empty filtered result"
+        );
+    }
+
+    #[test]
+    fn discover_with_user_filter_uri_query_drops_when_unbound() {
+        use crate::runtime::keyring::federated_bindings::FederatedBindingsStore;
+        use crate::runtime::keyring::resolver::FederatedUserResolver;
+        use std::sync::Arc;
+
+        let bindings = Arc::new(FederatedBindingsStore::in_memory());
+        let resolver = FederatedUserResolver::new("realm-b", bindings);
+        let view = populated_view_two_realms();
+        // Direct URI query for realm-c's entry — exists in the
+        // view but is unbound for the calling user. Filter out.
+        let resp = handle_discover_with_user_filter(
+            &DiscoverRequest {
+                agent_uri: Some("easynet:///r/realm-c/agent/unbound".to_string()),
+            },
+            &view,
+            &resolver,
+        );
+        assert!(resp.entries.is_empty());
     }
 
     #[test]
