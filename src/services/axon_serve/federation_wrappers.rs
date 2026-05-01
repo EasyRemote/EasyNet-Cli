@@ -398,12 +398,22 @@ pub fn handle_resolve_key(
 /// flattened federated directory in deterministic order
 /// (peers in lex order on `peer_realm`, entries within each
 /// peer in lex order on `agent_uri`).
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct DiscoverRequest {
     /// Optional URI to filter on. Absent ⇒ return every entry
     /// in the federated directory.
     #[serde(default)]
     pub agent_uri: Option<String>,
+    /// **N3-N4 bridge**. Optional caller's local user id. When
+    /// present and the daemon has a `FederatedBindingsStore`
+    /// wired, the dispatch arm filters cross-realm entries
+    /// through the corresponding `FederatedUserResolver`: only
+    /// entries whose URI is on the caller's local realm or has
+    /// a recorded binding to this `local_user_id` survive
+    /// (INV-5 privacy default). Absent ⇒ unfiltered (operator /
+    /// audit query path).
+    #[serde(default)]
+    pub local_user_id: Option<String>,
 }
 
 /// Response payload for `federation.discover`. Each entry in
@@ -1027,7 +1037,7 @@ mod tests {
         let view = populated_view_two_realms();
 
         let resp = handle_discover_with_user_filter(
-            &DiscoverRequest { agent_uri: None },
+            &DiscoverRequest { agent_uri: None, ..Default::default() },
             &view,
             &resolver,
         );
@@ -1052,7 +1062,7 @@ mod tests {
         let view = populated_view_two_realms();
 
         let resp = handle_discover_with_user_filter(
-            &DiscoverRequest { agent_uri: None },
+            &DiscoverRequest { agent_uri: None, ..Default::default() },
             &view,
             &resolver,
         );
@@ -1077,7 +1087,7 @@ mod tests {
         let resolver = FederatedUserResolver::new("realm-b", bindings);
         let view = populated_view_two_realms();
         let resp = handle_discover_with_user_filter(
-            &DiscoverRequest { agent_uri: None },
+            &DiscoverRequest { agent_uri: None, ..Default::default() },
             &view,
             &resolver,
         );
@@ -1101,6 +1111,7 @@ mod tests {
         let resp = handle_discover_with_user_filter(
             &DiscoverRequest {
                 agent_uri: Some("easynet:///r/realm-c/agent/unbound".to_string()),
+                ..Default::default()
             },
             &view,
             &resolver,

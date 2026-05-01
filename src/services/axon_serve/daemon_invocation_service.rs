@@ -2171,6 +2171,161 @@ mod tests {
         );
     }
 
+    // ── N3-N4 dispatch wire — discover with user filter ─────
+
+    #[tokio::test]
+    async fn invoke_discover_with_user_id_filters_unbound_cross_realm_entries() {
+        // Daemon's session_realm = realm-b. View has realm-c
+        // entry (unbound for the calling user). Bindings store
+        // is empty, so the cross-realm entry is filtered out.
+        use crate::runtime::keyring::federated_bindings::FederatedBindingsStore;
+        use crate::services::federation_directory::{
+            DirectoryEntry, DirectoryEvent, DirectoryView, SharedFederatedDirectoryView,
+        };
+        use std::collections::BTreeMap;
+
+        let cell = SharedFederatedDirectoryView::default();
+        let mut realm_c = DirectoryView::new("realm-c".to_string());
+        realm_c.apply_frame(&DirectoryEvent::Snapshot {
+            entries: vec![DirectoryEntry {
+                agent_uri: "easynet:///r/realm-c/agent/unbound".to_string(),
+                node_id: "n".to_string(),
+                display_name: None,
+                status: "active".to_string(),
+                origin_realm: None,
+                hub_endpoint: None,
+                last_seen_unix_ms: None,
+            }],
+        });
+        let mut peers = BTreeMap::new();
+        peers.insert("realm-c".to_string(), Arc::new(realm_c));
+        cell.replace(peers);
+
+        let bindings = Arc::new(FederatedBindingsStore::in_memory());
+        let svc = make_service()
+            .with_session_realm("realm-b")
+            .with_federated_directory_cell(cell)
+            .with_federated_bindings_store(bindings);
+
+        let resp = svc
+            .invoke(invoke_request(
+                ABILITY_FEDERATION_DISCOVER,
+                r#"{"local_user_id":"user-on-b"}"#,
+            ))
+            .await
+            .expect("dispatch returns Ok");
+        let body: federation_wrappers::DiscoverResponse = parse_response_body(resp);
+        assert!(
+            body.entries.is_empty(),
+            "unbound cross-realm entry must be filtered when local_user_id is set"
+        );
+    }
+
+    #[tokio::test]
+    async fn invoke_discover_without_user_id_does_not_filter() {
+        // Same setup as above but no local_user_id ⇒ unfiltered
+        // path. Cross-realm unbound entries surface (operator /
+        // audit query path).
+        use crate::services::federation_directory::{
+            DirectoryEntry, DirectoryEvent, DirectoryView, SharedFederatedDirectoryView,
+        };
+        use std::collections::BTreeMap;
+
+        let cell = SharedFederatedDirectoryView::default();
+        let mut realm_c = DirectoryView::new("realm-c".to_string());
+        realm_c.apply_frame(&DirectoryEvent::Snapshot {
+            entries: vec![DirectoryEntry {
+                agent_uri: "easynet:///r/realm-c/agent/u".to_string(),
+                node_id: "n".to_string(),
+                display_name: None,
+                status: "active".to_string(),
+                origin_realm: None,
+                hub_endpoint: None,
+                last_seen_unix_ms: None,
+            }],
+        });
+        let mut peers = BTreeMap::new();
+        peers.insert("realm-c".to_string(), Arc::new(realm_c));
+        cell.replace(peers);
+
+        let svc = make_service()
+            .with_session_realm("realm-b")
+            .with_federated_directory_cell(cell);
+
+        let resp = svc
+            .invoke(invoke_request(ABILITY_FEDERATION_DISCOVER, r#"{}"#))
+            .await
+            .expect("dispatch returns Ok");
+        let body: federation_wrappers::DiscoverResponse = parse_response_body(resp);
+        assert_eq!(
+            body.entries.len(),
+            1,
+            "unfiltered path must surface every entry regardless of binding state"
+        );
+    }
+
+    #[tokio::test]
+    async fn invoke_discover_with_user_id_keeps_bound_entry() {
+        use crate::runtime::keyring::federated_bindings::{
+            FederatedBindingsStore, FederatedUserBinding,
+        };
+        use crate::services::federation_directory::{
+            DirectoryEntry, DirectoryEvent, DirectoryView, SharedFederatedDirectoryView,
+        };
+        use std::collections::BTreeMap;
+
+        let cell = SharedFederatedDirectoryView::default();
+        let mut realm_a = DirectoryView::new("realm-a".to_string());
+        realm_a.apply_frame(&DirectoryEvent::Snapshot {
+            entries: vec![DirectoryEntry {
+                agent_uri: "easynet:///r/realm-a/agent/bound-user".to_string(),
+                node_id: "n".to_string(),
+                display_name: None,
+                status: "active".to_string(),
+                origin_realm: None,
+                hub_endpoint: None,
+                last_seen_unix_ms: None,
+            }],
+        });
+        let mut peers = BTreeMap::new();
+        peers.insert("realm-a".to_string(), Arc::new(realm_a));
+        cell.replace(peers);
+
+        let bindings = Arc::new(FederatedBindingsStore::in_memory());
+        bindings
+            .record_binding(
+                FederatedUserBinding {
+                    source_realm: "realm-a".to_string(),
+                    source_user_uri: "easynet:///r/realm-a/agent/bound-user".to_string(),
+                    source_user_pubkey_b64:
+                        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+                    local_user_id: "user-on-b".to_string(),
+                    bound_at_unix_ms: 1_714_500_000_000,
+                },
+                "n".to_string(),
+            )
+            .unwrap();
+
+        let svc = make_service()
+            .with_session_realm("realm-b")
+            .with_federated_directory_cell(cell)
+            .with_federated_bindings_store(bindings);
+
+        let resp = svc
+            .invoke(invoke_request(
+                ABILITY_FEDERATION_DISCOVER,
+                r#"{"local_user_id":"user-on-b"}"#,
+            ))
+            .await
+            .expect("dispatch returns Ok");
+        let body: federation_wrappers::DiscoverResponse = parse_response_body(resp);
+        assert_eq!(body.entries.len(), 1);
+        assert_eq!(
+            body.entries[0].agent_uri,
+            "easynet:///r/realm-a/agent/bound-user"
+        );
+    }
+
     #[tokio::test]
     async fn invoke_dispatches_federation_list_user_devices_admits_loopback_caller() {
         // PR-N3 N3-5: a hub-mode daemon listing its own users
