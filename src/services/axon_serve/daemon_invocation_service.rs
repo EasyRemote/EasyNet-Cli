@@ -194,6 +194,14 @@ pub struct DaemonInvocationService {
     federated_bindings: Option<
         std::sync::Arc<crate::runtime::keyring::federated_bindings::FederatedBindingsStore>,
     >,
+    /// **PR-N3 N3-streaming-6**. Heartbeat cadence
+    /// (milliseconds) for the v2 subscribe_directory server
+    /// stream. Spec §2.3 pins 30 000ms in production; tests
+    /// override via `with_subscribe_v2_heartbeat_interval_ms`
+    /// to drive the keepalive path in real time without
+    /// virtualised clocks. Always nonzero — a zero interval
+    /// would emit a heartbeat per poll and pin the CPU.
+    subscribe_v2_heartbeat_interval_ms: u64,
 }
 
 impl std::fmt::Debug for DaemonInvocationService {
@@ -254,6 +262,7 @@ impl DaemonInvocationService {
             federated_directory:
                 crate::services::federation_directory::SharedFederatedDirectoryView::default(),
             federated_bindings: None,
+            subscribe_v2_heartbeat_interval_ms: 30_000,
         }
     }
 
@@ -379,6 +388,20 @@ impl DaemonInvocationService {
         >,
     ) -> Self {
         self.federated_bindings = Some(bindings);
+        self
+    }
+
+    /// **PR-N3 N3-streaming-6**. Override the v2 subscribe
+    /// stream's Heartbeat cadence in milliseconds. Production
+    /// stays at the 30 000ms default (spec §2.3); tests pass
+    /// a sub-second value (e.g. 50ms) to exercise the
+    /// keepalive path in real time without virtualised clocks.
+    /// Panics on zero so a misuse cannot pin the CPU emitting
+    /// heartbeats every poll.
+    #[must_use]
+    pub fn with_subscribe_v2_heartbeat_interval_ms(mut self, ms: u64) -> Self {
+        assert!(ms > 0, "heartbeat interval must be > 0 ms");
+        self.subscribe_v2_heartbeat_interval_ms = ms;
         self
     }
 }
@@ -1262,66 +1285,99 @@ impl DaemonInvocationService {
         let events = self.presence.subscribe_events();
         let presence_weak = Arc::downgrade(&self.presence);
 
+        // Heartbeat tick: spec §2.3 says emit Heartbeat every
+        // 30s when no other frame has been emitted in window.
+        // The interval is field-configurable via
+        // `with_subscribe_v2_heartbeat_interval_ms` for test
+        // ergonomics; production stays at the 30 000ms
+        // default. Skip-on-missed-tick keeps cadence aligned
+        // when a real event arrives close to the deadline.
+        let heartbeat_interval_ms: u64 = self.subscribe_v2_heartbeat_interval_ms;
         let initial_stream = futures::stream::once(async move { Ok(initial_chunk) });
         let event_stream = futures::stream::unfold(
-            (events, presence_weak),
-            |(mut events, presence_weak)| async move {
+            (events, presence_weak, heartbeat_interval_ms),
+            |(mut events, presence_weak, hb_ms)| async move {
                 use tokio::sync::broadcast::error::RecvError;
 
+                let mut hb = tokio::time::interval(std::time::Duration::from_millis(hb_ms));
+                hb.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                // Burn the immediate-fire tick — we don't want
+                // a Heartbeat at frame 1; the Snapshot already
+                // proves liveness. The next tick fires
+                // hb_ms from now.
+                hb.tick().await;
+
                 loop {
-                    match events.recv().await {
-                        Ok(event) => {
-                            let evt = presence_event_to_directory_event(&event);
-                            // DirectoryEvent is statically Serialize
-                            // (tagged enum of plain types); same
-                            // expect-rationale as v1.
-                            let payload = serde_json::to_vec(&evt).expect(
-                                "DirectoryEvent is statically Serialize; a serialise failure here \
-                                 means the type grew a fallible field — update this site to \
-                                 surface Status::internal instead of panicking",
-                            );
+                    tokio::select! {
+                        recv = events.recv() => {
+                            match recv {
+                                Ok(event) => {
+                                    let evt = presence_event_to_directory_event(&event);
+                                    let payload = serde_json::to_vec(&evt).expect(
+                                        "DirectoryEvent is statically Serialize; a serialise \
+                                         failure here means the type grew a fallible field \
+                                         — update this site to surface Status::internal \
+                                         instead of panicking",
+                                    );
+                                    let chunk = InvokeStreamChunk {
+                                        content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+                                        payload,
+                                        ..InvokeStreamChunk::default()
+                                    };
+                                    return Some((
+                                        Ok(chunk),
+                                        (events, presence_weak, hb_ms),
+                                    ));
+                                }
+                                Err(RecvError::Lagged(_)) => {
+                                    // Slow consumer; emit a
+                                    // fresh Snapshot so the
+                                    // receiver's view converges
+                                    // with the registry.
+                                    let presence = presence_weak.upgrade()?;
+                                    let snap_evt =
+                                        federation_wrappers::build_subscribe_directory_v2_snapshot(
+                                            &presence,
+                                        );
+                                    drop(presence);
+                                    let payload = serde_json::to_vec(&snap_evt).expect(
+                                        "DirectoryEvent::Snapshot is statically Serialize",
+                                    );
+                                    let _ = DirectoryEvent::Snapshot { entries: vec![] };
+                                    let chunk = InvokeStreamChunk {
+                                        content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+                                        payload,
+                                        ..InvokeStreamChunk::default()
+                                    };
+                                    return Some((
+                                        Ok(chunk),
+                                        (events, presence_weak, hb_ms),
+                                    ));
+                                }
+                                Err(RecvError::Closed) => return None,
+                            }
+                        }
+                        _ = hb.tick() => {
+                            // 30s elapsed without a real event;
+                            // emit Heartbeat so the subscriber's
+                            // 60s idle-timeout watcher does not
+                            // tear down a healthy stream.
+                            let now_ms = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis() as i64)
+                                .unwrap_or(0);
+                            let hb_evt = DirectoryEvent::Heartbeat {
+                                sent_at_unix_ms: now_ms,
+                            };
+                            let payload = serde_json::to_vec(&hb_evt)
+                                .expect("DirectoryEvent::Heartbeat is statically Serialize");
                             let chunk = InvokeStreamChunk {
                                 content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
                                 payload,
                                 ..InvokeStreamChunk::default()
                             };
-                            return Some((Ok(chunk), (events, presence_weak)));
+                            return Some((Ok(chunk), (events, presence_weak, hb_ms)));
                         }
-                        Err(RecvError::Lagged(_)) => {
-                            // Slow consumer; emit a fresh
-                            // Snapshot so the receiver's view
-                            // converges with the registry.
-                            let presence = presence_weak.upgrade()?;
-                            let snap_evt =
-                                federation_wrappers::build_subscribe_directory_v2_snapshot(
-                                    &presence,
-                                );
-                            drop(presence);
-                            let payload = serde_json::to_vec(&snap_evt).expect(
-                                "DirectoryEvent::Snapshot is statically Serialize; same rationale \
-                                 as the Ok arm above",
-                            );
-                            // Per spec §2.3 a second Snapshot
-                            // mid-stream is a protocol violation
-                            // for the *subscriber*; our case is
-                            // the recovery resync — the receiver
-                            // either treats this Snapshot as
-                            // authoritative replacement (matches
-                            // the SubscriberFsm Pumping ⇢
-                            // Snapshot ⇢ violation rule) or
-                            // tears down + reconnects. Lagged is
-                            // a transient slow-consumer event;
-                            // emitting Snapshot here is the v1
-                            // contract carried forward.
-                            let _ = DirectoryEvent::Snapshot { entries: vec![] };
-                            let chunk = InvokeStreamChunk {
-                                content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
-                                payload,
-                                ..InvokeStreamChunk::default()
-                            };
-                            return Some((Ok(chunk), (events, presence_weak)));
-                        }
-                        Err(RecvError::Closed) => return None,
                     }
                 }
             },
@@ -2832,6 +2888,71 @@ mod tests {
             .await
             .expect("pump closes within 2 s");
         assert!(close.is_none());
+    }
+
+    #[tokio::test]
+    async fn invoke_stream_subscribe_directory_v2_emits_heartbeat_when_idle() {
+        // PR-N3 N3-streaming-6. Confirm the v2 stream emits a
+        // DirectoryEvent::Heartbeat after the heartbeat
+        // interval has elapsed with no real events, so the
+        // subscriber's 60s idle-timeout watcher does not tear
+        // down a healthy stream. The test sets a 50ms cadence
+        // via `with_subscribe_v2_heartbeat_interval_ms` so it
+        // runs in real time without virtualised clocks; spec
+        // §2.3 production cadence is 30 000ms.
+        use crate::services::federation_directory::DirectoryEvent;
+        use futures::StreamExt;
+
+        let presence = Arc::new(PresenceRegistry::new());
+        let admission = AdmissionFacade::new(
+            Arc::new(RealmTrustAnchor::default()),
+            Some(TEST_DAEMON_URI.to_string()),
+        );
+        let svc = DaemonInvocationService::new(Arc::clone(&presence), admission)
+            .with_subscribe_v2_heartbeat_interval_ms(50);
+
+        let resp = svc
+            .invoke_stream(Request::new(InvokeServerStreamRequest {
+                envelope: Some(test_envelope()),
+                function_name: ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2.to_string(),
+                ..InvokeServerStreamRequest::default()
+            }))
+            .await
+            .expect("dispatch returns Ok");
+
+        let mut stream = resp.into_inner();
+
+        // Frame 1: empty Snapshot (immediate).
+        let first = stream.next().await.expect("first frame").expect("Ok");
+        let evt: DirectoryEvent =
+            serde_json::from_slice(&first.payload).expect("Snapshot decodes");
+        assert!(matches!(evt, DirectoryEvent::Snapshot { .. }));
+
+        // Frame 2: Heartbeat after the 50ms interval. Bound
+        // the wait to 1s so a real bug surfaces as a test
+        // timeout rather than a CI hang.
+        let hb_frame = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            stream.next(),
+        )
+        .await
+        .expect("heartbeat frame within 1s")
+        .expect("stream did not end")
+        .expect("frame is Ok");
+        let hb_evt: DirectoryEvent =
+            serde_json::from_slice(&hb_frame.payload).expect("Heartbeat decodes");
+        match hb_evt {
+            DirectoryEvent::Heartbeat { sent_at_unix_ms } => {
+                assert!(
+                    sent_at_unix_ms > 0,
+                    "Heartbeat sent_at_unix_ms must be a real epoch-ms",
+                );
+            }
+            other => panic!("expected Heartbeat after idle window; got {other:?}"),
+        }
+
+        drop(svc);
+        drop(presence);
     }
 
     #[tokio::test]
