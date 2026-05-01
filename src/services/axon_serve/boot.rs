@@ -245,22 +245,20 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     // SIGHUP-driven add/drop is naturally picked up; no
     // separate add/drop signalling needed.
     if let Some(client) = dialer.clone() {
-        spawn_federated_directory_poll_task(
-            client.clone(),
-            federated_peers_cell.clone(),
-            daemon_uri.clone(),
-            federated_directory_cell.clone(),
-        );
-
-        // **PR-N3 N3-streaming-4**. Streaming supervisor task
-        // that watches the federated_peers cell and spawns
-        // one per-peer subscribe loop per entry. Runs alongside
-        // the poll task — peers that support `federation.
-        // subscribe_directory_v2` get sub-second updates via
-        // the stream; peers that don't fall back to the 5s
-        // poll cadence and the streaming dial silently fails
-        // closed (its retry-with-backoff isolates the pollute
-        // in the supervisor).
+        // **Streaming-only directory federation**. The
+        // streaming supervisor (PR-N3 N3-streaming-4) watches
+        // the federated_peers cell and spawns one
+        // `subscribe_directory_v2` subscriber per entry. Every
+        // current peer hub runs the same daemon binary which
+        // serves v2 unconditionally, so the legacy poll task
+        // (`spawn_federated_directory_poll_task`) is dead code
+        // in production — its dual-path required a race-fix
+        // (PR-N3 N3-streaming-10) and contributed nothing once
+        // the streaming supervisor stabilised. The standalone
+        // `poll_once` helper stays available for a future
+        // "operator manual poll" CLI command but is no longer
+        // wired into boot.
+        //
         // Use the daemon's own URI as the subscribe-stream
         // envelope's caller. Falls back to a generic CLI-style
         // URI when the daemon has no credentials yet (test /
@@ -829,8 +827,12 @@ fn reload_federated_peers_cell_from(
 }
 
 /// **PR-N3 commit N3-3.1**. Spawn the cross-realm directory
-/// poll task. Calls `federation_directory::poll_once` every 5s
-/// against every entry in the live `SharedFederatedPeers` cell
+/// poll task. Kept available for a future "operator manual
+/// poll" CLI surface, but no longer wired into boot — the
+/// streaming supervisor handles every peer in production.
+///
+/// Calls `federation_directory::poll_once` every 5s against
+/// every entry in the live `SharedFederatedPeers` cell
 /// snapshot. The task reads the cell each round, so a SIGHUP-
 /// driven federated_peers reload is naturally picked up — peers
 /// added show up in the next poll, peers removed are dropped on
@@ -838,10 +840,8 @@ fn reload_federated_peers_cell_from(
 ///
 /// Per-peer failures (dial dropped, parse error) surface as
 /// stderr trace; the task does not retry mid-round, just waits
-/// for the next interval. Spec §3.1 backoff schedule lives in
-/// the FSM-driven streaming variant that supersedes this poll
-/// implementation when the streaming subscribe_directory wire
-/// surface lands.
+/// for the next interval.
+#[allow(dead_code)]
 fn spawn_federated_directory_poll_task(
     federation_client: Arc<dyn crate::services::federation_client::FederationClient>,
     federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
