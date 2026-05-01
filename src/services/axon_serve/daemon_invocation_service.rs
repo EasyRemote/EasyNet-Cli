@@ -84,6 +84,7 @@ use crate::services::axon_serve::federation_wrappers::{
     ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN, ABILITY_FEDERATION_RESOLVE,
     ABILITY_FEDERATION_REVOKE, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
 };
+use crate::services::federated_peers_cell::SharedFederatedPeers;
 use crate::services::federation_client::FederationClient;
 use crate::services::axon_serve::invoke_remote_initiator::{
     InvokeRemoteDown, InvokeRemoteUp, SessionDispatch, ABILITY_INVOKE_REMOTE,
@@ -160,12 +161,18 @@ pub struct DaemonInvocationService {
     /// dial). Commit 3b/N rewrites the `forward_invoke` dispatcher
     /// to consume this field; commit 3a/N only plumbs it through.
     federation_client: Option<Arc<dyn FederationClient>>,
-    /// **PR-N1 commit 3a/N**. Operator-curated `tenant → hub_uri`
-    /// map per `DaemonConfig::federated_peers`. Empty map ⇒ no
-    /// cross-tenant routing configured; the dispatcher returns
-    /// the legacy shape. PR-N3 will replace this hand-curated
-    /// map with auto-discovered cross-realm directory entries.
-    federated_peers: BTreeMap<String, String>,
+    /// **PR-N1 commit 3a/N → 10/N**. Operator-curated `tenant →
+    /// hub_uri` cell per `DaemonConfig::federated_peers`. Empty
+    /// map ⇒ no cross-tenant routing configured; the dispatcher
+    /// returns the legacy shape. Commit 10/N upgraded this from a
+    /// boot-time `BTreeMap<String, String>` snapshot to the
+    /// `SharedFederatedPeers` cell so SIGHUP-driven daemon-config
+    /// reloads (operator editing `[daemon.federated_peers]`)
+    /// surface to the next dispatch within ~50ms — same cadence
+    /// as the trust-anchor reload landed by commit 9/N.
+    /// PR-N3 will replace this hand-curated map with auto-
+    /// discovered cross-realm directory entries.
+    federated_peers: SharedFederatedPeers,
 }
 
 impl std::fmt::Debug for DaemonInvocationService {
@@ -180,7 +187,10 @@ impl std::fmt::Debug for DaemonInvocationService {
                 "federation_client",
                 &self.federation_client.as_ref().map(|_| "<dyn FederationClient>"),
             )
-            .field("federated_peers_count", &self.federated_peers.len())
+            .field(
+                "federated_peers_count",
+                &self.federated_peers.snapshot().len(),
+            )
             .finish()
     }
 }
@@ -215,7 +225,7 @@ impl DaemonInvocationService {
             register_pubkey: None,
             session_realm: None,
             federation_client: None,
-            federated_peers: BTreeMap::new(),
+            federated_peers: SharedFederatedPeers::default(),
         }
     }
 
@@ -278,14 +288,34 @@ impl DaemonInvocationService {
     }
 
     /// **PR-N1 commit 3a/N**. Attach the operator-curated
-    /// `tenant → hub_uri` map. Empty map (the default from
-    /// `DaemonInvocationService::new`) means no cross-tenant
-    /// routing is configured; the dispatcher's cross-tenant arm
-    /// then refuses to dial regardless of `federation_client`
-    /// presence — peer-not-trusted by absence of operator intent.
+    /// `tenant → hub_uri` map by-value. Wraps the supplied map in
+    /// a fresh `SharedFederatedPeers` cell so test fixtures that
+    /// don't care about hot-reload still get the cell shape under
+    /// the hood. Production daemons use
+    /// [`with_federated_peers_cell`] to share the boot-time cell
+    /// with the SIGHUP reload task.
+    ///
+    /// Empty map (the default from `DaemonInvocationService::new`)
+    /// means no cross-tenant routing is configured; the
+    /// dispatcher's cross-tenant arm then refuses to dial
+    /// regardless of `federation_client` presence.
     #[must_use]
     pub fn with_federated_peers(mut self, peers: BTreeMap<String, String>) -> Self {
-        self.federated_peers = peers;
+        self.federated_peers = SharedFederatedPeers::new(peers);
+        self
+    }
+
+    /// **PR-N1 commit 10/N**. Attach the live
+    /// `SharedFederatedPeers` cell so SIGHUP-driven daemon-config
+    /// reloads (operator editing `[daemon.federated_peers]`)
+    /// republish into the dispatcher's view within ~50ms — same
+    /// cadence as the trust-anchor reload landed by commit 9/N.
+    /// Production `start_axon_serve_sidecar` uses this builder; the
+    /// SIGHUP task in `boot.rs` calls `cell.replace(...)` on
+    /// successful TOML reload.
+    #[must_use]
+    pub fn with_federated_peers_cell(mut self, cell: SharedFederatedPeers) -> Self {
+        self.federated_peers = cell;
         self
     }
 }
@@ -610,7 +640,15 @@ impl DaemonInvocationService {
             };
             return wrap_json_response(&response);
         };
-        let Some(target_hub_uri) = self.federated_peers.get(target_tenant) else {
+        // PR-N1 commit 10/N: snapshot the federated_peers cell
+        // per-dispatch so a SIGHUP-driven reload of
+        // `[daemon.federated_peers]` (operator adding a new
+        // tenant→hub_uri entry without restarting the daemon)
+        // is visible to the next call. The snapshot is one
+        // `RwLock::read()` + `Arc::clone` (cheap; mirrors the
+        // admission gate's per-call pattern).
+        let peers_snapshot = self.federated_peers.snapshot();
+        let Some(target_hub_uri) = peers_snapshot.get(target_tenant) else {
             let response = federation_wrappers::ForwardInvokeResponse {
                 target_online: false,
             };
@@ -1942,7 +1980,7 @@ mod tests {
     #[test]
     fn with_federated_peers_attaches_map_field() {
         let svc = make_service();
-        assert!(svc.federated_peers.is_empty());
+        assert!(svc.federated_peers.snapshot().is_empty());
 
         let mut peers = BTreeMap::new();
         peers.insert(
@@ -1950,11 +1988,38 @@ mod tests {
             "https://peer-hub.example:50443".to_string(),
         );
         let svc = svc.with_federated_peers(peers);
-        assert_eq!(svc.federated_peers.len(), 1);
+        let snap = svc.federated_peers.snapshot();
+        assert_eq!(snap.len(), 1);
         assert_eq!(
-            svc.federated_peers.get("peer-realm").map(String::as_str),
+            snap.get("peer-realm").map(String::as_str),
             Some("https://peer-hub.example:50443")
         );
+    }
+
+    #[test]
+    fn federated_peers_cell_picks_up_replace_without_service_rebuild() {
+        // PR-N1 commit 10/N: the SIGHUP reload task calls
+        // `cell.replace(new_map)` on TOML re-parse success. The
+        // dispatcher's per-call `snapshot()` must see the new
+        // map without a `DaemonInvocationService` rebuild.
+        use crate::services::federated_peers_cell::SharedFederatedPeers;
+
+        let cell = SharedFederatedPeers::default();
+        let svc = make_service().with_federated_peers_cell(cell.clone());
+        assert!(svc.federated_peers.snapshot().is_empty());
+
+        let mut next = BTreeMap::new();
+        next.insert(
+            "hot-reloaded-realm".to_string(),
+            "https://hot:50443".to_string(),
+        );
+        cell.replace(next);
+
+        // Same `svc` instance, but the cell snapshot now has
+        // the new entry — no rebuild required.
+        let snap = svc.federated_peers.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert!(snap.contains_key("hot-reloaded-realm"));
     }
 
     // ── PR-N1 commit 3b/N: tenant-aware forward_invoke tests ──

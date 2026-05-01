@@ -75,6 +75,14 @@ pub mod realm_trust_anchor;
 /// cross-device calls awaiting reply". Pure data — no feature gate.
 pub mod pending_dispatch;
 
+/// Reload-friendly cell holding the daemon's current
+/// operator-curated `tenant → hub_uri` map (PR-N1 commit 10/N —
+/// closes the LB-37 §2.3 fallback Scope A defer note). Mirrors
+/// `trust_anchor_cell` so SIGHUP-triggered `daemon-config.toml`
+/// reloads republish the federated_peers map without daemon
+/// restart. Pure data; no feature gate.
+pub mod federated_peers_cell;
+
 /// Per-daemon nonce replay store (RFC 001 §5.2 step 4). Wraps the
 /// axon SDK's time-wheel store in `Arc<Mutex<…>>` so a single
 /// instance is shared across every concurrent invoke through the

@@ -170,17 +170,22 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     // -cross-pass-by-xiaowen.md). 晓雯 letter 67 attack round 4
     // catch closed by 凉冰 LB-37 ship-now ratify.
     //
-    // What this commit does NOT (yet) hot-reload:
-    // - `DaemonConfig::federated_peers` map. PR-N1 commit 6/N
-    //   already snapshots this at boot; commit 9/N keeps the
-    //   snapshot because there is no `DaemonConfigCell` cell
-    //   today (LB-37 §2.3 fallback Scope A). A follow-up commit
-    //   may mirror the `SharedTrustAnchor` pattern for
-    //   daemon-config; until then, operators editing
-    //   `[daemon.federated_peers]` still need a daemon restart.
-    //   The trust-anchor side is the more common edit (peer
-    //   add/remove); the federated_peers map is comparatively
-    //   stable once initially set.
+    // **PR-N1 commit 10/N change**: `DaemonConfig::federated_peers`
+    // map now flows through a `SharedFederatedPeers` cell and
+    // a SIGHUP reload task that re-parses
+    // `~/.easynet/daemon-config.toml` and republishes the map.
+    // Closes LB-37 §2.3 fallback Scope A defer note: operators
+    // editing `[daemon.federated_peers]` (adding a new peer,
+    // changing a hub URI, removing a tenant) just
+    // `kill -HUP <daemon_pid>` — the next cross-tenant
+    // dispatch sees the new map within ~50ms. Same cadence as
+    // the trust-anchor reload landed by commit 9/N.
+    let federated_peers_cell =
+        crate::services::federated_peers_cell::SharedFederatedPeers::new(
+            config.federated_peers().clone(),
+        );
+    spawn_daemon_config_reload_task(config_path.clone(), federated_peers_cell.clone());
+
     if matches!(config.mode(), DaemonMode::Hub | DaemonMode::Both) {
         let dialer = Arc::new(
             crate::services::federation_client::CrossHubDialer::with_trust_anchor_cell(
@@ -192,7 +197,7 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
                 dialer
                     as Arc<dyn crate::services::federation_client::FederationClient>,
             )
-            .with_federated_peers(config.federated_peers().clone());
+            .with_federated_peers_cell(federated_peers_cell.clone());
     }
 
     spawn_uds_listener(&config, service.clone())?;
@@ -601,6 +606,90 @@ fn spawn_trust_anchor_reload_task(path: PathBuf, trust_anchor_cell: SharedTrustA
 
 #[cfg(not(unix))]
 fn spawn_trust_anchor_reload_task(_path: PathBuf, _trust_anchor_cell: SharedTrustAnchor) {}
+
+/// **PR-N1 commit 10/N**. SIGHUP-driven reload task for the
+/// daemon-config `[daemon.federated_peers]` table. Mirrors
+/// `spawn_trust_anchor_reload_task` (PR-7) but operates on the
+/// `SharedFederatedPeers` cell instead of the trust anchor.
+///
+/// On every SIGHUP, the task re-parses the daemon-config TOML
+/// at `path` and republishes only the `federated_peers` map into
+/// the cell. Other config fields (mode, listen_tcp, tls cert/key
+/// paths) are not hot-reloaded — those are bound at boot and
+/// require a daemon restart to change.
+///
+/// **晓雯 letter 67 attack round 4** scope was the trust-anchor
+/// path; commit 9/N closed that. **凉冰 LB-37 §2.3 fallback Scope
+/// A** explicitly deferred the federated_peers cell because the
+/// `DaemonConfigCell` infrastructure didn't exist; commit 10/N
+/// ships the cell + this reload task.
+///
+/// Failure handling: if the TOML re-parse fails (operator typo
+/// during edit), the cell keeps the previously-published map and
+/// the daemon logs the error to stderr. The cross-tenant
+/// dispatcher continues to use the last-known-good map until the
+/// operator fixes the TOML and SIGHUPs again.
+#[cfg(unix)]
+fn spawn_daemon_config_reload_task(
+    path: PathBuf,
+    federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
+) {
+    tokio::spawn(async move {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let mut sighup = match signal(SignalKind::hangup()) {
+            Ok(stream) => stream,
+            Err(err) => {
+                eprintln!(
+                    "[axon-serve] failed to install SIGHUP daemon-config reload handler: {err}"
+                );
+                return;
+            }
+        };
+
+        while sighup.recv().await.is_some() {
+            match reload_federated_peers_cell_from(&path, &federated_peers_cell) {
+                Ok(0) => eprintln!(
+                    "[axon-serve] SIGHUP reload completed: daemon-config federated_peers at {} is now empty",
+                    path.display()
+                ),
+                Ok(len) => eprintln!(
+                    "[axon-serve] SIGHUP reload completed: daemon-config federated_peers at {} now has {} entries",
+                    path.display(),
+                    len
+                ),
+                Err(err) => eprintln!(
+                    "[axon-serve] SIGHUP daemon-config reload failed for {}: {err}; keeping previous federated_peers map",
+                    path.display()
+                ),
+            }
+        }
+    });
+}
+
+#[cfg(not(unix))]
+fn spawn_daemon_config_reload_task(
+    _path: PathBuf,
+    _federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
+) {
+}
+
+/// **PR-N1 commit 10/N**. Re-parse the daemon-config TOML at
+/// `path` and republish its `federated_peers` table into the
+/// cell. Returns the number of entries in the new map on
+/// success.
+fn reload_federated_peers_cell_from(
+    path: &Path,
+    federated_peers_cell: &crate::services::federated_peers_cell::SharedFederatedPeers,
+) -> anyhow::Result<usize> {
+    let next_config = DaemonConfig::load(path).map_err(|err| {
+        anyhow::anyhow!("reload daemon-config from {}: {err}", path.display())
+    })?;
+    let next_peers = next_config.federated_peers().clone();
+    let len = next_peers.len();
+    federated_peers_cell.replace(next_peers);
+    Ok(len)
+}
 
 /// Expand a `~/...` prefix using the current user's HOME. Existing
 /// EasyNet code uses several different helpers for this (some via
