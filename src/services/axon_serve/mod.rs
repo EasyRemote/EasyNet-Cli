@@ -57,6 +57,8 @@
 pub mod admission_facade;
 pub mod boot;
 pub mod daemon_invocation_service;
+#[cfg(feature = "axon-pb")]
+pub mod federated_key_resolver;
 pub mod federation_wrappers;
 pub mod invoke_remote_initiator;
 pub mod local_ability_dispatcher;

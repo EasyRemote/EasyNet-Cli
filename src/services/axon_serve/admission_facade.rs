@@ -109,8 +109,8 @@
 
 use std::sync::Arc;
 
+#[cfg(test)]
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use ed25519_dalek::VerifyingKey;
 use sha2::{Digest, Sha256};
 use tonic::Status;
 
@@ -130,9 +130,12 @@ use crate::pb::axon::v1::{
     causal_context, CausalContext as PbCausalContext, Envelope, EnvelopeOpen, InvocationState,
     InvokeRequest, InvokeServerStreamRequest,
 };
+use crate::services::axon_serve::federated_key_resolver::FederatedKeyResolver;
+use crate::services::federated_peers_cell::SharedFederatedPeers;
+use crate::services::federation_client::FederationClient;
 use crate::services::nonce_replay_store::SharedNonceReplayStore;
-use crate::services::receipt_store::SharedReceiptStore;
 use crate::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgentRole};
+use crate::services::receipt_store::SharedReceiptStore;
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
 
 /// Per-RPC admission gate consulted by `DaemonInvocationService`
@@ -148,7 +151,7 @@ use crate::services::trust_anchor_cell::SharedTrustAnchor;
 /// Constructed once per daemon process; cloned into per-request
 /// dispatcher tasks (clone is cheap — all fields are `Arc` or
 /// `Option<String>`).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AdmissionFacade {
     trust_anchor: SharedTrustAnchor,
     daemon_uri: Option<String>,
@@ -160,6 +163,43 @@ pub struct AdmissionFacade {
     /// tests / smoke runs default to a fresh empty store. INV-5
     /// is honoured by construction: `record` never errors.
     receipt_store: SharedReceiptStore,
+    /// **PR-N2 commit 1/N**. Cross-hub federation client used by
+    /// `FederatedKeyResolver` to dial a peer hub's
+    /// `federation.resolve_key` ability when the local trust
+    /// anchor has no entry for a cross-realm caller URI. `None`
+    /// in single-realm/test builds — the resolver collapses to
+    /// local-only behavior in that case (mirrors PR-7's
+    /// `TrustAnchorKeyResolver`).
+    federation_client: Option<Arc<dyn FederationClient>>,
+    /// **PR-N2 commit 1/N**. Snapshot cell for the operator-
+    /// curated `[daemon.federated_peers]` table. Threaded into
+    /// `FederatedKeyResolver` so a SIGHUP-driven reload (PR-N1
+    /// commit 10/N) is visible to the next admission. Defaults
+    /// to an empty cell when no federation client is wired.
+    federated_peers: SharedFederatedPeers,
+    /// **PR-N2 commit 1/N**. The local realm string used for
+    /// the same-realm-vs-cross-realm decision in
+    /// `FederatedKeyResolver`. Derived from `daemon_uri` when
+    /// not supplied directly. `None` in test builds with no
+    /// daemon URI wired.
+    self_realm: Option<String>,
+}
+
+impl std::fmt::Debug for AdmissionFacade {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AdmissionFacade")
+            .field("trust_anchor", &self.trust_anchor)
+            .field("daemon_uri", &self.daemon_uri)
+            .field("replay_store", &self.replay_store)
+            .field("receipt_store", &self.receipt_store)
+            .field(
+                "federation_client",
+                &self.federation_client.as_ref().map(|_| "<dyn FederationClient>"),
+            )
+            .field("federated_peers", &self.federated_peers)
+            .field("self_realm", &self.self_realm)
+            .finish()
+    }
 }
 
 impl AdmissionFacade {
@@ -195,11 +235,18 @@ impl AdmissionFacade {
         trust_anchor: SharedTrustAnchor,
         daemon_uri: Option<String>,
     ) -> Self {
+        let self_realm = daemon_uri
+            .as_deref()
+            .and_then(crate::services::axon_serve::register_device_pubkey::parse_realm_from_uri)
+            .map(str::to_string);
         Self {
             trust_anchor,
             daemon_uri,
             replay_store: SharedNonceReplayStore::new(),
             receipt_store: SharedReceiptStore::new(),
+            federation_client: None,
+            federated_peers: SharedFederatedPeers::new(std::collections::BTreeMap::new()),
+            self_realm,
         }
     }
 
@@ -234,12 +281,43 @@ impl AdmissionFacade {
         daemon_uri: Option<String>,
         replay_store: SharedNonceReplayStore,
     ) -> Self {
+        let self_realm = daemon_uri
+            .as_deref()
+            .and_then(crate::services::axon_serve::register_device_pubkey::parse_realm_from_uri)
+            .map(str::to_string);
         Self {
             trust_anchor: SharedTrustAnchor::new(trust_anchor),
             daemon_uri,
             replay_store,
             receipt_store: SharedReceiptStore::new(),
+            federation_client: None,
+            federated_peers: SharedFederatedPeers::new(std::collections::BTreeMap::new()),
+            self_realm,
         }
+    }
+
+    /// **PR-N2 commit 1/N**. Builder seam: wire the cross-hub
+    /// federation client + operator-curated federated_peers
+    /// cell. When set, the strict admission path constructs a
+    /// `FederatedKeyResolver` instead of `TrustAnchorKeyResolver`,
+    /// which means a cross-realm caller whose URI is missing
+    /// from the local trust anchor falls through to a
+    /// `federation.resolve_key` ability call against the peer
+    /// hub mapped by `federated_peers[caller_tenant]`.
+    ///
+    /// Production daemons call this in
+    /// `start_axon_serve_sidecar` after wiring the dialer; test
+    /// / smoke setups omit it and behave as PR-7
+    /// `TrustAnchorKeyResolver` did (local-only).
+    #[must_use]
+    pub fn with_federation(
+        mut self,
+        federation_client: Arc<dyn FederationClient>,
+        federated_peers: SharedFederatedPeers,
+    ) -> Self {
+        self.federation_client = Some(federation_client);
+        self.federated_peers = federated_peers;
+        self
     }
 
     /// Verify a unary `InvokeRequest`. Returns `Ok(())` when the
@@ -427,7 +505,24 @@ impl AdmissionFacade {
         let axiom_signature = build_axiom_signature(envelope.caller_signature.as_ref())
             .map_err(axon_error_to_status)?;
 
-        let resolver: Box<dyn KeyResolver> = Box::new(TrustAnchorKeyResolver { trust_anchor });
+        // **PR-N2 commit 1/N**. Build a `FederatedKeyResolver`
+        // that wraps the per-call snapshot trust anchor with
+        // the daemon-shared federation client + federated_peers
+        // cell. Same-realm callers short-circuit on the local
+        // anchor lookup (zero added latency); cross-realm
+        // callers fall through to a peer hub's
+        // `federation.resolve_key` ability iff the operator
+        // marked their tenant as federated. The
+        // `FederatedKeyResolver` mirrors the
+        // `TrustAnchorKeyResolver` shape on the local-only
+        // path, so single-realm setups are byte-identical to
+        // PR-7 commit 4/N.
+        let resolver: Box<dyn KeyResolver> = Box::new(FederatedKeyResolver::new(
+            trust_anchor,
+            self.federation_client.clone(),
+            self.federated_peers.snapshot(),
+            self.self_realm.clone(),
+        ));
 
         let result = self.replay_store.with_inner(|store| {
             run_admission(
@@ -773,39 +868,12 @@ fn envelope_carries_signature_material(envelope: &Envelope) -> bool {
         .unwrap_or(false)
 }
 
-// ── Resolver backed by the realm trust anchor ───────────────────────
-
-/// `KeyResolver` impl that maps `agent_uri → ed25519::VerifyingKey`
-/// via the daemon's `RealmTrustAnchor`. Returns a stable error code
-/// when the URI is unknown; `easynet_axon::admission::verify_signature`
-/// repackages it as `AXON_CALLER_SIGNATURE_INVALID` for the wire.
-#[derive(Debug)]
-struct TrustAnchorKeyResolver {
-    trust_anchor: Arc<RealmTrustAnchor>,
-}
-
-impl KeyResolver for TrustAnchorKeyResolver {
-    fn resolve(&self, agent_uri: &str) -> Result<VerifyingKey, InvocationError> {
-        let entry = self.trust_anchor.lookup(agent_uri).ok_or_else(|| {
-            InvocationError::invalid_argument("unknown_agent_uri")
-                .with_message(format!("agent_uri:{agent_uri}"))
-        })?;
-        let raw = BASE64_STANDARD.decode(&entry.public_key_b64).map_err(|e| {
-            InvocationError::invalid_argument("public_key_b64_decode_failed")
-                .with_message(format!("agent_uri:{agent_uri}:{e}"))
-        })?;
-        let arr: [u8; 32] = raw.as_slice().try_into().map_err(|_| {
-            InvocationError::invalid_argument("public_key_wrong_length").with_message(format!(
-                "agent_uri:{agent_uri}:expected_32_got_{}",
-                raw.len()
-            ))
-        })?;
-        VerifyingKey::from_bytes(&arr).map_err(|e| {
-            InvocationError::invalid_argument("public_key_parse_failed")
-                .with_message(format!("agent_uri:{agent_uri}:{e}"))
-        })
-    }
-}
+// (PR-N2 commit 1/N) The local-only `TrustAnchorKeyResolver`
+// was deleted in favour of `FederatedKeyResolver`, which
+// short-circuits to identical local behavior when no
+// federation client is wired and falls through to a peer
+// hub's `federation.resolve_key` ability when it is. See
+// `services::axon_serve::federated_key_resolver`.
 
 #[cfg(test)]
 mod tests {

@@ -135,8 +135,40 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     spawn_trust_anchor_reload_task(trust_anchor_path.clone(), trust_anchor_cell.clone());
     let presence = Arc::new(PresenceRegistry::new());
     let pending = Arc::new(PendingDispatchMap::new());
-    let admission =
+
+    // Federated_peers cell first so we can hand it to BOTH the
+    // DaemonInvocationService (for cross-hub `forward_invoke`
+    // routing) and the AdmissionFacade (for `FederatedKeyResolver`
+    // cross-realm signature verify against peer hubs).
+    let federated_peers_cell =
+        crate::services::federated_peers_cell::SharedFederatedPeers::new(
+            config.federated_peers().clone(),
+        );
+    spawn_daemon_config_reload_task(config_path.clone(), federated_peers_cell.clone());
+
+    // PR-N1 commit 9/N + PR-N2 commit 1/N: hub-mode daemons
+    // construct one CrossHubDialer that backs both the daemon's
+    // outbound `forward_invoke` routing AND the admission gate's
+    // `FederatedKeyResolver` so a cross-realm caller's URI can be
+    // resolved via `federation.resolve_key` against the peer hub.
+    // Device-mode daemons never originate federation calls, so
+    // both surfaces stay local-only.
+    let dialer: Option<Arc<dyn crate::services::federation_client::FederationClient>> =
+        if matches!(config.mode(), DaemonMode::Hub | DaemonMode::Both) {
+            Some(Arc::new(
+                crate::services::federation_client::CrossHubDialer::with_trust_anchor_cell(
+                    trust_anchor_cell.clone(),
+                ),
+            ))
+        } else {
+            None
+        };
+
+    let mut admission =
         AdmissionFacade::with_trust_anchor_cell(trust_anchor_cell.clone(), daemon_uri.clone());
+    if let Some(client) = dialer.clone() {
+        admission = admission.with_federation(client, federated_peers_cell.clone());
+    }
     let mut service = DaemonInvocationService::new(Arc::clone(&presence), admission)
         .with_pending(Arc::clone(&pending))
         .with_session_realm(config.realm().to_string())
@@ -147,56 +179,15 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
         );
 
     // PR-N1 commit 6/N (boot wiring) + commit 9/N (SIGHUP-aware
-    // cell): hub-mode daemons construct a `CrossHubDialer` and
-    // thread it as the daemon's `FederationClient`, plus the
-    // operator-curated `tenant → hub_uri` map from
-    // `DaemonConfig::federated_peers`. Together these enable
-    // cross-tenant `federation.forward_invoke` to route over the
-    // real cross-hub gRPC + TLS channel landed by PR-N1 commits
-    // 1-5/N. Device-mode daemons never originate federation
-    // calls (they dial a hub instead), so the dialer is wired
-    // only for `Hub` and `Both` modes.
-    //
-    // **PR-N1 commit 9/N change**: the dialer now holds the
-    // `SharedTrustAnchor` cell (live ref) instead of a boot-time
-    // snapshot, so SIGHUP-triggered `realm-trust.toml` reloads
-    // are visible to the next federation dispatch without a
-    // daemon restart. Operators editing the federation peer set
-    // (adding `[[trusted_agent]] role = "hub"` entries with the
-    // schema-B `origin_tenant_id` / `hub_uri` / `tls_ca_pem_path`
-    // fields) just `kill -HUP <daemon_pid>`; the next call sees
-    // the new entries within ~50ms (per PR-7 trust-anchor
-    // SIGHUP reload baseline + perf-notes/PR-N1-commit-6-perf
-    // -cross-pass.md). The user-flow review catch is closed by
-    // this commit's hot-reload wiring.
-    //
-    // **PR-N1 commit 10/N change**: `DaemonConfig::federated_peers`
-    // map now flows through a `SharedFederatedPeers` cell and
-    // a SIGHUP reload task that re-parses
-    // `~/.easynet/daemon-config.toml` and republishes the map.
-    // Closes LB-37 §2.3 fallback Scope A defer note: operators
-    // editing `[daemon.federated_peers]` (adding a new peer,
-    // changing a hub URI, removing a tenant) just
-    // `kill -HUP <daemon_pid>` — the next cross-tenant
-    // dispatch sees the new map within ~50ms. Same cadence as
-    // the trust-anchor reload landed by commit 9/N.
-    let federated_peers_cell =
-        crate::services::federated_peers_cell::SharedFederatedPeers::new(
-            config.federated_peers().clone(),
-        );
-    spawn_daemon_config_reload_task(config_path.clone(), federated_peers_cell.clone());
-
-    if matches!(config.mode(), DaemonMode::Hub | DaemonMode::Both) {
-        let dialer = Arc::new(
-            crate::services::federation_client::CrossHubDialer::with_trust_anchor_cell(
-                trust_anchor_cell.clone(),
-            ),
-        );
+    // trust anchor) + commit 10/N (SHIGHUP-aware federated_peers)
+    // + PR-N2 commit 1/N (FederatedKeyResolver wiring): the dialer
+    // and federated_peers cell were constructed above so the
+    // AdmissionFacade could pick them up too. Here we forward the
+    // same handles to the DaemonInvocationService for the
+    // cross-tenant `forward_invoke` dispatch path.
+    if let Some(client) = dialer.clone() {
         service = service
-            .with_federation_client(
-                dialer
-                    as Arc<dyn crate::services::federation_client::FederationClient>,
-            )
+            .with_federation_client(client)
             .with_federated_peers_cell(federated_peers_cell.clone());
     }
 
