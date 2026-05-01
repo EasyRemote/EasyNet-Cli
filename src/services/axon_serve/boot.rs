@@ -136,6 +136,46 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     let presence = Arc::new(PresenceRegistry::new());
     let pending = Arc::new(PendingDispatchMap::new());
 
+    // **LB-43 §二 demo-only presence seed**. The
+    // `EASYNET_DEMO_PRESENCE_SEED` env var, when set to a URI,
+    // registers a no-op `DispatchSender` under that URI in the
+    // local presence registry. Lets `forward_invoke` targeting
+    // the URI survive the registry's lookup gate without spinning
+    // up backend + DB + a real device pair flow — so the cross-
+    // hub demo script can drive a transport-plane proof
+    // unattended. Production pair flows populate the registry
+    // through `<self>.session` accept; this hook is strictly
+    // for unattended scripts. Multiple URIs are comma-separated.
+    if let Ok(seed_value) = std::env::var("EASYNET_DEMO_PRESENCE_SEED") {
+        for seed_uri in seed_value.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            // Channel capacity 8 mirrors what `<self>.session`
+            // accept paths use. The receiver is held in a
+            // dedicated drain task so the channel never reports
+            // full / closed; the daemon simply discards every
+            // frame queued to a seeded URI. This is correct for
+            // the demo's transport-plane proof: the hub-side
+            // dispatcher's job ends at "frame queued for
+            // delivery"; the actual ability response on the
+            // peer side comes from `dispatch_federation_*`
+            // handlers that do not consult the presence frame
+            // queue.
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<
+                Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
+            >(8);
+            presence.insert(seed_uri.to_string(), tx);
+            tokio::spawn(async move {
+                while rx.recv().await.is_some() {
+                    // discard
+                }
+            });
+            eprintln!(
+                "[axon-serve] EASYNET_DEMO_PRESENCE_SEED: registered no-op \
+                 presence entry for `{seed_uri}` (test fixture; do not use \
+                 in production)",
+            );
+        }
+    }
+
     // Federated_peers cell first so we can hand it to BOTH the
     // DaemonInvocationService (for cross-hub `forward_invoke`
     // routing) and the AdmissionFacade (for `FederatedKeyResolver`
