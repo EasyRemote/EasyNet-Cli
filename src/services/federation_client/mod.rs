@@ -54,5 +54,5 @@
 pub mod cross_hub_dial;
 
 pub use cross_hub_dial::{
-    CrossHubDialer, FederationClient, FederationClientError, HubUri,
+    CrossHubDialer, DirectoryEventStream, FederationClient, FederationClientError, HubUri,
 };

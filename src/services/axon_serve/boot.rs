@@ -260,9 +260,24 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     // separate add/drop signalling needed.
     if let Some(client) = dialer.clone() {
         spawn_federated_directory_poll_task(
-            client,
+            client.clone(),
             federated_peers_cell.clone(),
             daemon_uri.clone(),
+            federated_directory_cell.clone(),
+        );
+
+        // **PR-N3 N3-streaming-4**. Streaming supervisor task
+        // that watches the federated_peers cell and spawns
+        // one per-peer subscribe loop per entry. Runs alongside
+        // the poll task — peers that support `federation.
+        // subscribe_directory_v2` get sub-second updates via
+        // the stream; peers that don't fall back to the 5s
+        // poll cadence and the streaming dial silently fails
+        // closed (its retry-with-backoff isolates the pollute
+        // in the supervisor).
+        spawn_federated_directory_streaming_supervisor(
+            client,
+            federated_peers_cell.clone(),
             federated_directory_cell.clone(),
         );
     }
@@ -803,6 +818,91 @@ fn spawn_federated_directory_poll_task(
                 eprintln!(
                     "[federation_directory] poll peer realm={realm:?} failed: {err}"
                 );
+            }
+        }
+    });
+}
+
+/// **PR-N3 commit N3-streaming-4**. Spawn a watcher task that
+/// observes the live `SharedFederatedPeers` cell and maintains
+/// one streaming subscriber task per peer. New peers (added
+/// via SIGHUP-driven federated_peers reload) get a fresh
+/// supervisor; removed peers get their supervisor cancelled
+/// via a `oneshot::Sender`.
+///
+/// Cadence: the watcher rescans the cell every 2 seconds. A
+/// finer cadence wastes CPU on the snapshot clone; a coarser
+/// one delays peer add/drop visibility past the spec §八 (4)
+/// "appears within ~5s" budget. 2s is the operator-visible
+/// floor.
+///
+/// Per-peer supervisor lives until either (a) the cancel
+/// signal fires (peer removed) or (b) the daemon shuts down
+/// and tokio drops the runtime (the supervisor's awaits
+/// abort).
+fn spawn_federated_directory_streaming_supervisor(
+    federation_client: Arc<dyn crate::services::federation_client::FederationClient>,
+    federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
+    federated_directory_cell:
+        crate::services::federation_directory::SharedFederatedDirectoryView,
+) {
+    tokio::spawn(async move {
+        // peer_realm -> oneshot::Sender that cancels the
+        // supervisor when a peer is removed. The watcher
+        // reconciles this map against the cell every tick.
+        let mut active: std::collections::BTreeMap<
+            String,
+            tokio::sync::oneshot::Sender<()>,
+        > = std::collections::BTreeMap::new();
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(2));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            let snapshot = federated_peers_cell.snapshot();
+
+            // Spawn supervisors for newly-added peers.
+            for (peer_realm, peer_hub_uri) in snapshot.iter() {
+                if active.contains_key(peer_realm) {
+                    continue;
+                }
+                let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+                let realm_owned = peer_realm.clone();
+                let uri_owned = peer_hub_uri.clone();
+                let client_clone = Arc::clone(&federation_client);
+                let cell_clone = federated_directory_cell.clone();
+                tokio::spawn(async move {
+                    crate::services::federation_directory::run_per_peer_supervisor(
+                        realm_owned,
+                        uri_owned,
+                        client_clone,
+                        cell_clone,
+                        cancel_rx,
+                    )
+                    .await;
+                });
+                active.insert(peer_realm.clone(), cancel_tx);
+                eprintln!(
+                    "[federation_directory] streaming supervisor spawned for \
+                     peer realm={peer_realm:?} hub={peer_hub_uri:?}",
+                );
+            }
+
+            // Cancel supervisors for peers that have been
+            // removed from the cell.
+            let removed: Vec<String> = active
+                .keys()
+                .filter(|realm| !snapshot.contains_key(realm.as_str()))
+                .cloned()
+                .collect();
+            for realm in removed {
+                if let Some(cancel_tx) = active.remove(&realm) {
+                    let _ = cancel_tx.send(());
+                    eprintln!(
+                        "[federation_directory] streaming supervisor cancelled \
+                         for peer realm={realm:?} (no longer in federated_peers)",
+                    );
+                }
             }
         }
     });

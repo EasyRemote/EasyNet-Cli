@@ -796,6 +796,98 @@ impl RemoteDirectoryClient {
     }
 }
 
+/// **PR-N3 N3-streaming-4**. Run the per-peer streaming
+/// supervisor loop. Opens a `subscribe_directory_v2` stream
+/// against the peer, drives `consume_directory_event_stream`,
+/// reconnects on stream-end with FSM backoff. Exits when:
+///   - the cancel signal fires (operator removed the peer via
+///     SIGHUP, or daemon shutdown).
+///   - the FSM rejects a frame as a protocol violation; the
+///     supervisor tears down the stream + reconnects after
+///     backoff (a misbehaving peer's stream churn does not
+///     escalate into a busy-loop because backoff is doubled
+///     on every redial).
+///
+/// The supervisor itself never returns a value — errors are
+/// surfaced via stderr trace. Production callers spawn this
+/// as a tokio task and never await it; the task lives for the
+/// daemon's lifetime (or the peer's entry in
+/// `SharedFederatedPeers`, whichever ends first).
+#[cfg(feature = "axon-pb")]
+pub async fn run_per_peer_supervisor(
+    peer_realm: String,
+    peer_hub_uri: String,
+    federation_client: std::sync::Arc<dyn crate::services::federation_client::FederationClient>,
+    cell: SharedFederatedDirectoryView,
+    mut cancel: tokio::sync::oneshot::Receiver<()>,
+) {
+    use crate::pb::axon::v1::InvokeServerStreamRequest;
+
+    let mut client = RemoteDirectoryClient::new(peer_realm.clone(), peer_hub_uri.clone());
+    loop {
+        // Honour cancel before doing anything expensive.
+        if cancel.try_recv().is_ok() {
+            return;
+        }
+
+        // Build a default-shaped subscribe request. The peer's
+        // admission gate runs against the envelope; future
+        // commit threads a real signed envelope through the
+        // supervisor (today's CrossHubDialer applies its own
+        // trust gate before the dial completes, so the peer's
+        // admission is a defence-in-depth check).
+        let request = InvokeServerStreamRequest::default();
+
+        match federation_client
+            .subscribe_directory_v2(&peer_hub_uri, request)
+            .await
+        {
+            Ok(stream) => {
+                client.on_dial_ok();
+                let consume = consume_directory_event_stream(&mut client, &cell, stream);
+                tokio::select! {
+                    _ = consume => {
+                        // Stream ended (peer closed, error
+                        // surfaced inside the wrapper). Fall
+                        // through to reconnect with backoff.
+                    }
+                    _ = &mut cancel => {
+                        return;
+                    }
+                }
+            }
+            Err(err) => {
+                eprintln!(
+                    "[federation_directory] subscribe_directory_v2 dial \
+                     to peer realm={peer_realm:?} hub={peer_hub_uri:?} \
+                     failed: {err}; backing off",
+                );
+                let backoff_ms = client.on_dial_err();
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)) => {}
+                    _ = &mut cancel => {
+                        return;
+                    }
+                }
+                continue;
+            }
+        }
+
+        // Stream-end backoff (post-Pumping disconnect).
+        let backoff_ms = client.on_dial_err();
+        eprintln!(
+            "[federation_directory] subscribe_directory_v2 stream from \
+             peer realm={peer_realm:?} ended; reconnecting in {backoff_ms} ms",
+        );
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)) => {}
+            _ = &mut cancel => {
+                return;
+            }
+        }
+    }
+}
+
 /// **PR-N3 N3-streaming-2**. Drive a `RemoteDirectoryClient`
 /// from a stream of inbound `DirectoryEvent` frames, publishing
 /// the resulting view into the cell after each frame applied.
@@ -1348,6 +1440,129 @@ mod tests {
         assert_eq!(client.on_dial_err(), 2_000);
         assert_eq!(client.on_dial_err(), 4_000);
         assert_eq!(client.on_dial_err(), 8_000);
+    }
+
+    // ── PR-N3 N3-streaming-4 — run_per_peer_supervisor ──
+
+    #[cfg(feature = "axon-pb")]
+    mod supervisor_tests {
+        use super::*;
+        use crate::pb::axon::v1::{InvokeRequest, InvokeResponse, InvokeServerStreamRequest};
+        use crate::services::federation_client::{
+            DirectoryEventStream, FederationClient, FederationClientError, HubUri,
+        };
+        use async_trait::async_trait;
+        use std::sync::{Arc, Mutex};
+
+        /// Mock that delivers a canned event sequence on the
+        /// first subscribe call, then signals via `served`
+        /// when called. Subsequent calls fail to dial — the
+        /// supervisor will back off + retry until cancel.
+        struct OneShotStreamingClient {
+            events: Mutex<Option<Vec<DirectoryEvent>>>,
+            served: Mutex<bool>,
+        }
+
+        #[async_trait]
+        impl FederationClient for OneShotStreamingClient {
+            async fn forward_invoke(
+                &self,
+                _target_hub: &HubUri,
+                _request: InvokeRequest,
+            ) -> Result<InvokeResponse, FederationClientError> {
+                Err(FederationClientError::Unimplemented("not used in test"))
+            }
+
+            async fn subscribe_directory_v2(
+                &self,
+                _target_hub: &HubUri,
+                _request: InvokeServerStreamRequest,
+            ) -> Result<DirectoryEventStream, FederationClientError> {
+                let payload = self.events.lock().unwrap().take();
+                match payload {
+                    Some(events) => {
+                        *self.served.lock().unwrap() = true;
+                        Ok(Box::pin(futures::stream::iter(events)))
+                    }
+                    None => Err(FederationClientError::DialFailed {
+                        hub: "in-process".to_string(),
+                        detail: "test fixture: stream already served once".to_string(),
+                    }),
+                }
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn supervisor_consumes_one_stream_then_yields_to_cancel() {
+            let cell = SharedFederatedDirectoryView::default();
+            let client = Arc::new(OneShotStreamingClient {
+                events: Mutex::new(Some(vec![DirectoryEvent::Snapshot {
+                    entries: vec![entry_with_claimed_origin(
+                        "easynet:///r/realm-b/agent/peer",
+                        Some("trusted-bank"), // chokepoint stamps realm-b
+                    )],
+                }])),
+                served: Mutex::new(false),
+            });
+            let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+
+            let cell_for_task = cell.clone();
+            let client_for_task: Arc<dyn FederationClient> = client.clone();
+            let task = tokio::spawn(async move {
+                run_per_peer_supervisor(
+                    "realm-b".to_string(),
+                    "https://hub-b.example:50443".to_string(),
+                    client_for_task,
+                    cell_for_task,
+                    cancel_rx,
+                )
+                .await;
+            });
+
+            // Wait briefly for the supervisor to consume the
+            // canned stream.
+            for _ in 0..40 {
+                if *client.served.lock().unwrap() {
+                    if let Some(view) = cell.snapshot().get("realm-b") {
+                        if view
+                            .lookup("easynet:///r/realm-b/agent/peer")
+                            .is_some()
+                        {
+                            break;
+                        }
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+            assert!(
+                *client.served.lock().unwrap(),
+                "supervisor must have consumed the canned stream"
+            );
+
+            // Cell reflects the stamped entry.
+            let snap = cell.snapshot();
+            let entry = snap
+                .get("realm-b")
+                .expect("realm-b view")
+                .lookup("easynet:///r/realm-b/agent/peer")
+                .expect("entry");
+            assert_eq!(
+                entry.origin_realm.as_deref(),
+                Some("realm-b"),
+                "§2.4 chokepoint must run through the supervisor's apply path"
+            );
+
+            // Cancel and assert task ends within a bounded
+            // window. The supervisor should be inside its
+            // backoff-sleep when cancel fires.
+            let _ = cancel_tx.send(());
+            let result =
+                tokio::time::timeout(std::time::Duration::from_secs(5), task).await;
+            assert!(
+                result.is_ok(),
+                "supervisor must honour cancel within timeout"
+            );
+        }
     }
 
     // ── PR-N3 N3-streaming-2 — consume_directory_event_stream ──
