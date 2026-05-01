@@ -303,7 +303,7 @@ for line in sys.stdin:
     }
 
     #[test]
-    fn call_missing_server_field_returns_isError() {
+    fn call_missing_server_field_returns_is_error() {
         let mut reg = LocalAbilityRegistry::new();
         register(&mut reg, empty_svc());
         let handler = reg.get_rpc(ABILITY_CALL).unwrap();
@@ -313,7 +313,7 @@ for line in sys.stdin:
     }
 
     #[test]
-    fn call_missing_name_field_returns_isError() {
+    fn call_missing_name_field_returns_is_error() {
         let mut reg = LocalAbilityRegistry::new();
         register(&mut reg, empty_svc());
         let handler = reg.get_rpc(ABILITY_CALL).unwrap();
