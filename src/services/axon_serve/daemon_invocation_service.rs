@@ -89,8 +89,8 @@ use crate::services::axon_serve::federation_wrappers::{
 use crate::services::federated_peers_cell::SharedFederatedPeers;
 use crate::services::federation_client::FederationClient;
 use crate::services::axon_serve::invoke_remote_initiator::{
-    call_id_hex, InvokeRemoteDown, InvokeRemoteUp, SessionDispatch, ABILITY_INVOKE_REMOTE,
-    INVOKE_REMOTE_STREAM_ID,
+    call_id_hex, InvokeRemoteDown, InvokeRemoteUp, RequestOutcome, SessionDispatch,
+    SessionRequestError, ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID,
 };
 use crate::services::axon_serve::register_device_pubkey::{
     handle as handle_register_device_pubkey, parse_realm_from_uri,
@@ -1594,12 +1594,19 @@ impl DaemonInvocationService {
         let presence_for_drain = Arc::clone(&self.presence);
         let pending_for_drain = self.pending.clone();
         let caller_uri_for_drain = caller_uri.clone();
+        // PR-N6 C3: drain task needs a service handle so inbound
+        // `Request` frames can route into the same dispatch arms
+        // the unary `Invoke` RPC uses (forward_invoke today; other
+        // abilities follow as PR-N6 grows). `DaemonInvocationService`
+        // is `Clone` over Arc/Option fields so this is cheap.
+        let service_for_drain = self.clone();
         tokio::spawn(async move {
             drain_session_up_stream(
                 up,
                 caller_uri_for_drain,
                 presence_for_drain,
                 pending_for_drain,
+                service_for_drain,
             )
             .await
         });
@@ -1620,6 +1627,162 @@ impl DaemonInvocationService {
     }
 }
 
+impl DaemonInvocationService {
+    /// PR-N6 C3 hub-side handler for inbound `SessionDispatch::Request`
+    /// frames arriving on a device's `<self>.session` bidi. Routes
+    /// the named ability through the same dispatch arms the unary
+    /// `Invoke` RPC consults, then maps the result into the typed
+    /// `RequestOutcome` shape.
+    ///
+    /// Spec scope (PR-N6 v1): forwards
+    /// `federation.forward_invoke` only. Other ability names return
+    /// `PermissionDenied` so the device-side caller surfaces a
+    /// structured error instead of a silent timeout — PR-N6 v2 may
+    /// widen this set once a per-ability admission policy is
+    /// specified.
+    ///
+    /// Trust boundary (PR-N6 spec §"What this spec does NOT cover"):
+    /// the bidi was established with a signed Bootstrap frame, so
+    /// the hub trusts the originating device on every Request frame
+    /// — no per-Request signature verify happens here.
+    pub(crate) async fn dispatch_session_request(
+        &self,
+        ability: &str,
+        args: &[u8],
+    ) -> RequestOutcome {
+        match ability {
+            ABILITY_FEDERATION_FORWARD_INVOKE => {
+                match self
+                    .dispatch_federation_forward_invoke(None, args)
+                    .await
+                {
+                    Ok(response) => {
+                        let body = response.into_inner();
+                        RequestOutcome::Ok {
+                            result_bytes: body.result,
+                        }
+                    }
+                    Err(status) => map_status_to_session_request_error(status),
+                }
+            }
+            other => RequestOutcome::Err {
+                error: SessionRequestError::PermissionDenied {
+                    reason: format!(
+                        "session_request: ability `{other}` is not yet routed; \
+                         only `{ABILITY_FEDERATION_FORWARD_INVOKE}` is wired in PR-N6 v1"
+                    ),
+                },
+            },
+        }
+    }
+}
+
+/// Translate a `tonic::Status` from a hub-side dispatch arm into
+/// the typed `SessionRequestError` the device caller receives over
+/// the bidi. The mapping mirrors the wire-stable error reasons
+/// PR-N1 already uses on the unary path:
+///
+///   `failed_precondition` carrying the `target_offline` reason
+///   maps to `TargetOffline`; permission rejections map to
+///   `PermissionDenied`; everything else falls into
+///   `UpstreamFailure` with the underlying status text preserved
+///   so an operator grep'ing the device log can still cite the
+///   exact upstream code + message.
+fn map_status_to_session_request_error(status: Status) -> RequestOutcome {
+    let code = status.code();
+    let message = status.message().to_string();
+    if code == tonic::Code::FailedPrecondition && message.contains("target_offline") {
+        return RequestOutcome::Err {
+            error: SessionRequestError::TargetOffline,
+        };
+    }
+    if code == tonic::Code::PermissionDenied {
+        return RequestOutcome::Err {
+            error: SessionRequestError::PermissionDenied { reason: message },
+        };
+    }
+    RequestOutcome::Err {
+        error: SessionRequestError::UpstreamFailure {
+            reason: format!("code={code:?} message={message}"),
+        },
+    }
+}
+
+/// Build a `DispatchFrame` carrying a JSON-serialised
+/// `SessionDispatch::RequestResult` ready to push back down a
+/// device's `<self>.session` reverse channel. Encoding failure is
+/// vanishingly unlikely (owned `[u8; 16]`, owned `Vec<u8>`,
+/// typed enum) but mapped to a synthetic `UpstreamFailure` outcome
+/// so a malformed inner result never silently wedges the device.
+fn build_session_request_result_frame(
+    call_id: [u8; 16],
+    outcome: RequestOutcome,
+) -> crate::services::presence_registry::DispatchFrame {
+    use crate::pb::axon::v1::invoke_bidi_down::Payload;
+    use crate::pb::axon::v1::{BinaryChunk, InvokeBidiDown};
+
+    let frame = SessionDispatch::RequestResult { call_id, outcome };
+    let data = match serde_json::to_vec(&frame) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            // Replace the payload with a typed error so the device
+            // sees a structured outcome instead of a malformed
+            // frame. The id_hex stays in the eprintln below for
+            // operator audit.
+            let fallback = SessionDispatch::RequestResult {
+                call_id,
+                outcome: RequestOutcome::Err {
+                    error: SessionRequestError::UpstreamFailure {
+                        reason: format!("encode RequestResult: {err}"),
+                    },
+                },
+            };
+            serde_json::to_vec(&fallback)
+                .expect("typed error variant must always encode")
+        }
+    };
+    crate::services::presence_registry::DispatchFrame {
+        frame: InvokeBidiDown {
+            payload: Some(Payload::BinaryChunk(BinaryChunk {
+                data,
+                ..BinaryChunk::default()
+            })),
+            ..InvokeBidiDown::default()
+        },
+    }
+}
+
+/// Push a `RequestResult` frame back down the device's bidi via
+/// the same PresenceRegistry-keyed `DispatchSender` the device's
+/// session-accept handler registered. The device drains the down
+/// stream in `session_initiator::dial_and_run_session` and routes
+/// `RequestResult` frames to the `oneshot::Receiver` matching
+/// `call_id` (per PR-N6 spec §"Concurrent multiplexing"). Lookup
+/// failure means the device disconnected between issuing the
+/// Request and the hub finishing dispatch — log + drop, which is
+/// the same shape PR-N1's `try_push_forward_invoke_frame` uses for
+/// the symmetric race.
+async fn push_session_request_result(
+    presence: &Arc<PresenceRegistry>,
+    caller_uri: &str,
+    id_hex: &str,
+    frame: crate::services::presence_registry::DispatchFrame,
+) {
+    let Some(sender) = presence.lookup(caller_uri) else {
+        eprintln!(
+            "[session-accept] device {caller_uri} no longer in presence registry; \
+             dropping RequestResult call_id={id_hex} (device disconnected mid-dispatch)"
+        );
+        return;
+    };
+    if let Err(err) = sender.send(Ok(frame)).await {
+        eprintln!(
+            "[session-accept] failed to push RequestResult call_id={id_hex} to {caller_uri}: \
+             {err}; dropping (device down-channel closed)"
+        );
+    }
+}
+
 /// Drain a device's `<self>.session` up-stream. Each up-frame is
 /// expected to be a `BinaryChunk` carrying a JSON-serialised
 /// `SessionDispatch::Result`; on parse the matching pending entry
@@ -1635,6 +1798,7 @@ async fn drain_session_up_stream(
     caller_uri: String,
     presence: Arc<PresenceRegistry>,
     pending: Option<Arc<PendingDispatchMap>>,
+    service: DaemonInvocationService,
 ) {
     use crate::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 
@@ -1710,21 +1874,45 @@ async fn drain_session_up_stream(
                      (call_id={call_id}); ignoring"
                 );
             }
-            SessionDispatch::Request { call_id, ability, args: _ } => {
-                // PR-N6: device → hub forward_invoke escalation.
-                // Wire shape lands in C2 (this commit); the
-                // `dispatch_session_request` handler that resolves
-                // these against the hub's PresenceRegistry is C3.
-                // Until C3 ships, log the receipt with the locked
-                // marker the demo orchestration grep-asserts and
-                // drop the frame — the device-side `forward_invoke`
-                // sender will time out on no `RequestResult`,
-                // which is the honest behaviour for "wire shape
-                // landed but handler not yet wired".
+            SessionDispatch::Request { call_id, ability, args } => {
+                // PR-N6 C3: device → hub forward_invoke escalation.
+                // The device emits this when its CLI's
+                // `ability invoke --node` hits a target whose
+                // dispatch the device-mode daemon's empty local
+                // PresenceRegistry can't serve. The hub runs the
+                // SAME ability dispatch the unary `Invoke` RPC
+                // does, then sends `RequestResult` back down the
+                // device's open `<self>.session` bidi.
+                //
+                // Spec-locked log marker per PR-N6
+                // §"Locked log markers". The demo orchestration
+                // script grep-asserts this verbatim.
                 let id_hex = call_id_hex(&call_id);
                 eprintln!(
                     "[session-accept] received Request frame call_id={id_hex} ability={ability}"
                 );
+
+                // Dispatch off the drain task so a slow inner
+                // call (cross-hub dial round-trip, peer-side
+                // ability handler latency) does not stall
+                // subsequent up-frames the device sends. Each
+                // Request gets its own short-lived task.
+                let service_for_request = service.clone();
+                let presence_for_reply = Arc::clone(&presence);
+                let caller_uri_for_reply = caller_uri.clone();
+                tokio::spawn(async move {
+                    let outcome = service_for_request
+                        .dispatch_session_request(&ability, &args)
+                        .await;
+                    let frame = build_session_request_result_frame(call_id, outcome);
+                    push_session_request_result(
+                        &presence_for_reply,
+                        &caller_uri_for_reply,
+                        &id_hex,
+                        frame,
+                    )
+                    .await;
+                });
             }
             SessionDispatch::RequestResult { call_id, .. } => {
                 // RequestResult is hub → device only; a device
@@ -3946,6 +4134,94 @@ mod tests {
                 ..AgentIdentity::default()
             }),
             ..Envelope::default()
+        }
+    }
+
+    // ── PR-N6 C3 — dispatch_session_request hub-side handler ────────
+
+    #[tokio::test]
+    async fn dispatch_session_request_forward_invoke_target_offline_when_presence_empty() {
+        // Hub-side handler routes the inbound `Request` through
+        // the SAME `dispatch_federation_forward_invoke` arm the
+        // unary `Invoke` RPC uses. With an empty PresenceRegistry
+        // and no federation client, the inner call surfaces the
+        // wire-stable `target_offline` reason; `dispatch_session_
+        // request` translates that to the typed
+        // `SessionRequestError::TargetOffline` outcome the device
+        // caller can pattern-match on.
+        let svc = make_service().with_session_realm("test-realm");
+        let outcome = svc
+            .dispatch_session_request(
+                ABILITY_FEDERATION_FORWARD_INVOKE,
+                &forward_invoke_args("easynet:///r/test-realm/agent/missing-device"),
+            )
+            .await;
+        match outcome {
+            RequestOutcome::Err {
+                error: SessionRequestError::TargetOffline,
+            } => {}
+            other => panic!(
+                "expected TargetOffline outcome, got {other:?}; the hub's empty \
+                 PresenceRegistry must surface as a typed offline error"
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_session_request_unknown_ability_returns_permission_denied() {
+        // PR-N6 v1 only routes `federation.forward_invoke`. Other
+        // ability names must surface a typed `PermissionDenied`
+        // so the device caller knows the hub refused (not a
+        // silent timeout). PR-N6 v2 may widen this set once a
+        // per-ability admission policy is specified.
+        let svc = make_service().with_session_realm("test-realm");
+        let outcome = svc.dispatch_session_request("fs.read", b"{}").await;
+        match outcome {
+            RequestOutcome::Err {
+                error: SessionRequestError::PermissionDenied { reason },
+            } => {
+                assert!(
+                    reason.contains("fs.read"),
+                    "PermissionDenied reason must name the rejected ability; got: {reason}",
+                );
+                assert!(
+                    reason.contains(ABILITY_FEDERATION_FORWARD_INVOKE),
+                    "reason must cite the only ability PR-N6 v1 routes; got: {reason}",
+                );
+            }
+            other => panic!("expected PermissionDenied for unknown ability, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn build_session_request_result_frame_round_trips_through_serde() {
+        // Pin that the frame builder produces a wire shape the
+        // device-side drainer can decode. The device's
+        // `dial_and_run_session` reads JSON-encoded
+        // `SessionDispatch` payloads from `BinaryChunk.data`; this
+        // test confirms a `RequestResult` round-trips through
+        // that exact path without losing fields.
+        use crate::pb::axon::v1::invoke_bidi_down::Payload;
+        let call_id = [0xab; 16];
+        let outcome = RequestOutcome::Ok {
+            result_bytes: b"hello-from-hub".to_vec(),
+        };
+        let frame = build_session_request_result_frame(call_id, outcome.clone());
+        let chunk = match frame.frame.payload {
+            Some(Payload::BinaryChunk(c)) => c,
+            other => panic!("expected BinaryChunk, got {other:?}"),
+        };
+        let recovered: SessionDispatch =
+            serde_json::from_slice(&chunk.data).expect("decode RequestResult");
+        match recovered {
+            SessionDispatch::RequestResult {
+                call_id: rec_id,
+                outcome: rec_outcome,
+            } => {
+                assert_eq!(rec_id, call_id);
+                assert_eq!(rec_outcome, outcome);
+            }
+            other => panic!("expected RequestResult, got {other:?}"),
         }
     }
 }
