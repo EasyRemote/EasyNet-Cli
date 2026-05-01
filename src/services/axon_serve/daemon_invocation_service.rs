@@ -350,6 +350,9 @@ impl Invocation for DaemonInvocationService {
             }
             ABILITY_FEDERATION_HEARTBEAT => self.dispatch_federation_heartbeat(&inner.arguments),
             ABILITY_FEDERATION_RESOLVE => self.dispatch_federation_resolve(&inner.arguments),
+            ABILITY_FEDERATION_RESOLVE_KEY => {
+                self.dispatch_federation_resolve_key(&inner.arguments)
+            }
             ABILITY_FEDERATION_REVOKE => self.dispatch_federation_revoke(&inner.arguments),
             ABILITY_FEDERATION_FORWARD_INVOKE => {
                 self.dispatch_federation_forward_invoke(
@@ -1395,6 +1398,14 @@ pub(crate) fn build_peer_envelope(caller_envelope: Option<&Envelope>, target_uri
 
 /// Wrap the inner envelope bytes into a `DispatchFrame` heading
 /// down a target's `<self>.session` reverse channel.
+///
+/// DEC-N4 §2.1 round-trip note: `ForwardInvokeRequest` carries
+/// `causal_context_bytes` and `forward_deadline_ms` as outer wire
+/// fields; they remain on the request struct so the dispatcher's
+/// audit-chain hook (PR-N5 §1) and deadline derivation (DEC-N5
+/// §3) can read them directly. The dispatch frame itself stays
+/// proto-stable for C1a (just the inner-envelope BinaryChunk) —
+/// C1c's schema regen elevates these to first-class frame fields.
 fn build_forward_invoke_dispatch_frame(
     inner_bytes: Vec<u8>,
 ) -> crate::services::presence_registry::DispatchFrame {

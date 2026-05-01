@@ -102,7 +102,19 @@ pub const ABILITY_FEDERATION_REVOKE: &str = "federation.revoke";
 /// reply by call_id (same scheme MVP uses).
 pub const ABILITY_FEDERATION_FORWARD_INVOKE: &str = "federation.forward_invoke";
 
-/// All seven federation.* ability names in deterministic order.
+/// `federation.resolve_key` — peer-hub lookup of an agent URI's
+/// Ed25519 public key, served from the local realm trust anchor.
+/// PR-N2 commit 1/N's `FederatedKeyResolver` is the canonical
+/// caller: when realm A's daemon receives a forwarded envelope
+/// signed by an agent in realm B, A dials B's `federation.
+/// resolve_key` to fetch the verifying key, runs the same RFC 001
+/// §5.2 4-step verify, and admits or rejects identically to a
+/// local-realm caller. Wire shape: request `{agent_uri}` → response
+/// `{public_key_b64}`; `Status::not_found` when the URI is not in
+/// this hub's trust set.
+pub const ABILITY_FEDERATION_RESOLVE_KEY: &str = "federation.resolve_key";
+
+/// All eight federation.* ability names in deterministic order.
 /// Iteration order is the order PR-4's schema-compat matrix files
 /// land on disk, so changing this slice without updating PR-4
 /// fixtures is a wire-compat break.
@@ -111,6 +123,7 @@ pub const FEDERATION_ABILITIES: &[&str] = &[
     ABILITY_FEDERATION_ADVERTISE_AGENT,
     ABILITY_FEDERATION_HEARTBEAT,
     ABILITY_FEDERATION_RESOLVE,
+    ABILITY_FEDERATION_RESOLVE_KEY,
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
     ABILITY_FEDERATION_REVOKE,
     ABILITY_FEDERATION_FORWARD_INVOKE,
@@ -299,6 +312,56 @@ pub fn handle_resolve(request: &ResolveRequest, registry: &PresenceRegistry) -> 
     ResolveResponse { agents }
 }
 
+// ─── federation.resolve_key ────────────────────────────────────────
+
+/// Request payload for `federation.resolve_key`. PR-N2 commit 2/N
+/// peer-side handler: the local trust anchor is consulted for the
+/// supplied `agent_uri` and its base64-encoded Ed25519 public key
+/// is returned (or `Status::not_found` when absent).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ResolveKeyRequest {
+    /// The canonical agent URI whose verifying key the caller
+    /// needs. The peer hub returns its locally-known key
+    /// regardless of who is asking; cross-realm trust gating is
+    /// enforced caller-side by the FederatedKeyResolver before
+    /// dialling, never here.
+    pub agent_uri: String,
+}
+
+/// Response payload for `federation.resolve_key`. The 32-byte
+/// Ed25519 verifying key is returned base64-encoded in the same
+/// format `realm-trust.toml` and the local
+/// `TrustAnchorKeyResolver` use, so callers can feed it directly
+/// to `ed25519_dalek::VerifyingKey::from_bytes`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResolveKeyResponse {
+    /// Base64 (standard alphabet) of 32 raw Ed25519 verifying-key
+    /// bytes. The wire encoding is fixed; PR-4 schema fixtures
+    /// pin this shape.
+    pub public_key_b64: String,
+}
+
+/// Handle a `federation.resolve_key` invocation.
+///
+/// Looks up `agent_uri` in the supplied trust anchor snapshot and
+/// returns its `public_key_b64` verbatim (the local trust file
+/// already stores the canonical base64 form, so no re-encode is
+/// needed here). On miss, returns `None`; the caller is responsible
+/// for wrapping that as `Status::not_found` so the FederatedKey-
+/// Resolver can distinguish "URI is not in this hub's trust set"
+/// from a network-level failure.
+#[must_use]
+pub fn handle_resolve_key(
+    request: &ResolveKeyRequest,
+    trust_anchor: &crate::services::realm_trust_anchor::RealmTrustAnchor,
+) -> Option<ResolveKeyResponse> {
+    trust_anchor
+        .lookup(&request.agent_uri)
+        .map(|entry| ResolveKeyResponse {
+            public_key_b64: entry.public_key_b64.clone(),
+        })
+}
+
 // ─── federation.revoke ─────────────────────────────────────────────
 
 /// Request payload for `federation.revoke`.
@@ -337,14 +400,37 @@ pub fn handle_revoke(request: &RevokeRequest, registry: &PresenceRegistry) -> Re
 /// Request payload for `federation.forward_invoke` — the dispatcher
 /// uses this to decide whether to push the inner envelope down a
 /// target's `<self>.session` reverse channel.
-#[derive(Debug, Clone, Deserialize)]
+///
+/// Wire shape per DEC-N4 §2.1:
+/// - `target_uri` — destination agent URI.
+/// - `inner_envelope_b64` — base64 of the caller-built inner
+///   payload (`{ability, args, call_id}`); opaque to this wrapper.
+/// - `causal_context_bytes` — opaque audit-chain bytes the caller's
+///   `<self>.invoke_remote` initiator carries (PR-N5 §1: prior
+///   ForwardReceipt hash list, possibly empty). The dispatcher
+///   threads these verbatim into the target's session frame so the
+///   target's InvocationReceipt can stamp `causal_context.list`
+///   with the same values.
+/// - `forward_deadline_ms` — caller-side deadline budget remaining
+///   in milliseconds at the time the request was built. The peer
+///   hub uses this to derive its own forward-call deadline (DEC-N5
+///   §3); zero means "no caller-side deadline supplied" (peer
+///   applies its own default).
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ForwardInvokeRequest {
-    /// URI of the destination agent.
     pub target_uri: String,
-    /// The inner invocation, encoded as the dispatcher serialised it.
-    /// Opaque to this wrapper — passed through to the dispatch
-    /// sender as-is.
     pub inner_envelope_b64: String,
+    /// Opaque audit-chain bytes; round-trips verbatim per DEC-N4
+    /// §2.1 acceptance criterion. Empty when the caller's initiator
+    /// has no prior receipts to chain (typical for the first call
+    /// in a session).
+    #[serde(default)]
+    pub causal_context_bytes: Vec<u8>,
+    /// Caller-side remaining deadline in milliseconds. `0` is the
+    /// sentinel for "no deadline supplied"; the peer applies its
+    /// configured default in that case (DEC-N5 §3).
+    #[serde(default)]
+    pub forward_deadline_ms: u64,
 }
 
 /// Response payload for `federation.forward_invoke` (DEC-N4 §2.1
@@ -466,7 +552,8 @@ mod tests {
             ABILITY_FEDERATION_FORWARD_INVOKE,
             "federation.forward_invoke"
         );
-        assert_eq!(FEDERATION_ABILITIES.len(), 7);
+        assert_eq!(ABILITY_FEDERATION_RESOLVE_KEY, "federation.resolve_key");
+        assert_eq!(FEDERATION_ABILITIES.len(), 8);
     }
 
     #[test]
@@ -602,6 +689,47 @@ mod tests {
     }
 
     #[test]
+    fn handle_resolve_key_returns_pubkey_when_present_in_anchor() {
+        use crate::services::realm_trust_anchor::{
+            RealmTrustAnchor, TrustedAgent, TrustedAgentRole,
+        };
+        let entry = TrustedAgent {
+            agent_uri: "easynet:///r/realm-a/agent/n1".to_string(),
+            public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            role: TrustedAgentRole::Device,
+            added_at_unix_ms: 1_700_000_000_000,
+            origin_tenant_id: None,
+            hub_uri: None,
+            tls_ca_pem_path: None,
+        };
+        let anchor = RealmTrustAnchor::from_entries(vec![entry]).expect("anchor");
+        let resp = handle_resolve_key(
+            &ResolveKeyRequest {
+                agent_uri: "easynet:///r/realm-a/agent/n1".to_string(),
+            },
+            &anchor,
+        )
+        .expect("hit");
+        assert_eq!(
+            resp.public_key_b64,
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        );
+    }
+
+    #[test]
+    fn handle_resolve_key_returns_none_when_uri_not_in_anchor() {
+        use crate::services::realm_trust_anchor::RealmTrustAnchor;
+        let anchor = RealmTrustAnchor::default();
+        let resp = handle_resolve_key(
+            &ResolveKeyRequest {
+                agent_uri: "easynet:///r/realm-a/agent/missing".to_string(),
+            },
+            &anchor,
+        );
+        assert!(resp.is_none(), "miss must surface as None for caller status mapping");
+    }
+
+    #[test]
     fn handle_revoke_reports_was_active_correctly() {
         let registry = PresenceRegistry::new();
         let uri = "easynet:///r/realm/agent/n1".to_string();
@@ -645,6 +773,8 @@ mod tests {
             &ForwardInvokeRequest {
                 target_uri: "easynet:///r/realm/agent/n1".to_string(),
                 inner_envelope_b64: String::new(),
+                causal_context_bytes: Vec::new(),
+                forward_deadline_ms: 0,
             },
             "call-id-7",
             target_reply.clone(),
@@ -663,12 +793,54 @@ mod tests {
             &ForwardInvokeRequest {
                 target_uri: "easynet:///r/realm/agent/n1".to_string(),
                 inner_envelope_b64: String::new(),
+                causal_context_bytes: Vec::new(),
+                forward_deadline_ms: 0,
             },
             "call-id-8",
             Vec::new(),
         );
         assert!(resp.result_bytes.is_empty());
         assert_eq!(resp.correlation_call_id, "call-id-8");
+    }
+
+    #[test]
+    fn forward_invoke_request_round_trips_audit_chain_and_deadline() {
+        // DEC-N4 §2.1 acceptance: `causal_context_bytes` and
+        // `forward_deadline_ms` are wire fields on
+        // `ForwardInvokeRequest` that round-trip verbatim from the
+        // caller's `<self>.invoke_remote` initiator (or the CLI
+        // bridge in `support::federation_invoke`) through the
+        // dispatcher's JSON deserialise step. The dispatcher
+        // surfaces these to the target's session frame so PR-N5's
+        // InvocationReceipt can stamp `causal_context.list` and
+        // DEC-N5 §3 can derive the inner deadline.
+        let audit_bytes: Vec<u8> = vec![0xCA, 0xFE, 0xBA, 0xBE, 0x00, 0xFF];
+        let original = serde_json::json!({
+            "target_uri": "easynet:///r/realm/agent/n1",
+            "inner_envelope_b64": "",
+            "causal_context_bytes": audit_bytes,
+            "forward_deadline_ms": 12_345_u64,
+        });
+        let bytes = serde_json::to_vec(&original).unwrap();
+        let parsed: ForwardInvokeRequest = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.causal_context_bytes, audit_bytes);
+        assert_eq!(parsed.forward_deadline_ms, 12_345);
+    }
+
+    #[test]
+    fn forward_invoke_request_audit_fields_default_when_absent() {
+        // Backwards-compat: a `ForwardInvokeRequest` produced
+        // before C1a (no audit fields in the JSON) must still
+        // deserialise — the new fields default to empty / zero
+        // sentinels per the `#[serde(default)]` annotation.
+        let pre_c1a = serde_json::json!({
+            "target_uri": "easynet:///r/realm/agent/n1",
+            "inner_envelope_b64": "",
+        });
+        let bytes = serde_json::to_vec(&pre_c1a).unwrap();
+        let parsed: ForwardInvokeRequest = serde_json::from_slice(&bytes).unwrap();
+        assert!(parsed.causal_context_bytes.is_empty());
+        assert_eq!(parsed.forward_deadline_ms, 0);
     }
 
     #[test]

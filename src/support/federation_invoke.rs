@@ -152,12 +152,17 @@ pub fn invoke_via_federation_forward(
         );
     }
 
-    // The daemon's `federation.forward_invoke` request shape is
-    // `ForwardInvokeRequest { target_uri, inner_envelope_b64 }`.
-    // The inner envelope carries the original `(ability, args)`
-    // tuple as a JSON blob; PR-N1's daemon-to-daemon wire
-    // forwards this opaquely. PR-N2 will introduce AXIOM
-    // mapping rewrite + signature; PR-N1 ships the unsigned shape.
+    // The daemon's `federation.forward_invoke` request shape per
+    // DEC-N4 §2.1: `ForwardInvokeRequest { target_uri,
+    // inner_envelope_b64, causal_context_bytes,
+    // forward_deadline_ms }`. The inner envelope carries the
+    // original `(ability, args, call_id)` tuple as a JSON blob;
+    // PR-N1's daemon-to-daemon wire forwards this opaquely. The
+    // outer audit / deadline fields round-trip verbatim so
+    // PR-N5's InvocationReceipt can stamp causal_context.list and
+    // DEC-N5 §3 can derive the inner deadline. PR-N2 will
+    // introduce AXIOM mapping rewrite + signature; PR-N1 ships
+    // the unsigned shape.
     //
     // DEC-N4 §2.1: a client-minted `call_id` is required so the
     // daemon's `ForwardInvokeResponse.correlation_call_id` can
@@ -174,9 +179,20 @@ pub fn invoke_via_federation_forward(
         .context("serialise inner ability call as forward_invoke payload")?;
     let inner_envelope_b64 = base64_engine_encode(&inner_envelope_bytes);
 
+    // DEC-N4 §2.1 audit-chain + deadline fields. The CLI bridge
+    // is the lowest-level synchronous initiator; it has no prior
+    // `ForwardReceipt` to chain (those are PR-N5 territory) and
+    // no caller-side deadline budget (CLI invocations run to
+    // completion). Both fields ship as their zero-shape so the
+    // peer hub treats them as "no caller hint, apply defaults".
+    // Once `<self>.invoke_remote` initiator becomes the upstream
+    // caller (instead of a direct CLI dial), it will populate
+    // both with real values per PR-N5 §1 / DEC-N5 §3.
     let forward_args = json!({
         "target_uri": node_uri,
         "inner_envelope_b64": inner_envelope_b64,
+        "causal_context_bytes": Vec::<u8>::new(),
+        "forward_deadline_ms": 0_u64,
     });
     let forward_args_bytes = serde_json::to_vec(&forward_args)
         .context("serialise ForwardInvokeRequest")?;
