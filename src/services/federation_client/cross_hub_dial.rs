@@ -167,6 +167,30 @@ impl Default for BreakerState {
     }
 }
 
+/// The traffic pattern a breaker entry is keyed against.
+///
+/// `forward_invoke` and `subscribe_directory_v2` share the same
+/// trust gate, channel cache, and dial path, but their failure
+/// patterns differ: a streaming supervisor may retry
+/// `subscribe_directory_v2` continuously during a peer outage,
+/// while `forward_invoke` is per-call and tolerates a much higher
+/// failure rate. Conflating their counters lets a transient stream
+/// outage open the breaker for forward_invoke too — surfaced in a
+/// real production run when boot-time stream failures starved the
+/// per-call path even after trust was repaired. Separating the
+/// scopes keeps the auto-open behaviour but lets each path's
+/// counters reflect its own SLA.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum BreakerScope {
+    /// Per-call `forward_invoke` dispatch.
+    ForwardInvoke,
+    /// Long-running `subscribe_directory_v2` server-stream
+    /// supervisor. Reconnect attempts during a peer outage are
+    /// expected; their failures must not drain the budget the
+    /// per-call path also consults.
+    SubscribeDirectoryV2,
+}
+
 /// Canonical hub URI string used as the federation peer key. We
 /// intentionally do not introduce a newtype wrapper around
 /// `String` for v1 — the URI is parsed by `tonic::transport::
@@ -326,10 +350,13 @@ pub struct CrossHubDialer {
     /// reference count goes to one (the map's own) and lazy
     /// eviction (next §5.2 cleanup pass) reclaims it.
     channels: Arc<DashMap<(HubUri, u64), Channel>>,
-    /// **PR-N1 commit 4/N**. Per-peer breaker state. Lock-free
-    /// `DashMap` matches the channel cache shape so admission +
-    /// breaker contention stay symmetric on the hot path.
-    breaker_state: Arc<DashMap<HubUri, BreakerState>>,
+    /// **PR-N1 commit 4/N**. Per-peer breaker state, keyed by
+    /// `(hub_uri, scope)`. Lock-free `DashMap` matches the channel
+    /// cache shape so admission + breaker contention stay
+    /// symmetric on the hot path. Scope separation keeps the
+    /// long-stream supervisor's reconnect failures from draining
+    /// the per-call `forward_invoke` budget on the same peer.
+    breaker_state: Arc<DashMap<(HubUri, BreakerScope), BreakerState>>,
     /// **PR-N1 commit 4/N**. Per-call timeout for the inner
     /// `InvocationClient::invoke`. Wraps with
     /// `tokio::time::timeout`; expiration surfaces as
@@ -442,23 +469,24 @@ impl CrossHubDialer {
     }
 
     /// **PR-N1 commit 4/N**. Read-only inspection of a peer's
-    /// current breaker state. Test/observability only —
-    /// production callers do not branch on this directly; they
-    /// see the typed `CircuitOpen` error from `forward_invoke`.
-    /// Returns `None` when the peer has never been dialed (no
-    /// breaker entry tracked yet, semantically equivalent to
-    /// `Closed { 0 }`).
-    fn breaker_is_closed(&self, target_hub: &HubUri) -> bool {
-        match self.breaker_state.get(target_hub).map(|e| e.value().clone()) {
+    /// current breaker state for the named scope. Test/
+    /// observability only — production callers do not branch on
+    /// this directly; they see the typed `CircuitOpen` error from
+    /// `forward_invoke`. Returns `None` when the peer-scope tuple
+    /// has never been dialed (no breaker entry tracked yet,
+    /// semantically equivalent to `Closed { 0 }`).
+    fn breaker_is_closed(&self, target_hub: &HubUri, scope: BreakerScope) -> bool {
+        let key = (target_hub.clone(), scope);
+        match self.breaker_state.get(&key).map(|e| e.value().clone()) {
             None => true,
             Some(BreakerState::Closed { .. }) => true,
             Some(BreakerState::Open { .. }) | Some(BreakerState::HalfOpen) => false,
         }
     }
 
-    /// **PR-N1 commit 4/N**. Read the breaker state and decide
-    /// whether to dispatch the call. Returns `Ok(())` when the
-    /// dial may proceed (Closed or HalfOpen), or
+    /// **PR-N1 commit 4/N**. Read the breaker state for the named
+    /// scope and decide whether to dispatch the call. Returns
+    /// `Ok(())` when the dial may proceed (Closed or HalfOpen), or
     /// `CircuitOpen` when the breaker is Open within its reset
     /// window. The Open → HalfOpen transition happens here as a
     /// side effect of the read so HalfOpen behaviour is
@@ -466,12 +494,14 @@ impl CrossHubDialer {
     fn check_and_advance_breaker(
         &self,
         target_hub: &HubUri,
+        scope: BreakerScope,
     ) -> Result<(), FederationClientError> {
         // `entry()` ensures we get exclusive access for the
         // read-modify-write transition. `or_default()` materialises
         // a `Closed { 0 }` entry on first dial — saves a
         // separate `insert` later.
-        let mut entry = self.breaker_state.entry(target_hub.clone()).or_default();
+        let key = (target_hub.clone(), scope);
+        let mut entry = self.breaker_state.entry(key).or_default();
         match &*entry {
             BreakerState::Closed { .. } | BreakerState::HalfOpen => Ok(()),
             BreakerState::Open { opened_at } => {
@@ -485,20 +515,24 @@ impl CrossHubDialer {
         }
     }
 
-    /// **PR-N1 commit 4/N**. Record a successful dial outcome.
-    /// Closed → reset the failure counter; HalfOpen → Closed.
-    fn record_breaker_success(&self, target_hub: &HubUri) {
-        let mut entry = self.breaker_state.entry(target_hub.clone()).or_default();
+    /// **PR-N1 commit 4/N**. Record a successful dial outcome for
+    /// the named scope. Closed → reset the failure counter;
+    /// HalfOpen → Closed.
+    fn record_breaker_success(&self, target_hub: &HubUri, scope: BreakerScope) {
+        let key = (target_hub.clone(), scope);
+        let mut entry = self.breaker_state.entry(key).or_default();
         *entry = BreakerState::Closed {
             consecutive_failures: 0,
         };
     }
 
-    /// **PR-N1 commit 4/N**. Record a failure. Closed: bump the
-    /// counter, transitioning to Open if the threshold is met.
-    /// HalfOpen → Open (the trial dial failed). Open: idempotent.
-    fn record_breaker_failure(&self, target_hub: &HubUri) {
-        let mut entry = self.breaker_state.entry(target_hub.clone()).or_default();
+    /// **PR-N1 commit 4/N**. Record a failure for the named scope.
+    /// Closed: bump the counter, transitioning to Open if the
+    /// threshold is met. HalfOpen → Open (the trial dial failed).
+    /// Open: idempotent.
+    fn record_breaker_failure(&self, target_hub: &HubUri, scope: BreakerScope) {
+        let key = (target_hub.clone(), scope);
+        let mut entry = self.breaker_state.entry(key).or_default();
         let next = match &*entry {
             BreakerState::Closed {
                 consecutive_failures,
@@ -637,7 +671,9 @@ impl FederationClient for CrossHubDialer {
         // Open + within reset window → fail-fast `CircuitOpen`.
         // Open + past reset window → Open transitions to HalfOpen,
         // this call is the trial dial. Closed → proceed normally.
-        self.check_and_advance_breaker(target_hub)?;
+        // Scope = ForwardInvoke so this path's failure budget is
+        // independent of the long-stream supervisor's.
+        self.check_and_advance_breaker(target_hub, BreakerScope::ForwardInvoke)?;
 
         // ── 3. Resolve channel (cached or fresh TLS-pinned) ──
         // DEC-N5 §5: key the cache by `(hub_uri, generation)` so a
@@ -655,7 +691,7 @@ impl FederationClient for CrossHubDialer {
                 // `tls_ca_pem_path` can't pin the breaker open
                 // forever — the next operator save flushes the
                 // bad entry and the breaker auto-resets.
-                self.record_breaker_failure(target_hub);
+                self.record_breaker_failure(target_hub, BreakerScope::ForwardInvoke);
                 return Err(err);
             }
         };
@@ -667,18 +703,18 @@ impl FederationClient for CrossHubDialer {
 
         match outcome {
             Ok(Ok(response)) => {
-                self.record_breaker_success(target_hub);
+                self.record_breaker_success(target_hub, BreakerScope::ForwardInvoke);
                 Ok(response.into_inner())
             }
             Ok(Err(status)) => {
-                self.record_breaker_failure(target_hub);
+                self.record_breaker_failure(target_hub, BreakerScope::ForwardInvoke);
                 Err(FederationClientError::InnerInvokeFailed {
                     hub: target_hub.clone(),
                     status: format!("code={:?} message={}", status.code(), status.message()),
                 })
             }
             Err(_elapsed) => {
-                self.record_breaker_failure(target_hub);
+                self.record_breaker_failure(target_hub, BreakerScope::ForwardInvoke);
                 Err(FederationClientError::ChannelTimeout(target_hub.clone()))
             }
         }
@@ -719,14 +755,19 @@ impl FederationClient for CrossHubDialer {
             .ok_or_else(|| FederationClientError::PeerNotTrusted(target_hub.clone()))?;
 
         // ── 2. Breaker gate. ────────────────────────────────
-        self.check_and_advance_breaker(target_hub)?;
+        // Scope = SubscribeDirectoryV2 so reconnect-storm failures
+        // here (boot-time trust mismatch, network drop) keep their
+        // own counter and do NOT open the breaker for ForwardInvoke
+        // on the same peer. Both scopes share the trust gate +
+        // channel cache; only the breaker counters are split.
+        self.check_and_advance_breaker(target_hub, BreakerScope::SubscribeDirectoryV2)?;
 
         // ── 3. Channel resolve (same cache as forward_invoke). ─
         let generation = self.trust_source.cert_anchor_generation();
         let channel = match self.resolve_peer_channel(target_hub, ca_path, generation) {
             Ok(channel) => channel,
             Err(err) => {
-                self.record_breaker_failure(target_hub);
+                self.record_breaker_failure(target_hub, BreakerScope::SubscribeDirectoryV2);
                 return Err(err);
             }
         };
@@ -739,7 +780,7 @@ impl FederationClient for CrossHubDialer {
                 .await;
         match outcome {
             Ok(Ok(response)) => {
-                self.record_breaker_success(target_hub);
+                self.record_breaker_success(target_hub, BreakerScope::SubscribeDirectoryV2);
                 let inner = response.into_inner();
                 // Wrap the tonic Streaming with a JSON-decode
                 // step so consumers see DirectoryEvent shapes.
@@ -751,14 +792,14 @@ impl FederationClient for CrossHubDialer {
                 Ok(Box::pin(stream))
             }
             Ok(Err(status)) => {
-                self.record_breaker_failure(target_hub);
+                self.record_breaker_failure(target_hub, BreakerScope::SubscribeDirectoryV2);
                 Err(FederationClientError::InnerInvokeFailed {
                     hub: target_hub.clone(),
                     status: format!("code={:?} message={}", status.code(), status.message()),
                 })
             }
             Err(_elapsed) => {
-                self.record_breaker_failure(target_hub);
+                self.record_breaker_failure(target_hub, BreakerScope::SubscribeDirectoryV2);
                 Err(FederationClientError::ChannelTimeout(target_hub.clone()))
             }
         }
@@ -1150,7 +1191,7 @@ mod tests {
             .await
             .expect_err("first call should fail");
         assert!(
-            !dialer.breaker_is_closed(&target),
+            !dialer.breaker_is_closed(&target, BreakerScope::ForwardInvoke),
             "first failure must open the breaker"
         );
 
@@ -1197,7 +1238,7 @@ mod tests {
             .forward_invoke(&target, sample_request("test.echo"))
             .await
             .expect_err("first call should fail");
-        assert!(!dialer.breaker_is_closed(&target));
+        assert!(!dialer.breaker_is_closed(&target, BreakerScope::ForwardInvoke));
 
         // Wait for the reset window to elapse.
         tokio::time::sleep(Duration::from_millis(75)).await;
@@ -1472,20 +1513,81 @@ mod tests {
 
         let dialer = CrossHubDialer::new(anchor).with_breaker_failure_threshold(2);
 
-        dialer.record_breaker_failure(&target);
+        dialer.record_breaker_failure(&target, BreakerScope::ForwardInvoke);
         // Counter at 1 — still Closed.
-        assert!(dialer.breaker_is_closed(&target));
+        assert!(dialer.breaker_is_closed(&target, BreakerScope::ForwardInvoke));
 
-        dialer.record_breaker_success(&target);
+        dialer.record_breaker_success(&target, BreakerScope::ForwardInvoke);
         // Counter back to 0.
-        assert!(dialer.breaker_is_closed(&target));
+        assert!(dialer.breaker_is_closed(&target, BreakerScope::ForwardInvoke));
 
-        dialer.record_breaker_failure(&target);
+        dialer.record_breaker_failure(&target, BreakerScope::ForwardInvoke);
         // Only 1 failure since the success — still Closed (would
         // be Open if the counter hadn't reset).
         assert!(
-            dialer.breaker_is_closed(&target),
+            dialer.breaker_is_closed(&target, BreakerScope::ForwardInvoke),
             "success between failures must reset the counter"
+        );
+    }
+
+    #[tokio::test]
+    async fn breaker_scopes_are_independent_for_forward_invoke_and_subscribe() {
+        // Drive the SubscribeDirectoryV2 scope's counter past the
+        // threshold so that scope opens. The ForwardInvoke scope on
+        // the same hub must remain Closed — the per-call dispatch
+        // path keeps its own budget. Without scope separation a
+        // boot-time stream-supervisor failure storm would starve
+        // forward_invoke even after the operator repaired trust.
+        let target = "https://peer-hub.example:50443".to_string();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, SELF_SIGNED_CA_PEM).expect("seed ca");
+
+        let entry = fed_peer_entry(&target, ca_path);
+        let anchor = anchor_with(entry);
+
+        let dialer = CrossHubDialer::new(anchor).with_breaker_failure_threshold(2);
+
+        dialer.record_breaker_failure(&target, BreakerScope::SubscribeDirectoryV2);
+        dialer.record_breaker_failure(&target, BreakerScope::SubscribeDirectoryV2);
+        assert!(
+            !dialer.breaker_is_closed(&target, BreakerScope::SubscribeDirectoryV2),
+            "subscribe scope should be Open after threshold reached"
+        );
+        assert!(
+            dialer.breaker_is_closed(&target, BreakerScope::ForwardInvoke),
+            "forward_invoke scope must remain Closed despite subscribe failures \
+             on the same peer"
+        );
+    }
+
+    #[tokio::test]
+    async fn breaker_scope_does_not_leak_success_signal_across_paths() {
+        // Symmetric counterpart: a success on ForwardInvoke must
+        // not reset SubscribeDirectoryV2's failure counter. The
+        // two scopes are truly independent dimensions, not just
+        // separate buckets that share a reset signal.
+        let target = "https://peer-hub.example:50443".to_string();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, SELF_SIGNED_CA_PEM).expect("seed ca");
+
+        let entry = fed_peer_entry(&target, ca_path);
+        let anchor = anchor_with(entry);
+
+        let dialer = CrossHubDialer::new(anchor).with_breaker_failure_threshold(2);
+
+        dialer.record_breaker_failure(&target, BreakerScope::SubscribeDirectoryV2);
+        dialer.record_breaker_failure(&target, BreakerScope::SubscribeDirectoryV2);
+        // SubscribeDirectoryV2 is Open.
+        assert!(!dialer.breaker_is_closed(&target, BreakerScope::SubscribeDirectoryV2));
+
+        // A ForwardInvoke success on the same peer must NOT reset
+        // SubscribeDirectoryV2's state.
+        dialer.record_breaker_success(&target, BreakerScope::ForwardInvoke);
+        assert!(
+            !dialer.breaker_is_closed(&target, BreakerScope::SubscribeDirectoryV2),
+            "ForwardInvoke success must not reset SubscribeDirectoryV2 scope"
         );
     }
 
