@@ -844,12 +844,40 @@ pub async fn run_per_peer_supervisor(
         {
             Ok(stream) => {
                 client.on_dial_ok();
-                let consume = consume_directory_event_stream(&mut client, &cell, stream);
+                // PR-N3 N3-streaming-7: enforce the spec §2.3
+                // 60s idle-timeout. The peer's heartbeat (N3-
+                // streaming-6) fires every 30s when idle; two
+                // missed windows = dead peer, reconnect.
+                let idle_timeout_ms = 60_000u64;
+                let consume = consume_directory_event_stream_with_idle_timeout(
+                    &mut client,
+                    &cell,
+                    stream,
+                    idle_timeout_ms,
+                );
                 tokio::select! {
-                    _ = consume => {
-                        // Stream ended (peer closed, error
-                        // surfaced inside the wrapper). Fall
-                        // through to reconnect with backoff.
+                    outcome = consume => {
+                        match outcome {
+                            ConsumeOutcome::StreamEnded => {
+                                // Peer closed; fall through to
+                                // reconnect with backoff.
+                            }
+                            ConsumeOutcome::ProtocolViolation(reason) => {
+                                eprintln!(
+                                    "[federation_directory] subscribe_directory_v2 \
+                                     protocol violation from peer realm={peer_realm:?}: \
+                                     {reason}; tearing down + reconnecting"
+                                );
+                            }
+                            ConsumeOutcome::IdleTimeout => {
+                                eprintln!(
+                                    "[federation_directory] subscribe_directory_v2 \
+                                     idle timeout for peer realm={peer_realm:?} (no \
+                                     frame within {idle_timeout_ms} ms); \
+                                     reconnecting"
+                                );
+                            }
+                        }
                     }
                     _ = &mut cancel => {
                         return;
@@ -923,6 +951,77 @@ where
     }
     client.on_stream_end();
     Ok(())
+}
+
+/// Outcome of `consume_directory_event_stream_with_idle_timeout`.
+/// Distinct from `Result<(), FsmError>` because we need three
+/// terminal states, not two: graceful end vs. protocol
+/// violation vs. idle timeout. The supervisor reconnects with
+/// FSM backoff in all three cases; the variant lets it log
+/// the reason without grepping a `Display` string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConsumeOutcome {
+    /// Stream ended cleanly (peer closed gracefully).
+    StreamEnded,
+    /// FSM rejected an inbound frame (Snapshot mid-stream,
+    /// Upsert before Snapshot, etc).
+    ProtocolViolation(&'static str),
+    /// No frame received within the idle-timeout window
+    /// (peer alive but silent). Spec §2.3:
+    /// "60s no frame → Disconnected (treat as dead)". The
+    /// peer's heartbeat keepalive should arrive every 30s
+    /// (PR-N3 N3-streaming-6); two missed ticks ⇒ dead.
+    IdleTimeout,
+}
+
+/// **PR-N3 N3-streaming-7**. Drive a `RemoteDirectoryClient`
+/// from an upstream stream of `DirectoryEvent` frames, with a
+/// receiver-side idle-timeout watcher per spec §2.3. Variant of
+/// `consume_directory_event_stream` that races each
+/// `stream.next()` against a `tokio::time::sleep` of
+/// `idle_timeout_ms`; if the sleep wins, the FSM transitions to
+/// Disconnected and we return `ConsumeOutcome::IdleTimeout`.
+///
+/// Cadence: 60s production per spec §2.3 (= two missed
+/// 30s heartbeat windows). Tunable for tests via the parameter.
+///
+/// Frame applied → idle timer resets (next select! call
+/// reinitialises sleep).
+pub async fn consume_directory_event_stream_with_idle_timeout<S>(
+    client: &mut RemoteDirectoryClient,
+    cell: &SharedFederatedDirectoryView,
+    mut stream: S,
+    idle_timeout_ms: u64,
+) -> ConsumeOutcome
+where
+    S: futures::Stream<Item = DirectoryEvent> + Unpin,
+{
+    use futures::StreamExt;
+    let timeout = std::time::Duration::from_millis(idle_timeout_ms);
+    loop {
+        tokio::select! {
+            next = stream.next() => {
+                match next {
+                    Some(event) => {
+                        if let Err(FsmError::ProtocolViolation(reason)) =
+                            client.apply_event(&event)
+                        {
+                            return ConsumeOutcome::ProtocolViolation(reason);
+                        }
+                        client.publish_to_cell(cell);
+                    }
+                    None => {
+                        client.on_stream_end();
+                        return ConsumeOutcome::StreamEnded;
+                    }
+                }
+            }
+            _ = tokio::time::sleep(timeout) => {
+                client.on_idle_timeout();
+                return ConsumeOutcome::IdleTimeout;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1653,6 +1752,143 @@ mod tests {
             .lookup("easynet:///r/realm-b/agent/added")
             .expect("added still present");
         assert_eq!(added.origin_realm.as_deref(), Some("realm-b"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn consume_with_idle_timeout_returns_idle_when_stream_silent() {
+        // PR-N3 N3-streaming-7. Stream produces nothing within
+        // the timeout window → consumer returns IdleTimeout +
+        // FSM transitions to Disconnected so the supervisor's
+        // outer loop reconnects with backoff.
+        let mut client = RemoteDirectoryClient::new(
+            "realm-b".to_string(),
+            "https://hub-b.example:50443".to_string(),
+        );
+        client.on_dial_ok();
+        let cell = SharedFederatedDirectoryView::default();
+
+        // `futures::stream::pending()` never yields — perfect
+        // model of a silent peer.
+        let stream = futures::stream::pending::<DirectoryEvent>();
+        let outcome = consume_directory_event_stream_with_idle_timeout(
+            &mut client,
+            &cell,
+            stream,
+            50, // 50ms — keep test fast.
+        )
+        .await;
+
+        assert_eq!(outcome, ConsumeOutcome::IdleTimeout);
+        assert!(matches!(client.fsm_state(), &SubscriberState::Disconnected));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn consume_with_idle_timeout_returns_stream_ended_on_natural_close() {
+        // Stream yields a Snapshot then ends — natural close
+        // → StreamEnded outcome (not IdleTimeout).
+        let mut client = RemoteDirectoryClient::new(
+            "realm-b".to_string(),
+            "https://hub-b.example:50443".to_string(),
+        );
+        client.on_dial_ok();
+        let cell = SharedFederatedDirectoryView::default();
+
+        let stream = futures::stream::iter(vec![DirectoryEvent::Snapshot {
+            entries: vec![entry_with_claimed_origin(
+                "easynet:///r/realm-b/agent/x",
+                None,
+            )],
+        }]);
+        let outcome = consume_directory_event_stream_with_idle_timeout(
+            &mut client,
+            &cell,
+            stream,
+            5_000, // 5s — way bigger than the test runtime.
+        )
+        .await;
+
+        assert_eq!(outcome, ConsumeOutcome::StreamEnded);
+        // Cell got the entry stamped + published.
+        let snap = cell.snapshot();
+        assert!(snap
+            .get("realm-b")
+            .and_then(|v| v.lookup("easynet:///r/realm-b/agent/x"))
+            .is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn consume_with_idle_timeout_resets_on_each_received_frame() {
+        // Frames arrive every 30ms; idle timeout is 50ms. The
+        // reset-on-receive contract means the timeout never
+        // fires before the stream ends naturally. Without the
+        // per-loop sleep recreate, each iteration would
+        // accumulate elapsed-since-stream-start and trip
+        // around the 2nd or 3rd frame.
+        use futures::StreamExt;
+        let mut client = RemoteDirectoryClient::new(
+            "realm-b".to_string(),
+            "https://hub-b.example:50443".to_string(),
+        );
+        client.on_dial_ok();
+        let cell = SharedFederatedDirectoryView::default();
+
+        // 5 frames at 30ms cadence = 150ms total runtime; idle
+        // timeout 50ms only trips if the reset is broken.
+        // First frame must be Snapshot per FSM contract; the
+        // remaining four are Heartbeats which exercise the
+        // reset-on-receive without changing the view.
+        let stream = futures::stream::unfold(0, |i| async move {
+            if i >= 5 {
+                return None;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            let event = if i == 0 {
+                DirectoryEvent::Snapshot { entries: vec![] }
+            } else {
+                DirectoryEvent::Heartbeat {
+                    sent_at_unix_ms: 1_000 + i * 30,
+                }
+            };
+            Some((event, i + 1))
+        })
+        .boxed();
+
+        let outcome = consume_directory_event_stream_with_idle_timeout(
+            &mut client,
+            &cell,
+            stream,
+            50,
+        )
+        .await;
+        assert_eq!(
+            outcome,
+            ConsumeOutcome::StreamEnded,
+            "30ms-cadence stream must NOT trip the 50ms idle timeout"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn consume_with_idle_timeout_protocol_violation_aborts() {
+        // FSM rejects an Upsert before Snapshot → consumer
+        // returns ProtocolViolation, distinct from IdleTimeout.
+        let mut client = RemoteDirectoryClient::new(
+            "realm-b".to_string(),
+            "https://hub-b.example:50443".to_string(),
+        );
+        client.on_dial_ok();
+        let cell = SharedFederatedDirectoryView::default();
+
+        let stream = futures::stream::iter(vec![DirectoryEvent::Upsert {
+            entry: entry_with_claimed_origin("easynet:///r/realm-b/agent/sneaky", None),
+        }]);
+        let outcome = consume_directory_event_stream_with_idle_timeout(
+            &mut client,
+            &cell,
+            stream,
+            5_000,
+        )
+        .await;
+        assert!(matches!(outcome, ConsumeOutcome::ProtocolViolation(_)));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
