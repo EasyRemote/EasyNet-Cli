@@ -849,6 +849,20 @@ impl DaemonInvocationService {
             (None, Some(_)) => true,
         };
 
+        // Observable trace for operators debugging answer-sheet /
+        // demo runs — proves which dispatch arm fired without
+        // requiring an envelope-level packet capture. Cheap (one
+        // eprintln per call) and the only daemon-A-side signal
+        // that distinguishes "took cross-tenant arm" from "took
+        // local-presence arm" when the inner ability happens to
+        // be a hub-served one (e.g. federation.heartbeat).
+        eprintln!(
+            "[axon-serve] federation.forward_invoke dispatch: \
+             target_uri={} target_tenant={:?} local_tenant={:?} \
+             is_local_tenant={}",
+            request.target_uri, target_tenant, local_tenant, is_local_tenant,
+        );
+
         // Decode the inner payload up front. The
         // `correlation_call_id` field is required by DEC-N4 §2.1
         // so both arms (local-tenant fast-path AND cross-tenant
@@ -1053,6 +1067,13 @@ impl DaemonInvocationService {
                 // result bytes, linking to the target hub's
                 // InvocationReceipt by `child_invocation_id =
                 // correlation_call_id`.
+                eprintln!(
+                    "[axon-serve] federation.forward_invoke cross-tenant arm \
+                     OK: target_uri={} target_hub_uri={} result_bytes_len={}",
+                    request.target_uri,
+                    target_hub_uri,
+                    peer_response.result.len(),
+                );
                 self.admission.receipt_store().record(build_forward_receipt(
                     &correlation_call_id,
                     &request.target_uri,
