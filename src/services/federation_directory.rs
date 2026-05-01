@@ -93,6 +93,209 @@ pub struct DirectoryEntry {
     pub last_seen_unix_ms: Option<i64>,
 }
 
+// ── DirectoryEvent (PR-N3 N3-2) ────────────────────────────────────
+
+/// Frames the `subscribe_directory` server-stream emits to a
+/// subscriber.
+///
+/// **Spec v2 §2.2**. Tagged with `#[serde(tag = "type",
+/// rename_all = "snake_case")]` so JSON consumers see the
+/// ergonomic `{"type": "upsert", "entry": {...}}` shape. The
+/// first frame on every connection MUST be `Snapshot`; thereafter
+/// only `Upsert`, `Remove`, or `Heartbeat`. A second `Snapshot`
+/// mid-stream is a protocol violation and the receiver MUST drop
+/// the connection (see `SubscriberFsm`).
+///
+/// `Heartbeat` is the keepalive frame sent every 30s when no
+/// real event has been emitted. Receivers MUST tolerate it (drop
+/// on the floor); senders MUST emit it so the receiver's idle-
+/// timeout watcher can distinguish "stream alive but quiet" from
+/// "stream silently dead" and trigger a reconnect when the
+/// keepalive itself stops.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DirectoryEvent {
+    /// First frame on every subscribe stream. Receiver replaces
+    /// its peer-keyed view wholesale.
+    Snapshot { entries: Vec<DirectoryEntry> },
+    /// Incremental: one entry added or status-changed.
+    Upsert { entry: DirectoryEntry },
+    /// Incremental: entry removed.
+    Remove { agent_uri: String, reason: String },
+    /// Keepalive. Sender emits every 30s when no other frame
+    /// has been emitted in window.
+    Heartbeat { sent_at_unix_ms: i64 },
+}
+
+// ── Subscriber FSM (PR-N3 N3-2) ────────────────────────────────────
+
+/// Per-peer subscribe-stream state machine.
+///
+/// **Spec v2 §2.3**. The state transitions are:
+///
+/// ```text
+///   Disconnected ──dial──>  Connecting
+///   Connecting   ──ok──>    Snapshotting
+///   Connecting   ──fail──>  Backoff(t = min(t*2, 60s))
+///   Snapshotting ──Snapshot frame─> Pumping
+///   Pumping      ──Upsert/Remove/Heartbeat─> Pumping
+///   Pumping      ──stream end─> Disconnected
+///   Pumping      ──60s no frame─> Disconnected (treat as dead)
+///   Backoff(t)   ──t expires─>   Connecting
+/// ```
+///
+/// The FSM is pure data — it owns no clock and no I/O. The
+/// per-peer tokio task that drives it calls `on_dial_ok`,
+/// `on_dial_err`, `on_frame`, `on_idle_timeout`, and
+/// `on_stream_end` from real I/O outcomes; backoff scheduling
+/// reads `next_backoff_ms` and sleeps externally. This isolation
+/// is what makes the FSM unit-testable without a tokio runtime.
+pub struct SubscriberFsm {
+    state: SubscriberState,
+    /// Most recent backoff floor in milliseconds. Cap is 60_000;
+    /// floor is 1_000. Doubles on each consecutive dial failure;
+    /// resets to 1_000 on the first non-Heartbeat frame in a
+    /// Pumping window.
+    backoff_ms: u64,
+}
+
+/// Public view of the FSM's current state. Consumers that need
+/// to observe progress (eg. an admin dashboard rendering "peer
+/// X is connected" / "peer X is in 8s backoff") match on this.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubscriberState {
+    Disconnected,
+    /// Dial in flight; waiting on TCP/TLS + initial gRPC frame.
+    Connecting,
+    /// Connection up; waiting for the mandatory Snapshot frame.
+    Snapshotting,
+    /// Snapshot received; pumping incremental frames.
+    Pumping,
+    /// Last dial failed; sleep `delay_ms` then retry.
+    Backoff { delay_ms: u64 },
+}
+
+/// Errors the FSM emits when an inbound frame violates the
+/// stream contract. The per-peer task maps these to a clean
+/// disconnect + Backoff transition.
+#[derive(Debug, Clone)]
+pub enum FsmError {
+    /// A frame arrived that the current state cannot accept
+    /// (eg. Snapshot mid-Pumping, or Upsert before Snapshot).
+    /// The receiver MUST drop the connection.
+    ProtocolViolation(&'static str),
+}
+
+const BACKOFF_FLOOR_MS: u64 = 1_000;
+const BACKOFF_CEILING_MS: u64 = 60_000;
+
+impl SubscriberFsm {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            state: SubscriberState::Disconnected,
+            backoff_ms: BACKOFF_FLOOR_MS,
+        }
+    }
+
+    pub fn state(&self) -> &SubscriberState {
+        &self.state
+    }
+
+    /// Backoff value the per-peer task should sleep before the
+    /// next dial attempt. Always within `[BACKOFF_FLOOR_MS,
+    /// BACKOFF_CEILING_MS]`.
+    pub fn next_backoff_ms(&self) -> u64 {
+        self.backoff_ms
+    }
+
+    /// Successful dial: TCP/TLS up, gRPC stream open. Awaiting
+    /// the mandatory Snapshot frame.
+    pub fn on_dial_ok(&mut self) {
+        self.state = SubscriberState::Snapshotting;
+    }
+
+    /// Dial failed (TCP, TLS handshake, gRPC open, anything
+    /// before the first frame). Sets up the next backoff window.
+    pub fn on_dial_err(&mut self) {
+        let next_delay = self.backoff_ms.saturating_mul(2).min(BACKOFF_CEILING_MS);
+        self.backoff_ms = next_delay.max(BACKOFF_FLOOR_MS);
+        self.state = SubscriberState::Backoff {
+            delay_ms: self.backoff_ms,
+        };
+    }
+
+    /// Stream ended without error. Drop to Disconnected; the
+    /// per-peer task drives the reconnect.
+    pub fn on_stream_end(&mut self) {
+        self.state = SubscriberState::Disconnected;
+    }
+
+    /// 60s elapsed without any frame (including Heartbeat). The
+    /// peer is silently dead; tear down + reconnect.
+    pub fn on_idle_timeout(&mut self) {
+        self.state = SubscriberState::Disconnected;
+    }
+
+    /// Process an inbound frame.
+    ///
+    /// Returns `Err(ProtocolViolation)` when the frame violates
+    /// the contract (eg. Snapshot-mid-Pumping); the receiver
+    /// MUST drop the connection in that case (the FSM's state
+    /// has already been set to Disconnected). Returns `Ok(())`
+    /// for all valid frames; the FSM transitions internally and
+    /// reading `state()` after the call shows the new state.
+    pub fn on_frame(&mut self, event: &DirectoryEvent) -> Result<(), FsmError> {
+        match (&self.state, event) {
+            (SubscriberState::Snapshotting, DirectoryEvent::Snapshot { .. }) => {
+                self.state = SubscriberState::Pumping;
+                Ok(())
+            }
+            (SubscriberState::Snapshotting, _) => {
+                self.state = SubscriberState::Disconnected;
+                Err(FsmError::ProtocolViolation(
+                    "expected Snapshot frame; got incremental",
+                ))
+            }
+            (SubscriberState::Pumping, DirectoryEvent::Snapshot { .. }) => {
+                self.state = SubscriberState::Disconnected;
+                Err(FsmError::ProtocolViolation(
+                    "second Snapshot mid-stream",
+                ))
+            }
+            (SubscriberState::Pumping, DirectoryEvent::Upsert { .. })
+            | (SubscriberState::Pumping, DirectoryEvent::Remove { .. }) => {
+                // Spec §2.3: backoff resets on the first non-
+                // Heartbeat frame in a Pumping window.
+                self.backoff_ms = BACKOFF_FLOOR_MS;
+                Ok(())
+            }
+            (SubscriberState::Pumping, DirectoryEvent::Heartbeat { .. }) => {
+                // Heartbeat alone is liveness; not evidence the
+                // peer can serve real data. Backoff stays.
+                Ok(())
+            }
+            // Frames arriving while Disconnected / Connecting /
+            // Backoff are not theoretically possible if the per-
+            // peer task drives the FSM correctly, but we surface
+            // them as protocol violations to make incorrect
+            // drivers loud.
+            _ => {
+                self.state = SubscriberState::Disconnected;
+                Err(FsmError::ProtocolViolation(
+                    "frame in disconnected/connecting/backoff state",
+                ))
+            }
+        }
+    }
+}
+
+impl Default for SubscriberFsm {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,6 +382,200 @@ mod tests {
         assert!(parsed["origin_realm"].is_null());
         assert!(parsed["hub_endpoint"].is_null());
         assert!(parsed["last_seen_unix_ms"].is_null());
+    }
+
+    // ── N3-2 DirectoryEvent + subscribe_directory FSM ────────────
+
+    fn sample_entry() -> DirectoryEntry {
+        DirectoryEntry {
+            agent_uri: "easynet:///r/realm-a/agent/device-A".to_string(),
+            node_id: "node-1".to_string(),
+            display_name: Some("silan-laptop".to_string()),
+            status: "active".to_string(),
+            origin_realm: Some("realm-a".to_string()),
+            hub_endpoint: Some("https://hub-a.example:50443".to_string()),
+            last_seen_unix_ms: Some(1_714_492_800_000),
+        }
+    }
+
+    #[test]
+    fn directory_event_snapshot_serialises_with_type_tag() {
+        let evt = DirectoryEvent::Snapshot {
+            entries: vec![sample_entry()],
+        };
+        let bytes = serde_json::to_vec(&evt).expect("serialise snapshot");
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("re-parse");
+        assert_eq!(parsed["type"], "snapshot");
+        assert_eq!(parsed["entries"][0]["agent_uri"], sample_entry().agent_uri);
+    }
+
+    #[test]
+    fn directory_event_upsert_remove_heartbeat_serialise_with_type_tag() {
+        let upsert_bytes =
+            serde_json::to_vec(&DirectoryEvent::Upsert { entry: sample_entry() }).unwrap();
+        let upsert: serde_json::Value = serde_json::from_slice(&upsert_bytes).unwrap();
+        assert_eq!(upsert["type"], "upsert");
+
+        let remove_bytes = serde_json::to_vec(&DirectoryEvent::Remove {
+            agent_uri: "easynet:///r/realm-a/agent/dropped".to_string(),
+            reason: "shutdown".to_string(),
+        })
+        .unwrap();
+        let remove: serde_json::Value = serde_json::from_slice(&remove_bytes).unwrap();
+        assert_eq!(remove["type"], "remove");
+        assert_eq!(remove["reason"], "shutdown");
+
+        let hb_bytes = serde_json::to_vec(&DirectoryEvent::Heartbeat {
+            sent_at_unix_ms: 1_714_492_800_000,
+        })
+        .unwrap();
+        let hb: serde_json::Value = serde_json::from_slice(&hb_bytes).unwrap();
+        assert_eq!(hb["type"], "heartbeat");
+        assert_eq!(hb["sent_at_unix_ms"], 1_714_492_800_000_i64);
+    }
+
+    #[test]
+    fn directory_event_round_trips_through_serde() {
+        let original = DirectoryEvent::Upsert { entry: sample_entry() };
+        let bytes = serde_json::to_vec(&original).expect("serialise");
+        let restored: DirectoryEvent = serde_json::from_slice(&bytes).expect("deserialise");
+        assert_eq!(original, restored);
+    }
+
+    // ── FSM ──
+
+    #[test]
+    fn fsm_starts_disconnected() {
+        let fsm = SubscriberFsm::new();
+        assert!(matches!(fsm.state(), &SubscriberState::Disconnected));
+        assert_eq!(fsm.next_backoff_ms(), 1000);
+    }
+
+    #[test]
+    fn fsm_dial_success_then_snapshot_promotes_to_pumping() {
+        let mut fsm = SubscriberFsm::new();
+        fsm.on_dial_ok();
+        assert!(matches!(fsm.state(), &SubscriberState::Snapshotting));
+
+        fsm.on_frame(&DirectoryEvent::Snapshot { entries: vec![] }).expect("snapshot ok");
+        assert!(matches!(fsm.state(), &SubscriberState::Pumping));
+    }
+
+    #[test]
+    fn fsm_second_snapshot_mid_stream_is_protocol_violation() {
+        // Spec §2.3: a second Snapshot frame after the first
+        // promotes-to-Pumping is a protocol violation; receiver
+        // MUST drop the connection.
+        let mut fsm = SubscriberFsm::new();
+        fsm.on_dial_ok();
+        fsm.on_frame(&DirectoryEvent::Snapshot { entries: vec![] }).expect("first snapshot ok");
+        let err = fsm
+            .on_frame(&DirectoryEvent::Snapshot { entries: vec![] })
+            .expect_err("second snapshot must reject");
+        assert!(matches!(err, FsmError::ProtocolViolation(_)));
+        // Receiver moves to Disconnected so backoff drives a
+        // rebuild.
+        assert!(matches!(fsm.state(), &SubscriberState::Disconnected));
+    }
+
+    #[test]
+    fn fsm_upsert_before_snapshot_is_protocol_violation() {
+        // Spec §2.3: Snapshot is mandatory and exactly-once at
+        // the front of every connection. Any incremental frame
+        // arriving while still Snapshotting is a violation.
+        let mut fsm = SubscriberFsm::new();
+        fsm.on_dial_ok();
+        let err = fsm
+            .on_frame(&DirectoryEvent::Upsert { entry: sample_entry() })
+            .expect_err("upsert before snapshot must reject");
+        assert!(matches!(err, FsmError::ProtocolViolation(_)));
+        assert!(matches!(fsm.state(), &SubscriberState::Disconnected));
+    }
+
+    #[test]
+    fn fsm_pumping_accepts_upsert_remove_heartbeat() {
+        let mut fsm = SubscriberFsm::new();
+        fsm.on_dial_ok();
+        fsm.on_frame(&DirectoryEvent::Snapshot { entries: vec![] }).expect("snapshot");
+        for evt in [
+            DirectoryEvent::Upsert { entry: sample_entry() },
+            DirectoryEvent::Remove {
+                agent_uri: "easynet:///r/realm-a/agent/x".to_string(),
+                reason: "drop".to_string(),
+            },
+            DirectoryEvent::Heartbeat {
+                sent_at_unix_ms: 1_714_492_800_000,
+            },
+        ] {
+            fsm.on_frame(&evt).expect("pumping accepts");
+            assert!(matches!(fsm.state(), &SubscriberState::Pumping));
+        }
+    }
+
+    #[test]
+    fn fsm_dial_failure_sets_backoff_and_state() {
+        let mut fsm = SubscriberFsm::new();
+        fsm.on_dial_err();
+        assert!(matches!(fsm.state(), &SubscriberState::Backoff { .. }));
+        assert_eq!(fsm.next_backoff_ms(), 2000);
+        fsm.on_dial_err();
+        assert_eq!(fsm.next_backoff_ms(), 4000);
+        // Backoff caps at 60_000ms regardless of how many
+        // failures we accumulate.
+        for _ in 0..30 {
+            fsm.on_dial_err();
+        }
+        assert_eq!(fsm.next_backoff_ms(), 60_000);
+    }
+
+    #[test]
+    fn fsm_first_real_frame_resets_backoff() {
+        let mut fsm = SubscriberFsm::new();
+        fsm.on_dial_err();
+        fsm.on_dial_err();
+        assert_eq!(fsm.next_backoff_ms(), 4000);
+
+        // After success-then-snapshot-then-real-event we go
+        // back to the floor.
+        fsm.on_dial_ok();
+        fsm.on_frame(&DirectoryEvent::Snapshot { entries: vec![] }).unwrap();
+        fsm.on_frame(&DirectoryEvent::Upsert { entry: sample_entry() }).unwrap();
+        assert_eq!(fsm.next_backoff_ms(), 1000);
+    }
+
+    #[test]
+    fn fsm_heartbeat_alone_does_not_reset_backoff() {
+        // Spec §2.3 last paragraph: backoff resets "on any
+        // successful Pumping transition that received at least
+        // one non-Heartbeat frame". Heartbeat alone is liveness;
+        // it is not evidence the peer can serve real data.
+        let mut fsm = SubscriberFsm::new();
+        fsm.on_dial_err();
+        fsm.on_dial_err();
+        assert_eq!(fsm.next_backoff_ms(), 4000);
+
+        fsm.on_dial_ok();
+        fsm.on_frame(&DirectoryEvent::Snapshot { entries: vec![] }).unwrap();
+        fsm.on_frame(&DirectoryEvent::Heartbeat {
+            sent_at_unix_ms: 1_714_492_800_000,
+        })
+        .unwrap();
+        // Backoff stays at the next-step value.
+        assert_eq!(fsm.next_backoff_ms(), 4000);
+    }
+
+    #[test]
+    fn fsm_idle_timeout_drops_to_disconnected() {
+        // Spec §2.3: 60s no-frame triggers reconnect. The FSM
+        // surfaces this via on_idle_timeout; the FSM does not
+        // own its own clock — the per-peer task drives it.
+        let mut fsm = SubscriberFsm::new();
+        fsm.on_dial_ok();
+        fsm.on_frame(&DirectoryEvent::Snapshot { entries: vec![] }).unwrap();
+        fsm.on_frame(&DirectoryEvent::Upsert { entry: sample_entry() }).unwrap();
+
+        fsm.on_idle_timeout();
+        assert!(matches!(fsm.state(), &SubscriberState::Disconnected));
     }
 
     #[test]
