@@ -29,7 +29,11 @@ use std::sync::Arc;
 
 use super::handle::KeyringHandle;
 use super::store::{Entry, KeyStatus, PeerStatus};
-use super::user_binding_chain::{UserBindingToken, ED25519_PUBKEY_LEN, USER_BINDING_NONCE_LEN};
+use super::federated_bindings::{FederatedBindingsStore, FederatedUserBinding};
+use super::user_binding_chain::{
+    verify_user_binding_signature, UserBindingError, UserBindingToken, ED25519_PUBKEY_LEN,
+    USER_BINDING_FRESHNESS_MS, USER_BINDING_NONCE_LEN,
+};
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
 fn b64_encode(bytes: &[u8]) -> String {
@@ -267,6 +271,132 @@ fn parse_realm_from_uri(uri: &str) -> Option<&str> {
     Some(realm)
 }
 
+/// **PR-N4 commit 3/N**. `<self>.keyring.consume_federate_user_token`
+/// ability handler. Realm B's user (already authenticated on
+/// realm B with `local_user_id`) consumes a `UserBindingToken`
+/// issued by realm A. On success, a `FederatedUserBinding` row
+/// is written to the daemon's federated bindings store —
+/// subsequent cross-realm discovery / device-listing surfaces
+/// can then match `(source_realm, source_user_uri) →
+/// local_user_id` to filter the user's devices across realms.
+///
+/// Four-check verify chain per spec §commit 3/N (in evaluation
+/// order — fastest checks first to short-circuit attacks):
+///   1. `target_realm == self_realm` — INV-3 unidirectional;
+///       a token issued for realm C cannot be replayed at us.
+///   2. `issued_at_ms` is within `USER_BINDING_FRESHNESS_MS`
+///       of `now_ms` — bounds the replay window even if the
+///       per-nonce store loses state.
+///   3. token signature verifies via the embedded
+///       `source_user_pubkey` (and the canonical bytes shape
+///       from commit 1/N). The full PR-N2 cross-realm-pubkey-
+///       belongs-to-source-realm-backend check is added in
+///       commit 4/N's `FederatedUserResolver` layer; the
+///       structural verify here proves the bytes were signed
+///       by whoever holds the private key matching the
+///       embedded source_user_pubkey, which combined with
+///       INV-2 (consumer is in an authenticated session) +
+///       replay defence is meaningful at v1.
+///   4. nonce is not in the consumer's replay store for this
+///       source_realm — INV-3 dedup.
+///
+/// JSON wire shape:
+/// ```text
+/// args: {
+///   "token": <UserBindingToken JSON>,
+///   "self_realm": "<realm-b>",
+///   "local_user_id": "<consumer's session user id>",
+///   "now_unix_ms": <u64>,                  // caller-supplied for testability
+/// }
+/// returns: {
+///   "binding_recorded": true,
+///   "source_realm": "<realm-a>",
+///   "source_user_uri": "<...>",
+///   "local_user_id": "<...>",
+/// }
+/// ```
+///
+/// The `now_unix_ms` is caller-supplied so tests can pin a
+/// deterministic clock; production callers (the consume bridge
+/// or the backend's HTTP path) pass the current epoch-ms.
+pub fn handle_consume_federate_user_token(
+    bindings: &FederatedBindingsStore,
+    args: Value,
+) -> Result<Value> {
+    let self_realm = require_str(&args, "self_realm")?.to_string();
+    if self_realm.is_empty() {
+        return Err(anyhow!("self_realm must be non-empty"));
+    }
+    let local_user_id = require_str(&args, "local_user_id")?.to_string();
+    if local_user_id.is_empty() {
+        return Err(anyhow!("local_user_id must be non-empty"));
+    }
+    let now_ms = args
+        .get("now_unix_ms")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| anyhow!("missing required u64 field `now_unix_ms`"))?;
+
+    let token: UserBindingToken = serde_json::from_value(
+        args.get("token")
+            .cloned()
+            .ok_or_else(|| anyhow!("missing required field `token`"))?,
+    )
+    .map_err(|err| anyhow!("token JSON shape: {err}"))?;
+
+    // ── Check 1: target_realm matches us ──
+    if token.target_realm != self_realm {
+        let err = UserBindingError::WrongTargetRealm {
+            expected: self_realm.clone(),
+            actual: token.target_realm.clone(),
+        };
+        return Err(anyhow!("{}", err));
+    }
+
+    // ── Check 2: freshness window ──
+    if now_ms.saturating_sub(token.issued_at_ms) > USER_BINDING_FRESHNESS_MS {
+        let err = UserBindingError::ExpiredToken {
+            issued_at_ms: token.issued_at_ms,
+            now_ms,
+        };
+        return Err(anyhow!("{}", err));
+    }
+    // Future-dated tokens are also rejected; an issuer with a
+    // wildly skewed clock cannot extend the window arbitrarily.
+    if token.issued_at_ms > now_ms.saturating_add(USER_BINDING_FRESHNESS_MS) {
+        let err = UserBindingError::ExpiredToken {
+            issued_at_ms: token.issued_at_ms,
+            now_ms,
+        };
+        return Err(anyhow!("future-dated token: {}", err));
+    }
+
+    // ── Check 3: signature verifies ──
+    verify_user_binding_signature(&token).map_err(|err| anyhow!("{}", err))?;
+
+    // ── Check 4: replay ──
+    let nonce_b64 = b64_encode(&token.nonce);
+    if bindings.nonce_seen(&token.source_realm, &nonce_b64) {
+        return Err(anyhow!("{}", UserBindingError::ReplayDetected));
+    }
+
+    // All checks passed — record.
+    let binding = FederatedUserBinding {
+        source_realm: token.source_realm.clone(),
+        source_user_uri: token.source_user_uri.clone(),
+        source_user_pubkey_b64: b64_encode(&token.source_user_pubkey),
+        local_user_id: local_user_id.clone(),
+        bound_at_unix_ms: i64::try_from(now_ms).unwrap_or(i64::MAX),
+    };
+    bindings.record_binding(binding, nonce_b64)?;
+
+    Ok(json!({
+        "binding_recorded": true,
+        "source_realm":     token.source_realm,
+        "source_user_uri":  token.source_user_uri,
+        "local_user_id":    local_user_id,
+    }))
+}
+
 pub fn handle_rotate(handle: &KeyringHandle, args: Value) -> Result<Value> {
     let key_id = require_str(&args, "key_id")?;
     let (new_id, retired_id, epoch) = handle.rotate(key_id)?;
@@ -384,6 +514,26 @@ pub fn register_for_owner(reg: &mut LocalAbilityRegistry, owner: &str, handle: A
     reg.register_rpc(
         &name("federate_user_identity_token"),
         Arc::new(move |args| handle_federate_user_identity_token(&h, args)),
+    );
+}
+
+/// **PR-N4 commit 3/N**. Register the consumer-side
+/// `<self>.keyring.consume_federate_user_token` ability under
+/// `owner`. Kept as a separate registration function rather
+/// than folding into `register_for_owner` because the bindings
+/// store has a different lifecycle than the keyring handle —
+/// production daemons construct one bindings store per process
+/// from a path, while the keyring handle is per-ring.
+pub fn register_federated_consume_for_owner(
+    reg: &mut LocalAbilityRegistry,
+    owner: &str,
+    bindings: Arc<FederatedBindingsStore>,
+) {
+    let name = format!("{owner}.keyring.consume_federate_user_token");
+    let b = bindings.clone();
+    reg.register_rpc(
+        &name,
+        Arc::new(move |args| handle_consume_federate_user_token(&b, args)),
     );
 }
 
@@ -683,5 +833,206 @@ mod tests {
         )
         .expect_err("must reject empty target_realm");
         assert!(err.to_string().contains("non-empty"));
+    }
+
+    // ── PR-N4 commit 3/N — consume_federate_user_token ───────
+
+    /// Issue a token from realm A (using a fresh keyring) and
+    /// return both the JSON token + the source-realm-pubkey so
+    /// the test driver can wire up the consumer side.
+    fn issue_token_from_realm_a(target_realm: &str, issued_at_ms: u64) -> Value {
+        let (h, _d) = handle();
+        h.set_device_subject("easynet:///r/realm-a/agent/user-c".to_string())
+            .unwrap();
+        handle_create(&h, json!({"purpose": "agent_signing"})).unwrap();
+        let resp = handle_federate_user_identity_token(
+            &h,
+            json!({
+                "target_realm": target_realm,
+                "issued_at_unix_ms": issued_at_ms,
+            }),
+        )
+        .unwrap();
+        resp["token"].clone()
+    }
+
+    #[test]
+    fn consume_federate_user_token_happy_path() {
+        let token = issue_token_from_realm_a("realm-b", 1_714_500_000_000);
+        let bindings = FederatedBindingsStore::in_memory();
+        let resp = handle_consume_federate_user_token(
+            &bindings,
+            json!({
+                "token": token,
+                "self_realm": "realm-b",
+                "local_user_id": "user-c-on-realm-b",
+                "now_unix_ms": 1_714_500_000_000_u64 + 1_000,
+            }),
+        )
+        .expect("consume happy path");
+        assert_eq!(resp["binding_recorded"], json!(true));
+        assert_eq!(resp["source_realm"], json!("realm-a"));
+        assert_eq!(resp["local_user_id"], json!("user-c-on-realm-b"));
+        // Binding was actually written.
+        let bound = bindings
+            .find_local_user("realm-a", "easynet:///r/realm-a/agent/user-c")
+            .expect("binding present");
+        assert_eq!(bound, "user-c-on-realm-b");
+    }
+
+    #[test]
+    fn consume_federate_user_token_rejects_wrong_target_realm() {
+        let token = issue_token_from_realm_a("realm-b", 1_714_500_000_000);
+        let bindings = FederatedBindingsStore::in_memory();
+        let err = handle_consume_federate_user_token(
+            &bindings,
+            json!({
+                "token": token,
+                "self_realm": "realm-c", // = NOT what the token targets
+                "local_user_id": "user",
+                "now_unix_ms": 1_714_500_000_000_u64 + 1_000,
+            }),
+        )
+        .expect_err("must reject wrong target_realm");
+        assert!(err.to_string().contains("wrong target_realm"));
+    }
+
+    #[test]
+    fn consume_federate_user_token_rejects_expired_token() {
+        let token = issue_token_from_realm_a("realm-b", 1_714_500_000_000);
+        let bindings = FederatedBindingsStore::in_memory();
+        // now is well past issued_at + freshness window (24h).
+        let err = handle_consume_federate_user_token(
+            &bindings,
+            json!({
+                "token": token,
+                "self_realm": "realm-b",
+                "local_user_id": "u",
+                "now_unix_ms": 1_714_500_000_000_u64 + 25 * 60 * 60 * 1000,
+            }),
+        )
+        .expect_err("must reject expired token");
+        assert!(err.to_string().contains("expired token"));
+    }
+
+    #[test]
+    fn consume_federate_user_token_rejects_future_dated_token() {
+        // Token issued far in the "future" relative to consumer
+        // clock. Reject — an issuer with skewed clock cannot
+        // extend the freshness window arbitrarily.
+        let issued_ahead = 1_714_500_000_000_u64 + 100 * 60 * 60 * 1000;
+        let token = issue_token_from_realm_a("realm-b", issued_ahead);
+        let bindings = FederatedBindingsStore::in_memory();
+        let err = handle_consume_federate_user_token(
+            &bindings,
+            json!({
+                "token": token,
+                "self_realm": "realm-b",
+                "local_user_id": "u",
+                "now_unix_ms": 1_714_500_000_000_u64,
+            }),
+        )
+        .expect_err("must reject future-dated token");
+        assert!(err.to_string().contains("future-dated"));
+    }
+
+    #[test]
+    fn consume_federate_user_token_rejects_tampered_signature() {
+        let mut token = issue_token_from_realm_a("realm-b", 1_714_500_000_000);
+        // Flip the first byte of the signature.
+        let sig = token["signature"].as_array_mut().unwrap();
+        let first = sig[0].as_u64().unwrap();
+        sig[0] = json!((first ^ 0x01) as u8);
+        let bindings = FederatedBindingsStore::in_memory();
+        let err = handle_consume_federate_user_token(
+            &bindings,
+            json!({
+                "token": token,
+                "self_realm": "realm-b",
+                "local_user_id": "u",
+                "now_unix_ms": 1_714_500_000_000_u64 + 1_000,
+            }),
+        )
+        .expect_err("tampered signature must reject");
+        assert!(err.to_string().contains("invalid signature"));
+    }
+
+    #[test]
+    fn consume_federate_user_token_rejects_replay() {
+        let token = issue_token_from_realm_a("realm-b", 1_714_500_000_000);
+        let bindings = FederatedBindingsStore::in_memory();
+        let args = json!({
+            "token": token,
+            "self_realm": "realm-b",
+            "local_user_id": "u",
+            "now_unix_ms": 1_714_500_000_000_u64 + 1_000,
+        });
+        // First consume succeeds.
+        handle_consume_federate_user_token(&bindings, args.clone()).unwrap();
+        // Second consume of the SAME token (same nonce) is replay.
+        let err = handle_consume_federate_user_token(&bindings, args)
+            .expect_err("replay must reject");
+        assert!(err.to_string().contains("replay detected"));
+    }
+
+    #[test]
+    fn consume_federate_user_token_rejects_empty_self_realm() {
+        let token = issue_token_from_realm_a("realm-b", 1_714_500_000_000);
+        let bindings = FederatedBindingsStore::in_memory();
+        let err = handle_consume_federate_user_token(
+            &bindings,
+            json!({
+                "token": token,
+                "self_realm": "",
+                "local_user_id": "u",
+                "now_unix_ms": 1_714_500_000_000_u64,
+            }),
+        )
+        .expect_err("empty self_realm must reject");
+        assert!(err.to_string().contains("non-empty"));
+    }
+
+    #[test]
+    fn consume_federate_user_token_rejects_empty_local_user_id() {
+        let token = issue_token_from_realm_a("realm-b", 1_714_500_000_000);
+        let bindings = FederatedBindingsStore::in_memory();
+        let err = handle_consume_federate_user_token(
+            &bindings,
+            json!({
+                "token": token,
+                "self_realm": "realm-b",
+                "local_user_id": "",
+                "now_unix_ms": 1_714_500_000_000_u64,
+            }),
+        )
+        .expect_err("empty local_user_id must reject");
+        assert!(err.to_string().contains("non-empty"));
+    }
+
+    #[test]
+    fn consume_federate_user_token_full_round_trip_realm_a_to_realm_b() {
+        // End-to-end: realm A daemon issues, realm B daemon
+        // consumes. This is the cross-realm path — the token's
+        // bytes leave realm A and the consumer's keyring on B
+        // never had the source pubkey before.
+        let token = issue_token_from_realm_a("realm-b", 1_714_500_000_000);
+        // Build a fresh realm B store (no prior knowledge of A).
+        let bindings = FederatedBindingsStore::in_memory();
+        let resp = handle_consume_federate_user_token(
+            &bindings,
+            json!({
+                "token": token,
+                "self_realm": "realm-b",
+                "local_user_id": "user-c-realm-b-id",
+                "now_unix_ms": 1_714_500_000_001_u64,
+            }),
+        )
+        .unwrap();
+        assert_eq!(resp["binding_recorded"], json!(true));
+        // Realm B can now look up the cross-realm user.
+        let local_id = bindings
+            .find_local_user("realm-a", "easynet:///r/realm-a/agent/user-c")
+            .expect("binding present");
+        assert_eq!(local_id, "user-c-realm-b-id");
     }
 }

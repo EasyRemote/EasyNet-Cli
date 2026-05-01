@@ -36,6 +36,15 @@ pub mod store;
 /// land in commits 2/N + 3/N.
 pub mod user_binding_chain;
 
+/// On-disk + in-memory store for cross-realm user identity
+/// bindings (RFC-N PR-N4 commit 3/N). Consumer-side counterpart
+/// to `user_binding_chain.rs`: realm B's
+/// `<self>.keyring.consume_federate_user_token` writes here
+/// after the four-check verify chain passes; later
+/// `<self>.discover` Tier-3 reads the bindings to filter
+/// cross-realm devices by user identity.
+pub mod federated_bindings;
+
 pub use handle::KeyringHandle;
 pub use resolver::{ChainResolver, KeyResolveError, LocalKeyringResolver, PeerKeyringResolver};
 pub use store::{Entry, KeyRing, KeyStatus, MasterKeyKind, PeerEntry, PeerStatus};
