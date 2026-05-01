@@ -84,7 +84,7 @@ use crate::services::axon_serve::federation_wrappers::{
     ABILITY_FEDERATION_FORWARD_INVOKE, ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN,
     ABILITY_FEDERATION_LIST_USER_DEVICES, ABILITY_FEDERATION_RESOLVE,
     ABILITY_FEDERATION_RESOLVE_KEY, ABILITY_FEDERATION_REVOKE,
-    ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
+    ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
 };
 use crate::services::federated_peers_cell::SharedFederatedPeers;
 use crate::services::federation_client::FederationClient;
@@ -464,6 +464,9 @@ impl Invocation for DaemonInvocationService {
         match function {
             ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY => {
                 self.dispatch_federation_subscribe_directory_initial()
+            }
+            ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2 => {
+                self.dispatch_federation_subscribe_directory_v2()
             }
             other => Err(Status::unimplemented(format!(
                 "easynet-daemon: server-stream ability `{other}` is not handled in PR-1; \
@@ -1207,6 +1210,110 @@ impl DaemonInvocationService {
                                  fallible field — update this site to surface Status::internal \
                                  instead of panicking",
                             );
+                            let chunk = InvokeStreamChunk {
+                                content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+                                payload,
+                                ..InvokeStreamChunk::default()
+                            };
+                            return Some((Ok(chunk), (events, presence_weak)));
+                        }
+                        Err(RecvError::Closed) => return None,
+                    }
+                }
+            },
+        );
+
+        let combined = futures::StreamExt::chain(initial_stream, event_stream);
+        Ok(Response::new(
+            Box::pin(combined) as BoxedDownStream<InvokeStreamChunk>
+        ))
+    }
+
+    /// **PR-N3 N3-streaming-1**.
+    /// `federation.subscribe_directory_v2` server-stream
+    /// dispatch. Mirrors v1's pump structure but emits the new
+    /// `DirectoryEvent` wire shape: `Snapshot` first, then
+    /// per-presence-event `Upsert` / `Remove` frames produced
+    /// by `presence_event_to_directory_event`. Lagged →
+    /// re-snapshot recovery + Closed → graceful end mirror v1
+    /// verbatim. Weak-Arc pattern keeps the pump from blocking
+    /// daemon shutdown.
+    fn dispatch_federation_subscribe_directory_v2(
+        &self,
+    ) -> Result<Response<<Self as Invocation>::InvokeStreamStream>, Status> {
+        use crate::services::federation_directory::{
+            presence_event_to_directory_event, DirectoryEvent,
+        };
+
+        let initial_evt = federation_wrappers::build_subscribe_directory_v2_snapshot(
+            &self.presence,
+        );
+        let initial_bytes = serde_json::to_vec(&initial_evt).map_err(|err| {
+            Status::internal(format!(
+                "federation.subscribe_directory_v2: encode initial snapshot: {err}"
+            ))
+        })?;
+        let initial_chunk = InvokeStreamChunk {
+            content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            payload: initial_bytes,
+            ..InvokeStreamChunk::default()
+        };
+
+        let events = self.presence.subscribe_events();
+        let presence_weak = Arc::downgrade(&self.presence);
+
+        let initial_stream = futures::stream::once(async move { Ok(initial_chunk) });
+        let event_stream = futures::stream::unfold(
+            (events, presence_weak),
+            |(mut events, presence_weak)| async move {
+                use tokio::sync::broadcast::error::RecvError;
+
+                loop {
+                    match events.recv().await {
+                        Ok(event) => {
+                            let evt = presence_event_to_directory_event(&event);
+                            // DirectoryEvent is statically Serialize
+                            // (tagged enum of plain types); same
+                            // expect-rationale as v1.
+                            let payload = serde_json::to_vec(&evt).expect(
+                                "DirectoryEvent is statically Serialize; a serialise failure here \
+                                 means the type grew a fallible field — update this site to \
+                                 surface Status::internal instead of panicking",
+                            );
+                            let chunk = InvokeStreamChunk {
+                                content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+                                payload,
+                                ..InvokeStreamChunk::default()
+                            };
+                            return Some((Ok(chunk), (events, presence_weak)));
+                        }
+                        Err(RecvError::Lagged(_)) => {
+                            // Slow consumer; emit a fresh
+                            // Snapshot so the receiver's view
+                            // converges with the registry.
+                            let presence = presence_weak.upgrade()?;
+                            let snap_evt =
+                                federation_wrappers::build_subscribe_directory_v2_snapshot(
+                                    &presence,
+                                );
+                            drop(presence);
+                            let payload = serde_json::to_vec(&snap_evt).expect(
+                                "DirectoryEvent::Snapshot is statically Serialize; same rationale \
+                                 as the Ok arm above",
+                            );
+                            // Per spec §2.3 a second Snapshot
+                            // mid-stream is a protocol violation
+                            // for the *subscriber*; our case is
+                            // the recovery resync — the receiver
+                            // either treats this Snapshot as
+                            // authoritative replacement (matches
+                            // the SubscriberFsm Pumping ⇢
+                            // Snapshot ⇢ violation rule) or
+                            // tears down + reconnects. Lagged is
+                            // a transient slow-consumer event;
+                            // emitting Snapshot here is the v1
+                            // contract carried forward.
+                            let _ = DirectoryEvent::Snapshot { entries: vec![] };
                             let chunk = InvokeStreamChunk {
                                 content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
                                 payload,
@@ -2639,6 +2746,92 @@ mod tests {
             close.is_none(),
             "stream must terminate once all senders drop"
         );
+    }
+
+    #[tokio::test]
+    async fn invoke_stream_dispatches_subscribe_directory_v2_emits_directory_events() {
+        // PR-N3 N3-streaming-1. v2 stream emits DirectoryEvent
+        // shapes (Snapshot first, then Upsert/Remove).
+        use crate::services::federation_directory::DirectoryEvent;
+        use futures::StreamExt;
+
+        let presence = Arc::new(PresenceRegistry::new());
+        let admission = AdmissionFacade::new(
+            Arc::new(RealmTrustAnchor::default()),
+            Some(TEST_DAEMON_URI.to_string()),
+        );
+        let svc = DaemonInvocationService::new(Arc::clone(&presence), admission);
+
+        let resp = svc
+            .invoke_stream(Request::new(InvokeServerStreamRequest {
+                envelope: Some(test_envelope()),
+                function_name: ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2.to_string(),
+                ..InvokeServerStreamRequest::default()
+            }))
+            .await
+            .expect("v2 dispatch returns Ok");
+
+        let mut stream = resp.into_inner();
+
+        // Frame 1: empty Snapshot (registry has no entries yet).
+        let first = stream.next().await.expect("first frame").expect("Ok");
+        assert_eq!(first.content_type, FEDERATION_RESULT_CONTENT_TYPE);
+        let evt: DirectoryEvent =
+            serde_json::from_slice(&first.payload).expect("decodes DirectoryEvent");
+        match evt {
+            DirectoryEvent::Snapshot { entries } => {
+                assert!(entries.is_empty(), "initial snapshot must reflect empty registry");
+            }
+            other => panic!("expected Snapshot first; got {other:?}"),
+        }
+
+        // Frame 2: Upsert after a registry insert.
+        let (sender, _rx) = tokio::sync::mpsc::channel::<
+            Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
+        >(1);
+        presence.insert(
+            "easynet:///r/test-realm/agent/n1".to_string(),
+            sender,
+        );
+        let second = stream.next().await.expect("second frame").expect("Ok");
+        let evt2: DirectoryEvent =
+            serde_json::from_slice(&second.payload).expect("decodes DirectoryEvent");
+        match evt2 {
+            DirectoryEvent::Upsert { entry } => {
+                assert_eq!(entry.agent_uri, "easynet:///r/test-realm/agent/n1");
+                assert_eq!(entry.status, "active");
+                assert_eq!(entry.origin_realm, None);
+            }
+            other => panic!("expected Upsert; got {other:?}"),
+        }
+
+        // Frame 3: Remove after the device's stream closes (we
+        // drop the receiver to trigger the Closed path).
+        // PresenceRegistry's drop-on-receiver-close behaviour is
+        // exercised by the existing v1 test; here we just
+        // explicitly remove via the registry surface.
+        presence.remove(
+            "easynet:///r/test-realm/agent/n1",
+            crate::services::presence_registry::OfflineReason::AdminRevoked,
+        );
+        let third = stream.next().await.expect("third frame").expect("Ok");
+        let evt3: DirectoryEvent =
+            serde_json::from_slice(&third.payload).expect("decodes DirectoryEvent");
+        match evt3 {
+            DirectoryEvent::Remove { agent_uri, reason } => {
+                assert_eq!(agent_uri, "easynet:///r/test-realm/agent/n1");
+                assert_eq!(reason, "admin_revoked");
+            }
+            other => panic!("expected Remove; got {other:?}"),
+        }
+
+        // Drop senders → pump closes.
+        drop(svc);
+        drop(presence);
+        let close = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+            .await
+            .expect("pump closes within 2 s");
+        assert!(close.is_none());
     }
 
     #[tokio::test]

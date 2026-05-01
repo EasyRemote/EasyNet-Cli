@@ -126,6 +126,17 @@ pub const ABILITY_FEDERATION_RESOLVE_KEY: &str = "federation.resolve_key";
 /// so reads here are pure lookup.
 pub const ABILITY_FEDERATION_DISCOVER: &str = "federation.discover";
 
+/// `federation.subscribe_directory_v2` — server-stream variant
+/// of `subscribe_directory` that emits `DirectoryEvent` frames
+/// (Snapshot / Upsert / Remove / Heartbeat) per PR-N3 spec
+/// §2.2-2.3. Distinct from the legacy `federation.subscribe_
+/// directory` (which emits `SubscribeDirectoryInitial` +
+/// `PresenceEventDelta` shapes); the daemon serves both during
+/// the v1→v2 migration so subscriber-side rollout can ramp
+/// independently of hub upgrades.
+pub const ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2: &str =
+    "federation.subscribe_directory_v2";
+
 /// `federation.list_user_devices` — peer-hub user-device
 /// projection (PR-N3 N3-5). Backend on hub A invokes this on
 /// hub B to merge B's view of `tenant_id`'s devices into the
@@ -152,6 +163,7 @@ pub const FEDERATION_ABILITIES: &[&str] = &[
     ABILITY_FEDERATION_DISCOVER,
     ABILITY_FEDERATION_LIST_USER_DEVICES,
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
+    ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
     ABILITY_FEDERATION_REVOKE,
     ABILITY_FEDERATION_FORWARD_INVOKE,
 ];
@@ -756,6 +768,25 @@ pub fn build_subscribe_directory_initial(registry: &PresenceRegistry) -> Subscri
     SubscribeDirectoryInitial { agents }
 }
 
+/// **PR-N3 N3-streaming-1**. Build the initial `Snapshot` frame
+/// for the v2 subscribe stream from the local presence registry.
+/// Each in-registry URI projects to a `DirectoryEntry` via the
+/// pure-data adapter; sorted iteration mirrors v1's
+/// deterministic-bytes-from-deterministic-state contract.
+#[must_use]
+pub fn build_subscribe_directory_v2_snapshot(
+    registry: &PresenceRegistry,
+) -> crate::services::federation_directory::DirectoryEvent {
+    let entries = registry
+        .snapshot()
+        .into_iter()
+        .map(|uri| {
+            crate::services::federation_directory::presence_uri_to_directory_entry(&uri, true)
+        })
+        .collect();
+    crate::services::federation_directory::DirectoryEvent::Snapshot { entries }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -793,7 +824,11 @@ mod tests {
             ABILITY_FEDERATION_LIST_USER_DEVICES,
             "federation.list_user_devices"
         );
-        assert_eq!(FEDERATION_ABILITIES.len(), 10);
+        assert_eq!(
+            ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
+            "federation.subscribe_directory_v2"
+        );
+        assert_eq!(FEDERATION_ABILITIES.len(), 11);
     }
 
     #[test]

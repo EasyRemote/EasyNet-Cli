@@ -96,6 +96,80 @@ pub struct DirectoryEntry {
     pub last_seen_unix_ms: Option<i64>,
 }
 
+// ── PresenceEvent → DirectoryEvent adapter (PR-N3 N3-streaming-1) ──
+
+/// Project a single presence-registry URI into a `DirectoryEntry`
+/// suitable for inclusion in a `DirectoryEvent::Snapshot` or
+/// `Upsert`. The projection is pure — given a URI string and an
+/// `is_active` flag, returns a deterministic entry shape.
+///
+/// `origin_realm` is `None` because the local hub speaks for its
+/// own realm (the §2.4 chokepoint stamps it on the receive side
+/// when this entry crosses to a peer). `display_name` /
+/// `hub_endpoint` / `last_seen_unix_ms` are `None` in the
+/// presence-only projection — the registry knows URIs and online
+/// state, nothing richer. Future enrichment (joining device-
+/// pairing rows for display_name / last-seen) is N3-6 backend-Go
+/// territory.
+///
+/// `node_id` is parsed from the URI tail: the segment after
+/// `/agent/`. Non-canonical URIs (which should not appear in the
+/// registry, but defensive handling matters) get `node_id =
+/// agent_uri.clone()` so downstream consumers always have a
+/// non-empty key.
+#[cfg(feature = "axon-pb")]
+#[must_use]
+pub fn presence_uri_to_directory_entry(agent_uri: &str, is_active: bool) -> DirectoryEntry {
+    let node_id = agent_uri
+        .rsplit_once("/agent/")
+        .map(|(_, tail)| tail.to_string())
+        .unwrap_or_else(|| agent_uri.to_string());
+    DirectoryEntry {
+        agent_uri: agent_uri.to_string(),
+        node_id,
+        display_name: None,
+        status: if is_active { "active" } else { "stale" }.to_string(),
+        origin_realm: None,
+        hub_endpoint: None,
+        last_seen_unix_ms: None,
+    }
+}
+
+/// Convert a single `PresenceEvent` into the corresponding
+/// `DirectoryEvent`. `Online` projects to `Upsert`; `Offline`
+/// projects to `Remove` with the registry's `OfflineReason`
+/// stringified into the `reason` field for operator audit.
+///
+/// **Spec v2 §3.3 broadcast pump**. The hub's
+/// `subscribe_directory_v2` server stream wraps a per-subscriber
+/// `broadcast::Receiver<PresenceEvent>` with this adapter so the
+/// outbound frames carry the `DirectoryEvent` wire shape rather
+/// than the legacy `AgentSummary` shape.
+#[cfg(feature = "axon-pb")]
+#[must_use]
+pub fn presence_event_to_directory_event(
+    event: &crate::services::presence_registry::PresenceEvent,
+) -> DirectoryEvent {
+    use crate::services::presence_registry::{OfflineReason, PresenceEvent};
+    match event {
+        PresenceEvent::Online { uri } => DirectoryEvent::Upsert {
+            entry: presence_uri_to_directory_entry(uri, true),
+        },
+        PresenceEvent::Offline { uri, reason } => {
+            let reason_str = match reason {
+                OfflineReason::StreamClosed => "stream_closed",
+                OfflineReason::StreamReset => "stream_reset",
+                OfflineReason::SendFailed => "send_failed",
+                OfflineReason::AdminRevoked => "admin_revoked",
+            };
+            DirectoryEvent::Remove {
+                agent_uri: uri.clone(),
+                reason: reason_str.to_string(),
+            }
+        }
+    }
+}
+
 // ── DirectoryEvent (PR-N3 N3-2) ────────────────────────────────────
 
 /// Frames the `subscribe_directory` server-stream emits to a
@@ -1300,6 +1374,87 @@ mod tests {
     fn flatten_federated_view_is_empty_when_no_peers() {
         let cell = SharedFederatedDirectoryView::default();
         assert!(flatten_federated_view(&cell).is_empty());
+    }
+
+    // ── PresenceEvent → DirectoryEvent adapter (N3-streaming-1) ──
+
+    #[cfg(feature = "axon-pb")]
+    mod presence_adapter_tests {
+        use super::*;
+        use crate::services::presence_registry::{OfflineReason, PresenceEvent};
+
+        #[test]
+        fn presence_uri_to_directory_entry_extracts_node_id_from_canonical_shape() {
+            let entry = presence_uri_to_directory_entry(
+                "easynet:///r/realm-a/agent/device-X",
+                true,
+            );
+            assert_eq!(entry.agent_uri, "easynet:///r/realm-a/agent/device-X");
+            assert_eq!(entry.node_id, "device-X");
+            assert_eq!(entry.status, "active");
+            // Local hub speaks for own realm; chokepoint stamps
+            // origin_realm on the receive side.
+            assert_eq!(entry.origin_realm, None);
+            assert_eq!(entry.display_name, None);
+            assert_eq!(entry.hub_endpoint, None);
+            assert_eq!(entry.last_seen_unix_ms, None);
+        }
+
+        #[test]
+        fn presence_uri_to_directory_entry_inactive_marks_status_stale() {
+            let entry = presence_uri_to_directory_entry(
+                "easynet:///r/realm-a/agent/device-X",
+                false,
+            );
+            assert_eq!(entry.status, "stale");
+        }
+
+        #[test]
+        fn presence_uri_to_directory_entry_falls_back_when_uri_non_canonical() {
+            // Defensive — registry should never hold these, but
+            // the adapter must produce a non-empty node_id
+            // anyway so downstream code never sees an empty key.
+            let entry = presence_uri_to_directory_entry("not-canonical", true);
+            assert_eq!(entry.node_id, "not-canonical");
+            assert_eq!(entry.agent_uri, "not-canonical");
+        }
+
+        #[test]
+        fn presence_event_online_projects_to_upsert_with_active_status() {
+            let evt = presence_event_to_directory_event(&PresenceEvent::Online {
+                uri: "easynet:///r/realm-a/agent/x".to_string(),
+            });
+            match evt {
+                DirectoryEvent::Upsert { entry } => {
+                    assert_eq!(entry.agent_uri, "easynet:///r/realm-a/agent/x");
+                    assert_eq!(entry.status, "active");
+                }
+                _ => panic!("expected Upsert; got {evt:?}"),
+            }
+        }
+
+        #[test]
+        fn presence_event_offline_projects_to_remove_with_reason_string() {
+            let cases = [
+                (OfflineReason::StreamClosed, "stream_closed"),
+                (OfflineReason::StreamReset, "stream_reset"),
+                (OfflineReason::SendFailed, "send_failed"),
+                (OfflineReason::AdminRevoked, "admin_revoked"),
+            ];
+            for (reason, expected_str) in cases {
+                let evt = presence_event_to_directory_event(&PresenceEvent::Offline {
+                    uri: "easynet:///r/realm-a/agent/x".to_string(),
+                    reason,
+                });
+                match evt {
+                    DirectoryEvent::Remove { agent_uri, reason } => {
+                        assert_eq!(agent_uri, "easynet:///r/realm-a/agent/x");
+                        assert_eq!(reason, expected_str);
+                    }
+                    other => panic!("expected Remove for {reason:?}; got {other:?}"),
+                }
+            }
+        }
     }
 
     // ── PollOnce integration (N3-3.1) ─────────────────────────
