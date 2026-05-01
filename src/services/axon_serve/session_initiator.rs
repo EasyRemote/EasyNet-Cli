@@ -97,7 +97,7 @@ use rand::RngCore as _;
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
+use tonic::transport::{Channel, Endpoint};
 use tonic::Status;
 
 use crate::pb::axon::v1::invocation_client::InvocationClient;
@@ -215,13 +215,22 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
         .connect_timeout(Duration::from_secs(10));
 
     if let Some(ca_path) = hub_ca_pem_path {
-        let ca_pem =
-            std::fs::read(ca_path).map_err(|err| SessionError::TlsCaRead {
-                path: ca_path.to_path_buf(),
-                source: err,
-            })?;
-        let ca = Certificate::from_pem(&ca_pem);
-        let tls = ClientTlsConfig::new().ca_certificate(ca);
+        // Shared with `federation_client::cross_hub_dial::resolve_
+        // peer_channel` via `federation_client::peer_dial::pinned_
+        // tls_config` so both outbound dial sites have one audited
+        // PEM-read + Certificate::from_pem + ClientTlsConfig path.
+        // The pure-function helper returns a typed `PinnedTlsError`
+        // that we wrap into the existing `SessionError::TlsCaRead`
+        // variant — supervisor log formatting and downstream tests
+        // stay byte-identical.
+        let tls = crate::services::federation_client::pinned_tls_config(ca_path).map_err(
+            |err| match err {
+                crate::services::federation_client::PinnedTlsError::ReadFailed {
+                    path,
+                    source,
+                } => SessionError::TlsCaRead { path, source },
+            },
+        )?;
         endpoint =
             endpoint
                 .tls_config(tls)

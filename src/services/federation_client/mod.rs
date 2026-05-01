@@ -52,7 +52,9 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub mod cross_hub_dial;
+pub mod peer_dial;
 
 pub use cross_hub_dial::{
     CrossHubDialer, DirectoryEventStream, FederationClient, FederationClientError, HubUri,
 };
+pub use peer_dial::{pinned_tls_config, PinnedTlsError};

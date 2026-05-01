@@ -53,7 +53,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
-use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
+use tonic::transport::{Channel, Endpoint};
 
 use crate::pb::axon::v1::invocation_client::InvocationClient;
 use crate::pb::axon::v1::{InvokeRequest, InvokeResponse, InvokeServerStreamRequest};
@@ -585,17 +585,15 @@ impl CrossHubDialer {
             return Ok(cached.clone());
         }
 
-        let ca_pem = std::fs::read(ca_pem_path).map_err(|err| {
-            FederationClientError::DialFailed {
+        // Shared with `axon_serve::session_initiator::dial_and_run_
+        // session` via `federation_client::peer_dial::pinned_tls_
+        // config` so both outbound dial sites have one audited
+        // PEM-read + Certificate::from_pem + ClientTlsConfig path.
+        let tls = super::peer_dial::pinned_tls_config(ca_pem_path)
+            .map_err(|err| FederationClientError::DialFailed {
                 hub: target_hub.clone(),
-                detail: format!(
-                    "read tls_ca_pem_path `{}`: {err}",
-                    ca_pem_path.display()
-                ),
-            }
-        })?;
-        let ca = Certificate::from_pem(&ca_pem);
-        let tls = ClientTlsConfig::new().ca_certificate(ca);
+                detail: err.to_string(),
+            })?;
 
         let endpoint = Endpoint::from_shared(target_hub.clone())
             .map_err(|err| FederationClientError::DialFailed {
