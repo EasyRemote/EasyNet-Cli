@@ -215,6 +215,25 @@ pub struct DaemonInvocationService {
     escalation: Option<
         std::sync::Arc<crate::services::axon_serve::session_escalation::SessionEscalationHandle>,
     >,
+    /// **PR-1 commit 7/9 (LB-56)**. Local ability dispatcher Arc.
+    /// When a `federation.forward_invoke` call's `target_uri` is
+    /// the daemon's OWN canonical URI (i.e. the peer hub is the
+    /// target itself, not a device subscribed to its
+    /// PresenceRegistry), the local-presence push misses by
+    /// construction — hub daemons do not register their own URI
+    /// in the presence map. Without this field, the call surfaces
+    /// as `target_offline` and the cross-hub forward chain breaks
+    /// for peer-targeted abilities (`fs.read` against hub-B's own
+    /// filesystem, `meta.list_abilities` issued through the
+    /// federation wrapping path, etc.). When set, the dispatcher
+    /// falls back to running the inner ability against this Arc
+    /// and stamps the bytes inline into
+    /// `ForwardInvokeResponse.result_bytes`. `None` ⇒ pre-PR-1-7/9
+    /// behaviour (test fixtures + hub-only daemons that don't
+    /// publish a local ability surface). Boot wires this from
+    /// `start_axon_serve_sidecar`'s already-threaded
+    /// `Arc<AbilityDispatcher>`.
+    local_dispatcher: Option<Arc<crate::runtime::ability_dispatch::AbilityDispatcher>>,
 }
 
 impl std::fmt::Debug for DaemonInvocationService {
@@ -277,6 +296,7 @@ impl DaemonInvocationService {
             federated_bindings: None,
             subscribe_v2_heartbeat_interval_ms: 30_000,
             escalation: None,
+            local_dispatcher: None,
         }
     }
 
@@ -340,6 +360,23 @@ impl DaemonInvocationService {
         >,
     ) -> Self {
         self.escalation = Some(handle);
+        self
+    }
+
+    /// **PR-1 commit 7/9 (LB-56)**. Attach the daemon's process-
+    /// wide `AbilityDispatcher` Arc. When set, a
+    /// `federation.forward_invoke` call whose `target_uri` is the
+    /// daemon's own URI falls through to local execution against
+    /// the registered `LocalAbilityRegistry` instead of surfacing
+    /// `target_offline`. See the field doc on `local_dispatcher`
+    /// for the why; closes the source-cited PR-1 commit 7/9 hole
+    /// at line 27 / 32 / 42 / 455 / 497 of this file.
+    #[must_use]
+    pub fn with_local_dispatcher(
+        mut self,
+        dispatcher: Arc<crate::runtime::ability_dispatch::AbilityDispatcher>,
+    ) -> Self {
+        self.local_dispatcher = Some(dispatcher);
         self
     }
 
@@ -932,6 +969,44 @@ impl DaemonInvocationService {
         // DEC-N4 §2.1 — the empty-result shape is no longer the
         // wire surface for offline.
         if is_local_tenant {
+            // **PR-1 commit 7/9 (LB-56) — self-targeted local dispatch**.
+            // When the inbound forward_invoke targets THIS daemon's
+            // own canonical URI, the local-presence push misses by
+            // construction (a hub does not register its own URI in
+            // its PresenceRegistry). Without a synchronous
+            // fall-through to `LocalAbilityRegistry`, the call
+            // surfaces as target_offline even though the target is
+            // perfectly capable of running the ability. This arm
+            // resolves the inner ability against the boot-threaded
+            // `AbilityDispatcher` Arc and stamps the JSON result
+            // bytes inline into ForwardInvokeResponse.result_bytes.
+            //
+            // The semantic difference vs the bidi-push path: this
+            // is a synchronous reply, no reverse-channel correlation
+            // round-trip, no PR-N5 second-receipt update. The
+            // ForwardReceipt is written ONCE with a real result_digest
+            // computed from the bytes returned here.
+            //
+            // Guard: only fires when caller and daemon URIs match
+            // exactly AND the daemon was booted with a local
+            // dispatcher (production hub-mode + both-mode daemons
+            // always have one; test fixtures with `make_service()`
+            // do not, preserving their target_offline expectation).
+            if let (Some(daemon_uri), Some(local_dispatcher)) = (
+                self.admission.daemon_uri(),
+                self.local_dispatcher.as_ref(),
+            ) {
+                if request.target_uri == daemon_uri {
+                    return self.dispatch_self_targeted_forward_invoke(
+                        local_dispatcher,
+                        &inner_payload,
+                        &request,
+                        caller_envelope,
+                        &correlation_call_id,
+                    );
+                }
+            }
+
             // DEC-N5 §1 dual-write — caller hub records the
             // ForwardReceipt eagerly, before the frame push, so a
             // mid-push panic still leaves an audit breadcrumb. On
@@ -1212,6 +1287,98 @@ impl DaemonInvocationService {
                 ))
             }
         }
+    }
+
+    /// **PR-1 commit 7/9 (LB-56)**. Synchronous self-targeted
+    /// `federation.forward_invoke` dispatch.
+    ///
+    /// Caller has confirmed `target_uri == admission.daemon_uri()`
+    /// AND `local_dispatcher.is_some()`. We resolve the inner
+    /// ability against the daemon's `LocalAbilityRegistry` (via
+    /// the `AbilityDispatcher::execute_rpc` path), encode the
+    /// JSON result into bytes, write a single ForwardReceipt with
+    /// a real `result_digest` (no async second update), and
+    /// return the bytes inline in `ForwardInvokeResponse.
+    /// result_bytes`.
+    ///
+    /// Errors map to `tonic::Status`:
+    /// - inner args parse failure → `Status::invalid_argument`
+    /// - ability not registered or handler returned `Err` →
+    ///   `Status::failed_precondition` with the underlying
+    ///   anyhow chain in the message (callers / scripts grepping
+    ///   the daemon log can distinguish "ability not on this
+    ///   daemon" from "ability ran and threw")
+    /// - JSON encode failure of the response →
+    ///   `Status::internal`
+    fn dispatch_self_targeted_forward_invoke(
+        &self,
+        local_dispatcher: &Arc<crate::runtime::ability_dispatch::AbilityDispatcher>,
+        inner_payload: &InnerPayload,
+        request: &federation_wrappers::ForwardInvokeRequest,
+        caller_envelope: Option<&Envelope>,
+        correlation_call_id: &str,
+    ) -> Result<Response<InvokeResponse>, Status> {
+        use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+
+        // Inner args are JSON-encoded bytes per `decode_inner_payload`.
+        // `AbilityDispatcher::execute_rpc` consumes a `Value`, so
+        // round-trip-decode here. Empty → empty object (matches the
+        // dispatcher's args-default convention).
+        let normalized_args: serde_json::Value = if inner_payload.args_bytes.is_empty() {
+            serde_json::Value::Object(Default::default())
+        } else {
+            serde_json::from_slice(&inner_payload.args_bytes).map_err(|err| {
+                Status::invalid_argument(format!(
+                    "federation.forward_invoke: self-targeted dispatch could not parse inner args \
+                     for ability `{}`: {err}",
+                    inner_payload.ability,
+                ))
+            })?
+        };
+
+        let target = InvocationTarget {
+            scope: TargetScope::Local,
+            ability: inner_payload.ability.clone(),
+            normalized_args,
+            call_mode: CallMode::Rpc,
+            subject: None,
+        };
+
+        eprintln!(
+            "[axon-serve] forward_invoke self-target dispatch: target_uri={} ability={} \
+             call_id={}",
+            request.target_uri, inner_payload.ability, correlation_call_id,
+        );
+
+        let result_value = local_dispatcher.execute_rpc(target).map_err(|err| {
+            Status::failed_precondition(format!(
+                "federation.forward_invoke: self-targeted dispatch of ability `{}` failed: {err}",
+                inner_payload.ability,
+            ))
+        })?;
+
+        let result_bytes = serde_json::to_vec(&result_value).map_err(|err| {
+            Status::internal(format!(
+                "federation.forward_invoke: encode self-targeted result for ability `{}`: {err}",
+                inner_payload.ability,
+            ))
+        })?;
+
+        // Single ForwardReceipt write with real result_digest —
+        // unlike the bidi-push path, no PR-N5 second-update is
+        // needed because the bytes are already known.
+        self.admission.receipt_store().record(build_forward_receipt(
+            correlation_call_id,
+            &request.target_uri,
+            caller_envelope,
+            Some(&result_bytes),
+        ));
+
+        let response = federation_wrappers::ForwardInvokeResponse {
+            result_bytes,
+            correlation_call_id: correlation_call_id.to_string(),
+        };
+        wrap_json_response(&response)
     }
 
     fn dispatch_federation_subscribe_directory_initial(
@@ -3849,10 +4016,22 @@ mod tests {
         // `peer_request` carries the real inner ability + args;
         // C1a / DEC-N4 §2.1 added the required `call_id` field
         // for response correlation.
+        forward_invoke_args_for_ability(target_uri, "observe.health", serde_json::json!({}))
+    }
+
+    /// Parameterised sibling of `forward_invoke_args` for tests
+    /// that need to drive a specific inner ability + args
+    /// (e.g. PR-1 commit 7/9 self-target dispatch tests against
+    /// `fs.read`).
+    fn forward_invoke_args_for_ability(
+        target_uri: &str,
+        ability: &str,
+        args: serde_json::Value,
+    ) -> Vec<u8> {
         use base64::{engine::general_purpose::STANDARD, Engine as _};
         let inner = serde_json::json!({
-            "ability": "observe.health",
-            "args": {},
+            "ability": ability,
+            "args": args,
             "call_id": "test-call-id-1",
         });
         let inner_b64 = STANDARD.encode(serde_json::to_vec(&inner).unwrap());
@@ -3860,6 +4039,147 @@ mod tests {
             r#"{{"target_uri":"{target_uri}","inner_envelope_b64":"{inner_b64}"}}"#
         )
         .into_bytes()
+    }
+
+    // ── PR-1 commit 7/9 (LB-56) — self-targeted local dispatch ─────────
+
+    #[tokio::test]
+    async fn forward_invoke_self_target_runs_locally_via_local_dispatcher() {
+        // PR-1 commit 7/9 acceptance: when an inbound
+        // `federation.forward_invoke` call's `target_uri` matches
+        // THIS daemon's own canonical URI AND a local
+        // AbilityDispatcher is wired, the dispatcher MUST execute
+        // the inner ability locally (no presence push, no
+        // cross-hub dial) and return the JSON result bytes inline
+        // in `ForwardInvokeResponse.result_bytes`.
+        //
+        // This is the LB-56 §〇 production flow: hub-A → hub-B
+        // cross-hub dial → hub-B receives forward_invoke with
+        // target_uri = hub-B's own URI (peer hub IS the target,
+        // not a device on its bidi). Without this fall-through
+        // the call surfaces target_offline because hub-B does
+        // not register its own URI in its PresenceRegistry.
+        use crate::runtime::ability_dispatch::{AbilityDispatcher, LocalAbilityRegistry};
+        use crate::runtime::gateway::NoopGateway;
+
+        // Build a minimal registry with one ability that returns
+        // a sentinel object so we can prove the bytes came from
+        // the local dispatcher and not a daemon-internal stub.
+        let mut registry = LocalAbilityRegistry::new();
+        registry.register_rpc(
+            "demo.echo",
+            std::sync::Arc::new(|args| {
+                Ok(serde_json::json!({
+                    "MARKER-C9-1": "self-target-fallthrough-fired",
+                    "echoed_args": args,
+                }))
+            }),
+        );
+        let dispatcher: Arc<AbilityDispatcher> = Arc::new(AbilityDispatcher::new(
+            Arc::new(registry),
+            Arc::new(NoopGateway::new()),
+        ));
+
+        let svc = make_service()
+            .with_session_realm("test-realm")
+            .with_local_dispatcher(Arc::clone(&dispatcher));
+
+        let response = svc
+            .dispatch_federation_forward_invoke(
+                None,
+                &forward_invoke_args_for_ability(
+                    TEST_DAEMON_URI,
+                    "demo.echo",
+                    serde_json::json!({"k": "v"}),
+                ),
+            )
+            .await
+            .expect("self-target dispatch returns Ok with result_bytes inline");
+
+        let body = response.into_inner();
+        let parsed: federation_wrappers::ForwardInvokeResponse =
+            serde_json::from_slice(&body.result).expect("body decodes");
+        assert_eq!(
+            parsed.correlation_call_id, "test-call-id-1",
+            "correlation_call_id must round-trip through self-target arm"
+        );
+        assert!(
+            !parsed.result_bytes.is_empty(),
+            "self-target dispatch fills result_bytes (no async reverse-channel reply needed)"
+        );
+
+        let result_value: serde_json::Value =
+            serde_json::from_slice(&parsed.result_bytes).expect("result_bytes is JSON");
+        assert_eq!(
+            result_value
+                .get("MARKER-C9-1")
+                .and_then(|v| v.as_str()),
+            Some("self-target-fallthrough-fired"),
+            "result_bytes must come from the LocalAbilityRegistry handler, \
+             not a daemon-internal fallback"
+        );
+        assert_eq!(
+            result_value
+                .get("echoed_args")
+                .and_then(|v| v.get("k"))
+                .and_then(|v| v.as_str()),
+            Some("v"),
+            "inner args must round-trip through the dispatcher's normalized_args path"
+        );
+    }
+
+    #[tokio::test]
+    async fn forward_invoke_self_target_without_local_dispatcher_falls_to_target_offline() {
+        // Guard: when `local_dispatcher` is None (test fixtures
+        // that don't wire one), the self-target arm DOES NOT
+        // fire. The call drops to the existing local-presence
+        // path and surfaces target_offline because the
+        // PresenceRegistry doesn't have the daemon's own URI.
+        // This pins the Option-gated behaviour so adding the
+        // fall-through doesn't silently change the semantics for
+        // pre-PR-1-7/9 callers.
+        let svc = make_service().with_session_realm("test-realm");
+
+        let err = svc
+            .dispatch_federation_forward_invoke(
+                None,
+                &forward_invoke_args(TEST_DAEMON_URI),
+            )
+            .await
+            .expect_err("no local_dispatcher ⇒ legacy target_offline");
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert_eq!(err.message(), federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON);
+    }
+
+    #[tokio::test]
+    async fn forward_invoke_self_target_does_not_intercept_other_target_uris() {
+        // Guard: the self-target arm must ONLY fire when
+        // `target_uri == admission.daemon_uri()`. A different
+        // target_uri (a real device URI in the same realm) goes
+        // through the existing presence-push path and surfaces
+        // target_offline when the device is not subscribed —
+        // unchanged by the fall-through.
+        use crate::runtime::ability_dispatch::{AbilityDispatcher, LocalAbilityRegistry};
+        use crate::runtime::gateway::NoopGateway;
+
+        let registry = LocalAbilityRegistry::new();
+        let dispatcher: Arc<AbilityDispatcher> = Arc::new(AbilityDispatcher::new(
+            Arc::new(registry),
+            Arc::new(NoopGateway::new()),
+        ));
+        let svc = make_service()
+            .with_session_realm("test-realm")
+            .with_local_dispatcher(dispatcher);
+
+        let err = svc
+            .dispatch_federation_forward_invoke(
+                None,
+                &forward_invoke_args("easynet:///r/test-realm/agent/some-other-device"),
+            )
+            .await
+            .expect_err("non-self target ⇒ legacy presence-push path ⇒ target_offline");
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert_eq!(err.message(), federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON);
     }
 
     #[tokio::test]

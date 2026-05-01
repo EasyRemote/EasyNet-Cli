@@ -220,7 +220,16 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
             trust_anchor_path.clone(),
             trust_anchor_cell.clone(),
         )
-        .with_federated_directory_cell(federated_directory_cell.clone());
+        .with_federated_directory_cell(federated_directory_cell.clone())
+        // **PR-1 commit 7/9 (LB-56)**. Thread the boot-supplied
+        // `Arc<AbilityDispatcher>` so that a `federation.forward_
+        // invoke` call whose `target_uri` matches THIS daemon's
+        // own URI falls through to local execution against the
+        // registered `LocalAbilityRegistry` instead of surfacing
+        // `target_offline`. Closes the source-cited PR-1 commit
+        // 7/9 hole at line 27/32/42/455/497 of
+        // `daemon_invocation_service.rs`.
+        .with_local_dispatcher(Arc::clone(&dispatcher));
 
     // PR-N1 commit 6/N (boot wiring) + commit 9/N (SIGHUP-aware
     // trust anchor) + commit 10/N (SHIGHUP-aware federated_peers)
