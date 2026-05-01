@@ -31,6 +31,13 @@ axon-pb = [
     "dep:hyper-util",
 ]
 
+# Demo-only test fixtures compiled into the daemon binary. Off by
+# default so production builds cannot honour `EASYNET_DEMO_PRESENCE_SEED`
+# (or any future demo env var) regardless of operator misconfig.
+# Demo / e2e scripts pass `--features demo-fixture` to opt in. See
+# `services::axon_serve::boot::maybe_seed_demo_presence`.
+demo-fixture = []
+
 # v10.5 R1 (PR-DAEMON): split historical binary-only crate into a
 # library + multiple bins. The library target carries all the
 # business modules and (future) C ABI exports; bins are thin entry

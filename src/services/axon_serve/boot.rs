@@ -136,45 +136,13 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     let presence = Arc::new(PresenceRegistry::new());
     let pending = Arc::new(PendingDispatchMap::new());
 
-    // **Demo-only presence seed**. The
-    // `EASYNET_DEMO_PRESENCE_SEED` env var, when set to a URI,
-    // registers a no-op `DispatchSender` under that URI in the
-    // local presence registry. Lets `forward_invoke` targeting
-    // the URI survive the registry's lookup gate without spinning
-    // up backend + DB + a real device pair flow — so the cross-
-    // hub demo script can drive a transport-plane proof
-    // unattended. Production pair flows populate the registry
-    // through `<self>.session` accept; this hook is strictly
-    // for unattended scripts. Multiple URIs are comma-separated.
-    if let Ok(seed_value) = std::env::var("EASYNET_DEMO_PRESENCE_SEED") {
-        for seed_uri in seed_value.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-            // Channel capacity 8 mirrors what `<self>.session`
-            // accept paths use. The receiver is held in a
-            // dedicated drain task so the channel never reports
-            // full / closed; the daemon simply discards every
-            // frame queued to a seeded URI. This is correct for
-            // the demo's transport-plane proof: the hub-side
-            // dispatcher's job ends at "frame queued for
-            // delivery"; the actual ability response on the
-            // peer side comes from `dispatch_federation_*`
-            // handlers that do not consult the presence frame
-            // queue.
-            let (tx, mut rx) = tokio::sync::mpsc::channel::<
-                Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
-            >(8);
-            presence.insert(seed_uri.to_string(), tx);
-            tokio::spawn(async move {
-                while rx.recv().await.is_some() {
-                    // discard
-                }
-            });
-            eprintln!(
-                "[axon-serve] EASYNET_DEMO_PRESENCE_SEED: registered no-op \
-                 presence entry for `{seed_uri}` (test fixture; do not use \
-                 in production)",
-            );
-        }
-    }
+    // Demo-only presence seed (cfg-gated). Production binaries
+    // built without `--features demo-fixture` cannot honour the
+    // `EASYNET_DEMO_PRESENCE_SEED` env var no matter how it gets
+    // injected (container env, systemd unit override, etc.) —
+    // the symbol simply isn't there. Demo / e2e scripts pass
+    // `cargo build --features demo-fixture` to opt in.
+    maybe_seed_demo_presence(&presence);
 
     // Federated_peers cell first so we can hand it to BOTH the
     // DaemonInvocationService (for cross-hub `forward_invoke`
@@ -656,6 +624,51 @@ fn reload_trust_anchor_cell_from(
     let len = next.len();
     trust_anchor_cell.replace(Arc::new(next));
     Ok(len)
+}
+
+/// Demo-only presence seed. Compiled into the daemon binary
+/// only under `--features demo-fixture`; the production build
+/// emits a no-op no matter what `EASYNET_DEMO_PRESENCE_SEED`
+/// holds. The seed registers a no-op `DispatchSender` under
+/// each comma-separated URI in the env var so cross-hub
+/// `forward_invoke` targeting that URI survives the presence
+/// registry lookup gate without a real device pair flow.
+///
+/// Channel capacity 8 mirrors the `<self>.session` accept
+/// path. A drain task discards every queued frame so the
+/// channel never reports full or closed; the demo's
+/// transport-plane proof terminates at "frame queued for
+/// delivery". Real ability responses flow through
+/// `dispatch_federation_*` handlers that do not consult the
+/// presence frame queue.
+#[cfg(feature = "demo-fixture")]
+fn maybe_seed_demo_presence(presence: &Arc<PresenceRegistry>) {
+    let Ok(seed_value) = std::env::var("EASYNET_DEMO_PRESENCE_SEED") else {
+        return;
+    };
+    for seed_uri in seed_value.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<
+            Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
+        >(8);
+        presence.insert(seed_uri.to_string(), tx);
+        tokio::spawn(async move {
+            while rx.recv().await.is_some() {
+                // discard
+            }
+        });
+        eprintln!(
+            "[axon-serve] EASYNET_DEMO_PRESENCE_SEED: registered no-op \
+             presence entry for `{seed_uri}` (test fixture; do not use \
+             in production)",
+        );
+    }
+}
+
+#[cfg(not(feature = "demo-fixture"))]
+fn maybe_seed_demo_presence(_presence: &Arc<PresenceRegistry>) {
+    // Production build: env var is ignored. If the operator
+    // set it expecting the demo behaviour, the missing log line
+    // is the signal — re-build with `--features demo-fixture`.
 }
 
 #[cfg(unix)]
