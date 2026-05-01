@@ -146,6 +146,24 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
         );
     spawn_daemon_config_reload_task(config_path.clone(), federated_peers_cell.clone());
 
+    // **PR-N3 commit N3-3**. The cross-realm directory cell.
+    // Lives at the daemon scope so any consumer that wants the
+    // current federated directory snapshot —
+    // `<self>.discover` Tier-3 fan-out (N3-4),
+    // `federation.list_user_devices` peer projection (N3-5), or
+    // a future audit query — calls `.snapshot()` for an Arc
+    // clone that stays stable for the duration of one read.
+    // The per-peer `RemoteDirectoryClient` tasks that populate
+    // this cell are spawned by the follow-up commit (N3-3.1)
+    // that integrates with `services::federation_client::
+    // CrossHubDialer`'s subscribe-stream surface; today the
+    // cell simply starts empty so consumers see no peer entries
+    // yet (and gracefully degrade to local-only behaviour, the
+    // same shape they show on a single-realm daemon).
+    let federated_directory_cell =
+        crate::services::federation_directory::SharedFederatedDirectoryView::default();
+    let _ = federated_directory_cell.clone(); // placeholder for N3-3.1 spawn wire
+
     // PR-N1 commit 9/N + PR-N2 commit 1/N: hub-mode daemons
     // construct one CrossHubDialer that backs both the daemon's
     // outbound `forward_invoke` routing AND the admission gate's

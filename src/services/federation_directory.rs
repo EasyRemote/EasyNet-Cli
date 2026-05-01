@@ -28,6 +28,9 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::collections::BTreeMap;
+use std::sync::{Arc, RwLock};
+
 use serde::{Deserialize, Serialize};
 
 /// One entry in the federated directory view.
@@ -293,6 +296,226 @@ impl SubscriberFsm {
 impl Default for SubscriberFsm {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ── DirectoryView (PR-N3 N3-3) ─────────────────────────────────────
+
+/// A peer hub's directory projection, keyed by agent_uri so
+/// consumers can look up by URI in O(log n).
+///
+/// The receiving daemon's RemoteDirectoryClient owns one per
+/// federated peer; reads are snapshot-cheap via the
+/// SharedFederatedDirectoryView cell.
+///
+/// Entries in the view always carry `origin_realm =
+/// Some(peer_realm)`. The §2.4 rewrite chokepoint
+/// (`apply_frame`) stamps this on every entry before insertion,
+/// regardless of what the peer's wire bytes claimed — so a
+/// downstream consumer can rely on `origin_realm` reflecting the
+/// peer's authenticated identity, not whatever the peer wrote.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DirectoryView {
+    /// Realm of the peer this view represents.
+    pub peer_realm: String,
+    /// agent_uri → entry. BTreeMap for deterministic iteration
+    /// when projecting into a snapshot for consumers.
+    pub entries: BTreeMap<String, DirectoryEntry>,
+}
+
+impl DirectoryView {
+    #[must_use]
+    pub fn new(peer_realm: String) -> Self {
+        Self {
+            peer_realm,
+            entries: BTreeMap::new(),
+        }
+    }
+
+    /// Lookup an entry by URI. `None` ⇔ not in this peer's view.
+    #[must_use]
+    pub fn lookup(&self, agent_uri: &str) -> Option<&DirectoryEntry> {
+        self.entries.get(agent_uri)
+    }
+
+    /// **§2.4 origin_realm rewrite chokepoint.** Apply an
+    /// inbound `DirectoryEvent` to this view, **stamping**
+    /// `entry.origin_realm = Some(peer_realm)` on every Snapshot
+    /// or Upsert entry before insertion. The peer's wire bytes'
+    /// `origin_realm` field is overwritten regardless of what
+    /// they claimed; combined with PR-N2's signing-key gate (the
+    /// peer's signing key is bound to its own realm by DEC-N1
+    /// §2.4 admission), cross-realm spoofing is blocked at two
+    /// layers.
+    pub fn apply_frame(&mut self, event: &DirectoryEvent) {
+        match event {
+            DirectoryEvent::Snapshot { entries } => {
+                self.entries.clear();
+                for raw in entries {
+                    let entry = self.rewrite_origin(raw.clone());
+                    self.entries.insert(entry.agent_uri.clone(), entry);
+                }
+            }
+            DirectoryEvent::Upsert { entry } => {
+                let entry = self.rewrite_origin(entry.clone());
+                self.entries.insert(entry.agent_uri.clone(), entry);
+            }
+            DirectoryEvent::Remove { agent_uri, .. } => {
+                self.entries.remove(agent_uri);
+            }
+            DirectoryEvent::Heartbeat { .. } => {
+                // Keepalive is content-free for the view; the
+                // RemoteDirectoryClient consumes it for liveness
+                // only and never reaches apply_frame with a
+                // Heartbeat in the steady state. This arm exists
+                // so a stray Heartbeat-after-decode is a no-op
+                // rather than a panic.
+            }
+        }
+    }
+
+    fn rewrite_origin(&self, mut entry: DirectoryEntry) -> DirectoryEntry {
+        entry.origin_realm = Some(self.peer_realm.clone());
+        entry
+    }
+}
+
+// ── SharedFederatedDirectoryView (PR-N3 N3-3) ──────────────────────
+
+/// A reload-friendly cell holding the daemon's current
+/// federated-directory map keyed by peer realm.
+///
+/// Mirrors `SharedTrustAnchor` (commit 9/N) and
+/// `SharedFederatedPeers` (commit 10/N). The inner
+/// `Arc<BTreeMap<...>>` is the snapshot; readers
+/// (`<self>.discover` Tier 3 fan-out, future `listDevices`
+/// aggregation) call `.snapshot()` for an `Arc` clone that stays
+/// stable for the duration of one read even if a per-peer
+/// RemoteDirectoryClient task replaces the map mid-RPC.
+#[derive(Clone, Debug)]
+pub struct SharedFederatedDirectoryView {
+    inner: Arc<RwLock<Arc<BTreeMap<String, Arc<DirectoryView>>>>>,
+}
+
+impl SharedFederatedDirectoryView {
+    #[must_use]
+    pub fn new(initial: BTreeMap<String, Arc<DirectoryView>>) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(Arc::new(initial))),
+        }
+    }
+
+    /// Cheap-to-clone snapshot of the current directory map.
+    /// Readers hold the returned `Arc` for the duration of a
+    /// single fan-out; mid-fan-out replaces are not visible to
+    /// the in-flight reader by construction.
+    #[must_use]
+    pub fn snapshot(&self) -> Arc<BTreeMap<String, Arc<DirectoryView>>> {
+        Arc::clone(&self.inner.read().expect("rwlock poisoned"))
+    }
+
+    /// Atomic publish of a new map. The writer (per-peer task
+    /// finishing a Snapshot apply, or the SIGHUP-driven
+    /// federated_peers reload adding a new peer) calls this to
+    /// republish; readers in flight keep the prior `Arc`.
+    pub fn replace(&self, next: BTreeMap<String, Arc<DirectoryView>>) {
+        let mut guard = self.inner.write().expect("rwlock poisoned");
+        *guard = Arc::new(next);
+    }
+}
+
+impl Default for SharedFederatedDirectoryView {
+    fn default() -> Self {
+        Self::new(BTreeMap::new())
+    }
+}
+
+// ── RemoteDirectoryClient (PR-N3 N3-3 scaffold) ────────────────────
+
+/// Per-peer remote directory subscriber.
+///
+/// **Spec v2 §3.1**. One instance per entry in
+/// `SharedFederatedPeers`. Owns its own `SubscriberFsm` and a
+/// shared handle to the daemon-wide `SharedFederatedDirectoryView`
+/// cell; received frames feed into the cell so daemon-wide
+/// readers (`<self>.discover` Tier 3 in N3-4, `listDevices`
+/// aggregation in N3-6) see this peer's contribution.
+///
+/// This commit (N3-3) lands the **scaffold**: the struct, the
+/// constructor, and the `apply_event` method that drives the
+/// FSM + DirectoryView together with the §2.4 rewrite chokepoint.
+/// The real tonic subscribe-stream dial that produces those
+/// events lives in a follow-up commit (N3-3.1) that integrates
+/// with `services::federation_client::CrossHubDialer`. The split
+/// keeps the data-plane logic — which is the actual security
+/// boundary — unit-testable without a tokio + tonic harness.
+pub struct RemoteDirectoryClient {
+    peer_realm: String,
+    #[allow(dead_code)]
+    peer_hub_uri: String,
+    fsm: SubscriberFsm,
+    view: DirectoryView,
+}
+
+impl RemoteDirectoryClient {
+    #[must_use]
+    pub fn new(peer_realm: String, peer_hub_uri: String) -> Self {
+        let view = DirectoryView::new(peer_realm.clone());
+        Self {
+            peer_realm,
+            peer_hub_uri,
+            fsm: SubscriberFsm::new(),
+            view,
+        }
+    }
+
+    pub fn peer_realm(&self) -> &str {
+        &self.peer_realm
+    }
+
+    pub fn fsm_state(&self) -> &SubscriberState {
+        self.fsm.state()
+    }
+
+    pub fn view_snapshot(&self) -> &DirectoryView {
+        &self.view
+    }
+
+    /// Process a single inbound frame against both the FSM (for
+    /// state-machine correctness) and the view (for the actual
+    /// directory state). Errors surface FSM protocol violations;
+    /// the per-peer task that drives this MUST tear down + re-
+    /// dial when an error returns.
+    pub fn apply_event(&mut self, event: &DirectoryEvent) -> Result<(), FsmError> {
+        self.fsm.on_frame(event)?;
+        // FSM accepted the frame; it's safe to apply to the
+        // view. Heartbeat is the only frame that doesn't mutate
+        // the view (apply_frame's Heartbeat arm is a no-op).
+        self.view.apply_frame(event);
+        Ok(())
+    }
+
+    /// Successful dial transition. Mirrors `SubscriberFsm::on_dial_ok`.
+    pub fn on_dial_ok(&mut self) {
+        self.fsm.on_dial_ok();
+    }
+
+    /// Dial failure transition. Returns the next backoff in ms
+    /// the caller should sleep before re-dial.
+    pub fn on_dial_err(&mut self) -> u64 {
+        self.fsm.on_dial_err();
+        self.fsm.next_backoff_ms()
+    }
+
+    /// 60s no-frame timeout. The per-peer task that owns the
+    /// stream calls this when its idle watcher fires; the FSM
+    /// drops to Disconnected so the caller's outer loop re-dials.
+    pub fn on_idle_timeout(&mut self) {
+        self.fsm.on_idle_timeout();
+    }
+
+    pub fn on_stream_end(&mut self) {
+        self.fsm.on_stream_end();
     }
 }
 
@@ -595,5 +818,249 @@ mod tests {
         let bytes = serde_json::to_vec(&original).expect("serialise");
         let restored: DirectoryEntry = serde_json::from_slice(&bytes).expect("deserialise");
         assert_eq!(original, restored);
+    }
+
+    // ── N3-3 DirectoryView + §2.4 origin_realm rewrite ─────────
+
+    fn entry_with_claimed_origin(uri: &str, claimed: Option<&str>) -> DirectoryEntry {
+        DirectoryEntry {
+            agent_uri: uri.to_string(),
+            node_id: "n".to_string(),
+            display_name: None,
+            status: "active".to_string(),
+            origin_realm: claimed.map(String::from),
+            hub_endpoint: None,
+            last_seen_unix_ms: None,
+        }
+    }
+
+    #[test]
+    fn apply_snapshot_rewrites_origin_realm_to_peer() {
+        // §2.4 rewrite chokepoint. The peer's wire bytes claimed
+        // `origin_realm = "trusted-bank"` (clearly malicious —
+        // the peer is in realm-b). The receiver MUST overwrite
+        // with the peer's authenticated realm before any in-
+        // process consumer sees the entry.
+        let mut view = DirectoryView::new("realm-b".to_string());
+        view.apply_frame(&DirectoryEvent::Snapshot {
+            entries: vec![entry_with_claimed_origin(
+                "easynet:///r/realm-b/agent/peer-device",
+                Some("trusted-bank"),
+            )],
+        });
+        let stamped = view
+            .lookup("easynet:///r/realm-b/agent/peer-device")
+            .expect("entry stored");
+        assert_eq!(
+            stamped.origin_realm.as_deref(),
+            Some("realm-b"),
+            "spoofed origin_realm `trusted-bank` MUST be overwritten with the peer's realm"
+        );
+    }
+
+    #[test]
+    fn apply_upsert_rewrites_origin_realm_to_peer() {
+        let mut view = DirectoryView::new("realm-b".to_string());
+        view.apply_frame(&DirectoryEvent::Upsert {
+            entry: entry_with_claimed_origin(
+                "easynet:///r/realm-b/agent/peer-device",
+                Some("realm-c"),
+            ),
+        });
+        let stamped = view
+            .lookup("easynet:///r/realm-b/agent/peer-device")
+            .expect("entry stored");
+        assert_eq!(stamped.origin_realm.as_deref(), Some("realm-b"));
+    }
+
+    #[test]
+    fn apply_upsert_stamps_origin_realm_when_peer_omitted_it() {
+        // Peer's bytes had `origin_realm = None` (the legacy
+        // schema-A shape). The receiver still stamps the peer's
+        // realm so consumers downstream cannot accidentally see
+        // a None for a cross-realm entry.
+        let mut view = DirectoryView::new("realm-b".to_string());
+        view.apply_frame(&DirectoryEvent::Upsert {
+            entry: entry_with_claimed_origin(
+                "easynet:///r/realm-b/agent/peer-device",
+                None,
+            ),
+        });
+        let stamped = view
+            .lookup("easynet:///r/realm-b/agent/peer-device")
+            .expect("entry stored");
+        assert_eq!(stamped.origin_realm.as_deref(), Some("realm-b"));
+    }
+
+    #[test]
+    fn apply_remove_drops_entry_from_view() {
+        let mut view = DirectoryView::new("realm-b".to_string());
+        view.apply_frame(&DirectoryEvent::Snapshot {
+            entries: vec![entry_with_claimed_origin(
+                "easynet:///r/realm-b/agent/peer-device",
+                None,
+            )],
+        });
+        assert!(view
+            .lookup("easynet:///r/realm-b/agent/peer-device")
+            .is_some());
+        view.apply_frame(&DirectoryEvent::Remove {
+            agent_uri: "easynet:///r/realm-b/agent/peer-device".to_string(),
+            reason: "shutdown".to_string(),
+        });
+        assert!(view
+            .lookup("easynet:///r/realm-b/agent/peer-device")
+            .is_none());
+    }
+
+    #[test]
+    fn apply_snapshot_replaces_view_wholesale() {
+        // Spec §2.2: receiver replaces its peer-keyed view
+        // wholesale on Snapshot. Old entries that aren't in the
+        // new snapshot disappear.
+        let mut view = DirectoryView::new("realm-b".to_string());
+        view.apply_frame(&DirectoryEvent::Upsert {
+            entry: entry_with_claimed_origin("easynet:///r/realm-b/agent/old", None),
+        });
+        view.apply_frame(&DirectoryEvent::Snapshot {
+            entries: vec![entry_with_claimed_origin(
+                "easynet:///r/realm-b/agent/new",
+                None,
+            )],
+        });
+        assert!(view
+            .lookup("easynet:///r/realm-b/agent/old")
+            .is_none());
+        assert!(view
+            .lookup("easynet:///r/realm-b/agent/new")
+            .is_some());
+    }
+
+    #[test]
+    fn apply_heartbeat_is_noop_for_view() {
+        let mut view = DirectoryView::new("realm-b".to_string());
+        view.apply_frame(&DirectoryEvent::Upsert {
+            entry: entry_with_claimed_origin("easynet:///r/realm-b/agent/peer", None),
+        });
+        let before = view.entries.clone();
+        view.apply_frame(&DirectoryEvent::Heartbeat {
+            sent_at_unix_ms: 1_714_500_000_000,
+        });
+        assert_eq!(view.entries, before, "heartbeat must not mutate the view");
+    }
+
+    // ── SharedFederatedDirectoryView ──────────────────────────
+
+    #[test]
+    fn shared_federated_directory_view_starts_empty() {
+        let cell = SharedFederatedDirectoryView::default();
+        let snap = cell.snapshot();
+        assert!(snap.is_empty());
+    }
+
+    // ── RemoteDirectoryClient scaffold ──────────────────────
+
+    #[test]
+    fn remote_directory_client_starts_disconnected_with_empty_view() {
+        let client = RemoteDirectoryClient::new(
+            "realm-b".to_string(),
+            "https://hub-b.example:50443".to_string(),
+        );
+        assert_eq!(client.peer_realm(), "realm-b");
+        assert!(matches!(client.fsm_state(), &SubscriberState::Disconnected));
+        assert!(client.view_snapshot().entries.is_empty());
+    }
+
+    #[test]
+    fn remote_directory_client_apply_event_drives_fsm_and_view_together() {
+        let mut client = RemoteDirectoryClient::new(
+            "realm-b".to_string(),
+            "https://hub-b.example:50443".to_string(),
+        );
+        client.on_dial_ok();
+        client
+            .apply_event(&DirectoryEvent::Snapshot {
+                entries: vec![entry_with_claimed_origin(
+                    "easynet:///r/realm-b/agent/peer",
+                    Some("trusted-bank"), // spoofed; rewrite chokepoint catches
+                )],
+            })
+            .expect("snapshot accepted");
+        assert!(matches!(client.fsm_state(), &SubscriberState::Pumping));
+        let stamped = client
+            .view_snapshot()
+            .lookup("easynet:///r/realm-b/agent/peer")
+            .expect("entry stored");
+        assert_eq!(
+            stamped.origin_realm.as_deref(),
+            Some("realm-b"),
+            "RemoteDirectoryClient must enforce §2.4 origin_realm rewrite"
+        );
+    }
+
+    #[test]
+    fn remote_directory_client_apply_event_protocol_violation_does_not_mutate_view() {
+        let mut client = RemoteDirectoryClient::new(
+            "realm-b".to_string(),
+            "https://hub-b.example:50443".to_string(),
+        );
+        client.on_dial_ok();
+        // Upsert before Snapshot → ProtocolViolation. The FSM
+        // drops to Disconnected; the view MUST stay empty so the
+        // peer cannot inject entries by sending Upserts before
+        // the mandatory Snapshot.
+        let err = client
+            .apply_event(&DirectoryEvent::Upsert {
+                entry: entry_with_claimed_origin(
+                    "easynet:///r/realm-b/agent/sneaky",
+                    None,
+                ),
+            })
+            .expect_err("upsert before snapshot must reject");
+        assert!(matches!(err, FsmError::ProtocolViolation(_)));
+        assert!(matches!(client.fsm_state(), &SubscriberState::Disconnected));
+        assert!(
+            client.view_snapshot().entries.is_empty(),
+            "view MUST stay empty when FSM rejects the frame"
+        );
+    }
+
+    #[test]
+    fn remote_directory_client_dial_err_returns_growing_backoff() {
+        let mut client = RemoteDirectoryClient::new(
+            "realm-b".to_string(),
+            "https://hub-b.example:50443".to_string(),
+        );
+        assert_eq!(client.on_dial_err(), 2_000);
+        assert_eq!(client.on_dial_err(), 4_000);
+        assert_eq!(client.on_dial_err(), 8_000);
+    }
+
+    #[test]
+    fn shared_federated_directory_view_replace_publishes_atomically() {
+        let cell = SharedFederatedDirectoryView::default();
+        // Take snapshot 1 BEFORE replace.
+        let snap1 = cell.snapshot();
+        assert!(snap1.is_empty());
+
+        let mut next = BTreeMap::new();
+        let mut peer_view = DirectoryView::new("realm-b".to_string());
+        peer_view.apply_frame(&DirectoryEvent::Upsert {
+            entry: entry_with_claimed_origin("easynet:///r/realm-b/agent/peer", None),
+        });
+        next.insert("realm-b".to_string(), Arc::new(peer_view));
+        cell.replace(next);
+
+        // snap1 still observes the empty pre-replace state.
+        assert!(snap1.is_empty(), "in-flight reader sees pre-replace state");
+
+        // A fresh snapshot sees the new map.
+        let snap2 = cell.snapshot();
+        assert_eq!(snap2.len(), 1);
+        assert!(snap2
+            .get("realm-b")
+            .expect("realm-b present")
+            .lookup("easynet:///r/realm-b/agent/peer")
+            .is_some());
     }
 }
