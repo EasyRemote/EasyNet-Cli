@@ -184,6 +184,16 @@ pub struct DaemonInvocationService {
     /// daemons gracefully report no federated entries.
     federated_directory:
         crate::services::federation_directory::SharedFederatedDirectoryView,
+    /// **N3-N4 bridge**. Daemon-wide federated user binding
+    /// store. When wired, the `federation.discover` dispatch
+    /// arm constructs a `FederatedUserResolver` per call and
+    /// filters cross-realm entries through it whenever the
+    /// request supplies a `local_user_id`. `None` ⇒ no filter
+    /// (operator query path). Production daemons attach this
+    /// at boot via `with_federated_bindings_store`.
+    federated_bindings: Option<
+        std::sync::Arc<crate::runtime::keyring::federated_bindings::FederatedBindingsStore>,
+    >,
 }
 
 impl std::fmt::Debug for DaemonInvocationService {
@@ -201,6 +211,10 @@ impl std::fmt::Debug for DaemonInvocationService {
             .field(
                 "federated_peers_count",
                 &self.federated_peers.snapshot().len(),
+            )
+            .field(
+                "federated_bindings",
+                &self.federated_bindings.as_ref().map(|_| "<store>"),
             )
             .finish()
     }
@@ -239,6 +253,7 @@ impl DaemonInvocationService {
             federated_peers: SharedFederatedPeers::default(),
             federated_directory:
                 crate::services::federation_directory::SharedFederatedDirectoryView::default(),
+            federated_bindings: None,
         }
     }
 
@@ -346,6 +361,24 @@ impl DaemonInvocationService {
         cell: crate::services::federation_directory::SharedFederatedDirectoryView,
     ) -> Self {
         self.federated_directory = cell;
+        self
+    }
+
+    /// **N3-N4 dispatch wire**. Attach the daemon-wide
+    /// federated user binding store. When a `federation.discover`
+    /// request supplies a `local_user_id`, the dispatch arm
+    /// constructs a `FederatedUserResolver` from this store +
+    /// the daemon's own realm and routes through the filtered
+    /// handler, surfacing only entries the user has opted into
+    /// via PR-N4's consume flow.
+    #[must_use]
+    pub fn with_federated_bindings_store(
+        mut self,
+        bindings: std::sync::Arc<
+            crate::runtime::keyring::federated_bindings::FederatedBindingsStore,
+        >,
+    ) -> Self {
+        self.federated_bindings = Some(bindings);
         self
     }
 }
@@ -619,20 +652,50 @@ impl DaemonInvocationService {
         }
     }
 
-    /// **PR-N3 commit N3-4**. Cross-realm directory lookup
-    /// dispatch. Reads the daemon-wide
+    /// **PR-N3 commit N3-4 + N3-N4 dispatch wire**. Cross-realm
+    /// directory lookup dispatch. Reads the daemon-wide
     /// `SharedFederatedDirectoryView` cell snapshot, fans out
     /// across federated peers per spec §3.2 (lex tie-break,
     /// dedupe by agent_uri), returns matching `DirectoryEntry`
-    /// list. Pure read; no I/O — single-realm daemons that
-    /// haven't accumulated any peer views just return an empty
+    /// list.
+    ///
+    /// When the request carries a `local_user_id` AND the
+    /// daemon has both a `FederatedBindingsStore` and a
+    /// `session_realm` wired, the dispatch routes through
+    /// `handle_discover_with_user_filter` so cross-realm
+    /// entries are filtered by the user's binding state per
+    /// PR-N4 INV-5 privacy default. Otherwise (no user id or
+    /// no bindings store), routes through the unfiltered
+    /// `handle_discover` for backwards-compat with operator /
+    /// audit query callers.
+    ///
+    /// Pure read; no I/O — single-realm daemons that haven't
+    /// accumulated any peer views just return an empty
     /// response, gracefully degrading to local-only behaviour.
     fn dispatch_federation_discover(
         &self,
         arguments: &[u8],
     ) -> Result<Response<InvokeResponse>, Status> {
         let request: federation_wrappers::DiscoverRequest = parse_json_args(arguments)?;
-        let response = federation_wrappers::handle_discover(&request, &self.federated_directory);
+        let response = match (
+            request.local_user_id.as_deref(),
+            self.federated_bindings.as_ref(),
+            self.session_realm.as_deref(),
+        ) {
+            (Some(_user_id), Some(bindings), Some(realm)) => {
+                let resolver =
+                    crate::runtime::keyring::resolver::FederatedUserResolver::new(
+                        realm,
+                        std::sync::Arc::clone(bindings),
+                    );
+                federation_wrappers::handle_discover_with_user_filter(
+                    &request,
+                    &self.federated_directory,
+                    &resolver,
+                )
+            }
+            _ => federation_wrappers::handle_discover(&request, &self.federated_directory),
+        };
         wrap_json_response(&response)
     }
 
@@ -808,15 +871,80 @@ impl DaemonInvocationService {
                     };
                     return wrap_json_response(&response);
                 }
-                Err(status) => {
-                    // target_offline path — LB-39 §45: result_digest = None.
+                Err(_status) => {
+                    // **Same-tenant cross-hub fall-through**.
+                    // Local presence missed but the target's tenant
+                    // matches ours — the device may be paired on a
+                    // peer hub against the same user account. Per
+                    // CTO directive on cross-hub same-account: fan
+                    // out across `federated_peers` (no per-tenant
+                    // routing key when the tenant IS local; we ask
+                    // every peer hub the operator has federated
+                    // with). First-success wins in lex order on
+                    // `peer_realm`. Real `target_offline` only
+                    // surfaces if every peer also misses or no
+                    // peers are wired.
+                    if let Some(client) = self.federation_client.as_ref() {
+                        let peers_snapshot = self.federated_peers.snapshot();
+                        if !peers_snapshot.is_empty() {
+                            let peer_envelope =
+                                build_peer_envelope(caller_envelope, &request.target_uri);
+                            let peer_request = InvokeRequest {
+                                envelope: Some(peer_envelope),
+                                function_name: inner_payload.ability.clone(),
+                                arguments: inner_payload.args_bytes.clone(),
+                                ..InvokeRequest::default()
+                            };
+                            // Lex-deterministic iteration; peer
+                            // hubs typically number in the
+                            // single digits (operator-curated),
+                            // so sequential dialing is cheaper
+                            // than spinning a JoinSet for the
+                            // common case.
+                            for (peer_realm, peer_hub_uri) in peers_snapshot.iter() {
+                                let _ = peer_realm; // visible in logs below
+                                match client
+                                    .forward_invoke(peer_hub_uri, peer_request.clone())
+                                    .await
+                                {
+                                    Ok(peer_response) => {
+                                        self.admission.receipt_store().record(
+                                            build_forward_receipt(
+                                                &correlation_call_id,
+                                                &request.target_uri,
+                                                caller_envelope,
+                                                Some(&peer_response.result),
+                                            ),
+                                        );
+                                        let response = federation_wrappers::
+                                            ForwardInvokeResponse {
+                                                result_bytes: peer_response.result.clone(),
+                                                correlation_call_id,
+                                            };
+                                        return wrap_json_response(&response);
+                                    }
+                                    Err(err) => {
+                                        eprintln!(
+                                            "[axon-serve] same-tenant cross-hub miss \
+                                             on peer realm {peer_realm} hub {peer_hub_uri}: \
+                                             {err}"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Every peer missed (or no peers wired) →
+                    // real target_offline. result_digest = None.
                     self.admission.receipt_store().record(build_forward_receipt(
                         &correlation_call_id,
                         &request.target_uri,
                         caller_envelope,
                         None,
                     ));
-                    return Err(status);
+                    return Err(Status::failed_precondition(
+                        federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+                    ));
                 }
             }
         }
@@ -911,7 +1039,20 @@ impl DaemonInvocationService {
                 };
                 wrap_json_response(&response)
             }
-            Err(_err) => {
+            Err(err) => {
+                // Cross-hub dial failure surfaces as the wire-stable
+                // `target_offline` reason per DEC-N4 §2.1, but the
+                // underlying cause (peer dial timeout, peer-side
+                // admission reject, peer ability handler error) is
+                // lost on the wire. Log it so operators debugging
+                // demo / e2e setups can see why the cross-hub call
+                // failed without instrumenting the FederationClient
+                // by hand.
+                eprintln!(
+                    "[axon-serve] federation.forward_invoke peer dial \
+                     failed: target_uri={} target_hub_uri={} err={err}",
+                    request.target_uri, target_hub_uri,
+                );
                 record_offline_receipt();
                 Err(Status::failed_precondition(
                     federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
