@@ -82,7 +82,8 @@ use crate::services::axon_serve::admission_facade::AdmissionFacade;
 use crate::services::axon_serve::federation_wrappers::{
     self, ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_FEDERATION_DISCOVER,
     ABILITY_FEDERATION_FORWARD_INVOKE, ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN,
-    ABILITY_FEDERATION_RESOLVE, ABILITY_FEDERATION_RESOLVE_KEY, ABILITY_FEDERATION_REVOKE,
+    ABILITY_FEDERATION_LIST_USER_DEVICES, ABILITY_FEDERATION_RESOLVE,
+    ABILITY_FEDERATION_RESOLVE_KEY, ABILITY_FEDERATION_REVOKE,
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
 };
 use crate::services::federated_peers_cell::SharedFederatedPeers;
@@ -383,6 +384,11 @@ impl Invocation for DaemonInvocationService {
                 self.dispatch_federation_resolve_key(&inner.arguments)
             }
             ABILITY_FEDERATION_DISCOVER => self.dispatch_federation_discover(&inner.arguments),
+            ABILITY_FEDERATION_LIST_USER_DEVICES => self
+                .dispatch_federation_list_user_devices(
+                    inner.envelope.as_ref(),
+                    &inner.arguments,
+                ),
             ABILITY_FEDERATION_REVOKE => self.dispatch_federation_revoke(&inner.arguments),
             ABILITY_FEDERATION_FORWARD_INVOKE => {
                 self.dispatch_federation_forward_invoke(
@@ -627,6 +633,60 @@ impl DaemonInvocationService {
     ) -> Result<Response<InvokeResponse>, Status> {
         let request: federation_wrappers::DiscoverRequest = parse_json_args(arguments)?;
         let response = federation_wrappers::handle_discover(&request, &self.federated_directory);
+        wrap_json_response(&response)
+    }
+
+    /// **PR-N3 commit N3-5**. Hub-side projection of local
+    /// presence-registry entries for a given tenant. Spec §3.5
+    /// admission filter: only callers whose URI is in the local
+    /// trust anchor with `role = Hub` may invoke this. Other
+    /// roles (Backend, Device) are rejected with
+    /// `Status::permission_denied`. The general admission gate
+    /// has already accepted the call (caller URI is signed,
+    /// non-replayed, in trust set); this filter narrows to the
+    /// hub-only sub-surface.
+    ///
+    /// Loopback bypass: the daemon's own URI is admitted into
+    /// every dispatch arm regardless of role, so a hub-mode
+    /// daemon listing its own users from a CLI on the same
+    /// machine works without configuring itself as a Hub trust
+    /// entry.
+    fn dispatch_federation_list_user_devices(
+        &self,
+        caller_envelope: Option<&Envelope>,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        // Spec §3.5 admission filter — caller must be a Hub-role
+        // peer (or the daemon itself).
+        let caller_uri = caller_envelope
+            .and_then(|env| env.caller.as_ref())
+            .map(|c| c.uri.as_str())
+            .ok_or_else(|| {
+                Status::invalid_argument(
+                    "federation.list_user_devices: missing caller envelope.caller.uri",
+                )
+            })?;
+
+        let trust_anchor = self.admission.trust_anchor_snapshot();
+        let is_hub_role = trust_anchor.lookup(caller_uri).is_some_and(|entry| {
+            matches!(
+                entry.role,
+                crate::services::realm_trust_anchor::TrustedAgentRole::Hub
+            )
+        });
+        let is_loopback = self
+            .admission
+            .daemon_uri()
+            .is_some_and(|self_uri| self_uri == caller_uri);
+        if !(is_hub_role || is_loopback) {
+            return Err(Status::permission_denied(format!(
+                "federation.list_user_devices: caller `{caller_uri}` is not a hub-role peer; \
+                 only trusted hubs and the daemon itself may enumerate user devices"
+            )));
+        }
+
+        let request: federation_wrappers::ListUserDevicesRequest = parse_json_args(arguments)?;
+        let response = federation_wrappers::handle_list_user_devices(&request, &self.presence);
         wrap_json_response(&response)
     }
 
@@ -1967,6 +2027,107 @@ mod tests {
         assert_eq!(
             body.entries[0].agent_uri,
             "easynet:///r/realm-b/agent/match"
+        );
+    }
+
+    #[tokio::test]
+    async fn invoke_dispatches_federation_list_user_devices_admits_loopback_caller() {
+        // PR-N3 N3-5: a hub-mode daemon listing its own users
+        // from a CLI on the same machine works without
+        // configuring itself as a Hub trust entry — loopback
+        // bypass admits at the general gate, the N3-5 filter
+        // recognises `is_loopback = true` and accepts.
+        let svc = make_service();
+        // Two devices online for tenant-x.
+        svc.presence.insert(
+            "easynet:///r/tenant-x/agent/device-1".to_string(),
+            tokio::sync::mpsc::channel(8).0,
+        );
+        svc.presence.insert(
+            "easynet:///r/tenant-x/agent/device-2".to_string(),
+            tokio::sync::mpsc::channel(8).0,
+        );
+        // One device for an unrelated tenant — must NOT show
+        // through.
+        svc.presence.insert(
+            "easynet:///r/tenant-other/agent/device-3".to_string(),
+            tokio::sync::mpsc::channel(8).0,
+        );
+
+        let resp = svc
+            .invoke(invoke_request(
+                ABILITY_FEDERATION_LIST_USER_DEVICES,
+                r#"{"tenant_id":"tenant-x"}"#,
+            ))
+            .await
+            .expect("loopback caller admitted");
+        let body: federation_wrappers::ListUserDevicesResponse = parse_response_body(resp);
+        assert_eq!(body.devices.len(), 2);
+        for entry in &body.devices {
+            assert!(entry.agent_uri.starts_with("easynet:///r/tenant-x/agent/"));
+        }
+    }
+
+    #[tokio::test]
+    async fn invoke_dispatches_federation_list_user_devices_rejects_non_hub_caller() {
+        // PR-N3 N3-5: caller URI is in trust set but as Backend
+        // role → admission filter rejects. PermissionDenied is
+        // the wire-stable rejection; the message mentions the
+        // caller URI for operator audit grep.
+        //
+        // Build the test through the URI-only Device admission
+        // arm: we register the caller as a Device-role entry so
+        // the general admission gate's URI-only no-op admits
+        // (DEC-013 Device path doesn't require a signed envelope).
+        // The dispatch arm then runs the N3-5 admission filter,
+        // which reads the trust anchor again and finds the role
+        // is Device, not Hub — reject.
+        use crate::services::realm_trust_anchor::{
+            RealmTrustAnchor, TrustedAgent, TrustedAgentRole,
+        };
+
+        let device_caller_uri = "easynet:///r/realm-b/agent/device-not-hub";
+        let mut anchor_inner = RealmTrustAnchor::default();
+        anchor_inner
+            .append_agent(TrustedAgent {
+                agent_uri: device_caller_uri.to_string(),
+                public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+                role: TrustedAgentRole::Device,
+                added_at_unix_ms: 1_700_000_000_000,
+                origin_tenant_id: None,
+                hub_uri: None,
+                tls_ca_pem_path: None,
+            })
+            .expect("append device");
+        let admission = AdmissionFacade::new(
+            Arc::new(anchor_inner),
+            Some(TEST_DAEMON_URI.to_string()),
+        );
+        let svc = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission);
+
+        let envelope = Envelope {
+            caller: Some(crate::pb::axon::v1::AgentIdentity {
+                uri: device_caller_uri.to_string(),
+                profile: "easynet-strict-v2".to_string(),
+            }),
+            ..Envelope::default()
+        };
+        let req = Request::new(InvokeRequest {
+            envelope: Some(envelope),
+            function_name: ABILITY_FEDERATION_LIST_USER_DEVICES.to_string(),
+            arguments: br#"{"tenant_id":"tenant-x"}"#.to_vec(),
+            ..InvokeRequest::default()
+        });
+
+        let err = svc
+            .invoke(req)
+            .await
+            .expect_err("device-role caller must be rejected by N3-5 filter");
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert!(
+            err.message().contains(device_caller_uri),
+            "rejection message must surface the caller URI; got: {}",
+            err.message()
         );
     }
 

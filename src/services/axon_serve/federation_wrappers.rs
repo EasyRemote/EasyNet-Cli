@@ -126,7 +126,20 @@ pub const ABILITY_FEDERATION_RESOLVE_KEY: &str = "federation.resolve_key";
 /// so reads here are pure lookup.
 pub const ABILITY_FEDERATION_DISCOVER: &str = "federation.discover";
 
-/// All nine federation.* ability names in deterministic order.
+/// `federation.list_user_devices` — peer-hub user-device
+/// projection (PR-N3 N3-5). Backend on hub A invokes this on
+/// hub B to merge B's view of `tenant_id`'s devices into the
+/// `listDevices` response. Caller must authenticate as a
+/// trusted hub-role peer (admission filter rejects backends
+/// dialled directly from outside the federation). Hub-side
+/// projects the local `PresenceRegistry` entries whose URI
+/// matches the supplied tenant prefix into `DirectoryEntry`s
+/// with `origin_realm = None` (this hub speaks for its own
+/// realm; the calling backend stamps the merge boundary's
+/// realm at its end).
+pub const ABILITY_FEDERATION_LIST_USER_DEVICES: &str = "federation.list_user_devices";
+
+/// All ten federation.* ability names in deterministic order.
 /// Iteration order is the order PR-4's schema-compat matrix files
 /// land on disk, so changing this slice without updating PR-4
 /// fixtures is a wire-compat break.
@@ -137,6 +150,7 @@ pub const FEDERATION_ABILITIES: &[&str] = &[
     ABILITY_FEDERATION_RESOLVE,
     ABILITY_FEDERATION_RESOLVE_KEY,
     ABILITY_FEDERATION_DISCOVER,
+    ABILITY_FEDERATION_LIST_USER_DEVICES,
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
     ABILITY_FEDERATION_REVOKE,
     ABILITY_FEDERATION_FORWARD_INVOKE,
@@ -421,6 +435,71 @@ pub fn handle_discover(
     DiscoverResponse { entries }
 }
 
+// ─── federation.list_user_devices (PR-N3 N3-5) ────────────────────
+
+/// Request payload for `federation.list_user_devices`. The
+/// `tenant_id` is the URI realm component (`<tenant>` in
+/// `easynet:///r/<tenant>/agent/<id>`) — the same shape backend
+/// Go uses to key device_pairing rows.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ListUserDevicesRequest {
+    pub tenant_id: String,
+}
+
+/// Response payload for `federation.list_user_devices`. Each
+/// entry has `origin_realm = None` — this hub speaks for its
+/// own realm; the calling backend on the peer hub stamps the
+/// merge-boundary realm at its end (per spec §3.4 the backend
+/// rewrites `origin_realm = Some(peer_realm)` when projecting
+/// federated rows into its own listDevices response).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListUserDevicesResponse {
+    pub devices: Vec<crate::services::federation_directory::DirectoryEntry>,
+}
+
+/// Handle a `federation.list_user_devices` invocation. Reads
+/// the supplied `PresenceRegistry` snapshot, filters URIs
+/// whose realm component matches `request.tenant_id`, and
+/// projects each into a `DirectoryEntry`. PR-N3 spec §3.5: the
+/// admission filter (caller must be a trusted hub-role peer)
+/// is enforced by the dispatcher *before* this handler runs;
+/// the handler is pure data shaping.
+///
+/// `display_name` / `hub_endpoint` / `last_seen_unix_ms` are
+/// `None` in this baseline projection — the daemon's
+/// PresenceRegistry only knows URIs and active/inactive state.
+/// Enriching from the backend's device_pairing table (with
+/// real display_name, last_seen) is N3-6 backend-Go territory.
+#[must_use]
+pub fn handle_list_user_devices(
+    request: &ListUserDevicesRequest,
+    registry: &PresenceRegistry,
+) -> ListUserDevicesResponse {
+    let tenant_prefix = format!("easynet:///r/{}/agent/", request.tenant_id);
+    let snapshot = registry.snapshot();
+    let devices = snapshot
+        .into_iter()
+        .filter(|uri| uri.starts_with(&tenant_prefix))
+        .map(|uri| {
+            // Extract node_id from `easynet:///r/<tenant>/agent/<node_id>`.
+            let node_id = uri
+                .strip_prefix(&tenant_prefix)
+                .map(str::to_string)
+                .unwrap_or_default();
+            crate::services::federation_directory::DirectoryEntry {
+                agent_uri: uri,
+                node_id,
+                display_name: None,
+                status: "active".to_string(),
+                origin_realm: None,
+                hub_endpoint: None,
+                last_seen_unix_ms: None,
+            }
+        })
+        .collect();
+    ListUserDevicesResponse { devices }
+}
+
 // ─── federation.revoke ─────────────────────────────────────────────
 
 /// Request payload for `federation.revoke`.
@@ -662,7 +741,11 @@ mod tests {
         );
         assert_eq!(ABILITY_FEDERATION_RESOLVE_KEY, "federation.resolve_key");
         assert_eq!(ABILITY_FEDERATION_DISCOVER, "federation.discover");
-        assert_eq!(FEDERATION_ABILITIES.len(), 9);
+        assert_eq!(
+            ABILITY_FEDERATION_LIST_USER_DEVICES,
+            "federation.list_user_devices"
+        );
+        assert_eq!(FEDERATION_ABILITIES.len(), 10);
     }
 
     #[test]
@@ -836,6 +919,74 @@ mod tests {
             &anchor,
         );
         assert!(resp.is_none(), "miss must surface as None for caller status mapping");
+    }
+
+    #[test]
+    fn handle_list_user_devices_returns_only_matching_tenant() {
+        // PR-N3 N3-5. Registry holds entries for two tenants;
+        // the handler must surface only the requested tenant's
+        // entries.
+        let registry = PresenceRegistry::new();
+        registry.insert(
+            "easynet:///r/tenant-a/agent/device-1".to_string(),
+            make_dispatch_sender(),
+        );
+        registry.insert(
+            "easynet:///r/tenant-a/agent/device-2".to_string(),
+            make_dispatch_sender(),
+        );
+        registry.insert(
+            "easynet:///r/tenant-b/agent/device-3".to_string(),
+            make_dispatch_sender(),
+        );
+
+        let resp = handle_list_user_devices(
+            &ListUserDevicesRequest {
+                tenant_id: "tenant-a".to_string(),
+            },
+            &registry,
+        );
+        assert_eq!(resp.devices.len(), 2);
+        for entry in &resp.devices {
+            assert!(entry.agent_uri.starts_with("easynet:///r/tenant-a/agent/"));
+            assert_eq!(entry.origin_realm, None, "speaks for own realm — None");
+            assert_eq!(entry.status, "active");
+        }
+    }
+
+    #[test]
+    fn handle_list_user_devices_extracts_node_id_from_uri() {
+        let registry = PresenceRegistry::new();
+        registry.insert(
+            "easynet:///r/tenant-a/agent/node-xyz".to_string(),
+            make_dispatch_sender(),
+        );
+
+        let resp = handle_list_user_devices(
+            &ListUserDevicesRequest {
+                tenant_id: "tenant-a".to_string(),
+            },
+            &registry,
+        );
+        assert_eq!(resp.devices.len(), 1);
+        assert_eq!(resp.devices[0].node_id, "node-xyz");
+    }
+
+    #[test]
+    fn handle_list_user_devices_returns_empty_when_no_match() {
+        let registry = PresenceRegistry::new();
+        registry.insert(
+            "easynet:///r/tenant-a/agent/device".to_string(),
+            make_dispatch_sender(),
+        );
+
+        let resp = handle_list_user_devices(
+            &ListUserDevicesRequest {
+                tenant_id: "tenant-missing".to_string(),
+            },
+            &registry,
+        );
+        assert!(resp.devices.is_empty());
     }
 
     #[test]

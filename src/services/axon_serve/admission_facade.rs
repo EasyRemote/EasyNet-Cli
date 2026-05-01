@@ -281,6 +281,16 @@ impl AdmissionFacade {
         self.trust_anchor.snapshot()
     }
 
+    /// The daemon's own canonical URI. Used by per-ability
+    /// admission filters that need to recognise the loopback
+    /// caller (eg. `federation.list_user_devices` in N3-5
+    /// admits the daemon talking to itself without requiring
+    /// a Hub trust entry for its own URI).
+    #[must_use]
+    pub fn daemon_uri(&self) -> Option<&str> {
+        self.daemon_uri.as_deref()
+    }
+
     /// Construct a facade with a caller-supplied replay store. Used
     /// by tests that need to drive multiple facades against a single
     /// shared store, and reserved for the eventual PR-10 work that
