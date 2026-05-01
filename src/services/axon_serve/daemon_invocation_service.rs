@@ -75,14 +75,15 @@ use tonic::{Request, Response, Status, Streaming};
 use crate::pb::axon::v1::invocation_server::Invocation;
 use crate::pb::axon::v1::{
     invoke_bidi_down::Payload as DownPayload, invoke_bidi_up::Payload as UpPayload, AgentIdentity,
-    BinaryChunk, Envelope, EnvelopeOpen, InvocationState, InvokeBidiDown, InvokeBidiUp,
-    InvokeRequest, InvokeResponse, InvokeServerStreamRequest, InvokeStreamChunk,
+    BinaryChunk, Envelope, EnvelopeOpen, InvocationReceipt, InvocationState, InvokeBidiDown,
+    InvokeBidiUp, InvokeRequest, InvokeResponse, InvokeServerStreamRequest, InvokeStreamChunk,
 };
 use crate::services::axon_serve::admission_facade::AdmissionFacade;
 use crate::services::axon_serve::federation_wrappers::{
     self, ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_FEDERATION_FORWARD_INVOKE,
     ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN, ABILITY_FEDERATION_RESOLVE,
-    ABILITY_FEDERATION_REVOKE, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
+    ABILITY_FEDERATION_RESOLVE_KEY, ABILITY_FEDERATION_REVOKE,
+    ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
 };
 use crate::services::federated_peers_cell::SharedFederatedPeers;
 use crate::services::federation_client::FederationClient;
@@ -552,6 +553,37 @@ impl DaemonInvocationService {
         wrap_json_response(&response)
     }
 
+    /// **PR-N2 commit 2/N**. Peer-side `federation.resolve_key`
+    /// dispatch. Reads the daemon's `SharedTrustAnchor` (so a
+    /// SIGHUP-triggered `realm-trust.toml` reload is reflected
+    /// without a restart) and returns the matching
+    /// `public_key_b64` for the requested URI.
+    ///
+    /// On miss we surface `Status::not_found` so the calling
+    /// `FederatedKeyResolver` can distinguish "URI is not in
+    /// this hub's trust set" from a network or admission
+    /// failure (which arrive as `unavailable` /
+    /// `permission_denied`). The resolver then maps both into
+    /// `unknown_agent_uri` for INV-4 fail-closed admission, but
+    /// the wire-level distinction is useful for operator audit
+    /// and matches the rest of the federation.* surface where
+    /// `not_found` means "no entry" and `failed_precondition`
+    /// means "entry present but unusable".
+    fn dispatch_federation_resolve_key(
+        &self,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let request: federation_wrappers::ResolveKeyRequest = parse_json_args(arguments)?;
+        let trust_anchor = self.admission.trust_anchor_snapshot();
+        match federation_wrappers::handle_resolve_key(&request, &trust_anchor) {
+            Some(response) => wrap_json_response(&response),
+            None => Err(Status::not_found(format!(
+                "federation.resolve_key: agent_uri `{}` not in this hub's trust set",
+                request.agent_uri
+            ))),
+        }
+    }
+
     fn dispatch_federation_revoke(
         &self,
         arguments: &[u8],
@@ -647,20 +679,59 @@ impl DaemonInvocationService {
         // DEC-N4 §2.1 — the empty-result shape is no longer the
         // wire surface for offline.
         if is_local_tenant {
-            self.try_push_forward_invoke_frame(&request)?;
-            let response = federation_wrappers::ForwardInvokeResponse {
-                result_bytes: Vec::new(),
-                correlation_call_id,
-            };
-            return wrap_json_response(&response);
+            // DEC-N5 §1 dual-write — caller hub records the
+            // ForwardReceipt eagerly, before the frame push, so a
+            // mid-push panic still leaves an audit breadcrumb. On
+            // the local fast-path the actual reply flows back
+            // through the reverse-channel correlation path; we
+            // therefore stamp `result_digest = None` (empty
+            // payload) at the point of forward — PR-N5's audit
+            // chain extension will append a second receipt with
+            // the digest when the reverse-channel reply lands.
+            match self.try_push_forward_invoke_frame(&request) {
+                Ok(()) => {
+                    self.admission.receipt_store().record(build_forward_receipt(
+                        &correlation_call_id,
+                        &request.target_uri,
+                        caller_envelope,
+                        None,
+                    ));
+                    let response = federation_wrappers::ForwardInvokeResponse {
+                        result_bytes: Vec::new(),
+                        correlation_call_id,
+                    };
+                    return wrap_json_response(&response);
+                }
+                Err(status) => {
+                    // target_offline path — LB-39 §45: result_digest = None.
+                    self.admission.receipt_store().record(build_forward_receipt(
+                        &correlation_call_id,
+                        &request.target_uri,
+                        caller_envelope,
+                        None,
+                    ));
+                    return Err(status);
+                }
+            }
         }
 
         // Cross-tenant path. Missing federation client OR
         // missing peer entry both surface as
         // `failed_precondition(target_offline)` per DEC-N4 §2.1
         // — the legacy "Ok with target_online:false" shape is
-        // gone.
+        // gone. DEC-N5 §1 still requires a caller-hub
+        // ForwardReceipt with `result_digest = None` for every
+        // target_offline outcome.
+        let record_offline_receipt = || {
+            self.admission.receipt_store().record(build_forward_receipt(
+                &correlation_call_id,
+                &request.target_uri,
+                caller_envelope,
+                None,
+            ));
+        };
         let Some(client) = self.federation_client.as_ref() else {
+            record_offline_receipt();
             return Err(Status::failed_precondition(
                 federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
             ));
@@ -668,6 +739,7 @@ impl DaemonInvocationService {
         let Some(target_tenant) = target_tenant else {
             // Defensive: `is_local_tenant` already collapses
             // None tenant to the local fast-path arm above.
+            record_offline_receipt();
             return Err(Status::failed_precondition(
                 federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
             ));
@@ -680,6 +752,7 @@ impl DaemonInvocationService {
         // (cheap; mirrors the admission gate's per-call pattern).
         let peers_snapshot = self.federated_peers.snapshot();
         let Some(target_hub_uri) = peers_snapshot.get(target_tenant) else {
+            record_offline_receipt();
             return Err(Status::failed_precondition(
                 federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
             ));
@@ -714,15 +787,30 @@ impl DaemonInvocationService {
                 // bytes verbatim and stamp the caller's
                 // `correlation_call_id` so the CLI initiator
                 // can correlate.
+                //
+                // DEC-N5 §1 dual-write: caller hub records a
+                // ForwardReceipt with the SHA-256 of the actual
+                // result bytes, linking to the target hub's
+                // InvocationReceipt by `child_invocation_id =
+                // correlation_call_id`.
+                self.admission.receipt_store().record(build_forward_receipt(
+                    &correlation_call_id,
+                    &request.target_uri,
+                    caller_envelope,
+                    Some(&peer_response.result),
+                ));
                 let response = federation_wrappers::ForwardInvokeResponse {
                     result_bytes: peer_response.result.clone(),
                     correlation_call_id,
                 };
                 wrap_json_response(&response)
             }
-            Err(_err) => Err(Status::failed_precondition(
-                federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
-            )),
+            Err(_err) => {
+                record_offline_receipt();
+                Err(Status::failed_precondition(
+                    federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+                ))
+            }
         }
     }
 
@@ -1396,6 +1484,80 @@ pub(crate) fn build_peer_envelope(caller_envelope: Option<&Envelope>, target_uri
     }
 }
 
+/// Receipt-type discriminator for a `federation.forward_invoke`
+/// audit record on the *caller* hub. DEC-N5 §1 dual-write: the
+/// caller hub records this; the target hub records its usual
+/// `InvocationReceipt` for the inner ability, and the two are
+/// linkable by `target_call_id` (the caller-minted call_id that
+/// `ForwardInvokeResponse.correlation_call_id` echoes back).
+const FORWARD_RECEIPT_TYPE: &str = "forward";
+
+/// `payload_content_type` stamped on a ForwardReceipt whose
+/// `payload` carries `sha256(result_bytes)`. Empty content type
+/// for the target_offline path (no result bytes → no digest).
+const FORWARD_RECEIPT_DIGEST_CONTENT_TYPE: &str = "application/octet-stream;sha256";
+
+/// Build a caller-hub `ForwardReceipt` (modelled on top of
+/// `InvocationReceipt` — DEC-N5 §1 only requires the causal link,
+/// not a separate persistence container, so the existing
+/// `SharedReceiptStore` shape is reused).
+///
+/// LB-39 §44 / §45 field mapping:
+/// - `receipt_type = "forward"` — discriminator filtering
+///   forward-receipts from inner-ability state-machine receipts.
+/// - `child_invocation_id = target_call_id` — caller-minted
+///   `correlation_call_id`; same id appears on the target hub's
+///   `InvocationReceipt`, enabling the cross-hub audit join.
+/// - `payload = sha256(result_bytes)` for happy paths; empty for
+///   the target_offline path (encodes `result_digest = None`).
+/// - `caller_binding` / `callee_binding` — caller is the original
+///   envelope's caller (or a synthetic fallback equal to
+///   target_uri); callee is the target_uri.
+/// - `state = Completed` — terminal receipt for audit filters.
+fn build_forward_receipt(
+    target_call_id: &str,
+    target_uri: &str,
+    caller_envelope: Option<&Envelope>,
+    result_bytes: Option<&[u8]>,
+) -> InvocationReceipt {
+    use sha2::{Digest, Sha256};
+    let payload = match result_bytes {
+        Some(bytes) => {
+            let mut hasher = Sha256::new();
+            hasher.update(bytes);
+            hasher.finalize().to_vec()
+        }
+        None => Vec::new(),
+    };
+    let caller_binding = caller_envelope
+        .and_then(|env| env.caller.clone())
+        .or_else(|| {
+            Some(AgentIdentity {
+                uri: target_uri.to_string(),
+                ..AgentIdentity::default()
+            })
+        });
+    let callee_binding = Some(AgentIdentity {
+        uri: target_uri.to_string(),
+        ..AgentIdentity::default()
+    });
+    let payload_content_type = if payload.is_empty() {
+        String::new()
+    } else {
+        FORWARD_RECEIPT_DIGEST_CONTENT_TYPE.to_string()
+    };
+    InvocationReceipt {
+        receipt_type: FORWARD_RECEIPT_TYPE.to_string(),
+        state: InvocationState::Completed as i32,
+        child_invocation_id: target_call_id.to_string(),
+        payload_content_type,
+        payload,
+        caller_binding,
+        callee_binding,
+        ..InvocationReceipt::default()
+    }
+}
+
 /// Wrap the inner envelope bytes into a `DispatchFrame` heading
 /// down a target's `<self>.session` reverse channel.
 ///
@@ -1646,6 +1808,63 @@ mod tests {
             .expect("dispatch returns Ok");
         let body: federation_wrappers::ResolveResponse = parse_response_body(resp);
         assert!(body.agents.is_empty());
+    }
+
+    #[tokio::test]
+    async fn invoke_dispatches_federation_resolve_key_returns_pubkey_when_present() {
+        // PR-N2 commit 2/N: peer-side `federation.resolve_key`
+        // surfaces the local trust anchor's `public_key_b64` for
+        // a known URI. Cross-hub `FederatedKeyResolver` consumes
+        // this exact wire shape.
+        use crate::services::realm_trust_anchor::{
+            RealmTrustAnchor, TrustedAgent, TrustedAgentRole,
+        };
+        let entry = TrustedAgent {
+            agent_uri: "easynet:///r/realm-a/agent/n1".to_string(),
+            public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            role: TrustedAgentRole::Device,
+            added_at_unix_ms: 1_700_000_000_000,
+            origin_tenant_id: None,
+            hub_uri: None,
+            tls_ca_pem_path: None,
+        };
+        let anchor = Arc::new(RealmTrustAnchor::from_entries(vec![entry]).expect("anchor"));
+        let admission = AdmissionFacade::new(anchor, Some(TEST_DAEMON_URI.to_string()));
+        let svc = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission);
+
+        let resp = svc
+            .invoke(invoke_request(
+                ABILITY_FEDERATION_RESOLVE_KEY,
+                r#"{"agent_uri":"easynet:///r/realm-a/agent/n1"}"#,
+            ))
+            .await
+            .expect("dispatch returns Ok");
+        let body: federation_wrappers::ResolveKeyResponse = parse_response_body(resp);
+        assert_eq!(
+            body.public_key_b64,
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        );
+    }
+
+    #[tokio::test]
+    async fn invoke_dispatches_federation_resolve_key_returns_not_found_when_uri_unknown() {
+        // PR-N2 commit 2/N: miss surfaces as Status::not_found
+        // with the URI in the error message — operators can
+        // grep the daemon log for the exact URI that failed.
+        let svc = make_service();
+        let err = svc
+            .invoke(invoke_request(
+                ABILITY_FEDERATION_RESOLVE_KEY,
+                r#"{"agent_uri":"easynet:///r/realm-a/agent/missing"}"#,
+            ))
+            .await
+            .expect_err("miss must surface Status::not_found");
+        assert_eq!(err.code(), tonic::Code::NotFound);
+        assert!(
+            err.message().contains("easynet:///r/realm-a/agent/missing"),
+            "expected the missing URI in error message, got: {}",
+            err.message()
+        );
     }
 
     #[tokio::test]
@@ -2423,6 +2642,126 @@ mod tests {
             .as_ref()
             .expect("caller identity present");
         assert_eq!(peer_caller.uri, target_uri);
+    }
+
+    // ── C1b / DEC-N5 §1: ForwardReceipt dual-write tests ──
+
+    #[tokio::test]
+    async fn forward_invoke_cross_tenant_happy_path_records_forward_receipt_with_digest() {
+        // LB-39 §44: caller hub `SharedReceiptStore` has a
+        // `ForwardReceipt` with `result_digest = sha256(actual_
+        // result_bytes)`. The receipt's `child_invocation_id`
+        // equals the caller-minted `correlation_call_id` so the
+        // target hub's matching InvocationReceipt joins on the
+        // same key.
+        use sha2::{Digest, Sha256};
+
+        let peer_reply_bytes = br#"{"hello":"from-peer"}"#.to_vec();
+        let canned = InvokeResponse {
+            result: peer_reply_bytes.clone(),
+            result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            state: InvocationState::Completed as i32,
+            ..InvokeResponse::default()
+        };
+        let recorder = Arc::new(RecordingFederationClient::new(canned));
+
+        let mut peers = BTreeMap::new();
+        peers.insert(
+            "peer-realm".to_string(),
+            "https://peer-hub.example:50443".to_string(),
+        );
+
+        let svc = make_service()
+            .with_session_realm("test-realm")
+            .with_federation_client(recorder.clone() as Arc<dyn FederationClient>)
+            .with_federated_peers(peers);
+
+        let store_before = svc.admission.receipt_store().len();
+        assert_eq!(store_before, 0, "empty store at test start");
+
+        let target_uri = "easynet:///r/peer-realm/agent/peer-target";
+        let _resp = svc
+            .dispatch_federation_forward_invoke(None, &forward_invoke_args(target_uri))
+            .await
+            .expect("cross-tenant Ok");
+
+        let recent = svc.admission.receipt_store().snapshot_recent(10);
+        assert_eq!(recent.len(), 1, "exactly one ForwardReceipt recorded");
+        let receipt = &recent[0];
+        assert_eq!(receipt.receipt_type, "forward");
+        assert_eq!(
+            receipt.child_invocation_id, "test-call-id-1",
+            "child_invocation_id == caller-minted correlation_call_id"
+        );
+
+        let mut hasher = Sha256::new();
+        hasher.update(&peer_reply_bytes);
+        let expected_digest = hasher.finalize().to_vec();
+        assert_eq!(
+            receipt.payload, expected_digest,
+            "payload is sha256(result_bytes) per LB-39 §44"
+        );
+        assert_eq!(
+            receipt.payload_content_type, "application/octet-stream;sha256",
+            "content type identifies the payload as a SHA-256 digest"
+        );
+        let callee = receipt.callee_binding.as_ref().expect("callee_binding set");
+        assert_eq!(callee.uri, target_uri);
+    }
+
+    #[tokio::test]
+    async fn forward_invoke_target_offline_records_forward_receipt_with_no_digest() {
+        // LB-39 §45: ForwardReceipt's `result_digest` is `None`
+        // for the target_offline path — encoded as an empty
+        // `payload` field with empty content type. The receipt
+        // is still recorded so audit consumers can observe the
+        // failed-forward attempt.
+        let svc = make_service().with_session_realm("test-realm");
+        // Cross-tenant target with no federation client wired.
+        // Dispatcher takes the target_offline arm.
+
+        let _err = svc
+            .dispatch_federation_forward_invoke(None, &forward_invoke_args(
+                "easynet:///r/peer-realm/agent/peer-target",
+            ))
+            .await
+            .expect_err("target_offline");
+
+        let recent = svc.admission.receipt_store().snapshot_recent(10);
+        assert_eq!(recent.len(), 1, "ForwardReceipt recorded even on offline");
+        let receipt = &recent[0];
+        assert_eq!(receipt.receipt_type, "forward");
+        assert_eq!(receipt.child_invocation_id, "test-call-id-1");
+        assert!(
+            receipt.payload.is_empty(),
+            "result_digest = None encoded as empty payload"
+        );
+        assert!(
+            receipt.payload_content_type.is_empty(),
+            "no content type when there is no digest"
+        );
+    }
+
+    #[tokio::test]
+    async fn forward_invoke_local_tenant_miss_records_forward_receipt_with_no_digest() {
+        // C1b: local-tenant fast-path miss is also a target_offline
+        // outcome on the wire (Status::failed_precondition); the
+        // caller hub still records a ForwardReceipt with
+        // result_digest = None so the audit trail captures the
+        // attempt.
+        let svc = make_service().with_session_realm("test-realm");
+
+        let _err = svc
+            .dispatch_federation_forward_invoke(None, &forward_invoke_args(
+                "easynet:///r/test-realm/agent/local-target",
+            ))
+            .await
+            .expect_err("local fast-path miss");
+
+        let recent = svc.admission.receipt_store().snapshot_recent(10);
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].receipt_type, "forward");
+        assert!(recent[0].payload.is_empty());
     }
 
     // ── PR-N1 commit 5/N: 2-daemon in-process cross-hub e2e ──
