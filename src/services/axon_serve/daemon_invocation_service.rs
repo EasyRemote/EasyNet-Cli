@@ -79,6 +79,7 @@ use crate::pb::axon::v1::{
     InvokeBidiUp, InvokeRequest, InvokeResponse, InvokeServerStreamRequest, InvokeStreamChunk,
 };
 use crate::services::axon_serve::admission_facade::AdmissionFacade;
+use crate::services::realm_trust_anchor::RealmTrustAnchor;
 use crate::services::axon_serve::federation_wrappers::{
     self, ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_FEDERATION_DISCOVER,
     ABILITY_FEDERATION_FORWARD_INVOKE, ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN,
@@ -1619,7 +1620,11 @@ impl DaemonInvocationService {
         caller_uri: String,
         up: Streaming<InvokeBidiUp>,
     ) -> Result<Response<<Self as Invocation>::InvokeBidiStream>, Status> {
-        validate_session_realm(&caller_uri, self.session_realm.as_deref())?;
+        validate_session_realm(
+            &caller_uri,
+            self.session_realm.as_deref(),
+            &self.admission.trust_anchor_snapshot(),
+        )?;
 
         let (down_tx, down_rx): (DispatchSender, _) =
             mpsc::channel::<Result<DispatchFrame, Status>>(DISPATCH_CHANNEL_CAPACITY);
@@ -2081,7 +2086,27 @@ async fn drain_session_up_stream(
     );
 }
 
-fn validate_session_realm(caller_uri: &str, session_realm: Option<&str>) -> Result<(), Status> {
+/// Session-realm gate.
+///
+/// Same-realm callers always pass (the most common shape; a
+/// device whose URI's realm matches the hub's `session_realm`
+/// is the canonical "device joining its own hub" case).
+///
+/// Cross-realm callers pass iff the caller's URI is present in
+/// the supplied trust anchor. The frame-0 envelope's
+/// `caller_signature` was already verified upstream by the
+/// admission gate against the trust anchor's pubkey for this
+/// URI, so a trust-anchor hit here is a sufficient proof of
+/// federated identity. Same mechanism the cross-realm
+/// `forward_invoke` admission already uses (PR-N2 commits
+/// `d1adbea` + `68f6556`); we extend it to cover
+/// `<self>.session` admission too. Unblocks the cross-hub
+/// same-tenant directive that LB-49 surfaced.
+fn validate_session_realm(
+    caller_uri: &str,
+    session_realm: Option<&str>,
+    trust_anchor: &RealmTrustAnchor,
+) -> Result<(), Status> {
     let Some(daemon_realm) = session_realm else {
         return Ok(());
     };
@@ -2093,14 +2118,25 @@ fn validate_session_realm(caller_uri: &str, session_realm: Option<&str>) -> Resu
         ))
     })?;
 
-    if caller_realm != daemon_realm {
-        return Err(Status::permission_denied(format!(
-            "<self>.session: caller realm `{caller_realm}` does not match daemon realm \
-             `{daemon_realm}`; cross-realm session is blocked until RFC-N PR-N2 ships"
-        )));
+    if caller_realm == daemon_realm {
+        return Ok(());
     }
 
-    Ok(())
+    // Cross-realm path: federated trust is required. The trust
+    // anchor lookup is the same one the admission gate already
+    // exercised on frame 0, so a hit means the caller's pubkey
+    // signed the bidi's frame-0 envelope and the operator has
+    // explicitly listed this URI under realm-trust.toml.
+    if trust_anchor.lookup(caller_uri).is_some() {
+        return Ok(());
+    }
+
+    Err(Status::permission_denied(format!(
+        "<self>.session: caller `{caller_uri}` from realm `{caller_realm}` is \
+         not in this hub's realm `{daemon_realm}` and not present in the \
+         realm trust anchor as a federated identity; cross-realm session \
+         requires either same-realm or an explicit `[[trusted_agent]]` entry"
+    )))
 }
 
 /// Wire shape for an incremental presence event delivered by the
@@ -3520,21 +3556,61 @@ mod tests {
 
     #[test]
     fn validate_session_realm_accepts_same_realm() {
-        validate_session_realm("easynet:///r/realm-a/agent/device-1", Some("realm-a"))
-            .expect("same-realm caller must pass");
+        let anchor = RealmTrustAnchor::default();
+        validate_session_realm(
+            "easynet:///r/realm-a/agent/device-1",
+            Some("realm-a"),
+            &anchor,
+        )
+        .expect("same-realm caller must pass");
     }
 
     #[test]
-    fn validate_session_realm_rejects_cross_realm() {
-        let err = validate_session_realm("easynet:///r/realm-b/agent/device-1", Some("realm-a"))
-            .expect_err("cross-realm caller must be rejected");
+    fn validate_session_realm_rejects_cross_realm_without_trust() {
+        let anchor = RealmTrustAnchor::default();
+        let err = validate_session_realm(
+            "easynet:///r/realm-b/agent/device-1",
+            Some("realm-a"),
+            &anchor,
+        )
+        .expect_err("cross-realm caller without trust entry must be rejected");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
-        assert!(err.message().contains("cross-realm session"));
+        assert!(
+            err.message().contains("not present in the realm trust anchor"),
+            "got: {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn validate_session_realm_accepts_cross_realm_when_trust_anchor_has_caller() {
+        // Federated identity path: caller URI lives in realm-b
+        // but the local trust anchor on realm-a's hub has an
+        // explicit entry for it. Mirrors the admission gate's
+        // existing FederatedKeyResolver hit; closes LB-49.
+        use crate::services::realm_trust_anchor::{TrustedAgent, TrustedAgentRole};
+        let entry = TrustedAgent {
+            agent_uri: "easynet:///r/realm-b/agent/device-1".to_string(),
+            public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            role: TrustedAgentRole::Device,
+            added_at_unix_ms: 1_777_640_000_000,
+            origin_tenant_id: Some("federated-tenant".to_string()),
+            hub_uri: None,
+            tls_ca_pem_path: None,
+        };
+        let anchor = RealmTrustAnchor::from_entries(vec![entry]).expect("anchor");
+        validate_session_realm(
+            "easynet:///r/realm-b/agent/device-1",
+            Some("realm-a"),
+            &anchor,
+        )
+        .expect("cross-realm caller with trust-anchor entry must pass");
     }
 
     #[test]
     fn validate_session_realm_rejects_malformed_uri() {
-        let err = validate_session_realm("not-a-ura", Some("realm-a"))
+        let anchor = RealmTrustAnchor::default();
+        let err = validate_session_realm("not-a-ura", Some("realm-a"), &anchor)
             .expect_err("malformed URI must be rejected");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(err.message().contains("canonical"));
