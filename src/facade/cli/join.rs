@@ -44,6 +44,21 @@ pub struct JoinArgs {
     /// Only needed for local dev when the REST API is on a different host/port than the Hub.
     #[arg(long)]
     pub hub_api: Option<String>,
+    /// Peer hub's daemon TLS listen address, used to populate the
+    /// local daemon's `[daemon.federated_peers]` entry for this
+    /// tenant. Form: `https://host:port` (e.g. `https://hub-b.example:50443`).
+    ///
+    /// Why this is operator-supplied: the Hub's pairing response
+    /// carries the **backend's** Axon endpoint (the inbound-from-
+    /// device gRPC port), which is NOT the peer daemon's TLS
+    /// listener. In a multi-hub deployment those addresses
+    /// differ. Without this flag the auto-wire either writes the
+    /// backend port (wrong for cross-hub dial) or assumes the
+    /// canonical 50443 (wrong if the operator picked a different
+    /// port). Pass `--peer-hub` when joining a tenant whose hub
+    /// you intend to route cross-hub calls to.
+    #[arg(long)]
+    pub peer_hub: Option<String>,
     /// Skip confirmation prompts (for non-interactive use)
     #[arg(long, short = 'y')]
     pub yes: bool,
@@ -81,13 +96,19 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
     // Best-effort: if this device is also running a hub-mode
     // daemon (i.e. `~/.easynet/daemon-config.toml` exists), seed
     // the daemon's `[daemon.federated_peers]` table with the
-    // tenant→hub mapping the Hub just handed us, then SIGHUP the
-    // daemon so the cross-hub dialer picks up the new entry
-    // without a daemon restart. Failures here log and keep going
-    // — the join itself has succeeded; the operator can edit
-    // daemon-config.toml by hand later if the auto-wire didn't
-    // fire (no daemon running, parser hiccup, etc).
-    let _ = super::federation_wire::auto_wire_federated_peer_from_credentials(&creds);
+    // tenant→hub mapping. When `--peer-hub` is set the operator
+    // tells us the peer daemon's TLS listen address explicitly;
+    // when absent, the helper falls back to the canonical-port
+    // guess and warns the operator. SIGHUPs the running daemon
+    // so the new entry activates without a restart. Failures
+    // here log and keep going — the join itself has succeeded;
+    // the operator can edit daemon-config.toml by hand later if
+    // the auto-wire didn't fire (no daemon running, parser
+    // hiccup, etc).
+    let _ = super::federation_wire::auto_wire_federated_peer_from_credentials(
+        &creds,
+        args.peer_hub.as_deref(),
+    );
 
     output::success("Paired successfully");
     output::detail("node_id", &creds.node_id);

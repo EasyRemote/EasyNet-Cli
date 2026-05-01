@@ -70,43 +70,114 @@ fn daemon_config_path() -> PathBuf {
     PathBuf::from(".easynet/daemon-config.toml")
 }
 
-/// Translate a Hub-supplied `axon://host:port` endpoint into the
-/// `https://host:50443` shape the cross-hub dialer accepts.
-///
-/// The Hub returns endpoints like `axon://easynet.run:50051`
-/// (the inbound-from-device gRPC endpoint). The cross-hub dialer
-/// reads `[[trusted_agent]] hub_uri` as a TLS endpoint per
-/// `tonic::transport::Endpoint::from_shared`, which expects an
-/// `https://` scheme. By default the inbound-from-device port
-/// (50051) is not the hub-to-hub port (50443); operators
-/// running the standard deployment can edit daemon-config.toml
-/// after the fact if their topology differs. The helper applies
-/// the canonical port mapping but does NOT replace
-/// already-`https://`-shaped endpoints.
-fn normalise_hub_endpoint(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if trimmed.starts_with("https://") || trimmed.starts_with("http://") {
-        return trimmed.to_string();
-    }
-    if let Some(rest) = trimmed.strip_prefix("axon://") {
-        // Strip any port and re-append the canonical hub-to-hub
-        // port. A future commit may surface the cross-hub port
-        // separately on the credentials shape so this
-        // hard-coded substitution is removable.
-        let host = rest.split(':').next().unwrap_or(rest);
-        return format!("https://{host}:50443");
-    }
-    // Fallback: prepend https:// and let the operator edit if
-    // the resulting URI does not match their topology.
-    format!("https://{trimmed}")
+/// Canonical hub-to-hub TLS port. Used as a fallback when the
+/// operator did not pass `--peer-hub` and the Hub-supplied
+/// endpoint carries the backend's inbound-from-device port (e.g.
+/// `axon://...:50051`). Operators running on a non-default port
+/// must pass `--peer-hub` explicitly; otherwise this guess is
+/// emitted with a warning so they know to verify daemon-config.toml.
+const CANONICAL_HUB_TO_HUB_PORT: u16 = 50443;
+
+/// Outcome of resolving the federated_peers value to write. The
+/// classification feeds the operator-facing warning so they know
+/// whether the entry is `Confident` (operator-supplied or already
+/// TLS-shaped) or `Guessed` (the helper picked the canonical
+/// port for them).
+#[derive(Debug)]
+enum PeerHubResolution {
+    /// Either the operator passed `--peer-hub`, or the Hub-
+    /// supplied endpoint was already an `https://...` URL whose
+    /// port the operator can be assumed to own. No warning needed.
+    Confident(String),
+    /// The endpoint shape required substitution to look like a
+    /// daemon TLS listener. The operator gets a warning so they
+    /// can verify the resulting `daemon-config.toml` matches
+    /// their actual topology.
+    Guessed { endpoint: String, source: String },
 }
 
-/// Auto-wire the `(tenant_id, hub_endpoint)` mapping from a
+impl PeerHubResolution {
+    fn endpoint(&self) -> &str {
+        match self {
+            Self::Confident(s) => s,
+            Self::Guessed { endpoint, .. } => endpoint,
+        }
+    }
+}
+
+/// Resolve the value to write into `[daemon.federated_peers]`.
+///
+/// Precedence:
+///   1. Operator-supplied `--peer-hub` wins outright. The operator
+///      knows the peer daemon's TLS listen address; we trust it
+///      and pass through.
+///   2. `https://...` Hub endpoint passes through (rare in
+///      practice — backends emit `axon://` or `http://` — but
+///      preserves operator-set TLS endpoints when they appear).
+///   3. `axon://host[:port]` → `https://host:50443` with a
+///      warning. The Hub's `Axon.Endpoint` carries the inbound-
+///      from-device gRPC port; the daemon's TLS port is by
+///      convention 50443. Guessing keeps the auto-wire working
+///      for the canonical deployment but warns so non-default
+///      ports get caught.
+///   4. `http://host[:port]` → `https://host:50443` with a
+///      warning. Same shape as (3) but a different scheme; the
+///      backend port (commonly 50051 in local-dev) must NOT be
+///      written verbatim, since that would target the backend's
+///      gRPC listener instead of the peer daemon's TLS listener.
+///   5. Anything else → prepend `https://`, no port substitution
+///      (we have no signal to know what port the operator wants).
+fn resolve_peer_hub_endpoint(
+    operator_override: Option<&str>,
+    creds_hub_endpoint: &str,
+) -> PeerHubResolution {
+    if let Some(raw) = operator_override.map(str::trim).filter(|s| !s.is_empty()) {
+        return PeerHubResolution::Confident(raw.to_string());
+    }
+
+    let trimmed = creds_hub_endpoint.trim();
+
+    if trimmed.starts_with("https://") {
+        return PeerHubResolution::Confident(trimmed.to_string());
+    }
+
+    if let Some(rest) = trimmed.strip_prefix("axon://") {
+        let host = rest.split(':').next().unwrap_or(rest);
+        return PeerHubResolution::Guessed {
+            endpoint: format!("https://{host}:{CANONICAL_HUB_TO_HUB_PORT}"),
+            source: trimmed.to_string(),
+        };
+    }
+
+    if let Some(rest) = trimmed.strip_prefix("http://") {
+        let host = rest.split(':').next().unwrap_or(rest);
+        return PeerHubResolution::Guessed {
+            endpoint: format!("https://{host}:{CANONICAL_HUB_TO_HUB_PORT}"),
+            source: trimmed.to_string(),
+        };
+    }
+
+    PeerHubResolution::Guessed {
+        endpoint: format!("https://{trimmed}"),
+        source: trimmed.to_string(),
+    }
+}
+
+/// Auto-wire the `(tenant_id, peer_hub)` mapping from a
 /// successful `easynet join` into the local daemon's
 /// `[daemon.federated_peers]` table. Best-effort: every error
 /// logs a warning and returns Ok(()) so the user-facing join
 /// flow never fails on this step.
-pub fn auto_wire_federated_peer_from_credentials(creds: &Credentials) -> anyhow::Result<()> {
+///
+/// `operator_peer_hub` is the optional `--peer-hub` flag. When
+/// set it overrides the credentials-derived endpoint; when
+/// absent the helper falls back to a port-50443 guess off the
+/// Hub-supplied endpoint and emits an operator warning so
+/// non-default deployments are caught.
+pub fn auto_wire_federated_peer_from_credentials(
+    creds: &Credentials,
+    operator_peer_hub: Option<&str>,
+) -> anyhow::Result<()> {
     if creds.tenant_id.trim().is_empty() {
         return Ok(());
     }
@@ -128,9 +199,19 @@ pub fn auto_wire_federated_peer_from_credentials(creds: &Credentials) -> anyhow:
         }
     };
 
-    let normalised_hub = normalise_hub_endpoint(&creds.hub_endpoint);
+    let resolution = resolve_peer_hub_endpoint(operator_peer_hub, &creds.hub_endpoint);
+    if let PeerHubResolution::Guessed { endpoint, source } = &resolution {
+        eprintln!(
+            "[easynet join] peer hub endpoint not supplied; guessing `{endpoint}` from \
+             `{source}` (canonical hub-to-hub port {CANONICAL_HUB_TO_HUB_PORT}). \
+             If your peer daemon's TLS listener is on a different host or port, \
+             re-run join with `--peer-hub <https://host:port>` or edit \
+             `[daemon.federated_peers]` in daemon-config.toml directly."
+        );
+    }
+    let peer_hub = resolution.endpoint();
 
-    let updated = match upsert_federated_peer_in_toml(&raw, &creds.tenant_id, &normalised_hub) {
+    let updated = match upsert_federated_peer_in_toml(&raw, &creds.tenant_id, peer_hub) {
         Ok(s) => s,
         Err(err) => {
             eprintln!(
@@ -279,36 +360,74 @@ fn sighup_running_daemon_best_effort() -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn normalise_passes_https_endpoint_through() {
-        assert_eq!(
-            normalise_hub_endpoint("https://hub.example:50443"),
-            "https://hub.example:50443"
-        );
+    fn endpoint_of(r: &PeerHubResolution) -> &str {
+        r.endpoint()
     }
 
     #[test]
-    fn normalise_rewrites_axon_scheme_with_canonical_port() {
-        assert_eq!(
-            normalise_hub_endpoint("axon://easynet.run:50051"),
-            "https://easynet.run:50443"
-        );
+    fn operator_peer_hub_override_wins_over_creds() {
+        let r = resolve_peer_hub_endpoint(Some("https://peer-b.example:50443"), "axon://hub:50051");
+        assert!(matches!(r, PeerHubResolution::Confident(_)));
+        assert_eq!(endpoint_of(&r), "https://peer-b.example:50443");
     }
 
     #[test]
-    fn normalise_handles_axon_without_port() {
-        assert_eq!(
-            normalise_hub_endpoint("axon://hub.local"),
-            "https://hub.local:50443"
-        );
+    fn empty_operator_override_falls_through_to_creds() {
+        let r = resolve_peer_hub_endpoint(Some("   "), "https://hub.example:50443");
+        assert!(matches!(r, PeerHubResolution::Confident(_)));
+        assert_eq!(endpoint_of(&r), "https://hub.example:50443");
     }
 
     #[test]
-    fn normalise_falls_back_to_https_prefix_on_unknown_scheme() {
-        assert_eq!(
-            normalise_hub_endpoint("hub.example:50443"),
-            "https://hub.example:50443"
-        );
+    fn https_creds_endpoint_passes_through_confident() {
+        let r = resolve_peer_hub_endpoint(None, "https://hub.example:50443");
+        assert!(matches!(r, PeerHubResolution::Confident(_)));
+        assert_eq!(endpoint_of(&r), "https://hub.example:50443");
+    }
+
+    #[test]
+    fn axon_scheme_creds_endpoint_guesses_canonical_port() {
+        let r = resolve_peer_hub_endpoint(None, "axon://easynet.run:50051");
+        match &r {
+            PeerHubResolution::Guessed { endpoint, source } => {
+                assert_eq!(endpoint, "https://easynet.run:50443");
+                assert_eq!(source, "axon://easynet.run:50051");
+            }
+            other => panic!("expected Guessed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn http_scheme_creds_endpoint_guesses_canonical_port_not_backend_port() {
+        // Real production failure mode: backend Axon.Endpoint
+        // arrives as `http://localhost:50051`. Writing that
+        // verbatim into [daemon.federated_peers] would point the
+        // cross-hub dialer at the backend's gRPC port, which is
+        // not the peer daemon's TLS listener. The resolver must
+        // substitute the canonical hub-to-hub port and flag the
+        // outcome as Guessed so the operator gets a warning.
+        let r = resolve_peer_hub_endpoint(None, "http://localhost:50051");
+        match &r {
+            PeerHubResolution::Guessed { endpoint, source } => {
+                assert_eq!(endpoint, "https://localhost:50443");
+                assert_eq!(source, "http://localhost:50051");
+            }
+            other => panic!("expected Guessed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn axon_without_port_guesses_canonical_port() {
+        let r = resolve_peer_hub_endpoint(None, "axon://hub.local");
+        assert_eq!(endpoint_of(&r), "https://hub.local:50443");
+        assert!(matches!(r, PeerHubResolution::Guessed { .. }));
+    }
+
+    #[test]
+    fn unknown_scheme_falls_back_to_https_prefix_no_port_substitution() {
+        let r = resolve_peer_hub_endpoint(None, "hub.example:50443");
+        assert_eq!(endpoint_of(&r), "https://hub.example:50443");
+        assert!(matches!(r, PeerHubResolution::Guessed { .. }));
     }
 
     #[test]
@@ -387,6 +506,6 @@ listen_tcp = "127.0.0.1:50443"
             deploy_signature: "sig".into(),
             hub_api_base: None,
         };
-        auto_wire_federated_peer_from_credentials(&creds).expect("empty tenant is no-op");
+        auto_wire_federated_peer_from_credentials(&creds, None).expect("empty tenant is no-op");
     }
 }
