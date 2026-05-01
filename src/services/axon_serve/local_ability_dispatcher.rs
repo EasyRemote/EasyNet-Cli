@@ -42,7 +42,7 @@ use crate::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 use crate::pb::axon::v1::{BinaryChunk, InvokeBidiDown, InvokeBidiUp};
 use crate::runtime::ability_dispatch::AbilityDispatcher;
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
-use crate::services::axon_serve::invoke_remote_initiator::SessionDispatch;
+use crate::services::axon_serve::invoke_remote_initiator::{call_id_hex, SessionDispatch};
 use crate::services::axon_serve::session_initiator::{
     SessionDispatchError, SessionFrameDispatcher,
 };
@@ -61,13 +61,41 @@ pub struct LocalAbilityDispatcher {
     /// `Kernel::invoke` callers) share one `LocalAbilityRegistry`
     /// view.
     dispatcher: Arc<AbilityDispatcher>,
+    /// PR-N6 C4 device-side correlation table. Populated in
+    /// device-mode boot when the daemon also constructs a
+    /// `SessionEscalationHandle`; left `None` in hub or `both`
+    /// modes (those daemons never escalate forward_invoke and so
+    /// never receive `RequestResult` frames). When set, inbound
+    /// `SessionDispatch::RequestResult` frames are routed here
+    /// by `call_id`, completing the awaiting dispatcher future.
+    escalation_correlation: Option<
+        Arc<crate::services::axon_serve::session_escalation::EscalationCorrelation>,
+    >,
 }
 
 impl LocalAbilityDispatcher {
     /// Construct against the boot-threaded dispatcher Arc.
     #[must_use]
     pub fn new(dispatcher: Arc<AbilityDispatcher>) -> Self {
-        Self { dispatcher }
+        Self {
+            dispatcher,
+            escalation_correlation: None,
+        }
+    }
+
+    /// Builder seam: attach a device-mode escalation correlation
+    /// table so inbound `RequestResult` frames complete the
+    /// matching pending dispatcher future. Boot calls this in
+    /// device-mode only.
+    #[must_use]
+    pub fn with_escalation_correlation(
+        mut self,
+        correlation: Arc<
+            crate::services::axon_serve::session_escalation::EscalationCorrelation,
+        >,
+    ) -> Self {
+        self.escalation_correlation = Some(correlation);
+        self
     }
 
     fn execute_local_rpc(
@@ -137,16 +165,46 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
             ))
         })?;
 
-        let SessionDispatch::Dispatch {
-            call_id,
-            ability,
-            args,
-        } = dispatch
-        else {
-            // Result frames flow up from the device, not down. A
-            // down-stream Result is meaningless; log nothing and
-            // ignore (matches the prior staging behaviour).
-            return Ok(());
+        // Route by variant. PR-N6 C4 added the `RequestResult`
+        // direction (hub → device, the reply to a device-side
+        // forward_invoke escalation). When the optional
+        // `escalation_correlation` is wired (device-mode only),
+        // route `RequestResult` to the correlation table to
+        // complete the awaiting dispatcher future. `Dispatch`
+        // continues to the local-RPC execution path below.
+        // `Result` frames flow up from the device, not down,
+        // so a down-stream Result is meaningless; ignore
+        // (matches prior staging behaviour). `Request` frames
+        // are device → hub and never appear here.
+        let (call_id, ability, args) = match dispatch {
+            SessionDispatch::Dispatch {
+                call_id,
+                ability,
+                args,
+            } => (call_id, ability, args),
+            SessionDispatch::RequestResult { call_id, outcome } => {
+                if let Some(correlation) = self.escalation_correlation.as_ref() {
+                    let id_hex = call_id_hex(&call_id);
+                    let fired = correlation.complete(call_id, outcome);
+                    if !fired {
+                        eprintln!(
+                            "[local-ability-dispatcher] inbound RequestResult \
+                             call_id={id_hex} did not match a pending entry; \
+                             dropping (caller may have timed out, or hub double-replied)"
+                        );
+                    }
+                } else {
+                    eprintln!(
+                        "[local-ability-dispatcher] inbound RequestResult on a \
+                         hub-mode daemon (no escalation_correlation wired); \
+                         ignoring"
+                    );
+                }
+                return Ok(());
+            }
+            SessionDispatch::Result { .. } | SessionDispatch::Request { .. } => {
+                return Ok(());
+            }
         };
 
         let result = match serde_json::from_slice(&args) {
