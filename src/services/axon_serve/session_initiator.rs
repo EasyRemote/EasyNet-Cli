@@ -204,6 +204,7 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
     signing_seed: Option<SessionSigningSeed>,
     hub_ca_pem_path: Option<&Path>,
     dispatcher: Arc<D>,
+    escalation_outbox: Option<&crate::services::axon_serve::session_escalation::SharedSessionOutbox>,
 ) -> Result<(), SessionError> {
     let mut endpoint = Endpoint::from_shared(hub_endpoint.clone())
         .map_err(|err| SessionError::InvalidEndpoint {
@@ -276,6 +277,16 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
     let dispatcher = dispatcher;
     let outbound_tx = up_tx;
 
+    // PR-N6 C4: publish the active up sender so the device-mode
+    // escalation consumer task can push `SessionDispatch::Request`
+    // frames onto this same bidi. Cleared on every exit path
+    // below so the consumer's next snapshot reads `None` until the
+    // supervisor's next successful dial.
+    if let Some(outbox) = escalation_outbox {
+        outbox.set(outbound_tx.clone());
+    }
+    let _outbox_guard = OutboxGuard::new(escalation_outbox.cloned());
+
     while let Some(frame_result) = down_stream.next().await {
         match frame_result {
             Ok(frame) => {
@@ -297,6 +308,32 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
     Ok(())
 }
 
+/// RAII guard that clears the escalation outbox on Drop, ensuring
+/// every `dial_and_run_session` exit path (Ok return, error
+/// return, panic during the down-stream loop) leaves the outbox
+/// empty. The escalation consumer's next snapshot then surfaces
+/// `UpstreamFailure { reason: "no live <self>.session bidi" }`
+/// to in-flight escalations until the supervisor reconnects.
+struct OutboxGuard {
+    outbox: Option<crate::services::axon_serve::session_escalation::SharedSessionOutbox>,
+}
+
+impl OutboxGuard {
+    fn new(
+        outbox: Option<crate::services::axon_serve::session_escalation::SharedSessionOutbox>,
+    ) -> Self {
+        Self { outbox }
+    }
+}
+
+impl Drop for OutboxGuard {
+    fn drop(&mut self) {
+        if let Some(outbox) = &self.outbox {
+            outbox.clear();
+        }
+    }
+}
+
 /// Long-lived supervisor wrapping `dial_and_run_session` with
 /// exponential backoff. Returns only when `cancel` resolves; the
 /// reconnect loop never exits on its own. Production daemons run
@@ -314,6 +351,9 @@ pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
     signing_seed: Option<SessionSigningSeed>,
     hub_ca_pem_path: Option<PathBuf>,
     dispatcher: Arc<D>,
+    escalation_outbox: Option<
+        crate::services::axon_serve::session_escalation::SharedSessionOutbox,
+    >,
     mut cancel: tokio::sync::oneshot::Receiver<()>,
 ) {
     let mut backoff = SESSION_BACKOFF_INITIAL;
@@ -329,6 +369,7 @@ pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
                 signing_seed,
                 hub_ca_pem_path.as_deref(),
                 Arc::clone(&dispatcher),
+                escalation_outbox.as_ref(),
             ) => {
                 match result {
                     Ok(()) => {
@@ -614,6 +655,7 @@ mod tests {
             None,
             None,
             dispatcher,
+            None,
         )
         .await;
         match result {
@@ -638,6 +680,7 @@ mod tests {
                 None,
                 None,
                 dispatcher,
+                None,
             ),
         )
         .await
@@ -665,6 +708,7 @@ mod tests {
             None,
             Some(bogus.as_path()),
             dispatcher,
+            None,
         )
         .await;
         match result {
@@ -686,6 +730,7 @@ mod tests {
             None,
             None,
             dispatcher,
+            None, // PR-N6 C4: no escalation outbox in this test
             cancel_rx,
         ));
 

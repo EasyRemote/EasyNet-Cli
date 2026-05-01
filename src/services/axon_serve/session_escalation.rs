@@ -558,4 +558,143 @@ mod tests {
         );
         assert!(!completed, "complete on missing entry must be a silent no-op");
     }
+
+    // ── PR-N6 C4: outbox-aware consumer wiring tests ──
+
+    #[tokio::test]
+    async fn outbox_starts_empty_returns_none_on_snapshot() {
+        let outbox = SharedSessionOutbox::new();
+        assert!(outbox.snapshot().is_none());
+    }
+
+    #[tokio::test]
+    async fn outbox_set_then_clear_round_trip() {
+        let outbox = SharedSessionOutbox::new();
+        let (tx, _rx) = mpsc::channel::<InvokeBidiUp>(4);
+        outbox.set(tx);
+        assert!(outbox.snapshot().is_some());
+        outbox.clear();
+        assert!(outbox.snapshot().is_none());
+    }
+
+    #[tokio::test]
+    async fn outbox_consumer_surfaces_no_live_session_when_outbox_empty() {
+        // Boot ordering: device-mode daemon constructs the
+        // escalation correlation + outbox + consumer BEFORE the
+        // session supervisor has dialled. An immediate CLI call
+        // hitting the dispatcher escalates while outbox.snapshot()
+        // is still None. The consumer must surface
+        // `UpstreamFailure { reason: contains "no live ...
+        // bidi" }` rather than hanging waiting for a sender.
+        let correlation = EscalationCorrelation::new();
+        let outbox = SharedSessionOutbox::new();
+        let handle = spawn_escalation_consumer_with_outbox(Arc::clone(&correlation), outbox);
+
+        let outcome = handle
+            .escalate_with_timeout(
+                "federation.forward_invoke".into(),
+                b"{}".to_vec(),
+                Duration::from_secs(2),
+            )
+            .await;
+        match outcome {
+            RequestOutcome::Err {
+                error: SessionRequestError::UpstreamFailure { reason },
+            } => {
+                assert!(
+                    reason.contains("no live <self>.session bidi"),
+                    "reason should cite missing session; got {reason}",
+                );
+            }
+            other => panic!("expected UpstreamFailure, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn outbox_consumer_picks_up_published_sender_on_next_request() {
+        // Sequence:
+        //   1. Spawn consumer with empty outbox
+        //   2. Supervisor publishes a fresh up_tx
+        //   3. Hub-side fake task drains up_rx, decodes the
+        //      Request, and feeds matching RequestResult back
+        //   4. CLI escalation succeeds with Ok bytes
+        // Pins that the consumer reads outbox per-Request rather
+        // than capturing one up_tx at construction time.
+        let correlation = EscalationCorrelation::new();
+        let outbox = SharedSessionOutbox::new();
+        let handle =
+            spawn_escalation_consumer_with_outbox(Arc::clone(&correlation), outbox.clone());
+
+        let (up_tx, mut up_rx) = mpsc::channel::<InvokeBidiUp>(8);
+        outbox.set(up_tx);
+
+        let correlation_for_hub = Arc::clone(&correlation);
+        tokio::spawn(async move {
+            while let Some(frame) = up_rx.recv().await {
+                use crate::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+                let chunk = match frame.payload {
+                    Some(UpPayload::BinaryChunk(c)) => c,
+                    _ => continue,
+                };
+                let dispatch: crate::services::axon_serve::invoke_remote_initiator::SessionDispatch =
+                    serde_json::from_slice(&chunk.data).expect("decode");
+                if let crate::services::axon_serve::invoke_remote_initiator::SessionDispatch::Request {
+                    call_id, ..
+                } = dispatch
+                {
+                    correlation_for_hub.complete(
+                        call_id,
+                        RequestOutcome::Ok {
+                            result_bytes: b"hub-via-outbox".to_vec(),
+                        },
+                    );
+                }
+            }
+        });
+
+        let outcome = handle
+            .escalate("federation.forward_invoke".into(), b"{}".to_vec())
+            .await;
+        match outcome {
+            RequestOutcome::Ok { result_bytes } => {
+                assert_eq!(result_bytes, b"hub-via-outbox");
+            }
+            other => panic!("expected Ok via outbox, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn outbox_consumer_surfaces_no_live_session_after_clear() {
+        // Sequence:
+        //   1. Outbox set; consumer running
+        //   2. Outbox cleared (simulates session disconnect)
+        //   3. Subsequent escalate hits the empty-outbox branch
+        let correlation = EscalationCorrelation::new();
+        let outbox = SharedSessionOutbox::new();
+        let handle =
+            spawn_escalation_consumer_with_outbox(Arc::clone(&correlation), outbox.clone());
+
+        let (up_tx, _up_rx_held) = mpsc::channel::<InvokeBidiUp>(8);
+        outbox.set(up_tx);
+        outbox.clear();
+
+        let outcome = handle
+            .escalate_with_timeout(
+                "federation.forward_invoke".into(),
+                b"{}".to_vec(),
+                Duration::from_secs(2),
+            )
+            .await;
+        match outcome {
+            RequestOutcome::Err {
+                error: SessionRequestError::UpstreamFailure { reason },
+            } => {
+                assert!(
+                    reason.contains("no live <self>.session bidi"),
+                    "reason should cite missing session; got {reason}",
+                );
+            }
+            other => panic!("expected UpstreamFailure after clear, got {other:?}"),
+        }
+    }
 }

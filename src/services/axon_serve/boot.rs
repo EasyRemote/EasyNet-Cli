@@ -235,6 +235,43 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
             .with_federated_peers_cell(federated_peers_cell.clone());
     }
 
+    // **PR-N6 C4**. Device-mode daemon's `forward_invoke` escalates
+    // up the long-lived `<self>.session` bidi to the hub instead of
+    // consulting its (always-empty) local PresenceRegistry. Three
+    // collaborators wired here:
+    //
+    //   1. `EscalationCorrelation` — call_id → oneshot table.
+    //      Cloned into the service's `LocalAbilityDispatcher`
+    //      builder so inbound `RequestResult` frames complete the
+    //      awaiting dispatcher future.
+    //   2. `SharedSessionOutbox` — published by the session
+    //      supervisor on every successful dial, cleared on
+    //      disconnect. The escalation consumer reads it
+    //      per-Request.
+    //   3. `SessionEscalationHandle` — what the dispatcher's
+    //      `escalate_forward_invoke` arm calls. Wired into the
+    //      service via `with_session_escalation`.
+    //
+    // Hub / Both modes leave `escalation_state = None`. Their
+    // dispatcher's existing local-presence + cross-hub dial arms
+    // run unchanged.
+    let escalation_state = if matches!(config.mode(), DaemonMode::Device) {
+        let correlation =
+            crate::services::axon_serve::session_escalation::EscalationCorrelation::new();
+        let outbox =
+            crate::services::axon_serve::session_escalation::SharedSessionOutbox::new();
+        let handle = std::sync::Arc::new(
+            crate::services::axon_serve::session_escalation::spawn_escalation_consumer_with_outbox(
+                Arc::clone(&correlation),
+                outbox.clone(),
+            ),
+        );
+        service = service.with_session_escalation(Arc::clone(&handle));
+        Some((correlation, outbox))
+    } else {
+        None
+    };
+
     // **PR-N3 commit N3-3.1**. Spawn the polling task that
     // populates the federated directory cell by calling each
     // peer's `federation.discover` ability on a fixed cadence.
@@ -312,7 +349,20 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
                 .snapshot()
                 .lookup_peer_hub(&hub_endpoint)
                 .and_then(|entry| entry.tls_ca_pem_path.clone());
-            spawn_session_supervisor(hub_endpoint, identity, hub_ca_pem_path, dispatcher);
+            // PR-N6 C4: forward the (correlation, outbox) pair the
+            // outer block constructed when this daemon is device-
+            // mode. The supervisor publishes the active up_tx into
+            // the outbox on every successful dial; the
+            // LocalAbilityDispatcher inside the supervisor receives
+            // the correlation table so inbound RequestResult frames
+            // resolve the awaiting dispatcher futures.
+            spawn_session_supervisor(
+                hub_endpoint,
+                identity,
+                hub_ca_pem_path,
+                dispatcher,
+                escalation_state,
+            );
         } else {
             eprintln!(
                 "[axon-serve] device-mode daemon missing either hub_endpoint or \
@@ -335,6 +385,10 @@ fn spawn_session_supervisor(
     identity: DaemonIdentity,
     hub_ca_pem_path: Option<std::path::PathBuf>,
     dispatcher: Arc<AbilityDispatcher>,
+    escalation_state: Option<(
+        Arc<crate::services::axon_serve::session_escalation::EscalationCorrelation>,
+        crate::services::axon_serve::session_escalation::SharedSessionOutbox,
+    )>,
 ) {
     let signing_state = if identity.signing_seed.is_some() {
         "signed frame0"
@@ -345,11 +399,16 @@ fn spawn_session_supervisor(
         Some(path) => format!("pinned CA `{}`", path.display()),
         None => "system trust roots".to_string(),
     };
+    let escalation_state_str = if escalation_state.is_some() {
+        "forward_invoke escalation wired"
+    } else {
+        "forward_invoke escalation OFF"
+    };
     eprintln!(
         "[axon-serve] device-mode dialing `<self>.session` against {hub_endpoint} as \
-         {}; {signing_state}; tls={ca_state}; LocalAbilityDispatcher will execute \
-         inbound SessionDispatch::Dispatch frames through the boot-threaded \
-         AbilityDispatcher Arc",
+         {}; {signing_state}; tls={ca_state}; {escalation_state_str}; \
+         LocalAbilityDispatcher will execute inbound SessionDispatch::Dispatch \
+         frames through the boot-threaded AbilityDispatcher Arc",
         identity.caller_uri,
     );
     // Cancel oneshot held for the daemon process's lifetime — the
@@ -362,13 +421,28 @@ fn spawn_session_supervisor(
     // intent rather than a side-effect of forgetting to drop).
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
     Box::leak(Box::new(cancel_tx));
-    let dispatcher = Arc::new(LocalAbilityDispatcher::new(dispatcher));
+
+    // PR-N6 C4: when escalation is wired (device mode), inject the
+    // correlation table into the LocalAbilityDispatcher so inbound
+    // RequestResult frames complete the matching pending entry,
+    // and forward the SharedSessionOutbox to the supervisor so it
+    // publishes the active up_tx on every successful dial.
+    let (correlation, outbox) = match escalation_state {
+        Some((c, o)) => (Some(c), Some(o)),
+        None => (None, None),
+    };
+    let mut local_dispatcher = LocalAbilityDispatcher::new(dispatcher);
+    if let Some(correlation) = correlation {
+        local_dispatcher = local_dispatcher.with_escalation_correlation(correlation);
+    }
+    let dispatcher = Arc::new(local_dispatcher);
     tokio::spawn(run_session_supervisor(
         hub_endpoint,
         identity.caller_uri,
         identity.signing_seed,
         hub_ca_pem_path,
         dispatcher,
+        outbox,
         cancel_rx,
     ));
 }
