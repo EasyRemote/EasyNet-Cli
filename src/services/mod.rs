@@ -119,3 +119,13 @@ pub mod receipt_store;
 /// per `pr-drafts/PR-N1-spec-hub-to-hub-grpc-outbound.md`.
 #[cfg(feature = "axon-pb")]
 pub mod federation_client;
+
+/// Cross-realm directory federation wire shapes (RFC-N PR-N3).
+/// PR-N3 commit N3-1 lands `DirectoryEntry` with schema-B
+/// `origin_realm` / `hub_endpoint` / `last_seen_unix_ms` fields
+/// per `pr-drafts/PR-N3-spec-cross-realm-directory-v2.md §2.1`.
+/// `DirectoryEvent` (the event-stream tagged enum) lands in
+/// N3-2; the `RemoteDirectoryClient` per-peer FSM and
+/// `SharedFederatedDirectoryView` cell land in N3-3. Pure data
+/// + serde — no feature gate.
+pub mod federation_directory;
