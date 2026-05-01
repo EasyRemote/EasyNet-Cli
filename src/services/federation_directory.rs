@@ -915,6 +915,7 @@ impl RemoteDirectoryClient {
 pub async fn run_per_peer_supervisor(
     peer_realm: String,
     peer_hub_uri: String,
+    caller_uri: String,
     federation_client: std::sync::Arc<dyn crate::services::federation_client::FederationClient>,
     cell: SharedFederatedDirectoryView,
     cancel: tokio::sync::oneshot::Receiver<()>,
@@ -924,6 +925,7 @@ pub async fn run_per_peer_supervisor(
     run_per_peer_supervisor_with_idle_timeout(
         peer_realm,
         peer_hub_uri,
+        caller_uri,
         federation_client,
         cell,
         cancel,
@@ -1007,12 +1009,16 @@ where
 pub async fn run_per_peer_supervisor_with_idle_timeout(
     peer_realm: String,
     peer_hub_uri: String,
+    caller_uri: String,
     federation_client: std::sync::Arc<dyn crate::services::federation_client::FederationClient>,
     cell: SharedFederatedDirectoryView,
     mut cancel: tokio::sync::oneshot::Receiver<()>,
     idle_timeout_ms: u64,
 ) {
-    use crate::pb::axon::v1::InvokeServerStreamRequest;
+    use crate::pb::axon::v1::{
+        AgentIdentity, Envelope, InvokeServerStreamRequest, SubjectIdentity,
+    };
+    use rand::RngCore;
 
     let mut client = RemoteDirectoryClient::new(peer_realm.clone(), peer_hub_uri.clone());
     loop {
@@ -1021,13 +1027,45 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
             return;
         }
 
-        // Build a default-shaped subscribe request. The peer's
-        // admission gate runs against the envelope; future
-        // commit threads a real signed envelope through the
-        // supervisor (today's CrossHubDialer applies its own
-        // trust gate before the dial completes, so the peer's
-        // admission is a defence-in-depth check).
-        let request = InvokeServerStreamRequest::default();
+        // Build a request with a populated envelope. The peer's
+        // `dispatch_invoke_stream` admission rejects with
+        // `InvalidArgument: InvokeStream request missing
+        // envelope` if either the envelope or its caller /
+        // callee / subject / nonce fields are absent. We mirror
+        // the same shape the CLI bridge uses for forward_invoke:
+        // caller URI = this daemon's own URI, callee + subject =
+        // the peer's hub URI as the address being subscribed to,
+        // and a fresh 16-byte invocation nonce per dial. The
+        // CrossHubDialer applies its own trust gate (TLS pin)
+        // before the request reaches the peer's admission, so
+        // the peer's strict admission is defence-in-depth.
+        let mut nonce = vec![0u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut nonce);
+        let peer_uri_for_envelope =
+            format!("easynet:///r/{peer_realm}/agent/hub");
+        let envelope = Envelope {
+            caller: Some(AgentIdentity {
+                uri: caller_uri.clone(),
+                ..AgentIdentity::default()
+            }),
+            callee: Some(AgentIdentity {
+                uri: peer_uri_for_envelope.clone(),
+                ..AgentIdentity::default()
+            }),
+            subject: Some(SubjectIdentity {
+                uri: peer_uri_for_envelope,
+                ..SubjectIdentity::default()
+            }),
+            invocation_nonce: nonce,
+            ..Envelope::default()
+        };
+        let request = InvokeServerStreamRequest {
+            envelope: Some(envelope),
+            function_name: crate::services::axon_serve::federation_wrappers
+                ::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY
+                .to_string(),
+            ..InvokeServerStreamRequest::default()
+        };
 
         match federation_client
             .subscribe_directory_v2(&peer_hub_uri, request)
@@ -1861,6 +1899,7 @@ mod tests {
                 run_per_peer_supervisor_with_idle_timeout(
                     "realm-b".to_string(),
                     "https://hub-b.example:50443".to_string(),
+                    "easynet:///r/realm-a/agent/hub".to_string(),
                     client_for_task,
                     cell_for_task,
                     cancel_rx,
@@ -2052,6 +2091,7 @@ mod tests {
                 run_per_peer_supervisor(
                     "realm-b".to_string(),
                     "https://hub-b.example:50443".to_string(),
+                    "easynet:///r/realm-a/agent/hub".to_string(),
                     client_for_task,
                     cell_for_task,
                     cancel_rx,
@@ -2179,6 +2219,7 @@ mod tests {
                 run_per_peer_supervisor(
                     "realm-b".to_string(),
                     "https://hub-b.example:50443".to_string(),
+                    "easynet:///r/realm-a/agent/hub".to_string(),
                     client,
                     cell_for_task,
                     cancel_rx,

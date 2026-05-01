@@ -261,10 +261,19 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
         // poll cadence and the streaming dial silently fails
         // closed (its retry-with-backoff isolates the pollute
         // in the supervisor).
+        // Use the daemon's own URI as the subscribe-stream
+        // envelope's caller. Falls back to a generic CLI-style
+        // URI when the daemon has no credentials yet (test /
+        // smoke builds) so the peer's strict-admission still
+        // sees a non-empty caller field.
+        let supervisor_caller_uri = daemon_uri
+            .clone()
+            .unwrap_or_else(|| "easynet:///r/cli/agent/local".to_string());
         spawn_federated_directory_streaming_supervisor(
             client,
             federated_peers_cell.clone(),
             federated_directory_cell.clone(),
+            supervisor_caller_uri,
         );
     }
 
@@ -870,6 +879,7 @@ fn spawn_federated_directory_streaming_supervisor(
     federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
     federated_directory_cell:
         crate::services::federation_directory::SharedFederatedDirectoryView,
+    caller_uri: String,
 ) {
     tokio::spawn(async move {
         // peer_realm -> oneshot::Sender that cancels the
@@ -900,12 +910,14 @@ fn spawn_federated_directory_streaming_supervisor(
                             tokio::sync::oneshot::channel();
                         let realm_owned = peer_realm.to_string();
                         let uri_owned = peer_hub_uri.to_string();
+                        let caller_owned = caller_uri.clone();
                         let client_clone = Arc::clone(&federation_client_outer);
                         let cell_clone = directory_cell_outer.clone();
                         tokio::spawn(async move {
                             crate::services::federation_directory::run_per_peer_supervisor(
                                 realm_owned,
                                 uri_owned,
+                                caller_owned,
                                 client_clone,
                                 cell_clone,
                                 cancel_rx,

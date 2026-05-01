@@ -149,6 +149,7 @@ async fn streaming_chain_propagates_presence_event_to_peer_cell() {
         run_per_peer_supervisor(
             "realm-a".to_string(),
             "https://hub-a.example:50443".to_string(),
+            "easynet:///r/realm-b/agent/hub".to_string(),
             federation_client,
             cell_for_task,
             cancel_rx,
@@ -231,6 +232,7 @@ async fn streaming_chain_propagates_presence_remove() {
         run_per_peer_supervisor(
             "realm-a".to_string(),
             "https://hub-a.example:50443".to_string(),
+            "easynet:///r/realm-b/agent/hub".to_string(),
             federation_client,
             cell_for_task,
             cancel_rx,
