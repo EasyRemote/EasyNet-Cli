@@ -110,6 +110,19 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
         args.peer_hub.as_deref(),
     );
 
+    // LB-52 Gap 3 — mirror the device's own `(uri, pubkey,
+    // role=Device)` self-entry into the local realm-trust.toml so
+    // a co-located hub-mode daemon admits this device on
+    // `<self>.session` without a separate
+    // `<self>.register_device_pubkey` round-trip. Single-machine
+    // demo / answer-sheet topologies that mock or skip the
+    // backend hit this path; production deploys with a real
+    // backend invoke `<self>.register_device_pubkey` and either
+    // overwrite this entry or no-op against the matching pubkey
+    // (idempotent). Failures log and keep going — same discipline
+    // as the federated_peers auto-wire above.
+    let _ = super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds);
+
     output::success("Paired successfully");
     output::detail("node_id", &creds.node_id);
     output::detail("hub_endpoint", &creds.hub_endpoint);

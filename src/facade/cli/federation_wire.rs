@@ -250,6 +250,222 @@ pub fn auto_wire_federated_peer_from_credentials(
     Ok(())
 }
 
+/// LB-52 Gap 3 — mirror the just-paired device's own `(uri, pubkey,
+/// role=Device)` entry into the local realm-trust.toml so a
+/// co-located hub-mode daemon admits this device on
+/// `<self>.session` without a separate
+/// `<self>.register_device_pubkey` round-trip.
+///
+/// Why this exists
+/// ---------------
+/// The canonical writer for trust-anchor entries is the backend's
+/// pairing flow calling `<self>.register_device_pubkey` (PR-7
+/// commit 5/N). In single-machine demo / answer-sheet topologies,
+/// the backend is mocked or absent, so the trust anchor stays
+/// empty and the local daemon rejects its own paired device's
+/// `<self>.session` admission. This helper closes that gap by
+/// pre-populating the device's self-entry on `easynet join`,
+/// derived deterministically from `(tenant_id, node_id)` via the
+/// same `derive_owner_public_key_b64` the runtime publish path
+/// uses. Production deploys with a real backend continue to use
+/// the canonical pairing-flow writer; this helper is a no-op when
+/// the entry is already present (idempotent).
+///
+/// Failure handling
+/// ----------------
+/// Mirrors `auto_wire_federated_peer_from_credentials`: every step
+/// is best-effort; failures log and return Ok so the join hot
+/// path never aborts on this step. Empty `tenant_id` or
+/// `node_id` is a silent no-op (test fixtures with synthetic
+/// credentials hit this).
+///
+/// Path resolution
+/// ---------------
+/// Honours `EASYNET_REALM_TRUST_PATH` for tests / demos
+/// (matching `boot::trust_anchor_path_from_env_or_default`); falls
+/// back to `~/.easynet/realm-trust.toml` so the operator-readable
+/// home location is the canonical user-facing surface. The
+/// production daemon path `/etc/easynet/realm-trust.toml` is
+/// admin-owned and not writable by the unprivileged join flow;
+/// operators on production deploys rely on the backend's
+/// `<self>.register_device_pubkey` writer instead.
+pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyhow::Result<()> {
+    if creds.tenant_id.trim().is_empty() || creds.node_id.trim().is_empty() {
+        return Ok(());
+    }
+    let path = realm_trust_path_for_join();
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    if !parent.exists() {
+        if let Err(err) = fs::create_dir_all(parent) {
+            eprintln!(
+                "[easynet join] could not create {} ({err}); skipping realm-trust auto-wire",
+                parent.display()
+            );
+            return Ok(());
+        }
+    }
+
+    let raw = match fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => {
+            eprintln!(
+                "[easynet join] could not read {} ({err}); skipping realm-trust auto-wire",
+                path.display()
+            );
+            return Ok(());
+        }
+    };
+
+    let agent_uri = format!(
+        "easynet:///r/{}/agent/{}",
+        creds.tenant_id.trim(),
+        creds.node_id.trim(),
+    );
+    let public_key_b64 = crate::runtime::publish::derive_owner_public_key_b64(
+        creds.tenant_id.trim(),
+        creds.node_id.trim(),
+    );
+    let added_at_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+
+    let updated = match upsert_self_trusted_agent(
+        &raw,
+        &agent_uri,
+        &public_key_b64,
+        added_at_unix_ms,
+    ) {
+        Ok(s) => s,
+        Err(err) => {
+            eprintln!(
+                "[easynet join] could not edit realm-trust.toml ({err}); skipping \
+                 realm-trust auto-wire. Add the device entry manually under \
+                 `[[trusted_agent]]` if you want local hub-mode admission for \
+                 this device."
+            );
+            return Ok(());
+        }
+    };
+
+    if updated == raw {
+        // Idempotent: the entry already matches.
+        return Ok(());
+    }
+
+    if let Err(err) = atomic_write(&path, updated.as_bytes()) {
+        eprintln!(
+            "[easynet join] could not write realm-trust.toml ({err}); skipping \
+             realm-trust auto-wire"
+        );
+        return Ok(());
+    }
+
+    // Best-effort SIGHUP so a co-located hub-mode daemon picks up
+    // the new entry without a restart (PR-7 commit 5/N
+    // SharedTrustAnchor cell, same SIGHUP-aware reload path the
+    // canonical `<self>.register_device_pubkey` writer uses). The
+    // SIGHUP also reloads `[daemon.federated_peers]`; one signal
+    // covers both files.
+    if let Err(err) = sighup_running_daemon_best_effort() {
+        eprintln!(
+            "[easynet join] realm-trust.toml updated; SIGHUP to reload it failed ({err}). \
+             The new self-entry will activate on the next daemon restart."
+        );
+    }
+
+    Ok(())
+}
+
+/// Resolve the realm-trust.toml path the join helper should write
+/// to. Honours `EASYNET_REALM_TRUST_PATH` (test/demo override the
+/// daemon also honours via `boot::trust_anchor_path_from_env_or_
+/// default`) so a single env var rebases both the writer and the
+/// reader. Falls back to `~/.easynet/realm-trust.toml` — the
+/// home-rooted operator-visible default. The production
+/// `/etc/easynet/realm-trust.toml` location is intentionally NOT
+/// the join-time fallback: it requires root and operators on
+/// production deploys go through the backend's
+/// `<self>.register_device_pubkey` writer, not this helper.
+fn realm_trust_path_for_join() -> PathBuf {
+    if let Some(override_path) = std::env::var_os("EASYNET_REALM_TRUST_PATH") {
+        return PathBuf::from(override_path);
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join(".easynet/realm-trust.toml");
+    }
+    PathBuf::from(".easynet/realm-trust.toml")
+}
+
+/// TOML edit: insert-or-update a `[[trusted_agent]]` row whose
+/// `agent_uri` matches the joining device. Preserves every other
+/// row + comment via `toml_edit`. Idempotent when the row already
+/// has the same `public_key_b64` (the deterministic derivation
+/// from `(tenant_id, node_id)` should always produce the same
+/// pubkey for the same identity, so a re-run of `easynet join`
+/// against the same credentials is a no-op).
+fn upsert_self_trusted_agent(
+    raw: &str,
+    agent_uri: &str,
+    public_key_b64: &str,
+    added_at_unix_ms: u64,
+) -> anyhow::Result<String> {
+    use toml_edit::{value, ArrayOfTables, DocumentMut, Item, Table};
+
+    let mut doc: DocumentMut = if raw.trim().is_empty() {
+        DocumentMut::new()
+    } else {
+        raw.parse().context("parse realm-trust.toml")?
+    };
+
+    // The on-disk shape is `[[trusted_agent]]` (array of tables).
+    // toml_edit represents that as `Item::ArrayOfTables`.
+    let agents_item = doc
+        .as_table_mut()
+        .entry("trusted_agent")
+        .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
+    let agents = agents_item
+        .as_array_of_tables_mut()
+        .ok_or_else(|| anyhow::anyhow!("`trusted_agent` is not a TOML array of tables"))?;
+
+    // Idempotent path: an existing entry with our agent_uri
+    // means the canonical writer (or a previous join run) already
+    // populated this row. Leave it untouched so we preserve any
+    // operator-edited fields (e.g. role override for an admin-
+    // promoted device, or a pubkey explicitly rotated through the
+    // canonical `<self>.register_device_pubkey` writer). The
+    // pubkey-mismatch case is treated identically: the existing
+    // entry is authoritative; a re-pair that legitimately rotates
+    // the key should go through `easynet reset` first.
+    let already_present = agents
+        .iter()
+        .any(|existing| {
+            existing
+                .get("agent_uri")
+                .and_then(|i| i.as_str())
+                .map(|s| s == agent_uri)
+                .unwrap_or(false)
+        });
+    if already_present {
+        return Ok(doc.to_string());
+    }
+
+    // No existing entry: append a fresh row.
+    let mut row = Table::new();
+    row.insert("agent_uri", value(agent_uri));
+    row.insert("public_key_b64", value(public_key_b64));
+    row.insert("role", value("device"));
+    row.insert("added_at_unix_ms", value(added_at_unix_ms as i64));
+    // `origin_tenant_id`, `hub_uri`, `tls_ca_pem_path` are
+    // Hub-role-only fields; leave them off the device entry so
+    // the TOML matches what a fresh `<self>.register_device_pubkey`
+    // call would write.
+    agents.push(row);
+
+    Ok(doc.to_string())
+}
+
 /// TOML edit step: insert-or-update `[daemon.federated_peers]
 /// <tenant_id> = <hub_uri>` while preserving every other field
 /// in the file. Operator-authored daemon-config.toml files often
@@ -507,5 +723,178 @@ listen_tcp = "127.0.0.1:50443"
             hub_api_base: None,
         };
         auto_wire_federated_peer_from_credentials(&creds, None).expect("empty tenant is no-op");
+    }
+
+    // ── LB-52 Gap 3 — realm-trust auto-wire on join ────────────────
+
+    #[test]
+    fn upsert_self_trusted_agent_appends_to_empty_doc() {
+        let raw = "";
+        let updated = upsert_self_trusted_agent(
+            raw,
+            "easynet:///r/tenant-a/agent/dev-1",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            1_700_000_000_000,
+        )
+        .expect("upsert into empty doc");
+        // Round-trip parse to verify we wrote a valid TOML AOT entry.
+        let parsed: toml::Value = updated.parse().expect("output parses as TOML");
+        let arr = parsed
+            .get("trusted_agent")
+            .and_then(|v| v.as_array())
+            .expect("trusted_agent array present");
+        assert_eq!(arr.len(), 1, "exactly one entry written");
+        let row = arr[0].as_table().expect("row is a table");
+        assert_eq!(
+            row.get("agent_uri").and_then(|v| v.as_str()),
+            Some("easynet:///r/tenant-a/agent/dev-1"),
+        );
+        assert_eq!(row.get("role").and_then(|v| v.as_str()), Some("device"));
+        assert_eq!(
+            row.get("public_key_b64").and_then(|v| v.as_str()),
+            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+        );
+        assert_eq!(
+            row.get("added_at_unix_ms").and_then(|v| v.as_integer()),
+            Some(1_700_000_000_000),
+        );
+    }
+
+    #[test]
+    fn upsert_self_trusted_agent_idempotent_when_uri_already_present() {
+        // An existing row with our URI is left untouched even if
+        // the pubkey differs — the canonical
+        // `<self>.register_device_pubkey` writer (or an operator
+        // edit) is authoritative.
+        let raw = r#"
+[[trusted_agent]]
+agent_uri = "easynet:///r/tenant-a/agent/dev-1"
+public_key_b64 = "OPERATOR-WRITTEN-VALUE"
+role = "device"
+added_at_unix_ms = 100
+"#;
+        let updated = upsert_self_trusted_agent(
+            raw,
+            "easynet:///r/tenant-a/agent/dev-1",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            999_999_999_999,
+        )
+        .expect("idempotent path");
+        // Pubkey untouched, no second row appended.
+        assert!(updated.contains("OPERATOR-WRITTEN-VALUE"));
+        assert!(!updated.contains("AAAAAAAA"));
+        let arr_count = updated.matches("[[trusted_agent]]").count();
+        assert_eq!(arr_count, 1, "no duplicate row appended");
+    }
+
+    #[test]
+    fn upsert_self_trusted_agent_preserves_existing_unrelated_rows() {
+        let raw = r#"
+[[trusted_agent]]
+agent_uri = "easynet:///r/tenant-a/agent/other-device"
+public_key_b64 = "OTHER-KEY"
+role = "device"
+added_at_unix_ms = 1
+"#;
+        let updated = upsert_self_trusted_agent(
+            raw,
+            "easynet:///r/tenant-a/agent/dev-1",
+            "MY-KEY",
+            1_700_000_000_000,
+        )
+        .expect("upsert");
+        // Both rows present.
+        assert!(updated.contains("other-device"));
+        assert!(updated.contains("dev-1"));
+        let parsed: toml::Value = updated.parse().expect("parses");
+        let arr = parsed
+            .get("trusted_agent")
+            .and_then(|v| v.as_array())
+            .expect("trusted_agent array");
+        assert_eq!(arr.len(), 2, "preserves existing row + appends new");
+    }
+
+    #[test]
+    fn auto_wire_self_realm_trust_short_circuits_on_empty_node_id() {
+        let creds = Credentials {
+            node_id: String::new(),
+            credential_token: "tok".into(),
+            hub_endpoint: "axon://hub:50051".into(),
+            tenant_id: "tenant-a".into(),
+            deploy_signature: "sig".into(),
+            hub_api_base: None,
+        };
+        auto_wire_self_realm_trust_from_credentials(&creds)
+            .expect("empty node_id is a no-op (no panic, no write)");
+    }
+
+    #[test]
+    fn auto_wire_self_realm_trust_writes_entry_under_env_override() {
+        // Drive the helper end-to-end by pointing
+        // EASYNET_REALM_TRUST_PATH at a tempdir-rooted path. Asserts
+        // the file contains a Device-role entry for the joining
+        // device and that the pubkey is the deterministic
+        // derivation from (tenant_id, node_id).
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let trust_path = tmp.path().join("realm-trust.toml");
+        // Deterministic env-override scope: capture pre-existing
+        // value so concurrent tests don't see our write.
+        let prev = std::env::var_os("EASYNET_REALM_TRUST_PATH");
+        // SAFETY: tests are single-threaded for env mutations
+        // through the lock convention in this module's other
+        // tests; we hold no lock here but the override path is
+        // process-wide unique (tempdir) so concurrent tests
+        // can't collide on the file. Restore on exit via Drop.
+        std::env::set_var("EASYNET_REALM_TRUST_PATH", &trust_path);
+        struct EnvGuard(Option<std::ffi::OsString>);
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                match self.0.take() {
+                    Some(v) => std::env::set_var("EASYNET_REALM_TRUST_PATH", v),
+                    None => std::env::remove_var("EASYNET_REALM_TRUST_PATH"),
+                }
+            }
+        }
+        let _guard = EnvGuard(prev);
+
+        let creds = Credentials {
+            node_id: "dev-1".into(),
+            credential_token: "tok".into(),
+            hub_endpoint: "axon://hub:50051".into(),
+            tenant_id: "tenant-a".into(),
+            deploy_signature: "sig".into(),
+            hub_api_base: None,
+        };
+        auto_wire_self_realm_trust_from_credentials(&creds).expect("auto-wire ok");
+
+        let body = std::fs::read_to_string(&trust_path).expect("file exists");
+        let parsed: toml::Value = body.parse().expect("parses");
+        let arr = parsed
+            .get("trusted_agent")
+            .and_then(|v| v.as_array())
+            .expect("trusted_agent array");
+        assert_eq!(arr.len(), 1, "exactly one entry written");
+        let row = arr[0].as_table().expect("row is a table");
+        assert_eq!(
+            row.get("agent_uri").and_then(|v| v.as_str()),
+            Some("easynet:///r/tenant-a/agent/dev-1"),
+        );
+        assert_eq!(row.get("role").and_then(|v| v.as_str()), Some("device"));
+
+        let expected_pk =
+            crate::runtime::publish::derive_owner_public_key_b64("tenant-a", "dev-1");
+        assert_eq!(
+            row.get("public_key_b64").and_then(|v| v.as_str()),
+            Some(expected_pk.as_str()),
+            "pubkey must be the deterministic derivation (matches what \
+             <self>.register_device_pubkey would write)"
+        );
+
+        // Re-running is idempotent: file size unchanged.
+        let body_before = body;
+        auto_wire_self_realm_trust_from_credentials(&creds)
+            .expect("second auto-wire is a no-op");
+        let body_after = std::fs::read_to_string(&trust_path).expect("file exists");
+        assert_eq!(body_after, body_before, "second run is byte-identical");
     }
 }

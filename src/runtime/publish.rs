@@ -36,12 +36,10 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use crate::persistence::local_agents::{self, LocalAgentsFile};
-use crate::runtime::advertise::{
-    self, AbilityInvoker, AdvertiseOutcome,
-};
+use crate::runtime::advertise::{self, AbilityInvoker, AdvertiseOutcome};
 use crate::runtime::agents::profiles::{
-    bootstrap::{self, BootstrapOutcome, BootstrapPlan, UriMinter, UuidMinter},
     self as profiles_mod,
+    bootstrap::{self, BootstrapOutcome, BootstrapPlan, UriMinter, UuidMinter},
 };
 use serde_json::Value;
 
@@ -261,16 +259,14 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
     // Group descriptors by owner Agent and advertise each group.
     let mut by_owner: std::collections::HashMap<String, Vec<_>> = std::collections::HashMap::new();
     for d in descriptors {
-        by_owner.entry(d.owner_agent_uri.clone()).or_default().push(d);
+        by_owner
+            .entry(d.owner_agent_uri.clone())
+            .or_default()
+            .push(d);
     }
     for (owner_uri, abilities) in by_owner {
-        let result = advertise::advertise_abilities(
-            invoker,
-            tenant_id,
-            &plan.realm,
-            &owner_uri,
-            &abilities,
-        );
+        let result =
+            advertise::advertise_abilities(invoker, tenant_id, &plan.realm, &owner_uri, &abilities);
         outcomes.push(PublishOutcome {
             agent_uri: owner_uri.clone(),
             label: format!("abilities/{}", abilities.len()),
@@ -485,14 +481,11 @@ pub fn bootstrap_self_identity_via_runtime<I: AbilityInvoker>(
 /// derivation as `derive_owner_public_key_b64`; kept as a separate
 /// `pub(crate)` symbol so the heartbeat module can call it without
 /// promoting the underlying helper to the public surface.
-pub(crate) fn derive_owner_public_key_b64_for_keepalive(
-    tenant_id: &str,
-    node_id: &str,
-) -> String {
+pub(crate) fn derive_owner_public_key_b64_for_keepalive(tenant_id: &str, node_id: &str) -> String {
     derive_owner_public_key_b64(tenant_id, node_id)
 }
 
-fn derive_owner_public_key_b64(tenant_id: &str, node_id: &str) -> String {
+pub(crate) fn derive_owner_public_key_b64(tenant_id: &str, node_id: &str) -> String {
     let subject_id = format!("easynet:prv:reg:agent.{node_id}");
     derive_subject_public_key_b64(tenant_id, &subject_id)
 }
@@ -556,8 +549,8 @@ pub(crate) fn derive_subject_keypair(tenant_id: &str, subject_id: &str) -> ([u8;
     let mut seed = [0_u8; 32];
     seed.copy_from_slice(&digest[..32]);
     let signing = SigningKey::from_bytes(&seed);
-    let pk_b64 = base64::engine::general_purpose::STANDARD
-        .encode(signing.verifying_key().to_bytes());
+    let pk_b64 =
+        base64::engine::general_purpose::STANDARD.encode(signing.verifying_key().to_bytes());
     (seed, pk_b64)
 }
 
@@ -576,8 +569,7 @@ pub(crate) fn mirror_derived_keys_into_keyring(
     device_uri: &str,
 ) -> anyhow::Result<()> {
     let agent_subject_id = format!("easynet:prv:reg:agent.{node_id}");
-    let (agent_seed, agent_pk_b64) =
-        derive_subject_keypair(tenant_id, &agent_subject_id);
+    let (agent_seed, agent_pk_b64) = derive_subject_keypair(tenant_id, &agent_subject_id);
     let agent_pk = base64::Engine::decode(
         &base64::engine::general_purpose::STANDARD,
         agent_pk_b64.as_bytes(),
@@ -596,15 +588,8 @@ pub(crate) fn mirror_derived_keys_into_keyring(
             &base64::engine::general_purpose::STANDARD,
             hub_pk_b64.as_bytes(),
         )?;
-        let hub_subject_uri = format!(
-            "easynet:///r/prv/hub/{realm}?tenant_id={tenant_id}"
-        );
-        keyring.mirror_external_key(
-            "hub_signing",
-            hub_subject_uri,
-            &hub_pk,
-            Some(&hub_seed),
-        )?;
+        let hub_subject_uri = format!("easynet:///r/prv/hub/{realm}?tenant_id={tenant_id}");
+        keyring.mirror_external_key("hub_signing", hub_subject_uri, &hub_pk, Some(&hub_seed))?;
     }
     Ok(())
 }
@@ -676,9 +661,8 @@ pub fn unpublish_abilities_via_revoke<I: AbilityInvoker>(
     agent_uri: &str,
     reason: &str,
 ) -> PublishOutcome {
-    let resource_uri = format!(
-        "easynet:///r/prv/hub/{realm}/abilities/federation.revoke@1?tenant_id={tenant_id}"
-    );
+    let resource_uri =
+        format!("easynet:///r/prv/hub/{realm}/abilities/federation.revoke@1?tenant_id={tenant_id}");
     let payload = serde_json::json!({
         "agent_uri": agent_uri,
         "reason": reason,
@@ -704,11 +688,7 @@ fn advertise_outcome_to_publish_outcome(
     }
 }
 
-fn first_uri(
-    outcomes: &[BootstrapOutcome],
-    profile: &str,
-    name: &str,
-) -> Option<String> {
+fn first_uri(outcomes: &[BootstrapOutcome], profile: &str, name: &str) -> Option<String> {
     outcomes
         .iter()
         .find(|o| o.profile == profile && o.name == name)
@@ -758,12 +738,7 @@ mod tests {
 
     struct FailingInvoker;
     impl AbilityInvoker for FailingInvoker {
-        fn invoke_ability(
-            &self,
-            _: &str,
-            _: &str,
-            _: Value,
-        ) -> Result<Value, String> {
+        fn invoke_ability(&self, _: &str, _: &str, _: Value) -> Result<Value, String> {
             Err("transport down".into())
         }
     }
@@ -844,11 +819,13 @@ mod tests {
         let invoker = CountingInvoker::new(good_reply());
         let mut plan = plan_for("", "");
         plan.consent = true;
-        let outcomes =
-            republish_with_minter(&invoker, "tenant", &plan, &CountingMinter::new());
+        let outcomes = republish_with_minter(&invoker, "tenant", &plan, &CountingMinter::new());
         // Pre-join: bootstrap still ran but advertise was skipped.
         // We should see ZERO calls to the bridge.
-        assert!(invoker.calls().is_empty(), "no advertise calls should have happened");
+        assert!(
+            invoker.calls().is_empty(),
+            "no advertise calls should have happened"
+        );
         // The single outcome must report the skip.
         let skipped = outcomes
             .iter()
@@ -964,7 +941,10 @@ mod tests {
             .iter()
             .find(|o| o.agent_uri == *alice_uri && o.label.starts_with("abilities/"))
             .expect("alice's abilities-advertise outcome row must exist");
-        assert!(alice_row.result.is_ok(), "alice abilities advertise: {alice_row:?}");
+        assert!(
+            alice_row.result.is_ok(),
+            "alice abilities advertise: {alice_row:?}"
+        );
     }
 
     #[test]
@@ -1048,13 +1028,11 @@ mod tests {
         let _ = republish_with_minter(&invoker, "tenant", &plan, &CountingMinter::new());
         let calls = invoker.calls();
         // Find the consent-hosted advertise and assert the URA shape.
-        let consent_call = calls
-            .iter()
-            .find(|(u, p)| {
-                u.contains("federation.advertise_agent")
-                    && p["signing_authority"]["kind"] == "hosted_by"
-                    && p["agent_uri"].as_str().unwrap().contains("consent-default")
-            });
+        let consent_call = calls.iter().find(|(u, p)| {
+            u.contains("federation.advertise_agent")
+                && p["signing_authority"]["kind"] == "hosted_by"
+                && p["agent_uri"].as_str().unwrap().contains("consent-default")
+        });
         assert!(
             consent_call.is_some(),
             "expected a hosted_by advertise for consent/default, got calls = {calls:#?}"
@@ -1064,7 +1042,10 @@ mod tests {
         // the isolated $HOME and confirm the consent + llm rows
         // landed with stable URAs.
         let file_back = local_agents::load().expect("load after save must succeed");
-        assert_eq!(file_back.host_device_agent_uri, "easynet:///r/acme/agent/01DEV");
+        assert_eq!(
+            file_back.host_device_agent_uri,
+            "easynet:///r/acme/agent/01DEV"
+        );
         let consent_row = file_back
             .hosted_agents
             .iter()
@@ -1163,7 +1144,8 @@ mod tests {
             assert_eq!(payload["tenant_id"], "tenant");
             assert_eq!(payload["node_id"], "node-01DEV");
             assert_eq!(
-                payload["dispatch_endpoint"], "ipc:///tmp/runtime-dispatch-test.sock"
+                payload["dispatch_endpoint"],
+                "ipc:///tmp/runtime-dispatch-test.sock"
             );
             assert!(
                 payload["tool_name"].as_str().is_some_and(|s| !s.is_empty()),
@@ -1171,7 +1153,10 @@ mod tests {
             );
         }
         for o in &outcomes {
-            assert!(o.result.is_ok(), "every register call should succeed: {o:?}");
+            assert!(
+                o.result.is_ok(),
+                "every register call should succeed: {o:?}"
+            );
         }
     }
 
