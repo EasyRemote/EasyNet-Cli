@@ -104,6 +104,22 @@ impl TrustSource {
             TrustSource::Live(cell) => cell.snapshot(),
         }
     }
+
+    /// DEC-N5 §5 cert-anchor generation counter. The legacy
+    /// `Snapshot` flavour is fixed at generation 0 (no reload
+    /// possible by construction); the `Live` flavour reads the
+    /// cell's atomic counter, which bumps on every `replace`.
+    /// `CrossHubDialer` keys its channel cache by
+    /// `(hub_uri, generation)` so a SIGHUP-triggered swap of the
+    /// CA pinned for a peer invalidates cached channels for the
+    /// next dial — without disturbing in-flight calls on the old
+    /// channel.
+    fn cert_anchor_generation(&self) -> u64 {
+        match self {
+            TrustSource::Snapshot(_) => 0,
+            TrustSource::Live(cell) => cell.cert_anchor_generation(),
+        }
+    }
 }
 
 /// Default per-call timeout for `forward_invoke`. Spec §commit 4/N:
@@ -255,7 +271,16 @@ pub trait FederationClient: Send + Sync {
 #[derive(Clone)]
 pub struct CrossHubDialer {
     trust_source: TrustSource,
-    channels: Arc<DashMap<HubUri, Channel>>,
+    /// DEC-N5 §5 cert-rotation pool — keyed by `(hub_uri,
+    /// cert_anchor_generation)`. A SIGHUP-driven anchor swap bumps
+    /// the generation on the trust cell; the next dial keys at
+    /// the new generation, misses the cache, and builds a fresh
+    /// channel against the new CA. Old-generation entries persist
+    /// only as long as in-flight calls hold them; once those
+    /// futures drop their `Channel` clones, the cache entry's
+    /// reference count goes to one (the map's own) and lazy
+    /// eviction (next §5.2 cleanup pass) reclaims it.
+    channels: Arc<DashMap<(HubUri, u64), Channel>>,
     /// **PR-N1 commit 4/N**. Per-peer breaker state. Lock-free
     /// `DashMap` matches the channel cache shape so admission +
     /// breaker contention stay symmetric on the hot path.
@@ -474,8 +499,10 @@ impl CrossHubDialer {
         &self,
         target_hub: &HubUri,
         ca_pem_path: &std::path::Path,
+        generation: u64,
     ) -> Result<Channel, FederationClientError> {
-        if let Some(cached) = self.channels.get(target_hub) {
+        let cache_key = (target_hub.clone(), generation);
+        if let Some(cached) = self.channels.get(&cache_key) {
             return Ok(cached.clone());
         }
 
@@ -514,7 +541,17 @@ impl CrossHubDialer {
         //     basis, matching the trait's "no retry on
         //     forward_invoke" contract.
         let channel = endpoint.connect_lazy();
-        self.channels.insert(target_hub.clone(), channel.clone());
+        // DEC-N5 §5: lazy eviction of stale-generation entries
+        // for *this* peer. New-generation lookups miss the cache,
+        // so old-generation entries that nobody else holds open
+        // become unreachable from the trust source. Evict them
+        // here so the map doesn't grow unboundedly across
+        // repeated SIGHUP cycles. In-flight calls on those old
+        // entries already hold their own `Channel` clone; the
+        // map removal does not interrupt them.
+        self.channels
+            .retain(|(hub, gen), _| hub != target_hub || *gen == generation);
+        self.channels.insert(cache_key, channel.clone());
         Ok(channel)
     }
 }
@@ -558,7 +595,13 @@ impl FederationClient for CrossHubDialer {
         self.check_and_advance_breaker(target_hub)?;
 
         // ── 3. Resolve channel (cached or fresh TLS-pinned) ──
-        let channel = match self.resolve_peer_channel(target_hub, ca_path) {
+        // DEC-N5 §5: key the cache by `(hub_uri, generation)` so a
+        // SIGHUP-driven anchor swap (which changes the per-peer
+        // pinned CA) invalidates cached channels for the next dial.
+        // The generation snapshot is per-call — the call sees a
+        // consistent (anchor, generation) pair.
+        let generation = self.trust_source.cert_anchor_generation();
+        let channel = match self.resolve_peer_channel(target_hub, ca_path, generation) {
             Ok(channel) => channel,
             Err(err) => {
                 // A channel-build failure is a peer-reachability
@@ -1122,6 +1165,120 @@ mod tests {
             err2,
             FederationClientError::PeerNotTrusted(_)
         ));
+    }
+
+    // ── C2a / DEC-N5 §5: cert_anchor_generation pool tests ──
+
+    #[tokio::test]
+    async fn cert_anchor_generation_starts_at_zero_and_bumps_on_replace() {
+        // Direct cell-level pin: a fresh `SharedTrustAnchor` is
+        // generation 0; every `replace` bumps it by 1. The dialer
+        // observes the same monotonic counter via TrustSource::Live.
+        let cell = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
+        assert_eq!(cell.cert_anchor_generation(), 0);
+        cell.replace(Arc::new(RealmTrustAnchor::default()));
+        assert_eq!(cell.cert_anchor_generation(), 1);
+        cell.replace(Arc::new(RealmTrustAnchor::default()));
+        assert_eq!(cell.cert_anchor_generation(), 2);
+    }
+
+    #[tokio::test]
+    async fn channel_pool_keys_by_generation_so_cert_swap_invalidates_cache() {
+        // DEC-N5 §5 contract: a SIGHUP-driven anchor swap (which
+        // can carry a new per-peer `tls_ca_pem_path`) must
+        // invalidate cached channels — the next dial keys at the
+        // new generation, misses, and builds a fresh channel
+        // against the new CA. Old-generation entries are evicted
+        // lazily by the per-peer retain pass; in-flight calls on
+        // the old channel finish naturally.
+        let target = "https://127.0.0.1:1".to_string();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ca_path_v1 = dir.path().join("ca-v1.pem");
+        std::fs::write(&ca_path_v1, SELF_SIGNED_CA_PEM).expect("seed v1 ca");
+        let ca_path_v2 = dir.path().join("ca-v2.pem");
+        std::fs::write(&ca_path_v2, SELF_SIGNED_CA_PEM).expect("seed v2 ca");
+
+        // Boot anchor: generation 0, peer pinned to v1 CA.
+        let initial_anchor = anchor_with(fed_peer_entry(&target, ca_path_v1));
+        let cell = SharedTrustAnchor::new(initial_anchor);
+        let dialer = CrossHubDialer::with_trust_anchor_cell(cell.clone())
+            .with_forward_invoke_timeout(Duration::from_millis(50));
+
+        // First dial populates the cache at generation 0.
+        let _ = dialer
+            .forward_invoke(&target, sample_request("test.echo"))
+            .await;
+        assert_eq!(
+            dialer.cached_peer_count(),
+            1,
+            "first dial fills the pool at generation 0"
+        );
+
+        // SIGHUP-equivalent: operator publishes a new anchor with
+        // the same peer pinned to a different CA file. Generation
+        // bumps to 1.
+        let next_anchor = anchor_with(fed_peer_entry(&target, ca_path_v2));
+        cell.replace(next_anchor);
+        assert_eq!(cell.cert_anchor_generation(), 1);
+
+        // Next dial keys at generation 1 → cache miss → fresh
+        // channel built. The lazy retain pass evicts the
+        // generation-0 entry for this peer, so total count is
+        // still 1, but the entry itself is the new one.
+        let _ = dialer
+            .forward_invoke(&target, sample_request("test.echo"))
+            .await;
+        assert_eq!(
+            dialer.cached_peer_count(),
+            1,
+            "stale-generation entry must be evicted on the next dial"
+        );
+
+        // Pin the new entry's generation explicitly so a future
+        // refactor that broke the eviction would flip this red.
+        let entry = dialer
+            .channels
+            .iter()
+            .next()
+            .expect("one entry remains");
+        let (cached_uri, cached_gen) = entry.key();
+        assert_eq!(cached_uri, &target);
+        assert_eq!(*cached_gen, 1, "remaining entry must be at the new generation");
+    }
+
+    #[tokio::test]
+    async fn snapshot_constructor_pins_generation_at_zero() {
+        // Reverse-direction pin: the legacy snapshot-flavour
+        // constructor (`CrossHubDialer::new`) cannot observe
+        // generation bumps because it has no cell to read.
+        // Repeated dials must always key at generation 0.
+        let target = "https://127.0.0.1:1".to_string();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, SELF_SIGNED_CA_PEM).expect("seed ca");
+
+        let entry = fed_peer_entry(&target, ca_path);
+        let anchor = anchor_with(entry);
+
+        let dialer = CrossHubDialer::new(anchor)
+            .with_forward_invoke_timeout(Duration::from_millis(50));
+        let _ = dialer
+            .forward_invoke(&target, sample_request("test.echo"))
+            .await;
+        let _ = dialer
+            .forward_invoke(&target, sample_request("test.echo"))
+            .await;
+        assert_eq!(dialer.cached_peer_count(), 1);
+        let entry = dialer
+            .channels
+            .iter()
+            .next()
+            .expect("one entry remains");
+        let (_, cached_gen) = entry.key();
+        assert_eq!(
+            *cached_gen, 0,
+            "snapshot constructor pins generation at 0 forever"
+        );
     }
 
     #[tokio::test]
