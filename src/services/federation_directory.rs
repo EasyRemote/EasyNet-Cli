@@ -452,6 +452,24 @@ impl DirectoryView {
         entry.origin_realm = Some(self.peer_realm.clone());
         entry
     }
+
+    /// **PR-N3 N3-streaming-12**. Mark every entry in the view
+    /// as `status = "stale"`. The streaming supervisor calls
+    /// this after a stream-end before publishing to the cell;
+    /// readers see the peer's last-known entries flagged as
+    /// possibly-out-of-date until the next successful
+    /// Snapshot flips them back to `"active"` (or removes
+    /// them).
+    ///
+    /// Spec §2.1 status enum: `"active" | "stale" |
+    /// "draining"`. The streaming wire never directly emits
+    /// "stale" — that's purely a receiver-side annotation
+    /// driven by transport-level disconnect signal.
+    pub fn mark_all_stale(&mut self) {
+        for entry in self.entries.values_mut() {
+            entry.status = "stale".to_string();
+        }
+    }
 }
 
 // ── SharedFederatedDirectoryView (PR-N3 N3-3) ──────────────────────
@@ -858,6 +876,22 @@ impl RemoteDirectoryClient {
         next.insert(self.peer_realm.clone(), Arc::new(self.view.clone()));
         cell.replace(next);
     }
+
+    /// **PR-N3 N3-streaming-12**. Mark every entry in this
+    /// peer's local view as `status = "stale"` and publish to
+    /// the cell. The supervisor calls this after a stream-end
+    /// (StreamEnded / IdleTimeout / ProtocolViolation) so
+    /// readers see the peer's last-known entries flagged
+    /// possibly-out-of-date until the next successful stream
+    /// reconnect's Snapshot replaces the view wholesale.
+    ///
+    /// Idempotent: calling on an already-stale view is a no-op
+    /// at the wire level (same status string), so a supervisor
+    /// stuck in backoff cycles doesn't churn the cell.
+    pub fn mark_stale_and_publish(&mut self, cell: &SharedFederatedDirectoryView) {
+        self.view.mark_all_stale();
+        self.publish_to_cell(cell);
+    }
 }
 
 /// **PR-N3 N3-streaming-4**. Run the per-peer streaming
@@ -1048,7 +1082,11 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
                         // peer-removal SIGHUP would leave a
                         // stale claim that blocks the poll task
                         // from picking up the realm in a
-                        // re-add cycle.
+                        // re-add cycle. We do NOT mark stale
+                        // on cancel: a peer-removed via SIGHUP
+                        // means the operator no longer wants
+                        // the entries at all (the next watcher
+                        // pass drops them).
                         cell.unmark_streamed(&peer_realm);
                         return;
                     }
@@ -1056,7 +1094,15 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
                 // Stream ended (any outcome except cancel) —
                 // release the claim so the poll task picks up
                 // the slack until the next reconnect succeeds.
+                // Also flip every entry in the peer's local
+                // view to status = "stale" + republish so
+                // readers see freshness annotation per spec
+                // §2.1 (PR-N3 N3-streaming-12). The view stays
+                // populated so a brief disconnect doesn't
+                // erase the entries; the next successful
+                // Snapshot replaces them wholesale.
                 cell.unmark_streamed(&peer_realm);
+                client.mark_stale_and_publish(&cell);
             }
             Err(err) => {
                 eprintln!(
@@ -2169,6 +2215,103 @@ mod tests {
     }
 
     // ── PR-N3 N3-streaming-2 — consume_directory_event_stream ──
+
+    // ── PR-N3 N3-streaming-12 — mark-stale-and-publish ──
+
+    #[test]
+    fn mark_all_stale_flips_every_entry_status() {
+        // Pure DirectoryView API. View has 3 active entries;
+        // mark_all_stale flips each.
+        let mut view = DirectoryView::new("realm-b".to_string());
+        view.apply_frame(&DirectoryEvent::Snapshot {
+            entries: vec![
+                entry_with_claimed_origin("easynet:///r/realm-b/agent/a", None),
+                entry_with_claimed_origin("easynet:///r/realm-b/agent/b", None),
+                entry_with_claimed_origin("easynet:///r/realm-b/agent/c", None),
+            ],
+        });
+        for entry in view.entries.values() {
+            assert_eq!(entry.status, "active", "fixture is active");
+        }
+        view.mark_all_stale();
+        for entry in view.entries.values() {
+            assert_eq!(entry.status, "stale", "every entry must flip to stale");
+        }
+    }
+
+    #[test]
+    fn mark_stale_and_publish_writes_stale_view_to_cell() {
+        // Client with a populated view; mark_stale_and_publish
+        // flips locally + publishes; cell snapshot reflects
+        // the stale annotation.
+        let cell = SharedFederatedDirectoryView::default();
+        let mut client = RemoteDirectoryClient::new(
+            "realm-b".to_string(),
+            "https://hub-b.example:50443".to_string(),
+        );
+        client.on_dial_ok();
+        client
+            .apply_event(&DirectoryEvent::Snapshot {
+                entries: vec![entry_with_claimed_origin(
+                    "easynet:///r/realm-b/agent/peer",
+                    None,
+                )],
+            })
+            .unwrap();
+        client.publish_to_cell(&cell);
+        // Sanity: cell shows the entry as active.
+        let snap1 = cell.snapshot();
+        assert_eq!(
+            snap1.get("realm-b")
+                .and_then(|v| v.lookup("easynet:///r/realm-b/agent/peer"))
+                .map(|e| e.status.as_str()),
+            Some("active"),
+        );
+
+        // Disconnect → mark_stale_and_publish → cell shows
+        // status="stale".
+        client.mark_stale_and_publish(&cell);
+        let snap2 = cell.snapshot();
+        assert_eq!(
+            snap2.get("realm-b")
+                .and_then(|v| v.lookup("easynet:///r/realm-b/agent/peer"))
+                .map(|e| e.status.as_str()),
+            Some("stale"),
+            "post-disconnect publish must flip status to stale",
+        );
+    }
+
+    #[test]
+    fn mark_stale_and_publish_idempotent_on_already_stale_view() {
+        // Calling twice in a row produces the same wire bytes.
+        // Idempotency guard against a supervisor stuck in
+        // reconnect cycles churning the cell.
+        let cell = SharedFederatedDirectoryView::default();
+        let mut client = RemoteDirectoryClient::new(
+            "realm-b".to_string(),
+            "https://hub-b.example:50443".to_string(),
+        );
+        client.on_dial_ok();
+        client
+            .apply_event(&DirectoryEvent::Snapshot {
+                entries: vec![entry_with_claimed_origin(
+                    "easynet:///r/realm-b/agent/peer",
+                    None,
+                )],
+            })
+            .unwrap();
+        client.mark_stale_and_publish(&cell);
+        let snap_a = cell.snapshot();
+        client.mark_stale_and_publish(&cell);
+        let snap_b = cell.snapshot();
+        // Both snapshots show the same status.
+        let status_a = snap_a.get("realm-b").unwrap()
+            .lookup("easynet:///r/realm-b/agent/peer").unwrap().status.clone();
+        let status_b = snap_b.get("realm-b").unwrap()
+            .lookup("easynet:///r/realm-b/agent/peer").unwrap().status.clone();
+        assert_eq!(status_a, status_b);
+        assert_eq!(status_a, "stale");
+    }
 
     #[test]
     fn publish_to_cell_replaces_only_this_peers_slot() {
