@@ -452,27 +452,32 @@ async fn cross_hub_two_daemon_real_tls_round_trip() {
             let body = resp.into_inner();
             let parsed: ForwardInvokeResponse = serde_json::from_slice(&body.result)
                 .expect("response body is ForwardInvokeResponse JSON");
-            // target_online may be false because we never registered
-            // a session for `target_b_uri`. The cross-hub dial chain
-            // delivering a structured response is the assertion.
+            // DEC-N4 §2.1: an `Ok(...)` outcome means delivery
+            // accepted (local-tenant fast-path queued the frame on
+            // the target's reverse channel, OR cross-tenant peer
+            // returned an ability response). The
+            // `correlation_call_id` round-trips the caller's
+            // `call_id` so the CLI initiator can match the eventual
+            // reverse-channel reply.
             eprintln!(
-                "[test] cross-hub forward_invoke OK; target_online={}",
-                parsed.target_online
+                "[test] cross-hub forward_invoke OK; result_bytes_len={} corr_id={}",
+                parsed.result_bytes.len(),
+                parsed.correlation_call_id,
             );
         }
         Err(status) => {
-            // Admission gate may reject the unsigned test caller URI —
-            // that is still proof the binary is processing requests.
-            // What we DO NOT accept: `Status::unavailable` (channel
-            // never connected) or a panic/abort.
+            // DEC-N4 §2.1 admits two non-transport failure modes:
+            //   - `permission_denied` from the admission gate
+            //   - `failed_precondition("target_offline")` from the
+            //     dispatcher (no presence entry / dial failure /
+            //     channel full / channel closed)
+            // Both prove the binary processed the RPC. Only
+            // transport-layer failures indicate broken boot wiring.
             eprintln!(
                 "[test] cross-hub forward_invoke status: code={:?} message={}",
                 status.code(),
                 status.message()
             );
-            // `permission_denied` and `invalid_argument` are
-            // legitimate admission outcomes; only fail on
-            // transport-layer failures.
             assert!(
                 !matches!(
                     status.code(),

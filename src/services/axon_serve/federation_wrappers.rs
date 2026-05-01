@@ -347,47 +347,56 @@ pub struct ForwardInvokeRequest {
     pub inner_envelope_b64: String,
 }
 
-/// Response payload for `federation.forward_invoke`.
+/// Response payload for `federation.forward_invoke` (DEC-N4 §2.1
+/// final shape).
 ///
-/// **PR-1 staging shape only.** Spec §4 defines the final wire shape
-/// as a *dispatch result* (the inner invocation's correlated reply,
-/// carrying the target's response bytes plus the call_id used to
-/// correlate). PR-1 ships this `target_online` shape during the
-/// staging window because:
+/// `result_bytes` carries the target's ability-response bytes
+/// end-to-end, opaque to the forwarding hub. `correlation_call_id`
+/// is the call_id originally minted by the caller's
+/// `<self>.invoke_remote` initiator (or, for the CLI bridge,
+/// generated client-side at request build time); the receiving
+/// daemon uses it to correlate the SessionDispatch::Result with
+/// the awaiting bidi.
 ///
-/// 1. The presence-registry lookup is implementable at PR-1 commit
-///    5/9; the actual frame push down a `<self>.session` reverse
-///    channel needs the broadcast-pump infrastructure that lands in
-///    commit 8/9
-/// 2. PR-4's schema-compat suite is *informational, not gating*
-///    until commit 8/9 (see `checklists/PR-4-checklist.md §6.5`),
-///    so an interim shape does not break the bisect-bisect-merge
-///    plan
-/// 3. Replacing the response shape later is one struct edit + a
-///    test update — `ForwardInvokeResponse` is not on the path of
-///    any consumer outside this commit's tests
-///
-/// Final shape (lands in commit 8/9): `result_bytes: Vec<u8>` +
-/// `correlation_call_id: String` + a `target_offline` error variant
-/// communicated via `Status::failed_precondition`.
+/// `target_offline` is NOT carried as an `Ok(ForwardInvokeResponse
+/// { result_bytes: empty })`; per DEC-N4 §2.1 it surfaces as
+/// `Status::failed_precondition` with reason text `target_offline`.
+/// The previous staging field `target_online: bool` is removed
+/// entirely; PR-4 baseline schema fixtures regenerate alongside
+/// this shape change.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ForwardInvokeResponse {
-    /// PR-1 staging field; whether the target had an open
-    /// `<self>.session` at lookup time. Replaced in commit 8/9.
-    pub target_online: bool,
+    /// Target ability response bytes, opaque to the forwarder.
+    pub result_bytes: Vec<u8>,
+    /// Call-id minted by the caller; threaded back so the caller
+    /// can correlate this response with its awaiting bidi.
+    pub correlation_call_id: String,
 }
 
-/// Handle a `federation.forward_invoke` invocation. PR-1 staging:
-/// reports whether the target is online; the actual frame push
-/// across the reverse channel arrives in a follow-up commit on the
-/// same branch.
+/// Reason text emitted on `Status::failed_precondition` when the
+/// target presence-registry lookup misses on the local-tenant
+/// fast-path. Wire-stable per DEC-N4 §2.1.
+pub const FORWARD_INVOKE_TARGET_OFFLINE_REASON: &str = "target_offline";
+
+/// Handle a local-tenant `federation.forward_invoke` invocation.
+///
+/// Pure constructor for the DEC-N4 §2.1 `ForwardInvokeResponse`
+/// shape. Threads the caller's `correlation_call_id` and the
+/// target's `result_bytes` into the wire envelope. Presence-
+/// registry lookup + target_offline behaviour live in the
+/// dispatcher (`daemon_invocation_service::try_push_forward_
+/// invoke_frame`); this wrapper exists for the test contract
+/// pin and call sites that build the wire shape directly.
 #[must_use]
 pub fn handle_forward_invoke(
     request: &ForwardInvokeRequest,
-    registry: &PresenceRegistry,
+    correlation_call_id: &str,
+    result_bytes: Vec<u8>,
 ) -> ForwardInvokeResponse {
+    let _ = request;
     ForwardInvokeResponse {
-        target_online: registry.lookup(&request.target_uri).is_some(),
+        result_bytes,
+        correlation_call_id: correlation_call_id.to_string(),
     }
 }
 
@@ -623,32 +632,43 @@ mod tests {
     }
 
     #[test]
-    fn handle_forward_invoke_reports_target_online() {
-        let registry = PresenceRegistry::new();
-        let uri = "easynet:///r/realm/agent/n1".to_string();
-        registry.insert(uri.clone(), make_dispatch_sender());
-
+    fn handle_forward_invoke_threads_correlation_id_and_result_bytes() {
+        // DEC-N4 §2.1 final shape: handle_forward_invoke is a
+        // pure constructor that threads the caller's
+        // correlation_call_id and the target's result_bytes
+        // through. Presence-registry lookup + target_offline
+        // surface live in the dispatcher's
+        // try_push_forward_invoke_frame.
+        let _registry = PresenceRegistry::new();
+        let target_reply = b"hello from device-b".to_vec();
         let resp = handle_forward_invoke(
             &ForwardInvokeRequest {
-                target_uri: uri,
+                target_uri: "easynet:///r/realm/agent/n1".to_string(),
                 inner_envelope_b64: String::new(),
             },
-            &registry,
+            "call-id-7",
+            target_reply.clone(),
         );
-        assert!(resp.target_online);
+        assert_eq!(resp.correlation_call_id, "call-id-7");
+        assert_eq!(resp.result_bytes, target_reply);
     }
 
     #[test]
-    fn handle_forward_invoke_offline_target_reports_false() {
-        let registry = PresenceRegistry::new();
+    fn handle_forward_invoke_empty_result_bytes_is_legal_at_construction() {
+        // Empty result_bytes is a legitimate shape after the
+        // target dispatcher returns nothing. It is NOT how
+        // target_offline is signalled (DEC-N4 §2.1 makes
+        // target_offline a Status::failed_precondition).
         let resp = handle_forward_invoke(
             &ForwardInvokeRequest {
-                target_uri: "easynet:///r/realm/agent/missing".to_string(),
+                target_uri: "easynet:///r/realm/agent/n1".to_string(),
                 inner_envelope_b64: String::new(),
             },
-            &registry,
+            "call-id-8",
+            Vec::new(),
         );
-        assert!(!resp.target_online);
+        assert!(resp.result_bytes.is_empty());
+        assert_eq!(resp.correlation_call_id, "call-id-8");
     }
 
     #[test]

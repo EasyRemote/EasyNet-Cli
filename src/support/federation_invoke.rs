@@ -158,9 +158,17 @@ pub fn invoke_via_federation_forward(
     // tuple as a JSON blob; PR-N1's daemon-to-daemon wire
     // forwards this opaquely. PR-N2 will introduce AXIOM
     // mapping rewrite + signature; PR-N1 ships the unsigned shape.
+    //
+    // DEC-N4 §2.1: a client-minted `call_id` is required so the
+    // daemon's `ForwardInvokeResponse.correlation_call_id` can
+    // thread it back to whichever bidi was waiting for the
+    // result. We use a nanosecond+rng id; the value is opaque
+    // to the daemon, only the round-trip equality matters.
+    let call_id = generate_call_id();
     let inner_payload = json!({
         "ability": ability,
         "args": args,
+        "call_id": call_id,
     });
     let inner_envelope_bytes = serde_json::to_vec(&inner_payload)
         .context("serialise inner ability call as forward_invoke payload")?;
@@ -221,29 +229,90 @@ pub fn invoke_via_federation_forward(
             .context("connect to local daemon gRPC UDS socket")?;
 
         let mut client = InvocationClient::new(channel);
-        let response = client
-            .invoke(request)
-            .await
-            .map_err(|status| {
+        let response = client.invoke(request).await.map_err(|status| {
+            // DEC-N4 §2.1: cross-hub `target_offline` surfaces
+            // as `Status::failed_precondition` with reason text
+            // `target_offline`. Translate that into an
+            // operator-actionable bail (rather than a generic
+            // RPC error) so a CLI user reading the message
+            // knows the call reached the daemon but the peer
+            // was unreachable.
+            if status.code() == tonic::Code::FailedPrecondition
+                && status.message().contains("target_offline")
+            {
+                anyhow!(
+                    "cross-hub target `{node_uri}` is offline (federation.forward_invoke \
+                     reported target_offline). Run `easynet federation peers` to see \
+                     reachable peers, or `easynet runtime status` on the peer machine \
+                     to confirm the daemon is running."
+                )
+            } else {
                 anyhow!(
                     "daemon error invoking federation.forward_invoke for target `{node_uri}` \
                      (code={:?}): {}",
                     status.code(),
                     status.message(),
                 )
-            })?;
+            }
+        })?;
         let body = response.into_inner();
-        // The daemon's ForwardInvokeResponse shape is
-        // `{target_online: bool}` for v1 — PR-N1 commits 3b/N +
-        // 6/N forward the response verbatim. Parse + return as
-        // JSON so the caller can decide how to present it.
-        let parsed: Value = serde_json::from_slice(&body.result).with_context(|| {
+        // DEC-N4 §2.1 final shape:
+        // ForwardInvokeResponse { result_bytes, correlation_call_id }
+        // is the wire surface. Parse + extract result_bytes.
+        // For local-tenant fast-path the daemon returns
+        // `result_bytes: empty` (the actual ability response
+        // flows back over the reverse-channel correlation
+        // path). For cross-tenant the result_bytes is the
+        // peer's full ability response; if it parses as JSON
+        // we hand the parsed value back, otherwise the raw
+        // bytes (lossy decoded as UTF-8) so the CLI can still
+        // print something useful.
+        let envelope: Value = serde_json::from_slice(&body.result).with_context(|| {
             format!(
-                "parse federation.forward_invoke response: result_content_type={:?}",
+                "parse federation.forward_invoke ForwardInvokeResponse envelope: \
+                 result_content_type={:?}",
                 body.result_content_type
             )
         })?;
-        Ok(parsed)
+        let result_bytes_b64 = envelope
+            .get("result_bytes")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|n| n.as_u64())
+                    .map(|n| n as u8)
+                    .collect::<Vec<u8>>()
+            })
+            .unwrap_or_default();
+        if result_bytes_b64.is_empty() {
+            // Local-tenant fast-path delivery accepted, or a
+            // cross-hub call where the peer ability genuinely
+            // returned empty bytes. Either way, the
+            // correlation id is the only useful surface to
+            // print.
+            let correlation = envelope
+                .get("correlation_call_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            return Ok(serde_json::json!({
+                "delivery": "accepted",
+                "correlation_call_id": correlation,
+            }));
+        }
+        // Try parsing the peer's ability response as JSON; if
+        // it isn't, fall back to a hex-stringified shape so
+        // the CLI's print path doesn't crash on binary
+        // payloads.
+        match serde_json::from_slice::<Value>(&result_bytes_b64) {
+            Ok(v) => Ok(v),
+            Err(_) => Ok(serde_json::json!({
+                "result_bytes_len": result_bytes_b64.len(),
+                "result_bytes_hex": result_bytes_b64
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<String>(),
+            })),
+        }
     })
 }
 
@@ -258,6 +327,23 @@ fn expand_home(path: &str) -> PathBuf {
         }
     }
     PathBuf::from(path)
+}
+
+/// Generate a fresh `call_id` for the inner envelope payload's
+/// DEC-N4 §2.1 correlation field. Format: `cli-<nanos-hex>` —
+/// nanoseconds since Unix epoch, hex-encoded, prefixed so log
+/// scraping can tell CLI-minted ids apart from daemon-minted
+/// ones (`<self>.invoke_remote` initiator path uses a different
+/// prefix). Collision space is `2^64` per second of clock
+/// resolution; for the CLI's typical hand-driven cadence the
+/// risk is negligible.
+fn generate_call_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("cli-{nanos:x}")
 }
 
 /// Minimal base64 encoder used for the inner envelope payload.

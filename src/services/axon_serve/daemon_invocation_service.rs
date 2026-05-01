@@ -619,72 +619,81 @@ impl DaemonInvocationService {
             (None, Some(_)) => true,
         };
 
+        // Decode the inner payload up front. The
+        // `correlation_call_id` field is required by DEC-N4 §2.1
+        // so both arms (local-tenant fast-path AND cross-tenant
+        // dial) can thread it back to the caller. Decode failure
+        // surfaces as `Status::invalid_argument`; the CLI bridge
+        // is the producer and must always supply a non-empty
+        // `call_id` field.
+        let inner_payload = decode_inner_payload(&request.inner_envelope_b64)?;
+        let correlation_call_id = inner_payload.call_id.clone();
+
+        // **C1a / DEC-N4 §2.1 local-tenant fast-path**.
+        // When the target tenant is local (or no realm context
+        // is wired in this build), look up the target on the
+        // local presence registry. Hit → push the inner envelope
+        // bytes down the target's `<self>.session` reverse
+        // channel + return `Ok(ForwardInvokeResponse {
+        // result_bytes: empty, correlation_call_id })`. The
+        // empty `result_bytes` here means "delivery accepted";
+        // the actual ability response flows back through the
+        // reverse-channel correlation path, not through this
+        // synchronous unary response. Miss → typed
+        // `Status::failed_precondition(target_offline)` per
+        // DEC-N4 §2.1 — the empty-result shape is no longer the
+        // wire surface for offline.
         if is_local_tenant {
-            let target_online = self.try_push_forward_invoke_frame(&request)?;
-            let response = federation_wrappers::ForwardInvokeResponse { target_online };
+            self.try_push_forward_invoke_frame(&request)?;
+            let response = federation_wrappers::ForwardInvokeResponse {
+                result_bytes: Vec::new(),
+                correlation_call_id,
+            };
             return wrap_json_response(&response);
         }
 
-        // Cross-tenant path. Both the federation client and a
-        // matching `federated_peers` entry must be wired or the
-        // request collapses to `target_online: false`.
+        // Cross-tenant path. Missing federation client OR
+        // missing peer entry both surface as
+        // `failed_precondition(target_offline)` per DEC-N4 §2.1
+        // — the legacy "Ok with target_online:false" shape is
+        // gone.
         let Some(client) = self.federation_client.as_ref() else {
-            let response = federation_wrappers::ForwardInvokeResponse {
-                target_online: false,
-            };
-            return wrap_json_response(&response);
+            return Err(Status::failed_precondition(
+                federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+            ));
         };
         let Some(target_tenant) = target_tenant else {
-            // Already handled by the `is_local_tenant` branch
-            // above (None tenant collapses to local fast-path).
-            // This is defensive — the `let Some` reads as a
-            // contract reminder for future maintainers.
-            let response = federation_wrappers::ForwardInvokeResponse {
-                target_online: false,
-            };
-            return wrap_json_response(&response);
+            // Defensive: `is_local_tenant` already collapses
+            // None tenant to the local fast-path arm above.
+            return Err(Status::failed_precondition(
+                federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+            ));
         };
-        // PR-N1 commit 10/N: snapshot the federated_peers cell
-        // per-dispatch so a SIGHUP-driven reload of
-        // `[daemon.federated_peers]` (operator adding a new
-        // tenant→hub_uri entry without restarting the daemon)
-        // is visible to the next call. The snapshot is one
-        // `RwLock::read()` + `Arc::clone` (cheap; mirrors the
-        // admission gate's per-call pattern).
+        // Snapshot the federated_peers cell per-dispatch so a
+        // SIGHUP-driven reload of `[daemon.federated_peers]`
+        // (operator adding a new tenant→hub_uri entry without
+        // restarting the daemon) is visible to the next call.
+        // The snapshot is one `RwLock::read()` + `Arc::clone`
+        // (cheap; mirrors the admission gate's per-call pattern).
         let peers_snapshot = self.federated_peers.snapshot();
         let Some(target_hub_uri) = peers_snapshot.get(target_tenant) else {
-            let response = federation_wrappers::ForwardInvokeResponse {
-                target_online: false,
-            };
-            return wrap_json_response(&response);
+            return Err(Status::failed_precondition(
+                federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+            ));
         };
 
-        // **PR-N1 commit 11/N**: unwrap the inner envelope and
-        // rebuild a real `InvokeRequest` for the peer daemon.
-        //
-        // Pre-fix the cross-tenant path forwarded the same
-        // `federation.forward_invoke` wrapper to the peer with
-        // `envelope: None`, which made the peer daemon's
-        // admission gate immediately reject with
-        // `invalid_argument` — every cross-hub call collapsed
-        // to `target_online: false` regardless of whether the
-        // peer was actually reachable. The CLI bridge ships an
-        // `inner_envelope_b64 = base64(JSON{ability, args})`
-        // shape (`support/federation_invoke.rs`); this commit
-        // decodes that, builds a real `InvokeRequest` whose
-        // `function_name` is the inner `ability`, attaches the
-        // caller's original envelope (so the peer's admission
-        // gate sees the user's identity), and dials the peer.
-        //
-        // Cross-realm signature verify is still PR-N2 territory:
-        // the peer's admission gate verifies the caller URI
-        // against its local `realm-trust.toml`. For PR-N1's
-        // same-account same-tenant scope, the backend tenant fix
-        // (`0af7c0e`) ensures both daemons store the same
-        // `(tenant_id, agent_uri, public_key)` triple for the
-        // device, so the peer's admission gate accepts the
-        // forwarded envelope without a federated key resolver.
-        let inner_payload = decode_inner_payload(&request.inner_envelope_b64)?;
+        // Cross-tenant dial. Build a real `InvokeRequest` from
+        // the unwrapped inner payload (caller's `(ability,
+        // args)` pair) and attach the original caller envelope
+        // so the peer's admission gate sees the user's
+        // identity. The peer's admission gate verifies the
+        // caller URI against its local `realm-trust.toml`; for
+        // PR-N1's same-account same-tenant scope the backend
+        // tenant fix ensures both daemons store the same
+        // `(tenant_id, agent_uri, public_key)` triple, so the
+        // forwarded envelope is accepted. PR-N2's
+        // FederatedKeyResolver lifts that limitation for
+        // genuine cross-realm callers.
         let peer_envelope = build_peer_envelope(caller_envelope, &request.target_uri);
         let peer_request = InvokeRequest {
             envelope: Some(peer_envelope),
@@ -694,87 +703,84 @@ impl DaemonInvocationService {
         };
 
         match client.forward_invoke(target_hub_uri, peer_request).await {
-            Ok(peer_response) => Ok(Response::new(peer_response)),
-            // Treat any cross-hub failure as legacy
-            // `target_online: false` rather than bubbling the
-            // peer status to the caller. The caller's contract
-            // is the same shape every reachable peer would
-            // return; surfacing peer-side admission rejection
-            // as `target_online: false` is the spec-§4 staging
-            // shape's natural behavior.
-            //
-            // PR-N1 commit 4/N (timeout + circuit-breaker) +
-            // PR-N1 commit 5/N (e2e) refine this — circuit-
-            // open will surface a typed
-            // `failed_precondition` so operators can tell apart
-            // "peer rejected" from "peer is down".
-            Err(_err) => {
+            Ok(peer_response) => {
+                // C1a: thread the peer's response bytes through
+                // the DEC-N4 §2.1 wire shape. The peer-side
+                // dispatcher returns its ability handler's full
+                // `InvokeResponse`; we forward the `result`
+                // bytes verbatim and stamp the caller's
+                // `correlation_call_id` so the CLI initiator
+                // can correlate.
                 let response = federation_wrappers::ForwardInvokeResponse {
-                    target_online: false,
+                    result_bytes: peer_response.result.clone(),
+                    correlation_call_id,
                 };
                 wrap_json_response(&response)
             }
+            Err(_err) => Err(Status::failed_precondition(
+                federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+            )),
         }
     }
 
-    /// Real reverse-channel push for `federation.forward_invoke`.
+    /// Reverse-channel push for `federation.forward_invoke`.
     ///
-    /// Looks up `request.target_uri` in the presence registry and
-    /// pushes a `BinaryChunk` containing the inner-envelope bytes
-    /// down the target's `<self>.session` `DispatchSender`.
-    /// Returns `Ok(true)` when the frame was queued for delivery,
-    /// `Ok(false)` when the target was offline, and
-    /// `failed_precondition` when the dispatch sender's channel is
-    /// full (treated as offline-by-backpressure per spec §3
-    /// Invariant 4 — slow consumer is removed and the call surfaces
-    /// the eviction).
+    /// Looks up `request.target_uri` in the presence registry
+    /// and pushes a `BinaryChunk` containing the inner-envelope
+    /// bytes down the target's `<self>.session`
+    /// `DispatchSender`. Per DEC-N4 §2.1 the wire shape gives up
+    /// the legacy `target_online: bool` distinction in favour of:
     ///
-    /// PR-1 staging keeps the JSON response shape
-    /// `{ target_online: bool }` rather than the spec-§4-final
-    /// `{ result_bytes, correlation_call_id }` shape — DEC-003
-    /// Reading A pinned the staging shape; the final shape lands
-    /// alongside PR-3's `<self>.invoke_remote` per-call dispatch
-    /// because the correlated reply path needs the
-    /// `pending_dispatch` correlation table that PR-3 introduces.
+    /// - `Ok(())` — frame queued for delivery; the caller wraps
+    ///   that in `ForwardInvokeResponse { result_bytes: empty,
+    ///   correlation_call_id }`. The actual ability response
+    ///   flows back over the reverse-channel correlation path,
+    ///   not through this synchronous unary response.
+    /// - `Err(Status::failed_precondition(target_offline))` —
+    ///   target not in presence registry, channel closed, or
+    ///   channel full (slow-consumer eviction). All collapse to
+    ///   the same wire-stable reason; operators trace registry
+    ///   events for the underlying cause.
     fn try_push_forward_invoke_frame(
         &self,
         request: &federation_wrappers::ForwardInvokeRequest,
-    ) -> Result<bool, Status> {
+    ) -> Result<(), Status> {
         let Some(sender) = self.presence.lookup(&request.target_uri) else {
-            return Ok(false);
+            return Err(Status::failed_precondition(
+                federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+            ));
         };
 
         let inner_bytes = decode_inner_envelope(&request.inner_envelope_b64)?;
         let frame = build_forward_invoke_dispatch_frame(inner_bytes);
 
         match sender.try_send(Ok(frame)) {
-            Ok(()) => Ok(true),
+            Ok(()) => Ok(()),
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                 // Bounded backpressure (Invariant 4 in
-                // `services::presence_registry`). A full channel is
-                // a slow consumer; the canonical recovery is to
-                // remove the device with `OfflineReason::SendFailed`
-                // — that emits the matching presence event and
-                // future calls observe a clean `target_online=false`.
+                // `services::presence_registry`). Slow consumer
+                // → evict + surface `target_offline` per DEC-N4
+                // §2.1; the matching presence event ensures
+                // future calls observe a clean miss.
                 self.presence.remove(
                     &request.target_uri,
                     crate::services::presence_registry::OfflineReason::SendFailed,
                 );
-                Err(Status::failed_precondition(format!(
-                    "federation.forward_invoke: target `{}` channel full; \
-                     removed from registry with OfflineReason::SendFailed",
-                    request.target_uri,
-                )))
+                Err(Status::failed_precondition(
+                    federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+                ))
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                // Receiver dropped without explicit removal — the
-                // channel is dead. Symmetric removal so the next
-                // lookup returns None.
+                // Receiver dropped without explicit removal —
+                // channel is dead. Symmetric removal +
+                // `target_offline` surface for this call.
                 self.presence.remove(
                     &request.target_uri,
                     crate::services::presence_registry::OfflineReason::StreamClosed,
                 );
-                Ok(false)
+                Err(Status::failed_precondition(
+                    federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+                ))
             }
         }
     }
@@ -1268,26 +1274,35 @@ fn decode_inner_envelope(b64: &str) -> Result<Vec<u8>, Status> {
     })
 }
 
-/// **PR-N1 commit 11/N**. The inner-envelope payload shape the
-/// CLI bridge (`support/federation_invoke.rs::invoke_via_
-/// federation_forward`) emits: a JSON object carrying the
-/// originally-requested `(ability, args)` pair the user typed
-/// on the `easynet ability invoke` command line.
+/// **PR-N1 commit 11/N + C1a**. The inner-envelope payload
+/// shape the CLI bridge (`support/federation_invoke.rs::
+/// invoke_via_federation_forward`) emits: a JSON object
+/// carrying the originally-requested `(ability, args)` pair the
+/// user typed plus a `call_id` minted client-side that DEC-N4
+/// §2.1 threads back through `ForwardInvokeResponse.
+/// correlation_call_id` so the caller can correlate the
+/// response with its awaiting bidi.
 pub(crate) struct InnerPayload {
     pub ability: String,
     pub args_bytes: Vec<u8>,
+    pub call_id: String,
 }
 
-/// **PR-N1 commit 11/N**. Decode the base64-then-JSON inner
-/// payload the CLI bridge ships, surfacing each parse failure
-/// as `Status::invalid_argument` with a wire-stable hint so
-/// scripts grepping the daemon log can distinguish them.
+/// **PR-N1 commit 11/N + C1a**. Decode the base64-then-JSON
+/// inner payload the CLI bridge ships, surfacing each parse
+/// failure as `Status::invalid_argument` with a wire-stable
+/// hint so scripts grepping the daemon log can distinguish
+/// them. Non-empty `call_id` is required by DEC-N4 §2.1; a
+/// missing or empty value rejects with a clear error rather
+/// than synthesising a server-side id (which would defeat the
+/// caller-side correlation contract).
 pub(crate) fn decode_inner_payload(b64: &str) -> Result<InnerPayload, Status> {
     let raw = decode_inner_envelope(b64)?;
     if raw.is_empty() {
         return Err(Status::invalid_argument(
             "federation.forward_invoke: inner_envelope_b64 is empty; \
-             cross-hub dispatch requires a base64-encoded JSON {ability, args} payload",
+             cross-hub dispatch requires a base64-encoded JSON \
+             {ability, args, call_id} payload",
         ));
     }
     let parsed: serde_json::Value = serde_json::from_slice(&raw).map_err(|err| {
@@ -1298,7 +1313,7 @@ pub(crate) fn decode_inner_payload(b64: &str) -> Result<InnerPayload, Status> {
     let obj = parsed.as_object().ok_or_else(|| {
         Status::invalid_argument(
             "federation.forward_invoke: inner envelope must be a JSON object \
-             with `ability` and `args` fields",
+             with `ability`, `args`, and `call_id` fields",
         )
     })?;
     let ability = obj
@@ -1309,6 +1324,17 @@ pub(crate) fn decode_inner_payload(b64: &str) -> Result<InnerPayload, Status> {
             Status::invalid_argument(
                 "federation.forward_invoke: inner envelope is missing a non-empty \
                  string `ability` field",
+            )
+        })?
+        .to_string();
+    let call_id = obj
+        .get("call_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            Status::invalid_argument(
+                "federation.forward_invoke: inner envelope is missing a non-empty \
+                 string `call_id` field (DEC-N4 §2.1 correlation requirement)",
             )
         })?
         .to_string();
@@ -1324,6 +1350,7 @@ pub(crate) fn decode_inner_payload(b64: &str) -> Result<InnerPayload, Status> {
     Ok(InnerPayload {
         ability,
         args_bytes,
+        call_id,
     })
 }
 
@@ -1627,16 +1654,27 @@ mod tests {
 
     #[tokio::test]
     async fn invoke_dispatches_federation_forward_invoke() {
+        // DEC-N4 §2.1: empty `inner_envelope_b64` is rejected
+        // up front by `decode_inner_payload` because the
+        // payload must carry a non-empty `call_id`. Earlier
+        // staging code accepted the empty shape and replied
+        // `target_online: false`; the final wire shape requires
+        // a real correlation id, so the wrong shape surfaces as
+        // `Status::invalid_argument`.
         let svc = make_service();
-        let resp = svc
+        let err = svc
             .invoke(invoke_request(
                 ABILITY_FEDERATION_FORWARD_INVOKE,
                 r#"{"target_uri":"easynet:///r/realm/agent/missing","inner_envelope_b64":""}"#,
             ))
             .await
-            .expect("dispatch returns Ok");
-        let body: federation_wrappers::ForwardInvokeResponse = parse_response_body(resp);
-        assert!(!body.target_online);
+            .expect_err("empty inner_envelope_b64 must be rejected");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message().contains("inner_envelope_b64 is empty"),
+            "expected empty-payload error, got: {}",
+            err.message()
+        );
     }
 
     #[tokio::test]
@@ -2184,34 +2222,38 @@ mod tests {
     }
 
     fn forward_invoke_args(target_uri: &str) -> Vec<u8> {
-        // Test fixture: a base64-encoded JSON {ability, args}
-        // payload that mirrors what `support::federation_invoke
-        // ::invoke_via_federation_forward` ships from the CLI
-        // bridge. PR-N1 commit 11/N decodes this on the peer-
-        // dispatch path so the rebuilt `peer_request` carries
-        // the real inner ability + args. Tests that did not
-        // care about the inner shape (local fast-path, missing
-        // client, missing peer entry) still pass through this
-        // helper because they exit before the decode step.
-        //
-        // base64("{\"ability\":\"observe.health\",\"args\":{}}")
-        // == "eyJhYmlsaXR5Ijoib2JzZXJ2ZS5oZWFsdGgiLCJhcmdzIjp7fX0="
+        // Test fixture: a base64-encoded JSON `{ability, args,
+        // call_id}` payload that mirrors what `support::
+        // federation_invoke::invoke_via_federation_forward`
+        // ships from the CLI bridge. PR-N1 commit 11/N decodes
+        // this on the peer-dispatch path so the rebuilt
+        // `peer_request` carries the real inner ability + args;
+        // C1a / DEC-N4 §2.1 added the required `call_id` field
+        // for response correlation.
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let inner = serde_json::json!({
+            "ability": "observe.health",
+            "args": {},
+            "call_id": "test-call-id-1",
+        });
+        let inner_b64 = STANDARD.encode(serde_json::to_vec(&inner).unwrap());
         format!(
-            r#"{{"target_uri":"{target_uri}","inner_envelope_b64":"eyJhYmlsaXR5Ijoib2JzZXJ2ZS5oZWFsdGgiLCJhcmdzIjp7fX0="}}"#
+            r#"{{"target_uri":"{target_uri}","inner_envelope_b64":"{inner_b64}"}}"#
         )
         .into_bytes()
     }
 
     #[tokio::test]
     async fn forward_invoke_local_tenant_takes_fast_path() {
-        // When `target_uri` tenant matches the daemon's own
-        // realm, the local presence-registry path runs (and
-        // returns target_online: false because no presence
-        // entry was inserted in this test). Critical: the
-        // federation client is NEVER called even though one is
-        // wired.
+        // C1a / DEC-N4 §2.1: when `target_uri` tenant matches
+        // the daemon's own realm, the local presence-registry
+        // path runs. With no presence entry inserted, the
+        // dispatcher surfaces `Status::failed_precondition`
+        // with the wire-stable `target_offline` reason. Critical:
+        // the federation client is NEVER called even though one
+        // is wired.
         let canned = InvokeResponse {
-            result: br#"{"target_online":true}"#.to_vec(),
+            result: br#"{"result_bytes":[]}"#.to_vec(),
             result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
             state: InvocationState::Completed as i32,
             ..InvokeResponse::default()
@@ -2222,14 +2264,18 @@ mod tests {
             .with_session_realm("test-realm")
             .with_federation_client(recorder.clone() as Arc<dyn FederationClient>);
 
-        let resp = svc
+        let err = svc
             .dispatch_federation_forward_invoke(None, &forward_invoke_args(
                 "easynet:///r/test-realm/agent/local-target",
             ))
             .await
-            .expect("local fast-path returns Ok");
-        let body: federation_wrappers::ForwardInvokeResponse = parse_response_body(resp);
-        assert!(!body.target_online, "no presence entry for local target");
+            .expect_err("local fast-path miss surfaces target_offline");
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert_eq!(
+            err.message(),
+            federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+            "expected wire-stable target_offline reason"
+        );
         assert!(
             recorder.calls().is_empty(),
             "federation client must NOT be called on local-tenant fast-path"
@@ -2237,36 +2283,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forward_invoke_cross_tenant_with_no_client_returns_legacy_shape() {
-        // Cross-tenant target + no federation client wired ⇒
-        // legacy `target_online: false`. Daemons that have not
-        // opted into cross-hub routing keep their existing wire
-        // behavior.
+    async fn forward_invoke_cross_tenant_with_no_client_returns_target_offline() {
+        // C1a / DEC-N4 §2.1: cross-tenant target + no federation
+        // client wired ⇒ `Status::failed_precondition` with the
+        // wire-stable `target_offline` reason. The legacy
+        // "Ok with target_online:false" shape is gone.
         let svc = make_service().with_session_realm("test-realm");
 
-        let resp = svc
+        let err = svc
             .dispatch_federation_forward_invoke(None, &forward_invoke_args(
                 "easynet:///r/peer-realm/agent/peer-target",
             ))
             .await
-            .expect("cross-tenant without client returns Ok");
-        let body: federation_wrappers::ForwardInvokeResponse = parse_response_body(resp);
-        assert!(
-            !body.target_online,
-            "cross-tenant without federation client must collapse to legacy shape"
+            .expect_err("cross-tenant without client surfaces target_offline");
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert_eq!(
+            err.message(),
+            federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
         );
     }
 
     #[tokio::test]
-    async fn forward_invoke_cross_tenant_with_no_peer_entry_returns_legacy_shape() {
-        // Federation client is wired but the operator-curated
-        // `federated_peers` map has no entry for the target's
-        // tenant ⇒ legacy `target_online: false`. The map is
-        // the operator's explicit statement of "these are the
-        // peer realms I federate with"; an unmapped tenant is
-        // not dialable.
+    async fn forward_invoke_cross_tenant_with_no_peer_entry_returns_target_offline() {
+        // C1a / DEC-N4 §2.1: federation client wired but the
+        // operator-curated `federated_peers` map has no entry
+        // for the target's tenant ⇒ `Status::failed_
+        // precondition` with the `target_offline` reason. The
+        // map is the operator's explicit statement of "these
+        // are the peer realms I federate with"; an unmapped
+        // tenant is not dialable.
         let canned = InvokeResponse {
-            result: br#"{"target_online":true}"#.to_vec(),
+            result: br#"{"result_bytes":[]}"#.to_vec(),
             result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
             state: InvocationState::Completed as i32,
             ..InvokeResponse::default()
@@ -2277,14 +2324,17 @@ mod tests {
             .with_session_realm("test-realm")
             .with_federation_client(recorder.clone() as Arc<dyn FederationClient>);
 
-        let resp = svc
+        let err = svc
             .dispatch_federation_forward_invoke(None, &forward_invoke_args(
                 "easynet:///r/unmapped-realm/agent/peer-target",
             ))
             .await
-            .expect("unmapped tenant returns Ok");
-        let body: federation_wrappers::ForwardInvokeResponse = parse_response_body(resp);
-        assert!(!body.target_online);
+            .expect_err("unmapped tenant surfaces target_offline");
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert_eq!(
+            err.message(),
+            federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+        );
         assert!(
             recorder.calls().is_empty(),
             "federation client must NOT be called when peer entry is missing"
@@ -2293,12 +2343,15 @@ mod tests {
 
     #[tokio::test]
     async fn forward_invoke_cross_tenant_with_peer_entry_dials_via_federation_client() {
-        // Cross-tenant + federation client wired + peer entry
-        // present ⇒ federation client called with the peer's
-        // hub URI + the ability `federation.forward_invoke` +
-        // the original request bytes.
+        // C1a / DEC-N4 §2.1: cross-tenant + federation client
+        // wired + peer entry present ⇒ federation client called
+        // with the peer's hub URI + the *inner* ability decoded
+        // from `inner_envelope_b64`. Response carries peer's
+        // `result` bytes through `result_bytes`, plus the
+        // caller's `correlation_call_id` echoed back.
+        let peer_reply_bytes = br#"{"hello":"from-peer"}"#.to_vec();
         let canned = InvokeResponse {
-            result: br#"{"target_online":true}"#.to_vec(),
+            result: peer_reply_bytes.clone(),
             result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
             state: InvocationState::Completed as i32,
             ..InvokeResponse::default()
@@ -2323,11 +2376,12 @@ mod tests {
             .await
             .expect("cross-tenant returns Ok");
 
-        // Response is the peer's canned shape forwarded
-        // verbatim — the caller cannot tell apart local-on-peer
-        // hit from local-on-self hit by the wire bytes.
+        // Response carries the peer's `result` bytes verbatim
+        // in `result_bytes`, and stamps back the caller's
+        // `call_id` from the fixture as `correlation_call_id`.
         let body: federation_wrappers::ForwardInvokeResponse = parse_response_body(resp);
-        assert!(body.target_online, "peer canned target_online=true forwarded");
+        assert_eq!(body.result_bytes, peer_reply_bytes);
+        assert_eq!(body.correlation_call_id, "test-call-id-1");
 
         let calls = recorder.calls();
         assert_eq!(calls.len(), 1, "exactly one cross-hub dial");
@@ -2478,6 +2532,7 @@ mod tests {
             "args": {
                 "agent_uri": TARGET_DEVICE_URI,
             },
+            "call_id": "e2e-call-id-1",
         });
         let inner_b64 = {
             use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -2501,33 +2556,22 @@ mod tests {
         let body = response.into_inner();
 
         // ── Assert: daemon B handled the inner ability and ──
-        // returned a real heartbeat response. The peer's
-        // `federation.heartbeat` handler emits a JSON object;
-        // the exact fields are an implementation detail, what
-        // matters is that daemon B processed the inner ability
-        // (not a `target_online: false` short-circuit on daemon
-        // A's side). We assert the response is a JSON object
-        // and not the staging `{target_online: ...}` shape — if
-        // the new path failed at decode, daemon A would have
-        // returned the legacy `target_online: false` instead.
-        let parsed: serde_json::Value = serde_json::from_slice(&body.result)
-            .expect("peer ability response is JSON");
+        // C1a / DEC-N4 §2.1 wire shape: the outer InvokeResponse
+        // body carries a `ForwardInvokeResponse {result_bytes,
+        // correlation_call_id}` JSON. `result_bytes` is the
+        // peer's ability-handler reply bytes (themselves JSON
+        // for `federation.heartbeat`), and
+        // `correlation_call_id` echoes the caller's id from the
+        // inner payload. We assert both layers.
+        let outer: federation_wrappers::ForwardInvokeResponse =
+            serde_json::from_slice(&body.result)
+                .expect("outer ForwardInvokeResponse is JSON");
+        assert_eq!(outer.correlation_call_id, "e2e-call-id-1");
+        let inner: serde_json::Value = serde_json::from_slice(&outer.result_bytes)
+            .expect("inner peer ability response is JSON");
         assert!(
-            parsed.is_object(),
-            "expected JSON object from federation.heartbeat handler, got: {parsed}"
-        );
-        // Sanity: the `target_online` legacy shape would have a
-        // top-level `target_online` field; the heartbeat shape
-        // does not. This assertion would fail loudly if commit
-        // 11/N's decode path silently returned the legacy
-        // shape.
-        assert!(
-            !parsed
-                .as_object()
-                .and_then(|o| o.get("target_online"))
-                .map(|v| v.as_bool() == Some(false))
-                .unwrap_or(false),
-            "expected real peer ability response, got legacy target_online shape: {parsed}"
+            inner.is_object(),
+            "expected JSON object from federation.heartbeat handler, got: {inner}"
         );
     }
 
