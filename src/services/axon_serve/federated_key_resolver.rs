@@ -49,7 +49,9 @@
 
 #![cfg(feature = "axon-pb")]
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::VerifyingKey;
@@ -59,6 +61,62 @@ use easynet_axon::invocation::{AxonError, AxonErrorKind};
 use crate::pb::axon::v1::{Envelope, InvokeRequest};
 use crate::services::federation_client::FederationClient;
 use crate::services::realm_trust_anchor::RealmTrustAnchor;
+
+/// Default TTL for a federated-resolve cache entry. 5 minutes
+/// trims a hot signed-call path from O(N) cross-hub round-trips
+/// to ~O(N/window) without making key-rotation observability
+/// worse than the SIGHUP cadence operators already rely on for
+/// trust-anchor reloads. Tunable via
+/// [`FederatedKeyResolver::with_cache_ttl`] for tests.
+pub const DEFAULT_FEDERATED_RESOLVE_CACHE_TTL: Duration = Duration::from_secs(300);
+
+/// Per-entry record in the federated-resolve cache. Stores the
+/// resolved verifying key plus the deadline after which the
+/// entry is considered stale.
+#[derive(Clone)]
+struct CachedKey {
+    key: VerifyingKey,
+    expires_at: Instant,
+}
+
+/// Shared TTL cache handle. Lives at AdmissionFacade scope so a
+/// new `FederatedKeyResolver` constructed per admission call
+/// inherits the same in-process cache state. Cloning is cheap
+/// (one `Arc::clone`); mutations go through the inner `Mutex`.
+#[derive(Clone, Default)]
+pub struct SharedFederatedKeyCache {
+    inner: Arc<Mutex<HashMap<String, CachedKey>>>,
+}
+
+impl SharedFederatedKeyCache {
+    /// Construct an empty shared cache. Same shape as
+    /// `Default::default()` but explicit at boot sites.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Drop every cached entry. Operator SIGHUP entry point —
+    /// trust-anchor reload calls this so a key rotation
+    /// propagates without waiting for the per-entry TTL.
+    pub fn flush(&self) {
+        match self.inner.lock() {
+            Ok(mut g) => g.clear(),
+            Err(poisoned) => poisoned.into_inner().clear(),
+        }
+    }
+
+    /// Test-only: total cached entries.
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        match self.inner.lock() {
+            Ok(g) => g.len(),
+            Err(poisoned) => poisoned.into_inner().len(),
+        }
+    }
+}
 
 /// Resolves an `agent_uri` to its Ed25519 verifying key, falling
 /// through to a federated lookup when the local trust anchor has
@@ -70,6 +128,22 @@ pub struct FederatedKeyResolver {
     federation_client: Option<Arc<dyn FederationClient>>,
     federated_peers: Arc<std::collections::BTreeMap<String, String>>,
     self_realm: Option<String>,
+    /// 5-min TTL cache on cross-hub `federation.resolve_key`
+    /// outcomes. Keyed by full `agent_uri`. Operators flush on
+    /// trust-anchor SIGHUP via [`SharedFederatedKeyCache::flush`]
+    /// so a key rotation propagates without a daemon restart.
+    /// The mutex is held for the duration of one HashMap lookup
+    /// / insert / drain — never across the cross-hub dial
+    /// itself, so concurrent first-time resolves on disjoint
+    /// URIs never serialize.
+    ///
+    /// The cache lives at AdmissionFacade scope (passed in via
+    /// `with_cache`) so the per-admission-call resolver
+    /// instance inherits the same in-process state. Without
+    /// this share, the cache would reset to empty on every
+    /// admission call and never deliver any savings.
+    cache: SharedFederatedKeyCache,
+    cache_ttl: Duration,
 }
 
 impl FederatedKeyResolver {
@@ -90,7 +164,80 @@ impl FederatedKeyResolver {
             federation_client,
             federated_peers,
             self_realm,
+            cache: SharedFederatedKeyCache::new(),
+            cache_ttl: DEFAULT_FEDERATED_RESOLVE_CACHE_TTL,
         }
+    }
+
+    /// Override the federated-resolve cache TTL. Tests use a
+    /// short TTL to exercise the expiry path without sleeping
+    /// 5 minutes; production paths use the default (300s).
+    #[must_use]
+    pub fn with_cache_ttl(mut self, ttl: Duration) -> Self {
+        self.cache_ttl = ttl;
+        self
+    }
+
+    /// Use the supplied `SharedFederatedKeyCache` instead of
+    /// building a fresh one. AdmissionFacade calls this so every
+    /// per-admission resolver shares one in-process cache; the
+    /// SIGHUP handler at boot scope holds a clone too so a
+    /// trust-anchor reload can flush all cached entries
+    /// atomically.
+    #[must_use]
+    pub fn with_cache(mut self, cache: SharedFederatedKeyCache) -> Self {
+        self.cache = cache;
+        self
+    }
+
+    /// Drop every cached entry. Re-exported on the resolver for
+    /// call-site convenience; identical to
+    /// `self.cache.clone().flush()`.
+    pub fn flush_cache(&self) {
+        self.cache.flush();
+    }
+
+    /// Test-only: total cached entries.
+    #[cfg(test)]
+    pub fn cache_len(&self) -> usize {
+        self.cache.len()
+    }
+
+    /// Lookup `agent_uri` in the cache. Returns the cached key
+    /// only if it has not expired; expired entries are removed
+    /// inline so the next caller misses cleanly. Mutex held
+    /// for one HashMap operation; never across the cross-hub
+    /// dial.
+    fn cache_lookup(&self, agent_uri: &str) -> Option<VerifyingKey> {
+        let mut guard = match self.cache.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match guard.get(agent_uri) {
+            Some(entry) if entry.expires_at > Instant::now() => Some(entry.key),
+            Some(_expired) => {
+                guard.remove(agent_uri);
+                None
+            }
+            None => None,
+        }
+    }
+
+    /// Insert a freshly-resolved key into the cache with the
+    /// configured TTL. Subsequent lookups on the same URI inside
+    /// the window short-circuit before any cross-hub dial.
+    fn cache_insert(&self, agent_uri: &str, key: VerifyingKey) {
+        let mut guard = match self.cache.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.insert(
+            agent_uri.to_string(),
+            CachedKey {
+                key,
+                expires_at: Instant::now() + self.cache_ttl,
+            },
+        );
     }
 
     /// Local-first lookup. Mirrors `TrustAnchorKeyResolver` shape
@@ -135,6 +282,19 @@ impl FederatedKeyResolver {
     /// Returns `Ok(VerifyingKey)` only when the cross-hub resolve
     /// returns a valid base64 Ed25519 pubkey for the caller.
     fn resolve_federated(&self, agent_uri: &str) -> Result<VerifyingKey, AxonError> {
+        // Cache short-circuit. A hot signed-call path with the
+        // same caller URI repeated within the TTL window skips
+        // the cross-hub dial entirely. Cache-miss paths
+        // (expired, never-resolved, post-flush) fall through to
+        // a real dial. Cache failure modes are NEVER considered
+        // — `unknown_agent_uri` flows from the federated dial
+        // chain itself, not from the cache; we never cache a
+        // negative result so a transient peer-hub outage cannot
+        // poison the cache.
+        if let Some(cached) = self.cache_lookup(agent_uri) {
+            return Ok(cached);
+        }
+
         let Some(client) = self.federation_client.as_ref() else {
             return Err(unknown_agent_uri(agent_uri, "no_federation_client"));
         };
@@ -195,7 +355,9 @@ impl FederatedKeyResolver {
         })?;
         let request = InvokeRequest {
             envelope: Some(Envelope::default()),
-            function_name: "federation.resolve_key".to_string(),
+            function_name:
+                crate::services::axon_serve::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY
+                    .to_string(),
             arguments: args_bytes,
             ..InvokeRequest::default()
         };
@@ -227,8 +389,13 @@ impl FederatedKeyResolver {
                 &format!("resolve_key_pubkey_wrong_length:{}", raw.len()),
             )
         })?;
-        VerifyingKey::from_bytes(&arr)
-            .map_err(|e| unknown_agent_uri(agent_uri, &format!("resolve_key_pubkey_parse:{e}")))
+        let verifying_key = VerifyingKey::from_bytes(&arr)
+            .map_err(|e| unknown_agent_uri(agent_uri, &format!("resolve_key_pubkey_parse:{e}")))?;
+        // Cache success only. A failed dial / parse leaves the
+        // cache untouched so a recoverable peer-hub outage does
+        // not poison resolution for the configured TTL.
+        self.cache_insert(agent_uri, verifying_key);
+        Ok(verifying_key)
     }
 }
 
@@ -459,6 +626,167 @@ mod tests {
         assert!(
             err_str.contains("same_realm_local_miss"),
             "expected same_realm_local_miss in detail, got {err_str}"
+        );
+    }
+
+    // ── TTL cache (C3b) tests ──────────────────────────────────
+
+    /// `CountingFederationClient` records every cross-hub dial
+    /// and returns the same canned pubkey response. Lets the
+    /// cache tests assert exactly how many real dials fired.
+    struct CountingFederationClient {
+        canned_response: Vec<u8>,
+        dial_count: std::sync::atomic::AtomicUsize,
+    }
+
+    impl CountingFederationClient {
+        fn new(canned_response: Vec<u8>) -> Self {
+            Self {
+                canned_response,
+                dial_count: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+        fn dials(&self) -> usize {
+            self.dial_count.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl FederationClient for CountingFederationClient {
+        async fn forward_invoke(
+            &self,
+            _target_hub: &crate::services::federation_client::HubUri,
+            _request: InvokeRequest,
+        ) -> Result<
+            crate::pb::axon::v1::InvokeResponse,
+            crate::services::federation_client::FederationClientError,
+        > {
+            self.dial_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(crate::pb::axon::v1::InvokeResponse {
+                result: self.canned_response.clone(),
+                ..Default::default()
+            })
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ttl_cache_hits_avoid_repeat_dial_within_window() {
+        // Two consecutive resolves on the same URI within the
+        // TTL window: second hits cache, peer hub is dialed
+        // exactly once.
+        let (_signing, pk_b64) = ed25519_pubkey_b64();
+        let cross_uri = "easynet:///r/realm-b/agent/peer-device";
+        let anchor = Arc::new(RealmTrustAnchor::default());
+        let mut peers = BTreeMap::new();
+        peers.insert("realm-b".to_string(), "https://hub-b:50443".to_string());
+
+        let response_json = serde_json::json!({ "public_key_b64": pk_b64 });
+        let counting = Arc::new(CountingFederationClient::new(
+            serde_json::to_vec(&response_json).unwrap(),
+        ));
+        let client: Arc<dyn FederationClient> = counting.clone();
+
+        let resolver = FederatedKeyResolver::new(
+            anchor,
+            Some(client),
+            Arc::new(peers),
+            Some("realm-a".to_string()),
+        );
+
+        let k1 = resolver.resolve(cross_uri).expect("dial 1");
+        let k2 = resolver.resolve(cross_uri).expect("cache hit");
+        assert_eq!(k1.to_bytes(), k2.to_bytes());
+        assert_eq!(counting.dials(), 1, "second resolve must hit cache");
+        assert_eq!(resolver.cache_len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ttl_cache_expires_after_window_and_redials() {
+        // Short TTL forces expiry; the second resolve sees an
+        // expired entry, evicts it, and dials again.
+        let (_signing, pk_b64) = ed25519_pubkey_b64();
+        let cross_uri = "easynet:///r/realm-b/agent/peer-device";
+        let anchor = Arc::new(RealmTrustAnchor::default());
+        let mut peers = BTreeMap::new();
+        peers.insert("realm-b".to_string(), "https://hub-b:50443".to_string());
+
+        let response_json = serde_json::json!({ "public_key_b64": pk_b64 });
+        let counting = Arc::new(CountingFederationClient::new(
+            serde_json::to_vec(&response_json).unwrap(),
+        ));
+        let client: Arc<dyn FederationClient> = counting.clone();
+
+        let resolver = FederatedKeyResolver::new(
+            anchor,
+            Some(client),
+            Arc::new(peers),
+            Some("realm-a".to_string()),
+        )
+        .with_cache_ttl(Duration::from_millis(50));
+
+        let _ = resolver.resolve(cross_uri).expect("dial 1");
+        std::thread::sleep(Duration::from_millis(80));
+        let _ = resolver.resolve(cross_uri).expect("dial 2 post-expiry");
+        assert_eq!(counting.dials(), 2, "expired cache entry must redial");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn flush_cache_clears_all_entries() {
+        // Operator SIGHUP / key-rotation entry point. Simulate
+        // by populating the cache, then calling flush_cache,
+        // and asserting the next resolve hits the dial again.
+        let (_signing, pk_b64) = ed25519_pubkey_b64();
+        let cross_uri = "easynet:///r/realm-b/agent/peer-device";
+        let anchor = Arc::new(RealmTrustAnchor::default());
+        let mut peers = BTreeMap::new();
+        peers.insert("realm-b".to_string(), "https://hub-b:50443".to_string());
+
+        let response_json = serde_json::json!({ "public_key_b64": pk_b64 });
+        let counting = Arc::new(CountingFederationClient::new(
+            serde_json::to_vec(&response_json).unwrap(),
+        ));
+        let client: Arc<dyn FederationClient> = counting.clone();
+
+        let resolver = FederatedKeyResolver::new(
+            anchor,
+            Some(client),
+            Arc::new(peers),
+            Some("realm-a".to_string()),
+        );
+
+        let _ = resolver.resolve(cross_uri).expect("dial 1");
+        assert_eq!(resolver.cache_len(), 1);
+        resolver.flush_cache();
+        assert_eq!(resolver.cache_len(), 0, "flush drops all entries");
+        let _ = resolver.resolve(cross_uri).expect("dial 2 post-flush");
+        assert_eq!(counting.dials(), 2, "post-flush resolve dials again");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dial_failure_does_not_poison_cache() {
+        // A failed cross-hub dial must NOT cache the failure as
+        // a negative entry — a recoverable peer-hub outage
+        // would otherwise keep resolving as `unknown_agent_uri`
+        // for the entire TTL even after the peer comes back.
+        let cross_uri = "easynet:///r/realm-b/agent/peer-device";
+        let anchor = Arc::new(RealmTrustAnchor::default());
+        let mut peers = BTreeMap::new();
+        peers.insert("realm-b".to_string(), "https://hub-b:50443".to_string());
+
+        let client: Arc<dyn FederationClient> = Arc::new(DialFailedClient);
+        let resolver = FederatedKeyResolver::new(
+            anchor,
+            Some(client),
+            Arc::new(peers),
+            Some("realm-a".to_string()),
+        );
+
+        let _ = resolver.resolve(cross_uri).expect_err("dial fails");
+        assert_eq!(
+            resolver.cache_len(),
+            0,
+            "negative outcomes never poison the cache"
         );
     }
 }

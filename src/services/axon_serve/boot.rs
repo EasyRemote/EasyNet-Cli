@@ -226,6 +226,13 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     if let Some(client) = dialer.clone() {
         admission = admission.with_federation(client, federated_peers_cell.clone());
     }
+    // Grab a clone of the federated-key cache handle BEFORE
+    // ownership of the AdmissionFacade moves into the service,
+    // so the SIGHUP-driven trust-anchor reload task can flush
+    // cached cross-realm pubkeys after every reload (key
+    // rotation must not wait for the 5-min per-entry TTL).
+    let federated_key_cache = admission.federated_key_cache();
+    spawn_federated_key_cache_flush_task(federated_key_cache);
     let mut service = DaemonInvocationService::new(Arc::clone(&presence), admission)
         .with_pending(Arc::clone(&pending))
         .with_session_realm(config.realm().to_string())
@@ -688,6 +695,50 @@ fn spawn_trust_anchor_reload_task(path: PathBuf, trust_anchor_cell: SharedTrustA
 
 #[cfg(not(unix))]
 fn spawn_trust_anchor_reload_task(_path: PathBuf, _trust_anchor_cell: SharedTrustAnchor) {}
+
+/// **C3b**. SIGHUP-driven flush of the federated-key TTL cache.
+/// On every SIGHUP, drop every cached cross-realm pubkey so the
+/// next admission re-resolves through `federation.resolve_key`
+/// against the (newly reloaded) peer hub. Without this, a key
+/// rotation by the operator (edit `realm-trust.toml` + SIGHUP)
+/// would not visibly take effect for up to the cache TTL —
+/// surprising operators who expect SIGHUP to be the universal
+/// "I rotated something" signal.
+///
+/// The task runs on the same SIGHUP stream as the trust-anchor
+/// reload, but in a separate task to keep the two concerns
+/// independently observable in `eprintln` traces.
+#[cfg(unix)]
+fn spawn_federated_key_cache_flush_task(
+    cache: crate::services::axon_serve::federated_key_resolver::SharedFederatedKeyCache,
+) {
+    tokio::spawn(async move {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let mut sighup = match signal(SignalKind::hangup()) {
+            Ok(stream) => stream,
+            Err(err) => {
+                eprintln!(
+                    "[axon-serve] failed to install SIGHUP federated-key-cache flush handler: {err}"
+                );
+                return;
+            }
+        };
+
+        while sighup.recv().await.is_some() {
+            cache.flush();
+            eprintln!(
+                "[axon-serve] SIGHUP: federated-key cache flushed (cross-realm pubkeys will re-resolve on next admission)"
+            );
+        }
+    });
+}
+
+#[cfg(not(unix))]
+fn spawn_federated_key_cache_flush_task(
+    _cache: crate::services::axon_serve::federated_key_resolver::SharedFederatedKeyCache,
+) {
+}
 
 /// **PR-N1 commit 10/N**. SIGHUP-driven reload task for the
 /// daemon-config `[daemon.federated_peers]` table. Mirrors

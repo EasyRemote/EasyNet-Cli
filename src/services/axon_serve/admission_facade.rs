@@ -130,7 +130,9 @@ use crate::pb::axon::v1::{
     causal_context, CausalContext as PbCausalContext, Envelope, EnvelopeOpen, InvocationState,
     InvokeRequest, InvokeServerStreamRequest,
 };
-use crate::services::axon_serve::federated_key_resolver::FederatedKeyResolver;
+use crate::services::axon_serve::federated_key_resolver::{
+    FederatedKeyResolver, SharedFederatedKeyCache,
+};
 use crate::services::federated_peers_cell::SharedFederatedPeers;
 use crate::services::federation_client::FederationClient;
 use crate::services::nonce_replay_store::SharedNonceReplayStore;
@@ -183,6 +185,13 @@ pub struct AdmissionFacade {
     /// not supplied directly. `None` in test builds with no
     /// daemon URI wired.
     self_realm: Option<String>,
+    /// **C3b** TTL cache shared across every per-admission
+    /// `FederatedKeyResolver` instance. Without this share, the
+    /// per-call resolver would build a fresh empty cache and
+    /// the TTL would deliver zero savings. Boot-time SIGHUP
+    /// handler holds a clone too so a trust-anchor reload can
+    /// flush all cached cross-realm pubkeys atomically.
+    federated_key_cache: SharedFederatedKeyCache,
 }
 
 impl std::fmt::Debug for AdmissionFacade {
@@ -247,6 +256,7 @@ impl AdmissionFacade {
             federation_client: None,
             federated_peers: SharedFederatedPeers::new(std::collections::BTreeMap::new()),
             self_realm,
+            federated_key_cache: SharedFederatedKeyCache::new(),
         }
     }
 
@@ -291,6 +301,15 @@ impl AdmissionFacade {
         self.daemon_uri.as_deref()
     }
 
+    /// Snapshot the shared federated-key cache. Boot-time SIGHUP
+    /// handler clones this and calls `.flush()` after a
+    /// trust-anchor reload so a key rotation propagates without
+    /// waiting for the per-entry TTL to elapse.
+    #[must_use]
+    pub fn federated_key_cache(&self) -> SharedFederatedKeyCache {
+        self.federated_key_cache.clone()
+    }
+
     /// Construct a facade with a caller-supplied replay store. Used
     /// by tests that need to drive multiple facades against a single
     /// shared store, and reserved for the eventual PR-10 work that
@@ -314,6 +333,7 @@ impl AdmissionFacade {
             federation_client: None,
             federated_peers: SharedFederatedPeers::new(std::collections::BTreeMap::new()),
             self_realm,
+            federated_key_cache: SharedFederatedKeyCache::new(),
         }
     }
 
@@ -558,12 +578,15 @@ impl AdmissionFacade {
         // `TrustAnchorKeyResolver` shape on the local-only
         // path, so single-realm setups are byte-identical to
         // PR-7 commit 4/N.
-        let resolver: Box<dyn KeyResolver> = Box::new(FederatedKeyResolver::new(
-            trust_anchor,
-            self.federation_client.clone(),
-            self.federated_peers.snapshot(),
-            self.self_realm.clone(),
-        ));
+        let resolver: Box<dyn KeyResolver> = Box::new(
+            FederatedKeyResolver::new(
+                trust_anchor,
+                self.federation_client.clone(),
+                self.federated_peers.snapshot(),
+                self.self_realm.clone(),
+            )
+            .with_cache(self.federated_key_cache.clone()),
+        );
 
         let result = self.replay_store.with_inner(|store| {
             run_admission(
