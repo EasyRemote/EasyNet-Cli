@@ -772,6 +772,65 @@ impl RemoteDirectoryClient {
     pub fn on_stream_end(&mut self) {
         self.fsm.on_stream_end();
     }
+
+    /// **PR-N3 N3-streaming-2**. Publish the current per-peer
+    /// `DirectoryView` into the supplied
+    /// `SharedFederatedDirectoryView` cell. Read-modify-write
+    /// of the cell's snapshot map: replace this peer's slot
+    /// with the fresh view, preserve all other peers'
+    /// existing slots verbatim. Atomic publish via the cell's
+    /// `replace` so concurrent readers either see the
+    /// pre-update or post-update map, never a mid-write
+    /// state.
+    ///
+    /// The streaming consumer (a per-peer tokio task that
+    /// drives the FSM via `apply_event` for each inbound
+    /// frame) calls this after every successful Pumping
+    /// transition so the daemon-wide cell reflects the peer
+    /// state with sub-second latency.
+    pub fn publish_to_cell(&self, cell: &SharedFederatedDirectoryView) {
+        let current = cell.snapshot();
+        let mut next: BTreeMap<String, Arc<DirectoryView>> = (*current).clone();
+        next.insert(self.peer_realm.clone(), Arc::new(self.view.clone()));
+        cell.replace(next);
+    }
+}
+
+/// **PR-N3 N3-streaming-2**. Drive a `RemoteDirectoryClient`
+/// from a stream of inbound `DirectoryEvent` frames, publishing
+/// the resulting view into the cell after each frame applied.
+/// Returns when the stream ends (peer closed, error) or when an
+/// FSM protocol violation aborts the consume.
+///
+/// The caller (the per-peer tokio task) is responsible for
+/// reconnecting on return — backoff via `client.on_dial_err()`
+/// before re-dialling. This function does NOT loop; it consumes
+/// one stream's lifetime, then yields control so the caller can
+/// decide reconnect strategy.
+///
+/// Errors return the `FsmError::ProtocolViolation` reason; the
+/// caller maps this to a tear-down + back-off in the per-peer
+/// supervisor task. `Ok(())` means the stream ended gracefully.
+pub async fn consume_directory_event_stream<S>(
+    client: &mut RemoteDirectoryClient,
+    cell: &SharedFederatedDirectoryView,
+    mut stream: S,
+) -> Result<(), FsmError>
+where
+    S: futures::Stream<Item = DirectoryEvent> + Unpin,
+{
+    use futures::StreamExt;
+    while let Some(event) = stream.next().await {
+        client.apply_event(&event)?;
+        // After every applied frame, republish the peer's
+        // slot so downstream readers see the update. Heartbeat
+        // is a no-op for the view but still publishes — same-
+        // shape republish is cheap (Arc clones + one map
+        // write) and keeps the contract uniform.
+        client.publish_to_cell(cell);
+    }
+    client.on_stream_end();
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1289,6 +1348,129 @@ mod tests {
         assert_eq!(client.on_dial_err(), 2_000);
         assert_eq!(client.on_dial_err(), 4_000);
         assert_eq!(client.on_dial_err(), 8_000);
+    }
+
+    // ── PR-N3 N3-streaming-2 — consume_directory_event_stream ──
+
+    #[test]
+    fn publish_to_cell_replaces_only_this_peers_slot() {
+        let cell = SharedFederatedDirectoryView::default();
+        // Pre-populate realm-c (a different peer).
+        let mut realm_c_view = DirectoryView::new("realm-c".to_string());
+        realm_c_view.apply_frame(&DirectoryEvent::Upsert {
+            entry: entry_with_claimed_origin(
+                "easynet:///r/realm-c/agent/keep",
+                None,
+            ),
+        });
+        let mut prior = BTreeMap::new();
+        prior.insert("realm-c".to_string(), Arc::new(realm_c_view));
+        cell.replace(prior);
+
+        // realm-b client publishes its (still empty) view; the
+        // realm-c slot must remain intact.
+        let client = RemoteDirectoryClient::new(
+            "realm-b".to_string(),
+            "https://hub-b.example:50443".to_string(),
+        );
+        client.publish_to_cell(&cell);
+
+        let snap = cell.snapshot();
+        assert!(
+            snap.get("realm-c")
+                .and_then(|v| v.lookup("easynet:///r/realm-c/agent/keep"))
+                .is_some(),
+            "publishing realm-b's view must not clobber realm-c"
+        );
+        assert!(snap.contains_key("realm-b"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn consume_directory_event_stream_drives_fsm_and_publishes_view() {
+        // Simulate the wire-side stream as a sequence of three
+        // events: Snapshot, Upsert, Remove. Consumer drives the
+        // FSM, the view, AND publishes to the cell after each.
+        let mut client = RemoteDirectoryClient::new(
+            "realm-b".to_string(),
+            "https://hub-b.example:50443".to_string(),
+        );
+        client.on_dial_ok();
+        let cell = SharedFederatedDirectoryView::default();
+
+        let events = vec![
+            DirectoryEvent::Snapshot {
+                entries: vec![entry_with_claimed_origin(
+                    "easynet:///r/realm-b/agent/initial",
+                    Some("trusted-bank"), // chokepoint stamps realm-b
+                )],
+            },
+            DirectoryEvent::Upsert {
+                entry: entry_with_claimed_origin(
+                    "easynet:///r/realm-b/agent/added",
+                    None,
+                ),
+            },
+            DirectoryEvent::Remove {
+                agent_uri: "easynet:///r/realm-b/agent/initial".to_string(),
+                reason: "stream_closed".to_string(),
+            },
+        ];
+        let stream = futures::stream::iter(events);
+
+        consume_directory_event_stream(&mut client, &cell, stream)
+            .await
+            .expect("stream consumed gracefully");
+
+        // After the stream ended naturally, the FSM should be
+        // Disconnected (on_stream_end fired).
+        assert!(matches!(client.fsm_state(), &SubscriberState::Disconnected));
+
+        // Cell reflects the final state: `added` is present,
+        // `initial` was removed, origin_realm stamped to realm-b
+        // (the §2.4 chokepoint, even on the removed-then-snap
+        // path).
+        let snap = cell.snapshot();
+        let view = snap.get("realm-b").expect("realm-b view present");
+        assert!(view
+            .lookup("easynet:///r/realm-b/agent/initial")
+            .is_none());
+        let added = view
+            .lookup("easynet:///r/realm-b/agent/added")
+            .expect("added still present");
+        assert_eq!(added.origin_realm.as_deref(), Some("realm-b"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn consume_directory_event_stream_protocol_violation_aborts() {
+        // FSM rejects an Upsert before the mandatory Snapshot
+        // → ProtocolViolation propagates as the consume's
+        // error return, so the per-peer task tears down +
+        // reconnects with backoff.
+        let mut client = RemoteDirectoryClient::new(
+            "realm-b".to_string(),
+            "https://hub-b.example:50443".to_string(),
+        );
+        client.on_dial_ok();
+        let cell = SharedFederatedDirectoryView::default();
+
+        let events = vec![DirectoryEvent::Upsert {
+            entry: entry_with_claimed_origin(
+                "easynet:///r/realm-b/agent/sneaky",
+                None,
+            ),
+        }];
+        let stream = futures::stream::iter(events);
+
+        let err = consume_directory_event_stream(&mut client, &cell, stream)
+            .await
+            .expect_err("Upsert before Snapshot must reject");
+        assert!(matches!(err, FsmError::ProtocolViolation(_)));
+        // View stays empty — the violation aborted before any
+        // mutation could leak.
+        let snap = cell.snapshot();
+        if let Some(view) = snap.get("realm-b") {
+            assert!(view.entries.is_empty(), "view must stay empty on protocol violation");
+        }
     }
 
     // ── Tier-3 fan-out (N3-4) ─────────────────────────────
