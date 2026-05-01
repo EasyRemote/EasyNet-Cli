@@ -73,6 +73,17 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
     creds.hub_api_base = args.hub_api.map(|s| s.trim_end_matches('/').to_string());
     config::save_credentials(&creds)?;
 
+    // Best-effort: if this device is also running a hub-mode
+    // daemon (i.e. `~/.easynet/daemon-config.toml` exists), seed
+    // the daemon's `[daemon.federated_peers]` table with the
+    // tenant→hub mapping the Hub just handed us, then SIGHUP the
+    // daemon so the cross-hub dialer picks up the new entry
+    // without a daemon restart. Failures here log and keep going
+    // — the join itself has succeeded; the operator can edit
+    // daemon-config.toml by hand later if the auto-wire didn't
+    // fire (no daemon running, parser hiccup, etc).
+    let _ = super::federation_wire::auto_wire_federated_peer_from_credentials(&creds);
+
     output::success("Paired successfully");
     output::detail("node_id", &creds.node_id);
     output::detail("hub_endpoint", &creds.hub_endpoint);
