@@ -270,6 +270,17 @@ impl AdmissionFacade {
         &self.receipt_store
     }
 
+    /// Snapshot the SharedTrustAnchor cell. PR-N2 commit 2/N's
+    /// `federation.resolve_key` handler consults this at dispatch
+    /// time so a SIGHUP-driven `realm-trust.toml` reload (PR-7
+    /// commit 5/N) is visible without restart. Returns the
+    /// current `Arc<RealmTrustAnchor>`; callers pass it directly
+    /// to `federation_wrappers::handle_resolve_key`.
+    #[must_use]
+    pub fn trust_anchor_snapshot(&self) -> Arc<RealmTrustAnchor> {
+        self.trust_anchor.snapshot()
+    }
+
     /// Construct a facade with a caller-supplied replay store. Used
     /// by tests that need to drive multiple facades against a single
     /// shared store, and reserved for the eventual PR-10 work that
@@ -432,9 +443,29 @@ impl AdmissionFacade {
         // before any attempt at envelope/signature parsing, so an
         // unrelated caller cannot waste structure-validation cycles
         // and never has its (possibly malformed) nonce considered.
-        let trusted = snapshot
-            .lookup(caller_uri)
-            .ok_or_else(|| permission_denied_unknown_caller(caller_uri))?;
+        //
+        // **PR-N2 commit 1/N — cross-realm extension**. When the
+        // caller is in a *federated* realm (its tenant is mapped in
+        // `federated_peers` AND differs from `self_realm`), the
+        // local trust anchor will NOT have an entry: the caller's
+        // identity is gated by the peer hub, not by us. In that
+        // case we route to the strict admission path with the
+        // FederatedKeyResolver, which dials the peer's
+        // `federation.resolve_key` to fetch the verifying key and
+        // runs the same RFC 001 §5.2 4-step verify. This preserves
+        // INV-1 (federated trust gate is *operator-explicit*: only
+        // tenants the operator listed in `federated_peers` can
+        // bypass the local-membership reject) while opening the
+        // cross-realm signed-admission door.
+        let trusted = match snapshot.lookup(caller_uri) {
+            Some(entry) => entry,
+            None => {
+                if self.is_federated_caller(caller_uri) {
+                    return self.run_strict_admission(envelope, ability, args, snapshot);
+                }
+                return Err(permission_denied_unknown_caller(caller_uri));
+            }
+        };
 
         match trusted.role {
             // Device path: URI-only admission until PR-8 device-side
@@ -659,6 +690,49 @@ impl AdmissionFacade {
             None => false,
         }
     }
+
+    /// **PR-N2 commit 1/N**. Decide whether `caller_uri` belongs to
+    /// a federated peer realm — i.e. a realm the operator has
+    /// explicitly opted into by adding a `[daemon.federated_peers]`
+    /// map entry mapping `tenant → hub_uri`.
+    ///
+    /// Returns `true` iff:
+    ///   - the URI parses to a non-self tenant
+    ///   - the federated_peers cell holds an entry for that tenant
+    ///   - a federation client is wired (without one, the strict
+    ///     path's FederatedKeyResolver has no way to dial the peer
+    ///     and would just fail closed — short-circuit here)
+    fn is_federated_caller(&self, caller_uri: &str) -> bool {
+        let Some(client) = self.federation_client.as_ref() else {
+            return false;
+        };
+        let _ = client; // presence-only check; resolver does the dial
+        let Some(caller_tenant) = parse_realm_from_uri(caller_uri) else {
+            return false;
+        };
+        if let Some(self_realm) = self.self_realm.as_deref() {
+            if caller_tenant == self_realm {
+                return false;
+            }
+        }
+        let peers = self.federated_peers.snapshot();
+        peers.contains_key(caller_tenant)
+    }
+}
+
+/// **PR-N2 commit 1/N**. Parse the realm component from a canonical
+/// EasyNet URI (`easynet:///r/<realm>/agent/<id>`). Returns the
+/// realm slice when the shape matches, `None` otherwise. Shared by
+/// `is_federated_caller` and the cross-realm gate; mirrors the
+/// equivalent helper in `register_device_pubkey.rs` but lives here
+/// to avoid a cycle with the file boundary.
+fn parse_realm_from_uri(uri: &str) -> Option<&str> {
+    let rest = uri.strip_prefix("easynet:///r/")?;
+    let (realm, _tail) = rest.split_once("/agent/")?;
+    if realm.is_empty() {
+        return None;
+    }
+    Some(realm)
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
