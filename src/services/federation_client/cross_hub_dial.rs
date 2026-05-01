@@ -56,7 +56,7 @@ use dashmap::DashMap;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 
 use crate::pb::axon::v1::invocation_client::InvocationClient;
-use crate::pb::axon::v1::{InvokeRequest, InvokeResponse};
+use crate::pb::axon::v1::{InvokeRequest, InvokeResponse, InvokeServerStreamRequest};
 use crate::services::realm_trust_anchor::RealmTrustAnchor;
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
 
@@ -224,6 +224,14 @@ pub enum FederationClientError {
     /// 4/N; commit 1/N reserves the variant.
     #[error("federation circuit-breaker open for `{0}`")]
     CircuitOpen(HubUri),
+
+    /// **PR-N3 N3-streaming-3**. The trait method is defined
+    /// but the implementer (typically a test mock) did not
+    /// override it. Production `CrossHubDialer` always
+    /// overrides; this variant is the default trait impl's
+    /// signal so callers can fall through cleanly.
+    #[error("federation client method not implemented: {0}")]
+    Unimplemented(&'static str),
 }
 
 /// Abstract surface every `federation.forward_invoke` cross-hub
@@ -249,7 +257,44 @@ pub trait FederationClient: Send + Sync {
         target_hub: &HubUri,
         request: InvokeRequest,
     ) -> Result<InvokeResponse, FederationClientError>;
+
+    /// **PR-N3 N3-streaming-3**. Open a server-stream against
+    /// `target_hub`'s `federation.subscribe_directory_v2`
+    /// ability. Returns a boxed stream of `DirectoryEvent`
+    /// frames; each frame is the JSON-decoded payload of one
+    /// inbound `InvokeStreamChunk`. The stream ends when the
+    /// peer closes (graceful shutdown, network drop, breaker-
+    /// open). The caller (a per-peer supervisor task) feeds
+    /// the stream into `consume_directory_event_stream` to
+    /// drive the SubscriberFsm.
+    ///
+    /// Default impl returns `Unimplemented` so existing test
+    /// mocks compile unchanged. The production
+    /// `CrossHubDialer` overrides; test mocks that exercise
+    /// the streaming path supply their own override.
+    async fn subscribe_directory_v2(
+        &self,
+        target_hub: &HubUri,
+        request: InvokeServerStreamRequest,
+    ) -> Result<DirectoryEventStream, FederationClientError> {
+        let _ = (target_hub, request);
+        Err(FederationClientError::Unimplemented(
+            "subscribe_directory_v2 not implemented by this FederationClient",
+        ))
+    }
 }
+
+/// Boxed pinned `Stream` of `DirectoryEvent` frames. Production
+/// dialer wraps `tonic::Streaming<InvokeStreamChunk>` with a
+/// JSON-decode + filter step; test mocks wrap an in-memory
+/// vector via `futures::stream::iter`.
+pub type DirectoryEventStream = std::pin::Pin<
+    Box<
+        dyn futures::Stream<
+                Item = crate::services::federation_directory::DirectoryEvent,
+            > + Send,
+    >,
+>;
 
 /// tonic-backed concrete implementation. Holds:
 /// - `trust_source` — how the peer trust gate reads the
@@ -637,6 +682,132 @@ impl FederationClient for CrossHubDialer {
                 Err(FederationClientError::ChannelTimeout(target_hub.clone()))
             }
         }
+    }
+
+    /// **PR-N3 N3-streaming-3**. Open a server-stream against
+    /// the peer's `federation.subscribe_directory_v2`. Reuses
+    /// the same trust gate + channel cache as `forward_invoke`,
+    /// then calls `client.invoke_stream(request)` and wraps the
+    /// returned `tonic::Streaming<InvokeStreamChunk>` with a
+    /// JSON-decode step so consumers see a clean
+    /// `Stream<Item = DirectoryEvent>`.
+    ///
+    /// Frames whose payload fails to decode are logged and
+    /// dropped — the wire shape is locked in N3-2 + N3-streaming-1
+    /// so a decode failure indicates an out-of-spec peer; the
+    /// stream stays open so a subsequent valid frame can recover
+    /// the subscriber's view rather than tearing down on every
+    /// transient malformed bytes.
+    ///
+    /// The breaker counts failed *opens* against the peer (same
+    /// shape as forward_invoke). Once the stream is open and
+    /// pumping, in-stream tonic errors (peer dropped) end the
+    /// stream gracefully — the per-peer supervisor reconnects.
+    async fn subscribe_directory_v2(
+        &self,
+        target_hub: &HubUri,
+        request: InvokeServerStreamRequest,
+    ) -> Result<DirectoryEventStream, FederationClientError> {
+        // ── 1. Trust gate (same as forward_invoke). ─────────
+        let trust_snapshot = self.trust_source.snapshot();
+        let entry = trust_snapshot
+            .lookup_peer_hub(target_hub)
+            .ok_or_else(|| FederationClientError::PeerNotTrusted(target_hub.clone()))?;
+        let ca_path = entry
+            .tls_ca_pem_path
+            .as_deref()
+            .ok_or_else(|| FederationClientError::PeerNotTrusted(target_hub.clone()))?;
+
+        // ── 2. Breaker gate. ────────────────────────────────
+        self.check_and_advance_breaker(target_hub)?;
+
+        // ── 3. Channel resolve (same cache as forward_invoke). ─
+        let generation = self.trust_source.cert_anchor_generation();
+        let channel = match self.resolve_peer_channel(target_hub, ca_path, generation) {
+            Ok(channel) => channel,
+            Err(err) => {
+                self.record_breaker_failure(target_hub);
+                return Err(err);
+            }
+        };
+
+        // ── 4. Open the server-stream. ──────────────────────
+        let mut client = InvocationClient::new(channel);
+        let target_hub_owned = target_hub.clone();
+        let outcome =
+            tokio::time::timeout(self.forward_invoke_timeout, client.invoke_stream(request))
+                .await;
+        match outcome {
+            Ok(Ok(response)) => {
+                self.record_breaker_success(target_hub);
+                let inner = response.into_inner();
+                // Wrap the tonic Streaming with a JSON-decode
+                // step so consumers see DirectoryEvent shapes.
+                // Failed-decode frames are silently dropped
+                // (logged once at debug-level by the wrapper
+                // — production deploys can grep the daemon
+                // log for `subscribe_directory_v2 decode`).
+                let stream = Self::stream_chunks_to_directory_events(inner, target_hub_owned);
+                Ok(Box::pin(stream))
+            }
+            Ok(Err(status)) => {
+                self.record_breaker_failure(target_hub);
+                Err(FederationClientError::InnerInvokeFailed {
+                    hub: target_hub.clone(),
+                    status: format!("code={:?} message={}", status.code(), status.message()),
+                })
+            }
+            Err(_elapsed) => {
+                self.record_breaker_failure(target_hub);
+                Err(FederationClientError::ChannelTimeout(target_hub.clone()))
+            }
+        }
+    }
+}
+
+impl CrossHubDialer {
+    /// Wrap a tonic `Streaming<InvokeStreamChunk>` with a JSON-
+    /// decode step so consumers see `DirectoryEvent` frames.
+    /// Implemented as a free helper so the trait impl above
+    /// stays focused on the dial decision; this function is
+    /// the JSON-decode side of the wire.
+    fn stream_chunks_to_directory_events(
+        inner: tonic::Streaming<crate::pb::axon::v1::InvokeStreamChunk>,
+        target_hub: HubUri,
+    ) -> impl futures::Stream<Item = crate::services::federation_directory::DirectoryEvent> + Send
+    {
+        futures::stream::unfold(
+            (inner, target_hub),
+            |(mut inner, target_hub)| async move {
+                loop {
+                    match inner.message().await {
+                        Ok(Some(chunk)) => match serde_json::from_slice::<
+                            crate::services::federation_directory::DirectoryEvent,
+                        >(&chunk.payload)
+                        {
+                            Ok(event) => return Some((event, (inner, target_hub))),
+                            Err(err) => {
+                                eprintln!(
+                                    "[cross_hub_dial] subscribe_directory_v2 decode \
+                                     from {target_hub}: {err}; dropping frame"
+                                );
+                                continue;
+                            }
+                        },
+                        Ok(None) => return None,
+                        Err(status) => {
+                            eprintln!(
+                                "[cross_hub_dial] subscribe_directory_v2 stream from \
+                                 {target_hub} ended with error: code={:?} message={}",
+                                status.code(),
+                                status.message()
+                            );
+                            return None;
+                        }
+                    }
+                }
+            },
+        )
     }
 }
 
@@ -1125,6 +1296,9 @@ mod tests {
             FederationClientError::CircuitOpen(_) => {
                 panic!("breaker should not be open on the second dial")
             }
+            FederationClientError::Unimplemented(_) => {
+                panic!("forward_invoke is implemented; Unimplemented unreachable here")
+            }
         }
     }
 
@@ -1427,5 +1601,32 @@ SxYwtVK19IHR+6r7EBBCBg5D0fpPsH/xFsEWhdKVscezZ/W6m2iSQASUsCqSuQ22
             .expect("other canned");
         assert_eq!(r1.result, b"echo-payload");
         assert_eq!(r2.result, b"other-payload");
+    }
+
+    // ── PR-N3 N3-streaming-3 — subscribe_directory_v2 trait surface ──
+
+    #[tokio::test]
+    async fn default_subscribe_directory_v2_returns_unimplemented() {
+        // Test mocks (and any FederationClient impl that
+        // doesn't override the streaming method) get the
+        // default trait body which surfaces a typed
+        // `Unimplemented`. Catches a regression where someone
+        // adds a non-default required method that breaks every
+        // mock silently.
+        let mock = MockFederationClient::new();
+        let target = "https://peer.example:50443".to_string();
+        let req = InvokeServerStreamRequest::default();
+        // Stream type doesn't impl Debug so we can't use
+        // `expect_err`; match on the Result directly.
+        match mock.subscribe_directory_v2(&target, req).await {
+            Err(FederationClientError::Unimplemented(detail)) => {
+                assert!(
+                    detail.contains("subscribe_directory_v2"),
+                    "error detail must name the method; got {detail:?}"
+                );
+            }
+            Err(other) => panic!("expected Unimplemented; got {other:?}"),
+            Ok(_) => panic!("default impl must return Err"),
+        }
     }
 }
