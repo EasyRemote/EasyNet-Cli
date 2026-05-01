@@ -105,6 +105,7 @@ pub(crate) mod devices;
 pub(crate) mod discuss;
 pub(crate) mod doctor;
 pub(crate) mod exec;
+pub(crate) mod federation_gen_cert;
 pub(crate) mod federation_peers;
 #[cfg(feature = "axon-pb")]
 pub(crate) mod federation_discover;

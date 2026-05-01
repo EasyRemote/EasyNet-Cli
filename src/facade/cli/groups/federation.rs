@@ -8,6 +8,7 @@
 // Verbs:
 //   peers              List federation peers and trusted hubs    (-> cli::federation_peers)
 //   discover           Read the cross-realm directory cell        (-> cli::federation_discover)
+//   gen-cert           Generate a CA + leaf cert chain for TLS   (-> cli::federation_gen_cert)
 //
 // Verbs DELIBERATELY ABSENT:
 //
@@ -25,6 +26,7 @@
 
 use clap::{Args, Subcommand};
 
+use crate::facade::cli::federation_gen_cert;
 use crate::facade::cli::federation_peers;
 #[cfg(feature = "axon-pb")]
 use crate::facade::cli::federation_discover;
@@ -51,6 +53,13 @@ pub enum FederationAction {
     /// `--agent-uri` filter narrows to a single URI.
     #[cfg(feature = "axon-pb")]
     Discover(federation_discover::DiscoverArgs),
+
+    /// Generate a TLS cert chain shaped for cross-hub federation
+    /// (self-signed CA + leaf signed by that CA). Avoids the
+    /// `CaUsedAsEndEntity` rustls error operators hit when they
+    /// try to use a single self-signed cert as both the local
+    /// daemon's leaf and the peer's pinned CA.
+    GenCert(federation_gen_cert::GenCertArgs),
 }
 
 pub fn run(args: FederationArgs) -> anyhow::Result<()> {
@@ -58,5 +67,6 @@ pub fn run(args: FederationArgs) -> anyhow::Result<()> {
         FederationAction::Peers(a) => federation_peers::run(a),
         #[cfg(feature = "axon-pb")]
         FederationAction::Discover(a) => federation_discover::run(a),
+        FederationAction::GenCert(a) => federation_gen_cert::run(a),
     }
 }
