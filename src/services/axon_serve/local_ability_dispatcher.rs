@@ -103,6 +103,20 @@ impl LocalAbilityDispatcher {
         ability: &str,
         normalized_args: serde_json::Value,
     ) -> Result<SessionDispatch, SessionDispatchError> {
+        Self::execute_local_rpc_blocking(&self.dispatcher, ability, normalized_args)
+    }
+
+    /// Static variant that takes the dispatcher Arc by reference so
+    /// it can be moved into `tokio::task::spawn_blocking`. Both this
+    /// and `execute_local_rpc` produce identical bytes; this one
+    /// exists so `handle_down` can keep blocking ability handlers
+    /// (e.g. `process.exec`, `shell.run`) on the blocking pool
+    /// thread, where `Handle::current().block_on(...)` is safe.
+    fn execute_local_rpc_blocking(
+        dispatcher: &Arc<AbilityDispatcher>,
+        ability: &str,
+        normalized_args: serde_json::Value,
+    ) -> Result<SessionDispatch, SessionDispatchError> {
         let target = InvocationTarget {
             scope: TargetScope::Local,
             ability: ability.to_string(),
@@ -111,9 +125,7 @@ impl LocalAbilityDispatcher {
             subject: None,
         };
 
-        let result = self.dispatcher.execute_rpc(target);
-
-        match result {
+        match dispatcher.execute_rpc(target) {
             Ok(value) => {
                 let payload = serde_json::to_vec(&value).map_err(|err| {
                     SessionDispatchError::Other(format!(
@@ -135,6 +147,23 @@ impl LocalAbilityDispatcher {
             }),
         }
     }
+}
+
+/// Recover a printable message from a `Box<dyn Any + Send>` panic
+/// payload. Tokio's `JoinError::try_into_panic` returns the raw
+/// payload Rust handed to `std::panic::catch_unwind`; the two
+/// canonical shapes are `&'static str` (`panic!("...")`) and
+/// `String` (`panic!("{}", value)`). Anything else collapses to a
+/// type-name placeholder so the operator at least sees that a
+/// panic occurred even if the payload type is exotic.
+fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        return (*message).to_string();
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+    "panic payload not recoverable".to_string()
 }
 
 #[async_trait::async_trait]
@@ -207,8 +236,67 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
             }
         };
 
-        let result = match serde_json::from_slice(&args) {
-            Ok(normalized_args) => self.execute_local_rpc(&ability, normalized_args),
+        let result = match serde_json::from_slice::<serde_json::Value>(&args) {
+            Ok(normalized_args) => {
+                // LB-60 Gap 5a: execute_local_rpc invokes ability
+                // handlers on the calling thread; AXIOM Tier 2.5
+                // handlers like process.exec / shell.run wrap an
+                // async `execute()` call in `Handle::current().
+                // block_on()` on the assumption that the
+                // ability registry's `register_rpc` runs them
+                // inside `tokio::task::spawn_blocking`. That
+                // invariant holds for direct CLI invocations,
+                // but the cross-hub forward_invoke path (LB-57
+                // Option A) drives `handle_down` from a tokio
+                // worker thread — `block_on` from there panics
+                // ("Cannot start a runtime from within a
+                // runtime"). Wrapping here keeps every handler
+                // on the blocking pool regardless of the
+                // dispatch entrypoint without changing the
+                // handler API.
+                let dispatcher = Arc::clone(&self.dispatcher);
+                let ability_for_blocking = ability.clone();
+                let join = tokio::task::spawn_blocking(move || {
+                    Self::execute_local_rpc_blocking(
+                        &dispatcher,
+                        &ability_for_blocking,
+                        normalized_args,
+                    )
+                })
+                .await;
+                match join {
+                    Ok(Ok(value)) => Ok(value),
+                    Ok(Err(err)) => Err(err),
+                    Err(join_err) if join_err.is_panic() => {
+                        // LB-60 Gap 5b: handler panic must surface
+                        // as a typed Result error frame instead of
+                        // tearing down the session bidi. Stringify
+                        // the panic so downstream operators can
+                        // grep the cause.
+                        let panic_msg = match join_err.try_into_panic() {
+                            Ok(payload) => panic_payload_to_string(payload),
+                            Err(_) => "panic payload not recoverable".to_string(),
+                        };
+                        Ok(SessionDispatch::Result {
+                            call_id,
+                            payload: Vec::new(),
+                            terminal: true,
+                            error: Some(format!(
+                                "<self>.session: ability `{ability}` panicked: {panic_msg}"
+                            )),
+                        })
+                    }
+                    Err(join_err) => Ok(SessionDispatch::Result {
+                        call_id,
+                        payload: Vec::new(),
+                        terminal: true,
+                        error: Some(format!(
+                            "<self>.session: ability `{ability}` execution task \
+                             cancelled or aborted: {join_err}"
+                        )),
+                    }),
+                }
+            }
             Err(err) => Ok(SessionDispatch::Result {
                 call_id,
                 payload: Vec::new(),
@@ -283,6 +371,13 @@ mod tests {
         registry.register_rpc(
             "always.fails",
             Arc::new(|_| anyhow::bail!("simulated failure from handler")),
+        );
+        // LB-60 Gap 5b regression: a handler that panics. Cross-hub
+        // forward_invoke must surface the panic as a typed Result
+        // error frame, not by tearing down the session bidi.
+        registry.register_rpc(
+            "always.panics",
+            Arc::new(|_| panic!("simulated handler panic for LB-60 regression")),
         );
         let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
             Arc::new(NoopGateway::new());
@@ -369,6 +464,92 @@ mod tests {
                 assert!(payload.is_empty(), "failed dispatch carries no payload");
                 let err = error.expect("missing ability must surface error");
                 assert!(err.contains("missing.ability"));
+            }
+            other => panic!("expected SessionDispatch::Result, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn handler_panic_surfaces_as_terminal_error_not_session_teardown() {
+        // LB-60 Gap 5b regression: in the cross-hub forward_invoke
+        // path, `handle_down` runs from a tokio worker thread and
+        // some baseline-locomotion handlers (process.exec / shell.run)
+        // call `tokio::runtime::Handle::current().block_on(...)`.
+        // That panics from a worker thread; before Gap 5a/5b the
+        // panic propagated through `handle_down`, killed the worker,
+        // tore down the device-mode session bidi, and the caller
+        // saw `target_offline` instead of a typed handler error.
+        //
+        // This test pins the post-Gap 5b contract: a handler panic
+        // is caught at the spawn_blocking boundary and surfaced as a
+        // terminal `SessionDispatch::Result { error: Some(...) }`
+        // frame whose payload names the panicking ability. The
+        // dispatcher remains usable for follow-up dispatches.
+        let disp = LocalAbilityDispatcher::new(build_dispatcher());
+        let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
+
+        disp.handle_down(dispatch_frame(11, "always.panics", b"{}".to_vec()), &tx)
+            .await
+            .expect("handler panic must NOT propagate; handle_down stays Ok");
+
+        let reply = rx.recv().await.expect("panic recovery still emits a reply");
+        let chunk = match reply.payload {
+            Some(UpPayload::BinaryChunk(c)) => c,
+            other => panic!("expected BinaryChunk reply, got: {other:?}"),
+        };
+        let parsed: SessionDispatch =
+            serde_json::from_slice(&chunk.data).expect("Result decodes");
+        match parsed {
+            SessionDispatch::Result {
+                call_id,
+                terminal,
+                error,
+                payload,
+            } => {
+                assert_eq!(call_id, 11);
+                assert!(terminal, "panic recovery reply must be terminal");
+                assert!(payload.is_empty(), "panicked dispatch carries no payload");
+                let err = error.expect("panic must surface as Result.error");
+                assert!(
+                    err.contains("always.panics"),
+                    "error must name the panicking ability; got: {err}"
+                );
+                assert!(
+                    err.contains("panicked"),
+                    "error must mark the failure mode as a panic; got: {err}"
+                );
+            }
+            other => panic!("expected SessionDispatch::Result, got: {other:?}"),
+        }
+
+        // Dispatcher must remain usable for follow-up calls — the
+        // panic was contained, not a fatal trap.
+        disp.handle_down(
+            dispatch_frame(12, "test.echo", br#"{"after":"panic"}"#.to_vec()),
+            &tx,
+        )
+        .await
+        .expect("post-panic dispatch must still succeed");
+        let follow_up = rx.recv().await.expect("post-panic reply produced");
+        let chunk = match follow_up.payload {
+            Some(UpPayload::BinaryChunk(c)) => c,
+            other => panic!("expected BinaryChunk reply, got: {other:?}"),
+        };
+        let parsed: SessionDispatch =
+            serde_json::from_slice(&chunk.data).expect("Result decodes");
+        match parsed {
+            SessionDispatch::Result {
+                call_id,
+                terminal,
+                error,
+                ..
+            } => {
+                assert_eq!(call_id, 12);
+                assert!(terminal);
+                assert!(
+                    error.is_none(),
+                    "post-panic test.echo must succeed; got error: {error:?}"
+                );
             }
             other => panic!("expected SessionDispatch::Result, got: {other:?}"),
         }
