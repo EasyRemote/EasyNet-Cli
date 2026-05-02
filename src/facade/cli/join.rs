@@ -36,6 +36,16 @@ use crate::support::{output, sysinfo};
 
 #[derive(Debug, Deserialize)]
 struct PairingPreflight {
+    // URA v4.1.4 backend renamed the wire field `tenant_id` → `realm`
+    // (PairingPreflightResp in backend/internal/types/types.go:314).
+    // We deserialize from `realm`, fall back to the legacy
+    // `tenant_id` for compat with pre-v4.1.4 hubs, and expose the
+    // value through the existing `tenant_id` accessor so the rest
+    // of join.rs (assertions, validate-pairing payload) keeps the
+    // same shape — the v1 alias is the carrier on disk in
+    // `credentials.json::tenant_id` until that schema is also
+    // promoted (RFC follow-up).
+    #[serde(rename = "realm", alias = "tenant_id")]
     tenant_id: String,
     node_id: String,
 }

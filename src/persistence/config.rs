@@ -362,6 +362,15 @@ pub struct Credentials {
     pub node_id: String,
     pub credential_token: String,
     pub hub_endpoint: String,
+    // URA v4.1.4 backend renamed the wire field `tenant_id` → `realm`
+    // for every device-pairing response (CreatePairingResp,
+    // PairingPreflightResp, DeviceResp). We deserialize from `realm`
+    // first, fall back to `tenant_id` for compat with pre-v4.1.4
+    // hubs and on-disk credentials.json written by older CLIs. The
+    // separate `realm: Option<String>` field below stays the v2
+    // structured carrier; this alias keeps the legacy carrier wired
+    // until the on-disk schema is also promoted.
+    #[serde(alias = "realm")]
     pub tenant_id: String,
     #[serde(default)]
     pub deploy_signature: String,
