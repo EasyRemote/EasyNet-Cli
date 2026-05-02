@@ -249,7 +249,9 @@ pub enum SubscriberState {
     /// Snapshot received; pumping incremental frames.
     Pumping,
     /// Last dial failed; sleep `delay_ms` then retry.
-    Backoff { delay_ms: u64 },
+    Backoff {
+        delay_ms: u64,
+    },
 }
 
 /// Errors the FSM emits when an inbound frame violates the
@@ -336,9 +338,7 @@ impl SubscriberFsm {
             }
             (SubscriberState::Pumping, DirectoryEvent::Snapshot { .. }) => {
                 self.state = SubscriberState::Disconnected;
-                Err(FsmError::ProtocolViolation(
-                    "second Snapshot mid-stream",
-                ))
+                Err(FsmError::ProtocolViolation("second Snapshot mid-stream"))
             }
             (SubscriberState::Pumping, DirectoryEvent::Upsert { .. })
             | (SubscriberState::Pumping, DirectoryEvent::Remove { .. }) => {
@@ -625,9 +625,7 @@ pub fn lookup_in_federated_view(
 /// across invocations on the same snapshot so the CLI prints
 /// in a deterministic order.
 #[must_use]
-pub fn flatten_federated_view(
-    cell: &SharedFederatedDirectoryView,
-) -> Vec<DirectoryEntry> {
+pub fn flatten_federated_view(cell: &SharedFederatedDirectoryView) -> Vec<DirectoryEntry> {
     let snapshot = cell.snapshot();
     let mut out = Vec::new();
     for (_peer_realm, view) in snapshot.iter() {
@@ -732,7 +730,10 @@ pub async fn poll_once(
             ..InvokeRequest::default()
         };
 
-        match federation_client.forward_invoke(peer_hub_uri, request).await {
+        match federation_client
+            .forward_invoke(peer_hub_uri, request)
+            .await
+        {
             Ok(response) => {
                 let parsed: Result<
                     crate::services::axon_serve::federation_wrappers::DiscoverResponse,
@@ -748,10 +749,9 @@ pub async fn poll_once(
                         outcome.successful_peers.push(peer_realm.clone());
                     }
                     Err(err) => {
-                        outcome.failed_peers.push((
-                            peer_realm.clone(),
-                            format!("response parse failed: {err}"),
-                        ));
+                        outcome
+                            .failed_peers
+                            .push((peer_realm.clone(), format!("response parse failed: {err}")));
                     }
                 }
             }
@@ -962,10 +962,7 @@ pub async fn run_per_peer_supervisor(
 /// cancellation fired.
 pub fn reconcile_streaming_supervisors<F>(
     snapshot: &std::collections::BTreeMap<String, String>,
-    active: &mut std::collections::BTreeMap<
-        String,
-        tokio::sync::oneshot::Sender<()>,
-    >,
+    active: &mut std::collections::BTreeMap<String, tokio::sync::oneshot::Sender<()>>,
     mut spawn: F,
 ) -> (Vec<String>, Vec<String>)
 where
@@ -1041,8 +1038,7 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
         // the peer's strict admission is defence-in-depth.
         let mut nonce = vec![0u8; 16];
         rand::rngs::OsRng.fill_bytes(&mut nonce);
-        let peer_uri_for_envelope =
-            format!("easynet:///r/{peer_realm}/agent/hub");
+        let peer_uri_for_envelope = format!("easynet:///r/{peer_realm}/agent/hub");
         let envelope = Envelope {
             caller: Some(AgentIdentity {
                 uri: caller_uri.clone(),
@@ -1062,7 +1058,7 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
         let request = InvokeServerStreamRequest {
             envelope: Some(envelope),
             function_name: crate::services::axon_serve::federation_wrappers
-                ::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY
+                ::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2
                 .to_string(),
             ..InvokeServerStreamRequest::default()
         };
@@ -1397,8 +1393,10 @@ mod tests {
 
     #[test]
     fn directory_event_upsert_remove_heartbeat_serialise_with_type_tag() {
-        let upsert_bytes =
-            serde_json::to_vec(&DirectoryEvent::Upsert { entry: sample_entry() }).unwrap();
+        let upsert_bytes = serde_json::to_vec(&DirectoryEvent::Upsert {
+            entry: sample_entry(),
+        })
+        .unwrap();
         let upsert: serde_json::Value = serde_json::from_slice(&upsert_bytes).unwrap();
         assert_eq!(upsert["type"], "upsert");
 
@@ -1422,7 +1420,9 @@ mod tests {
 
     #[test]
     fn directory_event_round_trips_through_serde() {
-        let original = DirectoryEvent::Upsert { entry: sample_entry() };
+        let original = DirectoryEvent::Upsert {
+            entry: sample_entry(),
+        };
         let bytes = serde_json::to_vec(&original).expect("serialise");
         let restored: DirectoryEvent = serde_json::from_slice(&bytes).expect("deserialise");
         assert_eq!(original, restored);
@@ -1443,7 +1443,8 @@ mod tests {
         fsm.on_dial_ok();
         assert!(matches!(fsm.state(), &SubscriberState::Snapshotting));
 
-        fsm.on_frame(&DirectoryEvent::Snapshot { entries: vec![] }).expect("snapshot ok");
+        fsm.on_frame(&DirectoryEvent::Snapshot { entries: vec![] })
+            .expect("snapshot ok");
         assert!(matches!(fsm.state(), &SubscriberState::Pumping));
     }
 
@@ -1454,7 +1455,8 @@ mod tests {
         // MUST drop the connection.
         let mut fsm = SubscriberFsm::new();
         fsm.on_dial_ok();
-        fsm.on_frame(&DirectoryEvent::Snapshot { entries: vec![] }).expect("first snapshot ok");
+        fsm.on_frame(&DirectoryEvent::Snapshot { entries: vec![] })
+            .expect("first snapshot ok");
         let err = fsm
             .on_frame(&DirectoryEvent::Snapshot { entries: vec![] })
             .expect_err("second snapshot must reject");
@@ -1472,7 +1474,9 @@ mod tests {
         let mut fsm = SubscriberFsm::new();
         fsm.on_dial_ok();
         let err = fsm
-            .on_frame(&DirectoryEvent::Upsert { entry: sample_entry() })
+            .on_frame(&DirectoryEvent::Upsert {
+                entry: sample_entry(),
+            })
             .expect_err("upsert before snapshot must reject");
         assert!(matches!(err, FsmError::ProtocolViolation(_)));
         assert!(matches!(fsm.state(), &SubscriberState::Disconnected));
@@ -1482,9 +1486,12 @@ mod tests {
     fn fsm_pumping_accepts_upsert_remove_heartbeat() {
         let mut fsm = SubscriberFsm::new();
         fsm.on_dial_ok();
-        fsm.on_frame(&DirectoryEvent::Snapshot { entries: vec![] }).expect("snapshot");
+        fsm.on_frame(&DirectoryEvent::Snapshot { entries: vec![] })
+            .expect("snapshot");
         for evt in [
-            DirectoryEvent::Upsert { entry: sample_entry() },
+            DirectoryEvent::Upsert {
+                entry: sample_entry(),
+            },
             DirectoryEvent::Remove {
                 agent_uri: "easynet:///r/realm-a/agent/x".to_string(),
                 reason: "drop".to_string(),
@@ -1524,8 +1531,12 @@ mod tests {
         // After success-then-snapshot-then-real-event we go
         // back to the floor.
         fsm.on_dial_ok();
-        fsm.on_frame(&DirectoryEvent::Snapshot { entries: vec![] }).unwrap();
-        fsm.on_frame(&DirectoryEvent::Upsert { entry: sample_entry() }).unwrap();
+        fsm.on_frame(&DirectoryEvent::Snapshot { entries: vec![] })
+            .unwrap();
+        fsm.on_frame(&DirectoryEvent::Upsert {
+            entry: sample_entry(),
+        })
+        .unwrap();
         assert_eq!(fsm.next_backoff_ms(), 1000);
     }
 
@@ -1541,7 +1552,8 @@ mod tests {
         assert_eq!(fsm.next_backoff_ms(), 4000);
 
         fsm.on_dial_ok();
-        fsm.on_frame(&DirectoryEvent::Snapshot { entries: vec![] }).unwrap();
+        fsm.on_frame(&DirectoryEvent::Snapshot { entries: vec![] })
+            .unwrap();
         fsm.on_frame(&DirectoryEvent::Heartbeat {
             sent_at_unix_ms: 1_714_492_800_000,
         })
@@ -1557,8 +1569,12 @@ mod tests {
         // own its own clock — the per-peer task drives it.
         let mut fsm = SubscriberFsm::new();
         fsm.on_dial_ok();
-        fsm.on_frame(&DirectoryEvent::Snapshot { entries: vec![] }).unwrap();
-        fsm.on_frame(&DirectoryEvent::Upsert { entry: sample_entry() }).unwrap();
+        fsm.on_frame(&DirectoryEvent::Snapshot { entries: vec![] })
+            .unwrap();
+        fsm.on_frame(&DirectoryEvent::Upsert {
+            entry: sample_entry(),
+        })
+        .unwrap();
 
         fsm.on_idle_timeout();
         assert!(matches!(fsm.state(), &SubscriberState::Disconnected));
@@ -1644,10 +1660,7 @@ mod tests {
         // a None for a cross-realm entry.
         let mut view = DirectoryView::new("realm-b".to_string());
         view.apply_frame(&DirectoryEvent::Upsert {
-            entry: entry_with_claimed_origin(
-                "easynet:///r/realm-b/agent/peer-device",
-                None,
-            ),
+            entry: entry_with_claimed_origin("easynet:///r/realm-b/agent/peer-device", None),
         });
         let stamped = view
             .lookup("easynet:///r/realm-b/agent/peer-device")
@@ -1691,12 +1704,8 @@ mod tests {
                 None,
             )],
         });
-        assert!(view
-            .lookup("easynet:///r/realm-b/agent/old")
-            .is_none());
-        assert!(view
-            .lookup("easynet:///r/realm-b/agent/new")
-            .is_some());
+        assert!(view.lookup("easynet:///r/realm-b/agent/old").is_none());
+        assert!(view.lookup("easynet:///r/realm-b/agent/new").is_some());
     }
 
     #[test]
@@ -1774,10 +1783,7 @@ mod tests {
         // the mandatory Snapshot.
         let err = client
             .apply_event(&DirectoryEvent::Upsert {
-                entry: entry_with_claimed_origin(
-                    "easynet:///r/realm-b/agent/sneaky",
-                    None,
-                ),
+                entry: entry_with_claimed_origin("easynet:///r/realm-b/agent/sneaky", None),
             })
             .expect_err("upsert before snapshot must reject");
         assert!(matches!(err, FsmError::ProtocolViolation(_)));
@@ -1877,6 +1883,33 @@ mod tests {
             }
         }
 
+        struct CaptureSubscribeRequestClient {
+            function_names: Arc<Mutex<Vec<String>>>,
+        }
+
+        #[async_trait]
+        impl FederationClient for CaptureSubscribeRequestClient {
+            async fn forward_invoke(
+                &self,
+                _target_hub: &HubUri,
+                _request: InvokeRequest,
+            ) -> Result<InvokeResponse, FederationClientError> {
+                Err(FederationClientError::Unimplemented("not used in test"))
+            }
+
+            async fn subscribe_directory_v2(
+                &self,
+                _target_hub: &HubUri,
+                request: InvokeServerStreamRequest,
+            ) -> Result<DirectoryEventStream, FederationClientError> {
+                self.function_names
+                    .lock()
+                    .unwrap()
+                    .push(request.function_name);
+                Ok(Box::pin(futures::stream::pending::<DirectoryEvent>()))
+            }
+        }
+
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn supervisor_idle_timeout_drives_reconnect() {
             // PR-N3 N3-streaming-8. Peer accepts the dial but
@@ -1927,9 +1960,61 @@ mod tests {
 
             // Cancel the supervisor and confirm shutdown.
             let _ = cancel_tx.send(());
-            let result =
-                tokio::time::timeout(std::time::Duration::from_secs(5), task).await;
+            let result = tokio::time::timeout(std::time::Duration::from_secs(5), task).await;
             assert!(result.is_ok(), "supervisor must honour cancel within 5s");
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn supervisor_dials_v2_directory_ability() {
+            let cell = SharedFederatedDirectoryView::default();
+            let function_names = Arc::new(Mutex::new(Vec::<String>::new()));
+            let client = Arc::new(CaptureSubscribeRequestClient {
+                function_names: function_names.clone(),
+            });
+            let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+
+            let cell_for_task = cell.clone();
+            let client_for_task: Arc<dyn FederationClient> = client.clone();
+            let task = tokio::spawn(async move {
+                run_per_peer_supervisor_with_idle_timeout(
+                    "realm-b".to_string(),
+                    "https://hub-b.example:50443".to_string(),
+                    "easynet:///r/realm-a/agent/hub".to_string(),
+                    client_for_task,
+                    cell_for_task,
+                    cancel_rx,
+                    50,
+                )
+                .await;
+            });
+
+            for _ in 0..40 {
+                if !function_names.lock().unwrap().is_empty() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+            let _ = cancel_tx.send(());
+            let result = tokio::time::timeout(std::time::Duration::from_secs(5), task).await;
+            assert!(result.is_ok(), "supervisor must honour cancel within 5s");
+
+            let names = function_names.lock().unwrap();
+            assert!(
+                names.iter().any(|name| {
+                    name
+                        == crate::services::axon_serve::federation_wrappers
+                            ::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2
+                }),
+                "supervisor must dial the v2 stream ability; got {names:?}",
+            );
+            assert!(
+                names.iter().all(|name| {
+                    name
+                        != crate::services::axon_serve::federation_wrappers
+                            ::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY
+                }),
+                "supervisor must not dial the legacy v1 stream ability; got {names:?}",
+            );
         }
 
         // ── PR-N3 N3-streaming-9 — reconcile_streaming_supervisors ──
@@ -1938,13 +2023,17 @@ mod tests {
         fn reconcile_spawns_for_new_peers() {
             // Empty active map + 2-peer snapshot ⇒ 2 spawns,
             // 0 cancels. Spawn closure records the calls.
-            let mut active: std::collections::BTreeMap<
-                String,
-                tokio::sync::oneshot::Sender<()>,
-            > = std::collections::BTreeMap::new();
+            let mut active: std::collections::BTreeMap<String, tokio::sync::oneshot::Sender<()>> =
+                std::collections::BTreeMap::new();
             let mut snapshot = std::collections::BTreeMap::new();
-            snapshot.insert("realm-b".to_string(), "https://hub-b.example:50443".to_string());
-            snapshot.insert("realm-c".to_string(), "https://hub-c.example:50443".to_string());
+            snapshot.insert(
+                "realm-b".to_string(),
+                "https://hub-b.example:50443".to_string(),
+            );
+            snapshot.insert(
+                "realm-c".to_string(),
+                "https://hub-c.example:50443".to_string(),
+            );
 
             let mut spawn_calls: Vec<(String, String)> = Vec::new();
             let (spawned, cancelled) = reconcile_streaming_supervisors(
@@ -1969,27 +2058,28 @@ mod tests {
         fn reconcile_skips_peers_already_active() {
             // Pre-populate active with realm-b. Snapshot still
             // has realm-b + new realm-c. Only realm-c spawns.
-            let mut active: std::collections::BTreeMap<
-                String,
-                tokio::sync::oneshot::Sender<()>,
-            > = std::collections::BTreeMap::new();
+            let mut active: std::collections::BTreeMap<String, tokio::sync::oneshot::Sender<()>> =
+                std::collections::BTreeMap::new();
             let (existing_tx, _existing_rx) = tokio::sync::oneshot::channel();
             active.insert("realm-b".to_string(), existing_tx);
 
             let mut snapshot = std::collections::BTreeMap::new();
-            snapshot.insert("realm-b".to_string(), "https://hub-b.example:50443".to_string());
-            snapshot.insert("realm-c".to_string(), "https://hub-c.example:50443".to_string());
+            snapshot.insert(
+                "realm-b".to_string(),
+                "https://hub-b.example:50443".to_string(),
+            );
+            snapshot.insert(
+                "realm-c".to_string(),
+                "https://hub-c.example:50443".to_string(),
+            );
 
             let mut spawn_calls = 0u32;
-            let (spawned, cancelled) = reconcile_streaming_supervisors(
-                &snapshot,
-                &mut active,
-                |_, _| {
+            let (spawned, cancelled) =
+                reconcile_streaming_supervisors(&snapshot, &mut active, |_, _| {
                     spawn_calls += 1;
                     let (tx, _rx) = tokio::sync::oneshot::channel();
                     tx
-                },
-            );
+                });
             assert_eq!(spawned, vec!["realm-c".to_string()]);
             assert!(cancelled.is_empty());
             assert_eq!(spawn_calls, 1, "must NOT respawn an already-active peer");
@@ -2007,13 +2097,10 @@ mod tests {
             active.insert("realm-b".to_string(), cancel_tx);
 
             let snapshot = std::collections::BTreeMap::new();
-            let (spawned, cancelled) = reconcile_streaming_supervisors(
-                &snapshot,
-                &mut active,
-                |_, _| {
+            let (spawned, cancelled) =
+                reconcile_streaming_supervisors(&snapshot, &mut active, |_, _| {
                     panic!("must NOT spawn for empty snapshot");
-                },
-            );
+                });
             assert!(spawned.is_empty());
             assert_eq!(cancelled, vec!["realm-b".to_string()]);
             assert!(!active.contains_key("realm-b"));
@@ -2031,16 +2118,16 @@ mod tests {
             active.insert("realm-b".to_string(), existing_tx);
 
             let mut snapshot = std::collections::BTreeMap::new();
-            snapshot.insert("realm-c".to_string(), "https://hub-c.example:50443".to_string());
+            snapshot.insert(
+                "realm-c".to_string(),
+                "https://hub-c.example:50443".to_string(),
+            );
 
-            let (spawned, cancelled) = reconcile_streaming_supervisors(
-                &snapshot,
-                &mut active,
-                |_, _| {
+            let (spawned, cancelled) =
+                reconcile_streaming_supervisors(&snapshot, &mut active, |_, _| {
                     let (tx, _rx) = tokio::sync::oneshot::channel();
                     tx
-                },
-            );
+                });
             assert_eq!(spawned, vec!["realm-c".to_string()]);
             assert_eq!(cancelled, vec!["realm-b".to_string()]);
             assert!(active.contains_key("realm-c"));
@@ -2057,15 +2144,15 @@ mod tests {
             active.insert("realm-b".to_string(), existing_tx);
 
             let mut snapshot = std::collections::BTreeMap::new();
-            snapshot.insert("realm-b".to_string(), "https://hub-b.example:50443".to_string());
-
-            let (spawned, cancelled) = reconcile_streaming_supervisors(
-                &snapshot,
-                &mut active,
-                |_, _| {
-                    panic!("must NOT spawn");
-                },
+            snapshot.insert(
+                "realm-b".to_string(),
+                "https://hub-b.example:50443".to_string(),
             );
+
+            let (spawned, cancelled) =
+                reconcile_streaming_supervisors(&snapshot, &mut active, |_, _| {
+                    panic!("must NOT spawn");
+                });
             assert!(spawned.is_empty());
             assert!(cancelled.is_empty());
             assert!(active.contains_key("realm-b"));
@@ -2104,10 +2191,7 @@ mod tests {
             for _ in 0..40 {
                 if *client.served.lock().unwrap() {
                     if let Some(view) = cell.snapshot().get("realm-b") {
-                        if view
-                            .lookup("easynet:///r/realm-b/agent/peer")
-                            .is_some()
-                        {
+                        if view.lookup("easynet:///r/realm-b/agent/peer").is_some() {
                             break;
                         }
                     }
@@ -2136,8 +2220,7 @@ mod tests {
             // window. The supervisor should be inside its
             // backoff-sleep when cancel fires.
             let _ = cancel_tx.send(());
-            let result =
-                tokio::time::timeout(std::time::Duration::from_secs(5), task).await;
+            let result = tokio::time::timeout(std::time::Duration::from_secs(5), task).await;
             assert!(
                 result.is_ok(),
                 "supervisor must honour cancel within timeout"
@@ -2186,9 +2269,7 @@ mod tests {
                         // Subsequent dials hang briefly so the
                         // test can observe the unmark window
                         // between stream-end and re-dial.
-                        return Ok(Box::pin(
-                            futures::stream::pending::<DirectoryEvent>(),
-                        ));
+                        return Ok(Box::pin(futures::stream::pending::<DirectoryEvent>()));
                     }
                     *self.served.lock().unwrap() = true;
                     let snapshot = futures::stream::once(async {
@@ -2197,8 +2278,7 @@ mod tests {
                     // Hold the stream open ~200ms before EOF so
                     // the test has a window to poll is_streamed.
                     let hold = futures::stream::once(async {
-                        tokio::time::sleep(std::time::Duration::from_millis(200))
-                            .await;
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                         DirectoryEvent::Heartbeat {
                             sent_at_unix_ms: 1_000,
                         }
@@ -2303,7 +2383,8 @@ mod tests {
         // Sanity: cell shows the entry as active.
         let snap1 = cell.snapshot();
         assert_eq!(
-            snap1.get("realm-b")
+            snap1
+                .get("realm-b")
                 .and_then(|v| v.lookup("easynet:///r/realm-b/agent/peer"))
                 .map(|e| e.status.as_str()),
             Some("active"),
@@ -2314,7 +2395,8 @@ mod tests {
         client.mark_stale_and_publish(&cell);
         let snap2 = cell.snapshot();
         assert_eq!(
-            snap2.get("realm-b")
+            snap2
+                .get("realm-b")
                 .and_then(|v| v.lookup("easynet:///r/realm-b/agent/peer"))
                 .map(|e| e.status.as_str()),
             Some("stale"),
@@ -2346,10 +2428,20 @@ mod tests {
         client.mark_stale_and_publish(&cell);
         let snap_b = cell.snapshot();
         // Both snapshots show the same status.
-        let status_a = snap_a.get("realm-b").unwrap()
-            .lookup("easynet:///r/realm-b/agent/peer").unwrap().status.clone();
-        let status_b = snap_b.get("realm-b").unwrap()
-            .lookup("easynet:///r/realm-b/agent/peer").unwrap().status.clone();
+        let status_a = snap_a
+            .get("realm-b")
+            .unwrap()
+            .lookup("easynet:///r/realm-b/agent/peer")
+            .unwrap()
+            .status
+            .clone();
+        let status_b = snap_b
+            .get("realm-b")
+            .unwrap()
+            .lookup("easynet:///r/realm-b/agent/peer")
+            .unwrap()
+            .status
+            .clone();
         assert_eq!(status_a, status_b);
         assert_eq!(status_a, "stale");
     }
@@ -2360,10 +2452,7 @@ mod tests {
         // Pre-populate realm-c (a different peer).
         let mut realm_c_view = DirectoryView::new("realm-c".to_string());
         realm_c_view.apply_frame(&DirectoryEvent::Upsert {
-            entry: entry_with_claimed_origin(
-                "easynet:///r/realm-c/agent/keep",
-                None,
-            ),
+            entry: entry_with_claimed_origin("easynet:///r/realm-c/agent/keep", None),
         });
         let mut prior = BTreeMap::new();
         prior.insert("realm-c".to_string(), Arc::new(realm_c_view));
@@ -2407,10 +2496,7 @@ mod tests {
                 )],
             },
             DirectoryEvent::Upsert {
-                entry: entry_with_claimed_origin(
-                    "easynet:///r/realm-b/agent/added",
-                    None,
-                ),
+                entry: entry_with_claimed_origin("easynet:///r/realm-b/agent/added", None),
             },
             DirectoryEvent::Remove {
                 agent_uri: "easynet:///r/realm-b/agent/initial".to_string(),
@@ -2433,9 +2519,7 @@ mod tests {
         // path).
         let snap = cell.snapshot();
         let view = snap.get("realm-b").expect("realm-b view present");
-        assert!(view
-            .lookup("easynet:///r/realm-b/agent/initial")
-            .is_none());
+        assert!(view.lookup("easynet:///r/realm-b/agent/initial").is_none());
         let added = view
             .lookup("easynet:///r/realm-b/agent/added")
             .expect("added still present");
@@ -2541,13 +2625,8 @@ mod tests {
         })
         .boxed();
 
-        let outcome = consume_directory_event_stream_with_idle_timeout(
-            &mut client,
-            &cell,
-            stream,
-            50,
-        )
-        .await;
+        let outcome =
+            consume_directory_event_stream_with_idle_timeout(&mut client, &cell, stream, 50).await;
         assert_eq!(
             outcome,
             ConsumeOutcome::StreamEnded,
@@ -2569,13 +2648,9 @@ mod tests {
         let stream = futures::stream::iter(vec![DirectoryEvent::Upsert {
             entry: entry_with_claimed_origin("easynet:///r/realm-b/agent/sneaky", None),
         }]);
-        let outcome = consume_directory_event_stream_with_idle_timeout(
-            &mut client,
-            &cell,
-            stream,
-            5_000,
-        )
-        .await;
+        let outcome =
+            consume_directory_event_stream_with_idle_timeout(&mut client, &cell, stream, 5_000)
+                .await;
         assert!(matches!(outcome, ConsumeOutcome::ProtocolViolation(_)));
     }
 
@@ -2593,10 +2668,7 @@ mod tests {
         let cell = SharedFederatedDirectoryView::default();
 
         let events = vec![DirectoryEvent::Upsert {
-            entry: entry_with_claimed_origin(
-                "easynet:///r/realm-b/agent/sneaky",
-                None,
-            ),
+            entry: entry_with_claimed_origin("easynet:///r/realm-b/agent/sneaky", None),
         }];
         let stream = futures::stream::iter(events);
 
@@ -2608,7 +2680,10 @@ mod tests {
         // mutation could leak.
         let snap = cell.snapshot();
         if let Some(view) = snap.get("realm-b") {
-            assert!(view.entries.is_empty(), "view must stay empty on protocol violation");
+            assert!(
+                view.entries.is_empty(),
+                "view must stay empty on protocol violation"
+            );
         }
     }
 
@@ -2706,10 +2781,8 @@ mod tests {
 
         #[test]
         fn presence_uri_to_directory_entry_extracts_node_id_from_canonical_shape() {
-            let entry = presence_uri_to_directory_entry(
-                "easynet:///r/realm-a/agent/device-X",
-                true,
-            );
+            let entry =
+                presence_uri_to_directory_entry("easynet:///r/realm-a/agent/device-X", true);
             assert_eq!(entry.agent_uri, "easynet:///r/realm-a/agent/device-X");
             assert_eq!(entry.node_id, "device-X");
             assert_eq!(entry.status, "active");
@@ -2723,10 +2796,8 @@ mod tests {
 
         #[test]
         fn presence_uri_to_directory_entry_inactive_marks_status_stale() {
-            let entry = presence_uri_to_directory_entry(
-                "easynet:///r/realm-a/agent/device-X",
-                false,
-            );
+            let entry =
+                presence_uri_to_directory_entry("easynet:///r/realm-a/agent/device-X", false);
             assert_eq!(entry.status, "stale");
         }
 
@@ -2784,9 +2855,7 @@ mod tests {
     mod poll_tests {
         use super::*;
         use crate::pb::axon::v1::{InvokeRequest, InvokeResponse};
-        use crate::services::federation_client::{
-            FederationClient, FederationClientError, HubUri,
-        };
+        use crate::services::federation_client::{FederationClient, FederationClientError, HubUri};
         use async_trait::async_trait;
         use std::sync::Mutex;
 
@@ -3028,9 +3097,7 @@ mod tests {
             let snap = cell.snapshot();
             assert!(
                 snap.get("realm-b")
-                    .is_some_and(|v| v
-                        .lookup("easynet:///r/realm-b/agent/x")
-                        .is_some()),
+                    .is_some_and(|v| v.lookup("easynet:///r/realm-b/agent/x").is_some()),
                 "empty peers map must not clear existing views"
             );
         }

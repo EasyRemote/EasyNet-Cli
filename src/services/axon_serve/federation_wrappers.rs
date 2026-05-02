@@ -134,8 +134,7 @@ pub const ABILITY_FEDERATION_DISCOVER: &str = "federation.discover";
 /// `PresenceEventDelta` shapes); the daemon serves both during
 /// the v1→v2 migration so subscriber-side rollout can ramp
 /// independently of hub upgrades.
-pub const ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2: &str =
-    "federation.subscribe_directory_v2";
+pub const ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2: &str = "federation.subscribe_directory_v2";
 
 /// `federation.list_user_devices` — peer-hub user-device
 /// projection (PR-N3 N3-5). Backend on hub A invokes this on
@@ -315,22 +314,35 @@ pub struct ResolveRequest {
     pub uri_prefix: Option<String>,
 }
 
-/// One agent in a resolve response. Mirrors
-/// `FederatedNodeEntry`'s deterministic subset.
+/// One agent in a resolve response. Matches the backend Go helper's
+/// `ResolvedAgent` wire shape (`uri`, `status`) so
+/// `axon.ResolveAgents` can unmarshal real daemon receipts without a
+/// JSON field-name shim.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResolveAgentSummary {
+    /// The agent's URI; deterministic.
+    pub uri: String,
+    /// Always `"active"` because in-registry equals online; spec §4.
+    pub status: String,
+}
+
+/// Legacy v1 directory-stream projection. Kept separate from
+/// `ResolveAgentSummary` because `subscribe_directory` still speaks
+/// the historical `canonical_agent_uri` field while
+/// `federation.resolve` now matches the backend helper's `uri`
+/// field.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentSummary {
-    /// The agent's URI; deterministic.
     pub canonical_agent_uri: String,
-    /// Always `"active"` because in-registry equals online; spec §4.
     pub status: String,
 }
 
 /// Response payload for `federation.resolve`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResolveResponse {
-    /// Sorted ascending by `canonical_agent_uri` so byte-identical
+    /// Sorted ascending by `uri` so byte-identical
     /// responses come from byte-identical state.
-    pub agents: Vec<AgentSummary>,
+    pub agents: Vec<ResolveAgentSummary>,
 }
 
 /// Handle a `federation.resolve` invocation.
@@ -343,8 +355,8 @@ pub fn handle_resolve(request: &ResolveRequest, registry: &PresenceRegistry) -> 
             Some(prefix) => uri.starts_with(prefix),
             None => true,
         })
-        .map(|uri| AgentSummary {
-            canonical_agent_uri: uri,
+        .map(|uri| ResolveAgentSummary {
+            uri,
             status: "active".to_string(),
         })
         .collect();
@@ -920,11 +932,7 @@ mod tests {
         );
 
         let resp = handle_resolve(&ResolveRequest { uri_prefix: None }, &registry);
-        let uris: Vec<&str> = resp
-            .agents
-            .iter()
-            .map(|a| a.canonical_agent_uri.as_str())
-            .collect();
+        let uris: Vec<&str> = resp.agents.iter().map(|a| a.uri.as_str()).collect();
         assert_eq!(
             uris,
             vec![
@@ -957,10 +965,7 @@ mod tests {
             &registry,
         );
         assert_eq!(resp.agents.len(), 1);
-        assert_eq!(
-            resp.agents[0].canonical_agent_uri,
-            "easynet:///r/realm-a/agent/x"
-        );
+        assert_eq!(resp.agents[0].uri, "easynet:///r/realm-a/agent/x");
     }
 
     #[test]
@@ -1001,14 +1006,16 @@ mod tests {
             },
             &anchor,
         );
-        assert!(resp.is_none(), "miss must surface as None for caller status mapping");
+        assert!(
+            resp.is_none(),
+            "miss must surface as None for caller status mapping"
+        );
     }
 
     // ── N3-N4 bridge: handle_discover_with_user_filter ─────────
 
-    fn populated_view_two_realms()
-        -> crate::services::federation_directory::SharedFederatedDirectoryView
-    {
+    fn populated_view_two_realms(
+    ) -> crate::services::federation_directory::SharedFederatedDirectoryView {
         use crate::services::federation_directory::{
             DirectoryEntry, DirectoryEvent, DirectoryView, SharedFederatedDirectoryView,
         };
@@ -1072,7 +1079,10 @@ mod tests {
         let view = populated_view_two_realms();
 
         let resp = handle_discover_with_user_filter(
-            &DiscoverRequest { agent_uri: None, ..Default::default() },
+            &DiscoverRequest {
+                agent_uri: None,
+                ..Default::default()
+            },
             &view,
             &resolver,
         );
@@ -1097,7 +1107,10 @@ mod tests {
         let view = populated_view_two_realms();
 
         let resp = handle_discover_with_user_filter(
-            &DiscoverRequest { agent_uri: None, ..Default::default() },
+            &DiscoverRequest {
+                agent_uri: None,
+                ..Default::default()
+            },
             &view,
             &resolver,
         );
@@ -1122,7 +1135,10 @@ mod tests {
         let resolver = FederatedUserResolver::new("realm-b", bindings);
         let view = populated_view_two_realms();
         let resp = handle_discover_with_user_filter(
-            &DiscoverRequest { agent_uri: None, ..Default::default() },
+            &DiscoverRequest {
+                agent_uri: None,
+                ..Default::default()
+            },
             &view,
             &resolver,
         );

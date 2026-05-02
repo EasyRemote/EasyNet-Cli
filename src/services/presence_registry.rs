@@ -72,6 +72,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -121,6 +122,13 @@ pub fn presence_registry_shards() -> usize {
 /// gate revocation) can propagate to the device cleanly. The receiver
 /// converts these into the outbound `InvokeBidiDown` stream.
 pub type DispatchSender = mpsc::Sender<Result<DispatchFrame, tonic::Status>>;
+
+/// Monotonic identity of one admitted `<self>.session`.
+///
+/// Session ids are process-local and exist only to let stale tasks
+/// prove which registry entry they own when removing after a race
+/// with displacement/reconnect.
+pub type PresenceSessionId = u64;
 
 /// One frame heading down a `<self>.session` reverse channel.
 ///
@@ -187,6 +195,18 @@ pub enum PresenceEvent {
     },
 }
 
+#[derive(Debug, Clone)]
+struct PresenceSlot {
+    session_id: PresenceSessionId,
+    sender: DispatchSender,
+}
+
+#[derive(Debug, Clone)]
+pub struct PresenceRegistration {
+    pub session_id: PresenceSessionId,
+    pub displaced: Option<DispatchSender>,
+}
+
 /// Concurrent registry of live `<self>.session` reverse channels.
 ///
 /// The registry is the single owner of the mapping
@@ -197,7 +217,10 @@ pub enum PresenceEvent {
 pub struct PresenceRegistry {
     /// Sharded map keyed by caller-claimed URI. Outer `Arc` makes
     /// the entire registry cheap to clone for handler tasks.
-    by_uri: Arc<DashMap<String, DispatchSender>>,
+    by_uri: Arc<DashMap<String, PresenceSlot>>,
+
+    /// Monotonic session id allocator.
+    next_session_id: AtomicU64,
 
     /// Cross-cutting transitions broadcast. New subscribers receive
     /// only events from `subscribe_events`-time onward; bootstrap
@@ -223,6 +246,7 @@ impl PresenceRegistry {
         let (tx, _rx) = broadcast::channel(event_capacity);
         Self {
             by_uri: Arc::new(DashMap::with_shard_amount(presence_registry_shards())),
+            next_session_id: AtomicU64::new(1),
             events: tx,
         }
     }
@@ -239,7 +263,17 @@ impl PresenceRegistry {
     /// the prior session's state if it cares; production paths
     /// drop it.
     pub fn insert(&self, uri: String, sender: DispatchSender) -> Option<DispatchSender> {
-        let displaced = self.by_uri.insert(uri.clone(), sender);
+        self.insert_tracked(uri, sender).displaced
+    }
+
+    /// Register a new `<self>.session` and return the registry-owned
+    /// `session_id` alongside any displaced prior sender.
+    pub fn insert_tracked(&self, uri: String, sender: DispatchSender) -> PresenceRegistration {
+        let session_id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
+        let displaced = self
+            .by_uri
+            .insert(uri.clone(), PresenceSlot { session_id, sender })
+            .map(|prior| prior.sender);
         if displaced.is_some() {
             // Always emit Offline for the displaced session before
             // Online for the newcomer; ignore broadcast send errors
@@ -250,14 +284,43 @@ impl PresenceRegistry {
             });
         }
         let _ = self.events.send(PresenceEvent::Online { uri });
-        displaced
+        PresenceRegistration {
+            session_id,
+            displaced,
+        }
     }
 
     /// Remove a session, emitting `PresenceEvent::Offline` with the
     /// supplied reason. No-op if the URI is not present (the caller
     /// races; idempotent for the registry's lifecycle invariant).
     pub fn remove(&self, uri: &str, reason: OfflineReason) -> Option<DispatchSender> {
-        let prior = self.by_uri.remove(uri).map(|(_k, v)| v);
+        let prior = self.by_uri.remove(uri).map(|(_k, slot)| slot.sender);
+        if prior.is_some() {
+            let _ = self.events.send(PresenceEvent::Offline {
+                uri: uri.to_string(),
+                reason,
+            });
+        }
+        prior
+    }
+
+    /// Remove a session only if the currently-registered entry for
+    /// `uri` still belongs to `session_id`.
+    ///
+    /// This closes the reconnect/displacement race:
+    /// a stale task holding metadata for an old session at `uri`
+    /// must not be able to remove a newer replacement session that
+    /// has already won a later `insert`.
+    pub fn remove_if_session(
+        &self,
+        uri: &str,
+        session_id: PresenceSessionId,
+        reason: OfflineReason,
+    ) -> Option<DispatchSender> {
+        let prior = self
+            .by_uri
+            .remove_if(uri, |_uri, slot| slot.session_id == session_id)
+            .map(|(_k, slot)| slot.sender);
         if prior.is_some() {
             let _ = self.events.send(PresenceEvent::Offline {
                 uri: uri.to_string(),
@@ -271,7 +334,15 @@ impl PresenceRegistry {
     /// can hold it across `await` points without locking the shard.
     #[must_use]
     pub fn lookup(&self, uri: &str) -> Option<DispatchSender> {
-        self.by_uri.get(uri).map(|entry| entry.value().clone())
+        self.by_uri.get(uri).map(|entry| entry.sender.clone())
+    }
+
+    /// Find the current `(session_id, sender)` pair for `uri`.
+    #[must_use]
+    pub fn lookup_tracked(&self, uri: &str) -> Option<(PresenceSessionId, DispatchSender)> {
+        self.by_uri
+            .get(uri)
+            .map(|entry| (entry.session_id, entry.sender.clone()))
     }
 
     /// Take a deterministic snapshot of currently-online URIs. Used
@@ -318,6 +389,7 @@ impl Default for PresenceRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     use tokio::sync::broadcast::error::RecvError;
 
     /// Build a `DispatchSender` whose receiver is dropped immediately.
@@ -437,6 +509,48 @@ mod tests {
                 assert_eq!(u2, uri);
             }
             other => panic!("expected Offline-then-Online for displacement, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_sender_cannot_remove_newer_displaced_session() {
+        let registry = PresenceRegistry::new();
+        let uri = "easynet:///r/realm/agent/n1".to_string();
+        let sender_a = make_dispatch_sender();
+        let sender_b = make_dispatch_sender();
+
+        let first = registry.insert_tracked(uri.clone(), sender_a);
+
+        let mut subscriber = registry.subscribe_events();
+        let second = registry.insert_tracked(uri.clone(), sender_b.clone());
+        assert!(
+            second.displaced.is_some(),
+            "second insert must displace first sender"
+        );
+
+        // Drain the displacement transition first.
+        let _ = subscriber.recv().await.expect("offline displacement event");
+        let _ = subscriber.recv().await.expect("online replacement event");
+
+        let removed =
+            registry.remove_if_session(&uri, first.session_id, OfflineReason::StreamClosed);
+        assert!(
+            removed.is_none(),
+            "stale session id must not remove the replacement session"
+        );
+
+        let (current_session_id, current) = registry
+            .lookup_tracked(&uri)
+            .expect("replacement session still present");
+        assert!(
+            current.same_channel(&sender_b),
+            "registry must still point at the replacement sender"
+        );
+        assert_eq!(current_session_id, second.session_id);
+
+        match tokio::time::timeout(Duration::from_millis(50), subscriber.recv()).await {
+            Err(_elapsed) => {}
+            Ok(other) => panic!("stale remove must not emit a new offline event, got {other:?}"),
         }
     }
 

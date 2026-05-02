@@ -203,6 +203,22 @@ async fn main() -> anyhow::Result<()> {
     let resolver: Arc<dyn TargetResolver> = Arc::new(LocalNodeResolver::new(local_node));
     let proxy = AbilityProxy::new_with_dispatcher(Arc::clone(&kernel_api), dispatcher, resolver);
 
+    // RFC-003 PR-1 sidecar: gRPC InvocationServer (transport plane).
+    // Start this BEFORE any other daemon listener binds so
+    // `daemon-config.toml` is validated at the top of the boot order
+    // rather than after control/runtime-dispatch sockets already
+    // exist. That keeps the PR-1 "load config before any listener
+    // bind" invariant honest even while axon_serve is still a soft
+    // dependency.
+    #[cfg(feature = "axon-pb")]
+    {
+        if let Err(e) = easynet_cli::services::axon_serve::start_axon_serve_sidecar(Arc::clone(
+            &dispatcher_for_kernel,
+        )) {
+            eprintln!("[axon-serve] sidecar boot failed: {e:#}");
+        }
+    }
+
     // Optional sidecar: heartbeat. Run on a dedicated OS thread
     // because run_daemon() is blocking (ureq + ctrlc handler). Errors
     // are logged but do not tear down the IPC server; if heartbeat
@@ -240,23 +256,6 @@ async fn main() -> anyhow::Result<()> {
             eprintln!("[runtime-dispatch] responder exited: {e:#}");
         }
     });
-
-    // RFC-003 PR-1 sidecar: gRPC InvocationServer (transport plane).
-    // Distinct UDS from `control.sock` (length-delimited JSON IPC) and
-    // `runtime-dispatch.sock` (newline-delimited JSON) because tonic
-    // gRPC frames cannot share either socket. The sidecar is a soft
-    // dependency of the daemon: if `~/.easynet/daemon-config.toml` is
-    // absent (legacy device) or malformed, we log and skip without
-    // tearing down the legacy daemon subsystems. PR-7 + PR-10 finish
-    // the production rollout; PR-1 ships the listener only.
-    #[cfg(feature = "axon-pb")]
-    {
-        if let Err(e) = easynet_cli::services::axon_serve::start_axon_serve_sidecar(Arc::clone(
-            &dispatcher_for_kernel,
-        )) {
-            eprintln!("[axon-serve] sidecar boot failed: {e:#}");
-        }
-    }
 
     // Foreground: Control-plane IPC server. Returns when the listener
     // is dropped (i.e. never, in v1 — we exit on SIGTERM via the OS).

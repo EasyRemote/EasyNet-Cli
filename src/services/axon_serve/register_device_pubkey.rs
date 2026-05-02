@@ -50,6 +50,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::prelude::*;
+use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
 use tonic::Status;
 
@@ -124,6 +126,7 @@ pub fn handle(
             "<self>.register_device_pubkey: public_key_b64 is required",
         ));
     }
+    validate_public_key_b64(&args.public_key_b64)?;
 
     let role = parse_role(&args.role)?;
 
@@ -203,6 +206,26 @@ fn parse_role(raw: &str) -> Result<TrustedAgentRole, Status> {
     }
 }
 
+fn validate_public_key_b64(raw: &str) -> Result<(), Status> {
+    let decoded = BASE64_STANDARD.decode(raw).map_err(|err| {
+        Status::invalid_argument(format!(
+            "<self>.register_device_pubkey: public_key_b64 is not valid base64: {err}"
+        ))
+    })?;
+    let bytes: [u8; 32] = decoded.as_slice().try_into().map_err(|_| {
+        Status::invalid_argument(format!(
+            "<self>.register_device_pubkey: public_key_b64 must decode to exactly 32 bytes, got {}",
+            decoded.len()
+        ))
+    })?;
+    VerifyingKey::from_bytes(&bytes).map_err(|err| {
+        Status::invalid_argument(format!(
+            "<self>.register_device_pubkey: public_key_b64 is not a valid Ed25519 verifying key: {err}"
+        ))
+    })?;
+    Ok(())
+}
+
 /// Extract the realm component from a URA `easynet:///r/{realm}/...`
 /// URI. Returns `None` if the URI does not match the URA shape;
 /// the caller surfaces that as `invalid_argument`. We match on
@@ -255,6 +278,7 @@ fn realm_error_to_status(err: RealmTrustError) -> Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::SigningKey;
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -277,13 +301,17 @@ mod tests {
         (dir, path)
     }
 
-    const TEST_PUB_B64: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    fn test_pub_b64() -> String {
+        let signing = SigningKey::from_bytes(&[7u8; 32]);
+        BASE64_STANDARD.encode(signing.verifying_key().to_bytes())
+    }
 
     #[test]
     fn happy_path_appends_and_persists() {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
-        let args = args_bytes("easynet:///r/r1/agent/alpha", TEST_PUB_B64, "device");
+        let test_pub_b64 = test_pub_b64();
+        let args = args_bytes("easynet:///r/r1/agent/alpha", &test_pub_b64, "device");
 
         let result = handle(&args, "r1", &path, &cell).expect("ok");
         let response: RegisterResponse = serde_json::from_slice(&result).expect("decode");
@@ -292,7 +320,7 @@ mod tests {
         // Cell observes the new entry.
         let snap = cell.snapshot();
         let entry = snap.lookup("easynet:///r/r1/agent/alpha").expect("present");
-        assert_eq!(entry.public_key_b64, TEST_PUB_B64);
+        assert_eq!(entry.public_key_b64, test_pub_b64);
         assert!(matches!(entry.role, TrustedAgentRole::Device));
 
         // File on disk reflects the entry.
@@ -304,7 +332,7 @@ mod tests {
     fn cross_realm_uri_rejected_with_permission_denied() {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
-        let args = args_bytes("easynet:///r/r2/agent/intruder", TEST_PUB_B64, "device");
+        let args = args_bytes("easynet:///r/r2/agent/intruder", &test_pub_b64(), "device");
 
         let err = handle(&args, "r1", &path, &cell).expect_err("must reject cross-realm");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
@@ -319,7 +347,7 @@ mod tests {
     fn malformed_uri_rejected_with_invalid_argument() {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
-        let args = args_bytes("not-a-ura-uri", TEST_PUB_B64, "device");
+        let args = args_bytes("not-a-ura-uri", &test_pub_b64(), "device");
 
         let err = handle(&args, "r1", &path, &cell).expect_err("must reject malformed URI");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
@@ -330,7 +358,7 @@ mod tests {
     fn unknown_role_rejected_with_invalid_argument() {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
-        let args = args_bytes("easynet:///r/r1/agent/x", TEST_PUB_B64, "supervisor");
+        let args = args_bytes("easynet:///r/r1/agent/x", &test_pub_b64(), "supervisor");
         let err = handle(&args, "r1", &path, &cell).expect_err("must reject unknown role");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(err.message().contains("supervisor"));
@@ -340,7 +368,7 @@ mod tests {
     fn duplicate_uri_rejected_with_already_exists() {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
-        let args = args_bytes("easynet:///r/r1/agent/dup", TEST_PUB_B64, "device");
+        let args = args_bytes("easynet:///r/r1/agent/dup", &test_pub_b64(), "device");
         handle(&args, "r1", &path, &cell).expect("first ok");
         let err = handle(&args, "r1", &path, &cell).expect_err("second must reject as duplicate");
         assert_eq!(err.code(), tonic::Code::AlreadyExists);
@@ -350,7 +378,7 @@ mod tests {
     fn empty_agent_uri_rejected_with_invalid_argument() {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
-        let args = args_bytes("", TEST_PUB_B64, "device");
+        let args = args_bytes("", &test_pub_b64(), "device");
         let err = handle(&args, "r1", &path, &cell).expect_err("must reject");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(err.message().contains("agent_uri is required"));
@@ -364,6 +392,38 @@ mod tests {
         let err = handle(&args, "r1", &path, &cell).expect_err("must reject");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(err.message().contains("public_key_b64 is required"));
+    }
+
+    #[test]
+    fn malformed_public_key_b64_rejected_with_invalid_argument() {
+        let (_dir, path) = fresh_path();
+        let cell = empty_cell();
+        let args = args_bytes("easynet:///r/r1/agent/z", "@@@not-base64@@@", "device");
+        let err = handle(&args, "r1", &path, &cell).expect_err("must reject malformed base64");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains("not valid base64"));
+    }
+
+    #[test]
+    fn wrong_length_public_key_rejected_with_invalid_argument() {
+        let (_dir, path) = fresh_path();
+        let cell = empty_cell();
+        let short_key = BASE64_STANDARD.encode([0u8; 31]);
+        let args = args_bytes("easynet:///r/r1/agent/z", &short_key, "device");
+        let err = handle(&args, "r1", &path, &cell).expect_err("must reject short key");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains("exactly 32 bytes"));
+    }
+
+    #[test]
+    fn invalid_curve_public_key_rejected_with_invalid_argument() {
+        let (_dir, path) = fresh_path();
+        let cell = empty_cell();
+        let invalid_key = "xxdqcD1MnE8te47Y0dRcLz8rn+fYxqSy8eDZyLem9f8=";
+        let args = args_bytes("easynet:///r/r1/agent/z", &invalid_key, "device");
+        let err = handle(&args, "r1", &path, &cell).expect_err("must reject invalid curve point");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains("valid Ed25519 verifying key"));
     }
 
     #[test]
@@ -384,14 +444,18 @@ mod tests {
         let cell = empty_cell();
 
         handle(
-            &args_bytes("easynet:///r/r1/agent/backend-svc", TEST_PUB_B64, "backend"),
+            &args_bytes(
+                "easynet:///r/r1/agent/backend-svc",
+                &test_pub_b64(),
+                "backend",
+            ),
             "r1",
             &path,
             &cell,
         )
         .expect("backend ok");
         handle(
-            &args_bytes("easynet:///r/r1/agent/device-A", TEST_PUB_B64, "device"),
+            &args_bytes("easynet:///r/r1/agent/device-A", &test_pub_b64(), "device"),
             "r1",
             &path,
             &cell,

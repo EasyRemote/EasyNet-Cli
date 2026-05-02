@@ -72,8 +72,8 @@ use easynet_axon::invocation::axiom::{
 };
 use easynet_cli::pb::axon::v1::invocation_server::Invocation;
 use easynet_cli::pb::axon::v1::{
-    AgentIdentity as PbAgentIdentity, CallerSignature as PbCallerSignature, Envelope, InvokeRequest,
-    InvokeResponse, SubjectIdentity as PbSubjectIdentity,
+    AgentIdentity as PbAgentIdentity, CallerSignature as PbCallerSignature, Envelope,
+    InvokeRequest, InvokeResponse, SubjectIdentity as PbSubjectIdentity,
 };
 use easynet_cli::services::axon_serve::admission_facade::AdmissionFacade;
 use easynet_cli::services::axon_serve::daemon_invocation_service::DaemonInvocationService;
@@ -374,11 +374,9 @@ async fn cross_realm_caller_with_no_federated_peer_entry_rejected() {
         Some(DAEMON_B_URI.to_string()),
     )
     .with_federation(federation_client, peers_cell);
-    let daemon_b = DaemonInvocationService::new(
-        Arc::new(PresenceRegistry::new()),
-        daemon_b_admission,
-    )
-    .with_session_realm(REALM_B);
+    let daemon_b =
+        DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), daemon_b_admission)
+            .with_session_realm(REALM_B);
 
     let signed = signed_request(
         DEVICE_A_URI,

@@ -44,9 +44,7 @@ use easynet_cli::runtime::keyring::abilities::{
 };
 use easynet_cli::runtime::keyring::federated_bindings::FederatedBindingsStore;
 use easynet_cli::runtime::keyring::handle::KeyringHandle;
-use easynet_cli::runtime::keyring::resolver::{
-    FederatedUserOutcome, FederatedUserResolver,
-};
+use easynet_cli::runtime::keyring::resolver::{FederatedUserOutcome, FederatedUserResolver};
 
 /// Stand up realm A's daemon: keyring + agent_signing entry +
 /// bound device subject. Returns the handle plus the user URI

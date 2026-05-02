@@ -57,7 +57,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use rcgen::{CertifiedKey, generate_simple_self_signed};
+use rcgen::{generate_simple_self_signed, CertifiedKey};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::process::{Child, Command};
@@ -67,7 +67,7 @@ use tonic::transport::{Certificate, ClientTlsConfig, Endpoint};
 use easynet_cli::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_cli::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
 use easynet_cli::services::axon_serve::federation_wrappers::{
-    ABILITY_FEDERATION_FORWARD_INVOKE, ForwardInvokeResponse,
+    ForwardInvokeResponse, ABILITY_FEDERATION_FORWARD_INVOKE,
 };
 
 /// One daemon's filesystem layout for the test. Owns the tempdir
@@ -234,13 +234,8 @@ async fn spawn_daemon(
         .collect();
 
     let listen_tcp = format!("127.0.0.1:{listen_tcp_port}");
-    let config_body = daemon_config_body(
-        realm,
-        &listen_tcp,
-        &cert_path,
-        &key_path,
-        &federated_peers,
-    );
+    let config_body =
+        daemon_config_body(realm, &listen_tcp, &cert_path, &key_path, &federated_peers);
     std::fs::write(easynet_dir.join("daemon-config.toml"), config_body)
         .expect("write daemon-config.toml");
 

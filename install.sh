@@ -63,7 +63,6 @@ main() {
     echo ""
     echo "    easynet                      → $INSTALL_DIR/"
     echo "    easynet-daemon               → $INSTALL_DIR/"
-    echo "    axon-runtime                 → $INSTALL_DIR/"
     echo "    libaxon_dendrite_bridge.$LIB_EXT  → $NATIVE_DIR/"
     echo ""
     if [ -n "${PROFILE:-}" ]; then
@@ -179,20 +178,14 @@ download_and_install() {
     # that). Plain mv into INSTALL_DIR — no per-step sudo, no tty
     # juggling.
     #
-    # easynet-daemon is the long-running owner of control.sock /
-    # runtime-dispatch.sock; without it `easynet runtime start`
-    # warns "failed to spawn easynet-daemon: No such file or
-    # directory" and the cliipc / `_request_id` trace surface stays
-    # offline. Older tarballs (pre-2026-04-29) didn't ship it; the
-    # 2>/dev/null guard keeps this script forward-and-backward
-    # compatible with both layouts.
+    # The transport-plane rollout ships exactly two binaries:
+    # `easynet` (user-facing CLI) and `easynet-daemon` (long-running
+    # control + InvocationServer sidecar). Treat the daemon as a
+    # required artefact: if the tarball is missing it, the release is
+    # malformed and the installer should fail loudly.
     mv "${TMPDIR}/easynet"        "${INSTALL_DIR}/easynet"
-    mv "${TMPDIR}/axon-runtime"   "${INSTALL_DIR}/axon-runtime"
-    if [ -f "${TMPDIR}/easynet-daemon" ]; then
-        mv "${TMPDIR}/easynet-daemon" "${INSTALL_DIR}/easynet-daemon"
-        chmod +x "${INSTALL_DIR}/easynet-daemon"
-    fi
-    chmod +x "${INSTALL_DIR}/easynet" "${INSTALL_DIR}/axon-runtime"
+    mv "${TMPDIR}/easynet-daemon" "${INSTALL_DIR}/easynet-daemon"
+    chmod +x "${INSTALL_DIR}/easynet" "${INSTALL_DIR}/easynet-daemon"
 
     # Install dendrite bridge library under the REAL user's home so
     # the daemon can dlopen it without LD_LIBRARY_PATH gymnastics.
@@ -268,10 +261,11 @@ reload_shell() {
 }
 
 cleanup_stale_binaries() {
-    # Remove stale easynet/axon-runtime binaries from other PATH dirs
+    # Remove stale easynet/easynet-daemon/axon-runtime binaries from
+    # other PATH dirs
     # that would shadow the freshly installed copy. We're root here,
     # so direct rm — no nested sudo dance.
-    for bin in easynet axon-runtime; do
+    for bin in easynet easynet-daemon axon-runtime; do
         IFS=:
         for dir in $PATH; do
             unset IFS

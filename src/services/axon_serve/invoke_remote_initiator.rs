@@ -81,6 +81,8 @@ pub const ABILITY_INVOKE_REMOTE: &str = "<self>.invoke_remote";
 /// `application/json`); every subsequent chunk uses 0.
 pub const INVOKE_REMOTE_STREAM_ID: u32 = 0;
 
+const REASON_BIDI_DOWN_SEQUENCE: &str = "AXON_BIDI_DOWN_SEQUENCE";
+
 /// Channel capacity for the up-direction `InvokeBidiUp` mpsc that
 /// feeds the gRPC client. Frame 0 plus a small buffer of follow-on
 /// chunks if the caller streams arguments — most invoke_remote calls
@@ -352,17 +354,31 @@ where
     let (out_tx, out_rx) = mpsc::channel::<Result<InvokeRemoteFrame, Status>>(8);
     tokio::spawn(async move {
         let _keep_up_alive = up_tx;
+        let mut expected_sequence = 0u64;
         while let Some(item) = down.next().await {
             let send = match item {
                 Err(status) => out_tx.send(Err(status)).await,
-                Ok(frame) => match map_one_frame(&frame) {
-                    FrameOutcome::Skip => continue,
-                    FrameOutcome::Yield(frame_out) => out_tx.send(Ok(frame_out)).await,
-                    FrameOutcome::Terminal(result) => {
-                        let _ = out_tx.send(result).await;
+                Ok(frame) => {
+                    if frame.sequence != expected_sequence {
+                        let _ = out_tx
+                            .send(Err(Status::failed_precondition(format!(
+                                "{REASON_BIDI_DOWN_SEQUENCE}: expected down frame sequence \
+                                 {expected_sequence}, got {}",
+                                frame.sequence,
+                            ))))
+                            .await;
                         return;
                     }
-                },
+                    expected_sequence += 1;
+                    match map_one_frame(&frame) {
+                        FrameOutcome::Skip => continue,
+                        FrameOutcome::Yield(frame_out) => out_tx.send(Ok(frame_out)).await,
+                        FrameOutcome::Terminal(result) => {
+                            let _ = out_tx.send(result).await;
+                            return;
+                        }
+                    }
+                }
             };
             if send.is_err() {
                 // Consumer dropped the receiver; nothing left to do.
@@ -509,10 +525,10 @@ mod tests {
     /// Build a synthetic down frame carrying `payload` as the
     /// `InvokeRemoteDown` JSON in `BinaryChunk.data`. Tests use this
     /// to drive the down-stream mapper without a real gRPC server.
-    fn down_chunk_with(payload: InvokeRemoteDown) -> InvokeBidiDown {
+    fn down_chunk_with(sequence: u64, payload: InvokeRemoteDown) -> InvokeBidiDown {
         let json = serde_json::to_vec(&payload).expect("encode test payload");
         InvokeBidiDown {
-            sequence: 1,
+            sequence,
             mac: Vec::new(),
             payload: Some(DownPayload::BinaryChunk(BinaryChunk {
                 stream_id: INVOKE_REMOTE_STREAM_ID,
@@ -522,12 +538,27 @@ mod tests {
         }
     }
 
+    fn down_receipt(sequence: u64) -> InvokeBidiDown {
+        use crate::pb::axon::v1::InvocationReceipt;
+        InvokeBidiDown {
+            sequence,
+            mac: Vec::new(),
+            payload: Some(DownPayload::Receipt(InvocationReceipt::default())),
+        }
+    }
+
     #[tokio::test]
     async fn map_down_stream_yields_done_for_clean_terminal_result() {
-        let frames = vec![Ok(down_chunk_with(InvokeRemoteDown::Result {
-            payload: b"the-reply".to_vec(),
-            error: None,
-        }))];
+        let frames = vec![
+            Ok(down_receipt(0)),
+            Ok(down_chunk_with(
+                1,
+                InvokeRemoteDown::Result {
+                    payload: b"the-reply".to_vec(),
+                    error: None,
+                },
+            )),
+        ];
         let down = stream::iter(frames);
         let (up_tx, _up_rx) = mpsc::channel(1);
         let mut mapped = Box::pin(map_down_stream(down, up_tx));
@@ -546,16 +577,26 @@ mod tests {
     #[tokio::test]
     async fn map_down_stream_yields_chunks_then_done() {
         let frames = vec![
-            Ok(down_chunk_with(InvokeRemoteDown::Chunk {
-                payload: b"first".to_vec(),
-            })),
-            Ok(down_chunk_with(InvokeRemoteDown::Chunk {
-                payload: b"second".to_vec(),
-            })),
-            Ok(down_chunk_with(InvokeRemoteDown::Result {
-                payload: b"final".to_vec(),
-                error: None,
-            })),
+            Ok(down_receipt(0)),
+            Ok(down_chunk_with(
+                1,
+                InvokeRemoteDown::Chunk {
+                    payload: b"first".to_vec(),
+                },
+            )),
+            Ok(down_chunk_with(
+                2,
+                InvokeRemoteDown::Chunk {
+                    payload: b"second".to_vec(),
+                },
+            )),
+            Ok(down_chunk_with(
+                3,
+                InvokeRemoteDown::Result {
+                    payload: b"final".to_vec(),
+                    error: None,
+                },
+            )),
         ];
         let down = stream::iter(frames);
         let (up_tx, _up_rx) = mpsc::channel(1);
@@ -578,10 +619,16 @@ mod tests {
 
     #[tokio::test]
     async fn map_down_stream_surfaces_remote_error_as_aborted_status() {
-        let frames = vec![Ok(down_chunk_with(InvokeRemoteDown::Result {
-            payload: Vec::new(),
-            error: Some("device dropped before reply".into()),
-        }))];
+        let frames = vec![
+            Ok(down_receipt(0)),
+            Ok(down_chunk_with(
+                1,
+                InvokeRemoteDown::Result {
+                    payload: Vec::new(),
+                    error: Some("device dropped before reply".into()),
+                },
+            )),
+        ];
         let down = stream::iter(frames);
         let (up_tx, _up_rx) = mpsc::channel(1);
         let mut mapped = Box::pin(map_down_stream(down, up_tx));
@@ -609,24 +656,21 @@ mod tests {
 
     #[tokio::test]
     async fn map_down_stream_skips_receipt_and_control_frames() {
-        use crate::pb::axon::v1::{
-            invoke_bidi_down::Payload as DownPayload, BidiControl, InvocationReceipt,
-        };
+        use crate::pb::axon::v1::{invoke_bidi_down::Payload as DownPayload, BidiControl};
         let frames = vec![
-            Ok(InvokeBidiDown {
-                sequence: 0,
-                mac: Vec::new(),
-                payload: Some(DownPayload::Receipt(InvocationReceipt::default())),
-            }),
+            Ok(down_receipt(0)),
             Ok(InvokeBidiDown {
                 sequence: 1,
                 mac: Vec::new(),
                 payload: Some(DownPayload::Control(BidiControl::default())),
             }),
-            Ok(down_chunk_with(InvokeRemoteDown::Result {
-                payload: b"reply-after-receipt".to_vec(),
-                error: None,
-            })),
+            Ok(down_chunk_with(
+                2,
+                InvokeRemoteDown::Result {
+                    payload: b"reply-after-receipt".to_vec(),
+                    error: None,
+                },
+            )),
         ];
         let down = stream::iter(frames);
         let (up_tx, _up_rx) = mpsc::channel(1);
@@ -650,7 +694,7 @@ mod tests {
                 pts: 0,
             })),
         };
-        let down = stream::iter(vec![Ok(bad_frame)]);
+        let down = stream::iter(vec![Ok(down_receipt(0)), Ok(bad_frame)]);
         let (up_tx, _up_rx) = mpsc::channel(1);
         let mut mapped = Box::pin(map_down_stream(down, up_tx));
 
@@ -658,6 +702,28 @@ mod tests {
         let status = first.expect_err("malformed JSON must surface as Err");
         assert_eq!(status.code(), tonic::Code::Internal);
         assert!(status.message().contains("decode"));
+    }
+
+    #[tokio::test]
+    async fn map_down_stream_rejects_out_of_sequence_frames() {
+        let frames = vec![
+            Ok(down_receipt(0)),
+            Ok(down_chunk_with(
+                2,
+                InvokeRemoteDown::Result {
+                    payload: b"reply".to_vec(),
+                    error: None,
+                },
+            )),
+        ];
+        let down = stream::iter(frames);
+        let (up_tx, _up_rx) = mpsc::channel(1);
+        let mut mapped = Box::pin(map_down_stream(down, up_tx));
+
+        let first = mapped.next().await.expect("sequence error frame");
+        let status = first.expect_err("out-of-sequence frame must surface as Err");
+        assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+        assert!(status.message().contains(REASON_BIDI_DOWN_SEQUENCE));
     }
 
     #[tokio::test]
@@ -719,13 +785,10 @@ mod tests {
         for err in cases {
             let original = SessionDispatch::RequestResult {
                 call_id: [0; 16],
-                outcome: RequestOutcome::Err {
-                    error: err.clone(),
-                },
+                outcome: RequestOutcome::Err { error: err.clone() },
             };
             let bytes = serde_json::to_vec(&original).expect("encode");
-            let recovered: SessionDispatch =
-                serde_json::from_slice(&bytes).expect("decode");
+            let recovered: SessionDispatch = serde_json::from_slice(&bytes).expect("decode");
             assert_eq!(
                 original, recovered,
                 "round-trip mismatch for SessionRequestError {err:?}",

@@ -76,7 +76,9 @@ impl FederationClient for InProcessStreamingForwarder {
         _target_hub: &HubUri,
         _request: InvokeRequest,
     ) -> Result<InvokeResponse, FederationClientError> {
-        Err(FederationClientError::Unimplemented("not exercised in this test"))
+        Err(FederationClientError::Unimplemented(
+            "not exercised in this test",
+        ))
     }
 
     async fn subscribe_directory_v2(

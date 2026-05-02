@@ -137,7 +137,10 @@ async fn poll_once_against_real_daemon_populates_cell_with_peer_directory() {
 
     // Configure peers map: realm-a → in-process-A.
     let mut peers = std::collections::BTreeMap::new();
-    peers.insert("realm-a".to_string(), "https://hub-a.example:50443".to_string());
+    peers.insert(
+        "realm-a".to_string(),
+        "https://hub-a.example:50443".to_string(),
+    );
 
     // ── Drive: B polls A. Should pull A's federated view.
     let outcome = poll_once(
@@ -224,7 +227,10 @@ async fn discover_dispatch_returns_what_poll_populated() {
 
     // Step 1: B polls A.
     let mut peers = std::collections::BTreeMap::new();
-    peers.insert("realm-a".to_string(), "https://hub-a.example:50443".to_string());
+    peers.insert(
+        "realm-a".to_string(),
+        "https://hub-a.example:50443".to_string(),
+    );
     poll_once(
         federation_client.as_ref(),
         &peers,
