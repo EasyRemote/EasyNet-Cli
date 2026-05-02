@@ -254,6 +254,25 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
                     endpoint: hub_endpoint.clone(),
                     source: err,
                 })?;
+    } else if hub_endpoint.starts_with("https://") {
+        // No pinned CA + scheme is `https://` → caller wants TLS via
+        // OS native trust roots (Let's Encrypt et al.). Tonic 0.12's
+        // `Endpoint` has no default TLS config, so a `connect()` on
+        // an `https://` URL without an explicit `tls_config()` call
+        // fails with an opaque "transport error". `tls-roots` feature
+        // on the `tonic` dep ships rustls-native-certs probing; we
+        // hand it a `ClientTlsConfig::with_native_roots()` so the
+        // probe runs and the connection succeeds against any
+        // publicly-trusted CA. Domain validation uses the URL's
+        // host automatically.
+        let native_tls = tonic::transport::ClientTlsConfig::new().with_native_roots();
+        endpoint =
+            endpoint
+                .tls_config(native_tls)
+                .map_err(|err| SessionError::TlsConfig {
+                    endpoint: hub_endpoint.clone(),
+                    source: err,
+                })?;
     }
 
     let channel: Channel = endpoint
@@ -395,8 +414,14 @@ pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
                         backoff = SESSION_BACKOFF_INITIAL;
                     }
                     Err(err) => {
+                        // `{err:#}` walks the std::error::Error source
+                        // chain so opaque `tonic::transport::Error`
+                        // ("transport error") surfaces the underlying
+                        // rustls / hyper / io cause. Without this, a
+                        // CA-trust failure or DNS error is
+                        // indistinguishable from a NAT idle drop.
                         eprintln!(
-                            "[session] bidi error ({err}); reconnecting after {:?}",
+                            "[session] bidi error ({err:#}); reconnecting after {:?}",
                             backoff,
                         );
                     }

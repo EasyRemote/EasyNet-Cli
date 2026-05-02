@@ -1,6 +1,6 @@
 [package]
 name = "easynet"
-version = "1.22.18"
+version = "1.25.3"
 edition = "2021"
 description = "EasyNet CLI + Hub MCP server + EAL (EasyNet Ability Language)."
 license = "Apache-2.0"
@@ -310,5 +310,13 @@ optional = true
 # tonic::Status etc. Only needed when `axon-pb` is on.
 [dependencies.tonic]
 version = "0.12"
-features = ["transport", "tls"]
+# `tls-roots` adds the rustls-native-certs probe so dialing
+# `https://...` against a publicly-trusted CA (Let's Encrypt,
+# DigiCert, etc.) succeeds without an explicit `.tls_config(
+# ClientTlsConfig::with_native_roots())` call site. Without it,
+# tonic's `Endpoint` has no default trust anchor and every
+# unpinned `connect()` fails with an opaque "transport error" —
+# the exact symptom that masked the production-WAN issue when
+# the hub moved behind nginx with a real LE cert.
+features = ["transport", "tls", "tls-roots"]
 optional = true
