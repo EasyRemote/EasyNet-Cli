@@ -146,6 +146,43 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     // `cargo build --features demo-fixture` to opt in.
     maybe_seed_demo_presence(&presence);
 
+    // Device-mode self-presence seed.
+    //
+    // In device-mode the daemon's local PresenceRegistry is used by
+    // backend's `federation.resolve` (over the daemon UDS) to answer
+    // "which devices in this realm are online?". The hub-side
+    // presence registry holds the canonical answer, but in
+    // host-mode dev rigs (backend → device daemon UDS, no separate
+    // hub-mode daemon process) the backend never reaches the hub's
+    // presence — it queries this daemon's local one instead.
+    // Pre-this-fix: device daemon's local presence was empty because
+    // <self>.session is an OUTBOUND dial (the daemon dials the hub),
+    // not an inbound register, so nothing populated the local table.
+    // backend's `federation.resolve` then returned no agents; every
+    // device showed REMOVED in /api/v1/devices despite the bidi
+    // being healthy.
+    //
+    // Seed the local presence with the daemon's own URI on boot so
+    // the local resolve answers "yes I'm here" when the operator's
+    // backend asks. The dispatch sender is a no-op channel — backend
+    // queries don't push frames here, they just check membership.
+    //
+    // Hub / Both modes don't need this: their local presence is
+    // already populated by inbound device sessions, and the hub
+    // itself is the directory-of-record. Device-only.
+    if matches!(config.mode(), DaemonMode::Device) {
+        if let Some(uri) = daemon_uri.as_ref() {
+            let (noop_tx, _noop_rx) = tokio::sync::mpsc::channel(1);
+            let prior = presence.insert(uri.clone(), noop_tx);
+            if prior.is_none() {
+                eprintln!(
+                    "[axon-serve] device-mode self-presence seeded for `{uri}` \
+                     (so backend's federation.resolve answers ONLINE for own host)"
+                );
+            }
+        }
+    }
+
     // Federated_peers cell first so we can hand it to BOTH the
     // DaemonInvocationService (for cross-hub `forward_invoke`
     // routing) and the AdmissionFacade (for `FederatedKeyResolver`
@@ -831,15 +868,35 @@ fn device_id_from_caller_uri(uri: &str) -> Option<String> {
     }
 }
 
-/// Resolve the realm-trust file path from the env override or fall
-/// back to `/etc/easynet/realm-trust.toml`. The override is the one
-/// seam the PR-7 commit 7/N e2e test uses to redirect the daemon's
-/// trust write to a tempdir; production callers leave it unset.
+/// Resolve the realm-trust file path. Resolution order:
+///
+/// 1. `EASYNET_REALM_TRUST_PATH` env override (PR-7 commit 7/N
+///    test-redirect seam, also used by docker-e2e fixtures).
+/// 2. `/etc/easynet/realm-trust.toml` — production / packaged
+///    deploys where the file is admin-owned. When this file
+///    exists AND is non-empty we always prefer it.
+/// 3. `$HOME/.easynet/realm-trust.toml` — fallback for host-mode
+///    dev / unprivileged installs. `easynet device join` writes
+///    the device + local-hub trust entries here at pairing time
+///    (see `auto_wire_self_realm_trust_from_credentials`); the
+///    daemon picks them up here without needing `sudo` to write
+///    `/etc/easynet/`.
+///
+/// The home-mode fallback closes the operator-visible "I joined,
+/// the daemon's trust file is empty, admission rejects everything"
+/// failure mode that single-user host-mode installs hit when
+/// neither root nor an env override is in play.
 fn trust_anchor_path_from_env_or_default() -> PathBuf {
     if let Some(override_path) = std::env::var_os("EASYNET_REALM_TRUST_PATH") {
         return expand_home(override_path.to_string_lossy().as_ref());
     }
-    expand_home(DEFAULT_REALM_TRUST_PATH)
+    let etc = expand_home(DEFAULT_REALM_TRUST_PATH);
+    if let Ok(meta) = std::fs::metadata(&etc) {
+        if meta.is_file() && meta.len() > 0 {
+            return etc;
+        }
+    }
+    expand_home("~/.easynet/realm-trust.toml")
 }
 
 fn load_trust_anchor_from(path: &Path) -> RealmTrustAnchor {

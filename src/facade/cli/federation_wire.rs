@@ -370,7 +370,27 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
 
-    let updated =
+    // Two entries: the device's own URI (role=device) AND the
+    // local realm's hub URI (role=hub). The hub entry is what
+    // admits backend's federation.* calls into the daemon's
+    // admission gate; without it, every backend → daemon dispatch
+    // 401s with "caller URI ... is not in the realm trust anchor"
+    // and the device pins as REMOVED forever.
+    //
+    // The hub pubkey: backend's `LoadOrInitHubIdentity(realm)`
+    // mints a fresh random seed at its first boot and stores it
+    // in `~/.easynet-hub/<realm>/identity.json`. We read that file
+    // to get the actual pubkey backend signs with — falling back
+    // to `None` (skip the hub entry) when backend hasn't started
+    // yet. In production: backend boots first, then the operator
+    // joins; the file exists. In a fresh test rig where join runs
+    // before backend ever booted, we skip the hub entry and emit
+    // an INFO log; the operator just re-runs `easynet device join`
+    // (or restarts the daemon) after backend's first boot.
+    let hub_uri = crate::uri::hub_uri(creds.tenant_id.trim());
+    let hub_pubkey_b64_opt = read_backend_hub_pubkey_b64(creds.tenant_id.trim());
+
+    let after_device =
         match upsert_self_trusted_agent(&raw, &agent_uri, &public_key_b64, added_at_unix_ms) {
             Ok(s) => s,
             Err(err) => {
@@ -383,9 +403,40 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
                 return Ok(());
             }
         };
+    let updated = match hub_pubkey_b64_opt {
+        Some(hub_pubkey_b64) => match upsert_trusted_agent_inner(
+            &after_device,
+            &hub_uri,
+            &hub_pubkey_b64,
+            "hub",
+            added_at_unix_ms,
+        ) {
+            Ok(s) => s,
+            Err(err) => {
+                eprintln!(
+                    "[easynet join] could not append hub entry to realm-trust.toml ({err}); \
+                     backend's federation.* calls will be admission-rejected until you \
+                     add `[[trusted_agent]] role = \"hub\"` for {hub_uri} by hand."
+                );
+                after_device
+            }
+        },
+        None => {
+            eprintln!(
+                "[easynet join] backend hub identity not yet on disk for realm \
+                 {tenant} (no `~/.easynet-hub/{tenant}/identity.json` found); \
+                 skipping hub trust-anchor entry. Re-run `easynet device join` \
+                 after backend's first boot, or restart the daemon — backend \
+                 will populate the trust set via `<self>.register_device_pubkey` \
+                 once it can dial the daemon.",
+                tenant = creds.tenant_id.trim(),
+            );
+            after_device
+        }
+    };
 
     if updated == raw {
-        // Idempotent: the entry already matches.
+        // Idempotent: both entries already match.
         return Ok(());
     }
 
@@ -423,6 +474,46 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
 /// the join-time fallback: it requires root and operators on
 /// production deploys go through the backend's
 /// `<self>.register_device_pubkey` writer, not this helper.
+/// Read backend's hub identity file at `~/.easynet-hub/<realm>/identity.json`
+/// and project its private-key seed → ed25519 pubkey base64. Returns
+/// `None` when the file is absent, malformed, or the seed is the
+/// wrong length — every callsite treats `None` as "skip the hub
+/// trust entry; backend hasn't booted yet" rather than failing the
+/// join.
+///
+/// The file shape mirrors backend's `runtime/subject_context.go::
+/// backendIdentityRecord`:
+///   {
+///     "private_key_seed_hex": "<64-hex>",
+///     "agent_uri": "easynet:///r/<realm>/hub",
+///     "created_at_unix_ms": <int>
+///   }
+fn read_backend_hub_pubkey_b64(realm: &str) -> Option<String> {
+    use base64::Engine as _;
+    use ed25519_dalek::SigningKey;
+
+    let home = std::env::var_os("HOME")?;
+    let path = std::path::Path::new(&home)
+        .join(".easynet-hub")
+        .join(realm)
+        .join("identity.json");
+    let raw = std::fs::read_to_string(&path).ok()?;
+
+    #[derive(serde::Deserialize)]
+    struct BackendIdentityRecord {
+        private_key_seed_hex: String,
+    }
+    let parsed: BackendIdentityRecord = serde_json::from_str(&raw).ok()?;
+    let seed_bytes = hex::decode(parsed.private_key_seed_hex.trim()).ok()?;
+    if seed_bytes.len() != 32 {
+        return None;
+    }
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&seed_bytes);
+    let signing = SigningKey::from_bytes(&seed);
+    Some(base64::engine::general_purpose::STANDARD.encode(signing.verifying_key().to_bytes()))
+}
+
 fn realm_trust_path_for_join() -> PathBuf {
     if let Some(override_path) = std::env::var_os("EASYNET_REALM_TRUST_PATH") {
         return PathBuf::from(override_path);
@@ -444,6 +535,19 @@ fn upsert_self_trusted_agent(
     raw: &str,
     agent_uri: &str,
     public_key_b64: &str,
+    added_at_unix_ms: u64,
+) -> anyhow::Result<String> {
+    upsert_trusted_agent_inner(raw, agent_uri, public_key_b64, "device", added_at_unix_ms)
+}
+
+/// Generic [[trusted_agent]] upsert. `role` ∈ {"device", "hub", "agent"}.
+/// Idempotent on (agent_uri); skips entirely when a row with the
+/// same URI is already present (preserves operator-edited fields).
+fn upsert_trusted_agent_inner(
+    raw: &str,
+    agent_uri: &str,
+    public_key_b64: &str,
+    role: &str,
     added_at_unix_ms: u64,
 ) -> anyhow::Result<String> {
     use toml_edit::{value, ArrayOfTables, DocumentMut, Item, Table};
@@ -488,12 +592,14 @@ fn upsert_self_trusted_agent(
     let mut row = Table::new();
     row.insert("agent_uri", value(agent_uri));
     row.insert("public_key_b64", value(public_key_b64));
-    row.insert("role", value("device"));
+    row.insert("role", value(role));
     row.insert("added_at_unix_ms", value(added_at_unix_ms as i64));
     // `origin_tenant_id`, `hub_uri`, `tls_ca_pem_path` are
-    // Hub-role-only fields; leave them off the device entry so
-    // the TOML matches what a fresh `<self>.register_device_pubkey`
-    // call would write.
+    // Hub-role-only fields specific to peer-hub trust entries
+    // (cross-realm TLS dial); they're omitted here since the
+    // local hub trust entry is dialed via the local UDS and
+    // peer-hub entries are written by docker-e2e-cross-hub.sh
+    // or operator hand.
     agents.push(row);
 
     Ok(doc.to_string())
@@ -943,31 +1049,57 @@ added_at_unix_ms = 1
     #[test]
     fn auto_wire_self_realm_trust_writes_entry_under_env_override() {
         // Drive the helper end-to-end by pointing
-        // EASYNET_REALM_TRUST_PATH at a tempdir-rooted path. Asserts
-        // the file contains a Device-role entry for the joining
-        // device and that the pubkey is the deterministic
-        // derivation from (tenant_id, node_id).
+        // EASYNET_REALM_TRUST_PATH at a tempdir-rooted path AND
+        // staging a backend identity.json under the same tempdir's
+        // ~/.easynet-hub/<realm>/ subtree so the helper finds the
+        // hub pubkey. Asserts the file contains BOTH:
+        //   - device entry (deterministic pubkey derivation)
+        //   - hub entry (pubkey derived from staged seed)
         let tmp = tempfile::tempdir().expect("tempdir");
         let trust_path = tmp.path().join("realm-trust.toml");
-        // Deterministic env-override scope: capture pre-existing
-        // value so concurrent tests don't see our write.
+
+        // Stage a backend identity at <HOME>/.easynet-hub/tenant-a/identity.json
+        // with a known seed so we can reverse-derive the pubkey for
+        // assertion. Using a deterministic 32-byte seed keeps the
+        // assertion stable.
+        let staged_seed: [u8; 32] = [42; 32];
+        let staged_seed_hex = staged_seed
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
+        let identity_dir = tmp.path().join(".easynet-hub").join("tenant-a");
+        std::fs::create_dir_all(&identity_dir).expect("create identity dir");
+        std::fs::write(
+            identity_dir.join("identity.json"),
+            format!(
+                r#"{{"private_key_seed_hex":"{staged_seed_hex}","agent_uri":"easynet:///r/tenant-a/hub","created_at_unix_ms":1}}"#,
+            ),
+        )
+        .expect("write identity.json");
+
+        // Override HOME so read_backend_hub_pubkey_b64 finds the
+        // staged identity.json — same tempdir as the trust file.
         let prev = std::env::var_os("EASYNET_REALM_TRUST_PATH");
-        // SAFETY: tests are single-threaded for env mutations
-        // through the lock convention in this module's other
-        // tests; we hold no lock here but the override path is
-        // process-wide unique (tempdir) so concurrent tests
-        // can't collide on the file. Restore on exit via Drop.
+        let prev_home = std::env::var_os("HOME");
         std::env::set_var("EASYNET_REALM_TRUST_PATH", &trust_path);
-        struct EnvGuard(Option<std::ffi::OsString>);
+        std::env::set_var("HOME", tmp.path());
+        struct EnvGuard(
+            Option<std::ffi::OsString>,
+            Option<std::ffi::OsString>,
+        );
         impl Drop for EnvGuard {
             fn drop(&mut self) {
                 match self.0.take() {
                     Some(v) => std::env::set_var("EASYNET_REALM_TRUST_PATH", v),
                     None => std::env::remove_var("EASYNET_REALM_TRUST_PATH"),
                 }
+                match self.1.take() {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
             }
         }
-        let _guard = EnvGuard(prev);
+        let _guard = EnvGuard(prev, prev_home);
 
         let creds = Credentials {
             node_id: "dev-1".into(),
@@ -986,20 +1118,56 @@ added_at_unix_ms = 1
             .get("trusted_agent")
             .and_then(|v| v.as_array())
             .expect("trusted_agent array");
-        assert_eq!(arr.len(), 1, "exactly one entry written");
-        let row = arr[0].as_table().expect("row is a table");
         assert_eq!(
-            row.get("agent_uri").and_then(|v| v.as_str()),
+            arr.len(),
+            2,
+            "auto-wire writes both the device entry AND the local hub entry: device+hub = 2"
+        );
+
+        // Find each entry by role — order is "device first, then hub"
+        // per the upsert call sequence, but we lookup by role to
+        // stay decoupled from append order.
+        let device_row = arr
+            .iter()
+            .find(|v| v.get("role").and_then(|r| r.as_str()) == Some("device"))
+            .and_then(|v| v.as_table())
+            .expect("device entry present");
+        assert_eq!(
+            device_row.get("agent_uri").and_then(|v| v.as_str()),
             Some("easynet:///r/tenant-a/device/dev-1"),
         );
-        assert_eq!(row.get("role").and_then(|v| v.as_str()), Some("device"));
-
-        let expected_pk = crate::runtime::publish::derive_owner_public_key_b64("tenant-a", "dev-1");
+        let expected_dev_pk =
+            crate::runtime::publish::derive_owner_public_key_b64("tenant-a", "dev-1");
         assert_eq!(
-            row.get("public_key_b64").and_then(|v| v.as_str()),
-            Some(expected_pk.as_str()),
-            "pubkey must be the deterministic derivation (matches what \
+            device_row.get("public_key_b64").and_then(|v| v.as_str()),
+            Some(expected_dev_pk.as_str()),
+            "device pubkey must be the deterministic derivation (matches what \
              <self>.register_device_pubkey would write)"
+        );
+
+        let hub_row = arr
+            .iter()
+            .find(|v| v.get("role").and_then(|r| r.as_str()) == Some("hub"))
+            .and_then(|v| v.as_table())
+            .expect("hub entry present");
+        assert_eq!(
+            hub_row.get("agent_uri").and_then(|v| v.as_str()),
+            Some("easynet:///r/tenant-a/hub"),
+            "hub URI is the realm-singleton shape; admits backend's federation.* dispatches",
+        );
+
+        // The hub pubkey we wrote came from the staged seed
+        // (read_backend_hub_pubkey_b64 hex-decoded private_key_seed_hex
+        // and projected through ed25519_dalek). Reverse-derive here.
+        use base64::Engine as _;
+        use ed25519_dalek::SigningKey;
+        let signing = SigningKey::from_bytes(&staged_seed);
+        let expected_hub_pk = base64::engine::general_purpose::STANDARD
+            .encode(signing.verifying_key().to_bytes());
+        assert_eq!(
+            hub_row.get("public_key_b64").and_then(|v| v.as_str()),
+            Some(expected_hub_pk.as_str()),
+            "hub pubkey must be the ed25519 projection of the staged identity.json's seed",
         );
 
         // Re-running is idempotent: file size unchanged.
