@@ -223,17 +223,32 @@ pub fn auto_wire_federated_peer_from_credentials(
         }
     };
 
-    // Also align `[daemon].hub_endpoint` to the freshly-paired hub.
+    // Align `[daemon].hub_endpoint` to the freshly-paired hub.
     // A previous `device join` against a different hub (or a Docker
     // e2e session that pointed the daemon at a localhost listener)
     // leaves a stale value here that survives subsequent joins
     // — the device then dials the OLD hub and surfaces as
     // "PermissionDenied: caller URI is not in the realm trust
     // anchor" or as "transport error" against an unreachable host.
-    // Same `peer_hub` URL the federated_peers entry just received,
-    // since the device-mode dial target IS the same hub for
-    // single-tenant deploys. Idempotent on a no-op.
-    let updated = match upsert_daemon_hub_endpoint_in_toml(&with_peer, peer_hub) {
+    //
+    // CRITICAL: this MUST be `creds.hub_endpoint` (the device-to-
+    // hub dial target the backend handed us at pairing time), NOT
+    // `peer_hub` (the hub-to-hub TLS guess on port 50443). The
+    // two are different protocols on different ports:
+    //
+    //   * `[daemon].hub_endpoint`        ← creds.hub_endpoint
+    //     = device dials hub for `<self>.session` (gRPC plaintext
+    //       on :50051 in dev / TLS axon:// in prod)
+    //
+    //   * `[daemon.federated_peers].<t>` ← peer_hub
+    //     = THIS hub dials peer hubs for `forward_invoke`
+    //       (always TLS on :50443)
+    //
+    // Conflating them broke single-host host-mode v4.1.5: the
+    // 50443 guess overrode the working :50051 dial target, the
+    // daemon's `<self>.session` bidi never connected, and the
+    // device never showed ONLINE. Idempotent on a no-op.
+    let updated = match upsert_daemon_hub_endpoint_in_toml(&with_peer, &creds.hub_endpoint) {
         Ok(s) => s,
         Err(err) => {
             eprintln!(
@@ -743,6 +758,64 @@ listen_tcp = "127.0.0.1:50443"
         assert!(updated.contains("# realm picks"));
         assert!(updated.contains("listen_tcp = \"127.0.0.1:50443\""));
         assert!(updated.contains("tenant-x = \"https://x:50443\""));
+    }
+
+    #[test]
+    fn auto_wire_writes_creds_hub_endpoint_not_peer_hub_guess() {
+        // Regression pin for the v4.1.5 host-mode ONLINE bug:
+        // join used to overwrite [daemon].hub_endpoint with
+        // peer_hub (the :50443 TLS guess), which broke the
+        // device-mode dial target. The fix is to write
+        // creds.hub_endpoint into [daemon].hub_endpoint and
+        // reserve peer_hub for [daemon.federated_peers] only.
+        //
+        // Two-protocol invariant:
+        //   * [daemon].hub_endpoint        ← creds.hub_endpoint  (gRPC plaintext / axon://, :50051 in dev)
+        //   * [daemon.federated_peers].T   ← peer_hub            (TLS, :50443)
+        //
+        // This test creates a daemon-config under HOME, runs the
+        // auto-wire, and asserts that [daemon].hub_endpoint is the
+        // creds value, NOT the 50443 guess.
+        use std::io::Write;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("HOME", tmp.path());
+
+        let cfg_path = tmp.path().join(".easynet").join("daemon-config.toml");
+        std::fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
+        let mut f = std::fs::File::create(&cfg_path).unwrap();
+        writeln!(
+            f,
+            "[daemon]\nmode = \"device\"\nrealm = \"localhost\"\nhub_endpoint = \"http://stale-host:50051\"\nuds_path = \"/tmp/x.sock\"\n"
+        )
+        .unwrap();
+        drop(f);
+
+        let creds = Credentials {
+            node_id: "n1".into(),
+            credential_token: "tok".into(),
+            hub_endpoint: "http://127.0.0.1:50051".into(),
+            tenant_id: "localhost".into(),
+            deploy_signature: "sig".into(),
+            hub_api_base: None,
+            username: None,
+        };
+        auto_wire_federated_peer_from_credentials(&creds, None).expect("auto-wire");
+
+        let updated = std::fs::read_to_string(&cfg_path).unwrap();
+        assert!(
+            updated.contains("hub_endpoint = \"http://127.0.0.1:50051\""),
+            "[daemon].hub_endpoint must equal creds.hub_endpoint; got:\n{updated}"
+        );
+        assert!(
+            !updated.contains("hub_endpoint = \"https://127.0.0.1:50443\""),
+            "[daemon].hub_endpoint regressed to the 50443 TLS guess; got:\n{updated}"
+        );
+        // Federated_peers entry SHOULD be the 50443 guess (cross-
+        // hub dial target is TLS).
+        assert!(
+            updated.contains(":50443") && updated.contains("[daemon.federated_peers]"),
+            "[daemon.federated_peers] missing or wrong; got:\n{updated}"
+        );
     }
 
     #[test]
