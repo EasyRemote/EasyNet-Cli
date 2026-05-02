@@ -149,6 +149,27 @@ pub const ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2: &str = "federation.subscrib
 /// realm at its end).
 pub const ABILITY_FEDERATION_LIST_USER_DEVICES: &str = "federation.list_user_devices";
 
+/// `federation.advertise_abilities` — backend self-registration
+/// path. Backend on boot publishes its own ability descriptors
+/// (`aggregate.list_skills_across_fleet` etc.) so they show up in
+/// `federation.resolve(prefix=hub)`. PR-1 staging accepts the call
+/// as a no-op success — the directory is presence-driven via
+/// `<self>.session` membership, so the descriptors don't need
+/// separate persistence. Without the handler the backend's boot
+/// path errors `Unimplemented` and the realm directory is silently
+/// missing every backend-owned ability.
+pub const ABILITY_FEDERATION_ADVERTISE_ABILITIES: &str = "federation.advertise_abilities";
+
+/// `runtime.bootstrap_self_identity` — runtime-self handshake the
+/// backend issues at boot to register its hub-as-agent verifying
+/// key with the hub's KeyResolver. PR-1 staging accepts the call
+/// as a typed ack: the daemon's admission gate already trusts the
+/// caller via the trust anchor file, so the runtime does not need
+/// to re-derive keys. Without this handler the backend panics on
+/// `axon.BootstrapSelfIdentity` at boot and `federation.resolve`
+/// fans out against an empty key cache.
+pub const ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY: &str = "runtime.bootstrap_self_identity";
+
 /// All ten federation.* ability names in deterministic order.
 /// Iteration order is the order PR-4's schema-compat matrix files
 /// land on disk, so changing this slice without updating PR-4
@@ -165,6 +186,7 @@ pub const FEDERATION_ABILITIES: &[&str] = &[
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
     ABILITY_FEDERATION_REVOKE,
     ABILITY_FEDERATION_FORWARD_INVOKE,
+    ABILITY_FEDERATION_ADVERTISE_ABILITIES,
 ];
 
 // ─── federation.join ───────────────────────────────────────────────
@@ -262,6 +284,80 @@ pub fn handle_advertise_agent(_request: &AdvertiseAgentRequest) -> AdvertiseAgen
         ack: true,
         replaced_prior: false,
     }
+}
+
+// ─── federation.advertise_abilities ────────────────────────────────
+
+/// Request payload for `federation.advertise_abilities`. Used by the
+/// backend at boot to publish its own ability catalog (and by every
+/// hosted-agent advertise sweep). The wrapper accepts the request
+/// shape verbatim — the daemon does not persist the abilities; they
+/// surface naturally via `<self>.session` membership during
+/// `federation.resolve(prefix)` fan-outs.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AdvertiseAbilitiesRequest {
+    /// Caller-claimed agent URI publishing the abilities. Captured
+    /// for log context only; admission verifies caller equality
+    /// against the envelope before this wrapper runs.
+    pub agent_uri: String,
+    /// Catalog of ability descriptors. We accept any shape so a
+    /// future descriptor evolution does not require a daemon recompile;
+    /// only the count is reported back.
+    #[serde(default)]
+    pub abilities: Vec<serde_json::Value>,
+}
+
+/// Response payload for `federation.advertise_abilities`. Matches
+/// the wire shape the backend's `aggregator.advertise_abilities`
+/// expects (`ack` + `count`). PR-1 staging always returns
+/// `ack = true`; future PRs may surface partial-failure counts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdvertiseAbilitiesResponse {
+    pub ack: bool,
+    pub count: usize,
+}
+
+#[must_use]
+pub fn handle_advertise_abilities(
+    request: &AdvertiseAbilitiesRequest,
+) -> AdvertiseAbilitiesResponse {
+    AdvertiseAbilitiesResponse {
+        ack: true,
+        count: request.abilities.len(),
+    }
+}
+
+// ─── runtime.bootstrap_self_identity ───────────────────────────────
+
+/// Request payload for `runtime.bootstrap_self_identity`. The backend
+/// emits this once at boot so the daemon's KeyResolver can pin the
+/// hub's verifying key without waiting for a pairing flow. The shape
+/// is intentionally permissive: any of `agent_uri`, `node_id`,
+/// `tenant_id`, `public_key_b64` may be absent. Daemon-side trust
+/// is anchored in `realm-trust.toml`, so the wrapper's job is to
+/// acknowledge the call and let the boot path proceed.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct BootstrapSelfIdentityRequest {
+    #[serde(default)]
+    pub agent_uri: String,
+    #[serde(default)]
+    pub node_id: String,
+    #[serde(default)]
+    pub tenant_id: String,
+    #[serde(default)]
+    pub public_key_b64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BootstrapSelfIdentityResponse {
+    pub ack: bool,
+}
+
+#[must_use]
+pub fn handle_bootstrap_self_identity(
+    _request: &BootstrapSelfIdentityRequest,
+) -> BootstrapSelfIdentityResponse {
+    BootstrapSelfIdentityResponse { ack: true }
 }
 
 // ─── federation.heartbeat ──────────────────────────────────────────
@@ -840,7 +936,18 @@ mod tests {
             ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
             "federation.subscribe_directory_v2"
         );
-        assert_eq!(FEDERATION_ABILITIES.len(), 11);
+        assert_eq!(
+            ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+            "federation.advertise_abilities"
+        );
+        assert_eq!(
+            ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
+            "runtime.bootstrap_self_identity"
+        );
+        // 12 federation.* abilities now wired (added advertise_abilities
+        // for backend self-publish; bootstrap_self_identity is namespaced
+        // under `runtime.*` so it lives outside this set).
+        assert_eq!(FEDERATION_ABILITIES.len(), 12);
     }
 
     #[test]

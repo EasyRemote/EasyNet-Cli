@@ -67,34 +67,45 @@ use crate::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest, SubjectIdentit
 /// since the same tilde-expanded path is the wire contract.
 const DEFAULT_DAEMON_GRPC_UDS_PATH: &str = "~/.easynet/daemon.sock";
 
-/// Validate a `--node` argument as a canonical EasyNet agent URI.
+/// Validate a `--node` argument as a canonical EasyNet device URI.
 /// Returns the URI string when it parses; surfaces a typed error
 /// when it doesn't, with the exact wire-shape we expect quoted in
 /// the message so the operator can fix the typo.
+///
+/// URI v4.1.4 (Phase 2F): `--node` carries a `device` URA, not an
+/// `agent` URA. Devices are physical hosts (the box running the
+/// daemon); agents are user-owned hosted profiles that live ON
+/// devices. The legacy `/agent/<node>` shape collapsed both into
+/// one segment; v4.1.4 splits them. We accept both forms during
+/// the migration window so operators with stale credentials.json
+/// files keep working — the daemon's strict parser will reject the
+/// old shape post-Phase-4 anyway.
 pub fn parse_node_uri(node: &str) -> anyhow::Result<String> {
     let trimmed = node.trim();
     if !trimmed.starts_with("easynet:///r/") {
         bail!(
-            "--node `{trimmed}` is not a canonical EasyNet agent URI. \
-             Expected shape: easynet:///r/<tenant>/agent/<node>. \
+            "--node `{trimmed}` is not a canonical EasyNet device URI. \
+             Expected shape: easynet:///r/<realm>/device/<node-uuid>. \
              A bare hostname or `https://...` URL is not accepted. \
              {URI_DISCOVERY_HINT}"
         );
     }
-    // Past the `r/` prefix, require at least `<tenant>/agent/<node>`
-    // so the daemon's `parse_tenant_from_uri` (PR-N1 commit 3a/N)
-    // has a non-empty tenant component to extract.
+    // Past the `r/` prefix, require at least `<realm>/<role>/<node>`
+    // so the daemon's parsers have non-empty tenant + node
+    // components to extract. Accept either `device` (v4.1.4
+    // canonical) or `agent` (v1 collapse during migration window).
     let after = trimmed
         .strip_prefix("easynet:///r/")
         .expect("prefix checked above");
     let mut parts = after.splitn(3, '/');
-    let tenant = parts.next().unwrap_or("");
-    let agent_keyword = parts.next().unwrap_or("");
+    let realm = parts.next().unwrap_or("");
+    let role = parts.next().unwrap_or("");
     let node_id = parts.next().unwrap_or("");
-    if tenant.is_empty() || agent_keyword != "agent" || node_id.is_empty() {
+    let role_ok = matches!(role, "device" | "agent");
+    if realm.is_empty() || !role_ok || node_id.is_empty() {
         bail!(
-            "--node `{trimmed}` does not parse as easynet:///r/<tenant>/agent/<node>. \
-             Got tenant={tenant:?}, segment={agent_keyword:?}, node={node_id:?}. \
+            "--node `{trimmed}` does not parse as easynet:///r/<realm>/device/<node-uuid>. \
+             Got realm={realm:?}, segment={role:?}, node={node_id:?}. \
              {URI_DISCOVERY_HINT}"
         );
     }
@@ -441,8 +452,8 @@ mod tests {
     fn parse_node_uri_rejects_https_url() {
         let err = parse_node_uri("https://hub.example/r/foo").expect_err("https rejected");
         assert!(
-            format!("{err}").contains("not a canonical EasyNet agent URI"),
-            "error message must cite the canonical-URI requirement"
+            format!("{err}").contains("not a canonical EasyNet device URI"),
+            "error message must cite the canonical-URI requirement, got: {err}"
         );
     }
 
@@ -470,11 +481,12 @@ mod tests {
 
     #[test]
     fn parse_node_uri_rejects_wrong_keyword() {
-        // The path component after the tenant MUST be `agent`. A
-        // typo like `device` is rejected so the operator notices
-        // before the URI hits the daemon.
+        // URI v4.1.4: the role segment after the realm MUST be
+        // either `device` (canonical) or `agent` (v1 compat
+        // window). A typo / unknown role is rejected so the
+        // operator notices before the URI hits the daemon.
         let err =
-            parse_node_uri("easynet:///r/realm-b/device/n1").expect_err("wrong keyword rejected");
+            parse_node_uri("easynet:///r/realm-b/notarole/n1").expect_err("wrong keyword rejected");
         assert!(format!("{err}").contains("does not parse"));
     }
 
@@ -508,7 +520,11 @@ mod tests {
             "scheme-arm error must cite easynet.discover ability; got: {msg_scheme}"
         );
 
-        let err_struct = parse_node_uri("easynet:///r/realm-b/device/n1").expect_err("rejected");
+        // Structural-failure: empty realm tail. The role segment
+        // accepts both `device` (v4.1.4 canonical) and `agent` (v1
+        // compat), so use a clearly malformed input — empty realm
+        // — to exercise the structural-arm error path.
+        let err_struct = parse_node_uri("easynet:///r//device/n1").expect_err("rejected");
         let msg_struct = format!("{err_struct}");
         assert!(
             msg_struct.contains("credentials.json") && msg_struct.contains("daemon-config.toml"),
