@@ -213,7 +213,22 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
         })?
         // No timeout on the bidi itself — the stream is intended
         // to live forever. Connect timeout caps the dial step.
-        .connect_timeout(Duration::from_secs(10));
+        .connect_timeout(Duration::from_secs(10))
+        // Production-WAN h2 hardening: HTTP/2 keep-alive PINGs every
+        // 5s with 10s timeout. Without this, intermediate NAT /
+        // hosting LB / corporate firewall can silently close idle
+        // long-lived bidi streams, surfacing as "h2 protocol error:
+        // error reading a body from connection" on the server side
+        // and "target_offline" / dropped Dispatch frames at the
+        // application layer. 5s is conservative-aggressive: stays
+        // well under any NAT idle window (~60s typical) and surfaces
+        // dead streams in ~15s rather than minutes. Cost is ~24
+        // bytes/ping × 12/min ≈ negligible. tcp_keepalive is OS-
+        // level and complements the h2 PING.
+        .http2_keep_alive_interval(Duration::from_secs(5))
+        .keep_alive_timeout(Duration::from_secs(10))
+        .keep_alive_while_idle(true)
+        .tcp_keepalive(Some(Duration::from_secs(15)));
 
     if let Some(ca_path) = hub_ca_pem_path {
         // Shared with `federation_client::cross_hub_dial::resolve_

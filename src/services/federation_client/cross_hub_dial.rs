@@ -604,7 +604,18 @@ impl CrossHubDialer {
             .map_err(|err| FederationClientError::DialFailed {
                 hub: target_hub.clone(),
                 detail: format!("apply tls_config: {err}"),
-            })?;
+            })?
+            // Production-WAN h2 hardening on the peer-hub bidi.
+            // Mirrors `axon_serve::session_initiator::dial_and_run_
+            // session` on the device→hub leg: cross-hub federation
+            // streams traverse the same NAT/LB intermediaries and
+            // share the same idle-drop failure mode. 5s ping cadence,
+            // 10s timeout, 15s tcp_keepalive — see session_initiator
+            // for cost rationale.
+            .http2_keep_alive_interval(Duration::from_secs(5))
+            .keep_alive_timeout(Duration::from_secs(10))
+            .keep_alive_while_idle(true)
+            .tcp_keepalive(Some(Duration::from_secs(15)));
 
         // `connect_lazy` defers the real TCP+TLS handshake until
         // the first RPC. Two reasons we prefer it here:

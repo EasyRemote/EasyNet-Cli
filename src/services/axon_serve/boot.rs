@@ -74,6 +74,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::{Identity, Server, ServerTlsConfig};
@@ -514,6 +515,13 @@ fn spawn_uds_listener(
     let incoming = UnixListenerStream::new(listener);
     tokio::spawn(async move {
         let result = Server::builder()
+            // UDS is loopback-only; keepalive is purely defensive
+            // for symmetry with the TCP+TLS listener below. Same
+            // 5s ping cadence as the TCP+TLS server so behaviour
+            // is uniform across listener types.
+            .http2_keepalive_interval(Some(Duration::from_secs(5)))
+            .http2_keepalive_timeout(Some(Duration::from_secs(10)))
+            .tcp_keepalive(Some(Duration::from_secs(15)))
             .add_service(InvocationServer::new(service))
             .serve_with_incoming(incoming)
             .await;
@@ -572,8 +580,21 @@ fn spawn_tcp_tls_listener(
         key_path.display()
     );
 
+    // Production-WAN h2 hardening on the public TCP+TLS listener:
+    // long-lived `<self>.session` bidi streams from devices behind
+    // home/corporate NATs / hosting LBs need explicit keep-alive
+    // PINGs or intermediaries silently drop the connection,
+    // surfacing as "h2 protocol error: error reading a body" on
+    // the device side and "session ended (StreamReset)" here.
+    // 5s ping cadence: stays well under any NAT idle window
+    // (~60s typical), surfaces dead streams in ~15s rather than
+    // minutes, ~24 bytes/ping × 12/min ≈ negligible cost. Mirror
+    // the device-client side at session_initiator.rs.
     let mut builder = match Server::builder().tls_config(tls_config) {
-        Ok(b) => b,
+        Ok(b) => b
+            .http2_keepalive_interval(Some(Duration::from_secs(5)))
+            .http2_keepalive_timeout(Some(Duration::from_secs(10)))
+            .tcp_keepalive(Some(Duration::from_secs(15))),
         Err(err) => {
             return Err(anyhow::anyhow!(
                 "axon-serve: tls_config rejected by tonic: {err}"
