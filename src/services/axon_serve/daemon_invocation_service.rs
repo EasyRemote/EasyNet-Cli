@@ -1000,7 +1000,17 @@ impl DaemonInvocationService {
             return self.escalate_forward_invoke(handle, arguments).await;
         }
 
-        let request: federation_wrappers::ForwardInvokeRequest = parse_json_args(arguments)?;
+        let mut request: federation_wrappers::ForwardInvokeRequest = parse_json_args(arguments)?;
+
+        // Postel-boundary: peer hubs from pre-v4.1.4 builds may
+        // ship a `/agent/<bare-uuid>` target URI (the v1/v2
+        // device-as-agent shape). Coerce to the canonical
+        // `/device/<uuid>` form once here so every downstream
+        // use — local-presence lookup, peer-dial envelope, audit
+        // log line — sees the same canonical key. Real
+        // `/agent/<user>.<agent>` URIs and all v4.1.4-canonical
+        // shapes pass through unchanged.
+        request.target_uri = crate::uri::canonicalize_presence_key(&request.target_uri);
 
         let target_tenant = parse_tenant_from_uri(&request.target_uri);
         let local_tenant = self.session_realm.as_deref();
@@ -2091,6 +2101,13 @@ impl DaemonInvocationService {
             ability,
             args,
         } = request;
+
+        // Postel-boundary: peer hubs running pre-v4.1.4 builds may
+        // pass a `/agent/<bare-uuid>` device URI; coerce to the
+        // canonical `/device/<uuid>` shape before the registry
+        // lookup. New clients always emit canonical; this is
+        // strictly migration-window compat.
+        let subject_device = crate::uri::canonicalize_presence_key(&subject_device);
 
         let pending = self.pending.as_ref().ok_or_else(|| {
             Status::failed_precondition(
@@ -3340,7 +3357,14 @@ mod tests {
     /// Test helper daemon URI — admitted by the test admission
     /// facade via the loopback bypass. Tests that exercise
     /// admission rejection construct a different facade.
-    const TEST_DAEMON_URI: &str = "easynet:///r/test-realm/agent/test-daemon";
+    // URI v4.1.4: daemons are devices, not agents. The legacy
+    // `agent/<bare-id>` shape is rewritten to `device/<id>` by
+    // `canonicalize_presence_key` at the forward_invoke
+    // entry point — fixtures must use the canonical shape so
+    // self-target equality holds without going through the
+    // coercer (which would mask a real lookup-key mismatch
+    // bug if it appeared in production).
+    const TEST_DAEMON_URI: &str = "easynet:///r/test-realm/device/test-daemon";
 
     fn make_service() -> DaemonInvocationService {
         let admission = AdmissionFacade::new(
@@ -4850,7 +4874,7 @@ mod tests {
         let err = svc
             .dispatch_federation_forward_invoke(
                 None,
-                &forward_invoke_args("easynet:///r/test-realm/agent/some-other-device"),
+                &forward_invoke_args("easynet:///r/test-realm/device/some-other-device"),
             )
             .await
             .expect_err("non-self target ⇒ legacy presence-push path ⇒ target_offline");
@@ -4885,7 +4909,7 @@ mod tests {
         let err = svc
             .dispatch_federation_forward_invoke(
                 None,
-                &forward_invoke_args("easynet:///r/test-realm/agent/local-target"),
+                &forward_invoke_args("easynet:///r/test-realm/device/local-target"),
             )
             .await
             .expect_err("local fast-path miss surfaces target_offline");
@@ -4912,7 +4936,7 @@ mod tests {
         let err = svc
             .dispatch_federation_forward_invoke(
                 None,
-                &forward_invoke_args("easynet:///r/peer-realm/agent/peer-target"),
+                &forward_invoke_args("easynet:///r/peer-realm/device/peer-target"),
             )
             .await
             .expect_err("cross-tenant without client surfaces target_offline");
@@ -4947,7 +4971,7 @@ mod tests {
         let err = svc
             .dispatch_federation_forward_invoke(
                 None,
-                &forward_invoke_args("easynet:///r/unmapped-realm/agent/peer-target"),
+                &forward_invoke_args("easynet:///r/unmapped-realm/device/peer-target"),
             )
             .await
             .expect_err("unmapped tenant surfaces target_offline");
@@ -4990,7 +5014,7 @@ mod tests {
             .with_federation_client(recorder.clone() as Arc<dyn FederationClient>)
             .with_federated_peers(peers);
 
-        let target_uri = "easynet:///r/peer-realm/agent/peer-target";
+        let target_uri = "easynet:///r/peer-realm/device/peer-target";
         let args = forward_invoke_args(target_uri);
         let resp = svc
             .dispatch_federation_forward_invoke(None, &args)
@@ -5084,7 +5108,7 @@ mod tests {
         let store_before = svc.admission.receipt_store().len();
         assert_eq!(store_before, 0, "empty store at test start");
 
-        let target_uri = "easynet:///r/peer-realm/agent/peer-target";
+        let target_uri = "easynet:///r/peer-realm/device/peer-target";
         let _resp = svc
             .dispatch_federation_forward_invoke(None, &forward_invoke_args(target_uri))
             .await
@@ -5128,7 +5152,7 @@ mod tests {
         let _err = svc
             .dispatch_federation_forward_invoke(
                 None,
-                &forward_invoke_args("easynet:///r/peer-realm/agent/peer-target"),
+                &forward_invoke_args("easynet:///r/peer-realm/device/peer-target"),
             )
             .await
             .expect_err("target_offline");
@@ -5160,7 +5184,7 @@ mod tests {
         let _err = svc
             .dispatch_federation_forward_invoke(
                 None,
-                &forward_invoke_args("easynet:///r/test-realm/agent/local-target"),
+                &forward_invoke_args("easynet:///r/test-realm/device/local-target"),
             )
             .await
             .expect_err("local fast-path miss");
@@ -5199,7 +5223,7 @@ mod tests {
         const REALM_B: &str = "realm-b";
         const DAEMON_A_URI: &str = "easynet:///r/realm-a/agent/daemon-a";
         const DAEMON_B_URI: &str = "easynet:///r/realm-b/agent/daemon-b";
-        const TARGET_DEVICE_URI: &str = "easynet:///r/realm-b/agent/target-device";
+        const TARGET_DEVICE_URI: &str = "easynet:///r/realm-b/device/target-device";
         const PEER_HUB_URI: &str = "https://daemon-b.example:50443";
 
         // Daemon B's trust anchor: pre-populated with daemon A
@@ -5434,7 +5458,7 @@ mod tests {
         let outcome = svc
             .dispatch_session_request(
                 ABILITY_FEDERATION_FORWARD_INVOKE,
-                &forward_invoke_args("easynet:///r/test-realm/agent/missing-device"),
+                &forward_invoke_args("easynet:///r/test-realm/device/missing-device"),
             )
             .await;
         match outcome {
@@ -5497,7 +5521,7 @@ mod tests {
         let svc = make_service()
             .with_session_realm("test-realm")
             .with_pending(Arc::new(PendingDispatchMap::new()));
-        let target_uri = "easynet:///r/test-realm/agent/local-target";
+        let target_uri = "easynet:///r/test-realm/device/local-target";
 
         let (tx, mut rx) = tokio::sync::mpsc::channel::<
             Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
@@ -5632,7 +5656,7 @@ mod tests {
         let response = svc
             .dispatch_federation_forward_invoke(
                 None,
-                &forward_invoke_args("easynet:///r/peer-realm/agent/peer-target"),
+                &forward_invoke_args("easynet:///r/peer-realm/device/peer-target"),
             )
             .await
             .expect("escalation must surface canned bytes from the bidi hub");
@@ -5697,7 +5721,7 @@ mod tests {
         let err = svc
             .dispatch_federation_forward_invoke(
                 None,
-                &forward_invoke_args("easynet:///r/peer-realm/agent/peer-target"),
+                &forward_invoke_args("easynet:///r/peer-realm/device/peer-target"),
             )
             .await
             .expect_err("TargetOffline must surface as Status::failed_precondition");
@@ -5781,7 +5805,7 @@ mod tests {
         // log line actually fires through the dispatch arm.
         let presence = PresenceRegistry::new();
         emit_session_request_resolution_marker(
-            &forward_invoke_args("easynet:///r/test-realm/agent/local-target"),
+            &forward_invoke_args("easynet:///r/test-realm/device/local-target"),
             Some("test-realm"),
             &presence,
         );
@@ -5805,7 +5829,7 @@ mod tests {
         let outcome = svc
             .dispatch_session_request(
                 ABILITY_FEDERATION_FORWARD_INVOKE,
-                &forward_invoke_args("easynet:///r/realm-X/agent/missing-device"),
+                &forward_invoke_args("easynet:///r/realm-X/device/missing-device"),
             )
             .await;
         match outcome {
@@ -5828,7 +5852,7 @@ mod tests {
         let svc = make_service()
             .with_session_realm("easynet-platform")
             .with_pending(Arc::new(PendingDispatchMap::new()));
-        let target_uri = "easynet:///r/user-realm/agent/present-device";
+        let target_uri = "easynet:///r/user-realm/device/present-device";
 
         let (tx, mut rx) = tokio::sync::mpsc::channel::<
             Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
@@ -5898,7 +5922,7 @@ mod tests {
         let outcome = svc
             .dispatch_session_request(
                 ABILITY_FEDERATION_FORWARD_INVOKE,
-                &forward_invoke_args("easynet:///r/peer-realm/agent/peer-target"),
+                &forward_invoke_args("easynet:///r/peer-realm/device/peer-target"),
             )
             .await;
         match outcome {
@@ -5951,7 +5975,12 @@ mod tests {
         // before returning. The device's response bytes flow
         // through inline as `result_bytes`, not the legacy
         // empty-bytes "delivery accepted" shape.
-        let target_uri = "easynet:///r/test-realm/agent/dev-B";
+        // URI v4.1.4: device target lives under `device/<id>`, not
+        // `agent/<id>`. The forward_invoke entry point coerces
+        // legacy shapes via `canonicalize_presence_key`; fixtures
+        // must register presence under the canonical key so
+        // self-equality holds without going through the coercer.
+        let target_uri = "easynet:///r/test-realm/device/dev-B";
         let presence = std::sync::Arc::new(PresenceRegistry::new());
         let (target_tx, mut target_rx): (DispatchSender, _) = mpsc::channel(8);
         presence.insert(target_uri.to_string(), target_tx);

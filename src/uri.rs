@@ -428,6 +428,50 @@ pub fn display_id(uri: &str) -> String {
     }
 }
 
+/// Normalise a URI used as a `PresenceRegistry` lookup key.
+///
+/// PresenceRegistry keys on the caller-claimed URI exact-match
+/// (see `presence_registry.rs` §1 invariants). After URA v4.1.4
+/// the canonical device shape is `easynet:///r/<realm>/device/<uuid>`,
+/// but a peer hub running an older build (or a CLI bridge that
+/// hand-built a URI) may still emit the v1/v2 `agent/<bare-uuid>`
+/// shape — same node, different segment label. Without
+/// normalisation that lookup misses and the hub returns
+/// `target_offline` even though the device is registered live.
+///
+/// Rule: when [`parse_ura`] succeeds, the URI is already canonical
+/// — return it verbatim. When it fails AND the shape is exactly
+/// `easynet:///r/<realm>/agent/<token>` where `<token>` is a single
+/// segment with no `.` (i.e. NOT a real `<user>.<agent>` agent
+/// URA), rewrite the role segment to `device`. Otherwise return
+/// the input unchanged so a malformed URI surfaces a normal lookup
+/// miss rather than a silent rewrite.
+///
+/// This is the v4.1.5 Postel boundary: parsers are strict, but
+/// presence/forward-invoke lookup paths accept the one well-known
+/// pre-v4.1.4 shape so peer compatibility holds during the rolling
+/// upgrade window. New clients should always emit the canonical
+/// `device/<uuid>` form.
+pub fn canonicalize_presence_key(uri: &str) -> String {
+    if parse_ura(uri).is_ok() {
+        return uri.to_string();
+    }
+    let head = "easynet:///r/";
+    let Some(rest) = uri.strip_prefix(head) else {
+        return uri.to_string();
+    };
+    let Some((realm, after_realm)) = rest.split_once('/') else {
+        return uri.to_string();
+    };
+    let Some(token) = after_realm.strip_prefix("agent/") else {
+        return uri.to_string();
+    };
+    if token.is_empty() || token.contains('/') || token.contains('.') {
+        return uri.to_string();
+    }
+    format!("{head}{realm}/device/{token}")
+}
+
 /// Realm-agnostic v1-shape strip for `easynet:///r/<realm>/agent/<id>`
 /// shapes that pre-Phase-2A daemons still emit. Used as a fallback
 /// when [`parse_ura`] rejects a URI; returns the input unchanged on
@@ -655,5 +699,52 @@ mod tests {
         assert_eq!(display_id(v1), v1);
         // strip_v1_agent_prefix recovers the id.
         assert_eq!(strip_v1_agent_prefix(v1), "dev-A");
+    }
+
+    #[test]
+    fn canonicalize_presence_key_passes_canonical_device_through() {
+        let uuid = "4065c47a-ec6f-4330-87a5-0d69787709b8";
+        let canonical = format!("easynet:///r/easynet.run/device/{uuid}");
+        assert_eq!(canonicalize_presence_key(&canonical), canonical);
+    }
+
+    #[test]
+    fn canonicalize_presence_key_rewrites_legacy_agent_bare_id_to_device() {
+        // v1/v2 shape: device-as-agent, bare token, no dot.
+        // Peer hubs from older builds still emit this; lookup
+        // against the v4.1.4 device-shape PresenceRegistry would
+        // otherwise miss and return target_offline.
+        let uuid = "4065c47a-ec6f-4330-87a5-0d69787709b8";
+        let legacy = format!("easynet:///r/easynet.run/agent/{uuid}");
+        let canonical = format!("easynet:///r/easynet.run/device/{uuid}");
+        assert_eq!(canonicalize_presence_key(&legacy), canonical);
+    }
+
+    #[test]
+    fn canonicalize_presence_key_passes_canonical_agent_through() {
+        // Real agent URA — `<user>.<agent>` shape, two segments.
+        // Already canonical; do NOT rewrite to device.
+        let canonical = "easynet:///r/easynet.run/agent/alice.claude";
+        assert_eq!(canonicalize_presence_key(canonical), canonical);
+    }
+
+    #[test]
+    fn canonicalize_presence_key_passes_hub_through() {
+        let canonical = "easynet:///r/easynet.run/hub";
+        assert_eq!(canonicalize_presence_key(canonical), canonical);
+    }
+
+    #[test]
+    fn canonicalize_presence_key_returns_malformed_input_unchanged() {
+        // Bad scheme — leave alone so the lookup miss is the
+        // operator-visible error, not a silent rewrite.
+        let bad = "https://hub.example/r/foo";
+        assert_eq!(canonicalize_presence_key(bad), bad);
+
+        let empty_realm = "easynet:///r//device/x";
+        assert_eq!(canonicalize_presence_key(empty_realm), empty_realm);
+
+        let multi_seg = "easynet:///r/realm/agent/a/b/c";
+        assert_eq!(canonicalize_presence_key(multi_seg), multi_seg);
     }
 }
