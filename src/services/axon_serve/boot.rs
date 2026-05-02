@@ -692,18 +692,79 @@ fn daemon_identity_from_stored(stored: &StoredDeviceIdentity) -> Option<DaemonId
         .map(str::to_string)
         .or_else(|| device_id_from_caller_uri(&caller_uri));
 
-    let signing_seed = match (realm.as_deref(), node_id.as_deref()) {
-        (Some(realm), Some(node_id)) => {
-            let subject_id = format!("easynet:prv:reg:agent.{node_id}");
-            Some(derive_subject_keypair(realm, &subject_id).0)
+    // Phase 3D: prefer the keyring vault's seed when the operator
+    // has opted in via EASYNET_KEYRING_PASSPHRASE. The vault's
+    // primary_self for this device is `caller_uri`; the role
+    // overlay also matches HubURI(realm) on the same host, so
+    // backend (Go side, Phase 3D's Go reader) and daemon (Rust
+    // side here) end up signing with the **same** Ed25519 seed.
+    //
+    // Misses (env unset, vault file missing, this URI not in
+    // vault) silently fall through to the v4.1.4 deterministic
+    // derive — operators who have not yet rolled their daemons
+    // onto the keyring stay unaffected.
+    let signing_seed = if let Some(seed) = try_load_daemon_seed_from_keyring(&caller_uri) {
+        Some(seed)
+    } else {
+        match (realm.as_deref(), node_id.as_deref()) {
+            (Some(realm), Some(node_id)) => {
+                let subject_id = format!("easynet:prv:reg:agent.{node_id}");
+                Some(derive_subject_keypair(realm, &subject_id).0)
+            }
+            _ => None,
         }
-        _ => None,
     };
 
     Some(DaemonIdentity {
         caller_uri,
         signing_seed,
     })
+}
+
+fn try_load_daemon_seed_from_keyring(self_uri: &str) -> Option<[u8; 32]> {
+    use crate::services::keyring::{MasterKeySource, Vault, VaultError};
+
+    if std::env::var("EASYNET_KEYRING_PASSPHRASE")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .is_none()
+    {
+        return None;
+    }
+    let path = if let Ok(p) = std::env::var("EASYNET_KEYRING_VAULT_PATH") {
+        std::path::PathBuf::from(p)
+    } else {
+        expand_home(&format!("~/{}", crate::services::keyring::DEFAULT_VAULT_REL))
+    };
+    if !path.exists() {
+        return None;
+    }
+    let source = match MasterKeySource::from_env() {
+        Ok(s) => s,
+        Err(err) => {
+            eprintln!("[axon-serve] keyring: master key source: {err}");
+            return None;
+        }
+    };
+    let vault = match Vault::open(&path, &source) {
+        Ok(v) => v,
+        Err(VaultError::NotFound(_)) => return None,
+        Err(err) => {
+            eprintln!("[axon-serve] keyring: open failed: {err}");
+            return None;
+        }
+    };
+    match vault.export_seed(self_uri) {
+        Ok(seed) => {
+            eprintln!("[axon-serve] keyring: daemon seed for {self_uri} resolved from vault");
+            Some(seed)
+        }
+        Err(VaultError::NotFound(_)) => None,
+        Err(err) => {
+            eprintln!("[axon-serve] keyring: export_seed({self_uri}): {err}");
+            None
+        }
+    }
 }
 
 fn canonical_caller_uri_from_stored_identity(stored: &StoredDeviceIdentity) -> Option<String> {
@@ -1196,6 +1257,86 @@ mod tests {
         assert!(
             identity.signing_seed.is_none(),
             "legacy agent-only credentials stay unsigned until re-pair"
+        );
+    }
+
+    #[test]
+    fn daemon_identity_prefers_keyring_seed_over_deterministic_derive() {
+        use crate::services::keyring::{MasterKeySource, Vault};
+        use ed25519_dalek::SigningKey;
+        use std::sync::Mutex;
+        // Serialise against other env-mutating tests in this file
+        // (HOME, EASYNET_KEYRING_*). They all set_var at top of body
+        // without a guard; this guard ensures no two of them race.
+        static ENV_GUARD: Mutex<()> = Mutex::new(());
+        let _guard = ENV_GUARD.lock().unwrap();
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vault_path = temp.path().join("keyring.enc");
+        let pass = "phase3d-daemon-boot-test";
+
+        // Seed 0xAA repeated 32 times — distinguishable from
+        // anything `derive_subject_keypair` would produce, so we
+        // can pin the test on "this seed came from the vault".
+        let seed = [0xAAu8; 32];
+
+        let primary = "easynet:///r/host-test/device/dev-uuid";
+        let hub_overlay = "easynet:///r/host-test/hub";
+
+        let source = MasterKeySource::Explicit(pass.to_string());
+        let mut vault = Vault::init(&vault_path, &source).expect("init vault");
+        vault
+            .put(
+                primary,
+                vec![hub_overlay.to_string()],
+                hex::encode(seed),
+            )
+            .expect("put");
+        vault.seal().expect("seal");
+
+        std::env::set_var("EASYNET_KEYRING_PASSPHRASE", pass);
+        std::env::set_var("EASYNET_KEYRING_VAULT_PATH", &vault_path);
+
+        let stored = StoredDeviceIdentity {
+            agent_uri: None,
+            realm: Some("host-test".to_string()),
+            tenant_id: None,
+            node_id: Some("dev-uuid".to_string()),
+        };
+        let identity = daemon_identity_from_stored(&stored).expect("identity");
+
+        std::env::remove_var("EASYNET_KEYRING_PASSPHRASE");
+        std::env::remove_var("EASYNET_KEYRING_VAULT_PATH");
+
+        assert_eq!(identity.caller_uri, primary);
+        let got = identity.signing_seed.expect("seed");
+        assert_eq!(got, seed, "daemon must use the vault's seed, not the deterministic derive");
+
+        // Sanity: the resulting keypair is the SAME one as what the
+        // backend (Phase 3D Go reader) will pull from this vault
+        // for the hub overlay — that's the load-bearing v4.1.5
+        // host-mode invariant.
+        let _signer = SigningKey::from_bytes(&got);
+    }
+
+    #[test]
+    fn daemon_identity_falls_back_when_keyring_env_unset() {
+        use std::sync::Mutex;
+        static ENV_GUARD: Mutex<()> = Mutex::new(());
+        let _guard = ENV_GUARD.lock().unwrap();
+        std::env::remove_var("EASYNET_KEYRING_PASSPHRASE");
+        std::env::remove_var("EASYNET_KEYRING_VAULT_PATH");
+
+        let stored = StoredDeviceIdentity {
+            agent_uri: None,
+            realm: Some("realm-no-vault".to_string()),
+            tenant_id: None,
+            node_id: Some("dev-uuid".to_string()),
+        };
+        let identity = daemon_identity_from_stored(&stored).expect("identity");
+        assert!(
+            identity.signing_seed.is_some(),
+            "deterministic derive must still work when the keyring is not opted into"
         );
     }
 

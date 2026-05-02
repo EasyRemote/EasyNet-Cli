@@ -409,6 +409,27 @@ impl Vault {
         Ok(signing_key.verifying_key())
     }
 
+    /// Export the raw 32-byte Ed25519 seed for `self_uri`.
+    ///
+    /// Phase 3D bridge: the daemon's `boot::load_daemon_identity`
+    /// stores the seed (not a `SigningKey`) inside `DaemonIdentity`
+    /// so subjective-self channels can re-derive on demand. This
+    /// is the ONLY exfiltration path for raw seed bytes — every
+    /// other vault method takes canonical bytes in and gives a
+    /// signature out, which is the right ergonomics for everything
+    /// except boot's "I need a seed to feed the existing
+    /// `derive_subject_keypair` path" requirement.
+    ///
+    /// Same role-overlay lookup rules as `sign` / `derive_pubkey`.
+    pub fn export_seed(&self, self_uri: &str) -> Result<[u8; ED25519_SEED_LEN], VaultError> {
+        let entry = self.lookup(self_uri)?;
+        let seed = hex::decode(&entry.seed_hex)
+            .map_err(|e| VaultError::Corrupt(format!("seed_hex decode: {e}")))?;
+        seed.as_slice()
+            .try_into()
+            .map_err(|_| VaultError::BadSeedLen { got: seed.len() })
+    }
+
     /// List all primary_self URIs the vault holds.
     pub fn list(&self) -> Vec<String> {
         let mut out: Vec<String> = self.entries.keys().cloned().collect();

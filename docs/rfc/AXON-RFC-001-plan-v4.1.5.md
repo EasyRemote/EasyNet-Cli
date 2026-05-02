@@ -249,3 +249,6 @@ v4.1.4 §3 still requires a Phase 4 follow-up to land in code.
 | Rust `daemon_identity_falls_back_when_keyring_env_unset` | PASS |
 | Cross-language interop (`backend/cmd/keyring-cross-test`) | live verified |
 | Backend full sweep (22/22 packages)              | PASS |
+| Phase 3F host-mode e2e (`scripts/dev-host-e2e.sh`) | live PASS — 2026-05-03 |
+|   ↳ device primary + hub overlay share one keypair | proven via host-e2e-probe |
+|   ↳ deterministic Ed25519 byte-identical signatures over canonical message | proven |
