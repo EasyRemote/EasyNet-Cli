@@ -160,6 +160,12 @@ const SESSION_DOWN_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 #[derive(Clone)]
 pub struct DaemonInvocationService {
     presence: Arc<PresenceRegistry>,
+    /// Per-agent ability catalog populated by
+    /// `federation.advertise_abilities` and projected back through
+    /// `federation.resolve(include_abilities=true)`. Always present
+    /// on production daemons; an `Arc` clone, cheap to share with
+    /// every dispatch handler that needs it.
+    ability_catalog: Arc<crate::services::ability_catalog_store::AbilityCatalogStore>,
     admission: AdmissionFacade,
     /// Cross-call correlation table for `<self>.invoke_remote`
     /// per-call dispatches awaiting a target-device reply on its
@@ -313,6 +319,9 @@ impl DaemonInvocationService {
     pub fn new(presence: Arc<PresenceRegistry>, admission: AdmissionFacade) -> Self {
         Self {
             presence,
+            ability_catalog: Arc::new(
+                crate::services::ability_catalog_store::AbilityCatalogStore::new(),
+            ),
             admission,
             pending: None,
             register_pubkey: None,
@@ -731,7 +740,10 @@ impl DaemonInvocationService {
         arguments: &[u8],
     ) -> Result<Response<InvokeResponse>, Status> {
         let request: federation_wrappers::AdvertiseAbilitiesRequest = parse_json_args(arguments)?;
-        let response = federation_wrappers::handle_advertise_abilities(&request);
+        let response = federation_wrappers::handle_advertise_abilities(
+            &request,
+            Some(self.ability_catalog.as_ref()),
+        );
         wrap_json_response(&response)
     }
 
@@ -784,7 +796,11 @@ impl DaemonInvocationService {
         arguments: &[u8],
     ) -> Result<Response<InvokeResponse>, Status> {
         let request: federation_wrappers::ResolveRequest = parse_json_args(arguments)?;
-        let response = federation_wrappers::handle_resolve(&request, &self.presence);
+        let response = federation_wrappers::handle_resolve(
+            &request,
+            &self.presence,
+            Some(self.ability_catalog.as_ref()),
+        );
         wrap_json_response(&response)
     }
 

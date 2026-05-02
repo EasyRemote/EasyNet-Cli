@@ -350,6 +350,7 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
     escalation_outbox: Option<
         &crate::services::axon_serve::session_escalation::SharedSessionOutbox,
     >,
+    ability_catalog: &[String],
 ) -> Result<(), SessionError> {
     dial_and_run_session_with_idle_timeout(
         hub_endpoint,
@@ -358,6 +359,7 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
         hub_ca_pem_path,
         dispatcher,
         escalation_outbox,
+        ability_catalog,
         SESSION_IDLE_TIMEOUT,
     )
     .await
@@ -372,6 +374,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     escalation_outbox: Option<
         &crate::services::axon_serve::session_escalation::SharedSessionOutbox,
     >,
+    ability_catalog: &[String],
     idle_timeout: Duration,
 ) -> Result<(), SessionError> {
     let mut endpoint = Endpoint::from_shared(hub_endpoint.clone())
@@ -474,6 +477,43 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
             err.code(),
             err.message(),
         ),
+    }
+
+    // Ability-catalog prelude (URA v4.1.4 dev unblock): publish
+    // every locally-registered ability the daemon knows about to
+    // the hub's `AbilityCatalogStore` via
+    // `federation.advertise_abilities`. The hub projects this back
+    // through `federation.resolve(include_abilities=true)` to drive
+    // the backend's `/api/v1/abilities` page. Without this, the
+    // catalog page renders empty even when devices have
+    // observe.health / fs.read / fs.write / etc. registered.
+    //
+    // Best-effort: a failed advertise leaves the catalog page
+    // empty for this device but does not block the bidi from
+    // opening. Production daemons retry on every reconnect (the
+    // supervisor calls `dial_and_run_session` per backoff), so a
+    // transient hub outage self-heals on the next loop pass.
+    if !ability_catalog.is_empty() {
+        eprintln!(
+            "[session] sending federation.advertise_abilities prelude with {} abilities",
+            ability_catalog.len()
+        );
+        if let Err(err) =
+            send_advertise_abilities_prelude(&mut client, &caller_uri, ability_catalog).await
+        {
+            eprintln!(
+                "[session] advertise_abilities prelude soft-failed (code={:?}, msg={:?}); \
+                 proceeding — Frontend `/api/v1/abilities` page will be empty for this device \
+                 until the next reconnect",
+                err.code(),
+                err.message(),
+            );
+        } else {
+            eprintln!(
+                "[session] advertise_abilities prelude OK ({} abilities)",
+                ability_catalog.len()
+            );
+        }
     }
 
     let (up_tx, up_rx) = mpsc::channel::<InvokeBidiUp>(SESSION_UP_CHANNEL_CAPACITY);
@@ -606,6 +646,7 @@ pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
     hub_ca_pem_path: Option<PathBuf>,
     dispatcher: Arc<D>,
     escalation_outbox: Option<crate::services::axon_serve::session_escalation::SharedSessionOutbox>,
+    ability_catalog: Vec<String>,
     mut cancel: tokio::sync::oneshot::Receiver<()>,
 ) {
     let mut backoff = SESSION_BACKOFF_INITIAL;
@@ -622,6 +663,7 @@ pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
                 hub_ca_pem_path.as_deref(),
                 Arc::clone(&dispatcher),
                 escalation_outbox.as_ref(),
+                &ability_catalog,
             ) => {
                 match result {
                     Ok(()) => {
@@ -731,6 +773,61 @@ async fn send_federation_join_prelude(
         }
         Err(status) => Err(status),
     }
+}
+
+/// Send a one-shot `federation.advertise_abilities@1` over the same
+/// gRPC channel the session bidi will open on. Publishes the device
+/// daemon's locally-registered ability names to the hub's
+/// `AbilityCatalogStore` so the backend's `/api/v1/abilities` page
+/// can project them under the device's URI.
+///
+/// Each ability is represented by a JSON object with `name` and
+/// `tool_name` fields — the minimum the catalog projection needs.
+/// Richer descriptors (input_schema, description, hints) live in
+/// the runtime's per-ability descriptor and can be added here if a
+/// future projection wants them; v1 advertises just enough to
+/// surface the catalog rows.
+async fn send_advertise_abilities_prelude(
+    client: &mut crate::pb::axon::v1::invocation_client::InvocationClient<Channel>,
+    caller_uri: &str,
+    ability_names: &[String],
+) -> Result<(), tonic::Status> {
+    use crate::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
+
+    let abilities: Vec<serde_json::Value> = ability_names
+        .iter()
+        .map(|name| {
+            serde_json::json!({
+                "name": name,
+                "tool_name": name,
+            })
+        })
+        .collect();
+
+    let body = serde_json::json!({
+        "agent_uri": caller_uri,
+        "abilities": abilities,
+    });
+    let arguments = serde_json::to_vec(&body).map_err(|e| {
+        tonic::Status::internal(format!(
+            "federation.advertise_abilities prelude serialize: {e}"
+        ))
+    })?;
+
+    let request = InvokeRequest {
+        envelope: Some(Envelope {
+            caller: Some(AgentIdentity {
+                uri: caller_uri.to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        function_name: "federation.advertise_abilities".to_string(),
+        arguments,
+        ..Default::default()
+    };
+
+    client.invoke(request).await.map(|_| ())
 }
 
 /// Build the EnvelopeOpen frame 0 a device sends to open
@@ -1178,6 +1275,7 @@ mod tests {
             None,
             dispatcher,
             None,
+            &[],
         )
         .await;
         match result {
@@ -1203,6 +1301,7 @@ mod tests {
                 None,
                 dispatcher,
                 None,
+                &[],
             ),
         )
         .await
@@ -1231,6 +1330,7 @@ mod tests {
             Some(bogus.as_path()),
             dispatcher,
             None,
+            &[],
         )
         .await;
         match result {
@@ -1253,6 +1353,7 @@ mod tests {
             None,
             dispatcher,
             None, // PR-N6 C4: no escalation outbox in this test
+            Vec::new(), // ability_catalog: empty in tests
             cancel_rx,
         ));
 
@@ -1281,6 +1382,7 @@ mod tests {
             None,
             dispatcher,
             None,
+            &[],
             Duration::from_millis(80),
         )
         .await;
@@ -1306,6 +1408,7 @@ mod tests {
             None,
             dispatcher,
             None,
+            &[],
             Duration::from_secs(1),
         )
         .await;

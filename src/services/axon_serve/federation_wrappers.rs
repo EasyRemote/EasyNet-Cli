@@ -317,14 +317,21 @@ pub struct AdvertiseAbilitiesResponse {
     pub count: usize,
 }
 
+/// Handle a `federation.advertise_abilities` invocation. PR-1
+/// staging took this as a no-op stub; PR-fix-N stores the
+/// descriptor list in the daemon's `AbilityCatalogStore` so
+/// `federation.resolve(include_abilities=true)` can project them
+/// back to the backend's `/api/v1/abilities` page.
 #[must_use]
 pub fn handle_advertise_abilities(
     request: &AdvertiseAbilitiesRequest,
+    catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
 ) -> AdvertiseAbilitiesResponse {
-    AdvertiseAbilitiesResponse {
-        ack: true,
-        count: request.abilities.len(),
+    let count = request.abilities.len();
+    if let Some(store) = catalog {
+        store.upsert(request.agent_uri.clone(), request.abilities.clone());
     }
+    AdvertiseAbilitiesResponse { ack: true, count }
 }
 
 // ─── runtime.bootstrap_self_identity ───────────────────────────────
@@ -408,18 +415,35 @@ pub struct ResolveRequest {
     /// returns every online agent.
     #[serde(default)]
     pub uri_prefix: Option<String>,
+    /// When true, the response carries each agent's
+    /// `abilities[]` from the daemon's `AbilityCatalogStore`
+    /// (populated by `federation.advertise_abilities`). When
+    /// false / absent, the abilities slot is left empty so
+    /// callers paying the wire-bandwidth cost can opt out.
+    #[serde(default)]
+    pub include_abilities: bool,
 }
 
 /// One agent in a resolve response. Matches the backend Go helper's
 /// `ResolvedAgent` wire shape (`uri`, `status`) so
 /// `axon.ResolveAgents` can unmarshal real daemon receipts without a
 /// JSON field-name shim.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolveAgentSummary {
     /// The agent's URI; deterministic.
     pub uri: String,
     /// Always `"active"` because in-registry equals online; spec §4.
     pub status: String,
+    /// Catalog of ability descriptors the agent advertised via
+    /// `federation.advertise_abilities`. Populated only when the
+    /// caller sets `include_abilities = true` AND the daemon's
+    /// `AbilityCatalogStore` has a row for this URI; absent
+    /// otherwise. Each entry is the descriptor JSON the device
+    /// emitted (free-form: `{name, tool_name, description, ...}`)
+    /// so the backend can extend the projection without re-reading
+    /// the wire.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub abilities: Vec<serde_json::Value>,
 }
 
 /// Legacy v1 directory-stream projection. Kept separate from
@@ -434,7 +458,7 @@ pub struct AgentSummary {
 }
 
 /// Response payload for `federation.resolve`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolveResponse {
     /// Sorted ascending by `uri` so byte-identical
     /// responses come from byte-identical state.
@@ -442,18 +466,41 @@ pub struct ResolveResponse {
 }
 
 /// Handle a `federation.resolve` invocation.
+///
+/// `catalog` is the optional `AbilityCatalogStore` the daemon
+/// constructs at boot. When `request.include_abilities` is true
+/// AND the store has a row for an in-presence URI, the response
+/// carries that agent's published `abilities[]` verbatim. Hub-mode
+/// daemons in production always wire a catalog; the smoke-test
+/// build-without-catalog path passes `None` and the abilities slot
+/// stays empty (matching pre-PR behaviour).
 #[must_use]
-pub fn handle_resolve(request: &ResolveRequest, registry: &PresenceRegistry) -> ResolveResponse {
+pub fn handle_resolve(
+    request: &ResolveRequest,
+    registry: &PresenceRegistry,
+    catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
+) -> ResolveResponse {
     let snapshot = registry.snapshot();
+    let want_abilities = request.include_abilities;
     let agents = snapshot
         .into_iter()
         .filter(|uri| match &request.uri_prefix {
             Some(prefix) => uri.starts_with(prefix),
             None => true,
         })
-        .map(|uri| ResolveAgentSummary {
-            uri,
-            status: "active".to_string(),
+        .map(|uri| {
+            let abilities = if want_abilities {
+                catalog
+                    .and_then(|c| c.get(&uri))
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            ResolveAgentSummary {
+                uri,
+                status: "active".to_string(),
+                abilities,
+            }
         })
         .collect();
     ResolveResponse { agents }
@@ -1038,7 +1085,14 @@ mod tests {
             make_dispatch_sender(),
         );
 
-        let resp = handle_resolve(&ResolveRequest { uri_prefix: None }, &registry);
+        let resp = handle_resolve(
+            &ResolveRequest {
+                uri_prefix: None,
+                include_abilities: false,
+            },
+            &registry,
+            None,
+        );
         let uris: Vec<&str> = resp.agents.iter().map(|a| a.uri.as_str()).collect();
         assert_eq!(
             uris,
@@ -1068,8 +1122,10 @@ mod tests {
         let resp = handle_resolve(
             &ResolveRequest {
                 uri_prefix: Some("easynet:///r/realm-a".to_string()),
+                include_abilities: false,
             },
             &registry,
+            None,
         );
         assert_eq!(resp.agents.len(), 1);
         assert_eq!(resp.agents[0].uri, "easynet:///r/realm-a/agent/x");

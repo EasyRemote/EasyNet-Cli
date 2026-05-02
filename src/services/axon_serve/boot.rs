@@ -376,7 +376,7 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
         } else {
             eprintln!(
                 "[axon-serve] device-mode daemon missing either hub_endpoint or \
-                 credentials.json agent_uri; outbound `<self>.session` not started"
+                 credentials.json device identity; outbound `<self>.session` not started"
             );
         }
     }
@@ -400,6 +400,16 @@ fn spawn_session_supervisor(
         crate::services::axon_serve::session_escalation::SharedSessionOutbox,
     )>,
 ) {
+    // Snapshot the dispatcher's local-ability registry once, before
+    // wrapping it into a `LocalAbilityDispatcher`. The session
+    // supervisor's `federation.advertise_abilities` prelude consumes
+    // this list to populate the hub's `AbilityCatalogStore` so the
+    // backend's `/api/v1/abilities` page surfaces the device's
+    // registered abilities under its URI. Snapshot at boot is fine
+    // — `LocalAbilityRegistry` is constructed once per daemon
+    // process (build_registry_with_services) and never mutated
+    // post-boot.
+    let ability_catalog = dispatcher.local_registry().list_abilities();
     let signing_state = if identity.signing_seed.is_some() {
         "signed frame0"
     } else {
@@ -453,6 +463,7 @@ fn spawn_session_supervisor(
         hub_ca_pem_path,
         dispatcher,
         outbox,
+        ability_catalog,
         cancel_rx,
     ));
 }
@@ -626,6 +637,8 @@ struct StoredDeviceIdentity {
     #[serde(default)]
     agent_uri: Option<String>,
     #[serde(default)]
+    realm: Option<String>,
+    #[serde(default)]
     tenant_id: Option<String>,
     #[serde(default)]
     node_id: Option<String>,
@@ -638,48 +651,51 @@ struct StoredDeviceIdentity {
 /// - legacy sparse fixtures that only carry `agent_uri` still load
 ///   and boot; they simply omit the signing seed and therefore keep
 ///   the old unsigned frame-0 behaviour
-/// - modern credentials with `(tenant_id, node_id)` derive the same
-///   deterministic Ed25519 seed the SDK uses for
+/// - modern credentials with `(realm|tenant_id, node_id)` always
+///   derive the canonical v4.1.4 device URI from those fields,
+///   even when an old `agent_uri` is still persisted alongside
+///   them. This keeps daemon session registration aligned with
+///   CLI-side `forward_invoke` targets during the URI migration.
+/// - once we have the canonical `(realm, node_id)` pair, derive the
+///   same deterministic Ed25519 seed the SDK uses for
 ///   `easynet:prv:reg:agent.<node>`
 fn load_daemon_identity() -> Option<DaemonIdentity> {
     let path = expand_home("~/.easynet/credentials.json");
     let raw = std::fs::read_to_string(&path).ok()?;
     let stored: StoredDeviceIdentity = serde_json::from_str(&raw).ok()?;
+    daemon_identity_from_stored(&stored)
+}
 
-    let caller_uri = stored
-        .agent_uri
+fn daemon_identity_from_stored(stored: &StoredDeviceIdentity) -> Option<DaemonIdentity> {
+    let caller_uri = canonical_caller_uri_from_stored_identity(stored)?;
+
+    let realm = stored
+        .realm
         .as_deref()
         .map(str::trim)
-        .filter(|uri| !uri.is_empty())
+        .filter(|realm| !realm.is_empty())
         .map(str::to_string)
         .or_else(|| {
-            let tenant_id = stored.tenant_id.as_deref()?.trim();
-            let node_id = stored.node_id.as_deref()?.trim();
-            if tenant_id.is_empty() || node_id.is_empty() {
-                return None;
-            }
-            // URI v2: when credentials.json doesn't carry an
-            // explicit agent_uri (legacy / corrupt persisted file),
-            // synthesise a device-shaped URA. Backend's pairing
-            // path (validate_pairing) writes the agent_uri field
-            // in v2-minted credentials, so this fallback should
-            // only fire on hand-edited or pre-Phase-8 files.
-            Some(crate::uri::device_uri(tenant_id, node_id))
-        })?;
-
-    let tenant_id = stored
-        .tenant_id
-        .clone()
-        .or_else(|| tenant_id_from_agent_uri(&caller_uri));
+            stored
+                .tenant_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|tenant| !tenant.is_empty())
+                .map(str::to_string)
+        })
+        .or_else(|| realm_from_agent_uri(&caller_uri));
     let node_id = stored
         .node_id
-        .clone()
-        .or_else(|| node_id_from_agent_uri(&caller_uri));
+        .as_deref()
+        .map(str::trim)
+        .filter(|node| !node.is_empty())
+        .map(str::to_string)
+        .or_else(|| device_id_from_caller_uri(&caller_uri));
 
-    let signing_seed = match (tenant_id.as_deref(), node_id.as_deref()) {
-        (Some(tenant), Some(node)) if !tenant.trim().is_empty() && !node.trim().is_empty() => {
-            let subject_id = format!("easynet:prv:reg:agent.{node}");
-            Some(derive_subject_keypair(tenant.trim(), &subject_id).0)
+    let signing_seed = match (realm.as_deref(), node_id.as_deref()) {
+        (Some(realm), Some(node_id)) => {
+            let subject_id = format!("easynet:prv:reg:agent.{node_id}");
+            Some(derive_subject_keypair(realm, &subject_id).0)
         }
         _ => None,
     };
@@ -690,44 +706,68 @@ fn load_daemon_identity() -> Option<DaemonIdentity> {
     })
 }
 
-fn tenant_id_from_agent_uri(uri: &str) -> Option<String> {
-    let rest = uri.strip_prefix("easynet:///r/")?;
-    let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
-    let segments: Vec<&str> = path
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect();
-    if segments.is_empty() {
-        return None;
+fn canonical_caller_uri_from_stored_identity(stored: &StoredDeviceIdentity) -> Option<String> {
+    let realm = stored
+        .realm
+        .as_deref()
+        .map(str::trim)
+        .filter(|realm| !realm.is_empty())
+        .or_else(|| {
+            stored
+                .tenant_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|tenant| !tenant.is_empty())
+        });
+    let node_id = stored
+        .node_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|node| !node.is_empty());
+
+    if let (Some(realm), Some(node_id)) = (realm, node_id) {
+        return Some(crate::uri::device_uri(realm, node_id));
     }
-    if segments.len() >= 3 && segments[1] == "agent" {
-        return Some(segments[0].to_string());
-    }
-    if let Some(query_tenant) = query
-        .split('&')
-        .find_map(|pair| pair.strip_prefix("tenant_id=").map(str::to_string))
-    {
-        if !query_tenant.trim().is_empty() {
-            return Some(query_tenant);
-        }
-    }
-    Some(segments[0].to_string())
+
+    stored
+        .agent_uri
+        .as_deref()
+        .map(str::trim)
+        .filter(|uri| !uri.is_empty())
+        .map(str::to_string)
 }
 
-fn node_id_from_agent_uri(uri: &str) -> Option<String> {
-    let rest = uri.strip_prefix("easynet:///r/")?;
-    let path = rest.split('?').next().unwrap_or(rest);
-    let segments: Vec<&str> = path
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect();
-    if segments.len() >= 3 && segments[1] == "agent" {
-        return Some(segments[2].to_string());
+// URI v4.1.4: strict parsing via crate::uri::parse_ura, replacing
+// the v1-era wide is_role_segment / hand-rolled segment walks. The
+// daemon's stored caller URI in v4.1.4 is always
+// `easynet:///r/<realm>/device/<device-uuid>` (device-mode CLI's
+// self-identity URA), so we only need to match that one shape.
+//
+// Legacy `easynet:///r/<realm>/reg/agent.<id>?tenant_id=<t>` shapes
+// (URI v1 fallback) and `agent/<id>` shapes (URI v2 transitional)
+// are rejected — pre-v4.1.4 credential files cannot bootstrap
+// signing seeds; users must `easynet device join` again to mint a
+// v4.1.4 credential. Returning `None` triggers the parent code's
+// "skip signing seed" branch (CLI starts unsigned, harmless in dev).
+
+fn realm_from_agent_uri(uri: &str) -> Option<String> {
+    let parsed = crate::uri::parse_ura(uri).ok()?;
+    if parsed.realm.is_empty() {
+        None
+    } else {
+        Some(parsed.realm)
     }
-    if segments.len() >= 3 && segments[1] == "reg" {
-        return segments[2].strip_prefix("agent.").map(str::to_string);
+}
+
+fn device_id_from_caller_uri(uri: &str) -> Option<String> {
+    let parsed = crate::uri::parse_ura(uri).ok()?;
+    // Only Device-kind URIs carry a device_id field; other kinds
+    // leave it empty. Empty == not a device URA.
+    if parsed.device_id.is_empty() {
+        None
+    } else {
+        Some(parsed.device_id)
     }
-    None
 }
 
 /// Resolve the realm-trust file path from the env override or fall
@@ -1105,6 +1145,58 @@ mod tests {
     fn expand_home_passthrough_for_absolute_path() {
         let expanded = expand_home("/etc/easynet/realm-trust.toml");
         assert_eq!(expanded, PathBuf::from("/etc/easynet/realm-trust.toml"));
+    }
+
+    #[test]
+    fn canonical_caller_uri_prefers_realm_and_node_over_legacy_agent_uri() {
+        let stored = StoredDeviceIdentity {
+            agent_uri: Some("easynet:///r/legacy/agent/old-node".to_string()),
+            realm: Some("realm-a".to_string()),
+            tenant_id: Some("legacy".to_string()),
+            node_id: Some("device-123".to_string()),
+        };
+        assert_eq!(
+            canonical_caller_uri_from_stored_identity(&stored).as_deref(),
+            Some("easynet:///r/realm-a/device/device-123"),
+        );
+    }
+
+    #[test]
+    fn daemon_identity_from_stored_accepts_realm_only_credentials() {
+        let stored = StoredDeviceIdentity {
+            agent_uri: None,
+            realm: Some("realm-a".to_string()),
+            tenant_id: None,
+            node_id: Some("device-123".to_string()),
+        };
+        let identity = daemon_identity_from_stored(&stored).expect("identity");
+        assert_eq!(
+            identity.caller_uri,
+            "easynet:///r/realm-a/device/device-123"
+        );
+        assert!(
+            identity.signing_seed.is_some(),
+            "realm+node credentials must derive a signing seed"
+        );
+    }
+
+    #[test]
+    fn daemon_identity_from_stored_falls_back_to_agent_uri_when_fields_missing() {
+        let stored = StoredDeviceIdentity {
+            agent_uri: Some("easynet:///r/realm-a/agent/legacy-node".to_string()),
+            realm: None,
+            tenant_id: None,
+            node_id: None,
+        };
+        let identity = daemon_identity_from_stored(&stored).expect("identity");
+        assert_eq!(
+            identity.caller_uri,
+            "easynet:///r/realm-a/agent/legacy-node"
+        );
+        assert!(
+            identity.signing_seed.is_none(),
+            "legacy agent-only credentials stay unsigned until re-pair"
+        );
     }
 
     #[tokio::test]
