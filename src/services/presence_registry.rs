@@ -584,7 +584,7 @@ mod tests {
 
         for n in 0..10 {
             registry.insert(
-                crate::uri::agent_uri("realm", &format!("n{n}")),
+                crate::uri::agent_uri("realm", "u1", &format!("n{n}")),
                 make_dispatch_sender(),
             );
         }

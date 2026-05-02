@@ -44,10 +44,16 @@ use crate::persistence::local_agents::{upsert_hosted_agent, HostedAgentEntry, Lo
 #[derive(Debug, Clone, Default)]
 pub struct BootstrapPlan {
     /// Realm name from credentials.json. Used to mint canonical
-    /// URAs of shape `easynet:///r/<realm>/agent/<id>`. Empty
-    /// when the daemon hasn't joined yet — we still pre-mint
+    /// URAs of shape `easynet:///r/<realm>/agent/<user>.<id>`.
+    /// Empty when the daemon hasn't joined yet — we still pre-mint
     /// URAs into the file but flag them in the resulting save.
     pub realm: String,
+    /// User UUID from credentials (`username` field, which carries
+    /// the user-uuid in v4.1.4). All hosted agents this daemon
+    /// owns are anchored under this user. Empty pre-join, in which
+    /// case the URI is flagged with the literal `<unjoined>` user
+    /// so the first post-join save can repair it.
+    pub user_id: String,
     /// Device-profile URA from credentials.json. Empty pre-join.
     /// When non-empty, `local-agents.json::host_device_agent_uri`
     /// is set to this on save.
@@ -132,21 +138,25 @@ pub fn bootstrap_local_agents<M: UriMinter>(
             Some(uri) => (uri, true),
             None => {
                 let id = minter.mint_id(profile, name);
-                let uri = if plan.realm.is_empty() {
-                    // Pre-join state: we still record the row so
-                    // it survives the daemon process, but flag it
-                    // with the literal "<unjoined>" realm so the
-                    // first post-join save can repair it.
-                    //
-                    // Hosted-agent kind: keeps URI v2 `agent/`
-                    // segment. Only the daemon's own device-profile
-                    // self-URI is `device/<node>`; hosted agents
-                    // (consent / mcp / llm) live in the agent
-                    // namespace.
-                    crate::uri::agent_uri("<unjoined>", &id)
+                // URI v4.1.4: agent URI is user-anchored
+                // (`<user>.<agent-id>`). Pre-join state lacks both
+                // realm and user_id; flag with literal `<unjoined>`
+                // for both so the first post-join save can repair it.
+                // Only the daemon's own device-profile self-URI uses
+                // the `device/<uuid>` segment; hosted agents
+                // (consent / policy / mcp / llm) live under
+                // `agent/<user>.<id>`.
+                let realm = if plan.realm.is_empty() {
+                    "<unjoined>"
                 } else {
-                    crate::uri::agent_uri(&plan.realm, &id)
+                    plan.realm.as_str()
                 };
+                let user_id = if plan.user_id.is_empty() {
+                    "<unjoined>"
+                } else {
+                    plan.user_id.as_str()
+                };
+                let uri = crate::uri::agent_uri(realm, user_id, &id);
                 upsert_hosted_agent(file, profile, name, &uri);
                 (uri, false)
             }
@@ -229,7 +239,8 @@ mod tests {
     fn plan_with(consent: bool, policy: bool, mcp: bool, llms: &[(&str, &str)]) -> BootstrapPlan {
         BootstrapPlan {
             realm: "acme".into(),
-            host_device_uri: "easynet:///r/acme/agent/01DEV".into(),
+            user_id: "u1".into(),
+            host_device_uri: "easynet:///r/acme/device/01DEV".into(),
             consent,
             policy,
             mcp,
@@ -257,9 +268,17 @@ mod tests {
                 "first bootstrap pass must mint fresh URIs, got reused for {:?}",
                 o.profile
             );
-            assert!(o.agent_uri.starts_with("easynet:///r/acme/agent/"));
+            // v4.1.4: hosted-agent URA is user-anchored
+            // (`r/<realm>/agent/<user>.<id>`). plan_with seeds
+            // user_id="u1".
+            assert!(
+                o.agent_uri.starts_with("easynet:///r/acme/agent/u1."),
+                "expected user-anchored agent URA, got {:?}",
+                o.agent_uri
+            );
         }
-        assert_eq!(file.host_device_agent_uri, "easynet:///r/acme/agent/01DEV");
+        // The daemon's own self-URI uses the device segment.
+        assert_eq!(file.host_device_agent_uri, "easynet:///r/acme/device/01DEV");
         assert_eq!(file.hosted_agents.len(), 4);
     }
 

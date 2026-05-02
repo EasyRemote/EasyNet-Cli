@@ -340,11 +340,12 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
         }
     };
 
-    let agent_uri = format!(
-        "easynet:///r/{}/agent/{}",
-        creds.tenant_id.trim(),
-        creds.node_id.trim(),
-    );
+    // URI v4.1.4 Phase 2F: device URA, not agent URA. The trust
+    // anchor stores the daemon's device identity under the
+    // `/device/` role segment; emitting the legacy `/agent/`
+    // shape would land in a parallel namespace the parser
+    // strict-rejects.
+    let agent_uri = crate::uri::device_uri(creds.tenant_id.trim(), creds.node_id.trim());
     let public_key_b64 = crate::runtime::publish::derive_owner_public_key_b64(
         creds.tenant_id.trim(),
         creds.node_id.trim(),

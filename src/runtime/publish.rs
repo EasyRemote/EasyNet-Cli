@@ -786,6 +786,7 @@ mod tests {
     fn plan_for(realm: &str, host: &str) -> BootstrapPlan {
         BootstrapPlan {
             realm: realm.into(),
+            user_id: "test-user".into(),
             host_device_uri: host.into(),
             consent: true,
             policy: false,
@@ -904,7 +905,8 @@ mod tests {
         // bootstrap mints a URA for her.
         let plan = BootstrapPlan {
             realm: "acme".into(),
-            host_device_uri: "easynet:///r/acme/agent/01DEV".into(),
+            user_id: "alice".into(),
+            host_device_uri: "easynet:///r/acme/device/01DEV".into(),
             consent: false,
             policy: false,
             mcp: false,
@@ -987,7 +989,8 @@ mod tests {
         crate::registry::agents::save_agents(&reg).unwrap();
         let plan = BootstrapPlan {
             realm: "acme".into(),
-            host_device_uri: "easynet:///r/acme/agent/01DEV".into(),
+            user_id: "alice".into(),
+            host_device_uri: "easynet:///r/acme/device/01DEV".into(),
             consent: false,
             policy: false,
             mcp: false,
@@ -1002,12 +1005,14 @@ mod tests {
         // The device-owner advertise must still carry at least one
         // device-level ability (fs.read is the canary — it has been
         // in the device profile since Tier 2.5 baseline locomotion).
+        // URI v4.1.4: device-profile self-URI uses the `device/` role
+        // segment (was the v1 `agent/` shape).
         let calls = invoker.calls();
         let device_advert = calls
             .iter()
             .find(|(u, p)| {
                 u.contains("federation.advertise_abilities@1")
-                    && p["agent_uri"].as_str() == Some("easynet:///r/acme/agent/01DEV")
+                    && p["agent_uri"].as_str() == Some("easynet:///r/acme/device/01DEV")
             })
             .expect("device-owner advertise_abilities call must still exist");
         let abilities = device_advert.1["abilities"]

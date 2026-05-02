@@ -152,16 +152,16 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             // surface; None there preserves the legacy default
             // for unattended fixture scripts that have no
             // credentials.json.
+            // URI v4.1.4 Phase 2F: caller URI for an `easynet
+            // ability invoke --node ...` originating from a daemon
+            // is the daemon's *device* URA, not an agent URA. The
+            // legacy `/agent/<node>` shape collapsed devices into
+            // the agent namespace; v4.1.4 puts the daemon under the
+            // `device` role with the same node-id tail.
             let caller_uri = crate::persistence::config::load_credentials()
                 .ok()
                 .filter(|c| !c.tenant_id.trim().is_empty() && !c.node_id.trim().is_empty())
-                .map(|c| {
-                    format!(
-                        "easynet:///r/{}/agent/{}",
-                        c.tenant_id.trim(),
-                        c.node_id.trim(),
-                    )
-                });
+                .map(|c| crate::uri::device_uri(c.tenant_id.trim(), c.node_id.trim()));
             let value = crate::support::federation_invoke::invoke_via_federation_forward(
                 &invoke_args.ability,
                 arguments,

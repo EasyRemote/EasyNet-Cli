@@ -546,15 +546,20 @@ fn republish_via_federation_best_effort(
 fn build_bootstrap_plan(
     creds: &config::Credentials,
 ) -> anyhow::Result<crate::runtime::agents::profiles::bootstrap::BootstrapPlan> {
-    build_bootstrap_plan_from(&creds.tenant_id, &creds.node_id)
+    let user_id = creds.username.as_deref().unwrap_or("").to_string();
+    build_bootstrap_plan_from(&creds.tenant_id, &creds.node_id, &user_id)
 }
 
 /// Variant that takes the inputs directly. Public so `agent.rs`'s
 /// publish path can construct the plan from a `(tenant_id,
-/// node_id)` pair already in scope without re-loading credentials.
+/// node_id, user_id)` triple already in scope without re-loading
+/// credentials. user_id is the user-uuid the device is paired to
+/// (carries the v4.1.4 user-anchor for hosted agent URAs); pass
+/// empty when pre-join.
 pub(crate) fn build_bootstrap_plan_from(
     tenant_id: &str,
     node_id: &str,
+    user_id: &str,
 ) -> anyhow::Result<crate::runtime::agents::profiles::bootstrap::BootstrapPlan> {
     use crate::runtime::agents::profiles::bootstrap::{BootstrapPlan, LlmSubAgent};
 
@@ -574,6 +579,7 @@ pub(crate) fn build_bootstrap_plan_from(
         // The credentials' realm field maps to the tenant for now;
         // a future config split will separate them.
         realm: tenant_id.to_string(),
+        user_id: user_id.to_string(),
         // node_id from credentials is the local node identifier
         // (`en-...`). Wrap it in the canonical URA shape so every
         // downstream consumer (advertise_self_signed_device,
@@ -581,7 +587,7 @@ pub(crate) fn build_bootstrap_plan_from(
         // self-signed-must-equal-caller check) sees one form. The
         // bare node_id remains accessible separately via
         // `creds.node_id` when an entry path needs it.
-        host_device_uri: crate::uri::device_uri(&tenant_id, &node_id),
+        host_device_uri: crate::uri::device_uri(tenant_id, node_id),
         // Defaults match plan §1's "default-on consent on
         // interactive hosts"; policy + mcp default off until
         // [profiles] config wiring lands.
@@ -1154,8 +1160,10 @@ mod tests {
         // for downstream Hub-tier signing — that wrapping is exactly
         // what the federation Invoke surface consumes, so the test
         // pins the wrapped form rather than the raw bare id.
-        let plan = build_bootstrap_plan_from("tenant-test", "node-test").expect("plan must build");
+        let plan = build_bootstrap_plan_from("tenant-test", "node-test", "user-test")
+            .expect("plan must build");
         assert_eq!(plan.realm, "tenant-test");
+        assert_eq!(plan.user_id, "user-test");
         assert_eq!(
             plan.host_device_uri,
             "easynet:///r/tenant-test/device/node-test"

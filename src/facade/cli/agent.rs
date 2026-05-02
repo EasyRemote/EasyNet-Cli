@@ -346,8 +346,12 @@ fn publish_to_local_runtime_best_effort(agent_name: &str, directory: &AgentDirec
     // with a full federation.advertise_* sweep. The just-added
     // agent is already in registry.agents, so the bootstrap+advertise
     // path picks it up; we don't need agent-specific plumbing here.
-    let plan = match crate::facade::cli::start::build_bootstrap_plan_from(tenant_id, &creds.node_id)
-    {
+    let user_id = creds.username.as_deref().unwrap_or("");
+    let plan = match crate::facade::cli::start::build_bootstrap_plan_from(
+        tenant_id,
+        &creds.node_id,
+        user_id,
+    ) {
         Ok(p) => p,
         Err(e) => {
             output::warn(&format!("publish bootstrap plan: {e}"));
@@ -1474,8 +1478,11 @@ fn run_refresh() -> anyhow::Result<()> {
     })?;
     let creds = crate::persistence::config::load_credentials()
         .map_err(|e| anyhow::anyhow!("load credentials: {e}"))?;
-    let plan =
-        crate::facade::cli::start::build_bootstrap_plan_from(&creds.tenant_id, &creds.node_id)?;
+    let plan = crate::facade::cli::start::build_bootstrap_plan_from(
+        &creds.tenant_id,
+        &creds.node_id,
+        creds.username.as_deref().unwrap_or(""),
+    )?;
     if plan.realm.is_empty() {
         anyhow::bail!(
             "daemon is not joined to a realm yet; run `easynet join <token>` before refresh"
