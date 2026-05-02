@@ -108,14 +108,23 @@ The URA fills the caller / callee / subject slots:
 |----------|-------------------------------------------------------------------|
 | caller   | hub / device / agent (the entity that signed and transmitted)     |
 | callee   | hub / device / agent (the entity addressed)                       |
-| subject  | device / resource (the operational principal — user is identity, |
-|          | not action-target; in the JWT-delegation flow the subject is the |
-|          | device acting for the user)                                       |
+| subject  | user / device / resource (the principal an action is taken on    |
+|          | behalf of, OR the principal acting). Concrete shape depends on  |
+|          | call context: JWT-delegation from web UI carries user-URA as    |
+|          | subject; daemon-originated calls carry device-URA; fs.read /    |
+|          | shell.run carry resource-URA.                                    |
 
 Admission's `ValidateSubject` enforces the kind constraint at
 envelope dispatch. `ValidateSubject` lives in
 `backend/internal/axon/admission.go` (Phase 5 landing — log-only
 default; production toggles via env `EASYNET_ADMISSION_SUBJECT_ENFORCE`).
+The current implementation accepts `{user, resource}` and rejects
+`{agent, device, hub, ability}`; the device-as-subject path was
+ratified mid-Phase-2 for cross-realm `federation.resolve` calls
+where the device is the operational principal — extending
+`ValidateSubject` to also accept `URAKindDevice` is a Phase 4
+follow-up the existing user-as-subject deployments ratify silently
+when daemon-originated traffic hits the gate.
 
 ## §4 — Migration: v4.1.3 → v4.1.4
 
