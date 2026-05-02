@@ -362,15 +362,21 @@ pub struct Credentials {
     pub node_id: String,
     pub credential_token: String,
     pub hub_endpoint: String,
-    // URA v4.1.4 backend renamed the wire field `tenant_id` → `realm`
+    // URI v4.1.4 backend renamed the wire field `tenant_id` → `realm`
     // for every device-pairing response (CreatePairingResp,
-    // PairingPreflightResp, DeviceResp). We deserialize from `realm`
-    // first, fall back to `tenant_id` for compat with pre-v4.1.4
-    // hubs and on-disk credentials.json written by older CLIs. The
-    // separate `realm: Option<String>` field below stays the v2
-    // structured carrier; this alias keeps the legacy carrier wired
-    // until the on-disk schema is also promoted.
-    #[serde(alias = "realm")]
+    // PairingPreflightResp, DeviceResp).
+    //
+    // The Rust struct keeps `tenant_id` as the in-memory field name
+    // (~15 callsites depend on it) but accepts EITHER `realm` (v4.1.4)
+    // or `tenant_id` (legacy + on-disk v1 credentials.json) on the
+    // wire via serde alias. `default` lets the v1 form decode when
+    // only `tenant_id` is present and the v4.1.4 form when only
+    // `realm` is present. Output side: `serialize` always writes
+    // `tenant_id` (the field name) for backward-compat with any
+    // tooling that still reads credentials.json by hand. A future
+    // amendment can flip serialization to write `realm` once nothing
+    // else reads the file path.
+    #[serde(default, alias = "realm")]
     pub tenant_id: String,
     #[serde(default)]
     pub deploy_signature: String,
@@ -378,12 +384,6 @@ pub struct Credentials {
     /// When absent, derived from `hub_endpoint` by stripping scheme/port and using HTTPS.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hub_api_base: Option<String>,
-    /// URI v2 realm — federation namespace, DNS-aligned. Optional
-    /// for backward-compat read of v1 credentials.json: when absent,
-    /// callers fall back to `tenant_id` (which carries the same
-    /// value in v2-minted credentials).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub realm: Option<String>,
     /// URI v2 username — stable slug for the user this device is
     /// paired to. Optional during the migration window; populated
     /// by the Phase 14 backend in validate-pairing responses.
@@ -392,10 +392,14 @@ pub struct Credentials {
 }
 
 impl Credentials {
-    /// Returns the v2 realm — `realm` field if set, else `tenant_id`
-    /// (for legacy credentials.json files written before Phase 8).
+    /// Returns the v4.1.4 realm. After the alias-based serde change
+    /// (Phase 2B'), the value lives in `tenant_id` regardless of
+    /// whether the wire payload used the new `realm` field name or
+    /// the legacy `tenant_id` field name. Callers should still go
+    /// through this helper rather than reading `.tenant_id` directly
+    /// — that way a future field rename will only need one edit.
     pub fn realm_str(&self) -> &str {
-        self.realm.as_deref().unwrap_or(&self.tenant_id)
+        &self.tenant_id
     }
 }
 
@@ -631,7 +635,6 @@ mod tests {
             tenant_id: "tenant".into(),
             deploy_signature: String::new(),
             hub_api_base: Some("https://api.example.com/".into()),
-            realm: None,
             username: None,
         };
         assert_eq!(creds.api_base(), "https://api.example.com");
@@ -750,7 +753,6 @@ mod tests {
             tenant_id: "tenant".into(),
             deploy_signature: String::new(),
             hub_api_base: None,
-            realm: None,
             username: None,
         };
         assert_eq!(creds.api_base(), "https://my-hub.example.org");
