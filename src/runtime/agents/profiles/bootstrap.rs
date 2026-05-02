@@ -377,8 +377,11 @@ mod tests {
 
         // Post-join: realm + host URI now known. Re-run bootstrap.
         plan.realm = "acme".into();
-        plan.host_device_uri = "easynet:///r/acme/agent/01DEV".into();
+        // URI v4.1.4: host device URA uses the `/device/` role
+        // segment (Phase 2F) — the legacy `/agent/01DEV` collapsed
+        // every profile under one role.
+        plan.host_device_uri = "easynet:///r/acme/device/01DEV".into();
         let _ = bootstrap_local_agents(&plan, &mut file, &CountingMinter::new());
-        assert_eq!(file.host_device_agent_uri, "easynet:///r/acme/agent/01DEV");
+        assert_eq!(file.host_device_agent_uri, "easynet:///r/acme/device/01DEV");
     }
 }
