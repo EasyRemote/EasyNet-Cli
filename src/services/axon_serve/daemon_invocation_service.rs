@@ -974,6 +974,7 @@ impl DaemonInvocationService {
             // cross-hub path.
             (None, Some(_)) => true,
         };
+        let has_local_presence = self.presence.lookup(&request.target_uri).is_some();
 
         // Observable trace for operators debugging answer-sheet /
         // demo runs — proves which dispatch arm fired without
@@ -985,8 +986,8 @@ impl DaemonInvocationService {
         eprintln!(
             "[axon-serve] federation.forward_invoke dispatch: \
              target_uri={} target_tenant={:?} local_tenant={:?} \
-             is_local_tenant={}",
-            request.target_uri, target_tenant, local_tenant, is_local_tenant,
+             is_local_tenant={} has_local_presence={}",
+            request.target_uri, target_tenant, local_tenant, is_local_tenant, has_local_presence,
         );
 
         // Decode the inner payload up front. The
@@ -1013,64 +1014,51 @@ impl DaemonInvocationService {
         // `Status::failed_precondition(target_offline)` per
         // DEC-N4 §2.1 — the empty-result shape is no longer the
         // wire surface for offline.
-        if is_local_tenant {
-            // **PR-1 commit 7/9 (LB-56) — self-targeted local dispatch**.
-            // When the inbound forward_invoke targets THIS daemon's
-            // own canonical URI, the local-presence push misses by
-            // construction (a hub does not register its own URI in
-            // its PresenceRegistry). Without a synchronous
-            // fall-through to `LocalAbilityRegistry`, the call
-            // surfaces as target_offline even though the target is
-            // perfectly capable of running the ability. This arm
-            // resolves the inner ability against the boot-threaded
-            // `AbilityDispatcher` Arc and stamps the JSON result
-            // bytes inline into ForwardInvokeResponse.result_bytes.
-            //
-            // The semantic difference vs the bidi-push path: this
-            // is a synchronous reply, no reverse-channel correlation
-            // round-trip, no PR-N5 second-receipt update. The
-            // ForwardReceipt is written ONCE with a real result_digest
-            // computed from the bytes returned here.
-            //
-            // Guard: only fires when caller and daemon URIs match
-            // exactly AND the daemon was booted with a local
-            // dispatcher (production hub-mode + both-mode daemons
-            // always have one; test fixtures with `make_service()`
-            // do not, preserving their target_offline expectation).
-            if let (Some(daemon_uri), Some(local_dispatcher)) =
-                (self.admission.daemon_uri(), self.local_dispatcher.as_ref())
-            {
-                if request.target_uri == daemon_uri {
-                    return self.dispatch_self_targeted_forward_invoke(
-                        local_dispatcher,
-                        &inner_payload,
-                        &request,
-                        caller_envelope,
-                        &correlation_call_id,
-                    );
-                }
+        // **PR-1 commit 7/9 (LB-56) — self-targeted local dispatch**.
+        // When the inbound forward_invoke targets THIS daemon's
+        // own canonical URI, the local-presence push misses by
+        // construction (a hub does not register its own URI in
+        // its PresenceRegistry). Without a synchronous
+        // fall-through to `LocalAbilityRegistry`, the call
+        // surfaces as target_offline even though the target is
+        // perfectly capable of running the ability. This arm
+        // resolves the inner ability against the boot-threaded
+        // `AbilityDispatcher` Arc and stamps the JSON result
+        // bytes inline into ForwardInvokeResponse.result_bytes.
+        //
+        // The semantic difference vs the bidi-push path: this
+        // is a synchronous reply, no reverse-channel correlation
+        // round-trip, no PR-N5 second-receipt update. The
+        // ForwardReceipt is written ONCE with a real result_digest
+        // computed from the bytes returned here.
+        //
+        // Guard: only fires when caller and daemon URIs match
+        // exactly AND the daemon was booted with a local
+        // dispatcher (production hub-mode + both-mode daemons
+        // always have one; test fixtures with `make_service()`
+        // do not, preserving their target_offline expectation).
+        if let (Some(daemon_uri), Some(local_dispatcher)) =
+            (self.admission.daemon_uri(), self.local_dispatcher.as_ref())
+        {
+            if request.target_uri == daemon_uri {
+                return self.dispatch_self_targeted_forward_invoke(
+                    local_dispatcher,
+                    &inner_payload,
+                    &request,
+                    caller_envelope,
+                    &correlation_call_id,
+                );
             }
+        }
 
-            // **LB-57 Option A — synchronous local-presence dispatch**.
-            // The peer hub-B receives `federation.forward_invoke`
-            // for a device URI in its PresenceRegistry (the demo
-            // case: device-A's CLI → hub-A → hub-B → device-B).
-            // We register a `PendingDispatchMap` entry, push a
-            // `SessionDispatch::Dispatch{call_id, ability, args}`
-            // frame down device-B's session bidi (the same wire
-            // shape `<self>.invoke_remote` already uses), and
-            // await the matching `SessionDispatch::Result` via
-            // `drain_session_up_stream`'s correlation path.
-            //
-            // The previous shape pushed raw inner_envelope bytes
-            // as a BinaryChunk and returned empty result_bytes
-            // immediately — the CLI saw a phantom-success reply
-            // before device-B even ran the ability. That was a
-            // wire-shape mismatch (device's LocalAbilityDispatcher
-            // can only decode SessionDispatch JSON, not raw
-            // inner-envelope JSON) AND a correlation hole (no
-            // pending entry, so the eventual Result complete()
-            // landed as a no-op).
+        // **LB-57 Option A — synchronous local-presence dispatch**.
+        // Presence is keyed by full caller URI, not by the daemon's
+        // own realm. A platform hub may therefore host devices whose
+        // URIs live under many user realms simultaneously. When the
+        // target URI is already present on THIS hub, that concrete
+        // liveness fact wins over any tenant mismatch and we dispatch
+        // locally rather than forcing a spurious cross-hub dial.
+        if has_local_presence {
             match self
                 .dispatch_local_presence_forward_invoke(
                     &request,
@@ -1081,7 +1069,10 @@ impl DaemonInvocationService {
                 .await
             {
                 Ok(response) => return Ok(response),
-                Err(_status) => {
+                Err(status) => {
+                    if !is_local_tenant {
+                        return Err(status);
+                    }
                     // **Same-tenant cross-hub fall-through**.
                     // Local presence missed but the target's tenant
                     // matches ours — the device may be paired on a
@@ -1208,6 +1199,118 @@ impl DaemonInvocationService {
             }
         }
 
+        if is_local_tenant {
+            // Same-tenant but not locally present: fan out across
+            // peer hubs that serve this tenant, then surface a real
+            // target_offline if every peer also misses.
+            match self
+                .dispatch_local_presence_forward_invoke(
+                    &request,
+                    &inner_payload,
+                    caller_envelope,
+                    &correlation_call_id,
+                )
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(_status) => {
+                    // **Same-tenant cross-hub fall-through**.
+                    // Local presence missed but the target's tenant
+                    // matches ours — the device may be paired on a
+                    // peer hub against the same user account. Per
+                    // CTO directive on cross-hub same-account: fan
+                    // out across `federated_peers` (no per-tenant
+                    // routing key when the tenant IS local; we ask
+                    // every peer hub the operator has federated
+                    // with). First-success wins in lex order on
+                    // `peer_realm`. Real `target_offline` only
+                    // surfaces if every peer also misses or no
+                    // peers are wired.
+                    if let Some(client) = self.federation_client.as_ref() {
+                        let peers_snapshot = self.federated_peers.snapshot();
+                        if !peers_snapshot.is_empty() {
+                            let peer_envelope =
+                                build_peer_envelope(caller_envelope, &request.target_uri);
+                            let nested = federation_wrappers::ForwardInvokeRequest {
+                                target_uri: request.target_uri.clone(),
+                                inner_envelope_b64: request.inner_envelope_b64.clone(),
+                                causal_context_bytes: request.causal_context_bytes.clone(),
+                                forward_deadline_ms: request.forward_deadline_ms,
+                            };
+                            let nested_arguments = serde_json::to_vec(&nested).map_err(|err| {
+                                Status::internal(format!(
+                                    "federation.forward_invoke: encode nested \
+                                         ForwardInvokeRequest for same-tenant fan-out: {err}"
+                                ))
+                            })?;
+                            let peer_request = InvokeRequest {
+                                envelope: Some(peer_envelope),
+                                function_name: ABILITY_FEDERATION_FORWARD_INVOKE.to_string(),
+                                arguments: nested_arguments,
+                                ..InvokeRequest::default()
+                            };
+                            for (peer_realm, peer_hub_uri) in peers_snapshot.iter() {
+                                let _ = peer_realm;
+                                match client
+                                    .forward_invoke(peer_hub_uri, peer_request.clone())
+                                    .await
+                                {
+                                    Ok(peer_response) => {
+                                        let peer_body: federation_wrappers::ForwardInvokeResponse =
+                                            match serde_json::from_slice(&peer_response.result) {
+                                                Ok(body) => body,
+                                                Err(err) => {
+                                                    eprintln!(
+                                                        "[axon-serve] same-tenant \
+                                                         fan-out peer returned malformed \
+                                                         ForwardInvokeResponse JSON: \
+                                                         {err}; forwarding raw bytes \
+                                                         for forward-compat"
+                                                    );
+                                                    federation_wrappers::ForwardInvokeResponse {
+                                                        result_bytes: peer_response.result.clone(),
+                                                        correlation_call_id: correlation_call_id
+                                                            .clone(),
+                                                    }
+                                                }
+                                            };
+                                        self.admission.receipt_store().record(
+                                            build_forward_receipt(
+                                                &correlation_call_id,
+                                                &request.target_uri,
+                                                caller_envelope,
+                                                Some(&peer_body.result_bytes),
+                                            ),
+                                        );
+                                        let response = federation_wrappers::ForwardInvokeResponse {
+                                            result_bytes: peer_body.result_bytes,
+                                            correlation_call_id,
+                                        };
+                                        return wrap_json_response(&response);
+                                    }
+                                    Err(err) => {
+                                        eprintln!(
+                                            "[axon-serve] same-tenant cross-hub miss \
+                                             on peer realm {peer_realm} hub {peer_hub_uri}: \
+                                             {err}"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    self.admission.receipt_store().record(build_forward_receipt(
+                        &correlation_call_id,
+                        &request.target_uri,
+                        caller_envelope,
+                        None,
+                    ));
+                    return Err(Status::failed_precondition(
+                        federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+                    ));
+                }
+            }
+        }
         // Cross-tenant path. Missing federation client OR
         // missing peer entry both surface as
         // `failed_precondition(target_offline)` per DEC-N4 §2.1
@@ -2333,7 +2436,11 @@ impl DaemonInvocationService {
                 // verbatim. The arm choice mirrors the same
                 // `target_tenant == local_tenant` comparison the
                 // inner dispatch performs.
-                emit_session_request_resolution_marker(args, self.session_realm.as_deref());
+                emit_session_request_resolution_marker(
+                    args,
+                    self.session_realm.as_deref(),
+                    &self.presence,
+                );
 
                 match self.dispatch_federation_forward_invoke(None, args).await {
                     Ok(response) => {
@@ -2372,14 +2479,22 @@ impl DaemonInvocationService {
 /// internal `is_local_tenant` computation: a malformed inner
 /// payload or a missing `session_realm` collapses to the local
 /// arm (matching the inner dispatcher's smoke-test fall-through).
-fn emit_session_request_resolution_marker(args: &[u8], local_tenant: Option<&str>) {
+fn emit_session_request_resolution_marker(
+    args: &[u8],
+    local_tenant: Option<&str>,
+    presence: &crate::services::presence_registry::PresenceRegistry,
+) {
     let request: Option<federation_wrappers::ForwardInvokeRequest> =
         serde_json::from_slice(args).ok();
     let target_tenant = request
         .as_ref()
         .and_then(|r| parse_tenant_from_uri(&r.target_uri));
+    let has_local_presence = request
+        .as_ref()
+        .map(|r| presence.lookup(&r.target_uri).is_some())
+        .unwrap_or(false);
 
-    let is_local = match (target_tenant, local_tenant) {
+    let is_local = has_local_presence || match (target_tenant, local_tenant) {
         (Some(target), Some(local)) => target == local,
         (_, None) | (None, Some(_)) => true,
     };
@@ -5593,9 +5708,11 @@ mod tests {
         // directly with both arms to pin the branch logic, and
         // rely on the larger e2e test below to confirm the
         // log line actually fires through the dispatch arm.
+        let presence = PresenceRegistry::new();
         emit_session_request_resolution_marker(
             &forward_invoke_args("easynet:///r/test-realm/agent/local-target"),
             Some("test-realm"),
+            &presence,
         );
         // No assertion possible without a stderr capture rig;
         // the function returns unit. Branch coverage IS the
@@ -5627,6 +5744,74 @@ mod tests {
             other => panic!(
                 "same-tenant target with empty presence must surface TargetOffline \
                  (proves local-fast-path arm fired), got {other:?}"
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_session_request_routes_local_fast_path_when_cross_realm_target_is_present() {
+        // Platform hubs can host devices whose URIs live under a
+        // user realm different from the hub's own control-plane
+        // realm. If the concrete target URI is already present on
+        // THIS hub, local presence must win over the realm mismatch.
+        let svc = make_service()
+            .with_session_realm("easynet-platform")
+            .with_pending(Arc::new(PendingDispatchMap::new()));
+        let target_uri = "easynet:///r/user-realm/agent/present-device";
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<
+            Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
+        >(4);
+        svc.presence.insert(target_uri.to_string(), tx);
+
+        let pending = svc.pending.clone().expect("pending wired above");
+        let pending_for_fake = Arc::clone(&pending);
+        let fake_device = tokio::spawn(async move {
+            let frame = rx
+                .recv()
+                .await
+                .expect("reverse-channel frame arrives")
+                .expect("frame is Ok");
+            use crate::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
+            let chunk = match frame.frame.payload {
+                Some(DownPayload::BinaryChunk(c)) => c,
+                other => panic!("expected BinaryChunk, got {other:?}"),
+            };
+            let dispatch: SessionDispatch =
+                serde_json::from_slice(&chunk.data).expect("frame is SessionDispatch JSON");
+            let SessionDispatch::Dispatch { call_id, .. } = dispatch else {
+                panic!("expected SessionDispatch::Dispatch, got {dispatch:?}");
+            };
+            pending_for_fake.complete(
+                call_id,
+                DispatchResult {
+                    payload: br#"{"marker":"cross-realm-local-presence"}"#.to_vec(),
+                    error: None,
+                },
+            );
+        });
+
+        let outcome = svc
+            .dispatch_session_request(
+                ABILITY_FEDERATION_FORWARD_INVOKE,
+                &forward_invoke_args(target_uri),
+            )
+            .await;
+        fake_device.await.expect("fake device task joins");
+
+        match outcome {
+            RequestOutcome::Ok { result_bytes } => {
+                let body: federation_wrappers::ForwardInvokeResponse =
+                    serde_json::from_slice(&result_bytes).expect("outer body decodes");
+                let inner: serde_json::Value =
+                    serde_json::from_slice(&body.result_bytes).expect("inner result decodes");
+                assert_eq!(
+                    inner.get("marker").and_then(|v| v.as_str()),
+                    Some("cross-realm-local-presence"),
+                );
+            }
+            other => panic!(
+                "cross-realm target already present on this hub must stay on the local fast-path, got {other:?}"
             ),
         }
     }
