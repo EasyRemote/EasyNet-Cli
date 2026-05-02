@@ -315,29 +315,46 @@ impl PtyIoService {
 /// Register the three RPCs on the dispatcher. Caller threads the
 /// shared `PtyService` (lifecycle) + `PtyIoService` (I/O state) so
 /// every handler observes the same session and state tables.
+///
+/// Two name families register the same handlers:
+///   * `fleet.pty_session_*`  (canonical local-IPC name; CLI subcommands
+///                              and stdio MCP server use these)
+///   * `fleet.session_*`      (axon-runtime wire-name family; backend's
+///                              PTYDriver dispatches under these
+///                              because terminal_proxy.rs in the
+///                              runtime registers the same handlers
+///                              under the shorter prefix)
+///
+/// In host-mode (backend → daemon UDS → `<self>.invoke_remote` →
+/// device's local AbilityDispatcher), backend's PTYDriver hits the
+/// `fleet.session_*` name and would otherwise 404 on this dispatcher
+/// because it only knew `fleet.pty_session_*`. Registering aliases
+/// closes that gap without forcing every CLI surface or downstream
+/// SDK to switch names.
 pub fn register(reg: &mut LocalAbilityRegistry, pty: Arc<PtyService>, io: PtyIoService) {
+    use crate::runtime::ability_dispatch::LocalRpcHandler;
     {
         let pty = Arc::clone(&pty);
         let io = io.clone();
-        reg.register_rpc(
-            ABILITY_PTY_SESSION_INPUT,
-            Arc::new(move |args: Value| input_handler(&pty, &io, args)),
-        );
+        let handler: LocalRpcHandler =
+            Arc::new(move |args: Value| input_handler(&pty, &io, args));
+        reg.register_rpc(ABILITY_PTY_SESSION_INPUT, Arc::clone(&handler));
+        reg.register_rpc("fleet.session_input", handler);
     }
     {
         let pty = Arc::clone(&pty);
         let io = io.clone();
-        reg.register_rpc(
-            ABILITY_PTY_SESSION_READ,
-            Arc::new(move |args: Value| read_handler(&pty, &io, args)),
-        );
+        let handler: LocalRpcHandler =
+            Arc::new(move |args: Value| read_handler(&pty, &io, args));
+        reg.register_rpc(ABILITY_PTY_SESSION_READ, Arc::clone(&handler));
+        reg.register_rpc("fleet.session_read", handler);
     }
     {
         let pty = Arc::clone(&pty);
-        reg.register_rpc(
-            ABILITY_PTY_SESSION_RESIZE,
-            Arc::new(move |args: Value| resize_handler(&pty, args)),
-        );
+        let handler: LocalRpcHandler =
+            Arc::new(move |args: Value| resize_handler(&pty, args));
+        reg.register_rpc(ABILITY_PTY_SESSION_RESIZE, Arc::clone(&handler));
+        reg.register_rpc("fleet.session_resize", handler);
     }
 }
 
