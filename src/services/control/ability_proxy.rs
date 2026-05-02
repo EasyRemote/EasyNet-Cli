@@ -244,6 +244,7 @@ impl AbilityProxy {
                 request_id,
                 ability,
                 args,
+                subject,
             } => {
                 // `handle_invoke` is synchronous and can call
                 // ability handlers (process.exec, shell.run) that
@@ -265,7 +266,7 @@ impl AbilityProxy {
                 let proxy = self.clone();
                 let join = tokio::task::spawn_blocking(move || {
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                        proxy.handle_invoke(request_id, ability, args)
+                        proxy.handle_invoke(request_id, ability, args, subject)
                     }))
                 })
                 .await;
@@ -634,7 +635,8 @@ impl AbilityProxy {
                 request_id,
                 ability,
                 args,
-            } => self.handle_invoke(request_id, ability, args),
+                subject,
+            } => self.handle_invoke(request_id, ability, args, subject),
             IncomingFrame::Subscribe {
                 subscription_id,
                 ability,
@@ -740,6 +742,7 @@ impl AbilityProxy {
         request_id: String,
         ability: String,
         args: serde_json::Value,
+        subject: Option<String>,
     ) -> Vec<OutgoingFrame> {
         let ability_for_receipt = ability.clone();
         let llm_sub_for_receipt = sub_agent_name_from_ability(&ability);
@@ -748,8 +751,12 @@ impl AbilityProxy {
             target_node_hint: extract_node_hint(&args),
             args,
             call_mode: CallMode::Rpc,
-            // PR-DISPATCHER-SUBJECT: see Stream sites above.
-            subject: None,
+            // The wire-level Invoke frame now carries an optional
+            // subject URI (set by `easynet ability invoke
+            // --subject`); the resolver threads it onto
+            // `InvocationTarget.subject`, where envelope-aware
+            // handlers consume it via `EnvelopeContext`.
+            subject,
         };
         let target = match self.resolver.resolve(plan) {
             Ok(t) => t,
@@ -1175,6 +1182,7 @@ mod tests {
             request_id: "req-1".into(),
             ability: "observe.health".into(),
             args: json!({}),
+            subject: None,
         });
         assert_eq!(frames.len(), 1);
         match &frames[0] {
@@ -1196,6 +1204,7 @@ mod tests {
             request_id: "req-2".into(),
             ability: "system.does.not.exist".into(),
             args: json!({}),
+            subject: None,
         });
         assert_eq!(frames.len(), 1);
         match &frames[0] {
@@ -1294,6 +1303,7 @@ mod tests {
             request_id: "req-receipt-1".into(),
             ability: "observe.health".into(),
             args: json!({}),
+            subject: None,
         });
         match &frames[0] {
             OutgoingFrame::Result {
@@ -1346,6 +1356,7 @@ mod tests {
             // get; if the registry happens to accept the empty
             // payload, the header check applies.
             args: json!({"request_id": "nonexistent", "decision": "Allowed"}),
+            subject: None,
         });
         // If consent.decide succeeded against an empty
         // PermissionService, we get a Result; if it failed, we get
@@ -1856,6 +1867,7 @@ mod tests {
             request_id: "req-no-header".into(),
             ability: "observe.health".into(),
             args: json!({}),
+            subject: None,
         });
         match &frames[0] {
             OutgoingFrame::Result {

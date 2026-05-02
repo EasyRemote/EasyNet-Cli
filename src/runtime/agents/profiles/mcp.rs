@@ -159,6 +159,7 @@ impl LocalInvoker for ProxyLocalInvoker {
             request_id: req_id,
             ability: ability.to_string(),
             args,
+            subject: None,
         });
         // Per the proxy contract, the first frame is either a
         // single Result or a single Error. We surface the Result's

@@ -41,11 +41,19 @@ use serde_json::Value;
 pub enum IncomingFrame {
     /// RPC-style ability call. Expect exactly one `Result` or
     /// `Error` envelope in response.
+    ///
+    /// `subject` carries the AXIOM envelope's subject URI (the
+    /// resource the ability acts on, e.g. a camera resource URA for
+    /// `camera.snapshot`). Older clients omit it; the daemon
+    /// forwards it to `InvocationPlan.subject` when present so
+    /// envelope-aware handlers see it via `EnvelopeContext`.
     Invoke {
         request_id: String,
         ability: String,
         #[serde(default)]
         args: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subject: Option<String>,
     },
     /// Streaming ability call. Expect zero or more `Frame` envelopes
     /// followed by exactly one `Terminal` envelope.
@@ -188,6 +196,7 @@ mod tests {
             request_id: "r-1".into(),
             ability: "observe.health".into(),
             args: serde_json::json!({}),
+            subject: None,
         };
         let s = serde_json::to_string(&f).unwrap();
         let back: IncomingFrame = serde_json::from_str(&s).unwrap();

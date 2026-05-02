@@ -57,7 +57,7 @@ use anyhow::{bail, Context};
 use clap::Args;
 use serde_json::Value;
 
-use crate::support::local_invoke::invoke_local_ability;
+use crate::support::local_invoke::invoke_local_ability_with_subject;
 use crate::support::{output, timeouts};
 
 #[derive(Debug, Args)]
@@ -92,6 +92,18 @@ pub struct InvokeArgs {
     /// envelope (timing, exit_code, fulfilled_by) for diagnostics.
     #[arg(long)]
     pub raw: bool,
+    /// AXIOM envelope subject — the resource the ability acts on,
+    /// expressed as a canonical resource URI
+    /// (`easynet:///r/<realm>/resource/<id>`). Required by abilities
+    /// whose contract pins behaviour on a specific resource (e.g.
+    /// `camera.snapshot`, which uses the subject to look up the
+    /// camera's `hardware_id` and `resources.json` entry); ignored
+    /// by abilities that don't consume `EnvelopeContext.subject`.
+    /// Per INV-SUBJECT-ENVELOPE the subject MUST come from the
+    /// envelope, not from `--args` — passing it via `--args
+    /// '{"subject": "..."}'` is rejected by the handler.
+    #[arg(long, value_name = "URI")]
+    pub subject: Option<String>,
 }
 
 pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
@@ -180,7 +192,17 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             // rendering — every CLI subcommand goes through this same
             // function per the AXON-RFC-001 ontology that says "every
             // action is an ability invocation".
-            let value = invoke_local_ability(&invoke_args.ability, arguments)?;
+            let subject = invoke_args
+                .subject
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let value = invoke_local_ability_with_subject(
+                &invoke_args.ability,
+                arguments,
+                subject,
+            )?;
             (value, "local daemon".to_string())
         }
     };
