@@ -118,6 +118,13 @@ pub mod trust_anchor_cell;
 /// roles.
 pub mod keyring;
 
+/// SelfIdentity client (RFC-001 plan v4.1.5 Phase 3B). Typed
+/// `sign(self_uri, canonical_bytes) -> Signature` handle backed
+/// by the `easynet-keyring` daemon's UDS or an in-process
+/// `Vault`. Boot wiring picks the impl; callsites take an
+/// `Arc<dyn SelfIdentity>` and never touch raw seed bytes.
+pub mod self_identity;
+
 /// Bounded in-memory store the admission gate records signed
 /// `InvocationReceipt`s into. PR-10 commit 2/N introduces the
 /// surface; commit 3/N hooks `run_strict_admission` to emit a
