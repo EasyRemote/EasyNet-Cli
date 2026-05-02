@@ -489,6 +489,46 @@ pub fn run_daemon() -> anyhow::Result<()> {
     let reconnecting = ReconnectingBridge::connect(reconnect_config, Some(hook))
         .with_context(|| format!("heartbeat daemon: initial connect to {endpoint}"))?;
 
+    // Bootstrap self-identity into axon-runtime BEFORE the first
+    // heartbeat. Without this the runtime rejects every signed Invoke
+    // (heartbeat, advertise, resolve) with
+    // `AXON_EASYNET_SUBJECT_KEY_UNREGISTERED` until `easynet runtime
+    // start` happens to be the launcher (it bootstraps too). Bare
+    // `easynet-daemon` boot — service / launchd / unit-file path —
+    // never goes through `runtime start`, so the heartbeat sidecar is
+    // the right place: it has the runtime endpoint, runs once per
+    // daemon lifetime, and any long-lived federation surface depends
+    // on it succeeding. Best-effort: a failure logs and continues —
+    // bootstrap is idempotent (first-writer-wins) so subsequent ticks
+    // pay zero cost on success.
+    //
+    // realm == tenant for v1 single-realm; the URI v2 cut-over picks
+    // a separate `realm` field. Until then both fields name the same
+    // logical scope.
+    let realm = tenant.clone();
+    let bootstrap_outcome = reconnecting.with_bridge(|br| {
+        let device_uri = format!("easynet:///r/{tenant}/agent/{node_id}");
+        let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+            br,
+            device_uri,
+        );
+        let outcome = crate::runtime::publish::bootstrap_self_identity_via_runtime(
+            &invoker, &tenant, &realm, &node_id,
+        );
+        outcome
+            .result
+            .map_err(easynet_axon::error::AxonError::Bridge)
+    });
+    match bootstrap_outcome {
+        Ok(()) => output::info(&format!(
+            "heartbeat daemon: bootstrapped trusted-key material for {node_id}"
+        )),
+        Err(e) => output::warn(&format!(
+            "heartbeat daemon: runtime.bootstrap_self_identity failed: {e}; signed Invokes \
+             will fail until the runtime accepts this node's key"
+        )),
+    }
+
     let shutdown = ShutdownSignal::new();
     let s = shutdown.clone();
     ctrlc::set_handler(move || {

@@ -245,27 +245,33 @@ impl AbilityProxy {
                 ability,
                 args,
             } => {
-                // Wrap the (synchronous) ability dispatch in
-                // `catch_unwind` so a panic anywhere downstream — most
-                // commonly from the chat handler's `eprintln!` path
-                // when stderr fd state is unexpected — does not take
-                // out the per-connection tokio task. Without the
-                // catch, the panic unwinds the future, drops `out`,
-                // and the writer observes EOF — the client sees
-                // "daemon closed the connection before responding"
-                // instead of a typed error frame.
+                // `handle_invoke` is synchronous and can call
+                // ability handlers (process.exec, shell.run) that
+                // wrap an async `execute()` in
+                // `Handle::current().block_on(...)`. That pattern is
+                // safe ONLY on a blocking-pool thread; on a tokio
+                // worker it panics with "Cannot start a runtime
+                // from within a runtime". `handle_async` is driven
+                // from a per-connection worker, so we move the
+                // dispatch onto the blocking pool. Mirrors the
+                // session path in
+                // `local_ability_dispatcher::execute_local_rpc_blocking`.
                 //
-                // The dispatcher itself is a closed crate-internal
-                // surface; it has no async state (handle_invoke is
-                // sync), so AssertUnwindSafe is sound: there's no
-                // borrow we'd be holding across an await.
+                // `catch_unwind` still guards the call so a handler
+                // panic surfaces as a typed Error frame instead of
+                // tearing down the connection.
                 let request_id_for_err = request_id.clone();
                 let ability_for_err = ability.clone();
-                let frames = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    self.handle_invoke(request_id, ability, args)
-                })) {
-                    Ok(frames) => frames,
-                    Err(panic_payload) => {
+                let proxy = self.clone();
+                let join = tokio::task::spawn_blocking(move || {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                        proxy.handle_invoke(request_id, ability, args)
+                    }))
+                })
+                .await;
+                let frames = match join {
+                    Ok(Ok(frames)) => frames,
+                    Ok(Err(panic_payload)) => {
                         let msg = if let Some(s) = panic_payload.downcast_ref::<&'static str>() {
                             (*s).to_string()
                         } else if let Some(s) = panic_payload.downcast_ref::<String>() {
@@ -281,6 +287,18 @@ impl AbilityProxy {
                             subscription_id: None,
                             code: codes::ABILITY_FAILED.into(),
                             message: format!("ability handler panicked: {msg}"),
+                        }]
+                    }
+                    Err(join_err) => {
+                        eprintln!(
+                            "[ability_proxy] handle_invoke {ability_for_err:?} \
+                             spawn_blocking task aborted: {join_err}"
+                        );
+                        vec![OutgoingFrame::Error {
+                            request_id: Some(request_id_for_err),
+                            subscription_id: None,
+                            code: codes::ABILITY_FAILED.into(),
+                            message: format!("ability handler task aborted: {join_err}"),
                         }]
                     }
                 };
