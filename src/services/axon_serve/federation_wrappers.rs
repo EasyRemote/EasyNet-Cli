@@ -547,7 +547,7 @@ pub fn handle_list_user_devices(
     request: &ListUserDevicesRequest,
     registry: &PresenceRegistry,
 ) -> ListUserDevicesResponse {
-    let tenant_prefix = format!("easynet:///r/{}/agent/", request.tenant_id);
+    let tenant_prefix = crate::uri::realm_agent_prefix(&request.tenant_id);
     let snapshot = registry.snapshot();
     let devices = snapshot
         .into_iter()

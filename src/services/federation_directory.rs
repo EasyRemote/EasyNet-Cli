@@ -1038,7 +1038,7 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
         // the peer's strict admission is defence-in-depth.
         let mut nonce = vec![0u8; 16];
         rand::rngs::OsRng.fill_bytes(&mut nonce);
-        let peer_uri_for_envelope = format!("easynet:///r/{peer_realm}/agent/hub");
+        let peer_uri_for_envelope = crate::uri::agent_uri(&peer_realm, "hub");
         let envelope = Envelope {
             caller: Some(AgentIdentity {
                 uri: caller_uri.clone(),

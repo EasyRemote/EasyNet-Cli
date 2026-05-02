@@ -137,9 +137,9 @@ pub fn bootstrap_local_agents<M: UriMinter>(
                     // it survives the daemon process, but flag it
                     // with the literal "<unjoined>" realm so the
                     // first post-join save can repair it.
-                    format!("easynet:///r/<unjoined>/agent/{id}")
+                    crate::uri::agent_uri("<unjoined>", &id)
                 } else {
-                    format!("easynet:///r/{}/agent/{}", plan.realm, id)
+                    crate::uri::agent_uri(&plan.realm, &id)
                 };
                 upsert_hosted_agent(file, profile, name, &uri);
                 (uri, false)

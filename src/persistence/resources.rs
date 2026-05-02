@@ -266,7 +266,11 @@ pub fn save(file: &ResourcesFile) -> anyhow::Result<()> {
 /// minted on first sight. Centralised so every consumer (upsert,
 /// tests, future federation.advertise hook) agrees on the shape.
 pub fn build_resource_uri(realm: &str, resource_id: &str) -> String {
-    format!("easynet:///r/{realm}/resource/{resource_id}")
+    // URI v2: resource_id is opaque tail; this convenience helper
+    // takes a pre-composed `<kind>.<id>` value and just slots it in
+    // — keeps backward-compat with existing callers that don't
+    // know about the kind+id split.
+    format!("{}{}/resource/{}", "easynet:///r/", realm, resource_id)
 }
 
 /// Look up an entry by `hardware_id`. Returns the existing URA when

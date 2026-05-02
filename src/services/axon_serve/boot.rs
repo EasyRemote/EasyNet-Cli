@@ -658,7 +658,10 @@ fn load_daemon_identity() -> Option<DaemonIdentity> {
             if tenant_id.is_empty() || node_id.is_empty() {
                 return None;
             }
-            Some(format!("easynet:///r/{tenant_id}/agent/{node_id}"))
+            // URI v2 phase 7: rename-only sweep; wire shape stays
+            // `agent/<node>` until Phase 14 production deploy
+            // re-mints the trust anchor with v2 device-URI keys.
+            Some(crate::uri::agent_uri(tenant_id, node_id))
         })?;
 
     let tenant_id = stored

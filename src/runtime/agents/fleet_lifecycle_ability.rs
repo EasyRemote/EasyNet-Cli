@@ -194,7 +194,7 @@ fn derive_canonical_uri(name: &str) -> String {
         .ok()
         .and_then(|f| extract_realm_from_uri(&f.host_device_agent_uri))
         .unwrap_or_else(|| "<unset>".to_string());
-    format!("easynet:///r/{realm}/agent/01LLM-{name}")
+    crate::uri::agent_uri(&realm, &format!("01LLM-{name}"))
 }
 
 /// Extract `<realm>` from `easynet:///r/<realm>/agent/<id>`.

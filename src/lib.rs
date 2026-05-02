@@ -48,6 +48,7 @@ pub mod registry;
 pub mod runtime;
 pub mod services;
 pub mod support;
+pub mod uri;
 
 /// Generated tonic + prost types for axon's `axon.v1.*` protos.
 ///
