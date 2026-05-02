@@ -273,20 +273,19 @@ pub(crate) fn node_to_json(node: &FleetNodeSnapshot) -> Value {
     })
 }
 
+/// URI v4.1.4: extract the device UUID from a device-profile URA.
+/// Strict per the v4.1.4 ontology — only `device/<uuid>` URAs are
+/// recognised. v1 `reg/agent.<id>` and v2 `agent/<id>` shapes return
+/// None (caller treats as "not a device row" and skips). Migration
+/// callers needing the legacy shape must `easynet device join`
+/// again to mint a v4.1.4 URA.
 pub(crate) fn node_id_from_agent_uri(uri: &str) -> Option<String> {
-    if let Some(rest) = uri.strip_prefix("easynet:///r/") {
-        let rest = rest.split('?').next().unwrap_or(rest);
-        let segments: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
-        if segments.len() >= 3 && segments[1] == "agent" {
-            return Some(segments[2].to_string());
-        }
-        if segments.len() >= 3 && segments[1] == "reg" {
-            if let Some(node) = segments[2].strip_prefix("agent.") {
-                return Some(node.to_string());
-            }
-        }
+    let parsed = crate::uri::parse_ura(uri).ok()?;
+    if parsed.device_id.is_empty() {
+        None
+    } else {
+        Some(parsed.device_id)
     }
-    None
 }
 
 fn is_device_profile_agent(agent: &ResolvedAgent) -> bool {
@@ -399,18 +398,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn node_id_from_legacy_agent_uri_extracts_tail() {
+    fn node_id_from_v414_device_uri_extracts_uuid() {
+        // URI v4.1.4: device-profile URA is `device/<uuid>`.
+        let uuid = "4065c47a-ec6f-4330-87a5-0d69787709b8";
         assert_eq!(
-            node_id_from_agent_uri("easynet:///r/acme/agent/01DEV"),
-            Some("01DEV".to_string())
+            node_id_from_agent_uri(&format!("easynet:///r/localhost/device/{uuid}")),
+            Some(uuid.to_string())
         );
     }
 
     #[test]
-    fn node_id_from_conformant_agent_uri_extracts_tail() {
+    fn node_id_from_v1_v2_shapes_returns_none() {
+        // URI v4.1.4 strict parser: v1 `reg/agent.<id>` and v2
+        // `agent/<id>` shapes are no longer recognised. Caller
+        // treats None as "skip this row" — pre-v4.1.4 credentials
+        // require `easynet device join` to mint a v4.1.4 URA.
+        assert_eq!(
+            node_id_from_agent_uri("easynet:///r/acme/agent/01DEV"),
+            None,
+            "v2 agent/<id> shape must not parse as a v4.1.4 device"
+        );
         assert_eq!(
             node_id_from_agent_uri("easynet:///r/prv/reg/agent.01DEV?tenant_id=acme"),
-            Some("01DEV".to_string())
+            None,
+            "v1 reg/agent.<id> shape must not parse as a v4.1.4 device"
         );
     }
 

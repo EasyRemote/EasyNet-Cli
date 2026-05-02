@@ -1048,7 +1048,6 @@ mod tests {
             tenant_id: "tenant-test".into(),
             deploy_signature: "sig".into(),
             hub_api_base: Some("https://api.example.com".into()),
-            realm: None,
             username: None,
         }
     }
@@ -1172,12 +1171,14 @@ mod tests {
 
     #[test]
     fn realm_from_agent_uri_extracts_segment() {
+        // URI v4.1.4: hub is realm-singleton (no sub-id); device-id
+        // is bare UUID. Function is shape-agnostic — only the
+        // `<realm>/<rest>` boundary matters.
+        assert_eq!(realm_from_agent_uri("easynet:///r/acme/hub"), Some("acme"));
         assert_eq!(
-            realm_from_agent_uri("easynet:///r/acme/agent/01HUB"),
-            Some("acme")
-        );
-        assert_eq!(
-            realm_from_agent_uri("easynet:///r/contoso/agent/01-blah-blah"),
+            realm_from_agent_uri(
+                "easynet:///r/contoso/device/4065c47a-ec6f-4330-87a5-0d69787709b8"
+            ),
             Some("contoso")
         );
     }

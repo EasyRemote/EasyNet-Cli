@@ -758,7 +758,6 @@ listen_tcp = "127.0.0.1:50443"
             tenant_id: String::new(),
             deploy_signature: "sig".into(),
             hub_api_base: None,
-            realm: None,
             username: None,
         };
         auto_wire_federated_peer_from_credentials(&creds, None).expect("empty tenant is no-op");
@@ -862,7 +861,6 @@ added_at_unix_ms = 1
             tenant_id: "tenant-a".into(),
             deploy_signature: "sig".into(),
             hub_api_base: None,
-            realm: None,
             username: None,
         };
         auto_wire_self_realm_trust_from_credentials(&creds)
@@ -905,7 +903,6 @@ added_at_unix_ms = 1
             tenant_id: "tenant-a".into(),
             deploy_signature: "sig".into(),
             hub_api_base: None,
-            realm: None,
             username: None,
         };
         auto_wire_self_realm_trust_from_credentials(&creds).expect("auto-wire ok");

@@ -34,8 +34,11 @@ use crate::support::{
     output::{self, OutputFormat},
 };
 
-/// Display length for short node IDs: "en-" prefix (3) + 8 hex chars = 11.
-const SHORT_NODE_ID_LEN: usize = 11;
+/// Display length for short device IDs in table output. URI v4.1.4
+/// device-ids are bare UUIDs (8-4-4-4-12, total 36 chars); we trim
+/// to the leading 8 hex chars + a trailing ellipsis so the table
+/// stays scannable.
+const SHORT_NODE_ID_LEN: usize = 8;
 
 #[derive(Debug, Args)]
 pub struct DevicesArgs {
@@ -188,7 +191,11 @@ fn device_display_name<'a>(n: &'a Value, node_id: &'a str) -> &'a str {
         .get("display_name")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty());
-    let short_id = if node_id.starts_with("en-") && node_id.len() > SHORT_NODE_ID_LEN {
+    // URI v4.1.4: device-id is a bare UUID. Trim to leading hex
+    // group when no display_name is set so device tables stay
+    // readable. Pre-v4.1.4 `en-`-prefixed ids also get caught (the
+    // length check is generous).
+    let short_id = if node_id.len() > SHORT_NODE_ID_LEN {
         node_id.get(..SHORT_NODE_ID_LEN).unwrap_or(node_id)
     } else {
         node_id

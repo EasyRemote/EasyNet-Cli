@@ -757,18 +757,17 @@ impl AdmissionFacade {
 }
 
 /// **PR-N2 commit 1/N**. Parse the realm component from a canonical
-/// EasyNet URI (`easynet:///r/<realm>/agent/<id>`). Returns the
-/// realm slice when the shape matches, `None` otherwise. Shared by
-/// `is_federated_caller` and the cross-realm gate; mirrors the
-/// equivalent helper in `register_device_pubkey.rs` but lives here
-/// to avoid a cycle with the file boundary.
+/// EasyNet URI (`easynet:///r/<realm>/...`). Returns the realm slice
+/// when the shape matches, `None` otherwise. Shared by
+/// `is_federated_caller` and the cross-realm gate.
+///
+/// Important: federated callers in v4.1.4 are no longer uniformly
+/// `.../agent/...`; peer hubs use the singleton `.../hub` shape and
+/// device sessions register under `.../device/<id>`. Reuse the same
+/// realm parser as `<self>.register_device_pubkey` so all canonical
+/// role tails stay accepted.
 fn parse_realm_from_uri(uri: &str) -> Option<&str> {
-    let rest = uri.strip_prefix("easynet:///r/")?;
-    let (realm, _tail) = rest.split_once("/agent/")?;
-    if realm.is_empty() {
-        return None;
-    }
-    Some(realm)
+    crate::services::axon_serve::register_device_pubkey::parse_realm_from_uri(uri)
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -1599,6 +1598,55 @@ mod tests {
             )])
             .expect("anchor"),
         )
+    }
+
+    struct NoopFederationClient;
+
+    #[async_trait::async_trait]
+    impl crate::services::federation_client::FederationClient for NoopFederationClient {
+        async fn forward_invoke(
+            &self,
+            _target_hub: &crate::services::federation_client::HubUri,
+            _request: InvokeRequest,
+        ) -> Result<
+            crate::pb::axon::v1::InvokeResponse,
+            crate::services::federation_client::FederationClientError,
+        > {
+            Err(
+                crate::services::federation_client::FederationClientError::DialFailed {
+                    hub: "https://noop.test:50443".to_string(),
+                    detail: "noop test client".to_string(),
+                },
+            )
+        }
+    }
+
+    #[test]
+    fn parse_realm_from_uri_accepts_hub_and_device_shapes() {
+        assert_eq!(
+            parse_realm_from_uri("easynet:///r/peer-realm/hub"),
+            Some("peer-realm")
+        );
+        assert_eq!(
+            parse_realm_from_uri("easynet:///r/peer-realm/device/device-123"),
+            Some("peer-realm")
+        );
+    }
+
+    #[test]
+    fn is_federated_caller_accepts_v414_hub_uri() {
+        let facade = AdmissionFacade::new(
+            Arc::new(RealmTrustAnchor::default()),
+            Some("easynet:///r/local-realm/hub".to_string()),
+        )
+        .with_federation(
+            Arc::new(NoopFederationClient),
+            SharedFederatedPeers::new(std::collections::BTreeMap::from([(
+                "peer-realm".to_string(),
+                "https://peer.example:50443".to_string(),
+            )])),
+        );
+        assert!(facade.is_federated_caller("easynet:///r/peer-realm/hub"));
     }
 
     #[test]

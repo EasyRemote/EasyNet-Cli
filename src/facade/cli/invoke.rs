@@ -270,6 +270,7 @@ mod tests {
             args: None,
             timeout: 60,
             raw: false,
+            subject: None,
         });
         let err = res.expect_err("must reject non-canonical --node");
         let msg = format!("{err}");
@@ -293,6 +294,7 @@ mod tests {
             args: None,
             timeout: 60,
             raw: false,
+            subject: None,
         });
         let err = res.expect_err("must reject empty --node");
         assert!(format!("{err}").contains("empty"));
@@ -308,6 +310,7 @@ mod tests {
             args: Some("{not valid".into()),
             timeout: 60,
             raw: false,
+            subject: None,
         });
         let err = res.expect_err("must reject malformed JSON");
         assert!(format!("{err:#}").contains("parse --args JSON"));

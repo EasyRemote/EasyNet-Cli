@@ -240,7 +240,6 @@ mod tests {
             tenant_id: tenant.into(),
             deploy_signature: String::new(),
             hub_api_base: None,
-            realm: None,
             username: None,
         }
     }
