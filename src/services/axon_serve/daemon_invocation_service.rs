@@ -1613,6 +1613,19 @@ impl DaemonInvocationService {
             payload: result_bytes,
             error,
         } = dispatch_result;
+        // Diagnostic: forward the mac-side outcome verbatim so a
+        // session-frame-correlation race is visible in the hub log
+        // without having to attach a debugger. Cheap (one eprintln
+        // per round-trip).
+        eprintln!(
+            "[axon-serve] forward_invoke local-presence dispatch: \
+             target_uri={} ability={} call_id={} → result_bytes={} error={:?}",
+            request.target_uri,
+            inner_payload.ability,
+            call_id,
+            result_bytes.len(),
+            error,
+        );
         if let Some(err) = error {
             return Err(Status::failed_precondition(format!(
                 "federation.forward_invoke: target `{}` ability `{}` failed: {err}",
@@ -2520,10 +2533,11 @@ fn emit_session_request_resolution_marker(
         .map(|r| presence.lookup(&r.target_uri).is_some())
         .unwrap_or(false);
 
-    let is_local = has_local_presence || match (target_tenant, local_tenant) {
-        (Some(target), Some(local)) => target == local,
-        (_, None) | (None, Some(_)) => true,
-    };
+    let is_local = has_local_presence
+        || match (target_tenant, local_tenant) {
+            (Some(target), Some(local)) => target == local,
+            (_, None) | (None, Some(_)) => true,
+        };
 
     if is_local {
         eprintln!("[session-request] resolved target via local-fast-path");
@@ -2875,7 +2889,7 @@ fn validate_session_realm(
     let caller_realm = parse_realm_from_uri(caller_uri).ok_or_else(|| {
         Status::invalid_argument(format!(
             "<self>.session: caller URI `{caller_uri}` does not match the canonical \
-             `easynet:///r/{{realm}}/agent/{{node}}` shape"
+             `easynet:///r/{{realm}}/...` shape"
         ))
     })?;
 
@@ -4365,6 +4379,17 @@ mod tests {
     }
 
     #[test]
+    fn validate_session_realm_accepts_same_realm_device_uri() {
+        let anchor = RealmTrustAnchor::default();
+        validate_session_realm(
+            "easynet:///r/realm-a/device/device-1",
+            Some("realm-a"),
+            &anchor,
+        )
+        .expect("same-realm device URI must pass");
+    }
+
+    #[test]
     fn validate_session_realm_rejects_cross_realm_without_trust() {
         let anchor = RealmTrustAnchor::default();
         let err = validate_session_realm(
@@ -4510,6 +4535,10 @@ mod tests {
     fn parse_tenant_from_uri_extracts_tenant_component() {
         assert_eq!(
             parse_tenant_from_uri("easynet:///r/realm-a/agent/laptop-1"),
+            Some("realm-a")
+        );
+        assert_eq!(
+            parse_tenant_from_uri("easynet:///r/realm-a/device/device-1"),
             Some("realm-a")
         );
         assert_eq!(

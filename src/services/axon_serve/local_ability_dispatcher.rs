@@ -183,6 +183,17 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
             return Ok(());
         };
 
+        // Surface a marker even on the cold path: reading the
+        // BinaryChunk size confirms the down-stream is feeding the
+        // dispatcher, distinct from a stalled supervisor or a
+        // transport hang. Without this we cannot tell from logs
+        // alone whether the bidi delivered a frame at all.
+        eprintln!(
+            "[local-ability-dispatcher] handle_down: BinaryChunk stream_id={} data_bytes={}",
+            chunk.stream_id,
+            chunk.data.len()
+        );
+
         let dispatch: SessionDispatch = serde_json::from_slice(&chunk.data).map_err(|err| {
             SessionDispatchError::Other(format!(
                 "session down BinaryChunk is not valid SessionDispatch JSON: {err}"
@@ -222,6 +233,11 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
                             "[local-ability-dispatcher] inbound RequestResult \
                              call_id={id_hex} did not match a pending entry; \
                              dropping (caller may have timed out, or hub double-replied)"
+                        );
+                    } else {
+                        eprintln!(
+                            "[local-ability-dispatcher] inbound RequestResult \
+                             call_id={id_hex} matched pending entry; completed"
                         );
                     }
                 } else {
