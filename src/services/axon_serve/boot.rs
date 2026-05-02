@@ -164,20 +164,41 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     //
     // Seed the local presence with the daemon's own URI on boot so
     // the local resolve answers "yes I'm here" when the operator's
-    // backend asks. The dispatch sender is a no-op channel — backend
-    // queries don't push frames here, they just check membership.
+    // backend asks. The dispatch sender pushes into a drain task
+    // (kept alive as long as the daemon process), so try_send never
+    // observes Closed/Full and the entry stays in the registry.
+    // For actual ability invokes targeting this URI, the
+    // `daemon_invocation_service` <self>.invoke_remote handler
+    // already short-circuits self-targeted invocations to the
+    // local AbilityDispatcher BEFORE try_send fires (see
+    // dispatch_self_targeted_forward_invoke in PR-1 commit 7/9).
     //
     // Hub / Both modes don't need this: their local presence is
     // already populated by inbound device sessions, and the hub
     // itself is the directory-of-record. Device-only.
     if matches!(config.mode(), DaemonMode::Device) {
         if let Some(uri) = daemon_uri.as_ref() {
-            let (noop_tx, _noop_rx) = tokio::sync::mpsc::channel(1);
+            let (noop_tx, mut noop_rx) =
+                tokio::sync::mpsc::channel(crate::services::presence_registry::DISPATCH_CHANNEL_CAPACITY);
+            // Drain task: holds the receiver alive for the lifetime
+            // of the daemon process. Without this, the receiver
+            // gets dropped when the seeding scope ends and the
+            // sender's first try_send observes Closed → presence
+            // entry deleted → the very state we're trying to fix.
+            tokio::spawn(async move {
+                while let Some(_frame) = noop_rx.recv().await {
+                    // Drop on the floor. The self-targeted
+                    // dispatcher path runs inline through
+                    // local_dispatcher; only out-of-path frames
+                    // (defensive) land here.
+                }
+            });
             let prior = presence.insert(uri.clone(), noop_tx);
             if prior.is_none() {
                 eprintln!(
                     "[axon-serve] device-mode self-presence seeded for `{uri}` \
-                     (so backend's federation.resolve answers ONLINE for own host)"
+                     (drain task holds receiver; \
+                      self-targeted invokes route through local AbilityDispatcher)"
                 );
             }
         }

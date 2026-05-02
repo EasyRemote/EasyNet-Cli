@@ -1814,6 +1814,94 @@ impl DaemonInvocationService {
         wrap_json_response(&response)
     }
 
+    /// Self-targeted `<self>.invoke_remote` shortcut.
+    ///
+    /// When the daemon receives `<self>.invoke_remote` whose
+    /// subject_device equals its own URI, dispatch the ability
+    /// through the in-process `AbilityDispatcher` and return the
+    /// result on a one-shot down stream. This fires in two
+    /// scenarios:
+    ///
+    ///   1. Host-mode dev rig: backend invokes a fleet.* ability
+    ///      against the local device daemon's own URI. The
+    ///      daemon's PresenceRegistry self-presence seed
+    ///      (boot.rs) makes the target findable; this shortcut
+    ///      dispatches inline without trying to push frames
+    ///      down a drain channel that nobody consumes.
+    ///
+    ///   2. Hub-mode self-call: a hub invoking an ability on
+    ///      its own URI (rare but valid; the hub is a Both-mode
+    ///      daemon and the local AbilityDispatcher hosts its
+    ///      registered tools).
+    ///
+    /// Mirrors `dispatch_self_targeted_forward_invoke` for the
+    /// federation.forward_invoke surface — same idea, different
+    /// envelope shape.
+    fn dispatch_self_targeted_invoke_remote(
+        &self,
+        local_dispatcher: &Arc<crate::runtime::ability_dispatch::AbilityDispatcher>,
+        subject_device: &str,
+        ability: &str,
+        args: &[u8],
+    ) -> Result<Response<<Self as Invocation>::InvokeBidiStream>, Status> {
+        use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+
+        eprintln!(
+            "[axon-serve] <self>.invoke_remote self-target dispatch: \
+             subject={subject_device} ability={ability}"
+        );
+
+        // args is the JSON-encoded inner-payload bytes (matches
+        // InvokeRemoteUp::Request shape). Decode to a Value so the
+        // local AbilityDispatcher can route. Empty → empty object.
+        let normalized_args: serde_json::Value = if args.is_empty() {
+            serde_json::Value::Object(Default::default())
+        } else {
+            serde_json::from_slice(args).map_err(|err| {
+                Status::invalid_argument(format!(
+                    "<self>.invoke_remote: self-targeted dispatch could not parse \
+                     inner args for ability `{ability}`: {err}"
+                ))
+            })?
+        };
+
+        let target = InvocationTarget {
+            scope: TargetScope::Local,
+            ability: ability.to_string(),
+            normalized_args,
+            call_mode: CallMode::Rpc,
+            subject: None,
+        };
+
+        let result_value = local_dispatcher.execute_rpc(target).map_err(|err| {
+            Status::failed_precondition(format!(
+                "<self>.invoke_remote: self-targeted dispatch of ability `{ability}` failed: {err}"
+            ))
+        })?;
+
+        let payload = serde_json::to_vec(&result_value).map_err(|err| {
+            Status::internal(format!(
+                "<self>.invoke_remote: encode self-targeted result for ability `{ability}`: {err}"
+            ))
+        })?;
+
+        let down = InvokeRemoteDown::Result {
+            payload,
+            error: None,
+        };
+        let frame = build_invoke_remote_terminal_frame(&down)?;
+
+        // One-shot down stream: yield the terminal frame, close.
+        let (down_tx, down_rx) = mpsc::channel::<Result<InvokeBidiDown, Status>>(1);
+        tokio::spawn(async move {
+            let _ = down_tx.send(Ok(frame)).await;
+        });
+        let stream = ReceiverStream::new(down_rx);
+        Ok(Response::new(
+            Box::pin(stream) as BoxedDownStream<InvokeBidiDown>
+        ))
+    }
+
     fn dispatch_federation_subscribe_directory_initial(
         &self,
     ) -> Result<Response<<Self as Invocation>::InvokeStreamStream>, Status> {
@@ -2108,6 +2196,40 @@ impl DaemonInvocationService {
         // lookup. New clients always emit canonical; this is
         // strictly migration-window compat.
         let subject_device = crate::uri::canonicalize_presence_key(&subject_device);
+
+        // **Self-targeted invoke_remote shortcut**.
+        //
+        // Host-mode dev rig: backend on the same host as the device's
+        // daemon dials the daemon's UDS to invoke an ability targeting
+        // the device itself. The daemon's local PresenceRegistry has a
+        // self-presence seed (boot.rs) but its DispatchSender is a
+        // drain channel — try_send works but the target never replies
+        // because there's no real session bidi consuming the frame.
+        //
+        // When subject_device == this daemon's own URI AND a
+        // local_dispatcher is wired, dispatch the ability through the
+        // in-process AbilityDispatcher and return the result inline
+        // on a one-shot down stream. Mirrors the
+        // `dispatch_self_targeted_forward_invoke` shortcut at
+        // `dispatch_federation_forward_invoke`'s top arm.
+        //
+        // Production hub-mode (DaemonMode::Both / Hub) reaches this
+        // branch only when caller_uri == its own hub URI invoking
+        // back to itself, which is also the right behaviour:
+        // hub-self ability dispatch goes inline.
+        if let (Some(daemon_uri), Some(local_dispatcher)) = (
+            self.admission.daemon_uri(),
+            self.local_dispatcher.as_ref(),
+        ) {
+            if subject_device == daemon_uri {
+                return self.dispatch_self_targeted_invoke_remote(
+                    local_dispatcher,
+                    &subject_device,
+                    &ability,
+                    &args,
+                );
+            }
+        }
 
         let pending = self.pending.as_ref().ok_or_else(|| {
             Status::failed_precondition(
