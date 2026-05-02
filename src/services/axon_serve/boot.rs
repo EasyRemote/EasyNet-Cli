@@ -658,10 +658,13 @@ fn load_daemon_identity() -> Option<DaemonIdentity> {
             if tenant_id.is_empty() || node_id.is_empty() {
                 return None;
             }
-            // URI v2 phase 7: rename-only sweep; wire shape stays
-            // `agent/<node>` until Phase 14 production deploy
-            // re-mints the trust anchor with v2 device-URI keys.
-            Some(crate::uri::agent_uri(tenant_id, node_id))
+            // URI v2: when credentials.json doesn't carry an
+            // explicit agent_uri (legacy / corrupt persisted file),
+            // synthesise a device-shaped URA. Backend's pairing
+            // path (validate_pairing) writes the agent_uri field
+            // in v2-minted credentials, so this fallback should
+            // only fire on hand-edited or pre-Phase-8 files.
+            Some(crate::uri::device_uri(tenant_id, node_id))
         })?;
 
     let tenant_id = stored

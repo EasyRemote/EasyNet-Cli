@@ -1042,6 +1042,8 @@ mod tests {
             tenant_id: "tenant-test".into(),
             deploy_signature: "sig".into(),
             hub_api_base: Some("https://api.example.com".into()),
+            realm: None,
+            username: None,
         }
     }
 

@@ -529,6 +529,27 @@ fn host_node_id_from_uri(uri: &str) -> Option<String> {
     None
 }
 
+/// URI v2 device-keypair wrapper. Returns `(seed, pk_b64)` for the
+/// device-profile agent under the given realm. Subject ID shape
+/// `easynet:prv:reg:device.<node_id>` (URI v2 device kind).
+///
+/// Phase 14 production deploy switches daemons to use this in place
+/// of `derive_agent_keypair` once the backend trust anchor has been
+/// regenerated under the device-URI shape.
+pub(crate) fn derive_device_keypair(realm: &str, node_id: &str) -> ([u8; 32], String) {
+    let subject_id = format!("easynet:prv:reg:device.{node_id}");
+    derive_subject_keypair(realm, &subject_id)
+}
+
+/// URI v1 (and current production) agent-keypair wrapper. Subject
+/// ID shape `easynet:prv:reg:agent.<node_id>`. Kept as the default
+/// path through Phase 14; the device-shaped wrapper above flips
+/// in only after the backend re-mints its trust anchor.
+pub(crate) fn derive_agent_keypair(realm: &str, node_id: &str) -> ([u8; 32], String) {
+    let subject_id = format!("easynet:prv:reg:agent.{node_id}");
+    derive_subject_keypair(realm, &subject_id)
+}
+
 /// Deterministic keypair derivation used by the SDK's
 /// `derive_subject_auth`. Returns `(seed_bytes, public_key_b64)` so
 /// the daemon can both publish the public key AND mirror the seed

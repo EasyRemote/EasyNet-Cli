@@ -367,6 +367,8 @@ mod tests {
             tenant_id: "tenant".into(),
             deploy_signature: "sig".into(),
             hub_api_base: None,
+            realm: None,
+            username: None,
         };
         let err = validate_pairing_response(creds).expect_err("missing node_id must fail");
         assert!(err.to_string().contains("missing node_id"));

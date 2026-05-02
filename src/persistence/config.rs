@@ -357,7 +357,7 @@ pub fn load_and_connect(
 
 // ─── Device Credentials ────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Credentials {
     pub node_id: String,
     pub credential_token: String,
@@ -369,6 +369,25 @@ pub struct Credentials {
     /// When absent, derived from `hub_endpoint` by stripping scheme/port and using HTTPS.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hub_api_base: Option<String>,
+    /// URI v2 realm — federation namespace, DNS-aligned. Optional
+    /// for backward-compat read of v1 credentials.json: when absent,
+    /// callers fall back to `tenant_id` (which carries the same
+    /// value in v2-minted credentials).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realm: Option<String>,
+    /// URI v2 username — stable slug for the user this device is
+    /// paired to. Optional during the migration window; populated
+    /// by the Phase 14 backend in validate-pairing responses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+}
+
+impl Credentials {
+    /// Returns the v2 realm — `realm` field if set, else `tenant_id`
+    /// (for legacy credentials.json files written before Phase 8).
+    pub fn realm_str(&self) -> &str {
+        self.realm.as_deref().unwrap_or(&self.tenant_id)
+    }
 }
 
 impl Credentials {
@@ -603,6 +622,8 @@ mod tests {
             tenant_id: "tenant".into(),
             deploy_signature: String::new(),
             hub_api_base: Some("https://api.example.com/".into()),
+            realm: None,
+            username: None,
         };
         assert_eq!(creds.api_base(), "https://api.example.com");
     }
@@ -720,6 +741,8 @@ mod tests {
             tenant_id: "tenant".into(),
             deploy_signature: String::new(),
             hub_api_base: None,
+            realm: None,
+            username: None,
         };
         assert_eq!(creds.api_base(), "https://my-hub.example.org");
     }
