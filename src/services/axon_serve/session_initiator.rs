@@ -83,14 +83,15 @@
 
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use ed25519_dalek::{Signer as _, SigningKey};
 use easynet_axon::invocation::axiom::{
     canonical_invocation_bytes, AgentIdentity as AxiomAgentIdentity, CausalContext,
     InvocationEnvelope, SubjectIdentity as AxiomSubjectIdentity, UriProfile,
 };
+use ed25519_dalek::{Signer as _, SigningKey};
 use futures::Stream;
 use futures::StreamExt as _;
 use rand::RngCore as _;
@@ -103,8 +104,8 @@ use tonic::Status;
 use crate::pb::axon::v1::invocation_client::InvocationClient;
 use crate::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 use crate::pb::axon::v1::{
-    AgentIdentity, CallerSignature, Envelope, EnvelopeOpen, InvocationTarget, InvokeBidiDown,
-    InvokeBidiUp, StreamDescriptor, SubjectIdentity,
+    AgentIdentity, BidiControl, BinaryChunk, CallerSignature, Envelope, EnvelopeOpen,
+    InvocationTarget, InvokeBidiDown, InvokeBidiUp, StreamDescriptor, SubjectIdentity,
 };
 
 /// Daemon-side ability name this initiator targets. The hub's
@@ -140,6 +141,47 @@ pub const SESSION_BACKOFF_INITIAL: Duration = Duration::from_millis(250);
 /// configures for federation_client.
 pub const SESSION_BACKOFF_MAX: Duration = Duration::from_secs(30);
 
+/// Maximum silence window on the down-stream before the device
+/// declares the session dead and forces a reconnect.
+///
+/// Why this exists in addition to transport-level HTTP/2 PING:
+/// the observed Docker failure mode was asymmetric — the hub-side
+/// reader saw `h2 protocol error: error reading a body from
+/// connection`, removed presence immediately, but the device-side
+/// `down_stream.next()` sometimes remained parked inside tonic's
+/// body machinery instead of surfacing EOF/reset promptly. A
+/// bounded inactivity watchdog closes that gap: if the hub stops
+/// sending *anything* (real dispatches, receipts, or no-op
+/// keepalives) for 15 s, the device tears the bidi down and the
+/// supervisor redials.
+///
+/// Paired with the hub-side no-op control keepalive every 5 s
+/// (`daemon_invocation_service::SESSION_DOWN_HEARTBEAT_INTERVAL`);
+/// 15 s = three missed keepalive windows, which is conservative
+/// enough to avoid false positives on a briefly busy runtime but
+/// fast enough to self-heal the session well before the old
+/// "hang forever in client.invoke_bidi" failure mode becomes
+/// user-visible.
+pub const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Device → hub application-level heartbeat cadence for the
+/// `<self>.session` up-stream.
+///
+/// The hub-side failure signature the user observed is
+/// specifically "error reading a body from connection" — i.e. the
+/// server's request-body reader saw the stream die while the
+/// client-side task was otherwise idle. Transport-level HTTP/2
+/// PING keeps the connection warm, but some proxies / LB stacks
+/// make stream-idle decisions on DATA/HEADERS activity, not on
+/// connection-level PING alone. Emitting a no-op control frame
+/// every 5 s keeps the request body observably alive.
+///
+/// Paired with the hub-side `SESSION_DOWN_HEARTBEAT_INTERVAL` and
+/// the device-side `SESSION_IDLE_TIMEOUT`. Together they make the
+/// bidi liveness story symmetric in both directions.
+pub const SESSION_UP_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+const REASON_BIDI_DOWN_SEQUENCE: &str = "AXON_BIDI_DOWN_SEQUENCE";
+
 /// Default URI profile used when the session frame carries a signed
 /// envelope. Empty profile fields canonicalise to the same value, but
 /// populating the string keeps the wire explicit and easier to inspect.
@@ -166,8 +208,77 @@ pub trait SessionFrameDispatcher: Send + Sync + 'static {
     async fn handle_down(
         &self,
         frame: InvokeBidiDown,
-        outbound: &mpsc::Sender<InvokeBidiUp>,
+        outbound: &SessionUpSender,
     ) -> Result<(), SessionDispatchError>;
+}
+
+/// Session-scoped sender for post-frame-0 `InvokeBidiUp` frames.
+///
+/// Why this exists:
+/// - Up-direction sequence numbers are independent from down-
+///   direction numbers per RFC 001 §A16.
+/// - Multiple producers share one live bidi after frame 0:
+///   `LocalAbilityDispatcher` reply frames, device-mode
+///   `SessionEscalationHandle` Request frames, and the no-op
+///   up-heartbeat task.
+/// - Using raw `mpsc::Sender<InvokeBidiUp>` let each producer
+///   invent sequences independently; one path even hard-coded 0 on
+///   every post-frame-0 Request. That is a wire bug once strict
+///   sequence validation is enabled and is already the wrong
+///   mental model today.
+///
+/// This wrapper is the single source of truth for post-frame-0
+/// up-direction sequencing within one `<self>.session`.
+#[derive(Clone, Debug)]
+pub struct SessionUpSender {
+    tx: mpsc::Sender<InvokeBidiUp>,
+    next_sequence: Arc<AtomicU64>,
+}
+
+impl SessionUpSender {
+    #[must_use]
+    pub fn new(tx: mpsc::Sender<InvokeBidiUp>) -> Self {
+        Self {
+            tx,
+            // Frame 0 is EnvelopeOpen. First post-frame-0 producer
+            // therefore owns sequence = 1.
+            next_sequence: Arc::new(AtomicU64::new(1)),
+        }
+    }
+
+    fn allocate_sequence(&self) -> u64 {
+        self.next_sequence.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Send a BinaryChunk on the live session, stamping the next
+    /// monotonic up-direction sequence number.
+    pub async fn send_binary_chunk(
+        &self,
+        chunk: BinaryChunk,
+    ) -> Result<(), tokio::sync::mpsc::error::SendError<InvokeBidiUp>> {
+        self.tx
+            .send(InvokeBidiUp {
+                sequence: self.allocate_sequence(),
+                payload: Some(UpPayload::BinaryChunk(chunk)),
+                ..InvokeBidiUp::default()
+            })
+            .await
+    }
+
+    /// Send a control frame on the live session, stamping the next
+    /// monotonic up-direction sequence number.
+    pub async fn send_control(
+        &self,
+        control: BidiControl,
+    ) -> Result<(), tokio::sync::mpsc::error::SendError<InvokeBidiUp>> {
+        self.tx
+            .send(InvokeBidiUp {
+                sequence: self.allocate_sequence(),
+                payload: Some(UpPayload::Control(control)),
+                ..InvokeBidiUp::default()
+            })
+            .await
+    }
 }
 
 /// Error from a single down-frame dispatch. Reported by the
@@ -176,6 +287,38 @@ pub trait SessionFrameDispatcher: Send + Sync + 'static {
 pub enum SessionDispatchError {
     #[error("session frame dispatch failed: {0}")]
     Other(String),
+}
+
+struct SessionUpHeartbeatTask {
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl SessionUpHeartbeatTask {
+    fn spawn(sender: SessionUpSender, hub_endpoint: String, caller_uri: String) -> Self {
+        let handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(SESSION_UP_HEARTBEAT_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            // First tick fires immediately; consume it so the first
+            // keepalive is sent after one full heartbeat window.
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                if let Err(err) = sender.send_control(BidiControl::default()).await {
+                    eprintln!(
+                        "[session] up-heartbeat send failed for `{caller_uri}` on `{hub_endpoint}`: {err}; stopping heartbeat task"
+                    );
+                    break;
+                }
+            }
+        });
+        Self { handle }
+    }
+}
+
+impl Drop for SessionUpHeartbeatTask {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
 }
 
 /// Run one `<self>.session` bidi against `hub_endpoint`. Connects,
@@ -204,7 +347,32 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
     signing_seed: Option<SessionSigningSeed>,
     hub_ca_pem_path: Option<&Path>,
     dispatcher: Arc<D>,
-    escalation_outbox: Option<&crate::services::axon_serve::session_escalation::SharedSessionOutbox>,
+    escalation_outbox: Option<
+        &crate::services::axon_serve::session_escalation::SharedSessionOutbox,
+    >,
+) -> Result<(), SessionError> {
+    dial_and_run_session_with_idle_timeout(
+        hub_endpoint,
+        caller_uri,
+        signing_seed,
+        hub_ca_pem_path,
+        dispatcher,
+        escalation_outbox,
+        SESSION_IDLE_TIMEOUT,
+    )
+    .await
+}
+
+async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
+    hub_endpoint: String,
+    caller_uri: String,
+    signing_seed: Option<SessionSigningSeed>,
+    hub_ca_pem_path: Option<&Path>,
+    dispatcher: Arc<D>,
+    escalation_outbox: Option<
+        &crate::services::axon_serve::session_escalation::SharedSessionOutbox,
+    >,
+    idle_timeout: Duration,
 ) -> Result<(), SessionError> {
     let mut endpoint = Endpoint::from_shared(hub_endpoint.clone())
         .map_err(|err| SessionError::InvalidEndpoint {
@@ -241,19 +409,17 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
         // stay byte-identical.
         let tls = crate::services::federation_client::pinned_tls_config(ca_path).map_err(
             |err| match err {
-                crate::services::federation_client::PinnedTlsError::ReadFailed {
-                    path,
-                    source,
-                } => SessionError::TlsCaRead { path, source },
+                crate::services::federation_client::PinnedTlsError::ReadFailed { path, source } => {
+                    SessionError::TlsCaRead { path, source }
+                }
             },
         )?;
-        endpoint =
-            endpoint
-                .tls_config(tls)
-                .map_err(|err| SessionError::TlsConfig {
-                    endpoint: hub_endpoint.clone(),
-                    source: err,
-                })?;
+        endpoint = endpoint
+            .tls_config(tls)
+            .map_err(|err| SessionError::TlsConfig {
+                endpoint: hub_endpoint.clone(),
+                source: err,
+            })?;
     } else if hub_endpoint.starts_with("https://") {
         // No pinned CA + scheme is `https://` → caller wants TLS via
         // OS native trust roots (Let's Encrypt et al.). Tonic 0.12's
@@ -266,13 +432,12 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
         // publicly-trusted CA. Domain validation uses the URL's
         // host automatically.
         let native_tls = tonic::transport::ClientTlsConfig::new().with_native_roots();
-        endpoint =
-            endpoint
-                .tls_config(native_tls)
-                .map_err(|err| SessionError::TlsConfig {
-                    endpoint: hub_endpoint.clone(),
-                    source: err,
-                })?;
+        endpoint = endpoint
+            .tls_config(native_tls)
+            .map_err(|err| SessionError::TlsConfig {
+                endpoint: hub_endpoint.clone(),
+                source: err,
+            })?;
     }
 
     let channel: Channel = endpoint
@@ -286,6 +451,7 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
     let mut client = InvocationClient::new(channel);
 
     let (up_tx, up_rx) = mpsc::channel::<InvokeBidiUp>(SESSION_UP_CHANNEL_CAPACITY);
+    let outbound_tx = SessionUpSender::new(up_tx.clone());
 
     // Frame 0: EnvelopeOpen carrying caller URI + ability name
     // `<self>.session`. When boot resolved a deterministic device
@@ -309,7 +475,9 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
 
     let mut down_stream = response.into_inner();
     let dispatcher = dispatcher;
-    let outbound_tx = up_tx;
+    eprintln!(
+        "[session] bidi opened against `{hub_endpoint}` as {caller_uri}; awaiting down-stream frames"
+    );
 
     // PR-N6 C4: publish the active up sender so the device-mode
     // escalation consumer task can push `SessionDispatch::Request`
@@ -320,10 +488,36 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
         outbox.set(outbound_tx.clone());
     }
     let _outbox_guard = OutboxGuard::new(escalation_outbox.cloned());
+    let _up_heartbeat = SessionUpHeartbeatTask::spawn(
+        outbound_tx.clone(),
+        hub_endpoint.clone(),
+        caller_uri.clone(),
+    );
+    let mut expected_down_sequence = 0_u64;
 
-    while let Some(frame_result) = down_stream.next().await {
+    loop {
+        let frame_result = match tokio::time::timeout(idle_timeout, down_stream.next()).await {
+            Ok(Some(frame_result)) => frame_result,
+            Ok(None) => break,
+            Err(_elapsed) => {
+                return Err(SessionError::IdleTimeout {
+                    endpoint: hub_endpoint,
+                    timeout: idle_timeout,
+                });
+            }
+        };
+
         match frame_result {
             Ok(frame) => {
+                if frame.sequence != expected_down_sequence {
+                    return Err(SessionError::DownStreamSequence {
+                        endpoint: hub_endpoint,
+                        expected: expected_down_sequence,
+                        actual: frame.sequence,
+                        reason: REASON_BIDI_DOWN_SEQUENCE,
+                    });
+                }
+                expected_down_sequence = expected_down_sequence.saturating_add(1);
                 if let Err(err) = dispatcher.handle_down(frame, &outbound_tx).await {
                     eprintln!("[session] frame dispatch error: {err}; continuing");
                 }
@@ -385,9 +579,7 @@ pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
     signing_seed: Option<SessionSigningSeed>,
     hub_ca_pem_path: Option<PathBuf>,
     dispatcher: Arc<D>,
-    escalation_outbox: Option<
-        crate::services::axon_serve::session_escalation::SharedSessionOutbox,
-    >,
+    escalation_outbox: Option<crate::services::axon_serve::session_escalation::SharedSessionOutbox>,
     mut cancel: tokio::sync::oneshot::Receiver<()>,
 ) {
     let mut backoff = SESSION_BACKOFF_INITIAL;
@@ -560,6 +752,20 @@ pub enum SessionError {
     #[error("hub `{endpoint}` sent error frame on down stream: {status}")]
     DownStreamError { endpoint: String, status: Status },
 
+    #[error("{reason}: hub `{endpoint}` sent down frame sequence {actual}, expected {expected}")]
+    DownStreamSequence {
+        endpoint: String,
+        expected: u64,
+        actual: u64,
+        reason: &'static str,
+    },
+
+    #[error(
+        "hub `{endpoint}` sent no down-stream activity for {:?}; forcing reconnect",
+        timeout
+    )]
+    IdleTimeout { endpoint: String, timeout: Duration },
+
     #[error("internal: failed to enqueue {0} for hub send")]
     SendFailed(&'static str),
 
@@ -588,6 +794,16 @@ pub type SessionReplyStream =
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::SocketAddr;
+
+    use crate::pb::axon::v1::invocation_server::{Invocation, InvocationServer};
+    use crate::pb::axon::v1::{
+        InvokeRequest, InvokeResponse, InvokeServerStreamRequest, InvokeStreamChunk,
+    };
+    use futures::stream;
+    use tokio::net::TcpListener;
+    use tokio_stream::wrappers::TcpListenerStream;
+    use tonic::{Request, Response};
 
     /// A mock dispatcher that just records every down frame it
     /// receives. Used by tests; production wires the real
@@ -602,11 +818,162 @@ mod tests {
         async fn handle_down(
             &self,
             frame: InvokeBidiDown,
-            _outbound: &mpsc::Sender<InvokeBidiUp>,
+            _outbound: &SessionUpSender,
         ) -> Result<(), SessionDispatchError> {
             self.received.lock().await.push(frame);
             Ok(())
         }
+    }
+
+    type TestInvokeStream =
+        Pin<Box<dyn Stream<Item = Result<InvokeStreamChunk, Status>> + Send + 'static>>;
+    type TestInvokeBidiStream =
+        Pin<Box<dyn Stream<Item = Result<InvokeBidiDown, Status>> + Send + 'static>>;
+
+    #[derive(Default)]
+    struct SilentSessionHub;
+
+    #[tonic::async_trait]
+    impl Invocation for SilentSessionHub {
+        type InvokeStreamStream = TestInvokeStream;
+        type InvokeBidiStream = TestInvokeBidiStream;
+
+        async fn invoke(
+            &self,
+            _request: Request<InvokeRequest>,
+        ) -> Result<Response<InvokeResponse>, Status> {
+            Err(Status::unimplemented("test hub only wires InvokeBidi"))
+        }
+
+        async fn invoke_stream(
+            &self,
+            _request: Request<InvokeServerStreamRequest>,
+        ) -> Result<Response<Self::InvokeStreamStream>, Status> {
+            Err(Status::unimplemented("test hub only wires InvokeBidi"))
+        }
+
+        async fn invoke_bidi(
+            &self,
+            request: Request<tonic::Streaming<InvokeBidiUp>>,
+        ) -> Result<Response<Self::InvokeBidiStream>, Status> {
+            let mut up = request.into_inner();
+            let frame0 = up
+                .next()
+                .await
+                .ok_or_else(|| Status::invalid_argument("expected frame 0"))?
+                .map_err(|status| Status::internal(format!("frame 0 recv: {status}")))?;
+            let UpPayload::EnvelopeOpen(_) = frame0.payload.ok_or_else(|| {
+                Status::invalid_argument("frame 0 must carry EnvelopeOpen payload")
+            })?
+            else {
+                return Err(Status::invalid_argument("frame 0 must be EnvelopeOpen"));
+            };
+
+            // Hold the bidi open forever without producing any
+            // down-stream frames. The session-side idle watchdog
+            // must turn this silent hang into a bounded error.
+            Ok(Response::new(
+                Box::pin(stream::pending()) as Self::InvokeBidiStream
+            ))
+        }
+    }
+
+    #[derive(Default)]
+    struct OutOfSequenceSessionHub;
+
+    #[tonic::async_trait]
+    impl Invocation for OutOfSequenceSessionHub {
+        type InvokeStreamStream = TestInvokeStream;
+        type InvokeBidiStream = TestInvokeBidiStream;
+
+        async fn invoke(
+            &self,
+            _request: Request<InvokeRequest>,
+        ) -> Result<Response<InvokeResponse>, Status> {
+            Err(Status::unimplemented("test hub only wires InvokeBidi"))
+        }
+
+        async fn invoke_stream(
+            &self,
+            _request: Request<InvokeServerStreamRequest>,
+        ) -> Result<Response<Self::InvokeStreamStream>, Status> {
+            Err(Status::unimplemented("test hub only wires InvokeBidi"))
+        }
+
+        async fn invoke_bidi(
+            &self,
+            request: Request<tonic::Streaming<InvokeBidiUp>>,
+        ) -> Result<Response<Self::InvokeBidiStream>, Status> {
+            let mut up = request.into_inner();
+            let frame0 = up
+                .next()
+                .await
+                .ok_or_else(|| Status::invalid_argument("expected frame 0"))?
+                .map_err(|status| Status::internal(format!("frame 0 recv: {status}")))?;
+            let UpPayload::EnvelopeOpen(_) = frame0.payload.ok_or_else(|| {
+                Status::invalid_argument("frame 0 must carry EnvelopeOpen payload")
+            })?
+            else {
+                return Err(Status::invalid_argument("frame 0 must be EnvelopeOpen"));
+            };
+
+            let frames = vec![
+                Ok(InvokeBidiDown {
+                    sequence: 0,
+                    payload: Some(crate::pb::axon::v1::invoke_bidi_down::Payload::Receipt(
+                        crate::pb::axon::v1::InvocationReceipt {
+                            state: crate::pb::axon::v1::InvocationState::Admitted as i32,
+                            ..crate::pb::axon::v1::InvocationReceipt::default()
+                        },
+                    )),
+                    ..InvokeBidiDown::default()
+                }),
+                Ok(InvokeBidiDown {
+                    sequence: 9,
+                    payload: Some(crate::pb::axon::v1::invoke_bidi_down::Payload::Control(
+                        BidiControl::default(),
+                    )),
+                    ..InvokeBidiDown::default()
+                }),
+            ];
+            Ok(Response::new(
+                Box::pin(stream::iter(frames)) as Self::InvokeBidiStream
+            ))
+        }
+    }
+
+    async fn spawn_silent_session_hub() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind silent session hub");
+        let addr = listener.local_addr().expect("silent hub local addr");
+        let incoming = TcpListenerStream::new(listener);
+        let handle = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(InvocationServer::new(SilentSessionHub))
+                .serve_with_incoming(incoming)
+                .await
+                .expect("silent session hub server");
+        });
+        (addr, handle)
+    }
+
+    async fn spawn_out_of_sequence_session_hub() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind out-of-sequence session hub");
+        let addr = listener
+            .local_addr()
+            .expect("out-of-sequence hub local addr");
+        let incoming = TcpListenerStream::new(listener);
+        let handle = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(InvocationServer::new(OutOfSequenceSessionHub))
+                .serve_with_incoming(incoming)
+                .await
+                .expect("out-of-sequence session hub server");
+        });
+        (addr, handle)
     }
 
     #[test]
@@ -646,10 +1013,8 @@ mod tests {
     #[test]
     fn build_session_envelope_open_with_seed_adds_signature_and_nonce() {
         let seed = [0x42_u8; 32];
-        let frame = build_session_envelope_open_with_seed(
-            "easynet:///r/realm/agent/n1",
-            Some(seed),
-        );
+        let frame =
+            build_session_envelope_open_with_seed("easynet:///r/realm/agent/n1", Some(seed));
         assert_eq!(frame.sequence, 0);
         assert_eq!(frame.mac.len(), 64);
 
@@ -672,6 +1037,30 @@ mod tests {
                 .unwrap_or(""),
             "easynet:///r/realm/agent/n1",
         );
+    }
+
+    #[tokio::test]
+    async fn session_up_sender_assigns_monotonic_sequences() {
+        let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
+        let sender = SessionUpSender::new(tx);
+
+        sender
+            .send_control(BidiControl::default())
+            .await
+            .expect("control send");
+        sender
+            .send_binary_chunk(BinaryChunk {
+                stream_id: SESSION_STREAM_ID,
+                data: b"payload".to_vec(),
+                ..BinaryChunk::default()
+            })
+            .await
+            .expect("chunk send");
+
+        let first = rx.recv().await.expect("first frame");
+        assert_eq!(first.sequence, 1);
+        let second = rx.recv().await.expect("second frame");
+        assert_eq!(second.sequence, 2);
     }
 
     #[test]
@@ -785,5 +1174,62 @@ mod tests {
             .await
             .expect("supervisor exits within 2 s of cancel");
         exit_within_bound.expect("supervisor task did not panic");
+    }
+
+    #[tokio::test]
+    async fn silent_hub_triggers_idle_timeout_reconnect_error() {
+        let dispatcher = Arc::new(RecordingDispatcher::default());
+        let (addr, _server) = spawn_silent_session_hub().await;
+
+        let result = dial_and_run_session_with_idle_timeout(
+            format!("http://{addr}"),
+            "easynet:///r/realm/agent/n1".to_string(),
+            None,
+            None,
+            dispatcher,
+            None,
+            Duration::from_millis(80),
+        )
+        .await;
+
+        match result {
+            Err(SessionError::IdleTimeout { endpoint, timeout }) => {
+                assert_eq!(endpoint, format!("http://{addr}"));
+                assert_eq!(timeout, Duration::from_millis(80));
+            }
+            other => panic!("expected IdleTimeout, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn out_of_sequence_down_frame_returns_protocol_error() {
+        let dispatcher = Arc::new(RecordingDispatcher::default());
+        let (addr, _server) = spawn_out_of_sequence_session_hub().await;
+
+        let result = dial_and_run_session_with_idle_timeout(
+            format!("http://{addr}"),
+            "easynet:///r/realm/agent/n1".to_string(),
+            None,
+            None,
+            dispatcher,
+            None,
+            Duration::from_secs(1),
+        )
+        .await;
+
+        match result {
+            Err(SessionError::DownStreamSequence {
+                endpoint,
+                expected,
+                actual,
+                reason,
+            }) => {
+                assert_eq!(endpoint, format!("http://{addr}"));
+                assert_eq!(expected, 1);
+                assert_eq!(actual, 9);
+                assert_eq!(reason, REASON_BIDI_DOWN_SEQUENCE);
+            }
+            other => panic!("expected DownStreamSequence, got {other:?}"),
+        }
     }
 }

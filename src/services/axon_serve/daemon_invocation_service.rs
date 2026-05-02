@@ -57,9 +57,12 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::time::Duration;
 
 use futures::Stream;
 // `StreamExt` brings `.next().await` into scope. Aliased to `_`
@@ -75,11 +78,11 @@ use tonic::{Request, Response, Status, Streaming};
 use crate::pb::axon::v1::invocation_server::Invocation;
 use crate::pb::axon::v1::{
     invoke_bidi_down::Payload as DownPayload, invoke_bidi_up::Payload as UpPayload, AgentIdentity,
-    BinaryChunk, Envelope, EnvelopeOpen, InvocationReceipt, InvocationState, InvokeBidiDown,
-    InvokeBidiUp, InvokeRequest, InvokeResponse, InvokeServerStreamRequest, InvokeStreamChunk,
+    BidiControl, BinaryChunk, Envelope, EnvelopeOpen, InvocationReceipt, InvocationState,
+    InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeResponse, InvokeServerStreamRequest,
+    InvokeStreamChunk, StreamDescriptor,
 };
 use crate::services::axon_serve::admission_facade::AdmissionFacade;
-use crate::services::realm_trust_anchor::RealmTrustAnchor;
 use crate::services::axon_serve::federation_wrappers::{
     self, ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_FEDERATION_DISCOVER,
     ABILITY_FEDERATION_FORWARD_INVOKE, ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN,
@@ -87,8 +90,6 @@ use crate::services::axon_serve::federation_wrappers::{
     ABILITY_FEDERATION_RESOLVE_KEY, ABILITY_FEDERATION_REVOKE,
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
 };
-use crate::services::federated_peers_cell::SharedFederatedPeers;
-use crate::services::federation_client::FederationClient;
 use crate::services::axon_serve::invoke_remote_initiator::{
     call_id_hex, InvokeRemoteDown, InvokeRemoteUp, RequestOutcome, SessionDispatch,
     SessionRequestError, ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID,
@@ -98,16 +99,41 @@ use crate::services::axon_serve::register_device_pubkey::{
     ABILITY_SELF_REGISTER_DEVICE_PUBKEY,
 };
 use crate::services::axon_serve::session_initiator::ABILITY_SELF_SESSION;
+use crate::services::federated_peers_cell::SharedFederatedPeers;
+use crate::services::federation_client::FederationClient;
 use crate::services::pending_dispatch::{DispatchResult, PendingDispatchMap};
 use crate::services::presence_registry::{
     DispatchFrame, DispatchSender, OfflineReason, PresenceRegistry, DISPATCH_CHANNEL_CAPACITY,
 };
+use crate::services::realm_trust_anchor::RealmTrustAnchor;
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
 
 /// Content type the federation wrappers emit on `InvokeResponse.result`.
 /// Centralised here so call sites cannot drift away from the value
 /// PR-4's baselines expect.
 const FEDERATION_RESULT_CONTENT_TYPE: &str = "application/json";
+const REASON_BIDI_FIRST_FRAME_SEQUENCE: &str = "AXON_BIDI_FIRST_FRAME_SEQUENCE";
+const REASON_BIDI_NON_STRICT_ORDERING: &str = "AXON_BIDI_NON_STRICT_ORDERING";
+const REASON_BIDI_FRAME_SEQUENCE: &str = "AXON_BIDI_FRAME_SEQUENCE";
+
+/// Application-level heartbeat cadence for `<self>.session` down
+/// streams.
+///
+/// Why we need this in addition to tonic/h2 keepalive PING:
+/// transport keepalive only proves the TCP/TLS/HTTP2 stack is still
+/// exchanging frames; it does not guarantee tonic surfaces a
+/// half-broken bidi back to the device task promptly. The observed
+/// failure mode was: hub-side reader noticed reset and removed the
+/// device from PresenceRegistry immediately, but the device-side
+/// `down_stream.next()` could remain parked and therefore never
+/// trigger the reconnect supervisor. A no-op application heartbeat
+/// every 5 s gives the device a concrete "the hub is still pushing
+/// session frames" signal it can watchdog against.
+///
+/// The frame is `BidiControl::default()` — a wire shape current
+/// readers already ignore as a non-business frame, so we add liveness
+/// without perturbing dispatch semantics.
+const SESSION_DOWN_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 /// gRPC `Invocation` service hosted by `easynet-daemon`.
 ///
@@ -183,8 +209,7 @@ pub struct DaemonInvocationService {
     /// the `federation.discover` dispatch arm reads from it for
     /// cross-realm URI lookup. Defaults to empty so single-realm
     /// daemons gracefully report no federated entries.
-    federated_directory:
-        crate::services::federation_directory::SharedFederatedDirectoryView,
+    federated_directory: crate::services::federation_directory::SharedFederatedDirectoryView,
     /// **N3-N4 bridge**. Daemon-wide federated user binding
     /// store. When wired, the `federation.discover` dispatch
     /// arm constructs a `FederatedUserResolver` per call and
@@ -192,9 +217,8 @@ pub struct DaemonInvocationService {
     /// request supplies a `local_user_id`. `None` ⇒ no filter
     /// (operator query path). Production daemons attach this
     /// at boot via `with_federated_bindings_store`.
-    federated_bindings: Option<
-        std::sync::Arc<crate::runtime::keyring::federated_bindings::FederatedBindingsStore>,
-    >,
+    federated_bindings:
+        Option<std::sync::Arc<crate::runtime::keyring::federated_bindings::FederatedBindingsStore>>,
     /// **PR-N3 N3-streaming-6**. Heartbeat cadence
     /// (milliseconds) for the v2 subscribe_directory server
     /// stream. Spec §2.3 pins 30 000ms in production; tests
@@ -246,7 +270,10 @@ impl std::fmt::Debug for DaemonInvocationService {
             .field("session_realm", &self.session_realm)
             .field(
                 "federation_client",
-                &self.federation_client.as_ref().map(|_| "<dyn FederationClient>"),
+                &self
+                    .federation_client
+                    .as_ref()
+                    .map(|_| "<dyn FederationClient>"),
             )
             .field(
                 "federated_peers_count",
@@ -510,17 +537,11 @@ impl Invocation for DaemonInvocationService {
             }
             ABILITY_FEDERATION_DISCOVER => self.dispatch_federation_discover(&inner.arguments),
             ABILITY_FEDERATION_LIST_USER_DEVICES => self
-                .dispatch_federation_list_user_devices(
-                    inner.envelope.as_ref(),
-                    &inner.arguments,
-                ),
+                .dispatch_federation_list_user_devices(inner.envelope.as_ref(), &inner.arguments),
             ABILITY_FEDERATION_REVOKE => self.dispatch_federation_revoke(&inner.arguments),
             ABILITY_FEDERATION_FORWARD_INVOKE => {
-                self.dispatch_federation_forward_invoke(
-                    inner.envelope.as_ref(),
-                    &inner.arguments,
-                )
-                .await
+                self.dispatch_federation_forward_invoke(inner.envelope.as_ref(), &inner.arguments)
+                    .await
             }
             ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY => Err(Status::invalid_argument(
                 "federation.subscribe_directory is a server-stream ability and must be invoked \
@@ -593,7 +614,7 @@ impl Invocation for DaemonInvocationService {
             None => return Err(Status::invalid_argument("InvokeBidi: empty up stream")),
         };
 
-        let envelope_open = extract_envelope_open(&frame0)?;
+        let envelope_open = validate_and_extract_bidi_frame0(&frame0)?;
         // PR-7: full §5.2 admission for the bidi path. The facade
         // checks envelope presence + caller URI, runs the four-step
         // pipeline (envelope/structure/verify/replay), and rejects
@@ -652,6 +673,31 @@ fn extract_envelope_open(frame: &InvokeBidiUp) -> Result<&EnvelopeOpen, Status> 
             "InvokeBidi frame 0 carries no payload",
         )),
     }
+}
+
+fn validate_and_extract_bidi_frame0(frame: &InvokeBidiUp) -> Result<&EnvelopeOpen, Status> {
+    if frame.sequence != 0 {
+        return Err(Status::invalid_argument(format!(
+            "{REASON_BIDI_FIRST_FRAME_SEQUENCE}: InvokeBidi frame 0 sequence must be 0, got {}",
+            frame.sequence,
+        )));
+    }
+    let envelope_open = extract_envelope_open(frame)?;
+    validate_bidi_stream_ordering(&envelope_open.streams)?;
+    Ok(envelope_open)
+}
+
+fn validate_bidi_stream_ordering(streams: &[StreamDescriptor]) -> Result<(), Status> {
+    for stream in streams {
+        if !stream.ordering.is_empty() && stream.ordering != "STRICT" {
+            return Err(Status::invalid_argument(format!(
+                "{REASON_BIDI_NON_STRICT_ORDERING}: stream {} ordering {:?} is unsupported; \
+                 InvokeBidi v1 accepts only empty or \"STRICT\" ordering",
+                stream.stream_id, stream.ordering,
+            )));
+        }
+    }
+    Ok(())
 }
 
 impl DaemonInvocationService {
@@ -778,11 +824,10 @@ impl DaemonInvocationService {
             self.session_realm.as_deref(),
         ) {
             (Some(_user_id), Some(bindings), Some(realm)) => {
-                let resolver =
-                    crate::runtime::keyring::resolver::FederatedUserResolver::new(
-                        realm,
-                        std::sync::Arc::clone(bindings),
-                    );
+                let resolver = crate::runtime::keyring::resolver::FederatedUserResolver::new(
+                    realm,
+                    std::sync::Arc::clone(bindings),
+                );
                 federation_wrappers::handle_discover_with_user_filter(
                     &request,
                     &self.federated_directory,
@@ -992,10 +1037,9 @@ impl DaemonInvocationService {
             // dispatcher (production hub-mode + both-mode daemons
             // always have one; test fixtures with `make_service()`
             // do not, preserving their target_offline expectation).
-            if let (Some(daemon_uri), Some(local_dispatcher)) = (
-                self.admission.daemon_uri(),
-                self.local_dispatcher.as_ref(),
-            ) {
+            if let (Some(daemon_uri), Some(local_dispatcher)) =
+                (self.admission.daemon_uri(), self.local_dispatcher.as_ref())
+            {
                 if request.target_uri == daemon_uri {
                     return self.dispatch_self_targeted_forward_invoke(
                         local_dispatcher,
@@ -1077,13 +1121,12 @@ impl DaemonInvocationService {
                                 causal_context_bytes: request.causal_context_bytes.clone(),
                                 forward_deadline_ms: request.forward_deadline_ms,
                             };
-                            let nested_arguments =
-                                serde_json::to_vec(&nested).map_err(|err| {
-                                    Status::internal(format!(
-                                        "federation.forward_invoke: encode nested \
+                            let nested_arguments = serde_json::to_vec(&nested).map_err(|err| {
+                                Status::internal(format!(
+                                    "federation.forward_invoke: encode nested \
                                          ForwardInvokeRequest for same-tenant fan-out: {err}"
-                                    ))
-                                })?;
+                                ))
+                            })?;
                             let peer_request = InvokeRequest {
                                 envelope: Some(peer_envelope),
                                 function_name: ABILITY_FEDERATION_FORWARD_INVOKE.to_string(),
@@ -1108,9 +1151,7 @@ impl DaemonInvocationService {
                                         // caller sees the device bytes,
                                         // not a double-wrap.
                                         let peer_body: federation_wrappers::ForwardInvokeResponse =
-                                            match serde_json::from_slice(
-                                                &peer_response.result,
-                                            ) {
+                                            match serde_json::from_slice(&peer_response.result) {
                                                 Ok(body) => body,
                                                 Err(err) => {
                                                     eprintln!(
@@ -1121,10 +1162,9 @@ impl DaemonInvocationService {
                                                          for forward-compat"
                                                     );
                                                     federation_wrappers::ForwardInvokeResponse {
-                                                        result_bytes:
-                                                            peer_response.result.clone(),
-                                                        correlation_call_id:
-                                                            correlation_call_id.clone(),
+                                                        result_bytes: peer_response.result.clone(),
+                                                        correlation_call_id: correlation_call_id
+                                                            .clone(),
                                                     }
                                                 }
                                             };
@@ -1136,11 +1176,10 @@ impl DaemonInvocationService {
                                                 Some(&peer_body.result_bytes),
                                             ),
                                         );
-                                        let response = federation_wrappers::
-                                            ForwardInvokeResponse {
-                                                result_bytes: peer_body.result_bytes,
-                                                correlation_call_id,
-                                            };
+                                        let response = federation_wrappers::ForwardInvokeResponse {
+                                            result_bytes: peer_body.result_bytes,
+                                            correlation_call_id,
+                                        };
                                         return wrap_json_response(&response);
                                     }
                                     Err(err) => {
@@ -1380,11 +1419,14 @@ impl DaemonInvocationService {
                  at boot to enable cross-device forward_invoke dispatch",
             )
         })?;
-        let sender = self.presence.lookup(&request.target_uri).ok_or_else(|| {
-            Status::failed_precondition(
-                federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
-            )
-        })?;
+        let (session_id, sender) = self
+            .presence
+            .lookup_tracked(&request.target_uri)
+            .ok_or_else(|| {
+                Status::failed_precondition(
+                    federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+                )
+            })?;
 
         // Register pending entry BEFORE pushing the frame so a
         // fast device reply lands a real `complete()` rather
@@ -1402,8 +1444,9 @@ impl DaemonInvocationService {
         match sender.try_send(Ok(dispatch_frame)) {
             Ok(()) => {}
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                self.presence.remove(
+                self.presence.remove_if_session(
                     &request.target_uri,
+                    session_id,
                     crate::services::presence_registry::OfflineReason::SendFailed,
                 );
                 return Err(Status::failed_precondition(
@@ -1411,8 +1454,9 @@ impl DaemonInvocationService {
                 ));
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                self.presence.remove(
+                self.presence.remove_if_session(
                     &request.target_uri,
+                    session_id,
                     crate::services::presence_registry::OfflineReason::StreamClosed,
                 );
                 return Err(Status::failed_precondition(
@@ -1468,7 +1512,7 @@ impl DaemonInvocationService {
         &self,
         request: &federation_wrappers::ForwardInvokeRequest,
     ) -> Result<(), Status> {
-        let Some(sender) = self.presence.lookup(&request.target_uri) else {
+        let Some((session_id, sender)) = self.presence.lookup_tracked(&request.target_uri) else {
             return Err(Status::failed_precondition(
                 federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
             ));
@@ -1485,8 +1529,9 @@ impl DaemonInvocationService {
                 // → evict + surface `target_offline` per DEC-N4
                 // §2.1; the matching presence event ensures
                 // future calls observe a clean miss.
-                self.presence.remove(
+                self.presence.remove_if_session(
                     &request.target_uri,
+                    session_id,
                     crate::services::presence_registry::OfflineReason::SendFailed,
                 );
                 Err(Status::failed_precondition(
@@ -1497,8 +1542,9 @@ impl DaemonInvocationService {
                 // Receiver dropped without explicit removal —
                 // channel is dead. Symmetric removal +
                 // `target_offline` surface for this call.
-                self.presence.remove(
+                self.presence.remove_if_session(
                     &request.target_uri,
+                    session_id,
                     crate::services::presence_registry::OfflineReason::StreamClosed,
                 );
                 Err(Status::failed_precondition(
@@ -1719,9 +1765,8 @@ impl DaemonInvocationService {
             presence_event_to_directory_event, DirectoryEvent,
         };
 
-        let initial_evt = federation_wrappers::build_subscribe_directory_v2_snapshot(
-            &self.presence,
-        );
+        let initial_evt =
+            federation_wrappers::build_subscribe_directory_v2_snapshot(&self.presence);
         let initial_bytes = serde_json::to_vec(&initial_evt).map_err(|err| {
             Status::internal(format!(
                 "federation.subscribe_directory_v2: encode initial snapshot: {err}"
@@ -1897,12 +1942,15 @@ impl DaemonInvocationService {
             )
         })?;
 
-        let target_sender = self.presence.lookup(&subject_device).ok_or_else(|| {
-            Status::not_found(format!(
-                "<self>.invoke_remote: target `{subject_device}` is not in PresenceRegistry; \
+        let (target_session_id, target_sender) = self
+            .presence
+            .lookup_tracked(&subject_device)
+            .ok_or_else(|| {
+                Status::not_found(format!(
+                    "<self>.invoke_remote: target `{subject_device}` is not in PresenceRegistry; \
                  either offline or never connected to this hub"
-            ))
-        })?;
+                ))
+            })?;
 
         // Register pending entry BEFORE pushing the dispatch frame —
         // otherwise the target could reply faster than we can register
@@ -1916,16 +1964,22 @@ impl DaemonInvocationService {
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                 // Bounded backpressure → presence transition (same
                 // policy as forward_invoke commit 8/9).
-                self.presence
-                    .remove(&subject_device, OfflineReason::SendFailed);
+                self.presence.remove_if_session(
+                    &subject_device,
+                    target_session_id,
+                    OfflineReason::SendFailed,
+                );
                 return Err(Status::failed_precondition(format!(
                     "<self>.invoke_remote: target `{subject_device}` channel full; \
                      removed from registry with OfflineReason::SendFailed"
                 )));
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                self.presence
-                    .remove(&subject_device, OfflineReason::StreamClosed);
+                self.presence.remove_if_session(
+                    &subject_device,
+                    target_session_id,
+                    OfflineReason::StreamClosed,
+                );
                 return Err(Status::not_found(format!(
                     "<self>.invoke_remote: target `{subject_device}` receiver closed \
                      between lookup and dispatch; removed from registry"
@@ -2019,7 +2073,11 @@ impl DaemonInvocationService {
         // arriving from `<self>.invoke_remote` immediately can find this
         // sender. The PresenceRegistry handles displacement (Offline +
         // Online emission ordering) under the hood.
-        let _displaced = self.presence.insert(caller_uri.clone(), down_tx);
+        let registration = self.presence.insert_tracked(caller_uri.clone(), down_tx);
+        eprintln!(
+            "[axon-serve] <self>.session admitted: caller={caller_uri} displaced_prior={}",
+            registration.displaced.is_some()
+        );
 
         // Step 2: spawn the up-stream consumer. Reads device replies
         // (SessionDispatch::Result frames) and routes them to the
@@ -2038,6 +2096,7 @@ impl DaemonInvocationService {
             drain_session_up_stream(
                 up,
                 caller_uri_for_drain,
+                registration.session_id,
                 presence_for_drain,
                 pending_for_drain,
                 service_for_drain,
@@ -2051,13 +2110,135 @@ impl DaemonInvocationService {
         // (presence_registry's newtype around `InvokeBidiDown`).
         // The tonic trait wants raw `InvokeBidiDown`, so map each
         // frame to unwrap the newtype.
-        let stream = ReceiverStream::new(down_rx).map(|item| match item {
-            Ok(frame) => Ok(frame.frame),
-            Err(status) => Err(status),
-        });
+        let stream = SessionDownStream::new(down_rx);
         Ok(Response::new(
             Box::pin(stream) as BoxedDownStream<InvokeBidiDown>
         ))
+    }
+}
+
+/// Build a no-op down-stream control frame suitable for session
+/// liveness probing. Current readers treat `Control` frames as
+/// non-business metadata and ignore them, so this is wire-compatible
+/// with every existing `<self>.session` consumer.
+fn build_session_down_keepalive_frame() -> DispatchFrame {
+    DispatchFrame {
+        frame: InvokeBidiDown {
+            payload: Some(DownPayload::Control(BidiControl::default())),
+            ..InvokeBidiDown::default()
+        },
+    }
+}
+
+/// Build the spec §1.1 admission-accept frame: down frame 0 carries
+/// an `InvocationReceipt` with `state = Admitted`. The receipt is
+/// what tells the device-side caller "your `<self>.session` open was
+/// accepted". Without it, devices have only HTTP/2 HEADERS as proof
+/// of acceptance, which some intermediaries (and tonic-h2 in some
+/// edge cases) buffer until the first response DATA frame — leaving
+/// the device's `client.invoke_bidi(...).await` parked indefinitely.
+///
+/// Receipt fields kept minimal: only the `state` is load-bearing per
+/// §1.1; the rest of `InvocationReceipt` is informational and the
+/// device's `LocalAbilityDispatcher` ignores `Receipt` payloads
+/// outright (handle_down only acts on `BinaryChunk`).
+fn build_session_down_admission_receipt() -> InvokeBidiDown {
+    InvokeBidiDown {
+        sequence: 0,
+        payload: Some(DownPayload::Receipt(InvocationReceipt {
+            state: InvocationState::Admitted as i32,
+            ..InvocationReceipt::default()
+        })),
+        ..InvokeBidiDown::default()
+    }
+}
+
+/// Down-stream wrapper that:
+///   1. Emits a spec §1.1 admission-accept `InvocationReceipt`
+///      (`state = Admitted`) as down frame 0 immediately on the
+///      first poll. This is the missing protocol-required ack that
+///      unblocks the device's `invoke_bidi.await` so it can enter
+///      the down-stream read loop.
+///   2. After frame 0, injects a no-op `BidiControl` heartbeat frame
+///      whenever no business frame has been queued for
+///      `SESSION_DOWN_HEARTBEAT_INTERVAL`.
+///
+/// Crucially this wrapper owns NO extra `DispatchSender`. That keeps
+/// `PresenceRegistry` displacement semantics intact: when a same-URI
+/// second session is admitted, dropping the displaced sender still
+/// closes the old response stream immediately. A background
+/// keepalive task that cloned the sender would accidentally keep the
+/// displaced stream open, which is exactly the class of lifecycle
+/// bug we are trying to eliminate here.
+struct SessionDownStream {
+    down_rx: tokio::sync::mpsc::Receiver<Result<DispatchFrame, Status>>,
+    next_heartbeat: Pin<Box<tokio::time::Sleep>>,
+    next_sequence: u64,
+    /// Set to `Some(receipt)` at construction; first `poll_next`
+    /// yields it and clears the slot. Subsequent polls follow the
+    /// recv-then-heartbeat path.
+    pending_admission_receipt: Option<InvokeBidiDown>,
+}
+
+impl SessionDownStream {
+    fn new(down_rx: tokio::sync::mpsc::Receiver<Result<DispatchFrame, Status>>) -> Self {
+        Self {
+            down_rx,
+            next_heartbeat: Box::pin(tokio::time::sleep(SESSION_DOWN_HEARTBEAT_INTERVAL)),
+            next_sequence: 0,
+            pending_admission_receipt: Some(build_session_down_admission_receipt()),
+        }
+    }
+
+    fn reset_heartbeat(&mut self) {
+        self.next_heartbeat
+            .as_mut()
+            .reset(tokio::time::Instant::now() + SESSION_DOWN_HEARTBEAT_INTERVAL);
+    }
+
+    fn stamp_sequence(&mut self, mut frame: InvokeBidiDown) -> InvokeBidiDown {
+        frame.sequence = self.next_sequence;
+        self.next_sequence = self.next_sequence.saturating_add(1);
+        frame
+    }
+}
+
+impl Stream for SessionDownStream {
+    type Item = Result<InvokeBidiDown, Status>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // Spec §1.1: down frame 0 MUST be an InvocationReceipt
+        // signalling admission accept. Emit it before anything else
+        // so the client's `invoke_bidi.await` always has a concrete
+        // first DATA frame to flush HTTP/2 HEADERS against, and so
+        // the wire shape matches what RFC-003 readers expect.
+        if let Some(receipt) = self.pending_admission_receipt.take() {
+            self.reset_heartbeat();
+            return Poll::Ready(Some(Ok(self.stamp_sequence(receipt))));
+        }
+
+        match Pin::new(&mut self.down_rx).poll_recv(cx) {
+            Poll::Ready(Some(Ok(frame))) => {
+                self.reset_heartbeat();
+                return Poll::Ready(Some(Ok(self.stamp_sequence(frame.frame))));
+            }
+            Poll::Ready(Some(Err(status))) => {
+                self.reset_heartbeat();
+                return Poll::Ready(Some(Err(status)));
+            }
+            Poll::Ready(None) => return Poll::Ready(None),
+            Poll::Pending => {}
+        }
+
+        match self.next_heartbeat.as_mut().poll(cx) {
+            Poll::Ready(()) => {
+                self.reset_heartbeat();
+                Poll::Ready(Some(Ok(
+                    self.stamp_sequence(build_session_down_keepalive_frame().frame)
+                )))
+            }
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
@@ -2152,15 +2333,9 @@ impl DaemonInvocationService {
                 // verbatim. The arm choice mirrors the same
                 // `target_tenant == local_tenant` comparison the
                 // inner dispatch performs.
-                emit_session_request_resolution_marker(
-                    args,
-                    self.session_realm.as_deref(),
-                );
+                emit_session_request_resolution_marker(args, self.session_realm.as_deref());
 
-                match self
-                    .dispatch_federation_forward_invoke(None, args)
-                    .await
-                {
+                match self.dispatch_federation_forward_invoke(None, args).await {
                     Ok(response) => {
                         let body = response.into_inner();
                         RequestOutcome::Ok {
@@ -2276,8 +2451,7 @@ fn build_session_request_result_frame(
                     },
                 },
             };
-            serde_json::to_vec(&fallback)
-                .expect("typed error variant must always encode")
+            serde_json::to_vec(&fallback).expect("typed error variant must always encode")
         }
     };
     crate::services::presence_registry::DispatchFrame {
@@ -2301,24 +2475,35 @@ fn build_session_request_result_frame(
 /// Request and the hub finishing dispatch — log + drop, which is
 /// the same shape PR-N1's `try_push_forward_invoke_frame` uses for
 /// the symmetric race.
-async fn push_session_request_result(
+fn push_session_request_result(
     presence: &Arc<PresenceRegistry>,
     caller_uri: &str,
     id_hex: &str,
     frame: crate::services::presence_registry::DispatchFrame,
 ) {
-    let Some(sender) = presence.lookup(caller_uri) else {
+    let Some((session_id, sender)) = presence.lookup_tracked(caller_uri) else {
         eprintln!(
             "[session-accept] device {caller_uri} no longer in presence registry; \
              dropping RequestResult call_id={id_hex} (device disconnected mid-dispatch)"
         );
         return;
     };
-    if let Err(err) = sender.send(Ok(frame)).await {
-        eprintln!(
-            "[session-accept] failed to push RequestResult call_id={id_hex} to {caller_uri}: \
-             {err}; dropping (device down-channel closed)"
-        );
+    match sender.try_send(Ok(frame)) {
+        Ok(()) => {}
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            let _ = presence.remove_if_session(caller_uri, session_id, OfflineReason::SendFailed);
+            eprintln!(
+                "[session-accept] failed to push RequestResult call_id={id_hex} to {caller_uri}: \
+                 channel full; removed device with OfflineReason::SendFailed"
+            );
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+            let _ = presence.remove_if_session(caller_uri, session_id, OfflineReason::StreamClosed);
+            eprintln!(
+                "[session-accept] failed to push RequestResult call_id={id_hex} to {caller_uri}: \
+                 device down-channel closed; removed from presence registry"
+            );
+        }
     }
 }
 
@@ -2335,6 +2520,7 @@ async fn push_session_request_result(
 async fn drain_session_up_stream(
     mut up: Streaming<InvokeBidiUp>,
     caller_uri: String,
+    session_id: crate::services::presence_registry::PresenceSessionId,
     presence: Arc<PresenceRegistry>,
     pending: Option<Arc<PendingDispatchMap>>,
     service: DaemonInvocationService,
@@ -2342,25 +2528,61 @@ async fn drain_session_up_stream(
     use crate::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 
     let mut close_reason = OfflineReason::StreamClosed;
+    let mut expected_up_sequence = 1_u64;
 
     while let Some(frame_result) = up.next().await {
         let frame = match frame_result {
             Ok(f) => f,
             Err(status) => {
+                // Walk the std::error::Error source chain so the
+                // underlying h2::Error (with its `Reason` code and
+                // `Initiator`) surfaces, not just tonic's opaque
+                // "h2 protocol error" wrapper. Without this we
+                // cannot distinguish a peer-initiated CANCEL from
+                // a library-initiated PROTOCOL_ERROR, which makes
+                // diagnosing reset-loops on the device side
+                // impossible.
+                let mut chain = format!("{status}");
+                let mut src: Option<&dyn std::error::Error> = std::error::Error::source(&status);
+                while let Some(err) = src {
+                    chain.push_str(&format!(" ↳ {err}"));
+                    src = err.source();
+                }
                 eprintln!(
-                    "[session-accept] up-stream error for {caller_uri}: {status}; \
-                     removing from registry"
+                    "[session-accept] up-stream error for {caller_uri}: {chain}; \
+                     code={:?}; removing from registry",
+                    status.code()
                 );
                 close_reason = OfflineReason::StreamReset;
                 break;
             }
         };
 
+        if frame.sequence != expected_up_sequence {
+            eprintln!(
+                "[session-accept] {caller_uri} violated {REASON_BIDI_FRAME_SEQUENCE}: \
+                 expected up sequence {expected_up_sequence}, got {}; removing from registry",
+                frame.sequence
+            );
+            close_reason = OfflineReason::StreamReset;
+            break;
+        }
+        expected_up_sequence = expected_up_sequence.saturating_add(1);
+
         let chunk = match frame.payload {
             Some(UpPayload::BinaryChunk(c)) => c,
-            Some(other) => {
+            Some(UpPayload::Control(control)) => {
+                if matches!(
+                    control.control,
+                    Some(crate::pb::axon::v1::bidi_control::Control::Eof(true))
+                ) {
+                    break;
+                }
+                continue;
+            }
+            Some(UpPayload::EnvelopeOpen(_)) => {
                 eprintln!(
-                    "[session-accept] {caller_uri} sent non-BinaryChunk up frame: {other:?}; \
+                    "[session-accept] {caller_uri} sent unexpected EnvelopeOpen after frame 0; \
                      ignoring"
                 );
                 continue;
@@ -2413,7 +2635,11 @@ async fn drain_session_up_stream(
                      (call_id={call_id}); ignoring"
                 );
             }
-            SessionDispatch::Request { call_id, ability, args } => {
+            SessionDispatch::Request {
+                call_id,
+                ability,
+                args,
+            } => {
                 // PR-N6 C3: device → hub forward_invoke escalation.
                 // The device emits this when its CLI's
                 // `ability invoke --node` hits a target whose
@@ -2449,8 +2675,7 @@ async fn drain_session_up_stream(
                         &caller_uri_for_reply,
                         &id_hex,
                         frame,
-                    )
-                    .await;
+                    );
                 });
             }
             SessionDispatch::RequestResult { call_id, .. } => {
@@ -2465,11 +2690,20 @@ async fn drain_session_up_stream(
         }
     }
 
-    presence.remove(&caller_uri, close_reason);
-    eprintln!(
-        "[session-accept] {caller_uri} session ended ({:?}); removed from registry",
-        close_reason
-    );
+    if presence
+        .remove_if_session(&caller_uri, session_id, close_reason)
+        .is_some()
+    {
+        eprintln!(
+            "[session-accept] {caller_uri} session ended ({:?}); removed from registry",
+            close_reason
+        );
+    } else {
+        eprintln!(
+            "[session-accept] {caller_uri} session ended ({:?}); newer session already replaced registry entry",
+            close_reason
+        );
+    }
 }
 
 /// Session-realm gate.
@@ -2685,7 +2919,10 @@ pub(crate) fn decode_inner_payload(b64: &str) -> Result<InnerPayload, Status> {
 /// `subject = original_caller`) plus a daemon-identity
 /// signature so cross-realm peers can verify the call without
 /// shared trust set.
-pub(crate) fn build_peer_envelope(caller_envelope: Option<&Envelope>, target_uri: &str) -> Envelope {
+pub(crate) fn build_peer_envelope(
+    caller_envelope: Option<&Envelope>,
+    target_uri: &str,
+) -> Envelope {
     if let Some(env) = caller_envelope {
         return env.clone();
     }
@@ -3264,8 +3501,8 @@ mod tests {
                 FederatedUserBinding {
                     source_realm: "realm-a".to_string(),
                     source_user_uri: "easynet:///r/realm-a/agent/bound-user".to_string(),
-                    source_user_pubkey_b64:
-                        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+                    source_user_pubkey_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        .to_string(),
                     local_user_id: "user-on-b".to_string(),
                     bound_at_unix_ms: 1_714_500_000_000,
                 },
@@ -3362,10 +3599,8 @@ mod tests {
                 tls_ca_pem_path: None,
             })
             .expect("append device");
-        let admission = AdmissionFacade::new(
-            Arc::new(anchor_inner),
-            Some(TEST_DAEMON_URI.to_string()),
-        );
+        let admission =
+            AdmissionFacade::new(Arc::new(anchor_inner), Some(TEST_DAEMON_URI.to_string()));
         let svc = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission);
 
         let envelope = Envelope {
@@ -3640,7 +3875,10 @@ mod tests {
             serde_json::from_slice(&first.payload).expect("decodes DirectoryEvent");
         match evt {
             DirectoryEvent::Snapshot { entries } => {
-                assert!(entries.is_empty(), "initial snapshot must reflect empty registry");
+                assert!(
+                    entries.is_empty(),
+                    "initial snapshot must reflect empty registry"
+                );
             }
             other => panic!("expected Snapshot first; got {other:?}"),
         }
@@ -3649,10 +3887,7 @@ mod tests {
         let (sender, _rx) = tokio::sync::mpsc::channel::<
             Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
         >(1);
-        presence.insert(
-            "easynet:///r/test-realm/agent/n1".to_string(),
-            sender,
-        );
+        presence.insert("easynet:///r/test-realm/agent/n1".to_string(), sender);
         let second = stream.next().await.expect("second frame").expect("Ok");
         let evt2: DirectoryEvent =
             serde_json::from_slice(&second.payload).expect("decodes DirectoryEvent");
@@ -3728,21 +3963,17 @@ mod tests {
 
         // Frame 1: empty Snapshot (immediate).
         let first = stream.next().await.expect("first frame").expect("Ok");
-        let evt: DirectoryEvent =
-            serde_json::from_slice(&first.payload).expect("Snapshot decodes");
+        let evt: DirectoryEvent = serde_json::from_slice(&first.payload).expect("Snapshot decodes");
         assert!(matches!(evt, DirectoryEvent::Snapshot { .. }));
 
         // Frame 2: Heartbeat after the 50ms interval. Bound
         // the wait to 1s so a real bug surfaces as a test
         // timeout rather than a CI hang.
-        let hb_frame = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            stream.next(),
-        )
-        .await
-        .expect("heartbeat frame within 1s")
-        .expect("stream did not end")
-        .expect("frame is Ok");
+        let hb_frame = tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
+            .await
+            .expect("heartbeat frame within 1s")
+            .expect("stream did not end")
+            .expect("frame is Ok");
         let hb_evt: DirectoryEvent =
             serde_json::from_slice(&hb_frame.payload).expect("Heartbeat decodes");
         match hb_evt {
@@ -3906,6 +4137,47 @@ mod tests {
     }
 
     #[test]
+    fn validate_and_extract_bidi_frame0_rejects_non_zero_sequence() {
+        let frame = InvokeBidiUp {
+            sequence: 7,
+            mac: Vec::new(),
+            payload: Some(UpPayload::EnvelopeOpen(make_envelope_open(
+                ABILITY_INVOKE_REMOTE,
+                b"{}".to_vec(),
+            ))),
+        };
+        let err = validate_and_extract_bidi_frame0(&frame).expect_err("must reject");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message().contains(REASON_BIDI_FIRST_FRAME_SEQUENCE),
+            "wire reason must be preserved, got: {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn validate_and_extract_bidi_frame0_rejects_non_strict_ordering() {
+        let mut envelope_open = make_envelope_open(ABILITY_INVOKE_REMOTE, b"{}".to_vec());
+        envelope_open.streams.push(StreamDescriptor {
+            stream_id: 9,
+            ordering: "UNORDERED".to_string(),
+            ..StreamDescriptor::default()
+        });
+        let frame = InvokeBidiUp {
+            sequence: 0,
+            mac: Vec::new(),
+            payload: Some(UpPayload::EnvelopeOpen(envelope_open)),
+        };
+        let err = validate_and_extract_bidi_frame0(&frame).expect_err("must reject");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message().contains(REASON_BIDI_NON_STRICT_ORDERING),
+            "wire reason must be preserved, got: {}",
+            err.message()
+        );
+    }
+
+    #[test]
     fn extract_envelope_open_rejects_binary_chunk_first_frame() {
         let frame = InvokeBidiUp {
             sequence: 0,
@@ -3962,7 +4234,8 @@ mod tests {
         .expect_err("cross-realm caller without trust entry must be rejected");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
         assert!(
-            err.message().contains("not present in the realm trust anchor"),
+            err.message()
+                .contains("not present in the realm trust anchor"),
             "got: {}",
             err.message()
         );
@@ -4194,7 +4467,8 @@ mod tests {
     /// tests assert the cross-tenant arm dialed the right peer
     /// hub with the right ability + arguments.
     struct RecordingFederationClient {
-        recorded: std::sync::Mutex<Vec<(crate::services::federation_client::HubUri, InvokeRequest)>>,
+        recorded:
+            std::sync::Mutex<Vec<(crate::services::federation_client::HubUri, InvokeRequest)>>,
         canned: InvokeResponse,
     }
 
@@ -4217,7 +4491,8 @@ mod tests {
             &self,
             target_hub: &crate::services::federation_client::HubUri,
             request: InvokeRequest,
-        ) -> Result<InvokeResponse, crate::services::federation_client::FederationClientError> {
+        ) -> Result<InvokeResponse, crate::services::federation_client::FederationClientError>
+        {
             self.recorded
                 .lock()
                 .expect("mutex")
@@ -4254,10 +4529,8 @@ mod tests {
             "call_id": "test-call-id-1",
         });
         let inner_b64 = STANDARD.encode(serde_json::to_vec(&inner).unwrap());
-        format!(
-            r#"{{"target_uri":"{target_uri}","inner_envelope_b64":"{inner_b64}"}}"#
-        )
-        .into_bytes()
+        format!(r#"{{"target_uri":"{target_uri}","inner_envelope_b64":"{inner_b64}"}}"#)
+            .into_bytes()
     }
 
     // ── PR-1 commit 7/9 (LB-56) — self-targeted local dispatch ─────────
@@ -4330,9 +4603,7 @@ mod tests {
         let result_value: serde_json::Value =
             serde_json::from_slice(&parsed.result_bytes).expect("result_bytes is JSON");
         assert_eq!(
-            result_value
-                .get("MARKER-C9-1")
-                .and_then(|v| v.as_str()),
+            result_value.get("MARKER-C9-1").and_then(|v| v.as_str()),
             Some("self-target-fallthrough-fired"),
             "result_bytes must come from the LocalAbilityRegistry handler, \
              not a daemon-internal fallback"
@@ -4360,14 +4631,14 @@ mod tests {
         let svc = make_service().with_session_realm("test-realm");
 
         let err = svc
-            .dispatch_federation_forward_invoke(
-                None,
-                &forward_invoke_args(TEST_DAEMON_URI),
-            )
+            .dispatch_federation_forward_invoke(None, &forward_invoke_args(TEST_DAEMON_URI))
             .await
             .expect_err("no local_dispatcher ⇒ legacy target_offline");
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
-        assert_eq!(err.message(), federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON);
+        assert_eq!(
+            err.message(),
+            federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON
+        );
     }
 
     #[tokio::test]
@@ -4398,7 +4669,10 @@ mod tests {
             .await
             .expect_err("non-self target ⇒ legacy presence-push path ⇒ target_offline");
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
-        assert_eq!(err.message(), federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON);
+        assert_eq!(
+            err.message(),
+            federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON
+        );
     }
 
     #[tokio::test]
@@ -4423,9 +4697,10 @@ mod tests {
             .with_federation_client(recorder.clone() as Arc<dyn FederationClient>);
 
         let err = svc
-            .dispatch_federation_forward_invoke(None, &forward_invoke_args(
-                "easynet:///r/test-realm/agent/local-target",
-            ))
+            .dispatch_federation_forward_invoke(
+                None,
+                &forward_invoke_args("easynet:///r/test-realm/agent/local-target"),
+            )
             .await
             .expect_err("local fast-path miss surfaces target_offline");
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
@@ -4449,9 +4724,10 @@ mod tests {
         let svc = make_service().with_session_realm("test-realm");
 
         let err = svc
-            .dispatch_federation_forward_invoke(None, &forward_invoke_args(
-                "easynet:///r/peer-realm/agent/peer-target",
-            ))
+            .dispatch_federation_forward_invoke(
+                None,
+                &forward_invoke_args("easynet:///r/peer-realm/agent/peer-target"),
+            )
             .await
             .expect_err("cross-tenant without client surfaces target_offline");
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
@@ -4483,9 +4759,10 @@ mod tests {
             .with_federation_client(recorder.clone() as Arc<dyn FederationClient>);
 
         let err = svc
-            .dispatch_federation_forward_invoke(None, &forward_invoke_args(
-                "easynet:///r/unmapped-realm/agent/peer-target",
-            ))
+            .dispatch_federation_forward_invoke(
+                None,
+                &forward_invoke_args("easynet:///r/unmapped-realm/agent/peer-target"),
+            )
             .await
             .expect_err("unmapped tenant surfaces target_offline");
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
@@ -4555,8 +4832,7 @@ mod tests {
         // pins the new wire shape; flipping back to bare-inner-name
         // would re-introduce the LB-57 §〇 production bug.
         assert_eq!(
-            calls[0].1.function_name,
-            ABILITY_FEDERATION_FORWARD_INVOKE,
+            calls[0].1.function_name, ABILITY_FEDERATION_FORWARD_INVOKE,
             "LB-57 Option A: peer dispatcher receives the federation.forward_invoke \
              wrapper, NOT the bare inner ability name"
         );
@@ -4664,9 +4940,10 @@ mod tests {
         // Dispatcher takes the target_offline arm.
 
         let _err = svc
-            .dispatch_federation_forward_invoke(None, &forward_invoke_args(
-                "easynet:///r/peer-realm/agent/peer-target",
-            ))
+            .dispatch_federation_forward_invoke(
+                None,
+                &forward_invoke_args("easynet:///r/peer-realm/agent/peer-target"),
+            )
             .await
             .expect_err("target_offline");
 
@@ -4695,9 +4972,10 @@ mod tests {
         let svc = make_service().with_session_realm("test-realm");
 
         let _err = svc
-            .dispatch_federation_forward_invoke(None, &forward_invoke_args(
-                "easynet:///r/test-realm/agent/local-target",
-            ))
+            .dispatch_federation_forward_invoke(
+                None,
+                &forward_invoke_args("easynet:///r/test-realm/agent/local-target"),
+            )
             .await
             .expect_err("local fast-path miss");
 
@@ -4757,10 +5035,8 @@ mod tests {
             hub_uri: None,
             tls_ca_pem_path: None,
         }];
-        let daemon_b_anchor = Arc::new(
-            RealmTrustAnchor::from_entries(daemon_a_in_b_trust)
-                .expect("anchor"),
-        );
+        let daemon_b_anchor =
+            Arc::new(RealmTrustAnchor::from_entries(daemon_a_in_b_trust).expect("anchor"));
 
         // Daemon B: presence registry contains the target device,
         // and a `PendingDispatchMap` is wired so the new LB-57
@@ -4774,8 +5050,7 @@ mod tests {
         // SessionDispatch::Result up).
         let daemon_b_presence = Arc::new(PresenceRegistry::new());
         let (target_tx, mut target_rx) = tokio::sync::mpsc::channel(8);
-        daemon_b_presence
-            .insert(TARGET_DEVICE_URI.to_string(), target_tx);
+        daemon_b_presence.insert(TARGET_DEVICE_URI.to_string(), target_tx);
 
         let daemon_b_pending = Arc::new(PendingDispatchMap::new());
         let daemon_b_admission =
@@ -4833,22 +5108,18 @@ mod tests {
             Arc::new(RealmTrustAnchor::default()),
             Some(DAEMON_A_URI.to_string()),
         );
-        let federation_client: Arc<dyn FederationClient> = Arc::new(
-            ForwardingPeerClient {
-                peer: daemon_b,
-                envelope: test_envelope_with_uri(DAEMON_A_URI),
-            },
-        );
+        let federation_client: Arc<dyn FederationClient> = Arc::new(ForwardingPeerClient {
+            peer: daemon_b,
+            envelope: test_envelope_with_uri(DAEMON_A_URI),
+        });
         let mut peers = BTreeMap::new();
         peers.insert(REALM_B.to_string(), PEER_HUB_URI.to_string());
 
-        let daemon_a = DaemonInvocationService::new(
-            Arc::new(PresenceRegistry::new()),
-            daemon_a_admission,
-        )
-        .with_session_realm(REALM_A)
-        .with_federation_client(federation_client)
-        .with_federated_peers(peers);
+        let daemon_a =
+            DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), daemon_a_admission)
+                .with_session_realm(REALM_A)
+                .with_federation_client(federation_client)
+                .with_federated_peers(peers);
 
         // ── Drive: daemon_a receives a federation.forward_invoke ──
         // PR-N1 commit 11/N rewrote the dispatch path: daemon A
@@ -4908,11 +5179,11 @@ mod tests {
         // PendingDispatchMap correlation). The new contract
         // closes both halves.
         let outer: federation_wrappers::ForwardInvokeResponse =
-            serde_json::from_slice(&body.result)
-                .expect("outer ForwardInvokeResponse is JSON");
+            serde_json::from_slice(&body.result).expect("outer ForwardInvokeResponse is JSON");
         assert_eq!(outer.correlation_call_id, "e2e-call-id-1");
         assert_eq!(
-            outer.result_bytes, br#"{"echo":"e2e-canned"}"#.to_vec(),
+            outer.result_bytes,
+            br#"{"echo":"e2e-canned"}"#.to_vec(),
             "result_bytes must carry the fake device-B canned reply verbatim"
         );
     }
@@ -4934,7 +5205,8 @@ mod tests {
             &self,
             _target_hub: &crate::services::federation_client::HubUri,
             mut request: InvokeRequest,
-        ) -> Result<InvokeResponse, crate::services::federation_client::FederationClientError> {
+        ) -> Result<InvokeResponse, crate::services::federation_client::FederationClientError>
+        {
             request.envelope = Some(self.envelope.clone());
             let response = self
                 .peer
@@ -4943,11 +5215,7 @@ mod tests {
                 .map_err(|status| {
                     crate::services::federation_client::FederationClientError::InnerInvokeFailed {
                         hub: "in-process-peer".to_string(),
-                        status: format!(
-                            "code={:?} message={}",
-                            status.code(),
-                            status.message()
-                        ),
+                        status: format!("code={:?} message={}", status.code(), status.message()),
                     }
                 })?;
             Ok(response.into_inner())
@@ -5101,7 +5369,8 @@ mod tests {
                     serde_json::from_slice(&result_bytes)
                         .expect("body decodes as ForwardInvokeResponse");
                 assert_eq!(
-                    body.result_bytes, br#"{"echo":"args-from-A"}"#.to_vec(),
+                    body.result_bytes,
+                    br#"{"echo":"args-from-A"}"#.to_vec(),
                     "result_bytes must carry device-B's canned ability output verbatim"
                 );
                 assert_eq!(
@@ -5109,9 +5378,7 @@ mod tests {
                     "correlation_call_id must round-trip from inner_envelope"
                 );
             }
-            other => panic!(
-                "expected Ok with real device-B bytes, got {other:?}"
-            ),
+            other => panic!("expected Ok with real device-B bytes, got {other:?}"),
         }
 
         // Sanity: fake device task ran to completion.
@@ -5136,12 +5403,15 @@ mod tests {
         use crate::services::axon_serve::session_escalation::{
             spawn_escalation_consumer, EscalationCorrelation,
         };
+        use crate::services::axon_serve::session_initiator::SessionUpSender;
         use tokio::sync::mpsc;
 
         let correlation = EscalationCorrelation::new();
         let (up_tx, mut up_rx) = mpsc::channel(8);
-        let handle =
-            std::sync::Arc::new(spawn_escalation_consumer(correlation.clone(), up_tx));
+        let handle = std::sync::Arc::new(spawn_escalation_consumer(
+            correlation.clone(),
+            SessionUpSender::new(up_tx),
+        ));
 
         let canned_bytes = b"hub-answered-via-bidi".to_vec();
         let canned_for_hub = canned_bytes.clone();
@@ -5202,12 +5472,15 @@ mod tests {
         use crate::services::axon_serve::session_escalation::{
             spawn_escalation_consumer, EscalationCorrelation,
         };
+        use crate::services::axon_serve::session_initiator::SessionUpSender;
         use tokio::sync::mpsc;
 
         let correlation = EscalationCorrelation::new();
         let (up_tx, mut up_rx) = mpsc::channel(8);
-        let handle =
-            std::sync::Arc::new(spawn_escalation_consumer(correlation.clone(), up_tx));
+        let handle = std::sync::Arc::new(spawn_escalation_consumer(
+            correlation.clone(),
+            SessionUpSender::new(up_tx),
+        ));
 
         // Fake hub: complete every Request with TargetOffline.
         tokio::spawn(async move {
@@ -5259,12 +5532,15 @@ mod tests {
         use crate::services::axon_serve::session_escalation::{
             spawn_escalation_consumer, EscalationCorrelation,
         };
+        use crate::services::axon_serve::session_initiator::SessionUpSender;
         use tokio::sync::mpsc;
 
         let correlation = EscalationCorrelation::new();
         let (up_tx, _up_rx_held) = mpsc::channel(8);
-        let handle =
-            std::sync::Arc::new(spawn_escalation_consumer(correlation, up_tx));
+        let handle = std::sync::Arc::new(spawn_escalation_consumer(
+            correlation,
+            SessionUpSender::new(up_tx),
+        ));
 
         // For this test we drive `escalate_with_timeout` directly
         // via the handle (not through the dispatch arm) because
@@ -5406,6 +5682,7 @@ mod tests {
         use crate::services::axon_serve::session_escalation::{
             spawn_escalation_consumer, EscalationCorrelation,
         };
+        use crate::services::axon_serve::session_initiator::SessionUpSender;
         use crate::services::presence_registry::DispatchSender;
         use tokio::sync::mpsc;
 
@@ -5435,8 +5712,7 @@ mod tests {
         // entry with canned bytes (mirrors what
         // `drain_session_up_stream` does in production when
         // device-B sends Result up).
-        let pending_for_fake_device =
-            hub_service.pending.clone().expect("pending wired above");
+        let pending_for_fake_device = hub_service.pending.clone().expect("pending wired above");
         let canned_device_reply = br#"{"echo":"end-to-end-chain"}"#.to_vec();
         let canned_for_fake = canned_device_reply.clone();
         tokio::spawn(async move {
@@ -5452,7 +5728,11 @@ mod tests {
             };
             let dispatch: SessionDispatch =
                 serde_json::from_slice(&chunk.data).expect("frame decodes as SessionDispatch");
-            let SessionDispatch::Dispatch { call_id: dev_call_id, .. } = dispatch else {
+            let SessionDispatch::Dispatch {
+                call_id: dev_call_id,
+                ..
+            } = dispatch
+            else {
                 panic!("expected SessionDispatch::Dispatch on down channel, got {dispatch:?}");
             };
             pending_for_fake_device.complete(
@@ -5467,8 +5747,10 @@ mod tests {
         // Device-side escalation handle + consumer.
         let correlation = EscalationCorrelation::new();
         let (up_tx, mut up_rx) = mpsc::channel(8);
-        let device_handle =
-            spawn_escalation_consumer(std::sync::Arc::clone(&correlation), up_tx);
+        let device_handle = spawn_escalation_consumer(
+            std::sync::Arc::clone(&correlation),
+            SessionUpSender::new(up_tx),
+        );
 
         // Fake hub task: decode Request frames, dispatch via
         // hub_service, complete the matching correlation entry.
@@ -5480,19 +5762,17 @@ mod tests {
                     Some(UpPayload::BinaryChunk(c)) => c,
                     _ => continue,
                 };
-                let dispatch: SessionDispatch =
-                    match serde_json::from_slice(&chunk.data) {
-                        Ok(d) => d,
-                        Err(_) => continue,
-                    };
+                let dispatch: SessionDispatch = match serde_json::from_slice(&chunk.data) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
                 if let SessionDispatch::Request {
                     call_id,
                     ability,
                     args,
                 } = dispatch
                 {
-                    let outcome =
-                        hub_for_task.dispatch_session_request(&ability, &args).await;
+                    let outcome = hub_for_task.dispatch_session_request(&ability, &args).await;
                     correlation_for_hub.complete(call_id, outcome);
                 }
             }
@@ -5566,6 +5846,54 @@ mod tests {
                 assert_eq!(rec_outcome, outcome);
             }
             other => panic!("expected RequestResult, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn push_session_request_result_evicts_slow_device_when_channel_full() {
+        use crate::services::presence_registry::{OfflineReason, PresenceEvent};
+        use tokio::sync::mpsc;
+
+        let presence = Arc::new(PresenceRegistry::new());
+        let mut events = presence.subscribe_events();
+        let caller_uri = "easynet:///r/test-realm/agent/device-a";
+        let (tx, _rx) = mpsc::channel(1);
+        presence.insert(caller_uri.to_string(), tx.clone());
+        match events.recv().await.expect("online event") {
+            PresenceEvent::Online { uri } => assert_eq!(uri, caller_uri),
+            other => panic!("expected online event, got {other:?}"),
+        }
+
+        tx.try_send(Ok(build_session_request_result_frame(
+            [0x11; 16],
+            RequestOutcome::Ok {
+                result_bytes: b"already-buffered".to_vec(),
+            },
+        )))
+        .expect("fill down-channel to capacity");
+
+        push_session_request_result(
+            &presence,
+            caller_uri,
+            "abcd",
+            build_session_request_result_frame(
+                [0x22; 16],
+                RequestOutcome::Ok {
+                    result_bytes: b"overflow".to_vec(),
+                },
+            ),
+        );
+
+        assert!(
+            presence.lookup_tracked(caller_uri).is_none(),
+            "slow device must be evicted from presence on RequestResult backpressure"
+        );
+        match events.recv().await.expect("offline event") {
+            PresenceEvent::Offline { uri, reason } => {
+                assert_eq!(uri, caller_uri);
+                assert_eq!(reason, OfflineReason::SendFailed);
+            }
+            other => panic!("expected offline event, got {other:?}"),
         }
     }
 }

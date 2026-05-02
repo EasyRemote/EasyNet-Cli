@@ -44,7 +44,7 @@ use crate::runtime::ability_dispatch::AbilityDispatcher;
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use crate::services::axon_serve::invoke_remote_initiator::{call_id_hex, SessionDispatch};
 use crate::services::axon_serve::session_initiator::{
-    SessionDispatchError, SessionFrameDispatcher,
+    SessionDispatchError, SessionFrameDispatcher, SessionUpSender, SESSION_STREAM_ID,
 };
 
 /// Device-side `<self>.session` dispatcher. Holds the boot-threaded
@@ -68,9 +68,8 @@ pub struct LocalAbilityDispatcher {
     /// never receive `RequestResult` frames). When set, inbound
     /// `SessionDispatch::RequestResult` frames are routed here
     /// by `call_id`, completing the awaiting dispatcher future.
-    escalation_correlation: Option<
-        Arc<crate::services::axon_serve::session_escalation::EscalationCorrelation>,
-    >,
+    escalation_correlation:
+        Option<Arc<crate::services::axon_serve::session_escalation::EscalationCorrelation>>,
 }
 
 impl LocalAbilityDispatcher {
@@ -90,9 +89,7 @@ impl LocalAbilityDispatcher {
     #[must_use]
     pub fn with_escalation_correlation(
         mut self,
-        correlation: Arc<
-            crate::services::axon_serve::session_escalation::EscalationCorrelation,
-        >,
+        correlation: Arc<crate::services::axon_serve::session_escalation::EscalationCorrelation>,
     ) -> Self {
         self.escalation_correlation = Some(correlation);
         self
@@ -175,10 +172,8 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
     async fn handle_down(
         &self,
         frame: InvokeBidiDown,
-        outbound: &mpsc::Sender<InvokeBidiUp>,
+        outbound: &SessionUpSender,
     ) -> Result<(), SessionDispatchError> {
-        let sequence = frame.sequence;
-
         // Only `BinaryChunk` frames carry SessionDispatch; ignore
         // Receipt / Control frames silently (PR-1 semantics).
         let DownPayload::BinaryChunk(chunk) = frame.payload.ok_or_else(|| {
@@ -210,7 +205,14 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
                 call_id,
                 ability,
                 args,
-            } => (call_id, ability, args),
+            } => {
+                eprintln!(
+                    "[local-ability-dispatcher] received Dispatch frame \
+                     call_id={call_id} ability={ability} args_bytes={}",
+                    args.len()
+                );
+                (call_id, ability, args)
+            }
             SessionDispatch::RequestResult { call_id, outcome } => {
                 if let Some(correlation) = self.escalation_correlation.as_ref() {
                     let id_hex = call_id_hex(&call_id);
@@ -340,19 +342,32 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
             SessionDispatchError::Other(format!("encode SessionDispatch::Result: {err}"))
         })?;
 
-        let reply_frame = InvokeBidiUp {
-            sequence: sequence.saturating_add(1),
-            payload: Some(UpPayload::BinaryChunk(BinaryChunk {
+        let payload_len = payload.len();
+        eprintln!(
+            "[local-ability-dispatcher] sending Result frame up bidi: \
+             call_id={call_id} payload_bytes={payload_len}"
+        );
+
+        let send_result = outbound
+            .send_binary_chunk(BinaryChunk {
+                stream_id: SESSION_STREAM_ID,
                 data: payload,
                 ..BinaryChunk::default()
-            })),
-            ..InvokeBidiUp::default()
-        };
-
-        outbound
-            .send(reply_frame)
+            })
             .await
-            .map_err(|_| SessionDispatchError::Other("outbound channel closed".to_string()))
+            .map_err(|_| SessionDispatchError::Other("outbound channel closed".to_string()));
+
+        if send_result.is_err() {
+            eprintln!(
+                "[local-ability-dispatcher] FAILED to send Result frame up bidi for call_id={call_id} — outbound channel closed"
+            );
+        } else {
+            eprintln!(
+                "[local-ability-dispatcher] Result frame sent up bidi successfully for call_id={call_id}"
+            );
+        }
+
+        send_result
     }
 }
 
@@ -405,15 +420,20 @@ mod tests {
     async fn dispatch_frame_executes_registered_rpc_and_returns_json_payload() {
         let disp = LocalAbilityDispatcher::new(build_dispatcher());
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
+        let session_tx = SessionUpSender::new(tx);
 
         disp.handle_down(
             dispatch_frame(1, "test.echo", br#"{"echo":"args-from-A"}"#.to_vec()),
-            &tx,
+            &session_tx,
         )
         .await
         .expect("handle_down returns Ok with terminal reply queued");
 
         let reply = rx.recv().await.expect("reply produced");
+        assert_eq!(
+            reply.sequence, 1,
+            "first post-frame-0 reply must own up-direction sequence 1"
+        );
         let chunk = match reply.payload {
             Some(UpPayload::BinaryChunk(c)) => c,
             other => panic!("expected BinaryChunk reply, got: {other:?}"),
@@ -441,10 +461,14 @@ mod tests {
     async fn unregistered_ability_returns_terminal_error() {
         let disp = LocalAbilityDispatcher::new(build_dispatcher());
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
+        let session_tx = SessionUpSender::new(tx);
 
-        disp.handle_down(dispatch_frame(7, "missing.ability", br#"{}"#.to_vec()), &tx)
-            .await
-            .expect("missing ability becomes a terminal wire error, not transport failure");
+        disp.handle_down(
+            dispatch_frame(7, "missing.ability", br#"{}"#.to_vec()),
+            &session_tx,
+        )
+        .await
+        .expect("missing ability becomes a terminal wire error, not transport failure");
 
         let reply = rx.recv().await.expect("reply produced");
         let chunk = match reply.payload {
@@ -487,18 +511,25 @@ mod tests {
         // dispatcher remains usable for follow-up dispatches.
         let disp = LocalAbilityDispatcher::new(build_dispatcher());
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
+        let session_tx = SessionUpSender::new(tx);
 
-        disp.handle_down(dispatch_frame(11, "always.panics", b"{}".to_vec()), &tx)
-            .await
-            .expect("handler panic must NOT propagate; handle_down stays Ok");
+        disp.handle_down(
+            dispatch_frame(11, "always.panics", b"{}".to_vec()),
+            &session_tx,
+        )
+        .await
+        .expect("handler panic must NOT propagate; handle_down stays Ok");
 
         let reply = rx.recv().await.expect("panic recovery still emits a reply");
+        assert_eq!(
+            reply.sequence, 1,
+            "first post-frame-0 reply must own up-direction sequence 1"
+        );
         let chunk = match reply.payload {
             Some(UpPayload::BinaryChunk(c)) => c,
             other => panic!("expected BinaryChunk reply, got: {other:?}"),
         };
-        let parsed: SessionDispatch =
-            serde_json::from_slice(&chunk.data).expect("Result decodes");
+        let parsed: SessionDispatch = serde_json::from_slice(&chunk.data).expect("Result decodes");
         match parsed {
             SessionDispatch::Result {
                 call_id,
@@ -526,17 +557,20 @@ mod tests {
         // panic was contained, not a fatal trap.
         disp.handle_down(
             dispatch_frame(12, "test.echo", br#"{"after":"panic"}"#.to_vec()),
-            &tx,
+            &session_tx,
         )
         .await
         .expect("post-panic dispatch must still succeed");
         let follow_up = rx.recv().await.expect("post-panic reply produced");
+        assert_eq!(
+            follow_up.sequence, 2,
+            "follow-up reply on the same session must increment the up sequence"
+        );
         let chunk = match follow_up.payload {
             Some(UpPayload::BinaryChunk(c)) => c,
             other => panic!("expected BinaryChunk reply, got: {other:?}"),
         };
-        let parsed: SessionDispatch =
-            serde_json::from_slice(&chunk.data).expect("Result decodes");
+        let parsed: SessionDispatch = serde_json::from_slice(&chunk.data).expect("Result decodes");
         match parsed {
             SessionDispatch::Result {
                 call_id,
@@ -559,10 +593,14 @@ mod tests {
     async fn malformed_args_bytes_return_terminal_error() {
         let disp = LocalAbilityDispatcher::new(build_dispatcher());
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
+        let session_tx = SessionUpSender::new(tx);
 
-        disp.handle_down(dispatch_frame(9, "test.echo", b"not-json".to_vec()), &tx)
-            .await
-            .expect("bad args bytes must be surfaced as a terminal reply");
+        disp.handle_down(
+            dispatch_frame(9, "test.echo", b"not-json".to_vec()),
+            &session_tx,
+        )
+        .await
+        .expect("bad args bytes must be surfaced as a terminal reply");
 
         let reply = rx.recv().await.expect("reply produced");
         let chunk = match reply.payload {
@@ -595,6 +633,7 @@ mod tests {
         // frame.
         let disp = LocalAbilityDispatcher::new(build_dispatcher());
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
+        let session_tx = SessionUpSender::new(tx);
 
         let bogus = SessionDispatch::Result {
             call_id: 42,
@@ -612,7 +651,9 @@ mod tests {
             ..InvokeBidiDown::default()
         };
 
-        disp.handle_down(frame, &tx).await.expect("ignored cleanly");
+        disp.handle_down(frame, &session_tx)
+            .await
+            .expect("ignored cleanly");
         match rx.try_recv() {
             Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
             Ok(unexpected) => {
@@ -626,6 +667,7 @@ mod tests {
     async fn malformed_dispatch_json_returns_error() {
         let disp = LocalAbilityDispatcher::new(build_dispatcher());
         let (tx, _rx) = mpsc::channel::<InvokeBidiUp>(4);
+        let session_tx = SessionUpSender::new(tx);
 
         let frame = InvokeBidiDown {
             sequence: 0,
@@ -637,7 +679,7 @@ mod tests {
         };
 
         let err = disp
-            .handle_down(frame, &tx)
+            .handle_down(frame, &session_tx)
             .await
             .expect_err("malformed JSON must surface as SessionDispatchError");
         match err {
@@ -697,11 +739,11 @@ mod tests {
     async fn device_mode_dispatcher_executes_fs_read_through_baseline_locomotion_registry() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let target = tmp.path().join("hello.txt");
-        std::fs::write(&target, "device-B-bytes-from-real-fs-read")
-            .expect("seed temp file");
+        std::fs::write(&target, "device-B-bytes-from-real-fs-read").expect("seed temp file");
 
         let disp = LocalAbilityDispatcher::new(build_real_daemon_dispatcher());
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
+        let session_tx = SessionUpSender::new(tx);
 
         let args = serde_json::json!({
             "path": target.to_string_lossy(),
@@ -713,7 +755,7 @@ mod tests {
             serde_json::to_vec(&args).expect("encode args"),
         );
 
-        disp.handle_down(frame, &tx)
+        disp.handle_down(frame, &session_tx)
             .await
             .expect("fs.read dispatches through device-mode registry");
 
@@ -722,8 +764,7 @@ mod tests {
             Some(UpPayload::BinaryChunk(c)) => c,
             other => panic!("expected BinaryChunk reply, got: {other:?}"),
         };
-        let parsed: SessionDispatch =
-            serde_json::from_slice(&chunk.data).expect("Result decodes");
+        let parsed: SessionDispatch = serde_json::from_slice(&chunk.data).expect("Result decodes");
         match parsed {
             SessionDispatch::Result {
                 call_id,
