@@ -104,10 +104,8 @@ pub fn load() -> anyhow::Result<LocalAgentsFile> {
     if !p.exists() {
         return Ok(LocalAgentsFile::default());
     }
-    let bytes = fs::read(&p)
-        .map_err(|e| anyhow::anyhow!("read {}: {e}", p.display()))?;
-    serde_json::from_slice(&bytes)
-        .map_err(|e| anyhow::anyhow!("parse {}: {e}", p.display()))
+    let bytes = fs::read(&p).map_err(|e| anyhow::anyhow!("read {}: {e}", p.display()))?;
+    serde_json::from_slice(&bytes).map_err(|e| anyhow::anyhow!("parse {}: {e}", p.display()))
 }
 
 /// Atomically write the file with mode 0600.
@@ -122,11 +120,7 @@ pub fn save(file: &LocalAgentsFile) -> anyhow::Result<()> {
 /// Look up a hosted Agent's URA by `(profile, name)`. Returns the
 /// URA if present, `None` otherwise. Used by the publish layer to
 /// decide whether to mint a fresh URA or reuse an existing one.
-pub fn lookup_hosted_uri(
-    file: &LocalAgentsFile,
-    profile: &str,
-    name: &str,
-) -> Option<String> {
+pub fn lookup_hosted_uri(file: &LocalAgentsFile, profile: &str, name: &str) -> Option<String> {
     file.hosted_agents
         .iter()
         .find(|e| e.profile == profile && e.name == name)
@@ -219,8 +213,7 @@ mod tests {
         let mut f = LocalAgentsFile::default();
         upsert_hosted_agent(&mut f, "consent", "default", "uri-c");
         assert_eq!(
-            f.hosted_agents[0].signing_authority,
-            "hosted_by:<unset>",
+            f.hosted_agents[0].signing_authority, "hosted_by:<unset>",
             "pre-join entries must be flagged so operators know to re-save after join"
         );
     }

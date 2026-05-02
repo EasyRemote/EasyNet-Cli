@@ -46,11 +46,7 @@ use serde_json::Value;
 /// "shell executor", "eal executor") that gets embedded in the
 /// error messages so an operator reading the daemon log can tell
 /// which executor blamed the manifest.
-pub fn render_template(
-    template: &str,
-    args: &Value,
-    caller_label: &str,
-) -> anyhow::Result<String> {
+pub fn render_template(template: &str, args: &Value, caller_label: &str) -> anyhow::Result<String> {
     let bindings_holder;
     let bindings: Option<&serde_json::Map<String, Value>> = match args {
         Value::Object(map) => {
@@ -201,22 +197,19 @@ mod tests {
 
     #[test]
     fn substitutes_object_as_json() {
-        let out =
-            render_template("{{ obj }}", &json!({"obj": {"a": 1}}), "test").unwrap();
+        let out = render_template("{{ obj }}", &json!({"obj": {"a": 1}}), "test").unwrap();
         assert_eq!(out, "{\"a\":1}");
     }
 
     #[test]
     fn whitespace_inside_braces_tolerated() {
-        let out =
-            render_template("{{name}} == {{ name }}", &json!({"name": "x"}), "test").unwrap();
+        let out = render_template("{{name}} == {{ name }}", &json!({"name": "x"}), "test").unwrap();
         assert_eq!(out, "x == x");
     }
 
     #[test]
     fn missing_arg_errors_with_caller_label() {
-        let err = render_template("{{ x }}", &json!({"y": 1}), "shell executor")
-            .unwrap_err();
+        let err = render_template("{{ x }}", &json!({"y": 1}), "shell executor").unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("shell executor"));
         assert!(msg.contains("x"));
@@ -265,8 +258,7 @@ mod tests {
 
     #[test]
     fn multibyte_utf8_passes_through() {
-        let out =
-            render_template("汉字 {{ x }} 字汉", &json!({"x": "中间"}), "test").unwrap();
+        let out = render_template("汉字 {{ x }} 字汉", &json!({"x": "中间"}), "test").unwrap();
         assert_eq!(out, "汉字 中间 字汉");
     }
 }

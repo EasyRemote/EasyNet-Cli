@@ -187,8 +187,8 @@ fn handler_read(args: Value) -> Result<Value> {
         ));
     }
 
-    let metadata = std::fs::metadata(Path::new(path))
-        .map_err(|e| anyhow!("fs.read: stat {path:?}: {e}"))?;
+    let metadata =
+        std::fs::metadata(Path::new(path)).map_err(|e| anyhow!("fs.read: stat {path:?}: {e}"))?;
     let total_size = metadata.len();
 
     // Stream up to max_bytes + 1, so we can tell "exactly at the
@@ -196,8 +196,8 @@ fn handler_read(args: Value) -> Result<Value> {
     // allocating past the cap. `Read::take` enforces the bound
     // at the syscall level — a multi-GB special file or a
     // misreported metadata.len cannot OOM us.
-    let file = std::fs::File::open(Path::new(path))
-        .map_err(|e| anyhow!("fs.read: open {path:?}: {e}"))?;
+    let file =
+        std::fs::File::open(Path::new(path)).map_err(|e| anyhow!("fs.read: open {path:?}: {e}"))?;
     let mut limited = file.take(max_bytes.saturating_add(1));
     let mut content: Vec<u8> = Vec::with_capacity((max_bytes.min(64 * 1024)) as usize);
     limited
@@ -216,9 +216,7 @@ fn handler_read(args: Value) -> Result<Value> {
     let body = match encoding {
         "utf8" => {
             let text = std::str::from_utf8(&content).map_err(|_| {
-                anyhow!(
-                    "fs.read: file at {path:?} is not valid UTF-8; use encoding=\"binary\""
-                )
+                anyhow!("fs.read: file at {path:?} is not valid UTF-8; use encoding=\"binary\"")
             })?;
             if offset_lines.is_some() || limit_lines.is_some() {
                 let sliced = slice_lines(text, offset_lines.unwrap_or(1), limit_lines);
@@ -312,9 +310,7 @@ fn handler_write(args: Value) -> Result<Value> {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let explicit_mode = args.get("mode").and_then(Value::as_u64).map(|m| m as u32);
-    let expected_mtime_ms = args
-        .get("expected_mtime_ms")
-        .and_then(Value::as_u64);
+    let expected_mtime_ms = args.get("expected_mtime_ms").and_then(Value::as_u64);
 
     let raw = decode_content(&args)?;
 
@@ -385,7 +381,9 @@ fn handler_write(args: Value) -> Result<Value> {
     #[cfg(unix)]
     let target_mode: Option<u32> = explicit_mode.or_else(|| {
         use std::os::unix::fs::PermissionsExt;
-        existing_meta.as_ref().map(|m| m.permissions().mode() & 0o7777)
+        existing_meta
+            .as_ref()
+            .map(|m| m.permissions().mode() & 0o7777)
     });
     #[cfg(not(unix))]
     let target_mode: Option<u32> = explicit_mode;
@@ -463,16 +461,14 @@ fn handler_write(args: Value) -> Result<Value> {
 /// the helper.
 pub(super) fn resolve_symlink_one_level(path: &Path) -> std::path::PathBuf {
     match std::fs::symlink_metadata(path) {
-        Ok(m) if m.file_type().is_symlink() => {
-            match std::fs::read_link(path) {
-                Ok(link) if link.is_absolute() => link,
-                Ok(link) => {
-                    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-                    parent.join(link)
-                }
-                Err(_) => path.to_path_buf(),
+        Ok(m) if m.file_type().is_symlink() => match std::fs::read_link(path) {
+            Ok(link) if link.is_absolute() => link,
+            Ok(link) => {
+                let parent = path.parent().unwrap_or_else(|| Path::new("."));
+                parent.join(link)
             }
-        }
+            Err(_) => path.to_path_buf(),
+        },
         _ => path.to_path_buf(),
     }
 }
@@ -483,9 +479,7 @@ pub(super) fn resolve_symlink_one_level(path: &Path) -> std::path::PathBuf {
 /// staleness guard.
 pub(super) fn file_mtime_ms(m: &std::fs::Metadata) -> Option<u64> {
     let modified = m.modified().ok()?;
-    let dur = modified
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?;
+    let dur = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
     Some(dur.as_millis() as u64)
 }
 
@@ -515,9 +509,9 @@ fn decode_content(args: &Value) -> Result<Vec<u8>> {
         // bindings that prefer not to base64-encode.
         let mut out = Vec::with_capacity(arr.len());
         for v in arr {
-            let n = v.as_u64().ok_or_else(|| {
-                anyhow!("fs.write: content[] entries must be integers in 0..256")
-            })?;
+            let n = v
+                .as_u64()
+                .ok_or_else(|| anyhow!("fs.write: content[] entries must be integers in 0..256"))?;
             if n > 255 {
                 return Err(anyhow!("fs.write: content[] entry {n} out of range"));
             }
@@ -599,8 +593,8 @@ fn list_recursive(
 }
 
 fn describe_entry(path: &Path) -> Result<Value> {
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|e| anyhow!("fs.list: stat {path:?}: {e}"))?;
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|e| anyhow!("fs.list: stat {path:?}: {e}"))?;
     let kind = if metadata.file_type().is_symlink() {
         "symlink"
     } else if metadata.is_dir() {

@@ -67,17 +67,13 @@ fn main() -> anyhow::Result<()> {
     }
 
     let metas = published_abilities();
-    let live_names: BTreeSet<String> =
-        metas.iter().map(|m| m.name.clone()).collect();
+    let live_names: BTreeSet<String> = metas.iter().map(|m| m.name.clone()).collect();
 
     let mut written: Vec<String> = Vec::new();
     let mut unchanged: Vec<String> = Vec::new();
     for meta in &metas {
-        let body = ability_toml::render_ability_toml(
-            &meta.name,
-            meta.description,
-            &meta.input_schema,
-        );
+        let body =
+            ability_toml::render_ability_toml(&meta.name, meta.description, &meta.input_schema);
         let path = target_dir.join(format!("{}.ability.toml", meta.name));
         let prior = std::fs::read_to_string(&path).ok();
         if prior.as_deref() == Some(body.as_str()) {

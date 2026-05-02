@@ -201,8 +201,10 @@ fn discuss_round_handler(
         // `Value`, not a Future); std::thread::spawn is the
         // correct primitive. Failures are caught per-thread and
         // turned into skip + an entry in `errors`.
-        let mut handles: Vec<(String, std::thread::JoinHandle<Result<AgentCycleOutcome, String>>)> =
-            Vec::with_capacity(agents.len());
+        let mut handles: Vec<(
+            String,
+            std::thread::JoinHandle<Result<AgentCycleOutcome, String>>,
+        )> = Vec::with_capacity(agents.len());
         for agent in &agents {
             let agent_name = agent.clone();
             let room_id_for_task = room_id.clone();
@@ -407,13 +409,11 @@ fn run_agent_cycle(
     // closed the connection before responding". Resolving the
     // peer ability inside the same registry skips the IPC hop
     // entirely.
-    let registry = dispatch_registry_handle
-        .get()
-        .ok_or_else(|| {
-            "internal_error: dispatch registry handle not yet set when \
+    let registry = dispatch_registry_handle.get().ok_or_else(|| {
+        "internal_error: dispatch registry handle not yet set when \
              mission.discuss_round invoked"
-                .to_string()
-        })?;
+            .to_string()
+    })?;
     let chat_handler = registry.resolve_rpc(&qualified_chat).ok_or_else(|| {
         format!(
             "agent {agent:?} has no chat ability registered (looked up \
@@ -430,9 +430,8 @@ fn run_agent_cycle(
     // and surfacing it as a typed error keeps the cycle's other
     // agents unaffected and surfaces a clean error envelope to
     // the operator.
-    let response_or_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        chat_handler(chat_args)
-    }));
+    let response_or_panic =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| chat_handler(chat_args)));
     let response = match response_or_panic {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => return Err(format!("{e}")),
@@ -856,8 +855,7 @@ mod tests {
     fn skip_protocol_does_not_misclassify_explanatory_text() {
         // A reply that mentions [SKIP] but in prose is NOT a skip
         // — only an exact-trim match is.
-        match classify_reply_for_test("I considered replying with [SKIP] but I do have a point.")
-        {
+        match classify_reply_for_test("I considered replying with [SKIP] but I do have a point.") {
             AgentCycleOutcome::Speak(s) => assert!(s.contains("considered")),
             _ => panic!("must classify prose containing [SKIP] as Speak"),
         }

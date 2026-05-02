@@ -433,12 +433,10 @@ impl AgentDirectory {
             if !fname.ends_with(ABILITY_MANIFEST_SUFFIX) {
                 continue;
             }
-            let body = fs::read_to_string(&path).map_err(|e| {
-                anyhow::anyhow!("failed to read {}: {e}", path.display())
-            })?;
-            let manifest = AbilityManifest::from_toml_str(&body).map_err(|e| {
-                anyhow::anyhow!("failed to parse {}: {e}", path.display())
-            })?;
+            let body = fs::read_to_string(&path)
+                .map_err(|e| anyhow::anyhow!("failed to read {}: {e}", path.display()))?;
+            let manifest = AbilityManifest::from_toml_str(&body)
+                .map_err(|e| anyhow::anyhow!("failed to parse {}: {e}", path.display()))?;
             // The file-name stem (before `.ability.toml`) is the
             // operator's authoritative verb name — a manifest whose
             // internal `name` disagrees with its file stem would
@@ -537,11 +535,8 @@ mod tests {
         // trips through the parser. A malformed default would
         // fail every `agent publish` on a fresh agent.
         let (loc, root) = local_at_tmp("default-chat");
-        let dir = AgentDirectory::create(
-            &loc,
-            AgentSpec::new("alice", RuntimeKind::ClaudeCode),
-        )
-        .unwrap();
+        let dir =
+            AgentDirectory::create(&loc, AgentSpec::new("alice", RuntimeKind::ClaudeCode)).unwrap();
         let manifests = dir.list_ability_manifests().unwrap();
         assert_eq!(manifests.len(), 1, "exactly one seeded ability");
         assert_eq!(manifests[0].name(), "chat");
@@ -555,11 +550,8 @@ mod tests {
         // list, not an IO error. Tools can branch on the empty
         // list; an IO error would require special-casing.
         let (loc, root) = local_at_tmp("no-abilities");
-        let dir = AgentDirectory::create(
-            &loc,
-            AgentSpec::new("alice", RuntimeKind::ClaudeCode),
-        )
-        .unwrap();
+        let dir =
+            AgentDirectory::create(&loc, AgentSpec::new("alice", RuntimeKind::ClaudeCode)).unwrap();
         fs::remove_dir_all(root.join("abilities")).unwrap();
         let manifests = dir.list_ability_manifests().unwrap();
         assert!(manifests.is_empty());
@@ -572,20 +564,12 @@ mod tests {
         // load-bearing for diff-friendly output (a CI pipeline
         // that saves the stdout and diffs it on the next run).
         let (loc, root) = local_at_tmp("sorted");
-        let dir = AgentDirectory::create(
-            &loc,
-            AgentSpec::new("alice", RuntimeKind::ClaudeCode),
-        )
-        .unwrap();
+        let dir =
+            AgentDirectory::create(&loc, AgentSpec::new("alice", RuntimeKind::ClaudeCode)).unwrap();
         // Seed abilities in reverse-name order to confirm the
         // sorter actually runs.
         for name in ["zulu", "alpha"] {
-            let m = AbilityManifest::new(
-                name,
-                "x",
-                serde_json::json!({"type": "object"}),
-            )
-            .unwrap();
+            let m = AbilityManifest::new(name, "x", serde_json::json!({"type": "object"})).unwrap();
             fs::write(
                 root.join("abilities")
                     .join(format!("{name}{ABILITY_MANIFEST_SUFFIX}")),
@@ -609,11 +593,8 @@ mod tests {
         // all expected-on-disk but not manifests. They must not
         // trip the parser.
         let (loc, root) = local_at_tmp("noise");
-        let dir = AgentDirectory::create(
-            &loc,
-            AgentSpec::new("alice", RuntimeKind::ClaudeCode),
-        )
-        .unwrap();
+        let dir =
+            AgentDirectory::create(&loc, AgentSpec::new("alice", RuntimeKind::ClaudeCode)).unwrap();
         let abilities = root.join("abilities");
         fs::write(abilities.join("README.md"), "# notes").unwrap();
         fs::write(abilities.join(".DS_Store"), "").unwrap();
@@ -629,11 +610,8 @@ mod tests {
         // Silent-skip would create drift between "what ls shows"
         // and "what publish registers". Instead, refuse loud.
         let (loc, root) = local_at_tmp("broken");
-        let dir = AgentDirectory::create(
-            &loc,
-            AgentSpec::new("alice", RuntimeKind::ClaudeCode),
-        )
-        .unwrap();
+        let dir =
+            AgentDirectory::create(&loc, AgentSpec::new("alice", RuntimeKind::ClaudeCode)).unwrap();
         fs::write(
             root.join("abilities")
                 .join(format!("broken{ABILITY_MANIFEST_SUFFIX}")),
@@ -654,11 +632,8 @@ mod tests {
         // `agent publish` would print `alice.chat` twice with
         // different descriptions. Refuse.
         let (loc, root) = local_at_tmp("mismatch");
-        let dir = AgentDirectory::create(
-            &loc,
-            AgentSpec::new("alice", RuntimeKind::ClaudeCode),
-        )
-        .unwrap();
+        let dir =
+            AgentDirectory::create(&loc, AgentSpec::new("alice", RuntimeKind::ClaudeCode)).unwrap();
         let m = default_chat_manifest();
         fs::write(
             root.join("abilities")
@@ -718,11 +693,8 @@ mod tests {
         // second `create` call (which would refuse because
         // agent.toml already exists).
         let (loc, root) = local_at_tmp("ensure");
-        let dir = AgentDirectory::create(
-            &loc,
-            AgentSpec::new("alice", RuntimeKind::ClaudeCode),
-        )
-        .unwrap();
+        let dir =
+            AgentDirectory::create(&loc, AgentSpec::new("alice", RuntimeKind::ClaudeCode)).unwrap();
         fs::remove_dir_all(root.join("runs")).unwrap();
         assert!(!root.join("runs").exists());
         dir.ensure_layout().unwrap();
@@ -850,11 +822,8 @@ mod tests {
         // "non-empty + no agent.toml → refuse", so we include it.
         fs::write(root.join(".env"), "").unwrap();
 
-        let err = AgentDirectory::create(
-            &loc,
-            AgentSpec::new("claude", RuntimeKind::ClaudeCode),
-        )
-        .expect_err("partial skeleton must be refused");
+        let err = AgentDirectory::create(&loc, AgentSpec::new("claude", RuntimeKind::ClaudeCode))
+            .expect_err("partial skeleton must be refused");
         let msg = format!("{err}");
         // Error must mention both the offending path and the
         // remediation so an operator can fix the state without
@@ -888,13 +857,11 @@ mod tests {
         // process might have deposited here.
         fs::set_permissions(&env_path, fs::Permissions::from_mode(0o644)).unwrap();
 
-        let err = AgentDirectory::create(
-            &loc,
-            AgentSpec::new("alice", RuntimeKind::ClaudeCode),
-        )
-        .expect_err("pre-existing weak .env must cause refusal");
-        assert!(format!("{err}").contains("half-finished")
-            || format!("{err}").contains("previous"));
+        let err = AgentDirectory::create(&loc, AgentSpec::new("alice", RuntimeKind::ClaudeCode))
+            .expect_err("pre-existing weak .env must cause refusal");
+        assert!(
+            format!("{err}").contains("half-finished") || format!("{err}").contains("previous")
+        );
         cleanup(&root);
     }
 
@@ -910,7 +877,10 @@ mod tests {
         let err = AgentDirectory::create(&loc, spec)
             .expect_err("timeout_secs=0 must be refused pre-flight");
         assert!(format!("{err}").contains("timeout"));
-        assert!(!root.exists(), "no directory must be created on pre-flight failure");
+        assert!(
+            !root.exists(),
+            "no directory must be created on pre-flight failure"
+        );
     }
 
     #[test]

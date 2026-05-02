@@ -47,8 +47,7 @@ use serde_json::{json, Value};
 use easynet_cli::persistence::config::Credentials;
 use easynet_cli::runtime::advertise::{forward_invoke, AbilityInvoker};
 use easynet_cli::runtime::federation_init::{
-    try_install_federation_routing, FederationInitInputs, FederationInitOutcome,
-    FederationStage,
+    try_install_federation_routing, FederationInitInputs, FederationInitOutcome, FederationStage,
 };
 use easynet_cli::runtime::keyring::KeyringHandle;
 use easynet_cli::runtime::resolver as tenant_resolver;
@@ -76,10 +75,7 @@ fn creds(tenant: &str, node: &str) -> Credentials {
     }
 }
 
-fn inputs<'a>(
-    creds: &'a Credentials,
-    keyring: &'a Arc<KeyringHandle>,
-) -> FederationInitInputs<'a> {
+fn inputs<'a>(creds: &'a Credentials, keyring: &'a Arc<KeyringHandle>) -> FederationInitInputs<'a> {
     FederationInitInputs {
         creds,
         keyring,
@@ -144,15 +140,13 @@ impl AbilityInvoker for HubFake {
         let target_args_bytes = B64
             .decode(target_args_b64)
             .expect("arguments_b64 must be valid base64");
-        let target_args: Value =
-            serde_json::from_slice(&target_args_bytes).unwrap_or(Value::Null);
+        let target_args: Value = serde_json::from_slice(&target_args_bytes).unwrap_or(Value::Null);
         let handler_result = (self.args_handler)(target_args);
         let handler_bytes = serde_json::to_vec(&handler_result).expect("encode handler result");
 
-        self.captures.borrow_mut().push((
-            resource_uri.to_string(),
-            payload_json.clone(),
-        ));
+        self.captures
+            .borrow_mut()
+            .push((resource_uri.to_string(), payload_json.clone()));
 
         // Return the production wire envelope:
         //   `BridgeAbilityInvoker.ability_call_raw` → `{result_json:
@@ -226,16 +220,17 @@ fn forward_invoke_carries_args_byte_identical_through_cli_pipeline() {
     // (omitted on the wire AND wire shape parses on the receiving
     // side without explicit value).
     assert!(
-        payload.get("function_name").is_none()
-            || payload["function_name"] == "",
+        payload.get("function_name").is_none() || payload["function_name"] == "",
         "function_name shape: {payload}"
     );
     let sent_args_bytes = B64
         .decode(payload["arguments_b64"].as_str().unwrap())
         .unwrap();
     let sent_args: Value = serde_json::from_slice(&sent_args_bytes).unwrap();
-    assert_eq!(sent_args["message"], "hello federation",
-        "arguments_b64 must round-trip the original payload byte-for-byte");
+    assert_eq!(
+        sent_args["message"], "hello federation",
+        "arguments_b64 must round-trip the original payload byte-for-byte"
+    );
 }
 
 #[test]
@@ -246,12 +241,7 @@ fn forward_invoke_propagates_typed_remote_error() {
     // code to the caller.
     struct FailingHub;
     impl AbilityInvoker for FailingHub {
-        fn invoke_ability(
-            &self,
-            _t: &str,
-            _u: &str,
-            _p: Value,
-        ) -> Result<Value, String> {
+        fn invoke_ability(&self, _t: &str, _u: &str, _p: Value) -> Result<Value, String> {
             // Wire shape: ForwardInvokeReceiptBody { ok: false }
             Ok(json!({
                 "result_json": {
@@ -344,7 +334,10 @@ fn keyring_peer_table_drives_knows_target() {
     let entry = k.create_entry("peer-fingerprint", None).unwrap();
     k.peer_add(peer_uri, &entry.public_key_b64, None, None)
         .expect("peer_add");
-    assert!(k.find_peer_by_uri(peer_uri).is_some(), "peer table lookup hits");
+    assert!(
+        k.find_peer_by_uri(peer_uri).is_some(),
+        "peer table lookup hits"
+    );
 
     // A genuinely unknown URI must miss both paths.
     let unknown = "easynet:///r/silan.localhost/agent/never-seen";

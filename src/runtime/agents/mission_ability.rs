@@ -120,9 +120,7 @@ fn run_handler(args: Value) -> anyhow::Result<Value> {
         .get("source")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .ok_or_else(|| {
-            anyhow::anyhow!("mission.run: `source` must be a non-empty string")
-        })?;
+        .ok_or_else(|| anyhow::anyhow!("mission.run: `source` must be a non-empty string"))?;
     if source.trim().is_empty() {
         anyhow::bail!("mission.run: `source` must be a non-empty string");
     }
@@ -138,12 +136,8 @@ fn run_handler(args: Value) -> anyhow::Result<Value> {
     };
 
     let result = crate::facade::cli::mission_runs::run_mission_inproc(&source, opts)?;
-    let outputs_json: serde_json::Map<String, Value> = result
-        .bound_vars
-        .into_iter()
-        .collect();
-    let meta_json = serde_json::to_value(&result.meta)
-        .unwrap_or(Value::Null);
+    let outputs_json: serde_json::Map<String, Value> = result.bound_vars.into_iter().collect();
+    let meta_json = serde_json::to_value(&result.meta).unwrap_or(Value::Null);
     Ok(json!({
         "ok": result.ok,
         "run_id": result.run_id,
@@ -176,9 +170,7 @@ fn track_handler(args: Value) -> anyhow::Result<Value> {
         .get("run_id")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .ok_or_else(|| {
-            anyhow::anyhow!("easynet.track: `run_id` must be a non-empty string")
-        })?;
+        .ok_or_else(|| anyhow::anyhow!("easynet.track: `run_id` must be a non-empty string"))?;
     if run_id.trim().is_empty() {
         anyhow::bail!("easynet.track: `run_id` must be a non-empty string");
     }
@@ -214,9 +206,7 @@ fn cancel_handler(args: Value) -> anyhow::Result<Value> {
         .get("run_id")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .ok_or_else(|| {
-            anyhow::anyhow!("easynet.cancel: `run_id` must be a non-empty string")
-        })?;
+        .ok_or_else(|| anyhow::anyhow!("easynet.cancel: `run_id` must be a non-empty string"))?;
     if run_id.trim().is_empty() {
         anyhow::bail!("easynet.cancel: `run_id` must be a non-empty string");
     }
@@ -381,8 +371,7 @@ mod tests {
     /// against by listing first.
     #[test]
     fn track_unknown_run_id_returns_error() {
-        let err = track_handler(json!({"run_id": "definitely-not-a-real-run-id"}))
-            .unwrap_err();
+        let err = track_handler(json!({"run_id": "definitely-not-a-real-run-id"})).unwrap_err();
         assert!(err.to_string().to_lowercase().contains("mission run"));
     }
 

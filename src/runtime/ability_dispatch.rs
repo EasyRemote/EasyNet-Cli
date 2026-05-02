@@ -141,8 +141,7 @@ impl StreamSource {
 /// One in-process stream handler. Returns either an eager snapshot
 /// or a live broadcast::Receiver — see `StreamSource` for the
 /// contract.
-pub type LocalStreamHandler =
-    Arc<dyn Fn(Value) -> anyhow::Result<StreamSource> + Send + Sync>;
+pub type LocalStreamHandler = Arc<dyn Fn(Value) -> anyhow::Result<StreamSource> + Send + Sync>;
 
 /// Envelope-aware stream handler. Mirrors `LocalRpcHandlerWithEnvelope`.
 pub type LocalStreamHandlerWithEnvelope =
@@ -210,8 +209,7 @@ pub struct BidiSource {
 /// returns the `BidiSource` immediately. The dispatcher never
 /// blocks waiting for a session loop, mirroring how
 /// `register_stream`'s `Live` variant is already shaped.
-pub type LocalBidiHandler =
-    Arc<dyn Fn(Value) -> anyhow::Result<BidiSource> + Send + Sync>;
+pub type LocalBidiHandler = Arc<dyn Fn(Value) -> anyhow::Result<BidiSource> + Send + Sync>;
 
 /// Envelope-aware bidi handler. Mirrors `LocalRpcHandlerWithEnvelope`.
 pub type LocalBidiHandlerWithEnvelope =
@@ -474,7 +472,9 @@ impl AbilityDispatcher {
                 // the legacy args-only path. The args-only registry
                 // is the fallback for legacy abilities.
                 if let Some(handler) = self.local.rpc_with_env.get(&target.ability) {
-                    let env = EnvelopeContext { subject: target.subject };
+                    let env = EnvelopeContext {
+                        subject: target.subject,
+                    };
                     return handler(env, target.normalized_args);
                 }
                 match self.local.resolve_rpc(&target.ability) {
@@ -515,7 +515,9 @@ impl AbilityDispatcher {
         match target.scope {
             TargetScope::Local => {
                 if let Some(handler) = self.local.stream_with_env.get(&target.ability) {
-                    let env = EnvelopeContext { subject: target.subject };
+                    let env = EnvelopeContext {
+                        subject: target.subject,
+                    };
                     return handler(env, target.normalized_args);
                 }
                 match self.local.get_stream(&target.ability) {
@@ -562,7 +564,9 @@ impl AbilityDispatcher {
         match target.scope {
             TargetScope::Local => {
                 if let Some(handler) = self.local.bidi_with_env.get(&target.ability) {
-                    let env = EnvelopeContext { subject: target.subject };
+                    let env = EnvelopeContext {
+                        subject: target.subject,
+                    };
                     return handler(env, target.normalized_args);
                 }
                 match self.local.get_bidi(&target.ability) {
@@ -608,13 +612,13 @@ mod tests {
     fn unregistered_local_ability_returns_clear_error() {
         // The error must name the ability so an operator can grep
         // "is observe.health registered?" against the daemon log.
-        let dispatcher =
-            AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
-        let err = dispatcher
-            .execute_rpc(ping_target_local())
-            .unwrap_err();
+        let dispatcher = AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
+        let err = dispatcher.execute_rpc(ping_target_local()).unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.contains("observe.health"), "error must name ability, got: {msg}");
+        assert!(
+            msg.contains("observe.health"),
+            "error must name ability, got: {msg}"
+        );
         assert!(msg.contains("local"), "error must indicate loopback path");
     }
 
@@ -681,9 +685,7 @@ mod tests {
         );
         reg.register_rpc_with_envelope(
             "x.dual",
-            Arc::new(|_env: EnvelopeContext, _args: Value| {
-                Ok(json!({"path": "envelope"}))
-            }),
+            Arc::new(|_env: EnvelopeContext, _args: Value| Ok(json!({"path": "envelope"}))),
         );
         let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
         let target = InvocationTarget {
@@ -760,10 +762,7 @@ mod tests {
         // and gen-ability-tomls iterate this list, and a handler
         // registered only via register_rpc_with_envelope MUST appear.
         let mut reg = LocalAbilityRegistry::new();
-        reg.register_rpc_with_envelope(
-            "x.env_only",
-            Arc::new(|_env, _args| Ok(json!({}))),
-        );
+        reg.register_rpc_with_envelope("x.env_only", Arc::new(|_env, _args| Ok(json!({}))));
         let names = reg.list_abilities();
         assert!(
             names.iter().any(|n| n == "x.env_only"),
@@ -777,8 +776,7 @@ mod tests {
         // returns a clear "not connected" error; we just need to
         // see that the dispatcher reached for it instead of
         // looking up the local registry.
-        let dispatcher =
-            AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
+        let dispatcher = AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
         let target = InvocationTarget {
             scope: TargetScope::Remote {
                 node: NodeId::new("peer"),
@@ -802,8 +800,7 @@ mod tests {
         // mode is calling the wrong method. Returning a clear
         // error catches the misuse at the call site instead of
         // silently degrading to an RPC return.
-        let dispatcher =
-            AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
+        let dispatcher = AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
         let mut t = ping_target_local();
         t.call_mode = CallMode::Stream;
         let err = dispatcher.execute_rpc(t).unwrap_err();
@@ -818,8 +815,7 @@ mod tests {
         // RPC executor would silently swallow the session contract.
         // Pin the rejection so a future refactor can't relax this
         // check to `== Stream`.
-        let dispatcher =
-            AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
+        let dispatcher = AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
         let mut t = ping_target_local();
         t.call_mode = CallMode::Bidi;
         let err = dispatcher.execute_rpc(t).unwrap_err();
@@ -832,8 +828,7 @@ mod tests {
         // target arriving here means a wiring bug upstream; pin the
         // bail so the misroute surfaces immediately rather than
         // silently returning an empty StreamSource.
-        let dispatcher =
-            AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
+        let dispatcher = AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
         let mut t = ping_target_local();
         t.call_mode = CallMode::Bidi;
         let err = dispatcher.execute_stream(t).unwrap_err();
@@ -867,7 +862,10 @@ mod tests {
         Arc::new(|_args: Value| {
             let (_to_handler_tx, from_client) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
             let (to_client, _to_client_rx) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
-            Ok(BidiSource { from_client, to_client })
+            Ok(BidiSource {
+                from_client,
+                to_client,
+            })
         })
     }
 
@@ -916,8 +914,7 @@ mod tests {
         // through the bidi executor would silently allocate channels
         // and never receive a frame; the bail catches that at the
         // call site.
-        let dispatcher =
-            AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
+        let dispatcher = AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
         let t = ping_target_local(); // call_mode = Rpc
         let err = dispatcher.execute_bidi(t).unwrap_err();
         assert!(format!("{err}").contains("Bidi"));
@@ -988,8 +985,7 @@ mod tests {
         // Mirror unregistered_local_ability_returns_clear_error for
         // bidi. The error must name the ability so an operator can
         // grep for it.
-        let dispatcher =
-            AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
+        let dispatcher = AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
         let target = InvocationTarget {
             scope: TargetScope::Local,
             ability: "fleet.session_attach".into(),
@@ -1035,10 +1031,11 @@ mod tests {
         // here keeps a misroute from silently degrading to a local
         // lookup or panicking on a missing gateway method; pin it
         // so a later refactor can't drop the guard.
-        let dispatcher =
-            AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
+        let dispatcher = AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
         let target = InvocationTarget {
-            scope: TargetScope::Remote { node: NodeId::new("01PEER") },
+            scope: TargetScope::Remote {
+                node: NodeId::new("01PEER"),
+            },
             ability: "fleet.session_attach".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Bidi,

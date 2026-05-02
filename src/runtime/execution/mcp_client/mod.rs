@@ -194,12 +194,13 @@ impl McpClientService {
     /// supplied snapshot). Production callers prefer `from_path`.
     pub fn from_file(file: McpClientsFile) -> Self {
         let svc = Self::new();
-        let mut g = svc.inner.try_lock().expect("fresh service has no contention");
+        let mut g = svc
+            .inner
+            .try_lock()
+            .expect("fresh service has no contention");
         for spec in file.servers {
-            g.servers.insert(
-                spec.name.clone(),
-                McpServerRow { spec, conn: None },
-            );
+            g.servers
+                .insert(spec.name.clone(), McpServerRow { spec, conn: None });
         }
         drop(g);
         svc
@@ -213,8 +214,8 @@ impl McpClientService {
         if !path.exists() {
             return Ok(Self::new());
         }
-        let bytes = std::fs::read(path)
-            .map_err(|e| anyhow::anyhow!("read {}: {e}", path.display()))?;
+        let bytes =
+            std::fs::read(path).map_err(|e| anyhow::anyhow!("read {}: {e}", path.display()))?;
         let file: McpClientsFile = serde_json::from_slice(&bytes)
             .map_err(|e| anyhow::anyhow!("parse {}: {e}", path.display()))?;
         Ok(Self::from_file(file))
@@ -253,8 +254,7 @@ impl McpClientService {
 
 impl std::fmt::Debug for McpClientService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("McpClientService")
-            .finish_non_exhaustive()
+        f.debug_struct("McpClientService").finish_non_exhaustive()
     }
 }
 
@@ -394,7 +394,10 @@ mod tests {
     #[tokio::test]
     async fn rpc_unknown_server_errors_clearly() {
         let svc = McpClientService::new();
-        let err = svc.rpc("nonexistent", "tools/list", json!({})).await.unwrap_err();
+        let err = svc
+            .rpc("nonexistent", "tools/list", json!({}))
+            .await
+            .unwrap_err();
         let msg = format!("{err}");
         assert!(
             msg.contains("nonexistent"),
@@ -431,11 +434,8 @@ for line in sys.stdin:
 "#,
         )
         .unwrap();
-        std::fs::set_permissions(
-            &script,
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
 
         let file = McpClientsFile {
             servers: vec![McpServerSpec {

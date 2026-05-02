@@ -100,7 +100,9 @@ fn list_skills_handler(
     registry_provider: &Arc<dyn Fn() -> AgentRegistry + Send + Sync>,
 ) -> anyhow::Result<Value> {
     let registry = registry_provider();
-    Ok(crate::registry::a2a_labels::build_agents_envelope(&registry))
+    Ok(crate::registry::a2a_labels::build_agents_envelope(
+        &registry,
+    ))
 }
 
 /// `a2a.bridge.send_task` handler.
@@ -126,11 +128,19 @@ fn send_task_handler(
 ) -> anyhow::Result<Value> {
     let agent_name = match args.get("agent_name").and_then(Value::as_str) {
         Some(s) if !s.is_empty() => s.to_string(),
-        _ => return Ok(error_response("`agent_name` is required and must be a non-empty string")),
+        _ => {
+            return Ok(error_response(
+                "`agent_name` is required and must be a non-empty string",
+            ))
+        }
     };
     let skill_name = match args.get("skill_name").and_then(Value::as_str) {
         Some(s) if !s.is_empty() => s.to_string(),
-        _ => return Ok(error_response("`skill_name` is required and must be a non-empty string")),
+        _ => {
+            return Ok(error_response(
+                "`skill_name` is required and must be a non-empty string",
+            ))
+        }
     };
     let task_args = args.get("args").cloned().unwrap_or(Value::Null);
 
@@ -230,10 +240,7 @@ mod tests {
         let mut reg = LocalAbilityRegistry::new();
         for a in echo_agents {
             let name = format!("{a}.echo");
-            reg.register_rpc(
-                name,
-                Arc::new(|args: Value| Ok(json!({"echoed": args}))),
-            );
+            reg.register_rpc(name, Arc::new(|args: Value| Ok(json!({"echoed": args}))));
         }
         let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
         register(&mut reg, provider, Arc::clone(&handle));

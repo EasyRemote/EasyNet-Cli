@@ -248,8 +248,7 @@ pub fn load() -> anyhow::Result<ResourcesFile> {
         return Ok(ResourcesFile::default());
     }
     let bytes = fs::read(&p).map_err(|e| anyhow::anyhow!("read {}: {e}", p.display()))?;
-    serde_json::from_slice(&bytes)
-        .map_err(|e| anyhow::anyhow!("parse {}: {e}", p.display()))
+    serde_json::from_slice(&bytes).map_err(|e| anyhow::anyhow!("parse {}: {e}", p.display()))
 }
 
 /// Atomically write the file with mode 0600.
@@ -277,9 +276,7 @@ pub fn lookup_by_hardware_id<'a>(
     file: &'a ResourcesFile,
     hardware_id: &str,
 ) -> Option<&'a ResourceEntry> {
-    file.resources
-        .iter()
-        .find(|e| e.hardware_id == hardware_id)
+    file.resources.iter().find(|e| e.hardware_id == hardware_id)
 }
 
 /// Look up an entry by its full resource URA. Used by media
@@ -403,7 +400,11 @@ mod tests {
             ResourceUpsert {
                 owner_agent: "easynet:///r/acme/agent/01DEV",
                 metadata: json!({"sample_rates":[16000,48000]}),
-                ..spec(ResourceType::Mic, "BuiltInMic-AAPL-0001", "Built-in Microphone")
+                ..spec(
+                    ResourceType::Mic,
+                    "BuiltInMic-AAPL-0001",
+                    "Built-in Microphone",
+                )
             },
         );
         assert!(uri.starts_with("easynet:///r/acme/resource/"));
@@ -411,10 +412,7 @@ mod tests {
         assert_eq!(f.resources[0].kind, ResourceType::Mic);
         assert_eq!(f.resources[0].hardware_id, "BuiltInMic-AAPL-0001");
         assert_eq!(f.resources[0].display_name, "Built-in Microphone");
-        assert_eq!(
-            f.resources[0].owner_agent,
-            "easynet:///r/acme/agent/01DEV"
-        );
+        assert_eq!(f.resources[0].owner_agent, "easynet:///r/acme/agent/01DEV");
     }
 
     #[test]
@@ -500,8 +498,7 @@ mod tests {
         let mics = filter_by_kinds(&f, &[ResourceType::Mic]);
         assert_eq!(mics.len(), 1);
         assert_eq!(mics[0].kind, ResourceType::Mic);
-        let mics_and_speakers =
-            filter_by_kinds(&f, &[ResourceType::Mic, ResourceType::Speaker]);
+        let mics_and_speakers = filter_by_kinds(&f, &[ResourceType::Mic, ResourceType::Speaker]);
         assert_eq!(mics_and_speakers.len(), 2);
     }
 

@@ -33,8 +33,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::runtime::domain::{
-    PermissionDecision, PermissionId, PermissionRequest, PermissionSensitivity, SessionId,
-    TenantId,
+    PermissionDecision, PermissionId, PermissionRequest, PermissionSensitivity, SessionId, TenantId,
 };
 
 /// Context a handler supplies to the broker at admission time.
@@ -162,11 +161,7 @@ impl SubscriberBroker {
     /// Deliver a decision. Removes the pending state, sends the
     /// decision to the waiting handler. Returns Err when the id
     /// is unknown (already decided or never created).
-    pub fn decide(
-        &self,
-        id: &PermissionId,
-        decision: PermissionDecision,
-    ) -> anyhow::Result<()> {
+    pub fn decide(&self, id: &PermissionId, decision: PermissionDecision) -> anyhow::Result<()> {
         let pending = {
             let mut g = self
                 .pending
@@ -336,11 +331,7 @@ impl PermissionService {
     /// to the SubscriberBroker if installed; rejects with a clear
     /// error otherwise (AllowAllBroker has no pending state to
     /// decide on).
-    pub fn decide(
-        &self,
-        id: &PermissionId,
-        decision: PermissionDecision,
-    ) -> anyhow::Result<()> {
+    pub fn decide(&self, id: &PermissionId, decision: PermissionDecision) -> anyhow::Result<()> {
         match &self.subscriber {
             Some(s) => s.decide(id, decision),
             None => anyhow::bail!(

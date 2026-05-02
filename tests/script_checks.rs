@@ -20,11 +20,7 @@ fn repo_root() -> PathBuf {
 
 fn run_bash_script(relative_path: &str) {
     let script = repo_root().join(relative_path);
-    assert!(
-        script.exists(),
-        "script missing: {}",
-        script.display()
-    );
+    assert!(script.exists(), "script missing: {}", script.display());
 
     let output = Command::new("bash")
         .arg(&script)

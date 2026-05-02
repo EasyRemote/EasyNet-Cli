@@ -346,14 +346,14 @@ fn publish_to_local_runtime_best_effort(agent_name: &str, directory: &AgentDirec
     // with a full federation.advertise_* sweep. The just-added
     // agent is already in registry.agents, so the bootstrap+advertise
     // path picks it up; we don't need agent-specific plumbing here.
-    let plan =
-        match crate::facade::cli::start::build_bootstrap_plan_from(tenant_id, &creds.node_id) {
-            Ok(p) => p,
-            Err(e) => {
-                output::warn(&format!("publish bootstrap plan: {e}"));
-                return;
-            }
-        };
+    let plan = match crate::facade::cli::start::build_bootstrap_plan_from(tenant_id, &creds.node_id)
+    {
+        Ok(p) => p,
+        Err(e) => {
+            output::warn(&format!("publish bootstrap plan: {e}"));
+            return;
+        }
+    };
     // Pin the caller URI so the bridge's hub-shaped envelope synth
     // doesn't fall back to the literal-subject path
     // (`agents/easynet:prv:hub:<realm>`), which axon's membership
@@ -428,12 +428,11 @@ fn unpublish_from_local_runtime_best_effort(agent_name: &str, directory: &AgentD
             return;
         }
     };
-    let agent_uri = match crate::persistence::local_agents::lookup_hosted_uri(
-        &file, "llm", agent_name,
-    ) {
-        Some(uri) => uri,
-        None => return,
-    };
+    let agent_uri =
+        match crate::persistence::local_agents::lookup_hosted_uri(&file, "llm", agent_name) {
+            Some(uri) => uri,
+            None => return,
+        };
     // Pin the caller URI so federation.revoke's signed envelope
     // carries the daemon's host URA, not the literal-subject
     // fallback the bridge would otherwise synthesise (which the
@@ -443,8 +442,8 @@ fn unpublish_from_local_runtime_best_effort(agent_name: &str, directory: &AgentD
         &bridge,
         file.host_device_agent_uri.clone(),
     );
-    let realm = crate::facade::cli::start::realm_from_agent_uri(&file.host_device_agent_uri)
-        .unwrap_or("");
+    let realm =
+        crate::facade::cli::start::realm_from_agent_uri(&file.host_device_agent_uri).unwrap_or("");
     let outcome = crate::runtime::publish::unpublish_abilities_via_revoke(
         &invoker,
         tenant_id,
@@ -563,10 +562,7 @@ fn render_row_status(
     // still render the row using fat-field fallbacks so an
     // operator can see the row at all and decide what to do.
     let (spec_model, spec_timeout) = match AgentDirectory::open(&root) {
-        Ok(dir) => (
-            dir.spec().model.clone(),
-            dir.spec().timeout_secs,
-        ),
+        Ok(dir) => (dir.spec().model.clone(), dir.spec().timeout_secs),
         Err(_) => (None, None),
     };
 
@@ -1266,8 +1262,7 @@ fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
         );
         eprintln!(
             "  {}",
-            style("Drop a `<verb>.ability.toml` into that directory to declare one.")
-                .dim(),
+            style("Drop a `<verb>.ability.toml` into that directory to declare one.").dim(),
         );
         eprintln!();
         return Ok(());
@@ -1333,9 +1328,7 @@ fn run_publish(args: PublishArgs) -> anyhow::Result<()> {
     eprintln!(
         "  {} {}  {}",
         style("dry-run:").yellow(),
-        style(format!("agent publish {}", args.name))
-            .white()
-            .bold(),
+        style(format!("agent publish {}", args.name)).white().bold(),
         style(format!("root={}", dir.root().display())).dim(),
     );
     eprintln!();
@@ -1412,10 +1405,7 @@ fn summarize_schema(schema: &serde_json::Value) -> String {
         Some(o) => o,
         None => return format!("{:?}", schema),
     };
-    let ty = obj
-        .get("type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("?");
+    let ty = obj.get("type").and_then(|v| v.as_str()).unwrap_or("?");
     // Dead-by-contract: AbilityManifest::validate() rejects any
     // input_schema or output_schema whose top-level is not an
     // object, so both schemas reaching this helper are objects.
@@ -1434,11 +1424,7 @@ fn summarize_schema(schema: &serde_json::Value) -> String {
     let required: std::collections::HashSet<&str> = obj
         .get("required")
         .and_then(|v| v.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str())
-                .collect()
-        })
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
         .unwrap_or_default();
     // Mark required keys with a trailing `!` so the summary
     // distinguishes "prompt (required)" from "context (optional)"
@@ -1481,16 +1467,15 @@ fn summarize_schema(schema: &serde_json::Value) -> String {
 /// succeeded — partial registration is the same shape this same path
 /// already takes during boot.
 fn run_refresh() -> anyhow::Result<()> {
-    let (bridge, _state) = crate::persistence::config::load_and_connect()
-        .map_err(|e| anyhow::anyhow!(
+    let (bridge, _state) = crate::persistence::config::load_and_connect().map_err(|e| {
+        anyhow::anyhow!(
             "could not reach local axon-runtime: {e}; run `easynet runtime start` first"
-        ))?;
+        )
+    })?;
     let creds = crate::persistence::config::load_credentials()
         .map_err(|e| anyhow::anyhow!("load credentials: {e}"))?;
-    let plan = crate::facade::cli::start::build_bootstrap_plan_from(
-        &creds.tenant_id,
-        &creds.node_id,
-    )?;
+    let plan =
+        crate::facade::cli::start::build_bootstrap_plan_from(&creds.tenant_id, &creds.node_id)?;
     if plan.realm.is_empty() {
         anyhow::bail!(
             "daemon is not joined to a realm yet; run `easynet join <token>` before refresh"
@@ -1505,8 +1490,7 @@ fn run_refresh() -> anyhow::Result<()> {
         &bridge,
         plan.host_device_uri.clone(),
     );
-    let dispatch_endpoint =
-        crate::services::control::runtime_dispatch::dispatch_endpoint_uri();
+    let dispatch_endpoint = crate::services::control::runtime_dispatch::dispatch_endpoint_uri();
     let outcomes = crate::runtime::publish::register_local_tools_via_runtime(
         &invoker,
         &creds.tenant_id,
@@ -1629,10 +1613,9 @@ mod tests {
         let root = registry.agents["alice"].root_path.as_ref().unwrap().clone();
 
         // Hand-edit agent.toml to add a description.
-        let mut spec = AgentSpec::from_toml_str(
-            &fs::read_to_string(root.join("agent.toml")).unwrap(),
-        )
-        .unwrap();
+        let mut spec =
+            AgentSpec::from_toml_str(&fs::read_to_string(root.join("agent.toml")).unwrap())
+                .unwrap();
         spec.description = Some("user-edited".into());
         fs::write(root.join("agent.toml"), spec.to_toml_string().unwrap()).unwrap();
 
@@ -1642,10 +1625,8 @@ mod tests {
         // The operator's description must survive; we do not
         // rewrite agent.toml on update, we only update the
         // registry row.
-        let spec2 = AgentSpec::from_toml_str(
-            &fs::read_to_string(root.join("agent.toml")).unwrap(),
-        )
-        .unwrap();
+        let spec2 = AgentSpec::from_toml_str(&fs::read_to_string(root.join("agent.toml")).unwrap())
+            .unwrap();
         assert_eq!(spec2.description.as_deref(), Some("user-edited"));
     }
 
@@ -1674,7 +1655,10 @@ mod tests {
         // Registry row gone.
         assert!(!agents::load_agents().unwrap().agents.contains_key("alice"));
         // Directory still present.
-        assert!(root.join("agent.toml").exists(), "--purge not passed: dir must stay");
+        assert!(
+            root.join("agent.toml").exists(),
+            "--purge not passed: dir must stay"
+        );
     }
 
     #[test]
@@ -1726,10 +1710,8 @@ mod tests {
 
         // agent.toml on disk updated.
         let root = entry.root_path.clone().unwrap();
-        let spec = AgentSpec::from_toml_str(
-            &fs::read_to_string(root.join("agent.toml")).unwrap(),
-        )
-        .unwrap();
+        let spec = AgentSpec::from_toml_str(&fs::read_to_string(root.join("agent.toml")).unwrap())
+            .unwrap();
         assert_eq!(spec.model.as_deref(), Some("opus"));
     }
 
@@ -1796,7 +1778,10 @@ mod tests {
         run_add(add_args("alice", "claude-code", None)).unwrap();
         run_set(set_args("alice", Some("definitely-not-a-real-model-xyz"))).unwrap();
         let entry = agents::load_agents().unwrap().agents["alice"].clone();
-        assert_eq!(entry.model.as_deref(), Some("definitely-not-a-real-model-xyz"));
+        assert_eq!(
+            entry.model.as_deref(),
+            Some("definitely-not-a-real-model-xyz")
+        );
     }
 
     #[test]
@@ -1820,10 +1805,7 @@ mod tests {
 
         let registry = agents::load_agents().unwrap();
         assert!(registry.agents.contains_key("alice"), "alice must survive");
-        assert!(
-            !registry.agents.contains_key("bob"),
-            "bob must be pruned"
-        );
+        assert!(!registry.agents.contains_key("bob"), "bob must be pruned");
     }
 
     #[test]
@@ -1845,10 +1827,7 @@ mod tests {
         // mutate the registry. This is the load-bearing
         // property that makes `prune --dry-run` safe to run
         // as a recon step.
-        assert!(agents::load_agents()
-            .unwrap()
-            .agents
-            .contains_key("alice"));
+        assert!(agents::load_agents().unwrap().agents.contains_key("alice"));
     }
 
     // ── abilities / publish dry-run ─────────────────────────────────────
@@ -1879,7 +1858,10 @@ mod tests {
         })
         .expect_err("unknown agent must error");
         let msg = format!("{err}");
-        assert!(msg.contains("nobody"), "error must name the missing agent: {msg}");
+        assert!(
+            msg.contains("nobody"),
+            "error must name the missing agent: {msg}"
+        );
         assert!(
             msg.contains("not registered") || msg.contains("add"),
             "error must hint at remediation: {msg}"
@@ -2033,10 +2015,7 @@ mod tests {
 
         let registry_path = config::state_dir().join("agents.json");
         let before_registry = fs::read(&registry_path).unwrap();
-        let before_ability = fs::read(
-            root.join("abilities").join("chat.ability.toml"),
-        )
-        .unwrap();
+        let before_ability = fs::read(root.join("abilities").join("chat.ability.toml")).unwrap();
 
         run_publish(PublishArgs {
             name: "alice".into(),
@@ -2045,12 +2024,15 @@ mod tests {
         .unwrap();
 
         let after_registry = fs::read(&registry_path).unwrap();
-        let after_ability = fs::read(
-            root.join("abilities").join("chat.ability.toml"),
-        )
-        .unwrap();
-        assert_eq!(before_registry, after_registry, "dry-run must not touch the registry");
-        assert_eq!(before_ability, after_ability, "dry-run must not touch manifests");
+        let after_ability = fs::read(root.join("abilities").join("chat.ability.toml")).unwrap();
+        assert_eq!(
+            before_registry, after_registry,
+            "dry-run must not touch the registry"
+        );
+        assert_eq!(
+            before_ability, after_ability,
+            "dry-run must not touch manifests"
+        );
     }
 
     // ── summarize_schema helper ──────────────────────────────────────────

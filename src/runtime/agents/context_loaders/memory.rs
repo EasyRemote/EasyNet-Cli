@@ -88,20 +88,16 @@ impl ContextLoader for MemoryLoader {
         "memory"
     }
 
-    fn load(
-        &self,
-        agent_name: &str,
-        _session_id: &str,
-    ) -> anyhow::Result<Option<String>> {
+    fn load(&self, agent_name: &str, _session_id: &str) -> anyhow::Result<Option<String>> {
         let dir = agent_memory_dir(agent_name);
         if !dir.exists() {
             return Ok(None);
         }
         // Collect (path, mtime) tuples, then sort desc.
         let mut entries: Vec<(PathBuf, SystemTime)> = Vec::new();
-        for entry in fs::read_dir(&dir).map_err(|e| {
-            anyhow::anyhow!("read memory dir {}: {e}", dir.display())
-        })? {
+        for entry in fs::read_dir(&dir)
+            .map_err(|e| anyhow::anyhow!("read memory dir {}: {e}", dir.display()))?
+        {
             let entry = match entry {
                 Ok(e) => e,
                 Err(_) => continue,
@@ -145,9 +141,7 @@ impl ContextLoader for MemoryLoader {
             let body = match fs::read_to_string(&path) {
                 Ok(b) => b,
                 Err(e) => {
-                    out.push_str(&format!(
-                        "### {title}\n\n_(failed to read: {e})_\n\n"
-                    ));
+                    out.push_str(&format!("### {title}\n\n_(failed to read: {e})_\n\n"));
                     continue;
                 }
             };

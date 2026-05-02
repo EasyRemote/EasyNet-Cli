@@ -311,9 +311,7 @@ pub fn manifests_for(
     match dir.list_ability_manifests() {
         Ok(m) => m,
         Err(e) => {
-            eprintln!(
-                "manifests_for[{agent_name}]: failed to enumerate ability manifests: {e}"
-            );
+            eprintln!("manifests_for[{agent_name}]: failed to enumerate ability manifests: {e}");
             Vec::new()
         }
     }
@@ -445,7 +443,6 @@ fn chat_ability(agent_name: &str) -> Result<AgentAbilitySpec, &'static str> {
     )
 }
 
-
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -570,11 +567,17 @@ mod tests {
         assert!(props.contains_key("prompt"));
         assert!(props.contains_key("context"));
         assert_eq!(
-            props.get("prompt").and_then(|p| p.get("type")).and_then(Value::as_str),
+            props
+                .get("prompt")
+                .and_then(|p| p.get("type"))
+                .and_then(Value::as_str),
             Some("string"),
         );
         assert_eq!(
-            props.get("context").and_then(|p| p.get("type")).and_then(Value::as_str),
+            props
+                .get("context")
+                .and_then(|p| p.get("type"))
+                .and_then(Value::as_str),
             Some("string"),
         );
     }
@@ -615,7 +618,12 @@ mod tests {
         // would re-trigger the 4 KiB Hub cap regression. Pinned
         // here so the next person tempted to "just add the schema
         // back" trips the test before they ship it.
-        for forbidden in ["input_schema", "output_schema", "timeout_seconds", "parameters"] {
+        for forbidden in [
+            "input_schema",
+            "output_schema",
+            "timeout_seconds",
+            "parameters",
+        ] {
             assert!(
                 !obj.contains_key(forbidden),
                 "v2 thin payload must not carry `{forbidden}` (would blow the Hub label cap)"
@@ -671,15 +679,15 @@ mod tests {
         let err =
             AgentAbilitySpec::new("", "desc", json!({"type": "object"})).expect_err("should err");
         assert!(err.contains("empty"));
-        let err =
-            AgentAbilitySpec::new("   ", "desc", json!({"type": "object"})).expect_err("should err");
+        let err = AgentAbilitySpec::new("   ", "desc", json!({"type": "object"}))
+            .expect_err("should err");
         assert!(err.contains("empty"));
     }
 
     #[test]
     fn new_rejects_dotless_name() {
-        let err =
-            AgentAbilitySpec::new("chat", "desc", json!({"type": "object"})).expect_err("should err");
+        let err = AgentAbilitySpec::new("chat", "desc", json!({"type": "object"}))
+            .expect_err("should err");
         assert!(err.contains("shape"));
     }
 
@@ -841,14 +849,19 @@ mod tests {
         let voice_path = root
             .join("abilities")
             .join(format!("voice{ABILITY_MANIFEST_SUFFIX}"));
-        std::fs::write(&voice_path, voice.to_toml_string().unwrap())
-            .expect("write voice manifest");
+        std::fs::write(&voice_path, voice.to_toml_string().unwrap()).expect("write voice manifest");
         let names: Vec<String> = abilities_for("carol", &entry)
             .into_iter()
             .map(|s| s.name().to_string())
             .collect();
-        assert!(names.contains(&"carol.chat".to_string()), "names = {names:?}");
-        assert!(names.contains(&"carol.voice".to_string()), "names = {names:?}");
+        assert!(
+            names.contains(&"carol.chat".to_string()),
+            "names = {names:?}"
+        );
+        assert!(
+            names.contains(&"carol.voice".to_string()),
+            "names = {names:?}"
+        );
     }
 
     #[test]

@@ -167,14 +167,10 @@ impl EalError {
             A::Validation(_) | A::PolicyDenied(_) => EalError::Validation(msg),
             A::NotInstalled(_) | A::NotActivated(_) => EalError::NotFound(msg),
             A::DeadlineExceeded(_) => EalError::DeadlineExceeded(msg),
-            A::Bridge(_)
-            | A::Stream(_)
-            | A::Invocation(_)
-            | A::Mcp(_)
-            | A::Io(_) => EalError::Unavailable(msg),
-            A::SymbolNotFound(_) | A::Json(_) | A::PartialSuccess { .. } => {
-                EalError::Internal(msg)
+            A::Bridge(_) | A::Stream(_) | A::Invocation(_) | A::Mcp(_) | A::Io(_) => {
+                EalError::Unavailable(msg)
             }
+            A::SymbolNotFound(_) | A::Json(_) | A::PartialSuccess { .. } => EalError::Internal(msg),
         }
     }
 }
@@ -304,9 +300,8 @@ mod tests {
 
     #[test]
     fn axon_deadline_maps_to_deadline_exceeded() {
-        let mapped = EalError::from_axon_error(Axon::DeadlineExceeded(
-            "stream chunk timeout".into(),
-        ));
+        let mapped =
+            EalError::from_axon_error(Axon::DeadlineExceeded("stream chunk timeout".into()));
         assert_eq!(mapped.error_code(), "deadline_exceeded");
         // Prose is preserved so operator-facing traces carry the cause.
         assert!(mapped.message().contains("stream chunk timeout"));

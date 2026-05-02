@@ -112,7 +112,7 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
     // backend/internal/logic/skill/listInstalledLogic.go), and this
     // ability now becomes the definitive source.
     use crate::facade::cli::skill::{
-        global_skill_pools_for, scan_global_pool_into, read_install_record, InstallRecord,
+        global_skill_pools_for, read_install_record, scan_global_pool_into, InstallRecord,
     };
     let mut rows: Vec<InstallRecord> = Vec::new();
 

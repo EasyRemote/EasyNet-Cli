@@ -67,6 +67,14 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub(crate) mod bridge_pool;
+/// PR-N1 commit 8/N: CLI bridge from `easynet ability invoke
+/// --node` to the local daemon's `federation.forward_invoke`
+/// gRPC ability. Mirrors the placement of `local_invoke.rs` so a
+/// reader looking for "where does the CLI talk to the daemon"
+/// finds both helpers in one directory; this one is for the
+/// cross-hub path.
+#[cfg(feature = "axon-pb")]
+pub(crate) mod federation_invoke;
 /// One helper — `invoke_local_ability(name, args)` — used by every
 /// CLI subcommand to talk to the local daemon's AbilityDispatcher.
 /// Per the AXON-RFC-001 ontology, every CLI action collapses to

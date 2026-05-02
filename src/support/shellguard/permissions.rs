@@ -473,11 +473,16 @@ mod tests {
     #[test]
     fn equals_value_flag_in_allowlist() {
         // `--registry=https://...` — full token match.
-        let rs = RuleSet::new()
-            .allow(Rule::exact("npm").with_flags(["install", "--registry=https://allowed.example"]));
+        let rs = RuleSet::new().allow(
+            Rule::exact("npm").with_flags(["install", "--registry=https://allowed.example"]),
+        );
         assert!(matches!(
             evaluate(
-                &[cmd(&["npm", "install", "--registry=https://allowed.example"])],
+                &[cmd(&[
+                    "npm",
+                    "install",
+                    "--registry=https://allowed.example"
+                ])],
                 &rs
             ),
             PermissionVerdict::Allowed
@@ -536,10 +541,7 @@ mod tests {
         let rs = RuleSet::new().allow(Rule::exact("git").with_flags(["--ok"]));
         match evaluate(&[cmd(&["git", "--bad1", "--bad2"])], &rs) {
             PermissionVerdict::Rejected {
-                reason:
-                    PermissionRejection::FlagNotAllowed {
-                        offending_flag, ..
-                    },
+                reason: PermissionRejection::FlagNotAllowed { offending_flag, .. },
                 ..
             } => {
                 assert_eq!(offending_flag, "--bad1");

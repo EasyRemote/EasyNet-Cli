@@ -297,11 +297,7 @@ fn write_mcp_json(ws: &Path, agent_name: &str) -> anyhow::Result<()> {
 
 // ── Codex workspace ──────────────────────────────────────────────────────────
 
-fn write_codex_config(
-    ws: &Path,
-    model: Option<&str>,
-    agent_name: &str,
-) -> anyhow::Result<()> {
+fn write_codex_config(ws: &Path, model: Option<&str>, agent_name: &str) -> anyhow::Result<()> {
     let codex_dir = ws.join(".codex");
     fs::create_dir_all(&codex_dir)?;
 
@@ -375,10 +371,7 @@ fn write_codex_config(
 fn write_collaborate_seed(ws: &Path, runtime: RuntimeKind) -> anyhow::Result<()> {
     let skill_dir = collaborate_seed_dir(ws, runtime);
     fs::create_dir_all(&skill_dir)?;
-    config::atomic_write(
-        &skill_dir.join("SKILL.md"),
-        COLLABORATE_SKILL_MD.as_bytes(),
-    )?;
+    config::atomic_write(&skill_dir.join("SKILL.md"), COLLABORATE_SKILL_MD.as_bytes())?;
     Ok(())
 }
 
@@ -387,9 +380,7 @@ fn write_collaborate_seed(ws: &Path, runtime: RuntimeKind) -> anyhow::Result<()>
 fn collaborate_seed_dir(ws: &Path, runtime: RuntimeKind) -> PathBuf {
     let parent = match runtime {
         RuntimeKind::ClaudeCode => ws.join(".claude").join("skills"),
-        RuntimeKind::Codex | RuntimeKind::CodexAppServer => {
-            ws.join(".agents").join("skills")
-        }
+        RuntimeKind::Codex | RuntimeKind::CodexAppServer => ws.join(".agents").join("skills"),
     };
     parent.join("easynet-collaborate")
 }
@@ -398,8 +389,7 @@ fn collaborate_seed_dir(ws: &Path, runtime: RuntimeKind) -> PathBuf {
 /// `skills/easynet-collaborate/SKILL.md` in this repo. Included via
 /// `include_str!` so editing the markdown is enough; no Rust recompile
 /// is needed for a content change in the same release.
-const COLLABORATE_SKILL_MD: &str =
-    include_str!("../../skills/easynet-collaborate/SKILL.md");
+const COLLABORATE_SKILL_MD: &str = include_str!("../../skills/easynet-collaborate/SKILL.md");
 
 // ── Shared ───────────────────────────────────────────────────────────────────
 
@@ -750,7 +740,6 @@ easynet device list                     # list hosting substrates
     .to_string()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -935,7 +924,9 @@ mod tests {
             .is_file());
         // Negative: legacy paths are not written.
         assert!(!root.join("skills/easynet-collaborate/SKILL.md").exists());
-        assert!(!root.join(".claude/skills/easynet-collaborate/SKILL.md").exists());
+        assert!(!root
+            .join(".claude/skills/easynet-collaborate/SKILL.md")
+            .exists());
         cleanup(&root);
     }
 
@@ -1029,15 +1020,10 @@ mod tests {
         let root = std::env::temp_dir().join(format!("easynet-ws-model-{pid}-{nanos}"));
         let mut spec = AgentSpec::new("alice", RuntimeKind::Codex);
         spec.model = Some("gpt-5-turbo".into());
-        let dir = AgentDirectory::create(
-            &Location::Local { root: root.clone() },
-            spec,
-        )
-        .unwrap();
+        let dir = AgentDirectory::create(&Location::Local { root: root.clone() }, spec).unwrap();
 
         ensure_from_directory(&dir).unwrap();
-        let codex_toml =
-            fs::read_to_string(root.join(".codex/config.toml")).unwrap();
+        let codex_toml = fs::read_to_string(root.join(".codex/config.toml")).unwrap();
         assert!(
             codex_toml.contains("model = \"gpt-5-turbo\""),
             "codex config must carry model from spec; got:\n{codex_toml}"
@@ -1095,10 +1081,9 @@ mod tests {
         // The reconstructed spec must have the correct runtime;
         // a silent mismatch here would dispatch to the wrong
         // driver on the next call.
-        let spec = AgentSpec::from_toml_str(
-            &fs::read_to_string(expected.join("agent.toml")).unwrap(),
-        )
-        .unwrap();
+        let spec =
+            AgentSpec::from_toml_str(&fs::read_to_string(expected.join("agent.toml")).unwrap())
+                .unwrap();
         assert_eq!(spec.runtime, RuntimeKind::ClaudeCode);
     }
 
@@ -1115,19 +1100,13 @@ mod tests {
         let root = config::agents_root().join("alice");
         let spec_path = root.join("agent.toml");
         // Edit the spec on disk.
-        let mut spec = AgentSpec::from_toml_str(
-            &fs::read_to_string(&spec_path).unwrap(),
-        )
-        .unwrap();
+        let mut spec = AgentSpec::from_toml_str(&fs::read_to_string(&spec_path).unwrap()).unwrap();
         spec.description = Some("user-edited".into());
         fs::write(&spec_path, spec.to_toml_string().unwrap()).unwrap();
 
         // Second call must NOT overwrite the user's edit.
         ensure_workspace("alice", &entry).unwrap();
-        let after = AgentSpec::from_toml_str(
-            &fs::read_to_string(&spec_path).unwrap(),
-        )
-        .unwrap();
+        let after = AgentSpec::from_toml_str(&fs::read_to_string(&spec_path).unwrap()).unwrap();
         assert_eq!(
             after.description.as_deref(),
             Some("user-edited"),
@@ -1229,7 +1208,8 @@ mod tests {
         let entry = AgentEntry::new(AgentType::ClaudeCode, None);
         let err = ensure_workspace("alice", &entry)
             .expect_err("partial skeleton must be refused by shim path");
-        assert!(format!("{err}").contains("half-finished")
-            || format!("{err}").contains("previous"));
+        assert!(
+            format!("{err}").contains("half-finished") || format!("{err}").contains("previous")
+        );
     }
 }

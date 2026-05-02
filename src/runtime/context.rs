@@ -116,10 +116,7 @@ impl DispatchContext {
     /// node in the dispatch tree, the origin tells an operator which
     /// human-facing agent started the chain.
     pub fn child(&self, caller: impl Into<String>) -> Self {
-        let origin_agent = self
-            .origin_agent
-            .clone()
-            .or_else(|| Some(caller.into()));
+        let origin_agent = self.origin_agent.clone().or_else(|| Some(caller.into()));
         Self {
             mission_id: self.mission_id.clone(),
             depth: self.depth.saturating_add(1),

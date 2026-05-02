@@ -29,9 +29,24 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use clap::Args;
+use serde::{Deserialize, Serialize};
 
 use crate::persistence::config;
 use crate::support::{output, sysinfo};
+
+#[derive(Debug, Deserialize)]
+struct PairingPreflight {
+    tenant_id: String,
+    node_id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ValidatePairingPayload {
+    #[serde(flatten)]
+    info: sysinfo::DeviceInfo,
+    node_id: String,
+    device_public_key: String,
+}
 
 #[derive(Debug, Args)]
 pub struct JoinArgs {
@@ -44,6 +59,21 @@ pub struct JoinArgs {
     /// Only needed for local dev when the REST API is on a different host/port than the Hub.
     #[arg(long)]
     pub hub_api: Option<String>,
+    /// Peer hub's daemon TLS listen address, used to populate the
+    /// local daemon's `[daemon.federated_peers]` entry for this
+    /// tenant. Form: `https://host:port` (e.g. `https://hub-b.example:50443`).
+    ///
+    /// Why this is operator-supplied: the Hub's pairing response
+    /// carries the **backend's** Axon endpoint (the inbound-from-
+    /// device gRPC port), which is NOT the peer daemon's TLS
+    /// listener. In a multi-hub deployment those addresses
+    /// differ. Without this flag the auto-wire either writes the
+    /// backend port (wrong for cross-hub dial) or assumes the
+    /// canonical 50443 (wrong if the operator picked a different
+    /// port). Pass `--peer-hub` when joining a tenant whose hub
+    /// you intend to route cross-hub calls to.
+    #[arg(long)]
+    pub peer_hub: Option<String>,
     /// Skip confirmation prompts (for non-interactive use)
     #[arg(long, short = 'y')]
     pub yes: bool,
@@ -68,10 +98,47 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
     let token = args.token.trim().to_string();
     validate_token_format(&token)?;
 
+    let hub_api_override = args
+        .hub_api
+        .as_ref()
+        .map(|s| s.trim_end_matches('/').to_string());
+    let validate_base = pick_validate_base(&args.hub, hub_api_override.as_deref());
+    output::info("Preparing pairing...");
+    let preflight = preflight_pairing_token(&token, &validate_base)?;
     output::info("Validating pairing token...");
-    let mut creds = validate_pairing_token(&token, &args.hub)?;
-    creds.hub_api_base = args.hub_api.map(|s| s.trim_end_matches('/').to_string());
+    let mut creds = validate_pairing_token(&token, &validate_base, &preflight)?;
+    creds.hub_api_base = hub_api_override;
     config::save_credentials(&creds)?;
+
+    // Best-effort: if this device is also running a hub-mode
+    // daemon (i.e. `~/.easynet/daemon-config.toml` exists), seed
+    // the daemon's `[daemon.federated_peers]` table with the
+    // tenant→hub mapping. When `--peer-hub` is set the operator
+    // tells us the peer daemon's TLS listen address explicitly;
+    // when absent, the helper falls back to the canonical-port
+    // guess and warns the operator. SIGHUPs the running daemon
+    // so the new entry activates without a restart. Failures
+    // here log and keep going — the join itself has succeeded;
+    // the operator can edit daemon-config.toml by hand later if
+    // the auto-wire didn't fire (no daemon running, parser
+    // hiccup, etc).
+    let _ = super::federation_wire::auto_wire_federated_peer_from_credentials(
+        &creds,
+        args.peer_hub.as_deref(),
+    );
+
+    // LB-52 Gap 3 — mirror the device's own `(uri, pubkey,
+    // role=Device)` self-entry into the local realm-trust.toml so
+    // a co-located hub-mode daemon admits this device on
+    // `<self>.session` without a separate
+    // `<self>.register_device_pubkey` round-trip. Single-machine
+    // demo / answer-sheet topologies that mock or skip the
+    // backend hit this path; production deploys with a real
+    // backend invoke `<self>.register_device_pubkey` and either
+    // overwrite this entry or no-op against the matching pubkey
+    // (idempotent). Failures log and keep going — same discipline
+    // as the federated_peers auto-wire above.
+    let _ = super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds);
 
     output::success("Paired successfully");
     output::detail("node_id", &creds.node_id);
@@ -121,14 +188,68 @@ fn validate_pairing_response(creds: config::Credentials) -> anyhow::Result<confi
     Ok(creds)
 }
 
-fn validate_pairing_token(token: &str, hub_base: &str) -> anyhow::Result<config::Credentials> {
-    let info = sysinfo::collect_system_info();
+/// Pick the REST-API base URL the pairing-token validation call
+/// should hit. Operators commonly run a self-hosted Hub where the
+/// user-facing portal (`--hub`) and the REST API (`--hub-api`)
+/// live on different hosts/ports — e.g. portal at
+/// `https://easynet.run`, REST API at `http://localhost:18080`.
+/// Without preferring `--hub-api` when set, the validation call
+/// hits the portal URL, gets a 404, and surfaces as "pairing
+/// token expired or already used" — a misleading error mode.
+fn pick_validate_base(hub: &str, hub_api_override: Option<&str>) -> String {
+    hub_api_override
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| hub.to_string())
+}
+
+fn preflight_pairing_token(token: &str, hub_base: &str) -> anyhow::Result<PairingPreflight> {
+    let base = hub_base.trim_end_matches('/');
+    let url = format!("{base}/api/v1/devices/pairing/{token}/preflight");
+
+    let resp = match ureq::get(&url)
+        .timeout(std::time::Duration::from_secs(30))
+        .call()
+    {
+        Ok(r) => r,
+        Err(ureq::Error::Status(code, resp)) => {
+            let body = resp.into_string().unwrap_or_default();
+            anyhow::bail!("{}", pairing_status_error_message(code, &body));
+        }
+        Err(ureq::Error::Transport(e)) => {
+            anyhow::bail!(
+                "cannot reach Hub at {base}: {e}\n  Check your network connection and Hub URL."
+            );
+        }
+    };
+
+    let preflight: PairingPreflight = resp.into_json().map_err(|e| {
+        anyhow::Error::from(e).context(
+            "Hub returned an unreadable pairing preflight response — the Hub is likely on an \
+             incompatible version, or a proxy rewrote the response. Verify the Hub URL and \
+             that CLI + Hub versions match; re-run with a fresh pairing token if so.",
+        )
+    })?;
+    if preflight.tenant_id.is_empty() {
+        anyhow::bail!("pairing preflight response missing tenant_id");
+    }
+    if preflight.node_id.is_empty() {
+        anyhow::bail!("pairing preflight response missing node_id");
+    }
+    Ok(preflight)
+}
+
+fn validate_pairing_token(
+    token: &str,
+    hub_base: &str,
+    preflight: &PairingPreflight,
+) -> anyhow::Result<config::Credentials> {
+    let payload = build_validate_pairing_payload(preflight)?;
     let base = hub_base.trim_end_matches('/');
     let url = format!("{base}/api/v1/devices/pairing/{token}/validate");
 
     let resp = match ureq::post(&url)
         .timeout(std::time::Duration::from_secs(30))
-        .send_json(&info)
+        .send_json(&payload)
     {
         Ok(r) => r,
         Err(ureq::Error::Status(code, resp)) => {
@@ -160,12 +281,53 @@ fn validate_pairing_token(token: &str, hub_base: &str) -> anyhow::Result<config:
         )
     })?;
 
-    validate_pairing_response(creds)
+    let creds = validate_pairing_response(creds)?;
+    if creds.node_id != preflight.node_id {
+        anyhow::bail!(
+            "Hub returned node_id {} but pairing preflight reserved {}; aborting to avoid \
+             booting with mismatched identity",
+            creds.node_id,
+            preflight.node_id
+        );
+    }
+    if creds.tenant_id != preflight.tenant_id {
+        anyhow::bail!(
+            "Hub returned tenant_id {} but pairing preflight reserved {}; aborting to avoid \
+             deriving credentials under the wrong realm",
+            creds.tenant_id,
+            preflight.tenant_id
+        );
+    }
+    Ok(creds)
+}
+
+fn build_validate_pairing_payload(
+    preflight: &PairingPreflight,
+) -> anyhow::Result<ValidatePairingPayload> {
+    Ok(ValidatePairingPayload {
+        info: sysinfo::collect_system_info(),
+        node_id: preflight.node_id.clone(),
+        device_public_key: derive_device_public_key_hex(&preflight.tenant_id, &preflight.node_id)?,
+    })
+}
+
+fn derive_device_public_key_hex(tenant_id: &str, node_id: &str) -> anyhow::Result<String> {
+    use anyhow::Context as _;
+    use base64::Engine as _;
+
+    let subject_id = format!("easynet:prv:reg:agent.{node_id}");
+    let (_seed, public_key_b64) =
+        crate::runtime::publish::derive_subject_keypair(tenant_id, &subject_id);
+    let public_key = base64::engine::general_purpose::STANDARD
+        .decode(public_key_b64.as_bytes())
+        .context("decode derived device public key")?;
+    Ok(hex::encode(public_key))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
     use std::net::TcpListener;
 
     #[test]
@@ -211,12 +373,64 @@ mod tests {
     }
 
     #[test]
+    fn pick_validate_base_prefers_hub_api_when_set() {
+        let chosen = pick_validate_base("https://easynet.run", Some("http://localhost:18080"));
+        assert_eq!(chosen, "http://localhost:18080");
+    }
+
+    #[test]
+    fn pick_validate_base_falls_back_to_hub_when_api_unset() {
+        let chosen = pick_validate_base("https://easynet.run", None);
+        assert_eq!(chosen, "https://easynet.run");
+    }
+
+    #[test]
+    fn derive_device_public_key_hex_matches_runtime_derivation() {
+        let tenant_id = "tenant-a";
+        let node_id = "en-test-node";
+        let got = derive_device_public_key_hex(tenant_id, node_id).expect("derive hex");
+        let want_b64 = crate::runtime::publish::derive_owner_public_key_b64(tenant_id, node_id);
+        let want = hex::encode(
+            base64::engine::general_purpose::STANDARD
+                .decode(want_b64.as_bytes())
+                .expect("decode owner b64"),
+        );
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn build_validate_pairing_payload_carries_reserved_identity() {
+        let preflight = PairingPreflight {
+            tenant_id: "tenant-a".into(),
+            node_id: "en-test-node".into(),
+        };
+        let payload = build_validate_pairing_payload(&preflight).expect("build payload");
+        assert_eq!(payload.node_id, "en-test-node");
+        assert_eq!(payload.device_public_key.len(), 64);
+    }
+
+    #[test]
+    fn preflight_pairing_token_surfaces_transport_failure() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind probe");
+        let addr = listener.local_addr().expect("local_addr");
+        drop(listener);
+        let base = format!("http://{}", addr);
+        let err = preflight_pairing_token("token_1234", &base)
+            .expect_err("transport failure should error");
+        assert!(err.to_string().contains("cannot reach Hub"));
+    }
+
+    #[test]
     fn validate_pairing_token_surfaces_transport_failure() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind probe");
         let addr = listener.local_addr().expect("local_addr");
         drop(listener);
         let base = format!("http://{}", addr);
-        let err = validate_pairing_token("token_1234", &base)
+        let preflight = PairingPreflight {
+            tenant_id: "tenant-a".into(),
+            node_id: "en-test-node".into(),
+        };
+        let err = validate_pairing_token("token_1234", &base, &preflight)
             .expect_err("transport failure should error");
         assert!(err.to_string().contains("cannot reach Hub"));
     }

@@ -105,9 +105,7 @@ impl std::fmt::Display for HostedReceiptError {
             HostedReceiptError::EmptySigner => "signer_agent_uri must not be empty",
             HostedReceiptError::EmptyHostUri => "HostedBy.host_uri must not be empty",
             HostedReceiptError::EmptyAttestation => "HostedBy.host_attestation must not be empty",
-            HostedReceiptError::SignerNotHost => {
-                "HostedBy: signer_agent_uri must equal host_uri"
-            }
+            HostedReceiptError::SignerNotHost => "HostedBy: signer_agent_uri must equal host_uri",
             HostedReceiptError::SignerNotCallee => {
                 "Selfsigned: signer_agent_uri must equal callee_agent_uri"
             }
@@ -277,7 +275,10 @@ mod tests {
             signer_agent_uri: "easynet:///r/acme/agent/01B".into(),
             model: SigningModel::Selfsigned,
         };
-        assert_eq!(bad.validate().unwrap_err(), HostedReceiptError::SignerNotCallee);
+        assert_eq!(
+            bad.validate().unwrap_err(),
+            HostedReceiptError::SignerNotCallee
+        );
     }
 
     #[test]
@@ -290,15 +291,17 @@ mod tests {
                 host_attestation: vec![1],
             },
         };
-        assert_eq!(bad.validate().unwrap_err(), HostedReceiptError::SignerNotHost);
+        assert_eq!(
+            bad.validate().unwrap_err(),
+            HostedReceiptError::SignerNotHost
+        );
     }
 
     #[test]
     fn validate_passes_for_well_formed_selfsigned_and_hosted() {
         let s = HostedAgentReceiptHeader::new_selfsigned("u").unwrap();
         assert!(s.validate().is_ok());
-        let h =
-            HostedAgentReceiptHeader::new_hosted("c", "host", vec![1]).unwrap();
+        let h = HostedAgentReceiptHeader::new_hosted("c", "host", vec![1]).unwrap();
         assert!(h.validate().is_ok());
     }
 
@@ -310,8 +313,7 @@ mod tests {
         assert_eq!(back, s);
         assert!(back.validate().is_ok());
 
-        let h =
-            HostedAgentReceiptHeader::new_hosted("c", "host", vec![0xAA]).unwrap();
+        let h = HostedAgentReceiptHeader::new_hosted("c", "host", vec![0xAA]).unwrap();
         let j = serde_json::to_string(&h).unwrap();
         let back: HostedAgentReceiptHeader = serde_json::from_str(&j).unwrap();
         assert_eq!(back, h);

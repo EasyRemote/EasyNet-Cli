@@ -82,8 +82,8 @@ use crate::support::shellguard::permissions::{
 };
 use crate::support::shellguard::readonly::{self, ReadOnlyRejection, ReadOnlyVerdict};
 use crate::support::shellguard::runner::{
-    self, RunError, RunRequest, Sandbox, OUTPUT_DEFAULT_CAP, OUTPUT_HARD_CAP,
-    TIMEOUT_DEFAULT_MS, TIMEOUT_HARD_CAP_MS,
+    self, RunError, RunRequest, Sandbox, OUTPUT_DEFAULT_CAP, OUTPUT_HARD_CAP, TIMEOUT_DEFAULT_MS,
+    TIMEOUT_HARD_CAP_MS,
 };
 use crate::support::shellguard::security::{self, SecurityVerdict};
 
@@ -148,9 +148,9 @@ fn parse_request(args: &Value) -> Result<ShellRunRequest> {
         Some(Value::Object(map)) => {
             let mut out = HashMap::with_capacity(map.len());
             for (k, v) in map {
-                let s = v.as_str().ok_or_else(|| {
-                    anyhow!("shell.run: env[{k}] must be a string value")
-                })?;
+                let s = v
+                    .as_str()
+                    .ok_or_else(|| anyhow!("shell.run: env[{k}] must be a string value"))?;
                 out.insert(k.clone(), s.to_string());
             }
             Some(out)
@@ -234,18 +234,15 @@ fn parse_permission_rules(args: &Value) -> Result<Option<RuleSet>> {
 fn parse_rule_array(arr: &[Value], field: &str) -> Result<Vec<Rule>> {
     let mut out = Vec::with_capacity(arr.len());
     for (i, v) in arr.iter().enumerate() {
-        let obj = v.as_object().ok_or_else(|| {
-            anyhow!("shell.run: {field}[{i}] must be an object")
-        })?;
+        let obj = v
+            .as_object()
+            .ok_or_else(|| anyhow!("shell.run: {field}[{i}] must be an object"))?;
         let argv0_prefix = obj
             .get("argv0")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("shell.run: {field}[{i}].argv0 missing"))?
             .to_string();
-        let mode = obj
-            .get("match")
-            .and_then(Value::as_str)
-            .unwrap_or("exact");
+        let mode = obj.get("match").and_then(Value::as_str).unwrap_or("exact");
         let match_mode = match mode {
             "exact" => MatchMode::Exact,
             "prefix" => MatchMode::Prefix,
@@ -323,9 +320,9 @@ fn decode_stdin(args: &Value) -> Result<Option<Vec<u8>>> {
         Some(Value::Array(items)) => {
             let mut out = Vec::with_capacity(items.len());
             for (i, v) in items.iter().enumerate() {
-                let n = v.as_u64().ok_or_else(|| {
-                    anyhow!("shell.run: stdin[{i}] must be an integer in 0..256")
-                })?;
+                let n = v
+                    .as_u64()
+                    .ok_or_else(|| anyhow!("shell.run: stdin[{i}] must be an integer in 0..256"))?;
                 if n > 255 {
                     return Err(anyhow!("shell.run: stdin[{i}] = {n} out of range"));
                 }
@@ -403,10 +400,7 @@ fn run_pipeline(req: &ShellRunRequest) -> std::result::Result<PipelinePass, Pipe
         if let PermissionVerdict::Rejected { argv_index, reason } =
             permissions::evaluate(&commands, rules)
         {
-            return Err(PipelineRejection::Permission {
-                argv_index,
-                reason,
-            });
+            return Err(PipelineRejection::Permission { argv_index, reason });
         }
     }
     // Stage 6: path constraints.
@@ -477,7 +471,10 @@ async fn execute(req: &ShellRunRequest) -> Result<runner::RunOutcome, RunError> 
 }
 
 fn locate_bash() -> Option<&'static str> {
-    BASH_PATHS.iter().copied().find(|p| std::path::Path::new(p).exists())
+    BASH_PATHS
+        .iter()
+        .copied()
+        .find(|p| std::path::Path::new(p).exists())
 }
 
 fn build_response(
@@ -601,14 +598,12 @@ fn rejection_response(req: &ShellRunRequest, rejection: PipelineRejection) -> Va
                 ReadOnlyRejection::GitNotReadOnly { subcommand } => {
                     ("GitNotReadOnly", json!({ "subcommand": subcommand }))
                 }
-                ReadOnlyRejection::WriteFlag { argv0, flag } => (
-                    "WriteFlag",
-                    json!({ "argv0": argv0, "flag": flag }),
-                ),
-                ReadOnlyRejection::WriteRedirect { op, target } => (
-                    "WriteRedirect",
-                    json!({ "op": op, "target": target }),
-                ),
+                ReadOnlyRejection::WriteFlag { argv0, flag } => {
+                    ("WriteFlag", json!({ "argv0": argv0, "flag": flag }))
+                }
+                ReadOnlyRejection::WriteRedirect { op, target } => {
+                    ("WriteRedirect", json!({ "op": op, "target": target }))
+                }
             };
             (
                 "readonly",
@@ -620,10 +615,7 @@ fn rejection_response(req: &ShellRunRequest, rejection: PipelineRejection) -> Va
                 }),
             )
         }
-        PipelineRejection::Destructive {
-            argv_index,
-            argv0,
-        } => (
+        PipelineRejection::Destructive { argv_index, argv0 } => (
             "destructive",
             "DESTRUCTIVE_REJECTED",
             json!({
@@ -784,10 +776,7 @@ mod tests {
     fn invalid_match_mode_rejects() {
         let err = parse_request(&args(&[
             ("command", json!("ls")),
-            (
-                "allow_rules",
-                json!([{"argv0":"ls","match":"glob"}]),
-            ),
+            ("allow_rules", json!([{"argv0":"ls","match":"glob"}])),
         ]))
         .unwrap_err();
         assert!(err.to_string().contains("expected exact|prefix"));
@@ -992,7 +981,12 @@ mod tests {
     fn input_schema_is_object_with_command_required() {
         let s = input_schema();
         assert_eq!(s["type"], json!("object"));
-        let required: Vec<&str> = s["required"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        let required: Vec<&str> = s["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
         assert!(required.contains(&"command"));
     }
 

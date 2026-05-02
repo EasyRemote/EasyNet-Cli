@@ -25,9 +25,7 @@ use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
 use crate::support::local_invoke::invoke_local_ability;
-use crate::support::{
-    output::{self, OutputFormat},
-};
+use crate::support::output::{self, OutputFormat};
 
 #[derive(Debug, Args)]
 pub struct CallArgs {
@@ -171,8 +169,8 @@ fn run_create(args: CreateArgs) -> anyhow::Result<()> {
     if !args.call_id.is_empty() {
         body["call_id"] = json!(args.call_id);
     }
-    let result = invoke_local_ability("voice.create_call", body)
-        .context("invoke voice.create_call")?;
+    let result =
+        invoke_local_ability("voice.create_call", body).context("invoke voice.create_call")?;
     if args.format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
@@ -261,15 +259,16 @@ fn run_end(args: EndArgs) -> anyhow::Result<()> {
 }
 
 fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
-    let result = invoke_local_ability(
-        "voice.watch_call",
-        json!({"call_id": args.call_id}),
-    )
-    .context("invoke voice.watch_call")?;
+    let result = invoke_local_ability("voice.watch_call", json!({"call_id": args.call_id}))
+        .context("invoke voice.watch_call")?;
     let events = result.get("events").and_then(Value::as_array);
     let mut count = 0;
     if let Some(events) = events {
-        for evt in events.iter().skip(args.from as usize).take(args.max_events as usize) {
+        for evt in events
+            .iter()
+            .skip(args.from as usize)
+            .take(args.max_events as usize)
+        {
             let etype = evt.get("type").and_then(Value::as_str).unwrap_or("?");
             let at = evt.get("at_ms").and_then(Value::as_i64).unwrap_or(0);
             println!("  {etype:<20} at_ms={at}");

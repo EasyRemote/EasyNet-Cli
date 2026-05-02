@@ -71,19 +71,9 @@
 /// the same answer.
 const DESTRUCTIVE: &[&str] = &[
     // delete
-    "rm",
-    "rmdir",
-    "shred",
-    "srm",
-    "trash",
-    // overwrite raw
-    "dd",
-    // partition
-    "cfdisk",
-    "fdisk",
-    "gdisk",
-    "parted",
-    "sfdisk",
+    "rm", "rmdir", "shred", "srm", "trash", // overwrite raw
+    "dd",    // partition
+    "cfdisk", "fdisk", "gdisk", "parted", "sfdisk",
 ];
 
 /// Prefix-matched destructive families. Entry `"mkfs"` flags
@@ -93,8 +83,7 @@ const DESTRUCTIVE: &[&str] = &[
 /// would be brittle.
 const DESTRUCTIVE_PREFIXES: &[&str] = &[
     // every mkfs.* variant on Linux/BSD
-    "mkfs",
-    // every wipefs.* — niche, but same hazard class as mkfs
+    "mkfs", // every wipefs.* — niche, but same hazard class as mkfs
     "wipefs",
 ];
 
@@ -242,10 +231,7 @@ mod tests {
     #[test]
     fn benign_commands_are_not_destructive() {
         for name in ["ls", "cat", "grep", "find", "echo", "true"] {
-            assert!(
-                !is_destructive(name),
-                "{name} should NOT be destructive",
-            );
+            assert!(!is_destructive(name), "{name} should NOT be destructive",);
         }
     }
 

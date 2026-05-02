@@ -112,19 +112,19 @@ pub mod execution;
 pub mod ability_descriptor;
 pub mod ability_dispatch;
 pub mod advertise;
+pub mod agents;
 pub mod dispatch_receipt;
 pub mod federation_client;
 pub mod hosted_receipt;
 pub mod provisional_ura;
 pub mod publish;
-pub mod agents;
 // RFC-002 keyring + KeyResolver. Local-first, zero axon dependency.
 pub mod keyring;
 // RFC-002 tenant suffix resolver: maps tenant_id to admission mode +
 // URA scope + hub endpoints.
-pub mod resolver;
 /// RFC-002.2 daemon-side federation initialisation. Pure decision
 /// over (Credentials, KeyringHandle, Bridge?) → install + record
 /// outcome. Daemon boot calls one function; the status probe
 /// surfaces the result for operators.
 pub mod federation_init;
+pub mod resolver;

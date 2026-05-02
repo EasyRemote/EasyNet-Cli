@@ -290,7 +290,50 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
 /// the registered endpoint is recorded, but every actual Invoke
 /// falling back to `runtime_local_tools` will fail at the UDS
 /// connect step until the operator manually starts the daemon.
+/// Probe whether an `easynet-daemon` is accepting on the canonical
+/// `~/.easynet/control.sock`. Returns `true` only if the path
+/// exists AND a connect succeeds — a stale socket file (left after
+/// a daemon crash) returns `false` because the connect refuses.
+///
+/// Unix-only; on non-Unix targets the daemon's IPC plane uses
+/// Named Pipes, and the spawn-twice race that motivates this
+/// probe is a Unix-specific failure mode.
+fn probe_daemon_alive() -> bool {
+    probe_uds_alive(&crate::services::control::transport::default_socket_path())
+}
+
+#[cfg(unix)]
+fn probe_uds_alive(sock: &std::path::Path) -> bool {
+    if !sock.exists() {
+        return false;
+    }
+    std::os::unix::net::UnixStream::connect(sock).is_ok()
+}
+
+#[cfg(not(unix))]
+fn probe_uds_alive(_sock: &std::path::Path) -> bool {
+    false
+}
+
 fn spawn_easynet_daemon(node_id: &str) -> Option<std::process::Child> {
+    // Liveness probe: if a daemon is already accepting on the
+    // canonical control.sock, do not spawn a second one. A second
+    // spawn races against the first for the runtime-dispatch
+    // socket bind (one-process), and the loser exits silently —
+    // leaving a "half-broken" setup that swallows dispatches. The
+    // pidfile alone does not catch this case (an operator who
+    // hand-spawned the daemon for a test never wrote one). Probe
+    // the actual UDS so any healthy responder, however spawned,
+    // counts as "already running".
+    if probe_daemon_alive() {
+        let sock = crate::services::control::transport::default_socket_path();
+        output::info(&format!(
+            "easynet-daemon already accepting on {} — leaving it in place",
+            sock.display()
+        ));
+        return None;
+    }
+
     // Resolve the daemon binary: env override > sibling of current
     // exe > PATH. The env override exists because the test stack
     // uses an out-of-tree build; production installers drop both
@@ -463,8 +506,7 @@ fn republish_via_federation_best_effort(
     // its dispatch UDS. Best-effort: a register failure leaves the
     // dispatch path degraded but keeps boot moving.
     if !plan.realm.is_empty() && !plan.host_device_uri.is_empty() {
-        let dispatch_endpoint =
-            crate::services::control::runtime_dispatch::dispatch_endpoint_uri();
+        let dispatch_endpoint = crate::services::control::runtime_dispatch::dispatch_endpoint_uri();
         let reg_outcomes = crate::runtime::publish::register_local_tools_via_runtime(
             &invoker,
             &creds.tenant_id,
@@ -479,7 +521,10 @@ fn republish_via_federation_best_effort(
             match &o.result {
                 Ok(_) => reg_ok += 1,
                 Err(msg) => {
-                    output::warn(&format!("runtime.register_local_tool {} failed: {msg}", o.label));
+                    output::warn(&format!(
+                        "runtime.register_local_tool {} failed: {msg}",
+                        o.label
+                    ));
                 }
             }
         }
@@ -639,8 +684,7 @@ fn run_foreground_with_heartbeat(
             // where the per-agent catalog gets exposed.
             agent_name: None,
         };
-        let configured =
-            crate::runtime::agents::profiles::mcp::build_stdio_server(&config);
+        let configured = crate::runtime::agents::profiles::mcp::build_stdio_server(&config);
         let descriptor_count = configured.descriptor_count();
         std::thread::spawn(move || {
             let server = easynet_axon::mcp::StdioMcpServer::new(configured.provider)
@@ -1108,8 +1152,7 @@ mod tests {
         // for downstream Hub-tier signing — that wrapping is exactly
         // what the federation Invoke surface consumes, so the test
         // pins the wrapped form rather than the raw bare id.
-        let plan = build_bootstrap_plan_from("tenant-test", "node-test")
-            .expect("plan must build");
+        let plan = build_bootstrap_plan_from("tenant-test", "node-test").expect("plan must build");
         assert_eq!(plan.realm, "tenant-test");
         assert_eq!(
             plan.host_device_uri,
@@ -1135,6 +1178,37 @@ mod tests {
         assert_eq!(realm_from_agent_uri("not-an-uri"), None);
         assert_eq!(realm_from_agent_uri("easynet:///r/"), None);
         assert_eq!(realm_from_agent_uri("easynet:///r/acme"), None);
-        assert_eq!(realm_from_agent_uri("http://example.com/r/acme/agent/X"), None);
+        assert_eq!(
+            realm_from_agent_uri("http://example.com/r/acme/agent/X"),
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_uds_alive_false_when_path_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock = dir.path().join("control.sock");
+        assert!(!sock.exists());
+        assert!(!probe_uds_alive(&sock));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_uds_alive_false_for_stale_socket_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock = dir.path().join("control.sock");
+        std::fs::write(&sock, b"").expect("write empty file");
+        assert!(sock.exists());
+        assert!(!probe_uds_alive(&sock));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_uds_alive_true_when_listener_accepts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock = dir.path().join("control.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&sock).expect("bind probe");
+        assert!(probe_uds_alive(&sock));
     }
 }

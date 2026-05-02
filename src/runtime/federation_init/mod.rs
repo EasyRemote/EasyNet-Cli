@@ -134,9 +134,7 @@ pub fn read_inputs_from_env<'a>(
 /// unreachable at boot). When `None`, federation init reports
 /// `Failed { stage = NoBridge }` so an operator can diagnose
 /// without needing to read source.
-pub fn try_install_federation_routing(
-    inputs: FederationInitInputs<'_>,
-) -> FederationInitOutcome {
+pub fn try_install_federation_routing(inputs: FederationInitInputs<'_>) -> FederationInitOutcome {
     let FederationInitInputs {
         creds,
         keyring,

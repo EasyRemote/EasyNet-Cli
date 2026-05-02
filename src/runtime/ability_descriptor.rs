@@ -379,8 +379,7 @@ impl AbilityDescriptor {
         match self.visibility {
             Visibility::Public => true,
             Visibility::Scoped => {
-                self.scope_subjects.admits(subject_uri)
-                    && self.scope_agents.admits(caller_uri)
+                self.scope_subjects.admits(subject_uri) && self.scope_agents.admits(caller_uri)
             }
             Visibility::Private => {
                 // Owner's own signing authority can list — that's
@@ -433,7 +432,11 @@ mod tests {
 
     #[test]
     fn public_visibility_is_visible_to_anyone() {
-        let d = must("observe.health", "easynet:///r/acme/agent/01DEV", Visibility::Public);
+        let d = must(
+            "observe.health",
+            "easynet:///r/acme/agent/01DEV",
+            Visibility::Public,
+        );
         assert!(d.is_visible_to("anybody", "anybody"));
         assert!(d.is_visible_to("", ""));
     }
@@ -449,7 +452,11 @@ mod tests {
 
     #[test]
     fn scoped_default_is_any_any_so_admits_everyone() {
-        let d = must("conversation.send", "easynet:///r/acme/agent/01LLM", Visibility::Scoped);
+        let d = must(
+            "conversation.send",
+            "easynet:///r/acme/agent/01LLM",
+            Visibility::Scoped,
+        );
         // Defaults set scope_subjects=Any, scope_agents=Any, so until
         // a builder narrows them, SCOPED behaves like PUBLIC. We test
         // this explicitly so the default is documented in code.
@@ -470,9 +477,13 @@ mod tests {
     fn scoped_both_axes_filtered_requires_both_matches() {
         let backend = "easynet:///r/acme/agent/01BAK";
         let operator = "easynet:///r/acme/agent/01USR-alice";
-        let d = must("fleet.list_agents", "easynet:///r/acme/agent/01DEV", Visibility::Scoped)
-            .with_scope_subjects(ScopeRule::OnlyMatching(vec![operator.into()]))
-            .with_scope_agents(ScopeRule::OnlyMatching(vec![backend.into()]));
+        let d = must(
+            "fleet.list_agents",
+            "easynet:///r/acme/agent/01DEV",
+            Visibility::Scoped,
+        )
+        .with_scope_subjects(ScopeRule::OnlyMatching(vec![operator.into()]))
+        .with_scope_agents(ScopeRule::OnlyMatching(vec![backend.into()]));
         assert!(d.is_visible_to(backend, operator));
         // Right subject, wrong caller — denied.
         assert!(!d.is_visible_to("rogue-caller", operator));
@@ -482,8 +493,12 @@ mod tests {
 
     #[test]
     fn scope_rule_none_denies_everything_on_that_axis() {
-        let d = must("admin.failover", "easynet:///r/acme/agent/01DEV", Visibility::Scoped)
-            .with_scope_subjects(ScopeRule::None);
+        let d = must(
+            "admin.failover",
+            "easynet:///r/acme/agent/01DEV",
+            Visibility::Scoped,
+        )
+        .with_scope_subjects(ScopeRule::None);
         assert!(!d.is_visible_to("anybody", "anybody"));
     }
 
@@ -496,10 +511,14 @@ mod tests {
         // same Agent), but NOT `easynet:///r/acme/agent/01DEVATTACKER`
         // — that would let attacker URAs masquerade as authorised
         // ones by sharing a prefix.
-        let d = must("fleet.list_agents", "easynet:///r/acme/agent/01HUB", Visibility::Scoped)
-            .with_scope_subjects(ScopeRule::OnlyMatching(vec![
-                "easynet:///r/acme/agent/01DEV".into(),
-            ]));
+        let d = must(
+            "fleet.list_agents",
+            "easynet:///r/acme/agent/01HUB",
+            Visibility::Scoped,
+        )
+        .with_scope_subjects(ScopeRule::OnlyMatching(vec![
+            "easynet:///r/acme/agent/01DEV".into(),
+        ]));
         assert!(d.is_visible_to("anybody", "easynet:///r/acme/agent/01DEV"));
         assert!(d.is_visible_to("anybody", "easynet:///r/acme/agent/01DEV/sub"));
         assert!(!d.is_visible_to("anybody", "easynet:///r/acme/agent/01DEVATTACKER"));

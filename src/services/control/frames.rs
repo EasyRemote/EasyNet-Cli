@@ -264,7 +264,11 @@ mod tests {
         assert!(s.contains("\"session_id\":\"s-1\""));
         let back: IncomingFrame = serde_json::from_str(&s).unwrap();
         match back {
-            IncomingFrame::OpenBidi { session_id, ability, .. } => {
+            IncomingFrame::OpenBidi {
+                session_id,
+                ability,
+                ..
+            } => {
                 assert_eq!(session_id, "s-1");
                 assert_eq!(ability, "fleet.session_attach");
             }
@@ -332,11 +336,10 @@ mod tests {
 
     #[test]
     fn outgoing_result_frame_emits_receipt_header_field_when_present() {
-        let header =
-            crate::runtime::hosted_receipt::HostedAgentReceiptHeader::new_selfsigned(
-                "easynet:///r/acme/agent/01DEV",
-            )
-            .unwrap();
+        let header = crate::runtime::hosted_receipt::HostedAgentReceiptHeader::new_selfsigned(
+            "easynet:///r/acme/agent/01DEV",
+        )
+        .unwrap();
         let f = OutgoingFrame::Result {
             request_id: "x".into(),
             value: serde_json::Value::Null,

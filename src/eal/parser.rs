@@ -225,9 +225,7 @@ impl Parser {
                     }
                     self.expect(&Token::RBrace)?;
                 }
-                t => anyhow::bail!(
-                    "loop: expected `body` or `verify` sub-block, got {t:?}"
-                ),
+                t => anyhow::bail!("loop: expected `body` or `verify` sub-block, got {t:?}"),
             }
         }
         self.expect(&Token::RBrace)?;
@@ -617,9 +615,7 @@ mod tests {
         match &p.mission.statements[idx] {
             Statement::LetCall { call, .. } => call,
             Statement::Call(c) => c,
-            s => panic!(
-                "extract_call expected a flat Call statement, got block variant: {s:?}"
-            ),
+            s => panic!("extract_call expected a flat Call statement, got block variant: {s:?}"),
         }
     }
 
@@ -812,8 +808,7 @@ mod tests {
             }"#;
         let err = parse(src).unwrap_err().to_string();
         assert!(
-            err.contains("docs/rfc/eal-control-flow-v1.md")
-                || err.contains("eal-control-flow-v1"),
+            err.contains("docs/rfc/eal-control-flow-v1.md") || err.contains("eal-control-flow-v1"),
             "handoff error must cite the approved RFC; got: {err}"
         );
     }

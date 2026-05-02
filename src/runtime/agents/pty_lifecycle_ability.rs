@@ -219,10 +219,7 @@ fn parse_create_spec(args: &Value) -> anyhow::Result<PtyCreateSpec> {
         Some(other) => anyhow::bail!("`command_args` must be an array, got {other}"),
     };
 
-    let cwd = args
-        .get("cwd")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let cwd = args.get("cwd").and_then(Value::as_str).map(str::to_string);
 
     let env: HashMap<String, String> = match args.get("env") {
         None | Some(Value::Null) => HashMap::new(),
@@ -317,11 +314,7 @@ mod tests {
     #[test]
     fn create_returns_session_id_and_inserts_row() {
         let svc = fresh_service();
-        let resp = create_handler(
-            &svc,
-            json!({"command": true_command()}),
-        )
-        .expect("create true");
+        let resp = create_handler(&svc, json!({"command": true_command()})).expect("create true");
         let id = resp["session_id"].as_str().expect("session_id is string");
         assert!(!id.is_empty());
         assert_eq!(svc.live_count(), 1, "create must install a session row");
@@ -366,11 +359,8 @@ mod tests {
     #[test]
     fn create_rejects_unknown_command() {
         let svc = fresh_service();
-        let err = create_handler(
-            &svc,
-            json!({"command": "/this/binary/does/not/exist"}),
-        )
-        .unwrap_err();
+        let err =
+            create_handler(&svc, json!({"command": "/this/binary/does/not/exist"})).unwrap_err();
         assert!(format!("{err}").contains("spawn"));
     }
 
@@ -379,8 +369,7 @@ mod tests {
         let svc = fresh_service();
         let resp = create_handler(&svc, json!({"command": true_command()})).unwrap();
         let id = resp["session_id"].as_str().unwrap().to_string();
-        let close_resp =
-            close_handler(&svc, None, json!({"session_id": id.clone()})).unwrap();
+        let close_resp = close_handler(&svc, None, json!({"session_id": id.clone()})).unwrap();
         assert_eq!(close_resp["ack"], true);
         assert_eq!(svc.live_count(), 0);
     }
@@ -388,8 +377,7 @@ mod tests {
     #[test]
     fn close_unknown_session_returns_ack_false_without_error() {
         let svc = fresh_service();
-        let resp =
-            close_handler(&svc, None, json!({"session_id": "ghost-id"})).unwrap();
+        let resp = close_handler(&svc, None, json!({"session_id": "ghost-id"})).unwrap();
         assert_eq!(resp["ack"], false);
         // exit_status absent when ack=false (no child to wait on).
         assert!(resp.get("exit_status").is_none());

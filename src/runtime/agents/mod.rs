@@ -33,6 +33,15 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+pub mod a2a_bridge_ability;
+pub mod a2a_client_ability;
+/// ability.publish + ability.unpublish — root meta-abilities that
+/// let a curator session (spawned by mission.think) materialise a
+/// new ability into a registered agent's abilities/ directory, or
+/// delete an existing one. Sibling of skill.publish (Phase 3); the
+/// two surfaces are how judge-validated experience is sunk back
+/// into the ability/skill ontology.
+pub mod ability_publish_ability;
 /// Generator for the `abilities/system/<name>.ability.toml`
 /// files. Single source of truth: every TOML descriptor on
 /// disk is the output of `render_ability_toml(name,
@@ -41,17 +50,38 @@
 /// the `gen-ability-tomls` binary regenerates after any code
 /// change to the metadata.
 pub mod ability_toml;
-/// Per-ability real-invocation tests. Each `#[test]` exercises
-/// one published ability through the live dispatcher with
-/// realistic args (not `{}`). This is the test layer that
-/// validates the full chain: registry lookup + handler
-/// invocation + service interaction + response shape. See the
-/// file's preamble for what "real" does and does NOT cover.
-#[cfg(test)]
-mod real_invoke_tests;
-pub mod a2a_bridge_ability;
-pub mod a2a_client_ability;
+/// fleet.pty_session_attach — interactive bidirectional terminal
+/// stream over InvokeBidi. The seventh and final member of the
+/// AXIOM Tier 2.5 Baseline Locomotion Profile (the streaming
+/// counterpart to process.exec / shell.run). See
+/// `runtime/execution/pty/` for the underlying PtyService.
+pub mod admin_status_ability;
 pub mod chat_ability;
+pub mod context_loaders;
+pub mod discover_ability;
+pub mod discuss_ability;
+/// eal_executor — backs `[exec] kind = "eal"` on agent-authored
+/// ability manifests. Lets an ability's implementation be a small
+/// EAL program that composes other abilities. Sibling of
+/// shell_executor; both consume `template` for `{{ var }}`
+/// substitution before dispatching.
+pub mod eal_executor;
+/// fleet.* device + ability operations: list_nodes, describe_node,
+/// remove_node, deploy_ability, uninstall_ability, exec_remote,
+/// register_self, deregister_self. The CLI side
+/// (`easynet device …`, `easynet ability deploy / uninstall / exec`)
+/// reaches these through `support::local_invoke::invoke_local_ability`,
+/// the same path every other CLI surface uses.
+pub(crate) mod federation_probe;
+/// fleet.file_transfer — bidirectional chunked file upload /
+/// download. Pairs with the EasyNet backend's
+/// /api/v1/files/{upload,download} HTTP routes; one signed
+/// InvokeBidi session per transfer. Atomic write (staging +
+/// rename), SHA-256 over content, 1 GiB byte cap.
+pub mod file_transfer_ability;
+pub mod fleet_lifecycle_ability;
+pub mod fleet_list_agents_ability;
+pub mod fleet_ops_ability;
 /// AXIOM §"Tier 2.5" Baseline Locomotion Profile, filesystem
 /// half. Three abilities (`fs.read`, `fs.write`, `fs.list`)
 /// published by every host-embodied agent claiming the
@@ -65,6 +95,49 @@ pub mod fs_ability;
 /// target = create-new-file. Atomic write (tempfile +
 /// fdatasync + rename) shared with fs.write.
 pub mod fs_edit_ability;
+/// http.request — outbound HTTP client. Last member of the
+/// Baseline Locomotion Profile. Issues one request per call,
+/// captures status / headers / body up to a cap, redacts
+/// auth-bearing headers (Authorization, Cookie, X-API-Key, …)
+/// from every receipt the auditor may persist. Schemes
+/// restricted to http / https; CR/LF in header values
+/// rejected; redirect / timeout / body caps enforced.
+pub mod http_executor;
+pub mod http_request_ability;
+pub mod invoke_ability;
+/// RFC-005 v3.2 A9 — `meta.list_resources`. Resource discovery
+/// surface for the eight media abilities above. Reads
+/// `~/.easynet/resources.json` via `persistence::resources` and
+/// projects to the wire shape; no device backend needed, so it
+/// ships fully working.
+pub mod list_resources_ability;
+pub mod loop_ability;
+pub mod mcp_bridge_ability;
+pub mod mcp_client_ability;
+/// Real (non-stub) media handlers, swapped in over the
+/// `media_abilities` stubs one ability at a time. PR3a delivers
+/// the `camera.snapshot` vertical slice with a deterministic
+/// synthetic backend; PR3 lands cpal/nokhwa/screen.
+pub mod media;
+/// RFC-005 v3.2 A1–A8 — eight physical-channel media abilities
+/// (mic.subscribe, camera.subscribe/snapshot, screen.subscribe/
+/// snapshot, speaker.publish, voice.subscribe, voice.transcribe).
+/// PR2 ships every handler as a stub that enforces
+/// INV-SUBJECT-ENVELOPE; PR3 / PR3a swap individual stubs out for
+/// real implementations.
+pub mod media_abilities;
+pub mod meta_ability;
+pub mod mission_ability;
+pub mod network_health_ability;
+/// mission.discuss / mission.think — round-robin and think-act-
+/// observe orchestration abilities. The `easynet mission discuss`
+/// and `easynet mission think` CLI subcommands invoke these,
+/// keeping a single ability-only path for both EAL programs and
+/// the operator CLI.
+pub mod orchestration_ability;
+pub mod permission_ability;
+pub mod ping;
+pub mod policy_ability;
 /// AXIOM §"Tier 2.5" Baseline Locomotion Profile,
 /// structured-execution member. `process.exec` spawns one
 /// process via OS-level argv (NO shell interpretation);
@@ -72,6 +145,36 @@ pub mod fs_edit_ability;
 /// The eight-stage shell pipeline is NOT run here; the
 /// structured input shape is the security boundary.
 pub mod process_exec_ability;
+pub mod profiles;
+pub mod pty_attach_ability;
+/// fleet.pty_session_input / fleet.pty_session_read /
+/// fleet.pty_session_resize — unary-RPC data plane. Used by the
+/// EasyNet backend's PTYDriver before the WS bidi optimisation.
+/// Mutually exclusive with pty_attach_ability per session: the
+/// reader thread takes one fd dup, attach takes another, and two
+/// readers on the same PTY race for incoming bytes.
+pub mod pty_io_ability;
+/// fleet.pty_session_create / fleet.pty_session_close — control-
+/// plane lifecycle for PtyService sessions. attach (above) is
+/// the data-plane sibling.
+pub mod pty_lifecycle_ability;
+/// Per-ability real-invocation tests. Each `#[test]` exercises
+/// one published ability through the live dispatcher with
+/// realistic args (not `{}`). This is the test layer that
+/// validates the full chain: registry lookup + handler
+/// invocation + service interaction + response shape. See the
+/// file's preamble for what "real" does and does NOT cover.
+#[cfg(test)]
+mod real_invoke_tests;
+pub mod schedule_ability;
+pub mod session_ability;
+/// shell_executor — backs `[exec] kind = "shell"` on agent-authored
+/// ability manifests. Distinct from `shell_run_ability` (the
+/// daemon-owned `shell.run` baseline locomotion ability): this
+/// module is invoked from the dispatch path when a manifest pins a
+/// concrete argv contract, bypassing chat translation. See module
+/// docstring for substitution model + injection-safety argument.
+pub mod shell_executor;
 /// shell.run — the shell-interpreted member of the Baseline
 /// Locomotion Profile. Takes a bash command STRING (with pipes
 /// / redirects / glob), runs it through the AXIOM Tier 2.5
@@ -83,41 +186,8 @@ pub mod process_exec_ability;
 /// `support/shellguard/`, this module is the thin
 /// agent-dispatch wiring on top.
 pub mod shell_run_ability;
-/// `{{ var }}` template substitution shared by every executor that
-/// consumes `[exec]`-bound ability manifests (shell argv, EAL
-/// source, …). Pulled out so the substitution model — including
-/// missing-arg / unclosed-brace error shapes — has one canonical
-/// implementation and one test surface.
-pub mod template;
-/// shell_executor — backs `[exec] kind = "shell"` on agent-authored
-/// ability manifests. Distinct from `shell_run_ability` (the
-/// daemon-owned `shell.run` baseline locomotion ability): this
-/// module is invoked from the dispatch path when a manifest pins a
-/// concrete argv contract, bypassing chat translation. See module
-/// docstring for substitution model + injection-safety argument.
-pub mod shell_executor;
-/// eal_executor — backs `[exec] kind = "eal"` on agent-authored
-/// ability manifests. Lets an ability's implementation be a small
-/// EAL program that composes other abilities. Sibling of
-/// shell_executor; both consume `template` for `{{ var }}`
-/// substitution before dispatching.
-pub mod eal_executor;
-/// http.request — outbound HTTP client. Last member of the
-/// Baseline Locomotion Profile. Issues one request per call,
-/// captures status / headers / body up to a cap, redacts
-/// auth-bearing headers (Authorization, Cookie, X-API-Key, …)
-/// from every receipt the auditor may persist. Schemes
-/// restricted to http / https; CR/LF in header values
-/// rejected; redirect / timeout / body caps enforced.
-pub mod http_executor;
-pub mod http_request_ability;
-/// ability.publish + ability.unpublish — root meta-abilities that
-/// let a curator session (spawned by mission.think) materialise a
-/// new ability into a registered agent's abilities/ directory, or
-/// delete an existing one. Sibling of skill.publish (Phase 3); the
-/// two surfaces are how judge-validated experience is sunk back
-/// into the ability/skill ontology.
-pub mod ability_publish_ability;
+pub mod skill_ability;
+pub mod skill_install_ability;
 /// skill.publish + skill.unpublish + skill.list — sibling of
 /// ability_publish_ability. Where ability.publish sinks a
 /// generally-useful experience as a published ability (device-
@@ -125,92 +195,23 @@ pub mod ability_publish_ability;
 /// skill (lives in the agent's own skill pool). The judge's
 /// `value_kind` field picks between the two.
 pub mod skill_publish_ability;
+/// `{{ var }}` template substitution shared by every executor that
+/// consumes `[exec]`-bound ability manifests (shell argv, EAL
+/// source, …). Pulled out so the substitution model — including
+/// missing-arg / unclosed-brace error shapes — has one canonical
+/// implementation and one test surface.
+pub mod template;
 /// mission.think — long-running worker+judge orchestration. Lets a
 /// task outgrow Claude Code's per-session ~200-step limit by
 /// resuming the worker's session_id across cycles, with an
 /// independent judge session emitting a memory-classification
 /// verdict per cycle (consumed by the Phase 5 curator).
 pub mod think_ability;
-pub mod context_loaders;
-pub mod discover_ability;
-pub mod discuss_ability;
-pub mod invoke_ability;
-pub mod fleet_list_agents_ability;
-/// fleet.* device + ability operations: list_nodes, describe_node,
-/// remove_node, deploy_ability, uninstall_ability, exec_remote,
-/// register_self, deregister_self. The CLI side
-/// (`easynet device …`, `easynet ability deploy / uninstall / exec`)
-/// reaches these through `support::local_invoke::invoke_local_ability`,
-/// the same path every other CLI surface uses.
-pub mod fleet_ops_ability;
 /// voice.* call signaling abilities backing the `easynet call …`
 /// subcommand surface (create, show, join, leave, end, watch,
 /// report_metrics). v1 stores call state in-process; persistence
 /// + federation fan-out land with the RFC-006 follow-up.
 pub mod voice_call_ability;
-/// mission.discuss / mission.think — round-robin and think-act-
-/// observe orchestration abilities. The `easynet mission discuss`
-/// and `easynet mission think` CLI subcommands invoke these,
-/// keeping a single ability-only path for both EAL programs and
-/// the operator CLI.
-pub mod orchestration_ability;
-pub mod loop_ability;
-pub mod mcp_bridge_ability;
-pub mod mcp_client_ability;
-pub mod meta_ability;
-pub mod mission_ability;
-pub mod network_health_ability;
-pub mod policy_ability;
-pub mod permission_ability;
-pub mod ping;
-pub mod profiles;
-/// fleet.pty_session_attach — interactive bidirectional terminal
-/// stream over InvokeBidi. The seventh and final member of the
-/// AXIOM Tier 2.5 Baseline Locomotion Profile (the streaming
-/// counterpart to process.exec / shell.run). See
-/// `runtime/execution/pty/` for the underlying PtyService.
-pub mod admin_status_ability;
-pub mod fleet_lifecycle_ability;
-pub mod pty_attach_ability;
-/// fleet.pty_session_create / fleet.pty_session_close — control-
-/// plane lifecycle for PtyService sessions. attach (above) is
-/// the data-plane sibling.
-pub mod pty_lifecycle_ability;
-/// fleet.pty_session_input / fleet.pty_session_read /
-/// fleet.pty_session_resize — unary-RPC data plane. Used by the
-/// EasyNet backend's PTYDriver before the WS bidi optimisation.
-/// Mutually exclusive with pty_attach_ability per session: the
-/// reader thread takes one fd dup, attach takes another, and two
-/// readers on the same PTY race for incoming bytes.
-pub mod pty_io_ability;
-/// fleet.file_transfer — bidirectional chunked file upload /
-/// download. Pairs with the EasyNet backend's
-/// /api/v1/files/{upload,download} HTTP routes; one signed
-/// InvokeBidi session per transfer. Atomic write (staging +
-/// rename), SHA-256 over content, 1 GiB byte cap.
-pub mod file_transfer_ability;
-pub mod schedule_ability;
-pub mod session_ability;
-pub mod skill_ability;
-pub mod skill_install_ability;
-/// RFC-005 v3.2 A1–A8 — eight physical-channel media abilities
-/// (mic.subscribe, camera.subscribe/snapshot, screen.subscribe/
-/// snapshot, speaker.publish, voice.subscribe, voice.transcribe).
-/// PR2 ships every handler as a stub that enforces
-/// INV-SUBJECT-ENVELOPE; PR3 / PR3a swap individual stubs out for
-/// real implementations.
-pub mod media_abilities;
-/// RFC-005 v3.2 A9 — `meta.list_resources`. Resource discovery
-/// surface for the eight media abilities above. Reads
-/// `~/.easynet/resources.json` via `persistence::resources` and
-/// projects to the wire shape; no device backend needed, so it
-/// ships fully working.
-pub mod list_resources_ability;
-/// Real (non-stub) media handlers, swapped in over the
-/// `media_abilities` stubs one ability at a time. PR3a delivers
-/// the `camera.snapshot` vertical slice with a deterministic
-/// synthetic backend; PR3 lands cpal/nokhwa/screen.
-pub mod media;
 
 use std::sync::Arc;
 
@@ -493,14 +494,10 @@ pub fn build_registry_with_services(
     if std::env::var("EASYNET_KEYRING_DISABLE").is_err() {
         match init_keyring_for_daemon() {
             Ok(handle) => {
-                crate::runtime::keyring::abilities::register_for_owner(
-                    &mut reg, "<self>", handle,
-                );
+                crate::runtime::keyring::abilities::register_for_owner(&mut reg, "<self>", handle);
             }
             Err(e) => {
-                eprintln!(
-                    "warn: keyring auto-init failed; <self>.keyring.* unavailable: {e}"
-                );
+                eprintln!("warn: keyring auto-init failed; <self>.keyring.* unavailable: {e}");
             }
         }
     }
@@ -551,20 +548,20 @@ pub fn build_registry_with_services(
                 .join(".easynet")
         })
         .join("mcp_clients.json");
-    let mcp_client_svc = match crate::runtime::execution::mcp_client::McpClientService::from_path(
-        &mcp_clients_path,
-    ) {
-        Ok(svc) => Arc::new(svc),
-        Err(e) => {
-            eprintln!(
-                "system::build_registry_with_services: failed to load {}: {e}; \
+    let mcp_client_svc =
+        match crate::runtime::execution::mcp_client::McpClientService::from_path(&mcp_clients_path)
+        {
+            Ok(svc) => Arc::new(svc),
+            Err(e) => {
+                eprintln!(
+                    "system::build_registry_with_services: failed to load {}: {e}; \
                  falling back to empty MCP client service (no outbound MCP \
                  servers configured)",
-                mcp_clients_path.display()
-            );
-            Arc::new(crate::runtime::execution::mcp_client::McpClientService::new())
-        }
-    };
+                    mcp_clients_path.display()
+                );
+                Arc::new(crate::runtime::execution::mcp_client::McpClientService::new())
+            }
+        };
     mcp_client_ability::register(&mut reg, mcp_client_svc);
     // fleet.list_agents — operational view of registered LLM
     // sub-agents. Cheap-row projection (name, runtime, model, label);
@@ -619,7 +616,8 @@ pub fn build_registry_with_services(
 ///
 /// Returns `Err` only on filesystem / decode / KDF errors; absence
 /// of an existing file is the happy path (creates a fresh ring).
-fn init_keyring_for_daemon() -> anyhow::Result<std::sync::Arc<crate::runtime::keyring::KeyringHandle>> {
+fn init_keyring_for_daemon(
+) -> anyhow::Result<std::sync::Arc<crate::runtime::keyring::KeyringHandle>> {
     use crate::runtime::keyring::store::default_keyring_path;
     use crate::runtime::keyring::KeyringHandle;
     let path = std::env::var("EASYNET_KEYRING_PATH")
@@ -634,7 +632,9 @@ fn init_keyring_for_daemon() -> anyhow::Result<std::sync::Arc<crate::runtime::ke
         // boundary anyway. RFC-002 §3.2.
         "easynet-local-default-passphrase-v1".into()
     });
-    Ok(std::sync::Arc::new(KeyringHandle::open_or_create(path, &pass)?))
+    Ok(std::sync::Arc::new(KeyringHandle::open_or_create(
+        path, &pass,
+    )?))
 }
 
 /// Exists so `bin/easynet-daemon.rs` does not have to reach into the
@@ -658,9 +658,8 @@ pub fn build_registry_for_daemon(
             AgentRegistry::default()
         }
     };
-    let loaders = loaders.unwrap_or_else(|| {
-        Arc::new(context_loaders::default_loaders(Arc::clone(&schedule)))
-    });
+    let loaders = loaders
+        .unwrap_or_else(|| Arc::new(context_loaders::default_loaders(Arc::clone(&schedule))));
     build_registry_with_services(
         sessions, perms, discuss, schedule, loop_svc, &agents, loaders,
     )
@@ -823,12 +822,12 @@ pub fn description_for(name: &str) -> &'static str {
         // the projection here is one Option lookup, no per-name
         // arm. A 9th media ability requires touching only that
         // table; this arm picks the new name up automatically.
-        n if media_abilities::description(n).is_some() => {
-            media_abilities::description(n).unwrap()
-        }
+        n if media_abilities::description(n).is_some() => media_abilities::description(n).unwrap(),
         // RFC-005 v3.2 A9 — meta.list_resources. Lives in its own
         // module because the handler is fully real (not a stub).
-        list_resources_ability::ABILITY_META_LIST_RESOURCES => list_resources_ability::description(),
+        list_resources_ability::ABILITY_META_LIST_RESOURCES => {
+            list_resources_ability::description()
+        }
         _ if name.ends_with(".chat") => "Send a chat prompt to the locally-installed agent.",
         _ => "(system ability)",
     }
@@ -931,7 +930,9 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         n if media_abilities::input_schema(n).is_some() => {
             media_abilities::input_schema(n).unwrap()
         }
-        list_resources_ability::ABILITY_META_LIST_RESOURCES => list_resources_ability::input_schema(),
+        list_resources_ability::ABILITY_META_LIST_RESOURCES => {
+            list_resources_ability::input_schema()
+        }
         _ => serde_json::json!({ "type": "object" }),
     }
 }
@@ -1197,7 +1198,11 @@ mod tests {
         // mcp.bridge.list_tools, and a2a.bridge.list_skills MUST all
         // classify as Introspection. A regression that moved one of
         // them to a different layer would fragment the discovery story.
-        for name in ["meta.list_abilities", "mcp.bridge.list_tools", "a2a.bridge.list_skills"] {
+        for name in [
+            "meta.list_abilities",
+            "mcp.bridge.list_tools",
+            "a2a.bridge.list_skills",
+        ] {
             assert_eq!(
                 classify_ability(name),
                 Some(AbilityLayer::Introspection),
@@ -1254,11 +1259,8 @@ mod tests {
                 }
             };
             let _ = rfc006_for(&meta.name);
-            let expected = ability_toml::render_ability_toml(
-                &meta.name,
-                meta.description,
-                &meta.input_schema,
-            );
+            let expected =
+                ability_toml::render_ability_toml(&meta.name, meta.description, &meta.input_schema);
             if on_disk != expected {
                 drift.push(meta.name.clone());
             }
@@ -1347,9 +1349,7 @@ mod tests {
     fn every_rpc_ability_actually_dispatches_through_to_its_handler() {
         use crate::runtime::ability_dispatch::AbilityDispatcher;
         use crate::runtime::gateway::NoopGateway;
-        use crate::runtime::invocation_target::{
-            CallMode, InvocationTarget, TargetScope,
-        };
+        use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
         let reg = build_registry();
         let dispatcher = AbilityDispatcher::new(Arc::clone(&reg), Arc::new(NoopGateway::new()));
@@ -1425,13 +1425,16 @@ mod tests {
         // ability invisible to the dispatcher even though the
         // module compiles. This test catches that.
         let reg = build_registry();
-        let names: std::collections::BTreeSet<String> =
-            reg.list_abilities().into_iter().collect();
+        let names: std::collections::BTreeSet<String> = reg.list_abilities().into_iter().collect();
         let must_have = [
             // Filesystem half
-            "fs.read", "fs.write", "fs.list", "fs.edit",
+            "fs.read",
+            "fs.write",
+            "fs.list",
+            "fs.edit",
             // Execution half
-            "process.exec", "shell.run",
+            "process.exec",
+            "shell.run",
             // Outbound network
             "http.request",
             // Interactive PTY trio

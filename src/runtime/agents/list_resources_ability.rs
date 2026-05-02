@@ -44,9 +44,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::persistence::resources::{
-    self, filter_by_kinds, ResourceEntry, ResourceType,
-};
+use crate::persistence::resources::{self, filter_by_kinds, ResourceEntry, ResourceType};
 use crate::runtime::ability_descriptor::AbilityClass;
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 use crate::runtime::agents::ability_toml::Rfc006Metadata;
@@ -226,8 +224,13 @@ mod tests {
         // returns [] and the operator concludes "no cameras" — when
         // the real cause is the typo. The error message must name
         // the offending value.
-        let err = parse_kinds(Some(&json!(["cammera"]))).unwrap_err().to_string();
-        assert!(err.contains("cammera"), "error must name the bad value: {err}");
+        let err = parse_kinds(Some(&json!(["cammera"])))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("cammera"),
+            "error must name the bad value: {err}"
+        );
     }
 
     #[test]
@@ -238,7 +241,9 @@ mod tests {
 
     #[test]
     fn parse_kinds_rejects_non_string_entries() {
-        let err = parse_kinds(Some(&json!([1, 2, 3]))).unwrap_err().to_string();
+        let err = parse_kinds(Some(&json!([1, 2, 3])))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("must be strings"), "got {err}");
     }
 

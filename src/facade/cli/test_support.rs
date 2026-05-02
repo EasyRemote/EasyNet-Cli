@@ -62,8 +62,7 @@ impl HomeGuard {
         // lock-release-to-acquire latency. Counter eliminates the
         // collision class entirely; was the root cause of the
         // intermittent registry::agents test flake.
-        static TEMPDIR_SEQ: std::sync::atomic::AtomicU64 =
-            std::sync::atomic::AtomicU64::new(0);
+        static TEMPDIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let pid = std::process::id();
         let seq = TEMPDIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let temp_dir = std::env::temp_dir().join(format!("easynet-test-{pid}-{seq}"));

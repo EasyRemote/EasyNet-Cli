@@ -345,7 +345,10 @@ mod tests {
 
         // v2 envelope: `{"agents": [...]}`, not a bare array.
         let obj = parsed.as_object().expect("must be a JSON object envelope");
-        assert!(obj.contains_key("agents"), "envelope must have `agents` key");
+        assert!(
+            obj.contains_key("agents"),
+            "envelope must have `agents` key"
+        );
         let arr = obj["agents"].as_array().expect("`agents` must be an array");
         assert_eq!(arr.len(), 2);
         // BTreeMap ordering → claude comes before codex.
@@ -456,7 +459,10 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(raw).unwrap();
         let skill = &parsed["agents"][0]["skills"][0];
         assert!(skill["name"].is_string(), "skill.name must be string");
-        assert!(skill["description"].is_string(), "skill.description must be string");
+        assert!(
+            skill["description"].is_string(),
+            "skill.description must be string"
+        );
         assert_eq!(
             skill["has_input_schema"],
             serde_json::Value::Bool(true),
@@ -466,7 +472,12 @@ mod tests {
         // would re-trigger the 4 KiB Hub cap regression. A future
         // PR that wants to ship full schemas to peers should add a
         // separate federation API, not re-inflate the label.
-        for forbidden in ["input_schema", "output_schema", "timeout_seconds", "parameters"] {
+        for forbidden in [
+            "input_schema",
+            "output_schema",
+            "timeout_seconds",
+            "parameters",
+        ] {
             assert!(
                 skill.get(forbidden).is_none(),
                 "v2 thin payload must not carry `{forbidden}` (would blow the 4 KiB Hub label cap)"
@@ -530,7 +541,9 @@ mod tests {
         let mut alice = entry(AgentType::ClaudeCode, Some("claude-opus-4-7"));
         alice.label = Some("code-review assistant".into());
         registry.agents.insert("alice".into(), alice);
-        registry.agents.insert("bob".into(), entry(AgentType::Codex, None));
+        registry
+            .agents
+            .insert("bob".into(), entry(AgentType::Codex, None));
 
         let labels = build(&registry, "host").expect("non-empty registry must yield Some");
         let produced = labels.get("a2a.agents_json").expect("a2a.agents_json");
@@ -547,10 +560,10 @@ mod tests {
             .join("golden.json");
         let fixture_raw = std::fs::read_to_string(&fixture_path)
             .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture_path.display()));
-        let fixture_val: serde_json::Value = serde_json::from_str(&fixture_raw)
-            .expect("fixture is valid JSON");
-        let produced_val: serde_json::Value = serde_json::from_str(produced)
-            .expect("produced label is valid JSON");
+        let fixture_val: serde_json::Value =
+            serde_json::from_str(&fixture_raw).expect("fixture is valid JSON");
+        let produced_val: serde_json::Value =
+            serde_json::from_str(produced).expect("produced label is valid JSON");
 
         if fixture_val != produced_val {
             // Print both on failure so the diff is immediately
@@ -578,13 +591,7 @@ mod tests {
         // relationship here so a future loosening of the validator
         // forces a corresponding hardening of the skill constructor.
         use crate::registry::agents::validate_agent_name;
-        for bad in [
-            r#"claude""#,
-            "claude\n",
-            "claude\t",
-            "agent.name",
-            "Agent",
-        ] {
+        for bad in [r#"claude""#, "claude\n", "claude\t", "agent.name", "Agent"] {
             assert!(
                 validate_agent_name(bad).is_err(),
                 "agent name {bad:?} must be rejected by the registry — \
@@ -627,10 +634,14 @@ mod label_size_guard {
 
     fn registry_with_two_agents() -> AgentRegistry {
         let mut r = AgentRegistry::default();
-        r.agents
-            .insert("claude".into(), AgentEntry::new(AgentType::ClaudeCode, Some("sonnet".into())));
-        r.agents
-            .insert("codex".into(), AgentEntry::new(AgentType::Codex, Some("gpt-5.2".into())));
+        r.agents.insert(
+            "claude".into(),
+            AgentEntry::new(AgentType::ClaudeCode, Some("sonnet".into())),
+        );
+        r.agents.insert(
+            "codex".into(),
+            AgentEntry::new(AgentType::Codex, Some("gpt-5.2".into())),
+        );
         r
     }
 
@@ -642,8 +653,8 @@ mod label_size_guard {
         // typical install. Pin the two-agent shape so any new
         // ability or schema addition is checked against the same
         // baseline.
-        let labels = build(&registry_with_two_agents(), "host")
-            .expect("non-empty registry must yield Some");
+        let labels =
+            build(&registry_with_two_agents(), "host").expect("non-empty registry must yield Some");
         for (k, v) in &labels {
             assert!(
                 v.len() <= MAX_LABEL_BYTES,

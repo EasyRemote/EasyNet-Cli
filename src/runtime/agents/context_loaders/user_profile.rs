@@ -117,11 +117,7 @@ impl ContextLoader for UserProfileLoader {
         "user_profile"
     }
 
-    fn load(
-        &self,
-        _agent_name: &str,
-        _session_id: &str,
-    ) -> anyhow::Result<Option<String>> {
+    fn load(&self, _agent_name: &str, _session_id: &str) -> anyhow::Result<Option<String>> {
         let path = profile_path();
         // NotFound is the steady state for users who haven't written a
         // profile yet — return None silently rather than logging on

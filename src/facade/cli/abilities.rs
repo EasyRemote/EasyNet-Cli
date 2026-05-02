@@ -127,10 +127,7 @@ pub fn run(args: AbilitiesArgs) -> anyhow::Result<()> {
     // whether an ability runs deterministically or via the LLM.
     let mut table = output::table(&["Ability", "Owner", "Kind", "Description"]);
     for entry in &filtered {
-        let name = entry
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or("-");
+        let name = entry.get("name").and_then(Value::as_str).unwrap_or("-");
         let (owner, _verb) = split_qualified(name);
         let kind = entry
             .get("fulfilled_by")
@@ -357,11 +354,7 @@ mod tests {
 
     #[test]
     fn filter_by_double_star_glob_crosses_dot_boundaries() {
-        let xs = vec![
-            entry("claude.a.b.c"),
-            entry("claude.x"),
-            entry("codex.x"),
-        ];
+        let xs = vec![entry("claude.a.b.c"), entry("claude.x"), entry("codex.x")];
         let out = filter_abilities(xs, None, "claude.**").unwrap();
         let names: Vec<_> = out
             .iter()

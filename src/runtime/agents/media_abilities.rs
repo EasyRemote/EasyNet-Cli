@@ -605,8 +605,12 @@ mod tests {
         // that reorders `ABILITIES` shouldn't silently break this
         // test by swapping which schema each index points to.
         let schema = |name| input_schema(name).expect("media schema");
-        assert!(schema(ABILITY_CAMERA_SUBSCRIBE)["properties"].get("region").is_none());
-        assert!(schema(ABILITY_CAMERA_SNAPSHOT)["properties"].get("region").is_none());
+        assert!(schema(ABILITY_CAMERA_SUBSCRIBE)["properties"]
+            .get("region")
+            .is_none());
+        assert!(schema(ABILITY_CAMERA_SNAPSHOT)["properties"]
+            .get("region")
+            .is_none());
         assert!(schema(ABILITY_SCREEN_SUBSCRIBE)["properties"]["region"].is_object());
         assert!(schema(ABILITY_SCREEN_SNAPSHOT)["properties"]["region"].is_object());
     }

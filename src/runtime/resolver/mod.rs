@@ -85,8 +85,7 @@ impl ResolverConfig {
                 .filter(|s| !s.is_empty())
                 .collect();
         }
-        if let Some(path) = dirs::config_dir().map(|d| d.join("easynet").join("rendezvous.json"))
-        {
+        if let Some(path) = dirs::config_dir().map(|d| d.join("easynet").join("rendezvous.json")) {
             if path.exists() {
                 if let Ok(bytes) = std::fs::read(&path) {
                     if let Ok(parsed) = serde_json::from_slice::<ResolverConfig>(&bytes) {
@@ -205,12 +204,10 @@ mod tests {
     fn cfg() -> ResolverConfig {
         ResolverConfig {
             easynet_rendezvous: vec!["http://rendezvous.easynet:7700".into()],
-            static_hubs: [
-                (
-                    "acme.com".to_string(),
-                    vec!["http://acme-hub.acme.com:7700".into()],
-                ),
-            ]
+            static_hubs: [(
+                "acme.com".to_string(),
+                vec!["http://acme-hub.acme.com:7700".into()],
+            )]
             .into_iter()
             .collect(),
         }

@@ -332,11 +332,7 @@ additionalProperties = false
 
     #[test]
     fn escapes_newline_in_description() {
-        let toml = render_ability_toml(
-            "x",
-            "line1\nline2",
-            &json!({"type":"object"}),
-        );
+        let toml = render_ability_toml("x", "line1\nline2", &json!({"type":"object"}));
         assert!(toml.contains("description = \"line1\\nline2\""));
     }
 

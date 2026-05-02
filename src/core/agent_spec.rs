@@ -313,10 +313,7 @@ impl AgentSpec {
             anyhow::bail!("agent.toml: `name` is empty");
         }
         if n.len() > 63 {
-            anyhow::bail!(
-                "agent.toml: `name` is too long ({} chars; max 63)",
-                n.len()
-            );
+            anyhow::bail!("agent.toml: `name` is too long ({} chars; max 63)", n.len());
         }
         if !n
             .chars()
@@ -485,7 +482,10 @@ mod tests {
         // future kebab-vs-snake flip trips the test loudly.
         assert_eq!(RuntimeKind::ClaudeCode.as_wire_str(), "claude-code");
         assert_eq!(RuntimeKind::Codex.as_wire_str(), "codex");
-        assert_eq!(RuntimeKind::CodexAppServer.as_wire_str(), "codex-app-server");
+        assert_eq!(
+            RuntimeKind::CodexAppServer.as_wire_str(),
+            "codex-app-server"
+        );
     }
 
     // ── failure path ────────────────────────────────────────────────────────
@@ -526,8 +526,10 @@ mod tests {
             runtime = "claude_code"
         "#;
         let err = AgentSpec::from_toml_str(src).expect_err("typo must not be accepted");
-        assert!(format!("{err}").to_lowercase().contains("runtime")
-            || format!("{err}").to_lowercase().contains("variant"));
+        assert!(
+            format!("{err}").to_lowercase().contains("runtime")
+                || format!("{err}").to_lowercase().contains("variant")
+        );
     }
 
     #[test]
@@ -606,9 +608,7 @@ mod tests {
             schema_version: None,
             name: "alice".into(),
             runtime: RuntimeKind::ClaudeCode,
-            description: Some(
-                "高级代码审查员 — 对 Rust / TypeScript 项目尤其严格。🔍".into(),
-            ),
+            description: Some("高级代码审查员 — 对 Rust / TypeScript 项目尤其严格。🔍".into()),
             model: None,
             mode: None,
             system_prompt: None,
@@ -671,9 +671,7 @@ mod tests {
         // guess.
         let mut s = AgentSpec::new("alice", RuntimeKind::ClaudeCode);
         s.timeout_secs = Some(0);
-        let err = s
-            .validate()
-            .expect_err("timeout_secs=0 must be rejected");
+        let err = s.validate().expect_err("timeout_secs=0 must be rejected");
         let msg = format!("{err}");
         assert!(
             msg.contains("timeout_secs"),
@@ -695,9 +693,8 @@ mod tests {
         for tv in [None, Some(1), Some(60), Some(86_400)] {
             let mut s = AgentSpec::new("alice", RuntimeKind::ClaudeCode);
             s.timeout_secs = tv;
-            s.validate().unwrap_or_else(|e| {
-                panic!("timeout_secs={tv:?} must be accepted, got error: {e}")
-            });
+            s.validate()
+                .unwrap_or_else(|e| panic!("timeout_secs={tv:?} must be accepted, got error: {e}"));
             let toml = s.to_toml_string().unwrap();
             let back = AgentSpec::from_toml_str(&toml).unwrap();
             assert_eq!(back.timeout_secs, tv);

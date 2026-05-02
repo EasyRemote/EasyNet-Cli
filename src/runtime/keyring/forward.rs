@@ -41,12 +41,7 @@ pub trait CliForwardInvoker: Send + Sync {
     /// (the same Value the local handler would have returned). On
     /// hub-side typed failure (AXON_TARGET_OFFLINE etc.) returns
     /// Err with the typed code in the message string.
-    fn invoke(
-        &self,
-        target_uri: &str,
-        ability: &str,
-        args: Value,
-    ) -> anyhow::Result<Value>;
+    fn invoke(&self, target_uri: &str, ability: &str, args: Value) -> anyhow::Result<Value>;
 }
 
 static FORWARD_INVOKER: OnceLock<Arc<dyn CliForwardInvoker>> = OnceLock::new();
@@ -85,9 +80,7 @@ pub fn is_federation_target(target: &str) -> bool {
 /// `test-support` feature when we want a stricter compile-time gate.
 pub struct TestSinkInvoker;
 
-type TestRouter = Box<
-    dyn Fn(&str, &str, Value) -> anyhow::Result<Value> + Send + Sync,
->;
+type TestRouter = Box<dyn Fn(&str, &str, Value) -> anyhow::Result<Value> + Send + Sync>;
 
 type TestKnower = Box<dyn Fn(&str) -> bool + Send + Sync>;
 
@@ -102,12 +95,7 @@ impl CliForwardInvoker for TestSinkInvoker {
             None => false,
         }
     }
-    fn invoke(
-        &self,
-        target_uri: &str,
-        ability: &str,
-        args: Value,
-    ) -> anyhow::Result<Value> {
+    fn invoke(&self, target_uri: &str, ability: &str, args: Value) -> anyhow::Result<Value> {
         let lock = TEST_ROUTER.get_or_init(|| std::sync::Mutex::new(None));
         let g = lock.lock().unwrap();
         match g.as_ref() {
@@ -165,7 +153,9 @@ mod tests {
     #[test]
     fn detects_federation_uras() {
         assert!(is_federation_target("easynet:///r/prv/reg/agent.foo"));
-        assert!(is_federation_target("easynet:///r/silan.localhost/agent/01HXYZ"));
+        assert!(is_federation_target(
+            "easynet:///r/silan.localhost/agent/01HXYZ"
+        ));
         assert!(!is_federation_target("foo.bar"));
         assert!(!is_federation_target("local-only"));
         assert!(!is_federation_target(""));

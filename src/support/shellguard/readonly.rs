@@ -60,41 +60,105 @@ use crate::support::shellguard::ast::SimpleCommand;
 /// to file" mode (e.g. `cp`, `mv`) are deliberately absent.
 const READ_ONLY_BUILTINS: &[&str] = &[
     // Inspection
-    "ls", "ll", "la",
-    "cat", "tac", "zcat", "bzcat", "xzcat", "zstdcat",
-    "head", "tail",
-    "less", "more",
+    "ls",
+    "ll",
+    "la",
+    "cat",
+    "tac",
+    "zcat",
+    "bzcat",
+    "xzcat",
+    "zstdcat",
+    "head",
+    "tail",
+    "less",
+    "more",
     // Search
-    "grep", "egrep", "fgrep", "rg", "ripgrep", "ack", "ag",
+    "grep",
+    "egrep",
+    "fgrep",
+    "rg",
+    "ripgrep",
+    "ack",
+    "ag",
     // Statistics
-    "wc", "du", "df", "stat", "file",
+    "wc",
+    "du",
+    "df",
+    "stat",
+    "file",
     // Pure transforms (read-only on stdin)
-    "tr", "cut", "sort", "uniq", "rev", "fold", "expand", "unexpand",
-    "comm", "diff", "cmp", "join", "paste",
-    "od", "xxd", "hexdump", "strings",
+    "tr",
+    "cut",
+    "sort",
+    "uniq",
+    "rev",
+    "fold",
+    "expand",
+    "unexpand",
+    "comm",
+    "diff",
+    "cmp",
+    "join",
+    "paste",
+    "od",
+    "xxd",
+    "hexdump",
+    "strings",
     // Encoding
-    "base64", "uuencode", "uudecode",
+    "base64",
+    "uuencode",
+    "uudecode",
     // Hashing
-    "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum",
-    "shasum", "b2sum",
+    "md5sum",
+    "sha1sum",
+    "sha256sum",
+    "sha512sum",
+    "cksum",
+    "shasum",
+    "b2sum",
     // Archive inspection
-    "tar", "zip", "unzip", // tar is dual-use; we only allow when no `-c` / `--create`
+    "tar",
+    "zip",
+    "unzip", // tar is dual-use; we only allow when no `-c` / `--create`
     // Process inspection
-    "ps", "top", "htop", "free", "uptime", "uname", "id", "whoami",
-    "pwd", "hostname", "date",
+    "ps",
+    "top",
+    "htop",
+    "free",
+    "uptime",
+    "uname",
+    "id",
+    "whoami",
+    "pwd",
+    "hostname",
+    "date",
     // Filesystem inspection
-    "find", "locate", "which", "type", "command",
+    "find",
+    "locate",
+    "which",
+    "type",
+    "command",
     // Text formatting
-    "printf", "echo", "yes", "true", "false", "test",
+    "printf",
+    "echo",
+    "yes",
+    "true",
+    "false",
+    "test",
     // jq is read-only on inputs (the SECURITY stage already
     // catches `system(...)` and `@sh`; here we accept the
     // common case).
-    "jq", "yq",
+    "jq",
+    "yq",
     // sed / awk: read-only when invoked WITHOUT -i / -i.bak
     // (in-place edit). The flag check below rejects the
     // write-mode invocation; argv[0] match here lets the
     // read-only invocation through.
-    "sed", "awk", "gawk", "mawk",
+    "sed",
+    "awk",
+    "gawk",
+    "mawk",
     // git (subcommand-gated below)
     "git",
 ];
@@ -102,10 +166,18 @@ const READ_ONLY_BUILTINS: &[&str] = &[
 /// Read-only `git` subcommands. `git status` is allowed,
 /// `git push` is not. argv[1] match.
 const GIT_READ_ONLY_SUBCOMMANDS: &[&str] = &[
-    "status", "log", "diff", "show", "blame", "branch",
-    "rev-parse", "ls-files", "ls-tree", "describe",
-    "config", // config --get is read-only; --set we reject below
-    "stash", // stash list/show only; we reject other stash ops
+    "status",
+    "log",
+    "diff",
+    "show",
+    "blame",
+    "branch",
+    "rev-parse",
+    "ls-files",
+    "ls-tree",
+    "describe",
+    "config",   // config --get is read-only; --set we reject below
+    "stash",    // stash list/show only; we reject other stash ops
     "worktree", // worktree list only
     "remote",   // remote -v / remote show only
     "tag",      // tag -l (list); -d (delete) we reject
@@ -115,8 +187,7 @@ const GIT_READ_ONLY_SUBCOMMANDS: &[&str] = &[
 
 /// `find` flags that mutate state.
 const FIND_WRITE_FLAGS: &[&str] = &[
-    "-delete", "-exec", "-execdir", "-ok", "-okdir",
-    "-fprint", "-fprintf", "-fls", "-fprint0",
+    "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf", "-fls", "-fprint0",
 ];
 
 /// `awk` / `sed` -i (in-place edit) flags. Any argv element
@@ -210,7 +281,7 @@ pub fn evaluate(commands: &[SimpleCommand]) -> ReadOnlyVerdict {
                             | "--rename-section"
                             | "--remove-section"
                             | "--edit"
-                    ) || (!arg.starts_with('-') && false /* setting form is `key value` — hard to detect statically; skip */)
+                    ) || (!arg.starts_with('-') && false/* setting form is `key value` — hard to detect statically; skip */)
                     {
                         return ReadOnlyVerdict::Rejected {
                             argv_index: idx,
@@ -255,7 +326,10 @@ pub fn evaluate(commands: &[SimpleCommand]) -> ReadOnlyVerdict {
             // intent; defer to pathconstraints). For
             // strictest read-only, treat tar as inspect-only.
             for arg in cmd.argv.iter().skip(1) {
-                if matches!(arg.as_str(), "-c" | "--create" | "-x" | "--extract" | "-u" | "--update") {
+                if matches!(
+                    arg.as_str(),
+                    "-c" | "--create" | "-x" | "--extract" | "-u" | "--update"
+                ) {
                     return ReadOnlyVerdict::Rejected {
                         argv_index: idx,
                         reason: ReadOnlyRejection::WriteFlag {
@@ -330,12 +404,18 @@ mod tests {
 
     #[test]
     fn cat_etc_passwd_passes() {
-        assert_eq!(evaluate(&[cmd(&["cat", "/etc/passwd"])]), ReadOnlyVerdict::Ok);
+        assert_eq!(
+            evaluate(&[cmd(&["cat", "/etc/passwd"])]),
+            ReadOnlyVerdict::Ok
+        );
     }
 
     #[test]
     fn grep_passes() {
-        assert_eq!(evaluate(&[cmd(&["grep", "TODO", "src"])]), ReadOnlyVerdict::Ok);
+        assert_eq!(
+            evaluate(&[cmd(&["grep", "TODO", "src"])]),
+            ReadOnlyVerdict::Ok
+        );
     }
 
     #[test]

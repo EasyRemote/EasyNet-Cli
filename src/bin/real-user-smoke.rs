@@ -184,10 +184,7 @@ fn main() -> anyhow::Result<()> {
     println!("\n=== shell.run REJECTION: 'rm -rf /tmp/x' without destructive ack ===");
     let resp = rt.block_on(async {
         tokio::task::spawn_blocking(|| {
-            d().execute_rpc(target(
-                "shell.run",
-                json!({"command": "rm /tmp/x"}),
-            ))
+            d().execute_rpc(target("shell.run", json!({"command": "rm /tmp/x"})))
         })
         .await
         .unwrap()
@@ -210,7 +207,9 @@ fn main() -> anyhow::Result<()> {
         //    facade::cli::mission_runs::root_dir() returns:
         //    `$HOME/.easynet/missions/runs/`.
         let mission_id = format!("smoke-{}", std::process::id());
-        let home = std::env::var("HOME").map(std::path::PathBuf::from).unwrap_or_default();
+        let home = std::env::var("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default();
         let mission_root = home.join(".easynet").join("missions").join("runs");
         let mission_dir = mission_root.join(&mission_id);
         std::fs::create_dir_all(&mission_dir)?;
@@ -229,9 +228,7 @@ fn main() -> anyhow::Result<()> {
             Some(Arc::new(Vec::new())),
         );
         let advertised = reg.list_abilities();
-        let chat_ability = advertised
-            .iter()
-            .find(|n| n.ends_with(".chat"));
+        let chat_ability = advertised.iter().find(|n| n.ends_with(".chat"));
         let chat_ability = match chat_ability {
             Some(n) => n.clone(),
             None => {
@@ -268,8 +265,10 @@ fn main() -> anyhow::Result<()> {
 
         match result {
             Ok(v) => {
-                println!("response keys: {:?}",
-                    v.as_object().map(|o| o.keys().collect::<Vec<_>>()));
+                println!(
+                    "response keys: {:?}",
+                    v.as_object().map(|o| o.keys().collect::<Vec<_>>())
+                );
                 let text = v
                     .get("text")
                     .or_else(|| v.get("output"))
@@ -295,11 +294,12 @@ fn main() -> anyhow::Result<()> {
         // would see — user_profile + schedule + memory loaders
         // attached, instead of an empty Vec like the other
         // smoke probes use.
-        let schedule_svc = Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new());
+        let schedule_svc =
+            Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new());
         let default_loaders = Arc::new(
-            easynet_cli::runtime::agents::context_loaders::default_loaders(
-                Arc::clone(&schedule_svc),
-            ),
+            easynet_cli::runtime::agents::context_loaders::default_loaders(Arc::clone(
+                &schedule_svc,
+            )),
         );
         let ctx_dispatcher = AbilityDispatcher::new(
             build_registry_for_daemon(
@@ -340,7 +340,12 @@ fn main() -> anyhow::Result<()> {
                 } else {
                     println!("✗ context injection FAILED: reply did not contain the canary");
                 }
-                println!("context_used: {}", v.get("context_used").map(|c| c.to_string()).unwrap_or_default());
+                println!(
+                    "context_used: {}",
+                    v.get("context_used")
+                        .map(|c| c.to_string())
+                        .unwrap_or_default()
+                );
             }
             Err(e) => println!("context probe failed: {e}"),
         }
@@ -434,22 +439,37 @@ fn main() -> anyhow::Result<()> {
                                     match rx.recv().await {
                                         Ok(frame) => {
                                             frame_seq += 1;
-                                            let kind = frame.get("type").and_then(|t| t.as_str()).unwrap_or("?");
+                                            let kind = frame
+                                                .get("type")
+                                                .and_then(|t| t.as_str())
+                                                .unwrap_or("?");
                                             let elapsed = stream_start.elapsed().as_millis();
-                                            println!("  [t+{elapsed:>5}ms #{frame_seq:>2}] type={kind}");
+                                            println!(
+                                                "  [t+{elapsed:>5}ms #{frame_seq:>2}] type={kind}"
+                                            );
                                         }
-                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                            break
+                                        }
+                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(
+                                            _,
+                                        )) => {}
                                     }
                                 }
                             });
                         }
                         other => {
-                            println!("  unexpected StreamSource variant: {other:?}", other = std::any::type_name_of_val(&other));
+                            println!(
+                                "  unexpected StreamSource variant: {other:?}",
+                                other = std::any::type_name_of_val(&other)
+                            );
                         }
                     }
-                    println!("Codex stream finished after {} frames in {}ms",
-                        frame_seq, stream_start.elapsed().as_millis());
+                    println!(
+                        "Codex stream finished after {} frames in {}ms",
+                        frame_seq,
+                        stream_start.elapsed().as_millis()
+                    );
                 }
                 Err(e) => {
                     println!("codex.chat stream failed: {e}");
@@ -509,10 +529,8 @@ fn main() -> anyhow::Result<()> {
                             Ok(frame) => {
                                 let elapsed = stream_start.elapsed().as_millis();
                                 frame_seq += 1;
-                                let kind = frame
-                                    .get("type")
-                                    .and_then(|t| t.as_str())
-                                    .unwrap_or("?");
+                                let kind =
+                                    frame.get("type").and_then(|t| t.as_str()).unwrap_or("?");
                                 let preview = match kind {
                                     "done" => {
                                         let reply = frame
@@ -547,8 +565,11 @@ fn main() -> anyhow::Result<()> {
                 println!("Mode: Snapshot-only ({} frames)", snap.len());
             }
         }
-        println!("Stream finished after {} frames in {}ms",
-            frame_seq, stream_start.elapsed().as_millis());
+        println!(
+            "Stream finished after {} frames in {}ms",
+            frame_seq,
+            stream_start.elapsed().as_millis()
+        );
 
         // Cleanup the mission dir. We did NOT mutate agents.json
         // (we used the developer's existing agent row), so nothing
@@ -567,8 +588,10 @@ fn main() -> anyhow::Result<()> {
     );
     let registered_names: std::collections::BTreeSet<String> =
         reg.list_abilities().into_iter().collect();
-    println!("LIVE registry has {} abilities (registered_rpc/stream/bidi):",
-        registered_names.len());
+    println!(
+        "LIVE registry has {} abilities (registered_rpc/stream/bidi):",
+        registered_names.len()
+    );
 
     let dispatcher = AbilityDispatcher::new(Arc::clone(&reg), Arc::new(NoopGateway::new()));
     let meta_resp = dispatcher
@@ -582,7 +605,10 @@ fn main() -> anyhow::Result<()> {
                 .collect()
         })
         .unwrap_or_default();
-    println!("meta.list_abilities returned {} abilities:", meta_names.len());
+    println!(
+        "meta.list_abilities returned {} abilities:",
+        meta_names.len()
+    );
 
     println!("\nIn LIVE registry but NOT in meta.list_abilities:");
     let only_registered: Vec<&String> = registered_names.difference(&meta_names).collect();

@@ -28,11 +28,11 @@
 //!   docs/rfc/AXON-RFC-001-restatement-mapping.md — old → new mapping
 
 pub mod bootstrap;
-pub mod device;
 pub mod consent;
-pub mod policy;
-pub mod mcp;
+pub mod device;
 pub mod llm;
+pub mod mcp;
+pub mod policy;
 
 /// Read `~/.easynet/local-agents.json` and project it into the full
 /// host descriptor catalog. Returns an empty catalog when the file is
@@ -59,8 +59,7 @@ pub fn load_host_descriptors() -> Vec<crate::runtime::ability_descriptor::Abilit
         crate::persistence::local_agents::lookup_hosted_uri(&local, "consent", "default");
     let policy_uri =
         crate::persistence::local_agents::lookup_hosted_uri(&local, "policy", "default");
-    let mcp_uri =
-        crate::persistence::local_agents::lookup_hosted_uri(&local, "mcp", "default");
+    let mcp_uri = crate::persistence::local_agents::lookup_hosted_uri(&local, "mcp", "default");
     let llm_uris: Vec<(String, String)> = local
         .hosted_agents
         .iter()
@@ -130,13 +129,7 @@ mod tests {
         // optional sub-systems and are exercised in their own tests.
         let device_uri = "easynet:///r/acme/agent/01DEV";
         let consent_uri = "easynet:///r/acme/agent/01CON";
-        let all = all_descriptors_for_host(
-            device_uri,
-            Some(consent_uri),
-            None,
-            None,
-            &[],
-        );
+        let all = all_descriptors_for_host(device_uri, Some(consent_uri), None, None, &[]);
         let owners: std::collections::HashSet<&str> =
             all.iter().map(|d| d.owner_agent_uri.as_str()).collect();
         assert!(owners.contains(device_uri));

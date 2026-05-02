@@ -130,10 +130,7 @@ pub fn run(args: DiscussArgs) -> anyhow::Result<()> {
     eprintln!("{}", style("═".repeat(40)).dim());
     eprintln!("  Room:    {}", style(&room_id).yellow());
     eprintln!("  Agents:  {}", participants.join(", "));
-    eprintln!(
-        "  Cycles:  up to {} (per sub-turn)",
-        args.max_cycles
-    );
+    eprintln!("  Cycles:  up to {} (per sub-turn)", args.max_cycles);
     eprintln!();
 
     // Post the human turn. On a fresh room this is the first
@@ -217,7 +214,11 @@ pub fn run(args: DiscussArgs) -> anyhow::Result<()> {
             continue;
         }
         let message = turn.get("message").and_then(Value::as_str).unwrap_or("");
-        eprintln!("{}  {}", style(format!("[{speaker}]")).cyan().bold(), message);
+        eprintln!(
+            "{}  {}",
+            style(format!("[{speaker}]")).cyan().bold(),
+            message
+        );
         eprintln!();
     }
 
@@ -257,11 +258,8 @@ pub fn run(args: DiscussArgs) -> anyhow::Result<()> {
     if let Some(path) = &args.output {
         let transcript = read_turns_from(&room_id, 0)?;
         let markdown = render_markdown(&room_id, &participants, &transcript);
-        crate::persistence::config::atomic_write(
-            std::path::Path::new(path),
-            markdown.as_bytes(),
-        )
-        .with_context(|| format!("write {path}"))?;
+        crate::persistence::config::atomic_write(std::path::Path::new(path), markdown.as_bytes())
+            .with_context(|| format!("write {path}"))?;
         eprintln!(
             "{} Transcript written to {}",
             style("✓").green(),
@@ -356,7 +354,11 @@ mod tests {
             json!({"speaker": "human", "message": "what should we build?"}),
             json!({"speaker": "claude", "message": "an ability dispatcher"}),
         ];
-        let md = render_markdown("room-x", &["claude".to_string(), "codex".to_string()], &turns);
+        let md = render_markdown(
+            "room-x",
+            &["claude".to_string(), "codex".to_string()],
+            &turns,
+        );
         assert!(md.contains("# Discussion room-x"));
         assert!(md.contains("claude, codex"));
         assert!(md.contains("**human**"));

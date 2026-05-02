@@ -212,9 +212,9 @@ fn spawn_pty_reader(
             use std::io::Read;
             loop {
                 let n = match reader.read(&mut buf) {
-                    Ok(0) => break,            // EOF
+                    Ok(0) => break, // EOF
                     Ok(n) => n,
-                    Err(_) => break,           // PTY gone
+                    Err(_) => break, // PTY gone
                 };
                 let encoded = base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
                 if to_client
@@ -253,10 +253,7 @@ fn spawn_pty_writer(
         let writer = std::sync::Arc::new(std::sync::Mutex::new(writer));
 
         while let Some(frame) = from_client.recv().await {
-            let frame_type = frame
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let frame_type = frame.get("type").and_then(Value::as_str).unwrap_or("");
             match frame_type {
                 "stdin" => {
                     let Some(data_b64) = frame.get("data").and_then(Value::as_str) else {
@@ -461,8 +458,7 @@ mod tests {
     #[tokio::test]
     async fn attach_to_unknown_session_id_fails_with_clear_error() {
         let svc = fresh_service();
-        let err =
-            attach_handler(&svc, json!({"session_id": "not-a-session"})).unwrap_err();
+        let err = attach_handler(&svc, json!({"session_id": "not-a-session"})).unwrap_err();
         let msg = format!("{err}");
         assert!(
             msg.contains("unknown session_id"),
@@ -488,8 +484,7 @@ mod tests {
         spec.command = Some(shell_command());
         let id = svc.create(spec).expect("spawn /bin/sh");
 
-        let source =
-            attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
+        let source = attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
 
         // Send one stdin frame: `echo hi\n`. Base64-encoded.
         let data_b64 = base64::engine::general_purpose::STANDARD.encode(b"echo hi\n");
@@ -505,12 +500,8 @@ mod tests {
         // assert "hi" appears somewhere in the cumulative bytes.
         let mut from_handler = source.from_client;
         let mut accum = Vec::new();
-        let frames = drain_handler_emit(
-            &mut from_handler,
-            32,
-            std::time::Duration::from_secs(3),
-        )
-        .await;
+        let frames =
+            drain_handler_emit(&mut from_handler, 32, std::time::Duration::from_secs(3)).await;
         for f in &frames {
             if f.get("type").and_then(Value::as_str) == Some("stdout") {
                 if let Some(b64) = f.get("data").and_then(Value::as_str) {
@@ -542,8 +533,7 @@ mod tests {
         let mut spec = PtyCreateSpec::default();
         spec.command = Some(shell_command());
         let id = svc.create(spec).expect("spawn /bin/sh");
-        let source =
-            attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
+        let source = attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
 
         source
             .to_client
@@ -559,12 +549,8 @@ mod tests {
 
         let mut from_handler = source.from_client;
         let mut accum = Vec::new();
-        let frames = drain_handler_emit(
-            &mut from_handler,
-            32,
-            std::time::Duration::from_secs(3),
-        )
-        .await;
+        let frames =
+            drain_handler_emit(&mut from_handler, 32, std::time::Duration::from_secs(3)).await;
         for f in &frames {
             if f.get("type").and_then(Value::as_str) == Some("stdout") {
                 if let Some(b64) = f.get("data").and_then(Value::as_str) {
@@ -590,27 +576,20 @@ mod tests {
         // emit exactly one `exit` frame. Pins T3.
         let svc = fresh_service();
         let mut spec = PtyCreateSpec::default();
-        spec.command = Some(
-            if std::path::Path::new("/usr/bin/true").exists() {
-                "/usr/bin/true".to_string()
-            } else {
-                "/bin/true".to_string()
-            },
-        );
+        spec.command = Some(if std::path::Path::new("/usr/bin/true").exists() {
+            "/usr/bin/true".to_string()
+        } else {
+            "/bin/true".to_string()
+        });
         let id = svc.create(spec).expect("spawn /usr/bin/true");
-        let source =
-            attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
+        let source = attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
 
         // Wait for an exit frame within a generous deadline (exit-
         // watcher polls every 100ms; the child may need a tick or
         // two to be reaped).
         let mut from_handler = source.from_client;
-        let frames = drain_handler_emit(
-            &mut from_handler,
-            16,
-            std::time::Duration::from_secs(3),
-        )
-        .await;
+        let frames =
+            drain_handler_emit(&mut from_handler, 16, std::time::Duration::from_secs(3)).await;
         let exit_count = frames
             .iter()
             .filter(|f| f.get("type").and_then(Value::as_str) == Some("exit"))
@@ -633,8 +612,7 @@ mod tests {
         let mut spec = PtyCreateSpec::default();
         spec.command = Some(shell_command());
         let id = svc.create(spec).expect("spawn /bin/sh");
-        let source =
-            attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
+        let source = attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
 
         source
             .to_client
@@ -650,12 +628,8 @@ mod tests {
 
         let mut from_handler = source.from_client;
         let mut accum = Vec::new();
-        let frames = drain_handler_emit(
-            &mut from_handler,
-            32,
-            std::time::Duration::from_secs(3),
-        )
-        .await;
+        let frames =
+            drain_handler_emit(&mut from_handler, 32, std::time::Duration::from_secs(3)).await;
         for f in &frames {
             if f.get("type").and_then(Value::as_str) == Some("stdout") {
                 if let Some(b64) = f.get("data").and_then(Value::as_str) {

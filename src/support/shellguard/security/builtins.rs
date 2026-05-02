@@ -59,26 +59,26 @@ use super::DetectorHit;
 /// builtins whose argv shape lies to permission-rule
 /// matchers.
 const EVAL_LIKE_BUILTINS: &[&str] = &[
-    "eval",     // executes argv tail as shell code
-    "source",   // reads + executes argv[1] as script
-    ".",        // POSIX synonym for `source`
-    "exec",     // replaces shell with argv tail (process tree mutation)
-    "command",  // bypasses function/alias lookup; permission rule can't see real argv[0]
-    "builtin",  // bypasses function lookup; same problem as `command`
-    "fc",       // history → re-execute previous command — permission rule sees `fc`, not the replayed cmd
-    "coproc",   // `coproc rm -rf /` — argv[0] is `coproc`, real command is argv[1]
-    "noglob",   // zsh precommand: `noglob cmd` runs cmd with globbing off
-    "nocorrect",// zsh precommand: same shape as noglob
-    "trap",     // `trap 'cmd' EXIT` — code-string runs at end of every shell.run invocation
-    "enable",   // `enable -f /path/lib.so name` — dlopen native lib
-    "mapfile",  // `mapfile -C cmd` — callback runs as code every N input lines
-    "readarray",// alias for mapfile
-    "hash",     // `hash -p /path cmd` — poisons command lookup; subsequent cmd resolves to /path
-    "bind",     // `bind -x '"key":cmd'` — interactive callback as code
+    "eval",      // executes argv tail as shell code
+    "source",    // reads + executes argv[1] as script
+    ".",         // POSIX synonym for `source`
+    "exec",      // replaces shell with argv tail (process tree mutation)
+    "command",   // bypasses function/alias lookup; permission rule can't see real argv[0]
+    "builtin",   // bypasses function lookup; same problem as `command`
+    "fc", // history → re-execute previous command — permission rule sees `fc`, not the replayed cmd
+    "coproc", // `coproc rm -rf /` — argv[0] is `coproc`, real command is argv[1]
+    "noglob", // zsh precommand: `noglob cmd` runs cmd with globbing off
+    "nocorrect", // zsh precommand: same shape as noglob
+    "trap", // `trap 'cmd' EXIT` — code-string runs at end of every shell.run invocation
+    "enable", // `enable -f /path/lib.so name` — dlopen native lib
+    "mapfile", // `mapfile -C cmd` — callback runs as code every N input lines
+    "readarray", // alias for mapfile
+    "hash", // `hash -p /path cmd` — poisons command lookup; subsequent cmd resolves to /path
+    "bind", // `bind -x '"key":cmd'` — interactive callback as code
     "complete", // `complete -C cmd` — completion callback as code
-    "compgen",  // `compgen -C cmd` — IMMEDIATELY runs cmd to generate completions
-    "alias",    // `alias name='cmd'` — aliases expand under shopt -s expand_aliases
-    "let",      // `let 'x=a[$(id)]'` — arithmetic eval expands $() in subscript
+    "compgen", // `compgen -C cmd` — IMMEDIATELY runs cmd to generate completions
+    "alias", // `alias name='cmd'` — aliases expand under shopt -s expand_aliases
+    "let", // `let 'x=a[$(id)]'` — arithmetic eval expands $() in subscript
 ];
 
 /// Zsh module / FFI / IPC builtins. Loaded via `zmodload` or
@@ -86,23 +86,17 @@ const EVAL_LIKE_BUILTINS: &[&str] = &[
 /// `zsh/system`. None of these are external programs; argv[0]
 /// match is the only way to detect them.
 const ZSH_DANGEROUS_BUILTINS: &[&str] = &[
-    "zmodload",  // load arbitrary zsh module
-    "emulate",   // switch zsh to bash/sh/csh emulation mode
-    "sysopen",   // open file descriptor (zsh/system)
-    "sysread",   // read from fd (zsh/system)
-    "syswrite",  // write to fd (zsh/system)
-    "sysseek",   // seek fd (zsh/system)
-    "zpty",      // open pseudo-TTY (zsh/zpty)
-    "ztcp",      // open TCP socket (zsh/net/tcp)
-    "zsocket",   // open Unix socket (zsh/net/socket)
-    "zf_rm",     // zsh/files functions — same hazard as the GNU coreutils
-    "zf_mv",
-    "zf_ln",
-    "zf_chmod",
-    "zf_chown",
-    "zf_mkdir",
-    "zf_rmdir",
-    "zf_chgrp",
+    "zmodload", // load arbitrary zsh module
+    "emulate",  // switch zsh to bash/sh/csh emulation mode
+    "sysopen",  // open file descriptor (zsh/system)
+    "sysread",  // read from fd (zsh/system)
+    "syswrite", // write to fd (zsh/system)
+    "sysseek",  // seek fd (zsh/system)
+    "zpty",     // open pseudo-TTY (zsh/zpty)
+    "ztcp",     // open TCP socket (zsh/net/tcp)
+    "zsocket",  // open Unix socket (zsh/net/socket)
+    "zf_rm",    // zsh/files functions — same hazard as the GNU coreutils
+    "zf_mv", "zf_ln", "zf_chmod", "zf_chown", "zf_mkdir", "zf_rmdir", "zf_chgrp",
 ];
 
 /// Public entry. Returns `Some(DetectorHit)` if `cmd.argv[0]`
@@ -188,7 +182,10 @@ mod tests {
 
     #[test]
     fn source_is_flagged() {
-        assert_eq!(check(&cmd(&["source", "script.sh"])).unwrap().name, "source");
+        assert_eq!(
+            check(&cmd(&["source", "script.sh"])).unwrap().name,
+            "source"
+        );
     }
 
     #[test]
@@ -198,29 +195,46 @@ mod tests {
 
     #[test]
     fn exec_is_flagged() {
-        assert_eq!(check(&cmd(&["exec", "rm", "-rf", "/"])).unwrap().name, "exec");
+        assert_eq!(
+            check(&cmd(&["exec", "rm", "-rf", "/"])).unwrap().name,
+            "exec"
+        );
     }
 
     #[test]
     fn coproc_is_flagged() {
         // `coproc rm -rf /` — argv[0]='coproc' hides the real command.
-        assert_eq!(check(&cmd(&["coproc", "rm", "-rf", "/"])).unwrap().name, "coproc");
+        assert_eq!(
+            check(&cmd(&["coproc", "rm", "-rf", "/"])).unwrap().name,
+            "coproc"
+        );
     }
 
     #[test]
     fn trap_is_flagged() {
-        assert_eq!(check(&cmd(&["trap", "rm /tmp/lock", "EXIT"])).unwrap().name, "trap");
+        assert_eq!(
+            check(&cmd(&["trap", "rm /tmp/lock", "EXIT"])).unwrap().name,
+            "trap"
+        );
     }
 
     #[test]
     fn enable_is_flagged() {
-        assert_eq!(check(&cmd(&["enable", "-f", "/tmp/x.so", "name"])).unwrap().name, "enable");
+        assert_eq!(
+            check(&cmd(&["enable", "-f", "/tmp/x.so", "name"]))
+                .unwrap()
+                .name,
+            "enable"
+        );
     }
 
     #[test]
     fn hash_is_flagged() {
         // Poisons command lookup.
-        assert_eq!(check(&cmd(&["hash", "-p", "/evil/rm", "rm"])).unwrap().name, "hash");
+        assert_eq!(
+            check(&cmd(&["hash", "-p", "/evil/rm", "rm"])).unwrap().name,
+            "hash"
+        );
     }
 
     #[test]
@@ -237,26 +251,37 @@ mod tests {
     #[test]
     fn mapfile_is_flagged() {
         assert_eq!(
-            check(&cmd(&["mapfile", "-C", "rm /tmp", "-c", "1", "arr"])).unwrap().name,
+            check(&cmd(&["mapfile", "-C", "rm /tmp", "-c", "1", "arr"]))
+                .unwrap()
+                .name,
             "mapfile"
         );
     }
 
     #[test]
     fn readarray_is_flagged() {
-        assert_eq!(check(&cmd(&["readarray", "-C", "rm /tmp"])).unwrap().name, "readarray");
+        assert_eq!(
+            check(&cmd(&["readarray", "-C", "rm /tmp"])).unwrap().name,
+            "readarray"
+        );
     }
 
     #[test]
     fn noglob_precommand_is_flagged() {
         // Zsh precommand modifier — argv[0]='noglob' hides the real command.
-        assert_eq!(check(&cmd(&["noglob", "rm", "-rf", "/"])).unwrap().name, "noglob");
+        assert_eq!(
+            check(&cmd(&["noglob", "rm", "-rf", "/"])).unwrap().name,
+            "noglob"
+        );
     }
 
     #[test]
     fn compgen_is_flagged() {
         // `compgen -C cmd` immediately runs cmd, even non-interactively.
-        assert_eq!(check(&cmd(&["compgen", "-C", "id"])).unwrap().name, "compgen");
+        assert_eq!(
+            check(&cmd(&["compgen", "-C", "id"])).unwrap().name,
+            "compgen"
+        );
     }
 
     #[test]

@@ -65,11 +65,7 @@ pub trait GatewayApi: Send + Sync {
     /// Invoke a remote ability via `send_a2a_task`. Returns the
     /// response value when the remote side responds RPC-style. For
     /// streaming abilities, see `subscribe_remote_ability`.
-    fn invoke_remote_ability(
-        &self,
-        target: &RemoteTarget,
-        args: &Value,
-    ) -> anyhow::Result<Value>;
+    fn invoke_remote_ability(&self, target: &RemoteTarget, args: &Value) -> anyhow::Result<Value>;
 
     /// Subscribe to a streaming remote ability. v1 returns a boxed
     /// callback installer; v2 will switch to a proper Stream type

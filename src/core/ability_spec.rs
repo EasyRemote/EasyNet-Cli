@@ -1369,9 +1369,7 @@ mod tests {
     #[test]
     fn new_rejects_name_with_control_character() {
         let err = AbilityManifest::new("chat\t", "x", object_schema()).unwrap_err();
-        assert!(
-            format!("{err}").contains("whitespace") || format!("{err}").contains("control")
-        );
+        assert!(format!("{err}").contains("whitespace") || format!("{err}").contains("control"));
     }
 
     #[test]
@@ -1614,7 +1612,10 @@ deny_callers = ["mallory"]
             access.allow_callers.as_deref(),
             Some(&["claude".to_string(), "alice".to_string()][..])
         );
-        assert_eq!(access.deny_callers.as_deref(), Some(&["mallory".to_string()][..]));
+        assert_eq!(
+            access.deny_callers.as_deref(),
+            Some(&["mallory".to_string()][..])
+        );
     }
 
     #[test]

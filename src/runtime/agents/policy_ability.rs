@@ -163,10 +163,8 @@ mod tests {
         assert_eq!(resp["decision"], "Allowed");
         assert!(resp["reason"].as_str().unwrap().contains("v1-allow-all"));
         // Expires_at is a parseable RFC3339 string in the future.
-        let expires = chrono::DateTime::parse_from_rfc3339(
-            resp["expires_at"].as_str().unwrap(),
-        )
-        .expect("expires_at is RFC3339");
+        let expires = chrono::DateTime::parse_from_rfc3339(resp["expires_at"].as_str().unwrap())
+            .expect("expires_at is RFC3339");
         let now = chrono::Utc::now();
         assert!(expires.with_timezone(&chrono::Utc) > now);
     }
@@ -186,7 +184,10 @@ mod tests {
         }))
         .unwrap();
         assert!(resp.get("would_decide").is_some());
-        assert!(resp.get("decision").is_none(), "simulate must NOT use `decision`");
+        assert!(
+            resp.get("decision").is_none(),
+            "simulate must NOT use `decision`"
+        );
         assert_eq!(resp["would_decide"], "Allowed");
     }
 

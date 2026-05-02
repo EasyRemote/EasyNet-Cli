@@ -137,7 +137,11 @@ fn call_tool_handler(
 ) -> anyhow::Result<Value> {
     let name = match args.get("name").and_then(Value::as_str) {
         Some(s) if !s.is_empty() => s.to_string(),
-        _ => return Ok(error_response("`name` is required and must be a non-empty string")),
+        _ => {
+            return Ok(error_response(
+                "`name` is required and must be a non-empty string",
+            ))
+        }
     };
     let arguments = args.get("arguments").cloned().unwrap_or(Value::Null);
 
@@ -173,7 +177,9 @@ fn call_tool_handler(
 
     match handler(arguments) {
         Ok(value) => Ok(success_response(value)),
-        Err(e) => Ok(error_response(&format!("tool `{name}` returned an error: {e}"))),
+        Err(e) => Ok(error_response(&format!(
+            "tool `{name}` returned an error: {e}"
+        ))),
     }
 }
 
@@ -187,8 +193,8 @@ fn success_response(value: Value) -> Value {
     // by construction always JSON-encodable (no NaN, no cycles).
     // expect() makes the invariant explicit; a fallback string
     // would just pretend to handle a case that doesn't exist.
-    let text = serde_json::to_string(&value)
-        .expect("serde_json::Value is always JSON-serializable");
+    let text =
+        serde_json::to_string(&value).expect("serde_json::Value is always JSON-serializable");
     json!({
         "content": [{
             "type": "text",
@@ -384,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn call_tool_unknown_name_in_descriptors_but_not_in_registry_is_isError() {
+    fn call_tool_unknown_name_in_descriptors_but_not_in_registry_returns_error() {
         // Descriptor advertises something with no matching RPC
         // handler (e.g. a stream-only ability registered through
         // the same descriptor catalogue). call_tool refuses cleanly.
@@ -404,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn call_tool_missing_name_arg_returns_isError_not_panic() {
+    fn call_tool_missing_name_arg_returns_error_not_panic() {
         let arc = build_bridge_registry(|| vec![d("test.echo")]);
         let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
         let resp = handler(json!({})).unwrap();
@@ -414,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn call_tool_empty_name_string_returns_isError() {
+    fn call_tool_empty_name_string_returns_error() {
         let arc = build_bridge_registry(|| vec![d("test.echo")]);
         let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
         let resp = handler(json!({"name": "", "arguments": {}})).unwrap();
@@ -422,7 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn call_tool_handler_error_is_surfaced_as_isError_text() {
+    fn call_tool_handler_error_is_surfaced_as_error_text() {
         // A handler that returns Err must NOT crash the bridge —
         // it surfaces the error message inside an isError frame so
         // the MCP client sees a structured response.
@@ -477,7 +483,7 @@ mod tests {
     }
 
     #[test]
-    fn call_tool_with_unset_registry_handle_returns_isError() {
+    fn call_tool_with_unset_registry_handle_returns_is_error() {
         // Defensive: if the build site forgets to populate the
         // OnceLock, surface as isError instead of panicking. This
         // pins the "test bug not crash" contract from the comment

@@ -131,10 +131,7 @@ pub struct AgentResponse {
 /// Extracted so production and tests call the same code: see
 /// the doc block at the call site in `send_to_agent_with_depth`
 /// for why.
-pub(crate) fn resolve_timeout(
-    spec_timeout_secs: Option<u64>,
-    entry_timeout_secs: u64,
-) -> Duration {
+pub(crate) fn resolve_timeout(spec_timeout_secs: Option<u64>, entry_timeout_secs: u64) -> Duration {
     Duration::from_secs(spec_timeout_secs.unwrap_or(entry_timeout_secs))
 }
 
@@ -158,9 +155,7 @@ pub(crate) fn resolve_model_with_overrides(
     spec_model: Option<String>,
     entry_model: Option<String>,
 ) -> Option<String> {
-    override_model
-        .or(spec_model)
-        .or(entry_model)
+    override_model.or(spec_model).or(entry_model)
 }
 
 pub(crate) fn resolve_model(
@@ -192,7 +187,15 @@ pub fn send_to_agent(
     context: Option<&str>,
     extra_trace_path: Option<&Path>,
 ) -> anyhow::Result<AgentResponse> {
-    send_to_agent_with_depth(agent_name, entry, prompt, context, extra_trace_path, None, None)
+    send_to_agent_with_depth(
+        agent_name,
+        entry,
+        prompt,
+        context,
+        extra_trace_path,
+        None,
+        None,
+    )
 }
 
 /// Send a prompt to a registered agent on behalf of an *external* caller —
@@ -482,7 +485,9 @@ pub fn send_to_agent_with_depth_and_progress(
     // dispatch sees overrides, only `model` can be set. See
     // chat_ability::parse_driver_overrides for the rationale.
     debug_assert!(
-        overrides.map(|o| o.temperature.is_none() && o.max_tokens.is_none()).unwrap_or(true),
+        overrides
+            .map(|o| o.temperature.is_none() && o.max_tokens.is_none())
+            .unwrap_or(true),
         "DriverOverrides reached dispatch with unsupported fields set; chat_ability \
          parse_driver_overrides should have rejected this earlier"
     );
@@ -641,9 +646,7 @@ pub fn send_to_agent_with_depth_and_progress(
             // a resume-capable driver (codex) to continue under that
             // thread id. Sourced from the chat ability's caller via
             // `DriverOverrides::resume_thread_id`.
-            resume_thread_id: overrides
-                .as_ref()
-                .and_then(|o| o.resume_thread_id.clone()),
+            resume_thread_id: overrides.as_ref().and_then(|o| o.resume_thread_id.clone()),
         },
     );
 
@@ -733,10 +736,7 @@ pub fn send_to_agent_with_depth_and_progress(
             }),
         ),
     };
-    if let Err(e) = session
-        .writer()
-        .emit(terminal_type, Some(terminal_payload))
-    {
+    if let Err(e) = session.writer().emit(terminal_type, Some(terminal_payload)) {
         eprintln!(
             "[easynet warn] agent {agent_name}: timeline terminal emit failed ({e}); \
              run_dir meta.json is still authoritative"
@@ -801,7 +801,10 @@ mod compose_prompt_tests {
     fn present_context_is_delimited() {
         let out = compose_prompt("Do X.", Some("earlier: A said B"));
         assert!(out.contains(CONTEXT_OPEN), "open sentinel must be present");
-        assert!(out.contains(CONTEXT_CLOSE), "close sentinel must be present");
+        assert!(
+            out.contains(CONTEXT_CLOSE),
+            "close sentinel must be present"
+        );
         // Open must precede close in byte order.
         let open_at = out.find(CONTEXT_OPEN).unwrap();
         let close_at = out.find(CONTEXT_CLOSE).unwrap();
@@ -1544,15 +1547,7 @@ mod tests {
         // enforcement (see recursion_guard_allows_depth_1's
         // rationale) and lets the dispatch reach the spawn
         // step, where `dummy_entry`'s bogus command fails fast.
-        let res = send_to_agent_with_depth(
-            "alice",
-            &entry,
-            "prompt",
-            None,
-            None,
-            Some(1),
-            None,
-        );
+        let res = send_to_agent_with_depth("alice", &entry, "prompt", None, None, Some(1), None);
         // Failure is expected — we don't need the response.
         // meta.json is written whether the run succeeded or
         // failed (see dispatch.rs's "Write meta.json regardless"
@@ -1581,15 +1576,7 @@ mod tests {
         entry.model = Some("legacy-entry-model".into());
         let root = entry.root_path.clone().unwrap();
 
-        let _ = send_to_agent_with_depth(
-            "alice",
-            &entry,
-            "prompt",
-            None,
-            None,
-            Some(1),
-            None,
-        );
+        let _ = send_to_agent_with_depth("alice", &entry, "prompt", None, None, Some(1), None);
 
         let meta = read_latest_meta(&root).expect("meta.json must exist");
         assert_eq!(
@@ -1613,15 +1600,7 @@ mod tests {
         entry.model = None;
         let root = entry.root_path.clone().unwrap();
 
-        let _ = send_to_agent_with_depth(
-            "alice",
-            &entry,
-            "prompt",
-            None,
-            None,
-            Some(1),
-            None,
-        );
+        let _ = send_to_agent_with_depth("alice", &entry, "prompt", None, None, Some(1), None);
 
         let meta = read_latest_meta(&root).expect("meta.json must exist");
         assert!(
@@ -1680,10 +1659,7 @@ mod tests {
 
     #[test]
     fn resolve_model_prefers_spec_when_set() {
-        let m = resolve_model(
-            Some("spec-model".into()),
-            Some("entry-model".into()),
-        );
+        let m = resolve_model(Some("spec-model".into()), Some("entry-model".into()));
         assert_eq!(m.as_deref(), Some("spec-model"));
     }
 
@@ -1800,10 +1776,7 @@ mod tests {
         let entry = seed_agent_with_spec("alice", Some("model-x"), None);
         let root = entry.root_path.clone().unwrap();
 
-        let _ = send_to_agent_with_depth(
-            "alice", &entry, "hello", None, None, Some(1),
-            None,
-        );
+        let _ = send_to_agent_with_depth("alice", &entry, "hello", None, None, Some(1), None);
 
         let meta = read_latest_meta(&root).expect("meta.json must exist");
         assert!(
@@ -1839,7 +1812,10 @@ mod tests {
         // We don't pin the exact text (driver-dependent), only
         // that an `error` string is present and non-empty.
         assert!(
-            events[1]["payload"]["error"].as_str().map(|s| !s.is_empty()).unwrap_or(false),
+            events[1]["payload"]["error"]
+                .as_str()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false),
             "failed event must carry non-empty error string, got {:?}",
             events[1]["payload"]
         );
@@ -1856,10 +1832,7 @@ mod tests {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let entry = seed_agent_with_spec("alice", None, None);
         let root = entry.root_path.clone().unwrap();
-        let _ = send_to_agent_with_depth(
-            "alice", &entry, "hello", None, None, Some(1),
-            None,
-        );
+        let _ = send_to_agent_with_depth("alice", &entry, "hello", None, None, Some(1), None);
 
         let meta = read_latest_meta(&root).expect("meta.json");
         use easynet_axon::invocation::persistence::PersistentLog;
@@ -1873,7 +1846,10 @@ mod tests {
             "terminal state must be recorded, got {:?}",
             idx.terminal_state
         );
-        assert_eq!(idx.last_sequence, 1, "two events emitted, last_sequence = 1");
+        assert_eq!(
+            idx.last_sequence, 1,
+            "two events emitted, last_sequence = 1"
+        );
     }
 
     /// Make a progress event shaped exactly like the driver
@@ -1963,7 +1939,12 @@ mod tests {
         assert_eq!(received.len(), 7);
         assert_eq!(received[0].event_type, "admitted");
         for (i, ev) in received[1..6].iter().enumerate() {
-            assert_eq!(ev.event_type, "progress", "event {} must be progress", i + 1);
+            assert_eq!(
+                ev.event_type,
+                "progress",
+                "event {} must be progress",
+                i + 1
+            );
             assert_eq!(
                 ev.payload.as_ref().unwrap()["chunk"]["chunk_n"],
                 i as i64,
@@ -1984,10 +1965,7 @@ mod tests {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let entry = seed_agent_with_spec("alice", None, None);
         let root = entry.root_path.clone().unwrap();
-        let _ = send_to_agent_with_depth(
-            "alice", &entry, "hello", None, None, Some(1),
-            None,
-        );
+        let _ = send_to_agent_with_depth("alice", &entry, "hello", None, None, Some(1), None);
 
         // Find the latest run directory.
         let runs = root.join("runs");
@@ -2025,10 +2003,7 @@ mod tests {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let entry = seed_agent_with_spec("alice", None, None);
         let root = entry.root_path.clone().unwrap();
-        let _ = send_to_agent_with_depth(
-            "alice", &entry, "hello", None, None, Some(1),
-            None,
-        );
+        let _ = send_to_agent_with_depth("alice", &entry, "hello", None, None, Some(1), None);
 
         let meta = read_latest_meta(&root).expect("meta.json");
         use easynet_axon::invocation::persistence::PersistentLog;

@@ -64,15 +64,11 @@ impl LoopStore {
             match std::fs::read_to_string(&path) {
                 Ok(s) => match serde_json::from_str::<OnDisk>(&s) {
                     Ok(d) => out.push(d.instance),
-                    Err(e) => eprintln!(
-                        "[loop] failed to parse {}: {e} (skipping)",
-                        path.display()
-                    ),
+                    Err(e) => {
+                        eprintln!("[loop] failed to parse {}: {e} (skipping)", path.display())
+                    }
                 },
-                Err(e) => eprintln!(
-                    "[loop] failed to read {}: {e} (skipping)",
-                    path.display()
-                ),
+                Err(e) => eprintln!("[loop] failed to read {}: {e} (skipping)", path.display()),
             }
         }
         Ok(out)

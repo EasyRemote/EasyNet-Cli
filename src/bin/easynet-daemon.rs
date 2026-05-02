@@ -45,18 +45,16 @@ use std::time::Duration;
 use chrono::Utc;
 use easynet_cli::facade::cli::run_daemon;
 use easynet_cli::runtime::ability_dispatch::AbilityDispatcher;
+use easynet_cli::runtime::agents;
 use easynet_cli::runtime::domain::{NodeId, ScheduleId, TenantId};
 use easynet_cli::runtime::execution::loop_instance::KernelLoopInvocationDriver;
 use easynet_cli::runtime::execution::schedule::ScheduleService;
 use easynet_cli::runtime::gateway::NoopGateway;
 use easynet_cli::runtime::gateway_api::GatewayApi;
-use easynet_cli::runtime::invocation::{
-    fresh_nonce_hex, CausalContext, Invocation,
-};
+use easynet_cli::runtime::invocation::{fresh_nonce_hex, CausalContext, Invocation};
 use easynet_cli::runtime::invocation_target::{LocalNodeResolver, TargetResolver};
 use easynet_cli::runtime::kernel::Kernel;
 use easynet_cli::runtime::kernel_api::KernelApi;
-use easynet_cli::runtime::agents;
 use easynet_cli::services::control::ability_proxy::AbilityProxy;
 use easynet_cli::services::control::runtime_dispatch;
 use easynet_cli::services::control::server;
@@ -195,17 +193,31 @@ async fn main() -> anyhow::Result<()> {
     // Populate it with the same Arc the Kernel holds so the
     // outbound path and Kernel::invoke share one dispatcher
     // instance — a future Receipt-emit hook on either lands once.
-    easynet_cli::runtime::agents::a2a_client_ability::set_dispatcher(dispatcher_for_kernel);
+    easynet_cli::runtime::agents::a2a_client_ability::set_dispatcher(Arc::clone(
+        &dispatcher_for_kernel,
+    ));
 
     // Stage-1 resolver. Local node id from EASYNET_NODE_ID env (set
     // by the supervisor from credentials.json) or "self" as a
     // harness default; controls loopback-vs-remote routing.
     let resolver: Arc<dyn TargetResolver> = Arc::new(LocalNodeResolver::new(local_node));
-    let proxy = AbilityProxy::new_with_dispatcher(
-        Arc::clone(&kernel_api),
-        dispatcher,
-        resolver,
-    );
+    let proxy = AbilityProxy::new_with_dispatcher(Arc::clone(&kernel_api), dispatcher, resolver);
+
+    // RFC-003 PR-1 sidecar: gRPC InvocationServer (transport plane).
+    // Start this BEFORE any other daemon listener binds so
+    // `daemon-config.toml` is validated at the top of the boot order
+    // rather than after control/runtime-dispatch sockets already
+    // exist. That keeps the PR-1 "load config before any listener
+    // bind" invariant honest even while axon_serve is still a soft
+    // dependency.
+    #[cfg(feature = "axon-pb")]
+    {
+        if let Err(e) = easynet_cli::services::axon_serve::start_axon_serve_sidecar(Arc::clone(
+            &dispatcher_for_kernel,
+        )) {
+            eprintln!("[axon-serve] sidecar boot failed: {e:#}");
+        }
+    }
 
     // Optional sidecar: heartbeat. Run on a dedicated OS thread
     // because run_daemon() is blocking (ureq + ctrlc handler). Errors
@@ -276,8 +288,7 @@ async fn main() -> anyhow::Result<()> {
 fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
     const TICK_PERIOD: Duration = Duration::from_secs(15);
     tokio::spawn(async move {
-        let last_fire: Arc<Mutex<HashMap<ScheduleId, i64>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let last_fire: Arc<Mutex<HashMap<ScheduleId, i64>>> = Arc::new(Mutex::new(HashMap::new()));
         let mut interval = tokio::time::interval(TICK_PERIOD);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let _ = interval.tick().await; // skip the immediate-fire tick
@@ -346,17 +357,15 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
                     fire.schedule_id, agent, fire.fire_at
                 );
                 let kernel_clone = Arc::clone(&kernel);
-                tokio::task::spawn_blocking(move || {
-                    match kernel_clone.invoke(inv) {
-                        Ok(receipt) => {
-                            eprintln!(
-                                "[schedule-tick]   receipt {} → {:?}",
-                                receipt.invocation_id, receipt.terminal
-                            );
-                        }
-                        Err(e) => {
-                            eprintln!("[schedule-tick]   invoke error: {e:#}");
-                        }
+                tokio::task::spawn_blocking(move || match kernel_clone.invoke(inv) {
+                    Ok(receipt) => {
+                        eprintln!(
+                            "[schedule-tick]   receipt {} → {:?}",
+                            receipt.invocation_id, receipt.terminal
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("[schedule-tick]   invoke error: {e:#}");
                     }
                 });
             }

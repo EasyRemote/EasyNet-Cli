@@ -105,12 +105,7 @@ impl BridgeForwardInvoker {
     /// device URA and (when the target's realm is non-local) routes
     /// through its installed `GrpcHubForwardDispatcher` to the
     /// owning shard.
-    fn dispatch_to_bridge(
-        &self,
-        target_uri: &str,
-        ability: &str,
-        args: &Value,
-    ) -> Result<Value> {
+    fn dispatch_to_bridge(&self, target_uri: &str, ability: &str, args: &Value) -> Result<Value> {
         // Pin the caller URI to the daemon's own keyring-bound
         // device subject so the receiving hub's KeyResolver can
         // find the public key. Today's KeyResolver finds it by
@@ -150,8 +145,7 @@ impl BridgeForwardInvoker {
         if result_bytes.is_empty() {
             return Ok(Value::Null);
         }
-        serde_json::from_slice(&result_bytes)
-            .with_context(|| "parse forward_invoke result body")
+        serde_json::from_slice(&result_bytes).with_context(|| "parse forward_invoke result body")
     }
 }
 
@@ -163,7 +157,11 @@ impl CliForwardInvoker for BridgeForwardInvoker {
         if self.keyring.find_peer_by_uri(target_uri).is_some() {
             return true;
         }
-        if self.keyring.find_active_entry_by_subject(target_uri).is_some() {
+        if self
+            .keyring
+            .find_active_entry_by_subject(target_uri)
+            .is_some()
+        {
             return true;
         }
         // No local proof of trust — we still pass through to the
@@ -175,12 +173,7 @@ impl CliForwardInvoker for BridgeForwardInvoker {
         true
     }
 
-    fn invoke(
-        &self,
-        target_uri: &str,
-        ability: &str,
-        args: Value,
-    ) -> Result<Value> {
+    fn invoke(&self, target_uri: &str, ability: &str, args: Value) -> Result<Value> {
         self.dispatch_to_bridge(target_uri, ability, &args)
     }
 }
@@ -233,9 +226,7 @@ mod tests {
             )
             .unwrap();
         assert!(h
-            .find_active_entry_by_subject(
-                "easynet:///r/silan.localhost/agent/silan-laptop"
-            )
+            .find_active_entry_by_subject("easynet:///r/silan.localhost/agent/silan-laptop")
             .is_some());
     }
 }

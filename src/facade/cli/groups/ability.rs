@@ -51,9 +51,7 @@ use serde_json::Value;
 
 use crate::facade::cli::{abilities, ability_scaffold, deploy, exec, invoke};
 use crate::support::local_invoke::{federation_not_wired_error, invoke_local_ability};
-use crate::support::{
-    output::{self, OutputFormat},
-};
+use crate::support::output::{self, OutputFormat};
 
 #[derive(Debug, Args)]
 pub struct AbilityArgs {
@@ -144,7 +142,12 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     // federation cull. A scripted caller passing `--node <id>` MUST
     // see a precise error rather than silently get the local entry
     // for whichever ability happened to share the name.
-    if args.node.as_deref().map(str::trim).is_some_and(|s| !s.is_empty()) {
+    if args
+        .node
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|s| !s.is_empty())
+    {
         return Err(federation_not_wired_error(
             "showing an ability hosted on a remote node",
         ));

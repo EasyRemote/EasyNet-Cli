@@ -164,8 +164,7 @@ impl PtyIoService {
         let mut g = self.inner.lock().expect("pty io service lock");
         match g.remove(id) {
             Some(io) => {
-                io.dropped
-                    .store(true, std::sync::atomic::Ordering::Release);
+                io.dropped.store(true, std::sync::atomic::Ordering::Release);
                 // Wake any pending reader so it sees `closed` /
                 // `dropped` and returns immediately.
                 let (lock, cv) = &*io.output;
@@ -297,8 +296,7 @@ impl PtyIoService {
         let mut g = self.inner.lock().expect("pty io service lock");
         match g.get(id) {
             Some(existing) => {
-                io.dropped
-                    .store(true, std::sync::atomic::Ordering::Release);
+                io.dropped.store(true, std::sync::atomic::Ordering::Release);
                 let (lock, cv) = &*io.output;
                 if let Ok(mut s) = lock.lock() {
                     s.closed = true;
@@ -350,11 +348,7 @@ pub fn register(reg: &mut LocalAbilityRegistry, pty: Arc<PtyService>, io: PtyIoS
 /// `error` field on a malformed request; ack=false + `code:
 /// "session_dead"` when the PTY reported EOF/error before this
 /// write completed.
-fn input_handler(
-    pty: &Arc<PtyService>,
-    io: &PtyIoService,
-    args: Value,
-) -> anyhow::Result<Value> {
+fn input_handler(pty: &Arc<PtyService>, io: &PtyIoService, args: Value) -> anyhow::Result<Value> {
     let session_id = require_session_id(&args)?;
     let data_b64 = args
         .get("data")
@@ -434,11 +428,7 @@ fn input_handler(
 ///   * `{ output: "", bytes: 0, code: "session_not_found" }` when
 ///     the underlying PtyService row is gone (lifecycle close
 ///     fired before this call landed).
-fn read_handler(
-    pty: &Arc<PtyService>,
-    io: &PtyIoService,
-    args: Value,
-) -> anyhow::Result<Value> {
+fn read_handler(pty: &Arc<PtyService>, io: &PtyIoService, args: Value) -> anyhow::Result<Value> {
     let session_id = require_session_id(&args)?;
     let id = PtySessionId::new(&session_id);
 
@@ -657,23 +647,16 @@ mod tests {
     #[test]
     fn resize_unknown_session_returns_ack_false() {
         let (pty, _) = fresh();
-        let resp = resize_handler(
-            &pty,
-            json!({"session_id": "nope", "cols": 80, "rows": 24}),
-        )
-        .unwrap();
+        let resp =
+            resize_handler(&pty, json!({"session_id": "nope", "cols": 80, "rows": 24})).unwrap();
         assert_eq!(resp["ack"], false);
     }
 
     #[test]
     fn input_unknown_session_errors() {
         let (pty, io) = fresh();
-        let err = input_handler(
-            &pty,
-            &io,
-            json!({"session_id": "nope", "data": "aGVsbG8="}),
-        )
-        .unwrap_err();
+        let err = input_handler(&pty, &io, json!({"session_id": "nope", "data": "aGVsbG8="}))
+            .unwrap_err();
         assert!(format!("{err}").contains("unknown session_id"));
     }
 
@@ -704,12 +687,8 @@ mod tests {
     fn input_empty_data_acks_zero_bytes() {
         let (pty, io) = fresh();
         let id = spawn_sh(&pty);
-        let resp = input_handler(
-            &pty,
-            &io,
-            json!({"session_id": id.as_str(), "data": ""}),
-        )
-        .unwrap();
+        let resp =
+            input_handler(&pty, &io, json!({"session_id": id.as_str(), "data": ""})).unwrap();
         assert_eq!(resp["ack"], true);
         assert_eq!(resp["bytes_written"], 0);
         pty.close(&id);
@@ -722,12 +701,8 @@ mod tests {
         let (pty, io) = fresh();
         let id = spawn_sh(&pty);
         let start = Instant::now();
-        let resp = read_handler(
-            &pty,
-            &io,
-            json!({"session_id": id.as_str(), "timeout": 0}),
-        )
-        .unwrap();
+        let resp =
+            read_handler(&pty, &io, json!({"session_id": id.as_str(), "timeout": 0})).unwrap();
         let elapsed = start.elapsed();
         assert_eq!(resp["bytes"], 0);
         // Allow generous slack for slow CI but assert the call
@@ -775,12 +750,7 @@ mod tests {
         let (pty, io) = fresh();
         let id = spawn_sh(&pty);
         // Init the I/O row by reading once.
-        let _ = read_handler(
-            &pty,
-            &io,
-            json!({"session_id": id.as_str(), "timeout": 0}),
-        )
-        .unwrap();
+        let _ = read_handler(&pty, &io, json!({"session_id": id.as_str(), "timeout": 0})).unwrap();
         assert!(io.drop_session(&id), "first drop must report ack=true");
         assert!(
             !io.drop_session(&id),
@@ -804,12 +774,8 @@ mod tests {
         // testing because some shells inject extra whitespace.
         let input = b"printf 'EASYNET_PTY_OK\\n'\n";
         let b64 = base64::engine::general_purpose::STANDARD.encode(input);
-        let resp = input_handler(
-            &pty,
-            &io,
-            json!({"session_id": id.as_str(), "data": b64}),
-        )
-        .unwrap();
+        let resp =
+            input_handler(&pty, &io, json!({"session_id": id.as_str(), "data": b64})).unwrap();
         assert_eq!(resp["ack"], true);
         assert_eq!(resp["bytes_written"], input.len() as i64);
 
@@ -853,10 +819,7 @@ mod tests {
                 cols: 80,
                 rows: 24,
                 command: Some("/bin/sh".to_string()),
-                command_args: vec![
-                    "-c".to_string(),
-                    "printf 'BYE_MARK'; exit".to_string(),
-                ],
+                command_args: vec!["-c".to_string(), "printf 'BYE_MARK'; exit".to_string()],
                 cwd: None,
                 env: HashMap::new(),
             })

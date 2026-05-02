@@ -321,9 +321,7 @@ impl RuntimeState {
     /// the shorter name matches the common case.
     ///
     /// [`DendriteBridge`]: easynet_axon::dendrite_bridge::DendriteBridge
-    pub fn connect_bridge(
-        &self,
-    ) -> anyhow::Result<easynet_axon::dendrite_bridge::DendriteBridge> {
+    pub fn connect_bridge(&self) -> anyhow::Result<easynet_axon::dendrite_bridge::DendriteBridge> {
         crate::support::connect_bridge_to(&self.endpoint)
     }
 }
@@ -350,10 +348,8 @@ impl RuntimeState {
 /// doc for the enforcement story.
 ///
 /// [`DendriteBridge`]: easynet_axon::dendrite_bridge::DendriteBridge
-pub fn load_and_connect() -> anyhow::Result<(
-    easynet_axon::dendrite_bridge::DendriteBridge,
-    RuntimeState,
-)> {
+pub fn load_and_connect(
+) -> anyhow::Result<(easynet_axon::dendrite_bridge::DendriteBridge, RuntimeState)> {
     let state = load()?;
     let bridge = state.connect_bridge()?;
     Ok((bridge, state))
@@ -387,10 +383,31 @@ impl Credentials {
     }
 }
 
-/// Extract the hostname from an endpoint URL for REST API calls.
+/// Daemon TLS gRPC ports we recognise as transport-plane endpoints
+/// — when `hub_endpoint` carries one of these on `https://`, the
+/// REST API base needs to be stripped back to bare `:443` because
+/// these ports speak HTTP/2 + gRPC, not HTTP/1.1 REST.
 ///
-/// For `axon://` endpoints, strips the gRPC port since the REST API uses HTTPS/443.
-/// For `http://`/`https://` endpoints, preserves the authority (host:port) as-is.
+/// 50443 is the canonical hub-side TLS listen port (`Daemon`
+/// `mode = both` in production); 50543 is the answer-sheet demo's
+/// hub-B port; both surface as `extract_api_host` inputs whenever
+/// the operator's `Axon.PublicEndpoint` resolves to a daemon TLS
+/// listener (the post-LB-65 production yaml hard-codes
+/// `https://easynet.run:50443` so this list is the production
+/// hot path).
+const DAEMON_TLS_PORTS: &[&str] = &["50443", "50543"];
+
+/// Extract the hostname authority an REST/HTTP API call should target,
+/// given the bidi/transport endpoint persisted in `creds.hub_endpoint`.
+///
+/// Conventions:
+/// * `axon://host:<grpc-port>` → strip the port (REST is on HTTPS/443).
+/// * `https://host:<daemon-TLS-port>` → strip the port for the same
+///   reason — those ports serve gRPC, not REST. The set of recognised
+///   ports lives in `DAEMON_TLS_PORTS`; `--hub-api` overrides this
+///   for operators running REST on a non-standard port.
+/// * `https://host:<other-port>` / `http://host:<port>` → preserve the
+///   authority verbatim (operator-set non-default REST endpoint).
 fn extract_api_host(endpoint: &str) -> String {
     let endpoint = endpoint.trim();
     let (is_axon, without_scheme) = if let Some(rest) = endpoint.strip_prefix("axon://") {
@@ -414,7 +431,14 @@ fn extract_api_host(endpoint: &str) -> String {
                 // Strip port for axon:// — REST API uses HTTPS/443.
                 return host_part.to_string();
             }
-            // http/https — preserve port if present.
+            // https://[::1]:50443 → strip daemon-TLS port back to bare host
+            if let Some(rest) = authority.strip_prefix(host_part) {
+                if let Some(port) = rest.strip_prefix(':') {
+                    if DAEMON_TLS_PORTS.iter().any(|p| *p == port) {
+                        return host_part.to_string();
+                    }
+                }
+            }
             return authority.to_string();
         }
     }
@@ -425,7 +449,14 @@ fn extract_api_host(endpoint: &str) -> String {
             .map_or(authority, |(host, _)| host)
             .to_string()
     } else {
-        // http/https — preserve port for non-standard setups.
+        // https://host:<daemon-TLS-port> → strip the port (gRPC, not
+        // REST). Preserve every other authority verbatim so an
+        // operator running REST on a non-standard port keeps working.
+        if let Some((host, port)) = authority.rsplit_once(':') {
+            if DAEMON_TLS_PORTS.iter().any(|p| *p == port) {
+                return host.to_string();
+            }
+        }
         authority.to_string()
     }
 }
@@ -546,6 +577,21 @@ mod tests {
         );
         assert_eq!(extract_api_host("http://127.0.0.1:8080"), "127.0.0.1:8080");
         assert_eq!(extract_api_host("https://[::1]:8080"), "[::1]:8080");
+    }
+
+    #[test]
+    fn extract_api_host_strips_daemon_tls_port_for_https_scheme() {
+        // Production yaml hard-codes PublicEndpoint=https://easynet.run:50443
+        // (the daemon TLS gRPC port). REST calls have to land on :443,
+        // not on the gRPC listener — historic bug.
+        assert_eq!(
+            extract_api_host("https://easynet.run:50443"),
+            "easynet.run"
+        );
+        assert_eq!(extract_api_host("https://10.0.0.1:50443"), "10.0.0.1");
+        assert_eq!(extract_api_host("https://[::1]:50443"), "[::1]");
+        // demo's hub-B port follows the same posture.
+        assert_eq!(extract_api_host("https://hub-b:50543"), "hub-b");
     }
 
     #[test]

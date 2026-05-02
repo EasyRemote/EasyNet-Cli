@@ -135,9 +135,7 @@ fn handler(args: Value) -> Result<Value> {
         .get("replace_all")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let expected_mtime_ms = args
-        .get("expected_mtime_ms")
-        .and_then(Value::as_u64);
+    let expected_mtime_ms = args.get("expected_mtime_ms").and_then(Value::as_u64);
 
     // Resolve a single layer of symlink so the tempfile lives
     // next to the REAL file (rename(2) stays on one filesystem)
@@ -219,8 +217,7 @@ fn handler(args: Value) -> Result<Value> {
 
     // Pre-read size guard — read_file_capped enforces it but
     // we surface the reason cleanly here.
-    let metadata = std::fs::metadata(dst)
-        .map_err(|e| anyhow!("fs.edit: stat {path:?}: {e}"))?;
+    let metadata = std::fs::metadata(dst).map_err(|e| anyhow!("fs.edit: stat {path:?}: {e}"))?;
     if metadata.len() > MAX_EDIT_FILE_SIZE {
         return Ok(rejection(
             "FileTooLarge",
@@ -321,12 +318,7 @@ fn preview(s: &str, cap: usize) -> String {
     out
 }
 
-fn rejection(
-    code: &str,
-    message: &str,
-    detail: Option<Value>,
-    path: &str,
-) -> Value {
+fn rejection(code: &str, message: &str, detail: Option<Value>, path: &str) -> Value {
     json!({
         "ok": false,
         "code": code,
@@ -361,14 +353,11 @@ fn write_atomic(dst: &Path, raw: &[u8]) -> Result<()> {
         }
     };
     let parent = dst.parent().unwrap_or_else(|| Path::new("."));
-    let stem = dst
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("__edit");
+    let stem = dst.file_name().and_then(|n| n.to_str()).unwrap_or("__edit");
     let tmp = parent.join(format!(".{stem}.tmp.{}", uuid_suffix()));
     {
-        let mut f = std::fs::File::create(&tmp)
-            .map_err(|e| anyhow!("fs.edit: create tmp {tmp:?}: {e}"))?;
+        let mut f =
+            std::fs::File::create(&tmp).map_err(|e| anyhow!("fs.edit: create tmp {tmp:?}: {e}"))?;
         f.write_all(raw)
             .map_err(|e| anyhow!("fs.edit: write tmp {tmp:?}: {e}"))?;
         f.sync_data()
@@ -770,10 +759,8 @@ mod tests {
         let dir = temp_dir();
         let path = dir.join("a.txt");
         std::fs::write(&path, "old").unwrap();
-        let mtime = super::super::fs_ability::file_mtime_ms(
-            &std::fs::metadata(&path).unwrap(),
-        )
-        .unwrap();
+        let mtime =
+            super::super::fs_ability::file_mtime_ms(&std::fs::metadata(&path).unwrap()).unwrap();
         let resp = handler(json!({
             "path": path.to_str().unwrap(),
             "old_string": "old",

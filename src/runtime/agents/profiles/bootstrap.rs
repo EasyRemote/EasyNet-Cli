@@ -36,9 +36,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use crate::persistence::local_agents::{
-    upsert_hosted_agent, HostedAgentEntry, LocalAgentsFile,
-};
+use crate::persistence::local_agents::{upsert_hosted_agent, HostedAgentEntry, LocalAgentsFile};
 
 /// Configuration for one bootstrap pass. The daemon-boot wiring
 /// fills this from `~/.easynet/config.toml` (`[profiles]` section)
@@ -192,9 +190,7 @@ pub fn outcomes_for_profile<'a>(
 pub fn hosted_uris(file: &LocalAgentsFile) -> Vec<(String, String, String)> {
     file.hosted_agents
         .iter()
-        .map(|e: &HostedAgentEntry| {
-            (e.profile.clone(), e.name.clone(), e.agent_uri.clone())
-        })
+        .map(|e: &HostedAgentEntry| (e.profile.clone(), e.name.clone(), e.agent_uri.clone()))
         .collect()
 }
 
@@ -287,22 +283,11 @@ mod tests {
         // want to mint fresh URIs on every flip).
         let mut file = LocalAgentsFile::default();
         let minter = CountingMinter::new();
-        let _ = bootstrap_local_agents(
-            &plan_with(true, true, false, &[]),
-            &mut file,
-            &minter,
-        );
+        let _ = bootstrap_local_agents(&plan_with(true, true, false, &[]), &mut file, &minter);
         assert_eq!(file.hosted_agents.len(), 2);
-        let _ = bootstrap_local_agents(
-            &plan_with(true, false, false, &[]),
-            &mut file,
-            &minter,
-        );
+        let _ = bootstrap_local_agents(&plan_with(true, false, false, &[]), &mut file, &minter);
         // policy row still present
-        assert!(file
-            .hosted_agents
-            .iter()
-            .any(|e| e.profile == "policy"));
+        assert!(file.hosted_agents.iter().any(|e| e.profile == "policy"));
     }
 
     #[test]

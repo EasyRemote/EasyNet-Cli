@@ -338,8 +338,8 @@ struct ImplicitAgentFallback {
 fn find_implicit_agent_fallback(
     ir: &crate::eal::ir::MissionIr,
 ) -> anyhow::Result<Option<ImplicitAgentFallback>> {
-    use crate::eal::ir::IrTarget;
     use crate::core::agent_id::{AgentId, DEFAULT_TENANT};
+    use crate::eal::ir::IrTarget;
 
     let registry = crate::registry::agents::load_agents()?;
 

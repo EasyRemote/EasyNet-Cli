@@ -150,9 +150,7 @@ fn parse_request(args: &Value) -> Result<HttpRequest> {
         .unwrap_or("GET")
         .to_uppercase();
     if !is_supported_method(&method) {
-        return Err(anyhow!(
-            "http.request: method {method:?} not supported"
-        ));
+        return Err(anyhow!("http.request: method {method:?} not supported"));
     }
     let headers = match args.get("headers") {
         Some(Value::Object(map)) => {
@@ -161,9 +159,9 @@ fn parse_request(args: &Value) -> Result<HttpRequest> {
                 if k.is_empty() {
                     return Err(anyhow!("http.request: header name must not be empty"));
                 }
-                let s = v.as_str().ok_or_else(|| {
-                    anyhow!("http.request: header[{k}] must be a string value")
-                })?;
+                let s = v
+                    .as_str()
+                    .ok_or_else(|| anyhow!("http.request: header[{k}] must be a string value"))?;
                 if !is_valid_header_name(k) {
                     return Err(anyhow!(
                         "http.request: header name {k:?} contains illegal characters"
@@ -255,8 +253,20 @@ fn is_valid_header_name(name: &str) -> bool {
         c.is_ascii_alphanumeric()
             || matches!(
                 c,
-                '!' | '#' | '$' | '%' | '&' | '\''
-                    | '*' | '+' | '-' | '.' | '^' | '_' | '`' | '|' | '~'
+                '!' | '#'
+                    | '$'
+                    | '%'
+                    | '&'
+                    | '\''
+                    | '*'
+                    | '+'
+                    | '-'
+                    | '.'
+                    | '^'
+                    | '_'
+                    | '`'
+                    | '|'
+                    | '~'
             )
     })
 }
@@ -317,8 +327,17 @@ struct HttpOutcome {
 
 #[derive(Debug)]
 enum HttpError {
-    Status { status: u16, message: String, body: Vec<u8>, duration_ms: u64, response_headers: Vec<(String, String)> },
-    Transport { message: String, duration_ms: u64 },
+    Status {
+        status: u16,
+        message: String,
+        body: Vec<u8>,
+        duration_ms: u64,
+        response_headers: Vec<(String, String)>,
+    },
+    Transport {
+        message: String,
+        duration_ms: u64,
+    },
 }
 
 fn run_request(req: &HttpRequest) -> Result<HttpOutcome, HttpError> {
@@ -343,8 +362,8 @@ fn run_request(req: &HttpRequest) -> Result<HttpOutcome, HttpError> {
         Ok(resp) => {
             let status = resp.status();
             let response_headers = collect_response_headers(&resp);
-            let (body, truncated) = read_capped(resp, req.body_max_bytes)
-                .map_err(|e| HttpError::Transport {
+            let (body, truncated) =
+                read_capped(resp, req.body_max_bytes).map_err(|e| HttpError::Transport {
                     message: format!("body read: {e}"),
                     duration_ms: start.elapsed().as_millis() as u64,
                 })?;
@@ -616,8 +635,7 @@ mod tests {
 
     #[test]
     fn file_scheme_rejects() {
-        let err =
-            parse_request(&args(&[("url", json!("file:///etc/passwd"))])).unwrap_err();
+        let err = parse_request(&args(&[("url", json!("file:///etc/passwd"))])).unwrap_err();
         assert!(err.to_string().contains("scheme"));
     }
 

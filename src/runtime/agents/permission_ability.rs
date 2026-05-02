@@ -147,9 +147,9 @@ fn decide_handler(svc: &PermissionService, args: Value) -> anyhow::Result<Value>
         "allow" => PermissionDecision::Allow,
         "deny" => PermissionDecision::Deny,
         "allow_once" => PermissionDecision::AllowOnce,
-        other => anyhow::bail!(
-            "consent.decide: `decision` must be allow|deny|allow_once, got {other:?}"
-        ),
+        other => {
+            anyhow::bail!("consent.decide: `decision` must be allow|deny|allow_once, got {other:?}")
+        }
     };
     svc.decide(&PermissionId::new(id), decision)?;
     Ok(json!({ "ok": true }))
@@ -222,9 +222,7 @@ mod tests {
     #[tokio::test]
     async fn subscribe_returns_empty_for_idle_queue() {
         let svc = fresh();
-        let frames = subscribe_handler(&svc, json!({}))
-            .unwrap()
-            .into_snapshot();
+        let frames = subscribe_handler(&svc, json!({})).unwrap().into_snapshot();
         assert!(frames.is_empty());
     }
 
@@ -245,11 +243,7 @@ mod tests {
     #[test]
     fn decide_invalid_decision_string_rejects_at_parse() {
         let svc = fresh();
-        let err = decide_handler(
-            &svc,
-            json!({"id": "x", "decision": "maybe"}),
-        )
-        .unwrap_err();
+        let err = decide_handler(&svc, json!({"id": "x", "decision": "maybe"})).unwrap_err();
         assert!(format!("{err}").contains("allow|deny|allow_once"));
     }
 

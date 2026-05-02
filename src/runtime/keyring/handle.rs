@@ -20,9 +20,9 @@ use std::sync::Mutex;
 
 use super::crypto::{fingerprint, MasterKey};
 use super::store::{
-    build_entry, fresh_keyring, load_keyring,
-    save_keyring, sign_with_entry, ulid_like, unlock_master_key, validate_fingerprint, Entry,
-    KeyRing, KeyStatus, MasterKeyKind, PeerEntry, PeerStatus,
+    build_entry, fresh_keyring, load_keyring, save_keyring, sign_with_entry, ulid_like,
+    unlock_master_key, validate_fingerprint, Entry, KeyRing, KeyStatus, MasterKeyKind, PeerEntry,
+    PeerStatus,
 };
 // Re-import the entry projection helpers — handle.rs's tests use
 // them. The linter trimmed them from the active code-path imports
@@ -40,7 +40,9 @@ fn b64_encode(bytes: &[u8]) -> String {
 fn b64_decode(s: &str) -> Result<Vec<u8>> {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
-    STANDARD.decode(s).map_err(|e| anyhow!("base64 decode: {e}"))
+    STANDARD
+        .decode(s)
+        .map_err(|e| anyhow!("base64 decode: {e}"))
 }
 
 pub struct KeyringHandle {
@@ -128,8 +130,7 @@ impl KeyringHandle {
             .entries
             .iter()
             .find(|e| {
-                e.status == KeyStatus::Active
-                    && e.bound_subject.as_deref() == Some(agent_uri)
+                e.status == KeyStatus::Active && e.bound_subject.as_deref() == Some(agent_uri)
             })
             .cloned()
     }
@@ -145,20 +146,9 @@ impl KeyringHandle {
     }
 
     /// Create a new entry, persist, return.
-    pub fn create_entry(
-        &self,
-        purpose: &str,
-        bound_subject: Option<String>,
-    ) -> Result<Entry> {
+    pub fn create_entry(&self, purpose: &str, bound_subject: Option<String>) -> Result<Entry> {
         let mut ring = self.inner.lock().unwrap();
-        let entry = build_entry(
-            &self.master,
-            &ring.ring_id,
-            purpose,
-            bound_subject,
-            None,
-            0,
-        )?;
+        let entry = build_entry(&self.master, &ring.ring_id, purpose, bound_subject, None, 0)?;
         ring.entries.push(entry.clone());
         save_keyring(&self.path, &ring)?;
         Ok(entry)
@@ -278,9 +268,11 @@ impl KeyringHandle {
         }
         let mut ring = self.inner.lock().unwrap();
         let key_id = super::store::ulid_like();
-        let aad =
-            format!("easynet/keyring/v1/{ring_id}/{key_id}", ring_id = ring.ring_id)
-                .into_bytes();
+        let aad = format!(
+            "easynet/keyring/v1/{ring_id}/{key_id}",
+            ring_id = ring.ring_id
+        )
+        .into_bytes();
         let private_key_ciphertext_b64 = match private_key_seed_opt {
             Some(seed) if seed.len() == 32 => {
                 let wrapped = super::crypto::aead_encrypt(&self.master, seed, &aad)?;
@@ -329,11 +321,7 @@ impl KeyringHandle {
         let now = chrono::Utc::now().timestamp_millis();
 
         // Update existing or insert new.
-        if let Some(p) = ring
-            .peer_table
-            .iter_mut()
-            .find(|p| p.peer_uri == peer_uri)
-        {
+        if let Some(p) = ring.peer_table.iter_mut().find(|p| p.peer_uri == peer_uri) {
             // Re-add of the same peer: refresh, preserving status.
             p.public_key_b64 = public_key_b64.to_string();
             p.fingerprint_b64 = fp_b64;
@@ -409,7 +397,9 @@ mod tests {
     #[test]
     fn rotation_retires_old_creates_new_with_incremented_epoch() {
         let (h, _dir) = open_test_handle();
-        let e = h.create_entry("agent_signing", Some("easynet:///r/prv/reg/agent.x".into())).unwrap();
+        let e = h
+            .create_entry("agent_signing", Some("easynet:///r/prv/reg/agent.x".into()))
+            .unwrap();
         let (new_id, retired_id, epoch) = h.rotate(&e.key_id).unwrap();
         assert_eq!(retired_id, e.key_id);
         assert_eq!(epoch, 1);
@@ -422,7 +412,10 @@ mod tests {
         assert_eq!(new.status, KeyStatus::Active);
         assert_eq!(new.rotation_epoch, 1);
         assert_eq!(new.rotated_from.as_deref(), Some(retired_id.as_str()));
-        assert_eq!(new.bound_subject.as_deref(), Some("easynet:///r/prv/reg/agent.x"));
+        assert_eq!(
+            new.bound_subject.as_deref(),
+            Some("easynet:///r/prv/reg/agent.x")
+        );
     }
 
     #[test]
@@ -474,7 +467,9 @@ mod tests {
         let pk = e.public_key_b64.clone();
         h.peer_add("easynet:///r/org/reg/agent.bob", &pk, None, Some("hub-uri"))
             .unwrap();
-        let p = h.find_peer_by_uri("easynet:///r/org/reg/agent.bob").unwrap();
+        let p = h
+            .find_peer_by_uri("easynet:///r/org/reg/agent.bob")
+            .unwrap();
         assert_eq!(p.via_hub.as_deref(), Some("hub-uri"));
         assert_eq!(p.public_key_b64, pk);
     }

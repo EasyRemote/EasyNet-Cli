@@ -41,8 +41,8 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::persistence::config;
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::agents::federation_probe;
 
 pub const ABILITY_LIST_NODES: &str = "fleet.list_nodes";
 pub const ABILITY_DESCRIBE_NODE: &str = "fleet.describe_node";
@@ -99,22 +99,13 @@ pub fn register(reg: &mut LocalAbilityRegistry) {
 /// daemon may still serve local abilities, but federation-tier
 /// answers should reflect the unpaired state.
 fn local_identity() -> (String, String, Option<String>, bool) {
-    match config::load_credentials() {
-        Ok(c) => {
-            let hub = if c.hub_endpoint.trim().is_empty() {
-                None
-            } else {
-                Some(c.hub_endpoint)
-            };
-            (c.node_id, c.tenant_id, hub, true)
-        }
-        Err(_) => (
-            "local".to_string(),
-            "default".to_string(),
-            None,
-            false,
-        ),
-    }
+    let local = federation_probe::local_identity();
+    (
+        local.node_id,
+        local.tenant_id,
+        local.hub_endpoint,
+        local.paired,
+    )
 }
 
 /// Treat a node id as "this device". Accepts the literal `local`,
@@ -150,26 +141,17 @@ fn federation_not_wired(action: &str) -> anyhow::Error {
 /// `list_nodes`; will be re-wired through a federation Invoke
 /// helper when one ships, at which point this handler fan-outs).
 fn list_nodes_handler(_args: Value) -> anyhow::Result<Value> {
-    let (node_id, tenant_id, hub, paired) = local_identity();
-    let mut nodes = Vec::new();
-    nodes.push(json!({
-        "node_id": node_id,
-        "tenant_id": tenant_id,
-        "is_self": true,
-        "paired": paired,
-        "hub_endpoint": hub,
-        // State derived from "are we even paired?". A paired,
-        // running daemon reports HEALTHY; an unpaired device is
-        // operating standalone — surface that explicitly so the
-        // CLI doesn't paint the wrong picture.
-        "state": if paired { "HEALTHY" } else { "STANDALONE" },
-    }));
+    let view = federation_probe::collect_fleet_view();
+    let nodes: Vec<Value> = view
+        .nodes
+        .iter()
+        .map(federation_probe::node_to_json)
+        .collect();
     Ok(json!({
         "nodes": nodes,
-        "federation_view": "local_only",
-        "federation_view_reason":
-            "Cross-node enumeration awaits the federation Invoke replacement \
-             for the AXON-RFC-001 P1.5 list_nodes bridge.",
+        "federation_view": view.federation_view,
+        "federation_view_reason": view.federation_view_reason,
+        "resolve_latency_ms": view.resolve_latency_ms,
     }))
 }
 
@@ -184,20 +166,30 @@ fn describe_node_handler(args: Value) -> anyhow::Result<Value> {
     if node_id.is_empty() {
         anyhow::bail!("fleet.describe_node: `node_id` is required");
     }
-    let (local_id, tenant_id, hub, paired) = local_identity();
-    if is_local_target(node_id, &local_id) {
-        return Ok(json!({
-            "node_id": local_id,
-            "tenant_id": tenant_id,
-            "is_self": true,
-            "paired": paired,
-            "hub_endpoint": hub,
-            "state": if paired { "HEALTHY" } else { "STANDALONE" },
-        }));
+    let view = federation_probe::collect_fleet_view();
+    let local_id = view
+        .nodes
+        .iter()
+        .find(|n| n.is_self)
+        .map(|n| n.node_id.as_str())
+        .unwrap_or("local");
+    if is_local_target(node_id, local_id) {
+        let node = view
+            .nodes
+            .iter()
+            .find(|n| n.is_self)
+            .ok_or_else(|| anyhow::anyhow!("fleet.describe_node: local node is unavailable"))?;
+        return Ok(federation_probe::node_to_json(node));
     }
-    Err(federation_not_wired(&format!(
-        "describing the remote node {node_id:?}"
-    )))
+    if let Some(node) = view.nodes.iter().find(|n| n.node_id == node_id) {
+        return Ok(federation_probe::node_to_json(node));
+    }
+    let suffix = view
+        .federation_view_reason
+        .as_deref()
+        .map(|reason| format!(" ({reason})"))
+        .unwrap_or_default();
+    anyhow::bail!("fleet.describe_node: node {node_id:?} not found{suffix}");
 }
 
 // ── fleet.remove_node ────────────────────────────────────────────
@@ -408,10 +400,11 @@ fn deregister_self_handler(_args: Value) -> anyhow::Result<Value> {
 // ── Discovery surfaces ───────────────────────────────────────────
 
 pub fn list_nodes_description() -> &'static str {
-    "List device nodes visible from this daemon. v1 returns the local \
-     device only; federation peer enumeration awaits the AXON-RFC-001 \
-     P1.5 follow-up. The response carries `federation_view = \"local_only\"` \
-     so callers can detect the limited view explicitly."
+    "List device nodes visible from this daemon. The handler resolves \
+     the realm directory through federation.resolve and then directly \
+     probes each discovered device-profile Agent with observe.health, \
+     so callers can distinguish a local-only view, a directory-only view, \
+     and a directly reachable peer."
 }
 
 pub fn list_nodes_input_schema() -> Value {
@@ -423,9 +416,9 @@ pub fn list_nodes_input_schema() -> Value {
 }
 
 pub fn describe_node_description() -> &'static str {
-    "Describe one node by id. `node_id == \"local\"` (or this device's \
-     own id) returns the local snapshot; any other id surfaces a \
-     `federation_not_wired` error until the Invoke replacement lands."
+    "Describe one node by id from the same live federation-backed view \
+     used by fleet.list_nodes. Accepts `local`, this device's actual \
+     node id, or any resolved peer node id."
 }
 
 pub fn describe_node_input_schema() -> Value {
@@ -541,10 +534,7 @@ mod tests {
             nodes.iter().any(|n| n.get("is_self") == Some(&json!(true))),
             "fleet.list_nodes must include the local device entry: {resp}"
         );
-        assert_eq!(
-            resp.get("federation_view").and_then(Value::as_str),
-            Some("local_only")
-        );
+        assert!(resp.get("federation_view").is_some());
     }
 
     #[test]
@@ -554,9 +544,9 @@ mod tests {
     }
 
     #[test]
-    fn describe_node_with_remote_returns_federation_not_wired() {
+    fn describe_node_with_remote_returns_not_found() {
         let err = describe_node_handler(json!({"node_id": "some-remote"})).unwrap_err();
-        assert!(format!("{err}").contains("federation"));
+        assert!(format!("{err}").contains("not found"));
     }
 
     #[test]
@@ -578,9 +568,8 @@ mod tests {
     #[test]
     fn deploy_ability_local_validates_manifest() {
         // path doesn't exist → typed error, not a panic.
-        let err =
-            deploy_ability_handler(json!({"path": "/no/such/dir", "node_id": "local"}))
-                .unwrap_err();
+        let err = deploy_ability_handler(json!({"path": "/no/such/dir", "node_id": "local"}))
+            .unwrap_err();
         assert!(format!("{err}").contains("not a directory"));
     }
 
@@ -621,6 +610,9 @@ mod tests {
         let r1 = register_self_handler(json!({})).unwrap();
         assert!(r1.get("state").is_some());
         let r2 = deregister_self_handler(json!({})).unwrap();
-        assert_eq!(r2.get("state").and_then(Value::as_str), Some("DEREGISTERED"));
+        assert_eq!(
+            r2.get("state").and_then(Value::as_str),
+            Some("DEREGISTERED")
+        );
     }
 }

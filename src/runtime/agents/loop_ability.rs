@@ -177,11 +177,7 @@ mod tests {
     #[test]
     fn create_then_status_round_trip() {
         let svc = fresh();
-        let resp = create_handler(
-            &svc,
-            json!({"worker_agent": "alice", "max_iters": 3}),
-        )
-        .unwrap();
+        let resp = create_handler(&svc, json!({"worker_agent": "alice", "max_iters": 3})).unwrap();
         let id = resp["loop_id"].as_str().unwrap().to_string();
         let s = status_handler(&svc, json!({"loop_id": id})).unwrap();
         assert_eq!(s["max_iters"], 3);
@@ -205,11 +201,8 @@ mod tests {
     #[test]
     fn subscribe_known_loop_emits_snapshot_or_live_stream() {
         let svc = fresh();
-        let id = create_handler(
-            &svc,
-            json!({"worker_agent": "alice", "max_iters": 2}),
-        )
-        .unwrap()["loop_id"]
+        let id = create_handler(&svc, json!({"worker_agent": "alice", "max_iters": 2})).unwrap()
+            ["loop_id"]
             .as_str()
             .unwrap()
             .to_string();

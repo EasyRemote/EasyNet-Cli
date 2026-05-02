@@ -35,8 +35,8 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use crate::runtime::domain::{
-    DiscussRoom, LoopInstance, LoopId, PermissionDecision, PermissionId, PermissionRequest,
-    RoomId, ScheduleEntry, ScheduleId, Session, SessionId,
+    DiscussRoom, LoopId, LoopInstance, PermissionDecision, PermissionId, PermissionRequest, RoomId,
+    ScheduleEntry, ScheduleId, Session, SessionId,
 };
 use crate::runtime::invocation::{Invocation, Receipt};
 

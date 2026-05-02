@@ -21,9 +21,9 @@
 use clap::Args;
 use console::style;
 
-use crate::runtime::drivers::{claude_code, codex};
 use crate::persistence::config;
 use crate::registry::agents;
+use crate::runtime::drivers::{claude_code, codex};
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
     /// Emit JSON instead of the human-readable report.
@@ -122,11 +122,24 @@ fn check_pairing() -> Check {
 
 fn check_runtime() -> Check {
     match config::load() {
-        Ok(state) => Check {
-            name: "local runtime".to_string(),
-            status: CheckStatus::Ok,
-            detail: format!("up at {}", state.endpoint),
-            hint: None,
+        Ok(state) => match crate::support::local_invoke::invoke_local_ability(
+            "observe.health",
+            serde_json::json!({"source": "doctor"}),
+        ) {
+            Ok(_) => Check {
+                name: "local runtime".to_string(),
+                status: CheckStatus::Ok,
+                detail: format!("up at {}", state.endpoint),
+                hint: None,
+            },
+            Err(e) => Check {
+                name: "local runtime".to_string(),
+                status: CheckStatus::Fail,
+                detail: format!("metadata present, but observe.health failed: {e}"),
+                hint: Some(
+                    "The runtime metadata exists, but the local daemon/control socket is not healthy.",
+                ),
+            },
         },
         Err(_) => Check {
             name: "local runtime".to_string(),
@@ -156,20 +169,41 @@ fn check_federation() -> Check {
                 .get("federation_view")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("");
-            // `local_only` is the expected steady-state today: the
-            // federation Invoke replacement for AXON-RFC-001 P1.5's
-            // `list_nodes` ships in a follow-up. Surface as Warn
-            // (not Fail) — the daemon is healthy, the federation
-            // surface is just incomplete by design.
+            let reason = envelope
+                .get("federation_view_reason")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("no federation detail provided");
+            let peer_probe_failed = envelope
+                .get("nodes")
+                .and_then(serde_json::Value::as_array)
+                .map(|nodes| {
+                    nodes.iter().any(|n| {
+                        n.get("is_self") != Some(&serde_json::Value::Bool(true))
+                            && (!n
+                                .get("online")
+                                .and_then(serde_json::Value::as_bool)
+                                .unwrap_or(false)
+                                || n.get("probe_status").and_then(serde_json::Value::as_str)
+                                    == Some("probe_failed"))
+                    })
+                })
+                .unwrap_or(false);
             if view == "local_only" {
                 Check {
                     name: "federation".to_string(),
                     status: CheckStatus::Warn,
-                    detail: format!(
-                        "{count} node(s); local-only view (federation Invoke replacement pending)"
-                    ),
+                    detail: format!("{count} node(s); local-only view: {reason}"),
                     hint: Some(
-                        "This is expected post-AXON-RFC-001 P1.5. Local fleet operations remain available.",
+                        "The daemon is reachable, but this runtime cannot currently see peers.",
+                    ),
+                }
+            } else if peer_probe_failed {
+                Check {
+                    name: "federation".to_string(),
+                    status: CheckStatus::Warn,
+                    detail: format!("{count} node(s) discovered, but at least one peer probe failed"),
+                    hint: Some(
+                        "Check realm membership, peer daemon health, and cross-device forward_invoke reachability.",
                     ),
                 }
             } else {

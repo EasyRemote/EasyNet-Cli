@@ -140,9 +140,7 @@ impl AbilityProxy {
         // empty file — receipt header emission is best-effort
         // (returns None for every ability) until the next daemon
         // restart picks up the file. Daemon startup never aborts.
-        let local_agents = Arc::new(
-            crate::persistence::local_agents::load().unwrap_or_default(),
-        );
+        let local_agents = Arc::new(crate::persistence::local_agents::load().unwrap_or_default());
         Self {
             kernel,
             dispatcher,
@@ -209,9 +207,7 @@ impl AbilityProxy {
         let dispatcher = AbilityDispatcher::new(registry, gateway);
         let local_node = node_id_from_env_or_default();
         let resolver: Arc<dyn TargetResolver> = Arc::new(LocalNodeResolver::new(local_node));
-        let local_agents = Arc::new(
-            crate::persistence::local_agents::load().unwrap_or_default(),
-        );
+        let local_agents = Arc::new(crate::persistence::local_agents::load().unwrap_or_default());
         Self {
             kernel,
             dispatcher,
@@ -265,20 +261,14 @@ impl AbilityProxy {
                 // borrow we'd be holding across an await.
                 let request_id_for_err = request_id.clone();
                 let ability_for_err = ability.clone();
-                let frames = match std::panic::catch_unwind(
-                    std::panic::AssertUnwindSafe(|| {
-                        self.handle_invoke(request_id, ability, args)
-                    }),
-                ) {
+                let frames = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.handle_invoke(request_id, ability, args)
+                })) {
                     Ok(frames) => frames,
                     Err(panic_payload) => {
-                        let msg = if let Some(s) =
-                            panic_payload.downcast_ref::<&'static str>()
-                        {
+                        let msg = if let Some(s) = panic_payload.downcast_ref::<&'static str>() {
                             (*s).to_string()
-                        } else if let Some(s) =
-                            panic_payload.downcast_ref::<String>()
-                        {
+                        } else if let Some(s) = panic_payload.downcast_ref::<String>() {
                             s.clone()
                         } else {
                             "non-string panic payload".to_string()
@@ -761,12 +751,11 @@ impl AbilityProxy {
                 // (pre-join state, missing hosted profile, etc.), we
                 // emit no header and the wire stays at the pre-RFC
                 // shape.
-                let receipt_header =
-                    crate::runtime::dispatch_receipt::header_for_ability(
-                        &ability_for_receipt,
-                        &self.local_agents,
-                        llm_sub_for_receipt.as_deref(),
-                    );
+                let receipt_header = crate::runtime::dispatch_receipt::header_for_ability(
+                    &ability_for_receipt,
+                    &self.local_agents,
+                    llm_sub_for_receipt.as_deref(),
+                );
                 vec![OutgoingFrame::Result {
                     request_id,
                     value,
@@ -1039,8 +1028,19 @@ fn sub_agent_name_from_ability(ability: &str) -> Option<String> {
     // Filter out protocol-owned namespaces — those resolve to the
     // device or hosted profile, not to a per-agent LLM URA.
     let protocol_namespaces = [
-        "fleet", "observe", "admin", "schedule", "loop", "discuss", "meta",
-        "consent", "policy", "mcp", "conversation", "session", "skill",
+        "fleet",
+        "observe",
+        "admin",
+        "schedule",
+        "loop",
+        "discuss",
+        "meta",
+        "consent",
+        "policy",
+        "mcp",
+        "conversation",
+        "session",
+        "skill",
         "federation",
     ];
     if protocol_namespaces.contains(&agent) {
@@ -1182,9 +1182,7 @@ mod tests {
         assert_eq!(frames.len(), 1);
         match &frames[0] {
             OutgoingFrame::Error {
-                request_id,
-                code,
-                ..
+                request_id, code, ..
             } => {
                 assert_eq!(request_id.as_deref(), Some("req-2"));
                 assert_eq!(code, codes::NOT_FOUND);
@@ -1266,12 +1264,7 @@ mod tests {
         let dispatcher = AbilityDispatcher::new(registry, gateway);
         let resolver: Arc<dyn TargetResolver> =
             Arc::new(LocalNodeResolver::new(NodeId::new("self")));
-        AbilityProxy::new_with_local_agents(
-            Arc::new(StubKernel),
-            dispatcher,
-            resolver,
-            file,
-        )
+        AbilityProxy::new_with_local_agents(Arc::new(StubKernel), dispatcher, resolver, file)
     }
 
     #[test]
@@ -1342,9 +1335,7 @@ mod tests {
         // build wiring. The strict semantic test is in
         // dispatch_receipt::tests where the registry isn't involved.
         let header = match &frames[0] {
-            OutgoingFrame::Result {
-                receipt_header, ..
-            } => receipt_header
+            OutgoingFrame::Result { receipt_header, .. } => receipt_header
                 .clone()
                 .expect("consent.* dispatch must attach a header on success"),
             OutgoingFrame::Error { .. } => {
@@ -1394,9 +1385,7 @@ mod tests {
     /// session per §D2; the closure returns immediately with a
     /// transport-axis BidiSource.
     fn proxy_with_echo_bidi() -> AbilityProxy {
-        use crate::runtime::ability_dispatch::{
-            BidiSource, LocalBidiHandler, BIDI_CHANNEL_BOUND,
-        };
+        use crate::runtime::ability_dispatch::{BidiSource, LocalBidiHandler, BIDI_CHANNEL_BOUND};
         let mut reg = LocalAbilityRegistry::new();
         let handler: LocalBidiHandler = Arc::new(|_args: serde_json::Value| {
             let (xport_to_handler_tx, mut handler_rx) =
@@ -1458,8 +1447,7 @@ mod tests {
         let (tx, rx) = tokio::sync::mpsc::channel::<OutgoingFrame>(64);
         let cancel: CancelRegistry =
             Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-        let bidi: BidiRegistry =
-            Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let bidi: BidiRegistry = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
         (proxy, tx, rx, cancel, bidi)
     }
 
@@ -1517,8 +1505,11 @@ mod tests {
             match frame {
                 OutgoingFrame::RecvBidi { session_id, frame } => {
                     assert_eq!(session_id, "sess-1");
-                    assert_eq!(frame, &json!({"i": idx}),
-                        "RecvBidi[{idx}] must preserve client emission order (§I1)");
+                    assert_eq!(
+                        frame,
+                        &json!({"i": idx}),
+                        "RecvBidi[{idx}] must preserve client emission order (§I1)"
+                    );
                 }
                 other => panic!("frame {idx}: expected RecvBidi, got {other:?}"),
             }
@@ -1627,7 +1618,11 @@ mod tests {
         let mut saw_recv = false;
         for f in &frames {
             match f {
-                OutgoingFrame::ErrorBidi { session_id, message, .. } => {
+                OutgoingFrame::ErrorBidi {
+                    session_id,
+                    message,
+                    ..
+                } => {
                     assert_eq!(session_id, "sess-dup");
                     assert!(
                         message.contains("already in use"),
@@ -1637,8 +1632,11 @@ mod tests {
                 }
                 OutgoingFrame::RecvBidi { session_id, frame } => {
                     assert_eq!(session_id, "sess-dup");
-                    assert_eq!(frame, &json!("probe"),
-                        "first session must keep echoing after duplicate-open rejection");
+                    assert_eq!(
+                        frame,
+                        &json!("probe"),
+                        "first session must keep echoing after duplicate-open rejection"
+                    );
                     saw_recv = true;
                 }
                 _ => {}
@@ -1697,7 +1695,11 @@ mod tests {
         let mut saw_terminal = false;
         for f in &frames {
             match f {
-                OutgoingFrame::ErrorBidi { session_id, message, .. } if session_id == "sess-ghost" => {
+                OutgoingFrame::ErrorBidi {
+                    session_id,
+                    message,
+                    ..
+                } if session_id == "sess-ghost" => {
                     if message.contains("unknown session_id") {
                         saw_send_err = true;
                     } else {
@@ -1710,7 +1712,10 @@ mod tests {
             }
         }
         assert!(saw_open_err, "OpenBidi failure must surface ErrorBidi");
-        assert!(saw_send_err, "SendBidi for unknown session must surface ErrorBidi");
+        assert!(
+            saw_send_err,
+            "SendBidi for unknown session must surface ErrorBidi"
+        );
         assert!(
             !saw_terminal,
             "§I3 / §D5: failed OpenBidi must NOT emit TerminalBidi (no session ever existed)"

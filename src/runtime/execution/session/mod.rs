@@ -184,12 +184,7 @@ impl SessionService {
 
     /// Convenience constructor for admission code paths that have
     /// the four input fields but not a full Session struct yet.
-    pub fn make_session(
-        id: SessionId,
-        agent: AgentId,
-        node: NodeId,
-        tenant: TenantId,
-    ) -> Session {
+    pub fn make_session(id: SessionId, agent: AgentId, node: NodeId, tenant: TenantId) -> Session {
         Session {
             id,
             agent,
@@ -203,12 +198,7 @@ impl SessionService {
 
 impl std::fmt::Debug for SessionService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let n = self
-            .sessions
-            .read()
-            .ok()
-            .map(|g| g.len())
-            .unwrap_or(0);
+        let n = self.sessions.read().ok().map(|g| g.len()).unwrap_or(0);
         write!(f, "SessionService {{ sessions: {n} }}")
     }
 }
@@ -318,9 +308,7 @@ mod tests {
     #[test]
     fn terminate_unknown_session_errors() {
         let svc = SessionService::new();
-        let err = svc
-            .terminate(&SessionId::new("ghost"), 0)
-            .unwrap_err();
+        let err = svc.terminate(&SessionId::new("ghost"), 0).unwrap_err();
         assert!(format!("{err}").contains("not found"));
     }
 

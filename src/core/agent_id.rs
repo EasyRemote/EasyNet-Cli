@@ -865,8 +865,8 @@ mod tests {
             "node.prod.example",
             "dev_machine_42",
             "9f8b2a1c-4d3e-11ee-be56-0242ac120002",
-            "a",                   // single char
-            "192-168-1-10",        // IP-ish (dots are fine; dashes too)
+            "a",            // single char
+            "192-168-1-10", // IP-ish (dots are fine; dashes too)
             "192.168.1.10",
         ] {
             let id = NodeId::parse(s).unwrap_or_else(|e| panic!("{s:?} -> {e}"));
@@ -907,8 +907,14 @@ mod tests {
         // contexts: shell metacharacters, path separators, spaces,
         // control characters. Every one must round-trip to
         // `InvalidChar` rather than being silently accepted or crashing.
-        for bad in ["node 1", "node/1", "node\\1", "node;rm -rf", "node\n", "node$"]
-        {
+        for bad in [
+            "node 1",
+            "node/1",
+            "node\\1",
+            "node;rm -rf",
+            "node\n",
+            "node$",
+        ] {
             match NodeId::parse(bad) {
                 Err(NodeIdError::InvalidChar { .. }) => {}
                 other => panic!("{bad:?} must be rejected as InvalidChar, got {other:?}"),

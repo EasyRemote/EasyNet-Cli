@@ -230,16 +230,10 @@ mod tests {
     #[test]
     fn post_assigns_monotonic_sequence_per_room() {
         let s = DiscussService::new();
-        let r = s
-            .create(vec!["alice".into(), "bob".into()], None)
-            .unwrap();
-        let s0 = s
-            .post(&r, AgentId::new("alice"), "hi", None)
-            .unwrap();
+        let r = s.create(vec!["alice".into(), "bob".into()], None).unwrap();
+        let s0 = s.post(&r, AgentId::new("alice"), "hi", None).unwrap();
         let s1 = s.post(&r, AgentId::new("bob"), "hello", None).unwrap();
-        let s2 = s
-            .post(&r, AgentId::new("alice"), "next", None)
-            .unwrap();
+        let s2 = s.post(&r, AgentId::new("alice"), "next", None).unwrap();
         assert_eq!(s0, 0);
         assert_eq!(s1, 1);
         assert_eq!(s2, 2);
@@ -263,12 +257,7 @@ mod tests {
     fn post_unknown_room_errors() {
         let s = DiscussService::new();
         let err = s
-            .post(
-                &RoomId::new("never"),
-                AgentId::new("alice"),
-                "hi",
-                None,
-            )
+            .post(&RoomId::new("never"), AgentId::new("alice"), "hi", None)
             .unwrap_err();
         assert!(format!("{err}").contains("does not exist"));
     }

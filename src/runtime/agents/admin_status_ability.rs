@@ -63,9 +63,7 @@ where
     );
 }
 
-fn handler(
-    ability_count_provider: &Arc<dyn Fn() -> usize + Send + Sync>,
-) -> anyhow::Result<Value> {
+fn handler(ability_count_provider: &Arc<dyn Fn() -> usize + Send + Sync>) -> anyhow::Result<Value> {
     let local = crate::persistence::local_agents::load().unwrap_or_default();
     let joined = !local.host_device_agent_uri.is_empty();
     let ability_count = ability_count_provider();
@@ -138,10 +136,7 @@ mod tests {
         ));
         let comps = resp["components"].as_array().unwrap();
         assert_eq!(comps.len(), 3, "components must list all three subsystems");
-        let names: Vec<&str> = comps
-            .iter()
-            .map(|c| c["name"].as_str().unwrap())
-            .collect();
+        let names: Vec<&str> = comps.iter().map(|c| c["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"membership"));
         assert!(names.contains(&"ability_registry"));
         assert!(names.contains(&"hosted_agents"));

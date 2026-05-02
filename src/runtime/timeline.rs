@@ -209,8 +209,8 @@ impl TimelineWriter {
         // fields are String / i64 / Option<Value>) but we propagate
         // the error rather than `expect` to keep the caller in
         // charge of "what do we do when disk is unreachable."
-        let value = serde_json::to_value(&event)
-            .map_err(|e| anyhow::anyhow!("serialize event: {e}"))?;
+        let value =
+            serde_json::to_value(&event).map_err(|e| anyhow::anyhow!("serialize event: {e}"))?;
         // fsync=true honours P2. The cost (one syscall per emit)
         // is bounded by the LLM streaming rate, which is orders of
         // magnitude slower than fsync even on slow disks.
@@ -327,7 +327,8 @@ mod tests {
         let (w, _dir) = new_writer("subscribe");
         let mut rx = w.subscribe();
         w.emit("admitted", None).unwrap();
-        w.emit("progress", Some(serde_json::json!({"n": 1}))).unwrap();
+        w.emit("progress", Some(serde_json::json!({"n": 1})))
+            .unwrap();
         // try_recv drains without awaiting — broadcast's receiver
         // is tokio-typed but try_recv is sync and returns
         // immediately when events are already enqueued.
@@ -388,7 +389,8 @@ mod tests {
         // disk read after recv would return zero events.
         let (w, dir) = new_writer("p2-order");
         let mut rx = w.subscribe();
-        w.emit("admitted", Some(serde_json::json!({"n": 42}))).unwrap();
+        w.emit("admitted", Some(serde_json::json!({"n": 42})))
+            .unwrap();
         let event = rx.try_recv().unwrap();
         // Disk must already be authoritative at this point.
         let log = PersistentLog::new(Some(dir));

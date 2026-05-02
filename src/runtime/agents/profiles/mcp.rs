@@ -168,9 +168,7 @@ impl LocalInvoker for ProxyLocalInvoker {
         // use the IPC path directly, not the MCP shim.
         match frames.into_iter().next() {
             Some(OutgoingFrame::Result { value, .. }) => Ok(value),
-            Some(OutgoingFrame::Error { code, message, .. }) => {
-                Err(format!("{code}: {message}"))
-            }
+            Some(OutgoingFrame::Error { code, message, .. }) => Err(format!("{code}: {message}")),
             Some(other) => Err(format!("unexpected frame from proxy: {other:?}")),
             None => Err("proxy returned no frames".into()),
         }
@@ -419,10 +417,9 @@ fn per_agent_workspace_descriptors(
         }
         let other_chat = format!("{other_name}.chat");
         let other_owner = format!("agent://{other_name}");
-        for s in
-            crate::runtime::abilities::abilities_for(other_name, other_entry)
-                .into_iter()
-                .filter(|s| s.name() != other_chat)
+        for s in crate::runtime::abilities::abilities_for(other_name, other_entry)
+            .into_iter()
+            .filter(|s| s.name() != other_chat)
         {
             if let Some(d) = to_descriptor(s, &other_owner, format!("agent:{other_name}")) {
                 out.push(d);
@@ -511,7 +508,10 @@ mod tests {
             "List every registered agent on this host."
         );
         assert!(
-            !spec["description"].as_str().unwrap().contains("kernel:built-in"),
+            !spec["description"]
+                .as_str()
+                .unwrap()
+                .contains("kernel:built-in"),
             "description must not leak the source/provenance string"
         );
         assert_eq!(spec["inputSchema"]["type"], "object");
@@ -531,8 +531,7 @@ mod tests {
 
     #[test]
     fn tool_spec_falls_back_to_object_schema_when_input_is_null() {
-        let mut desc =
-            AbilityDescriptor::new("a.b", "u", Visibility::Public).unwrap();
+        let mut desc = AbilityDescriptor::new("a.b", "u", Visibility::Public).unwrap();
         desc.schema_summary.input = serde_json::Value::Null;
         let spec = tool_spec_from_descriptor(&desc);
         assert_eq!(spec["inputSchema"]["type"], "object");
@@ -570,10 +569,7 @@ mod tests {
     #[test]
     fn tool_specs_lists_every_descriptor_passed_at_construction() {
         let descs = vec![d("observe.health"), d("fleet.list_agents")];
-        let p = InvokeMcpProvider::new(
-            RecordingInvoker::new(Ok(serde_json::json!({}))),
-            descs,
-        );
+        let p = InvokeMcpProvider::new(RecordingInvoker::new(Ok(serde_json::json!({}))), descs);
         let specs = p.tool_specs();
         assert_eq!(specs.len(), 2);
         let names: Vec<&str> = specs.iter().map(|s| s["name"].as_str().unwrap()).collect();
@@ -586,15 +582,17 @@ mod tests {
         let invoker = RecordingInvoker::new(Ok(serde_json::json!({})));
         let p = InvokeMcpProvider::new(invoker, vec![d("observe.health")]);
         let result = p.handle_tool_call("totally.unknown", &serde_json::Map::new());
-        assert!(result.is_error, "unknown tool must surface as is_error=true");
+        assert!(
+            result.is_error,
+            "unknown tool must surface as is_error=true"
+        );
         // Crucially: the invoker MUST NOT have been called.
         assert!(p.invoker.last_ability.borrow().is_none());
     }
 
     #[test]
     fn known_tool_call_is_dispatched_via_invoker() {
-        let invoker =
-            RecordingInvoker::new(Ok(serde_json::json!({"status": "healthy"})));
+        let invoker = RecordingInvoker::new(Ok(serde_json::json!({"status": "healthy"})));
         let p = InvokeMcpProvider::new(invoker, vec![d("observe.health")]);
         let mut args = serde_json::Map::new();
         args.insert("foo".into(), serde_json::Value::Bool(true));
@@ -617,14 +615,16 @@ mod tests {
         let p = InvokeMcpProvider::new(invoker, vec![d("observe.health")]);
         let result = p.handle_tool_call("observe.health", &serde_json::Map::new());
         assert!(result.is_error);
-        assert!(result.payload["error"].as_str().unwrap().contains("policy denied"));
+        assert!(result.payload["error"]
+            .as_str()
+            .unwrap()
+            .contains("policy denied"));
     }
 
     #[test]
     fn descriptor_count_matches_input() {
         let invoker = RecordingInvoker::new(Ok(serde_json::json!({})));
-        let p =
-            InvokeMcpProvider::new(invoker, vec![d("observe.health"), d("fleet.list_agents")]);
+        let p = InvokeMcpProvider::new(invoker, vec![d("observe.health"), d("fleet.list_agents")]);
         assert_eq!(p.descriptor_count(), 2);
     }
 
@@ -647,12 +647,11 @@ mod tests {
             Arc::new(Kernel::new(Arc::clone(&gateway)));
         let registry = crate::runtime::agents::build_registry();
         let dispatcher = AbilityDispatcher::new(registry, gateway);
-        let resolver: Arc<dyn crate::runtime::invocation_target::TargetResolver> =
-            Arc::new(LocalNodeResolver::new(crate::runtime::domain::NodeId::new("self")));
+        let resolver: Arc<dyn crate::runtime::invocation_target::TargetResolver> = Arc::new(
+            LocalNodeResolver::new(crate::runtime::domain::NodeId::new("self")),
+        );
         let proxy = Arc::new(AbilityProxy::new_with_dispatcher(
-            kernel,
-            dispatcher,
-            resolver,
+            kernel, dispatcher, resolver,
         ));
         let invoker = ProxyLocalInvoker::new(proxy);
         let result = invoker
@@ -661,7 +660,10 @@ mod tests {
         // observe.health returns a JSON object with at least
         // `status`. Exact shape is owned by ping.rs; we only assert
         // the dispatch happened (got a non-null Value).
-        assert!(!result.is_null(), "observe.health must return a value, not null");
+        assert!(
+            !result.is_null(),
+            "observe.health must return a value, not null"
+        );
     }
 
     #[test]
@@ -677,16 +679,14 @@ mod tests {
             Arc::new(NoopGateway::new());
         let kernel: Arc<dyn crate::runtime::kernel_api::KernelApi> =
             Arc::new(Kernel::new(Arc::clone(&gateway)));
-        let registry = std::sync::Arc::new(
-            crate::runtime::ability_dispatch::LocalAbilityRegistry::new(),
-        );
+        let registry =
+            std::sync::Arc::new(crate::runtime::ability_dispatch::LocalAbilityRegistry::new());
         let dispatcher = AbilityDispatcher::new(registry, gateway);
-        let resolver: Arc<dyn crate::runtime::invocation_target::TargetResolver> =
-            Arc::new(LocalNodeResolver::new(crate::runtime::domain::NodeId::new("self")));
+        let resolver: Arc<dyn crate::runtime::invocation_target::TargetResolver> = Arc::new(
+            LocalNodeResolver::new(crate::runtime::domain::NodeId::new("self")),
+        );
         let proxy = Arc::new(AbilityProxy::new_with_dispatcher(
-            kernel,
-            dispatcher,
-            resolver,
+            kernel, dispatcher, resolver,
         ));
         let invoker = ProxyLocalInvoker::new(proxy);
         let err = invoker
@@ -774,8 +774,8 @@ mod tests {
         // the EasyNet ontology's "agent exposes abilities"
         // promise: agents could declare abilities but the LLM
         // they wrap couldn't call them.
-        use crate::registry::agents::{AgentEntry, AgentType};
         use crate::facade::cli::test_support::HomeGuard;
+        use crate::registry::agents::{AgentEntry, AgentType};
 
         let _g = HomeGuard::new();
 
@@ -792,8 +792,7 @@ mod tests {
         registry.agents.insert(agent.into(), entry);
         crate::registry::agents::save_agents(&registry).unwrap();
 
-        let workspace_root =
-            crate::persistence::config::agents_root().join(agent);
+        let workspace_root = crate::persistence::config::agents_root().join(agent);
         std::fs::create_dir_all(workspace_root.join("abilities")).unwrap();
         std::fs::write(
             workspace_root.join("agent.toml"),
@@ -851,7 +850,9 @@ mod tests {
             .map(|d| d.name.clone())
             .collect();
         assert!(
-            !no_agent_names.iter().any(|n| n == &format!("{agent}.code-review")),
+            !no_agent_names
+                .iter()
+                .any(|n| n == &format!("{agent}.code-review")),
             "agent_name=None must NOT include any per-agent abilities; got {no_agent_names:?}"
         );
     }
@@ -873,12 +874,11 @@ mod tests {
             Arc::new(Kernel::new(Arc::clone(&gateway)));
         let registry = crate::runtime::agents::build_registry();
         let dispatcher = AbilityDispatcher::new(registry, gateway);
-        let resolver: Arc<dyn crate::runtime::invocation_target::TargetResolver> =
-            Arc::new(LocalNodeResolver::new(crate::runtime::domain::NodeId::new("self")));
+        let resolver: Arc<dyn crate::runtime::invocation_target::TargetResolver> = Arc::new(
+            LocalNodeResolver::new(crate::runtime::domain::NodeId::new("self")),
+        );
         let proxy = Arc::new(AbilityProxy::new_with_dispatcher(
-            kernel,
-            dispatcher,
-            resolver,
+            kernel, dispatcher, resolver,
         ));
         let invoker = ProxyLocalInvoker::new(proxy);
 
@@ -896,8 +896,7 @@ mod tests {
         assert_eq!(specs[0]["name"], "observe.health");
 
         // tools/call dispatches through the proxy.
-        let result =
-            provider.handle_tool_call("observe.health", &serde_json::Map::new());
+        let result = provider.handle_tool_call("observe.health", &serde_json::Map::new());
         assert!(
             !result.is_error,
             "observe.health must succeed end-to-end through MCP shim"

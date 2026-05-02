@@ -95,14 +95,8 @@ mod tests {
         // would fail to find the data.
         let p = path_for_tenant(&TenantId::default_v1(), TenantKind::Runs);
         let s = p.to_string_lossy();
-        assert!(
-            s.contains("tenants"),
-            "expected `tenants/` segment in {s}"
-        );
-        assert!(
-            s.contains("default"),
-            "expected `default/` segment in {s}"
-        );
+        assert!(s.contains("tenants"), "expected `tenants/` segment in {s}");
+        assert!(s.contains("default"), "expected `default/` segment in {s}");
         assert!(s.ends_with("runs"), "expected trailing `runs`, got {s}");
     }
 

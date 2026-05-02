@@ -181,12 +181,11 @@ pub fn run(args: AgentArgs) -> anyhow::Result<()> {
                 style("`easynet agent discuss` → use `easynet mission discuss`").dim()
             );
             discuss_cmd::run(a)
-        }
-        // The pre-rewrite `easynet agent think` deprecated alias was
-        // removed alongside `easynet mission think` and the
-        // `mission.think` ability: modern agent runtimes already do
-        // think-act-observe inside `<agent>.chat`, so the outer loop
-        // was redundant.
+        } // The pre-rewrite `easynet agent think` deprecated alias was
+          // removed alongside `easynet mission think` and the
+          // `mission.think` ability: modern agent runtimes already do
+          // think-act-observe inside `<agent>.chat`, so the outer loop
+          // was redundant.
     }
 }
 
