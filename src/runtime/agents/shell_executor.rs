@@ -87,12 +87,9 @@ pub fn run_shell_exec(
     let _ = sandboxed; // available for envelope augmentation below
 
     let timeout = timeout.unwrap_or_else(|| Duration::from_secs(DEFAULT_TIMEOUT_SECS));
-    let mut child = cmd.spawn().map_err(|e| {
-        anyhow::anyhow!(
-            "shell executor: failed to spawn {:?}: {e}",
-            argv[0]
-        )
-    })?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("shell executor: failed to spawn {:?}: {e}", argv[0]))?;
 
     // wait_timeout requires a separate crate; do a simple poll loop
     // to avoid the dep. The granularity (50 ms) is fine for the
@@ -291,10 +288,7 @@ fn decode_stdout(bytes: &[u8], mode: Option<&str>) -> anyhow::Result<String> {
             })?;
             Ok(s.trim_end().to_string())
         }
-        other => anyhow::bail!(
-            "shell executor: stdout decoder {:?} not implemented",
-            other
-        ),
+        other => anyhow::bail!("shell executor: stdout decoder {:?} not implemented", other),
     }
 }
 
@@ -322,7 +316,10 @@ mod tests {
         let argv = vec!["echo".to_string(), "{{ missing }}".to_string()];
         let err = render_argv(&argv, &json!({ "other": 1 })).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("missing"), "expected missing-arg error, got: {msg}");
+        assert!(
+            msg.contains("missing"),
+            "expected missing-arg error, got: {msg}"
+        );
     }
 
     #[test]
@@ -355,7 +352,10 @@ mod tests {
         };
         let envelope = run_shell_exec(&spec, &json!({}), None).unwrap();
         assert_eq!(envelope.get("result").and_then(|v| v.as_str()), Some("hi"));
-        assert_eq!(envelope.get("fulfilled_by").and_then(|v| v.as_str()), Some("shell"));
+        assert_eq!(
+            envelope.get("fulfilled_by").and_then(|v| v.as_str()),
+            Some("shell")
+        );
         assert_eq!(envelope.get("exit_code").and_then(|v| v.as_i64()), Some(0));
     }
 
@@ -373,7 +373,11 @@ mod tests {
     #[test]
     fn run_shell_exec_substitutes_json_arg_unambiguously() {
         let spec = ShellExec {
-            argv: vec!["printf".to_string(), "%s".to_string(), "{{ count }}".to_string()],
+            argv: vec![
+                "printf".to_string(),
+                "%s".to_string(),
+                "{{ count }}".to_string(),
+            ],
             stdout: None,
             sandbox: None,
         };
@@ -389,8 +393,7 @@ mod tests {
             sandbox: None,
         };
         let started = Instant::now();
-        let err = run_shell_exec(&spec, &json!({}), Some(Duration::from_millis(200)))
-            .unwrap_err();
+        let err = run_shell_exec(&spec, &json!({}), Some(Duration::from_millis(200))).unwrap_err();
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "timeout did not interrupt the subprocess promptly"

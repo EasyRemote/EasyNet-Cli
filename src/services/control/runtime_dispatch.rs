@@ -200,9 +200,8 @@ async fn bind_socket(path: &Path) -> anyhow::Result<UnixListener> {
                 );
             }
             let _ = std::fs::remove_file(path);
-            UnixListener::bind(path).map_err(|e| {
-                anyhow::anyhow!("rebind {} after stale unlink: {e}", path.display())
-            })
+            UnixListener::bind(path)
+                .map_err(|e| anyhow::anyhow!("rebind {} after stale unlink: {e}", path.display()))
         }
         Err(e) => Err(anyhow::anyhow!("bind {}: {e}", path.display())),
     }
@@ -211,10 +210,7 @@ async fn bind_socket(path: &Path) -> anyhow::Result<UnixListener> {
 /// Accept connections forever, spawn one task per connection.
 /// One request per connection; the task ends after writing the
 /// response.
-pub async fn accept_loop(
-    listener: UnixListener,
-    proxy: AbilityProxy,
-) -> anyhow::Result<()> {
+pub async fn accept_loop(listener: UnixListener, proxy: AbilityProxy) -> anyhow::Result<()> {
     loop {
         let (stream, _peer) = listener.accept().await?;
         let proxy = proxy.clone();
@@ -306,14 +302,13 @@ fn build_response_line(request_line: &str, proxy: &AbilityProxy) -> String {
     }
     let _ = req.function_name; // logged at trace level in a future PR
 
-    let args_bytes = match base64::engine::general_purpose::STANDARD
-        .decode(req.arguments_b64.as_bytes())
-    {
-        Ok(b) => b,
-        Err(e) => {
-            return error_line("BAD_REQUEST", format!("arguments_b64 decode: {e}"));
-        }
-    };
+    let args_bytes =
+        match base64::engine::general_purpose::STANDARD.decode(req.arguments_b64.as_bytes()) {
+            Ok(b) => b,
+            Err(e) => {
+                return error_line("BAD_REQUEST", format!("arguments_b64 decode: {e}"));
+            }
+        };
     let args_value: Value = if args_bytes.is_empty() {
         Value::Object(Default::default())
     } else {
@@ -333,10 +328,7 @@ fn build_response_line(request_line: &str, proxy: &AbilityProxy) -> String {
             let bytes = match serde_json::to_vec(&value) {
                 Ok(b) => b,
                 Err(e) => {
-                    return error_line(
-                        "INTERNAL",
-                        format!("serialise result: {e}"),
-                    );
+                    return error_line("INTERNAL", format!("serialise result: {e}"));
                 }
             };
             let body = DispatchOk {
@@ -455,7 +447,8 @@ fn decode_args(arguments_b64: &str) -> Result<Value, String> {
     if bytes.is_empty() {
         return Ok(Value::Object(Default::default()));
     }
-    serde_json::from_slice(&bytes).map_err(|e| format!("decoded arguments_b64 is not valid JSON: {e}"))
+    serde_json::from_slice(&bytes)
+        .map_err(|e| format!("decoded arguments_b64 is not valid JSON: {e}"))
 }
 
 /// Pump a `StreamSource` to the wire. The `done` / `error`
@@ -507,10 +500,7 @@ where
         loop {
             match rx.recv().await {
                 Ok(frame) => {
-                    let kind = frame
-                        .get("type")
-                        .and_then(Value::as_str)
-                        .unwrap_or("");
+                    let kind = frame.get("type").and_then(Value::as_str).unwrap_or("");
                     let envelope = match kind {
                         "done" => json!({"kind": "done", "frame": frame}),
                         "error" => {
@@ -532,8 +522,8 @@ where
                         }
                         _ => json!({"kind": "progress", "frame": frame}),
                     };
-                    let mut s = serde_json::to_string(&envelope)
-                        .expect("serialise stream envelope");
+                    let mut s =
+                        serde_json::to_string(&envelope).expect("serialise stream envelope");
                     s.push('\n');
                     write_half.write_all(s.as_bytes()).await?;
                     if matches!(kind, "done" | "error") {
@@ -603,8 +593,7 @@ mod tests {
         use crate::runtime::kernel::Kernel;
         use crate::runtime::kernel_api::KernelApi;
         use std::sync::Arc;
-        let kernel: Arc<dyn KernelApi> =
-            Arc::new(Kernel::new(Arc::new(NoopGateway::new())));
+        let kernel: Arc<dyn KernelApi> = Arc::new(Kernel::new(Arc::new(NoopGateway::new())));
         AbilityProxy::new(kernel)
     }
 
@@ -619,10 +608,7 @@ mod tests {
     fn dispatch_socket_path_uses_env_override_when_set() {
         let _g = ENV_LOCK.lock().unwrap();
         let prev = std::env::var("EASYNET_RUNTIME_DISPATCH_SOCK").ok();
-        std::env::set_var(
-            "EASYNET_RUNTIME_DISPATCH_SOCK",
-            "/tmp/test-override.sock",
-        );
+        std::env::set_var("EASYNET_RUNTIME_DISPATCH_SOCK", "/tmp/test-override.sock");
         let p = dispatch_socket_path();
         assert_eq!(p.to_string_lossy(), "/tmp/test-override.sock");
         match prev {
@@ -657,10 +643,7 @@ mod tests {
     #[test]
     fn empty_tool_name_returns_bad_request() {
         let proxy = fresh_proxy();
-        let resp = build_response_line(
-            r#"{"tool_name":"","arguments_b64":""}"#,
-            &proxy,
-        );
+        let resp = build_response_line(r#"{"tool_name":"","arguments_b64":""}"#, &proxy);
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
         assert_eq!(v["code"], "BAD_REQUEST");
         assert!(v["message"].as_str().unwrap().contains("tool_name"));
@@ -679,7 +662,11 @@ mod tests {
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
         assert_eq!(v["code"], "BAD_REQUEST");
         assert!(
-            v["message"].as_str().unwrap().to_ascii_lowercase().contains("base64")
+            v["message"]
+                .as_str()
+                .unwrap()
+                .to_ascii_lowercase()
+                .contains("base64")
                 || v["message"].as_str().unwrap().contains("decode")
                 || v["message"].as_str().unwrap().contains("not valid JSON"),
             "expected a base64-related error; got {:?}",
@@ -740,9 +727,7 @@ mod tests {
         let proxy = fresh_proxy();
         let args = serde_json::json!({"client_marker":"e2e-step3"}).to_string();
         let args_b64 = base64::engine::general_purpose::STANDARD.encode(args.as_bytes());
-        let req = format!(
-            r#"{{"tool_name":"observe.health","arguments_b64":"{args_b64}"}}"#
-        );
+        let req = format!(r#"{{"tool_name":"observe.health","arguments_b64":"{args_b64}"}}"#);
         let resp = build_response_line(&req, &proxy);
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
         assert_eq!(v["ok"], true);
@@ -777,8 +762,7 @@ mod tests {
 
         // Client side: open, send request, read response, close.
         let mut client = UnixStream::connect(&socket_path).await.unwrap();
-        let req =
-            "{\"tool_name\":\"observe.health\",\"arguments_b64\":\"\"}\n".as_bytes();
+        let req = "{\"tool_name\":\"observe.health\",\"arguments_b64\":\"\"}\n".as_bytes();
         client.write_all(req).await.unwrap();
         client.flush().await.unwrap();
         let (read_half, _) = client.into_split();
@@ -902,10 +886,8 @@ mod tests {
     /// shape.
     #[test]
     fn mode_omitted_defaults_to_rpc() {
-        let req: DispatchRequest = serde_json::from_str(
-            r#"{"tool_name":"observe.health","arguments_b64":""}"#,
-        )
-        .unwrap();
+        let req: DispatchRequest =
+            serde_json::from_str(r#"{"tool_name":"observe.health","arguments_b64":""}"#).unwrap();
         assert_eq!(req.mode, "rpc");
 
         // Sanity: explicit "rpc" parses too.
@@ -916,10 +898,9 @@ mod tests {
         assert_eq!(req2.mode, "rpc");
 
         // And explicit "stream" is preserved.
-        let req3: DispatchRequest = serde_json::from_str(
-            r#"{"mode":"stream","tool_name":"x","arguments_b64":""}"#,
-        )
-        .unwrap();
+        let req3: DispatchRequest =
+            serde_json::from_str(r#"{"mode":"stream","tool_name":"x","arguments_b64":""}"#)
+                .unwrap();
         assert_eq!(req3.mode, "stream");
     }
 
@@ -929,9 +910,7 @@ mod tests {
     /// dispatch path than the operator expected.
     #[test]
     fn unknown_mode_returns_bad_request() {
-        let m = parse_mode(
-            r#"{"mode":"streaem","tool_name":"x","arguments_b64":""}"#,
-        );
+        let m = parse_mode(r#"{"mode":"streaem","tool_name":"x","arguments_b64":""}"#);
         match m {
             Mode::Bad(msg) => {
                 assert!(msg.contains("unknown mode"));

@@ -313,11 +313,7 @@ pub trait FederationClient: Send + Sync {
 /// JSON-decode + filter step; test mocks wrap an in-memory
 /// vector via `futures::stream::iter`.
 pub type DirectoryEventStream = std::pin::Pin<
-    Box<
-        dyn futures::Stream<
-                Item = crate::services::federation_directory::DirectoryEvent,
-            > + Send,
-    >,
+    Box<dyn futures::Stream<Item = crate::services::federation_directory::DirectoryEvent> + Send>,
 >;
 
 /// tonic-backed concrete implementation. Holds:
@@ -589,11 +585,12 @@ impl CrossHubDialer {
         // session` via `federation_client::peer_dial::pinned_tls_
         // config` so both outbound dial sites have one audited
         // PEM-read + Certificate::from_pem + ClientTlsConfig path.
-        let tls = super::peer_dial::pinned_tls_config(ca_pem_path)
-            .map_err(|err| FederationClientError::DialFailed {
+        let tls = super::peer_dial::pinned_tls_config(ca_pem_path).map_err(|err| {
+            FederationClientError::DialFailed {
                 hub: target_hub.clone(),
                 detail: err.to_string(),
-            })?;
+            }
+        })?;
 
         let endpoint = Endpoint::from_shared(target_hub.clone())
             .map_err(|err| FederationClientError::DialFailed {
@@ -785,8 +782,7 @@ impl FederationClient for CrossHubDialer {
         let mut client = InvocationClient::new(channel);
         let target_hub_owned = target_hub.clone();
         let outcome =
-            tokio::time::timeout(self.forward_invoke_timeout, client.invoke_stream(request))
-                .await;
+            tokio::time::timeout(self.forward_invoke_timeout, client.invoke_stream(request)).await;
         match outcome {
             Ok(Ok(response)) => {
                 self.record_breaker_success(target_hub, BreakerScope::SubscribeDirectoryV2);
@@ -826,38 +822,35 @@ impl CrossHubDialer {
         target_hub: HubUri,
     ) -> impl futures::Stream<Item = crate::services::federation_directory::DirectoryEvent> + Send
     {
-        futures::stream::unfold(
-            (inner, target_hub),
-            |(mut inner, target_hub)| async move {
-                loop {
-                    match inner.message().await {
-                        Ok(Some(chunk)) => match serde_json::from_slice::<
-                            crate::services::federation_directory::DirectoryEvent,
-                        >(&chunk.payload)
-                        {
-                            Ok(event) => return Some((event, (inner, target_hub))),
-                            Err(err) => {
-                                eprintln!(
-                                    "[cross_hub_dial] subscribe_directory_v2 decode \
-                                     from {target_hub}: {err}; dropping frame"
-                                );
-                                continue;
-                            }
-                        },
-                        Ok(None) => return None,
-                        Err(status) => {
+        futures::stream::unfold((inner, target_hub), |(mut inner, target_hub)| async move {
+            loop {
+                match inner.message().await {
+                    Ok(Some(chunk)) => match serde_json::from_slice::<
+                        crate::services::federation_directory::DirectoryEvent,
+                    >(&chunk.payload)
+                    {
+                        Ok(event) => return Some((event, (inner, target_hub))),
+                        Err(err) => {
                             eprintln!(
-                                "[cross_hub_dial] subscribe_directory_v2 stream from \
-                                 {target_hub} ended with error: code={:?} message={}",
-                                status.code(),
-                                status.message()
+                                "[cross_hub_dial] subscribe_directory_v2 decode \
+                                     from {target_hub}: {err}; dropping frame"
                             );
-                            return None;
+                            continue;
                         }
+                    },
+                    Ok(None) => return None,
+                    Err(status) => {
+                        eprintln!(
+                            "[cross_hub_dial] subscribe_directory_v2 stream from \
+                                 {target_hub} ended with error: code={:?} message={}",
+                            status.code(),
+                            status.message()
+                        );
+                        return None;
                     }
                 }
-            },
-        )
+            }
+        })
     }
 }
 
@@ -1012,10 +1005,7 @@ mod tests {
             .forward_invoke(&target, sample_request("test.echo"))
             .await
             .expect_err("non-hub role must reject");
-        assert!(matches!(
-            err,
-            FederationClientError::PeerNotTrusted(_)
-        ));
+        assert!(matches!(err, FederationClientError::PeerNotTrusted(_)));
     }
 
     #[tokio::test]
@@ -1035,10 +1025,7 @@ mod tests {
             .forward_invoke(&target, sample_request("test.echo"))
             .await
             .expect_err("missing origin_tenant_id must reject");
-        assert!(matches!(
-            err,
-            FederationClientError::PeerNotTrusted(_)
-        ));
+        assert!(matches!(err, FederationClientError::PeerNotTrusted(_)));
     }
 
     #[tokio::test]
@@ -1057,10 +1044,7 @@ mod tests {
             .forward_invoke(&target, sample_request("test.echo"))
             .await
             .expect_err("missing tls_ca_pem_path must reject");
-        assert!(matches!(
-            err,
-            FederationClientError::PeerNotTrusted(_)
-        ));
+        assert!(matches!(err, FederationClientError::PeerNotTrusted(_)));
     }
 
     #[tokio::test]
@@ -1151,8 +1135,8 @@ mod tests {
         let entry = fed_peer_entry(&target, ca_path);
         let anchor = anchor_with(entry);
 
-        let dialer = CrossHubDialer::new(anchor)
-            .with_forward_invoke_timeout(Duration::from_millis(50));
+        let dialer =
+            CrossHubDialer::new(anchor).with_forward_invoke_timeout(Duration::from_millis(50));
         let err = dialer
             .forward_invoke(&target, sample_request("test.echo"))
             .await
@@ -1170,9 +1154,9 @@ mod tests {
             | FederationClientError::InnerInvokeFailed { hub, .. } => {
                 assert_eq!(hub, target);
             }
-            other => panic!(
-                "expected ChannelTimeout / DialFailed / InnerInvokeFailed, got: {other:?}"
-            ),
+            other => {
+                panic!("expected ChannelTimeout / DialFailed / InnerInvokeFailed, got: {other:?}")
+            }
         }
     }
 
@@ -1373,10 +1357,7 @@ mod tests {
             .forward_invoke(&target, sample_request("test.echo"))
             .await
             .expect_err("snapshot must reject indefinitely");
-        assert!(matches!(
-            err,
-            FederationClientError::PeerNotTrusted(_)
-        ));
+        assert!(matches!(err, FederationClientError::PeerNotTrusted(_)));
 
         // No cell to mutate — the snapshot constructor's signature
         // makes hot-reload impossible by construction. Call again
@@ -1385,10 +1366,7 @@ mod tests {
             .forward_invoke(&target, sample_request("test.echo"))
             .await
             .expect_err("snapshot must reject indefinitely");
-        assert!(matches!(
-            err2,
-            FederationClientError::PeerNotTrusted(_)
-        ));
+        assert!(matches!(err2, FederationClientError::PeerNotTrusted(_)));
     }
 
     // ── C2a / DEC-N5 §5: cert_anchor_generation pool tests ──
@@ -1460,14 +1438,13 @@ mod tests {
 
         // Pin the new entry's generation explicitly so a future
         // refactor that broke the eviction would flip this red.
-        let entry = dialer
-            .channels
-            .iter()
-            .next()
-            .expect("one entry remains");
+        let entry = dialer.channels.iter().next().expect("one entry remains");
         let (cached_uri, cached_gen) = entry.key();
         assert_eq!(cached_uri, &target);
-        assert_eq!(*cached_gen, 1, "remaining entry must be at the new generation");
+        assert_eq!(
+            *cached_gen, 1,
+            "remaining entry must be at the new generation"
+        );
     }
 
     #[tokio::test]
@@ -1484,8 +1461,8 @@ mod tests {
         let entry = fed_peer_entry(&target, ca_path);
         let anchor = anchor_with(entry);
 
-        let dialer = CrossHubDialer::new(anchor)
-            .with_forward_invoke_timeout(Duration::from_millis(50));
+        let dialer =
+            CrossHubDialer::new(anchor).with_forward_invoke_timeout(Duration::from_millis(50));
         let _ = dialer
             .forward_invoke(&target, sample_request("test.echo"))
             .await;
@@ -1493,11 +1470,7 @@ mod tests {
             .forward_invoke(&target, sample_request("test.echo"))
             .await;
         assert_eq!(dialer.cached_peer_count(), 1);
-        let entry = dialer
-            .channels
-            .iter()
-            .next()
-            .expect("one entry remains");
+        let entry = dialer.channels.iter().next().expect("one entry remains");
         let (_, cached_gen) = entry.key();
         assert_eq!(
             *cached_gen, 0,

@@ -39,7 +39,9 @@ use crate::runtime::execution::{
     session::SessionService,
 };
 use crate::runtime::gateway_api::GatewayApi;
-use crate::runtime::invocation::{invocation_id_of, Invocation, PriorChain, Receipt, TerminalState};
+use crate::runtime::invocation::{
+    invocation_id_of, Invocation, PriorChain, Receipt, TerminalState,
+};
 use crate::runtime::kernel_api::KernelApi;
 
 /// The runtime kernel. Holds one sub-service per feature and one
@@ -389,7 +391,10 @@ fn should_gate(ability: &str) -> bool {
 /// shape stable even for malformed inputs that should never reach
 /// this far.
 fn agent_portion(ability: &str) -> &str {
-    ability.rsplit_once('.').map(|(head, _)| head).unwrap_or(ability)
+    ability
+        .rsplit_once('.')
+        .map(|(head, _)| head)
+        .unwrap_or(ability)
 }
 
 impl KernelApi for Kernel {
@@ -447,8 +452,9 @@ impl KernelApi for Kernel {
         let outcome: anyhow::Result<serde_json::Value> = if should_gate(&invocation.ability) {
             let agent_label = agent_portion(&invocation.ability);
             match self.gate_permission(&session_id, agent_label, &invocation.args) {
-                PermissionDecision::Allow | PermissionDecision::AllowOnce => self
-                    .dispatch_via_registry(&session_id, &invocation.ability, invocation.args),
+                PermissionDecision::Allow | PermissionDecision::AllowOnce => {
+                    self.dispatch_via_registry(&session_id, &invocation.ability, invocation.args)
+                }
                 PermissionDecision::Deny => {
                     let _ = self.session.emit_event(
                         &session_id,
@@ -471,7 +477,9 @@ impl KernelApi for Kernel {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let terminal = match &outcome {
             Ok(_) => TerminalState::Succeeded,
-            Err(e) => TerminalState::Failed { reason: format!("{e}") },
+            Err(e) => TerminalState::Failed {
+                reason: format!("{e}"),
+            },
         };
         let _ = self.session.emit_event(
             &session_id,
@@ -671,7 +679,10 @@ mod tests {
         // Subscribe to the broker BEFORE invoking — has_subscribers()
         // gates the SubscriberBroker fallback to Allow when empty.
         let perm_svc = k.permission_service();
-        let sub = perm_svc.subscriber().expect("with-subscriber-broker variant").clone();
+        let sub = perm_svc
+            .subscriber()
+            .expect("with-subscriber-broker variant")
+            .clone();
         let mut pending_rx = sub.subscribe();
 
         // Spawn the kernel.invoke call in a blocking task — broker.ask
@@ -724,7 +735,8 @@ mod tests {
         // an empty registry — same observable contract via a
         // different code path.
         let k = Kernel::new(Arc::new(NoopGateway));
-        let empty_registry = Arc::new(crate::runtime::ability_dispatch::LocalAbilityRegistry::new());
+        let empty_registry =
+            Arc::new(crate::runtime::ability_dispatch::LocalAbilityRegistry::new());
         let dispatcher = Arc::new(crate::runtime::ability_dispatch::AbilityDispatcher::new(
             empty_registry,
             Arc::new(NoopGateway),

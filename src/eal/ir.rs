@@ -194,8 +194,7 @@ impl IrStep {
                 for s in &l.verify {
                     s.walk_calls(&mut verify_calls);
                 }
-                (l.max_iters as u64)
-                    .saturating_mul((body_calls.len() + verify_calls.len()) as u64)
+                (l.max_iters as u64).saturating_mul((body_calls.len() + verify_calls.len()) as u64)
             }
         }
     }

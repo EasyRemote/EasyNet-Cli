@@ -164,10 +164,7 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
     let body = manifest.to_toml_string()?;
     let hash = content_hash(&body);
     crate::persistence::config::atomic_write(&target, body.as_bytes()).map_err(|e| {
-        anyhow::anyhow!(
-            "ability.publish: failed to write {}: {e}",
-            target.display()
-        )
+        anyhow::anyhow!("ability.publish: failed to write {}: {e}", target.display())
     })?;
 
     eprintln!(
@@ -264,9 +261,9 @@ fn unpublish_handler(args: Value) -> anyhow::Result<Value> {
 // ── helpers ─────────────────────────────────────────────────────────────
 
 fn parse_publish_args(args: &Value) -> anyhow::Result<(String, String)> {
-    let obj = args.as_object().ok_or_else(|| {
-        anyhow::anyhow!("ability.publish: args must be a JSON object")
-    })?;
+    let obj = args
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("ability.publish: args must be a JSON object"))?;
     let owner = obj
         .get("owner_agent_id")
         .and_then(Value::as_str)
@@ -296,17 +293,15 @@ fn parse_publish_args(args: &Value) -> anyhow::Result<(String, String)> {
 }
 
 fn parse_unpublish_args(args: &Value) -> anyhow::Result<(String, String)> {
-    let obj = args.as_object().ok_or_else(|| {
-        anyhow::anyhow!("ability.unpublish: args must be a JSON object")
-    })?;
+    let obj = args
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("ability.unpublish: args must be a JSON object"))?;
     let owner = obj
         .get("owner_agent_id")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            anyhow::anyhow!("ability.unpublish: missing/empty `owner_agent_id`")
-        })?
+        .ok_or_else(|| anyhow::anyhow!("ability.unpublish: missing/empty `owner_agent_id`"))?
         .to_string();
     let name = obj
         .get("ability_name")
@@ -496,7 +491,12 @@ type = "object"
             "manifest file must exist on disk: {path}"
         );
         // Discoverable via list_ability_manifests too.
-        let entry = agents::load_agents().unwrap().agents.get(&name).cloned().unwrap();
+        let entry = agents::load_agents()
+            .unwrap()
+            .agents
+            .get(&name)
+            .cloned()
+            .unwrap();
         let manifests = crate::runtime::abilities::manifests_for(&name, &entry);
         assert!(
             manifests.iter().any(|m| m.name() == "summarise"),

@@ -86,8 +86,8 @@ use crate::runtime::publish::derive_subject_keypair;
 use crate::services::axon_serve::admission_facade::AdmissionFacade;
 use crate::services::axon_serve::daemon_invocation_service::DaemonInvocationService;
 use crate::services::axon_serve::local_ability_dispatcher::LocalAbilityDispatcher;
-use crate::services::axon_serve::session_initiator::SessionSigningSeed;
 use crate::services::axon_serve::session_initiator::run_session_supervisor;
+use crate::services::axon_serve::session_initiator::SessionSigningSeed;
 use crate::services::pending_dispatch::PendingDispatchMap;
 use crate::services::presence_registry::PresenceRegistry;
 use crate::services::realm_trust_anchor::{RealmTrustAnchor, DEFAULT_REALM_TRUST_PATH};
@@ -116,7 +116,9 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     };
 
     let daemon_identity = load_daemon_identity();
-    let daemon_uri = daemon_identity.as_ref().map(|identity| identity.caller_uri.clone());
+    let daemon_uri = daemon_identity
+        .as_ref()
+        .map(|identity| identity.caller_uri.clone());
     // PR-7 commit 7/N adds an env-override seam: production deploys
     // use `/etc/easynet/realm-trust.toml`; tests / smoke runs set
     // `EASYNET_REALM_TRUST_PATH` to a tempdir-rooted path so the
@@ -148,10 +150,9 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     // DaemonInvocationService (for cross-hub `forward_invoke`
     // routing) and the AdmissionFacade (for `FederatedKeyResolver`
     // cross-realm signature verify against peer hubs).
-    let federated_peers_cell =
-        crate::services::federated_peers_cell::SharedFederatedPeers::new(
-            config.federated_peers().clone(),
-        );
+    let federated_peers_cell = crate::services::federated_peers_cell::SharedFederatedPeers::new(
+        config.federated_peers().clone(),
+    );
 
     // **PR-N3 commit N3-3 + N3-4**. The cross-realm directory
     // cell. Lives at the daemon scope so any consumer of the
@@ -268,8 +269,7 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     let escalation_state = if matches!(config.mode(), DaemonMode::Device) {
         let correlation =
             crate::services::axon_serve::session_escalation::EscalationCorrelation::new();
-        let outbox =
-            crate::services::axon_serve::session_escalation::SharedSessionOutbox::new();
+        let outbox = crate::services::axon_serve::session_escalation::SharedSessionOutbox::new();
         let handle = std::sync::Arc::new(
             crate::services::axon_serve::session_escalation::spawn_escalation_consumer_with_outbox(
                 Arc::clone(&correlation),
@@ -687,7 +687,10 @@ fn load_daemon_identity() -> Option<DaemonIdentity> {
 fn tenant_id_from_agent_uri(uri: &str) -> Option<String> {
     let rest = uri.strip_prefix("easynet:///r/")?;
     let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
-    let segments: Vec<&str> = path.split('/').filter(|segment| !segment.is_empty()).collect();
+    let segments: Vec<&str> = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
     if segments.is_empty() {
         return None;
     }
@@ -708,7 +711,10 @@ fn tenant_id_from_agent_uri(uri: &str) -> Option<String> {
 fn node_id_from_agent_uri(uri: &str) -> Option<String> {
     let rest = uri.strip_prefix("easynet:///r/")?;
     let path = rest.split('?').next().unwrap_or(rest);
-    let segments: Vec<&str> = path.split('/').filter(|segment| !segment.is_empty()).collect();
+    let segments: Vec<&str> = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
     if segments.len() >= 3 && segments[1] == "agent" {
         return Some(segments[2].to_string());
     }
@@ -789,7 +795,11 @@ fn maybe_seed_demo_presence(presence: &Arc<PresenceRegistry>) {
     let Ok(seed_value) = std::env::var("EASYNET_DEMO_PRESENCE_SEED") else {
         return;
     };
-    for seed_uri in seed_value.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+    for seed_uri in seed_value
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<
             Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
         >(8);
@@ -850,9 +860,7 @@ fn spawn_unified_sighup_reload_task(
         let mut sighup = match signal(SignalKind::hangup()) {
             Ok(stream) => stream,
             Err(err) => {
-                eprintln!(
-                    "[axon-serve] failed to install unified SIGHUP reload handler: {err}"
-                );
+                eprintln!("[axon-serve] failed to install unified SIGHUP reload handler: {err}");
                 return;
             }
         };
@@ -921,9 +929,8 @@ fn reload_federated_peers_cell_from(
     path: &Path,
     federated_peers_cell: &crate::services::federated_peers_cell::SharedFederatedPeers,
 ) -> anyhow::Result<usize> {
-    let next_config = DaemonConfig::load(path).map_err(|err| {
-        anyhow::anyhow!("reload daemon-config from {}: {err}", path.display())
-    })?;
+    let next_config = DaemonConfig::load(path)
+        .map_err(|err| anyhow::anyhow!("reload daemon-config from {}: {err}", path.display()))?;
     let next_peers = next_config.federated_peers().clone();
     let len = next_peers.len();
     federated_peers_cell.replace(next_peers);
@@ -953,8 +960,7 @@ fn spawn_federated_directory_poll_task(
     federated_directory_cell: crate::services::federation_directory::SharedFederatedDirectoryView,
 ) {
     tokio::spawn(async move {
-        let mut interval =
-            tokio::time::interval(std::time::Duration::from_secs(5));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
         // Skip the immediate-fire on first tick so the daemon
         // doesn't hammer peers during boot before they're up.
         // The first real poll fires 5s after spawn.
@@ -974,9 +980,7 @@ fn spawn_federated_directory_poll_task(
             )
             .await;
             for (realm, err) in &outcome.failed_peers {
-                eprintln!(
-                    "[federation_directory] poll peer realm={realm:?} failed: {err}"
-                );
+                eprintln!("[federation_directory] poll peer realm={realm:?} failed: {err}");
             }
         }
     });
@@ -1002,8 +1006,7 @@ fn spawn_federated_directory_poll_task(
 fn spawn_federated_directory_streaming_supervisor(
     federation_client: Arc<dyn crate::services::federation_client::FederationClient>,
     federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
-    federated_directory_cell:
-        crate::services::federation_directory::SharedFederatedDirectoryView,
+    federated_directory_cell: crate::services::federation_directory::SharedFederatedDirectoryView,
     caller_uri: String,
 ) {
     tokio::spawn(async move {
@@ -1013,12 +1016,9 @@ fn spawn_federated_directory_streaming_supervisor(
         // via `reconcile_streaming_supervisors` (PR-N3
         // N3-streaming-9), which extracts the diff logic so
         // it stays unit-testable.
-        let mut active: std::collections::BTreeMap<
-            String,
-            tokio::sync::oneshot::Sender<()>,
-        > = std::collections::BTreeMap::new();
-        let mut interval =
-            tokio::time::interval(std::time::Duration::from_secs(2));
+        let mut active: std::collections::BTreeMap<String, tokio::sync::oneshot::Sender<()>> =
+            std::collections::BTreeMap::new();
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
@@ -1031,8 +1031,7 @@ fn spawn_federated_directory_streaming_supervisor(
                     &snapshot,
                     &mut active,
                     |peer_realm, peer_hub_uri| {
-                        let (cancel_tx, cancel_rx) =
-                            tokio::sync::oneshot::channel();
+                        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
                         let realm_owned = peer_realm.to_string();
                         let uri_owned = peer_hub_uri.to_string();
                         let caller_owned = caller_uri.clone();
@@ -1235,8 +1234,7 @@ tls_key_pem = {key:?}
         let config_path = easynet_dir.join("daemon-config.toml");
         std::fs::write(&config_path, config_body).expect("seed daemon-config");
 
-        let registry =
-            Arc::new(crate::runtime::ability_dispatch::LocalAbilityRegistry::default());
+        let registry = Arc::new(crate::runtime::ability_dispatch::LocalAbilityRegistry::default());
         let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
             Arc::new(crate::runtime::gateway::NoopGateway::new());
         let dispatcher = Arc::new(AbilityDispatcher::new(registry, gateway));

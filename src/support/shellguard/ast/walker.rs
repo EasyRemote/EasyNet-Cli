@@ -238,7 +238,9 @@ const SPECIAL_VAR_NAMES: &[&str] = &["?", "$", "!", "#", "0", "-"];
 /// the resolver only checks this regex when `inside_string` is
 /// false. Mirrors AliveCode's `BARE_VAR_UNSAFE_RE`.
 fn bare_var_unsafe(value: &str) -> bool {
-    value.chars().any(|c| matches!(c, ' ' | '\t' | '\n' | '*' | '?' | '['))
+    value
+        .chars()
+        .any(|c| matches!(c, ' ' | '\t' | '\n' | '*' | '?' | '['))
 }
 
 // --- pre-checks -----------------------------------------------------------
@@ -482,8 +484,16 @@ fn collect_commands<'a>(
             // `&&`/`;` chain mutates the caller's scope (sequential
             // semantics); reset only at `||`/`&` boundaries.
             let entry: VarScope = scope.clone();
-            let snapshot: VarScope = if needs_snapshot { entry.clone() } else { VarScope::new() };
-            let mut local: VarScope = if is_pipeline { entry.clone() } else { VarScope::new() };
+            let snapshot: VarScope = if needs_snapshot {
+                entry.clone()
+            } else {
+                VarScope::new()
+            };
+            let mut local: VarScope = if is_pipeline {
+                entry.clone()
+            } else {
+                VarScope::new()
+            };
 
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
@@ -548,15 +558,13 @@ fn collect_commands<'a>(
         // shell. tree-sitter emits it as a top-level
         // variable_assignment under `program` / `list`. We
         // mutate scope but emit no SimpleCommand.
-        "variable_assignment" => {
-            match walk_variable_assignment(node, src, commands, scope) {
-                Ok(assign) => {
-                    apply_assignment_to_scope(scope, &assign);
-                    None
-                }
-                Err(err) => Some(err),
+        "variable_assignment" => match walk_variable_assignment(node, src, commands, scope) {
+            Ok(assign) => {
+                apply_assignment_to_scope(scope, &assign);
+                None
             }
-        }
+            Err(err) => Some(err),
+        },
 
         "comment" => None,
 
@@ -643,10 +651,7 @@ fn walk_redirected_statement<'a>(
     Ok(cmd)
 }
 
-fn parse_file_redirect<'a>(
-    node: Node<'a>,
-    src: &str,
-) -> Result<Redirect, ParseForSecurityResult> {
+fn parse_file_redirect<'a>(node: Node<'a>, src: &str) -> Result<Redirect, ParseForSecurityResult> {
     // file_redirect has a child token that is the operator and a
     // child word/string for the target. Optionally a leading
     // `file_descriptor` (a number node) for `2>`.
@@ -756,8 +761,7 @@ fn walk_command<'a>(
                     ));
                 }
             }
-            "word" | "string" | "raw_string" | "number" | "concatenation"
-            | "simple_expansion" => {
+            "word" | "string" | "raw_string" | "number" | "concatenation" | "simple_expansion" => {
                 argv.push(walk_argument(child, src, inner, &mut local_scope)?);
             }
             "comment" => {}
@@ -952,14 +956,17 @@ fn walk_argument<'a>(
         // double-quoted string is extracted (walk_double_string
         // gates on the saw_dynamic_placeholder + saw_literal_content
         // invariant).
-        "command_substitution" | "expansion" | "process_substitution"
-        | "arithmetic_expansion" | "subshell" | "brace_expression"
-        | "ansi_c_string" | "translated_string" => {
-            Err(ParseForSecurityResult::too_complex_node(
-                format!("Argument uses `{}`", node.kind()),
-                node.kind(),
-            ))
-        }
+        "command_substitution"
+        | "expansion"
+        | "process_substitution"
+        | "arithmetic_expansion"
+        | "subshell"
+        | "brace_expression"
+        | "ansi_c_string"
+        | "translated_string" => Err(ParseForSecurityResult::too_complex_node(
+            format!("Argument uses `{}`", node.kind()),
+            node.kind(),
+        )),
         other => Err(ParseForSecurityResult::too_complex_node(
             format!("Argument uses unsupported node `{other}`"),
             other,

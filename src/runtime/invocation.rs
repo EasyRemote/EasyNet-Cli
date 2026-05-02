@@ -72,15 +72,9 @@ pub type AbilityUri = String;
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CausalContext {
     Null,
-    Scalar {
-        prior_invocation_id: String,
-    },
-    List {
-        prior_invocation_ids: Vec<String>,
-    },
-    Merkle {
-        merkle_root: String,
-    },
+    Scalar { prior_invocation_id: String },
+    List { prior_invocation_ids: Vec<String> },
+    Merkle { merkle_root: String },
 }
 
 impl CausalContext {

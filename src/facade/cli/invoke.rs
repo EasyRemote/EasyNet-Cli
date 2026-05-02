@@ -256,9 +256,7 @@ mod tests {
         // mentions `--node`. Either is acceptable as an operator-
         // actionable error.
         assert!(
-            msg.contains("--node")
-                || msg.contains("canonical")
-                || msg.contains("axon-pb"),
+            msg.contains("--node") || msg.contains("canonical") || msg.contains("axon-pb"),
             "error must surface a --node-related message, got: {msg}"
         );
     }

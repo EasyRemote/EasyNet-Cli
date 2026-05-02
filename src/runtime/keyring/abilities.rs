@@ -27,9 +27,9 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
+use super::federated_bindings::{FederatedBindingsStore, FederatedUserBinding};
 use super::handle::KeyringHandle;
 use super::store::{Entry, KeyStatus, PeerStatus};
-use super::federated_bindings::{FederatedBindingsStore, FederatedUserBinding};
 use super::user_binding_chain::{
     verify_user_binding_signature, UserBindingError, UserBindingToken, ED25519_PUBKEY_LEN,
     USER_BINDING_FRESHNESS_MS, USER_BINDING_NONCE_LEN,
@@ -173,10 +173,7 @@ pub fn handle_sign(handle: &KeyringHandle, args: Value) -> Result<Value> {
 /// pin a fixed timestamp; production callers pass the current
 /// epoch-ms. The handler MAY round to seconds in a future commit
 /// for backend JWT-encoding compatibility, but v1 keeps ms.
-pub fn handle_federate_user_identity_token(
-    handle: &KeyringHandle,
-    args: Value,
-) -> Result<Value> {
+pub fn handle_federate_user_identity_token(handle: &KeyringHandle, args: Value) -> Result<Value> {
     let target_realm = require_str(&args, "target_realm")?.to_string();
     if target_realm.is_empty() {
         return Err(anyhow!("target_realm must be non-empty"));
@@ -191,12 +188,12 @@ pub fn handle_federate_user_identity_token(
     // key (purpose=agent_signing) is the daemon's own backend
     // identity, and that's the same key the consuming realm
     // resolves via FederatedKeyResolver / federation.resolve_key.
-    let source_user_uri = handle
-        .device_subject()
-        .ok_or_else(|| anyhow!(
+    let source_user_uri = handle.device_subject().ok_or_else(|| {
+        anyhow!(
             "daemon has no bound device-subject; \
              call <self>.keyring.bind_subject before raising user binding tokens"
-        ))?;
+        )
+    })?;
     let source_realm = parse_realm_from_uri(&source_user_uri).ok_or_else(|| {
         anyhow!(
             "device-subject {source_user_uri:?} is not a canonical \
@@ -217,10 +214,12 @@ pub fn handle_federate_user_identity_token(
         .list_entries()
         .into_iter()
         .find(|e| e.purpose == "agent_signing" && e.status == KeyStatus::Active)
-        .ok_or_else(|| anyhow!(
-            "no active agent_signing entry in keyring; \
+        .ok_or_else(|| {
+            anyhow!(
+                "no active agent_signing entry in keyring; \
              call <self>.keyring.create with purpose=agent_signing first"
-        ))?;
+            )
+        })?;
     let pubkey_raw = b64_decode(&signing_entry.public_key_b64)?;
     let mut source_user_pubkey = [0u8; ED25519_PUBKEY_LEN];
     if pubkey_raw.len() != ED25519_PUBKEY_LEN {
@@ -808,7 +807,8 @@ mod tests {
     fn federate_user_identity_token_requires_canonical_uri() {
         // Subject set to a non-canonical URI. Reject.
         let (h, _d) = handle();
-        h.set_device_subject("not-a-canonical-uri".to_string()).unwrap();
+        h.set_device_subject("not-a-canonical-uri".to_string())
+            .unwrap();
         handle_create(&h, json!({"purpose": "agent_signing"})).unwrap();
         let err = handle_federate_user_identity_token(
             &h,
@@ -970,8 +970,8 @@ mod tests {
         // First consume succeeds.
         handle_consume_federate_user_token(&bindings, args.clone()).unwrap();
         // Second consume of the SAME token (same nonce) is replay.
-        let err = handle_consume_federate_user_token(&bindings, args)
-            .expect_err("replay must reject");
+        let err =
+            handle_consume_federate_user_token(&bindings, args).expect_err("replay must reject");
         assert!(err.to_string().contains("replay detected"));
     }
 

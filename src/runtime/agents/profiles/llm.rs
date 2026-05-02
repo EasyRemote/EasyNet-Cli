@@ -85,12 +85,11 @@ pub fn descriptors_for_with_metadata(
             } else {
                 Visibility::Scoped
             };
-            let mut desc =
-                AbilityDescriptor::new(m.name.clone(), owner_agent_uri, visibility)
-                    .expect("registry-derived names satisfy descriptor invariants")
-                    .with_input_schema(m.input_schema.clone())
-                    .with_source("kernel:built-in")
-                    .with_description(m.description);
+            let mut desc = AbilityDescriptor::new(m.name.clone(), owner_agent_uri, visibility)
+                .expect("registry-derived names satisfy descriptor invariants")
+                .with_input_schema(m.input_schema.clone())
+                .with_source("kernel:built-in")
+                .with_description(m.description);
             if let Some(t) = agent_type_display {
                 desc = desc.with_metadata_entry("agent_type", t);
             }
@@ -128,19 +127,27 @@ mod tests {
         let descriptors = descriptors_for("easynet:///r/acme/agent/01LLM");
         for d in descriptors {
             if d.name.starts_with("skill.") {
-                assert_eq!(d.visibility, Visibility::Private, "{} must be PRIVATE", d.name);
+                assert_eq!(
+                    d.visibility,
+                    Visibility::Private,
+                    "{} must be PRIVATE",
+                    d.name
+                );
             } else {
-                assert_eq!(d.visibility, Visibility::Scoped, "{} must be SCOPED", d.name);
+                assert_eq!(
+                    d.visibility,
+                    Visibility::Scoped,
+                    "{} must be SCOPED",
+                    d.name
+                );
             }
         }
     }
 
     #[test]
     fn descriptors_for_with_metadata_stamps_agent_type_when_provided() {
-        let descriptors = descriptors_for_with_metadata(
-            "easynet:///r/acme/agent/01LLM",
-            Some("claude-code"),
-        );
+        let descriptors =
+            descriptors_for_with_metadata("easynet:///r/acme/agent/01LLM", Some("claude-code"));
         for d in &descriptors {
             assert_eq!(
                 d.metadata.get("agent_type").map(String::as_str),
@@ -153,10 +160,7 @@ mod tests {
 
     #[test]
     fn descriptors_for_with_metadata_omits_agent_type_when_absent() {
-        let descriptors = descriptors_for_with_metadata(
-            "easynet:///r/acme/agent/01LLM",
-            None,
-        );
+        let descriptors = descriptors_for_with_metadata("easynet:///r/acme/agent/01LLM", None);
         for d in &descriptors {
             assert!(
                 !d.metadata.contains_key("agent_type"),

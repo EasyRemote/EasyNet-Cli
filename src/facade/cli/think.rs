@@ -91,8 +91,7 @@ pub fn run(args: ThinkArgs) -> anyhow::Result<()> {
     eprintln!("  Cycles:  up to {}", args.max_cycles);
     eprintln!();
 
-    let resp = invoke_local_ability("mission.think", payload)
-        .context("invoke mission.think")?;
+    let resp = invoke_local_ability("mission.think", payload).context("invoke mission.think")?;
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&resp)?);
@@ -167,11 +166,7 @@ fn render_summary(resp: &Value) {
             }
         } else if attempted && ok {
             let target = c.get("target").and_then(Value::as_str).unwrap_or("");
-            eprintln!(
-                "  Curator: {} → {}",
-                style("published").green(),
-                target
-            );
+            eprintln!("  Curator: {} → {}", style("published").green(), target);
             if let Some(pr) = c.get("publish_result") {
                 if let Some(p) = pr.get("path").and_then(Value::as_str) {
                     eprintln!("           {p}");
@@ -182,10 +177,7 @@ fn render_summary(resp: &Value) {
         } else if attempted {
             let stage = c.get("stage").and_then(Value::as_str).unwrap_or("?");
             let err = c.get("error").and_then(Value::as_str).unwrap_or("?");
-            eprintln!(
-                "  Curator: {} (stage={stage}) {err}",
-                style("failed").red()
-            );
+            eprintln!("  Curator: {} (stage={stage}) {err}", style("failed").red());
             // Validation failures include the authored_body so the
             // operator can see *what* the curator wrote that got
             // rejected. Operationally critical: without this, a

@@ -84,9 +84,10 @@ fn user_join_two_devices_chat_round_trip() {
     //    locally-installed agents (matches what
     //    `easynet agent add` writes to the per-device registry).
     let mut device1_agents = AgentRegistry::default();
-    device1_agents
-        .agents
-        .insert("agent1".into(), AgentEntry::new(AgentType::ClaudeCode, None));
+    device1_agents.agents.insert(
+        "agent1".into(),
+        AgentEntry::new(AgentType::ClaudeCode, None),
+    );
     let mut device2_agents = AgentRegistry::default();
     device2_agents
         .agents
@@ -151,9 +152,7 @@ fn user_join_two_devices_chat_round_trip() {
         let qualified = format!("agent2.{ability}");
         let handler = device2_dispatch_for_closure
             .resolve_rpc(&qualified)
-            .ok_or_else(|| {
-                anyhow::anyhow!("ability_not_found on remote: {qualified}")
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("ability_not_found on remote: {qualified}"))?;
         let _ = target_uri;
         handler(args)
     });
@@ -179,10 +178,7 @@ fn user_join_two_devices_chat_round_trip() {
     // confirms the call took the cross-device path, not the
     // local-registry path.
     assert_eq!(resp["target"], device2_uri);
-    assert_eq!(
-        resp["qualified_name"],
-        format!("{device2_uri}.chat")
-    );
+    assert_eq!(resp["qualified_name"], format!("{device2_uri}.chat"));
     assert_eq!(resp["fulfilled_by"], "federation_forward");
     assert_eq!(resp["result"]["echoed"], "ecived-ssorc olleh");
     assert_eq!(resp["result"]["from"], "agent2");
@@ -204,13 +200,12 @@ fn unknown_remote_target_falls_through_to_typed_error() {
     // (un-advertised) URA. Dispatch must surface
     // target_not_registered, not silently succeed.
     let mut device1_agents = AgentRegistry::default();
-    device1_agents
-        .agents
-        .insert("agent1".into(), AgentEntry::new(AgentType::ClaudeCode, None));
+    device1_agents.agents.insert(
+        "agent1".into(),
+        AgentEntry::new(AgentType::ClaudeCode, None),
+    );
 
-    fwd::set_test_knower(|target| {
-        target == "easynet:///r/silan.localhost/agent/known-only"
-    });
+    fwd::set_test_knower(|target| target == "easynet:///r/silan.localhost/agent/known-only");
     fwd::set_test_router(|_t, _a, _x| {
         // Should not be called: knower rejects the target first.
         panic!("router called for unknown target");
@@ -240,24 +235,20 @@ fn agent1_can_invoke_local_agent_without_federation_path() {
     // the forward router. Distinguished by `fulfilled_by:
     // registry_dispatch` in the response envelope.
     let mut shared_agents = AgentRegistry::default();
-    shared_agents
-        .agents
-        .insert("agent1".into(), AgentEntry::new(AgentType::ClaudeCode, None));
+    shared_agents.agents.insert(
+        "agent1".into(),
+        AgentEntry::new(AgentType::ClaudeCode, None),
+    );
     shared_agents
         .agents
         .insert("agent2".into(), AgentEntry::new(AgentType::Codex, None));
 
-    fwd::set_test_router(|_t, _a, _x| {
-        panic!("forward router must not be called for local target")
-    });
+    fwd::set_test_router(|_t, _a, _x| panic!("forward router must not be called for local target"));
 
     let mut reg = LocalAbilityRegistry::new();
     let summarize: easynet_cli::runtime::ability_dispatch::LocalRpcHandler =
         Arc::new(|args: Value| {
-            let text = args
-                .get("text")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");
             Ok(json!({"summary": format!("{} chars", text.len())}))
         });
     reg.register_rpc("agent2.summarize", summarize);

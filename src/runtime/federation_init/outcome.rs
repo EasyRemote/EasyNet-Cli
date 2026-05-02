@@ -96,10 +96,7 @@ impl FederationInitOutcome {
     /// the daemon-boot log to decide between "federation: ON" and
     /// "federation: OFF (...)" headlines.
     pub fn is_operational(&self) -> bool {
-        matches!(
-            self,
-            Self::Installed { .. } | Self::AlreadyInstalled { .. }
-        )
+        matches!(self, Self::Installed { .. } | Self::AlreadyInstalled { .. })
     }
 
     /// Stable code for status-probe receipts + logs. Mirrors the
@@ -133,10 +130,7 @@ mod tests {
             device_uri: "u".into(),
         }
         .is_operational());
-        assert!(!FederationInitOutcome::Disabled {
-            reason: "x".into()
-        }
-        .is_operational());
+        assert!(!FederationInitOutcome::Disabled { reason: "x".into() }.is_operational());
         assert!(!FederationInitOutcome::Failed {
             stage: FederationStage::BridgeUnavailable,
             reason: "x".into()
@@ -156,7 +150,10 @@ mod tests {
 
     #[test]
     fn stage_code_is_stable() {
-        assert_eq!(FederationStage::BridgeUnavailable.code(), "bridge_unavailable");
+        assert_eq!(
+            FederationStage::BridgeUnavailable.code(),
+            "bridge_unavailable"
+        );
         assert_eq!(FederationStage::KeyringBind.code(), "keyring_bind");
         assert_eq!(FederationStage::Other.code(), "other");
     }

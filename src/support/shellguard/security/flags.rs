@@ -62,50 +62,164 @@ struct InterpreterFlag {
 
 const INTERPRETER_FLAGS: &[InterpreterFlag] = &[
     // Shells
-    InterpreterFlag { interpreter: "bash",     flag: "-c" },
-    InterpreterFlag { interpreter: "sh",       flag: "-c" },
-    InterpreterFlag { interpreter: "zsh",      flag: "-c" },
-    InterpreterFlag { interpreter: "ksh",      flag: "-c" },
-    InterpreterFlag { interpreter: "dash",     flag: "-c" },
-    InterpreterFlag { interpreter: "fish",     flag: "-c" },
-    InterpreterFlag { interpreter: "ash",      flag: "-c" },
-    InterpreterFlag { interpreter: "busybox",  flag: "sh" }, // `busybox sh -c X` would match the next interpreter row;
+    InterpreterFlag {
+        interpreter: "bash",
+        flag: "-c",
+    },
+    InterpreterFlag {
+        interpreter: "sh",
+        flag: "-c",
+    },
+    InterpreterFlag {
+        interpreter: "zsh",
+        flag: "-c",
+    },
+    InterpreterFlag {
+        interpreter: "ksh",
+        flag: "-c",
+    },
+    InterpreterFlag {
+        interpreter: "dash",
+        flag: "-c",
+    },
+    InterpreterFlag {
+        interpreter: "fish",
+        flag: "-c",
+    },
+    InterpreterFlag {
+        interpreter: "ash",
+        flag: "-c",
+    },
+    InterpreterFlag {
+        interpreter: "busybox",
+        flag: "sh",
+    }, // `busybox sh -c X` would match the next interpreter row;
     // Generic interpreters
-    InterpreterFlag { interpreter: "python",   flag: "-c" },
-    InterpreterFlag { interpreter: "python2",  flag: "-c" },
-    InterpreterFlag { interpreter: "python3",  flag: "-c" },
-    InterpreterFlag { interpreter: "perl",     flag: "-e" },
-    InterpreterFlag { interpreter: "perl",     flag: "-E" },
-    InterpreterFlag { interpreter: "ruby",     flag: "-e" },
-    InterpreterFlag { interpreter: "node",     flag: "-e" },
-    InterpreterFlag { interpreter: "node",     flag: "--eval" },
-    InterpreterFlag { interpreter: "node",     flag: "-p" },
-    InterpreterFlag { interpreter: "node",     flag: "--print" },
-    InterpreterFlag { interpreter: "deno",     flag: "eval" },     // `deno eval CODE` (subcommand, not flag)
-    InterpreterFlag { interpreter: "lua",      flag: "-e" },
-    InterpreterFlag { interpreter: "luajit",   flag: "-e" },
-    InterpreterFlag { interpreter: "tcl",      flag: "-c" },
-    InterpreterFlag { interpreter: "tclsh",    flag: "-c" },
-    InterpreterFlag { interpreter: "php",      flag: "-r" },
-    InterpreterFlag { interpreter: "Rscript",  flag: "-e" },
-    InterpreterFlag { interpreter: "R",        flag: "-e" },
-    InterpreterFlag { interpreter: "ghc",      flag: "-e" },
-    InterpreterFlag { interpreter: "runghc",   flag: "-e" },
-    InterpreterFlag { interpreter: "stack",    flag: "exec" },     // `stack exec -- X`
+    InterpreterFlag {
+        interpreter: "python",
+        flag: "-c",
+    },
+    InterpreterFlag {
+        interpreter: "python2",
+        flag: "-c",
+    },
+    InterpreterFlag {
+        interpreter: "python3",
+        flag: "-c",
+    },
+    InterpreterFlag {
+        interpreter: "perl",
+        flag: "-e",
+    },
+    InterpreterFlag {
+        interpreter: "perl",
+        flag: "-E",
+    },
+    InterpreterFlag {
+        interpreter: "ruby",
+        flag: "-e",
+    },
+    InterpreterFlag {
+        interpreter: "node",
+        flag: "-e",
+    },
+    InterpreterFlag {
+        interpreter: "node",
+        flag: "--eval",
+    },
+    InterpreterFlag {
+        interpreter: "node",
+        flag: "-p",
+    },
+    InterpreterFlag {
+        interpreter: "node",
+        flag: "--print",
+    },
+    InterpreterFlag {
+        interpreter: "deno",
+        flag: "eval",
+    }, // `deno eval CODE` (subcommand, not flag)
+    InterpreterFlag {
+        interpreter: "lua",
+        flag: "-e",
+    },
+    InterpreterFlag {
+        interpreter: "luajit",
+        flag: "-e",
+    },
+    InterpreterFlag {
+        interpreter: "tcl",
+        flag: "-c",
+    },
+    InterpreterFlag {
+        interpreter: "tclsh",
+        flag: "-c",
+    },
+    InterpreterFlag {
+        interpreter: "php",
+        flag: "-r",
+    },
+    InterpreterFlag {
+        interpreter: "Rscript",
+        flag: "-e",
+    },
+    InterpreterFlag {
+        interpreter: "R",
+        flag: "-e",
+    },
+    InterpreterFlag {
+        interpreter: "ghc",
+        flag: "-e",
+    },
+    InterpreterFlag {
+        interpreter: "runghc",
+        flag: "-e",
+    },
+    InterpreterFlag {
+        interpreter: "stack",
+        flag: "exec",
+    }, // `stack exec -- X`
     // PowerShell — Windows interop, but a Linux receiver could still
     // see `pwsh -Command X` from a remote caller.
-    InterpreterFlag { interpreter: "pwsh",       flag: "-Command" },
-    InterpreterFlag { interpreter: "pwsh",       flag: "-c" },
-    InterpreterFlag { interpreter: "powershell", flag: "-Command" },
-    InterpreterFlag { interpreter: "powershell", flag: "-c" },
+    InterpreterFlag {
+        interpreter: "pwsh",
+        flag: "-Command",
+    },
+    InterpreterFlag {
+        interpreter: "pwsh",
+        flag: "-c",
+    },
+    InterpreterFlag {
+        interpreter: "powershell",
+        flag: "-Command",
+    },
+    InterpreterFlag {
+        interpreter: "powershell",
+        flag: "-c",
+    },
     // sed / awk — `-e PROGRAM` is the inline-code form
-    InterpreterFlag { interpreter: "sed",  flag: "-e" },
-    InterpreterFlag { interpreter: "awk",  flag: "-v" }, // `-v var=$(rm)` — value is shell-evaluated by awk runtime
-    InterpreterFlag { interpreter: "gawk", flag: "-v" },
-    InterpreterFlag { interpreter: "mawk", flag: "-v" },
+    InterpreterFlag {
+        interpreter: "sed",
+        flag: "-e",
+    },
+    InterpreterFlag {
+        interpreter: "awk",
+        flag: "-v",
+    }, // `-v var=$(rm)` — value is shell-evaluated by awk runtime
+    InterpreterFlag {
+        interpreter: "gawk",
+        flag: "-v",
+    },
+    InterpreterFlag {
+        interpreter: "mawk",
+        flag: "-v",
+    },
     // env -S splits + executes — `env -S "rm -rf /"` runs the embedded
     // shell-like syntax through env's GNU extension.
-    InterpreterFlag { interpreter: "env",  flag: "-S" },
+    InterpreterFlag {
+        interpreter: "env",
+        flag: "-S",
+    },
 ];
 
 /// Public entry. Returns `Some(DetectorHit)` if argv[0] matches
@@ -180,27 +294,42 @@ mod tests {
 
     #[test]
     fn python_dash_c_rejects() {
-        assert_eq!(check(&cmd(&["python", "-c", "import os"])).unwrap().name, "python -c");
+        assert_eq!(
+            check(&cmd(&["python", "-c", "import os"])).unwrap().name,
+            "python -c"
+        );
     }
 
     #[test]
     fn python3_dash_c_rejects() {
-        assert_eq!(check(&cmd(&["python3", "-c", "x"])).unwrap().name, "python3 -c");
+        assert_eq!(
+            check(&cmd(&["python3", "-c", "x"])).unwrap().name,
+            "python3 -c"
+        );
     }
 
     #[test]
     fn perl_dash_e_rejects() {
-        assert_eq!(check(&cmd(&["perl", "-e", "exit"])).unwrap().name, "perl -e");
+        assert_eq!(
+            check(&cmd(&["perl", "-e", "exit"])).unwrap().name,
+            "perl -e"
+        );
     }
 
     #[test]
     fn perl_dash_capital_e_rejects() {
-        assert_eq!(check(&cmd(&["perl", "-E", "say 1"])).unwrap().name, "perl -E");
+        assert_eq!(
+            check(&cmd(&["perl", "-E", "say 1"])).unwrap().name,
+            "perl -E"
+        );
     }
 
     #[test]
     fn ruby_dash_e_rejects() {
-        assert_eq!(check(&cmd(&["ruby", "-e", "puts 1"])).unwrap().name, "ruby -e");
+        assert_eq!(
+            check(&cmd(&["ruby", "-e", "puts 1"])).unwrap().name,
+            "ruby -e"
+        );
     }
 
     #[test]
@@ -210,22 +339,36 @@ mod tests {
 
     #[test]
     fn node_long_eval_flag_rejects() {
-        assert_eq!(check(&cmd(&["node", "--eval", "1"])).unwrap().name, "node --eval");
+        assert_eq!(
+            check(&cmd(&["node", "--eval", "1"])).unwrap().name,
+            "node --eval"
+        );
     }
 
     #[test]
     fn pwsh_command_rejects() {
-        assert_eq!(check(&cmd(&["pwsh", "-Command", "Get-Process"])).unwrap().name, "pwsh -Command");
+        assert_eq!(
+            check(&cmd(&["pwsh", "-Command", "Get-Process"]))
+                .unwrap()
+                .name,
+            "pwsh -Command"
+        );
     }
 
     #[test]
     fn sed_dash_e_rejects() {
-        assert_eq!(check(&cmd(&["sed", "-e", "s/a/b/", "f"])).unwrap().name, "sed -e");
+        assert_eq!(
+            check(&cmd(&["sed", "-e", "s/a/b/", "f"])).unwrap().name,
+            "sed -e"
+        );
     }
 
     #[test]
     fn env_dash_s_rejects() {
-        assert_eq!(check(&cmd(&["env", "-S", "rm -rf /"])).unwrap().name, "env -S");
+        assert_eq!(
+            check(&cmd(&["env", "-S", "rm -rf /"])).unwrap().name,
+            "env -S"
+        );
     }
 
     #[test]

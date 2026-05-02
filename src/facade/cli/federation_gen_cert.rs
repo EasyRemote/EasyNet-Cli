@@ -137,7 +137,10 @@ pub fn run(args: GenCertArgs) -> anyhow::Result<()> {
     set_owner_only_mode(&ca_key)?;
     set_owner_only_mode(&key_pem)?;
 
-    output::success(&format!("Generated cert chain in {}", args.out_dir.display()));
+    output::success(&format!(
+        "Generated cert chain in {}",
+        args.out_dir.display()
+    ));
     output::detail("ca.pem", &ca_pem.display().to_string());
     output::detail("ca.key", &ca_key.display().to_string());
     output::detail("cert.pem", &cert_pem.display().to_string());
@@ -159,9 +162,7 @@ fn require_openssl() -> anyhow::Result<()> {
             "openssl exited non-zero: {}",
             String::from_utf8_lossy(&out.stderr)
         ),
-        Err(e) => anyhow::bail!(
-            "openssl not found on PATH: {e}\n  install openssl and re-run."
-        ),
+        Err(e) => anyhow::bail!("openssl not found on PATH: {e}\n  install openssl and re-run."),
     }
 }
 
@@ -178,9 +179,8 @@ fn run_openssl(args: &[&str]) -> anyhow::Result<()> {
 }
 
 fn write_leaf_extfile(path: &Path, cn: &str) -> anyhow::Result<()> {
-    let body = format!(
-        "subjectAltName=DNS:localhost,DNS:{cn},IP:127.0.0.1\nbasicConstraints=CA:FALSE\n"
-    );
+    let body =
+        format!("subjectAltName=DNS:localhost,DNS:{cn},IP:127.0.0.1\nbasicConstraints=CA:FALSE\n");
     std::fs::write(path, body)?;
     Ok(())
 }
@@ -293,7 +293,13 @@ mod tests {
         for name in &["ca.key", "key.pem"] {
             let p = dir.path().join(name);
             let mode = std::fs::metadata(&p).expect("stat").permissions().mode();
-            assert_eq!(mode & 0o777, 0o600, "{} should be 0600, got {:o}", p.display(), mode & 0o777);
+            assert_eq!(
+                mode & 0o777,
+                0o600,
+                "{} should be 0600, got {:o}",
+                p.display(),
+                mode & 0o777
+            );
         }
     }
 }

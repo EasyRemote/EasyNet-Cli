@@ -20,6 +20,9 @@
 // - Read loop: deserialise each frame to `IncomingFrame`; pass to
 //   `AbilityProxy::handle`; serialise the resulting `OutgoingFrame`
 //   back over the codec.
+// - Stay distinct from the RFC-003 gRPC transport socket
+//   `~/.easynet/daemon.sock`; `control.sock` is legacy
+//   length-delimited JSON IPC, `daemon.sock` is tonic `Invocation`.
 //
 // What is NOT in this commit
 // --------------------------
@@ -142,9 +145,7 @@ pub async fn accept_loop(listener: ControlListener, proxy: AbilityProxy) -> anyh
 ///   writer task     ← `OutgoingFrame` from `out_rx`
 ///                  → length-prefixed JSON write to the connection
 async fn serve_connection(stream: UnixStream, proxy: AbilityProxy) -> anyhow::Result<()> {
-    let codec = LengthDelimitedCodec::builder()
-        .little_endian()
-        .new_codec();
+    let codec = LengthDelimitedCodec::builder().little_endian().new_codec();
     let framed = Framed::new(stream, codec);
     let (mut sink, mut source) = framed.split();
 
@@ -200,7 +201,9 @@ async fn serve_connection(stream: UnixStream, proxy: AbilityProxy) -> anyhow::Re
                 continue;
             }
         };
-        proxy.handle_async(req, out_tx.clone(), &cancel, &bidi).await;
+        proxy
+            .handle_async(req, out_tx.clone(), &cancel, &bidi)
+            .await;
     }
 
     // Reader stopped → connection closing. Cancel every live
@@ -371,8 +374,8 @@ mod tests {
             AbilityDispatcher, BidiSource, LocalAbilityRegistry, LocalBidiHandler,
             BIDI_CHANNEL_BOUND,
         };
-        use crate::runtime::invocation_target::{LocalNodeResolver, TargetResolver};
         use crate::runtime::domain::NodeId;
+        use crate::runtime::invocation_target::{LocalNodeResolver, TargetResolver};
 
         let dir = unique_tmp();
         let path = dir.join("bidi.sock");
@@ -482,7 +485,10 @@ mod tests {
                     )
                 });
             match frame {
-                OutgoingFrame::RecvBidi { session_id, frame: f } => {
+                OutgoingFrame::RecvBidi {
+                    session_id,
+                    frame: f,
+                } => {
                     assert_eq!(session_id, "e2e-1");
                     assert_eq!(
                         f,

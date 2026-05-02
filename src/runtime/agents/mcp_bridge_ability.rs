@@ -137,7 +137,11 @@ fn call_tool_handler(
 ) -> anyhow::Result<Value> {
     let name = match args.get("name").and_then(Value::as_str) {
         Some(s) if !s.is_empty() => s.to_string(),
-        _ => return Ok(error_response("`name` is required and must be a non-empty string")),
+        _ => {
+            return Ok(error_response(
+                "`name` is required and must be a non-empty string",
+            ))
+        }
     };
     let arguments = args.get("arguments").cloned().unwrap_or(Value::Null);
 
@@ -173,7 +177,9 @@ fn call_tool_handler(
 
     match handler(arguments) {
         Ok(value) => Ok(success_response(value)),
-        Err(e) => Ok(error_response(&format!("tool `{name}` returned an error: {e}"))),
+        Err(e) => Ok(error_response(&format!(
+            "tool `{name}` returned an error: {e}"
+        ))),
     }
 }
 
@@ -187,8 +193,8 @@ fn success_response(value: Value) -> Value {
     // by construction always JSON-encodable (no NaN, no cycles).
     // expect() makes the invariant explicit; a fallback string
     // would just pretend to handle a case that doesn't exist.
-    let text = serde_json::to_string(&value)
-        .expect("serde_json::Value is always JSON-serializable");
+    let text =
+        serde_json::to_string(&value).expect("serde_json::Value is always JSON-serializable");
     json!({
         "content": [{
             "type": "text",

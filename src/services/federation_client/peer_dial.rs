@@ -66,17 +66,18 @@ pub enum PinnedTlsError {
     /// `std::fs::read` of the PEM file failed. Most often a
     /// missing file (operator typo in `realm-trust.toml`'s
     /// `tls_ca_pem_path`) or a permissions issue.
-    ReadFailed { path: PathBuf, source: std::io::Error },
+    ReadFailed {
+        path: PathBuf,
+        source: std::io::Error,
+    },
 }
 
 impl std::fmt::Display for PinnedTlsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PinnedTlsError::ReadFailed { path, source } => write!(
-                f,
-                "read tls_ca_pem_path `{}`: {source}",
-                path.display()
-            ),
+            PinnedTlsError::ReadFailed { path, source } => {
+                write!(f, "read tls_ca_pem_path `{}`: {source}", path.display())
+            }
         }
     }
 }
@@ -123,8 +124,11 @@ mod tests {
         // surprising PathBuf metadata is the assertion.
         let dir = tempfile::tempdir().expect("tempdir");
         let pem = dir.path().join("ca.pem");
-        std::fs::write(&pem, b"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n")
-            .expect("seed pem");
+        std::fs::write(
+            &pem,
+            b"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
+        )
+        .expect("seed pem");
         let _config = pinned_tls_config(&pem).expect("pin should succeed");
     }
 

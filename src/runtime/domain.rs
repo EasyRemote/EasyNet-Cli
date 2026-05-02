@@ -47,9 +47,7 @@ use serde::{Deserialize, Serialize};
 /// wrong id type at the call site" at compile time.
 macro_rules! string_newtype {
     ($name:ident) => {
-        #[derive(
-            Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-        )]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
         pub struct $name(String);
 
         impl $name {

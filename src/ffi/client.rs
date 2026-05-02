@@ -46,7 +46,9 @@ use futures::{SinkExt, StreamExt};
 use tokio::net::UnixStream;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-use crate::services::control::discovery::{self, ControlDiscovery, IpcVersionRange, IPC_VERSION_V1};
+use crate::services::control::discovery::{
+    self, ControlDiscovery, IpcVersionRange, IPC_VERSION_V1,
+};
 use crate::services::control::frames::{IncomingFrame, OutgoingFrame};
 
 /// Open IPC connection to the daemon, owned by a `ClientSession`.
@@ -99,11 +101,12 @@ pub fn supported_versions() -> IpcVersionRange {
 /// - version ranges do not overlap (`ERR_VERSION_INCOMPATIBLE`).
 /// - connect refused (`ERR_DAEMON_DOWN`).
 pub async fn connect(control_json_path: &Path) -> anyhow::Result<IpcClient> {
-    let disc = discovery::read(control_json_path)?
-        .ok_or_else(|| anyhow::anyhow!(
+    let disc = discovery::read(control_json_path)?.ok_or_else(|| {
+        anyhow::anyhow!(
             "FFI client: control.json not found at {} — is `easynet-daemon` running?",
             control_json_path.display()
-        ))?;
+        )
+    })?;
 
     // Version overlap check. The lib advertises its supported range
     // via `supported_versions()`; intersect with the daemon's
@@ -179,15 +182,12 @@ impl IpcClient {
             .next()
             .await
             .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "FFI client: daemon closed the connection before responding"
-                )
+                anyhow::anyhow!("FFI client: daemon closed the connection before responding")
             })?
             .map_err(|e| anyhow::anyhow!("FFI client: read frame failed: {e}"))?;
 
-        let resp: OutgoingFrame = serde_json::from_slice(&resp_bytes).map_err(|e| {
-            anyhow::anyhow!("FFI client: decode OutgoingFrame failed: {e}")
-        })?;
+        let resp: OutgoingFrame = serde_json::from_slice(&resp_bytes)
+            .map_err(|e| anyhow::anyhow!("FFI client: decode OutgoingFrame failed: {e}"))?;
         Ok(resp)
     }
 }

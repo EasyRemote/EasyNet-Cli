@@ -61,8 +61,8 @@ use serde_json::{json, Value};
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 use crate::support::shellguard::destructive;
 use crate::support::shellguard::runner::{
-    self, RunError, RunRequest, Sandbox, OUTPUT_DEFAULT_CAP, OUTPUT_HARD_CAP,
-    TIMEOUT_DEFAULT_MS, TIMEOUT_HARD_CAP_MS,
+    self, RunError, RunRequest, Sandbox, OUTPUT_DEFAULT_CAP, OUTPUT_HARD_CAP, TIMEOUT_DEFAULT_MS,
+    TIMEOUT_HARD_CAP_MS,
 };
 
 /// Wire name. Pinned by AXIOM Tier 2.5; a rename is a
@@ -115,9 +115,9 @@ fn parse_request(args: &Value) -> Result<ExecRequest> {
         Some(Value::Array(items)) => {
             let mut out = Vec::with_capacity(items.len());
             for (i, v) in items.iter().enumerate() {
-                let s = v.as_str().ok_or_else(|| {
-                    anyhow!("process.exec: args[{i}] must be a string")
-                })?;
+                let s = v
+                    .as_str()
+                    .ok_or_else(|| anyhow!("process.exec: args[{i}] must be a string"))?;
                 out.push(s.to_string());
             }
             out
@@ -135,9 +135,9 @@ fn parse_request(args: &Value) -> Result<ExecRequest> {
         Some(Value::Object(map)) => {
             let mut out = HashMap::with_capacity(map.len());
             for (k, v) in map {
-                let s = v.as_str().ok_or_else(|| {
-                    anyhow!("process.exec: env[{k}] must be a string value")
-                })?;
+                let s = v
+                    .as_str()
+                    .ok_or_else(|| anyhow!("process.exec: env[{k}] must be a string value"))?;
                 out.insert(k.clone(), s.to_string());
             }
             Some(out)

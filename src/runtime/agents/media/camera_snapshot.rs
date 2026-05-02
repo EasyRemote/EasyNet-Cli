@@ -55,13 +55,9 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use serde_json::{json, Value};
 
-use crate::persistence::resources::{
-    self, lookup_by_uri, ResourceEntry, ResourceType,
-};
+use crate::persistence::resources::{self, lookup_by_uri, ResourceEntry, ResourceType};
 use crate::runtime::ability_dispatch::{EnvelopeContext, LocalAbilityRegistry};
-use crate::runtime::agents::media_abilities::{
-    ABILITY_CAMERA_SNAPSHOT, REASON_SUBJECT_IN_ARGS,
-};
+use crate::runtime::agents::media_abilities::{ABILITY_CAMERA_SNAPSHOT, REASON_SUBJECT_IN_ARGS};
 
 /// Maximum inline image size, in encoded JPEG bytes (NOT the base64
 /// expansion). Above this the handler refuses with an explicit
@@ -143,9 +139,7 @@ pub struct NokhwaBackend;
 impl SnapshotBackend for NokhwaBackend {
     fn capture_jpeg(&self, entry: &ResourceEntry) -> anyhow::Result<EncodedFrame> {
         use nokhwa::pixel_format::RgbFormat;
-        use nokhwa::utils::{
-            CameraIndex, RequestedFormat, RequestedFormatType,
-        };
+        use nokhwa::utils::{CameraIndex, RequestedFormat, RequestedFormatType};
         use nokhwa::Camera;
 
         let index = entry
@@ -155,9 +149,7 @@ impl SnapshotBackend for NokhwaBackend {
             .map(|n| n as u32)
             .unwrap_or(0);
 
-        let req = RequestedFormat::new::<RgbFormat>(
-            RequestedFormatType::AbsoluteHighestResolution,
-        );
+        let req = RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestResolution);
         let mut cam = Camera::new(CameraIndex::Index(index), req).map_err(|e| {
             anyhow::anyhow!(
                 "{ABILITY_CAMERA_SNAPSHOT}: nokhwa Camera::new(index={index}) failed: \
@@ -188,7 +180,12 @@ impl SnapshotBackend for NokhwaBackend {
         let mut jpeg = Vec::new();
         let encoder = jpeg_encoder::Encoder::new(&mut jpeg, 80);
         encoder
-            .encode(&rgb, width as u16, height as u16, jpeg_encoder::ColorType::Rgb)
+            .encode(
+                &rgb,
+                width as u16,
+                height as u16,
+                jpeg_encoder::ColorType::Rgb,
+            )
             .map_err(|e| anyhow::anyhow!("jpeg encode failed: {e}"))?;
         Ok(EncodedFrame {
             jpeg_bytes: jpeg,
@@ -268,10 +265,7 @@ impl SnapshotBackend for SyntheticBackend {
 /// dispatcher's "envelope-first" lookup picks this one up and the
 /// stub becomes unreachable. Reversing the order silently leaves
 /// the stub in place.
-pub fn register_with_backend(
-    reg: &mut LocalAbilityRegistry,
-    backend: Arc<dyn SnapshotBackend>,
-) {
+pub fn register_with_backend(reg: &mut LocalAbilityRegistry, backend: Arc<dyn SnapshotBackend>) {
     reg.register_rpc_with_envelope(
         ABILITY_CAMERA_SNAPSHOT,
         Arc::new(move |env: EnvelopeContext, args: Value| handler(&backend, env, args)),

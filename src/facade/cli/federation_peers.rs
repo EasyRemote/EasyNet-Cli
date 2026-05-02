@@ -135,10 +135,7 @@ pub fn run(args: PeersArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn print_plain(
-    federated_peers: &BTreeMap<String, String>,
-    trusted_hubs: &[TrustedHubEntry],
-) {
+fn print_plain(federated_peers: &BTreeMap<String, String>, trusted_hubs: &[TrustedHubEntry]) {
     output::info("federated_peers (operator-curated tenant → hub_uri map)");
     if federated_peers.is_empty() {
         output::detail(
@@ -216,7 +213,10 @@ fn read_trusted_hubs() -> anyhow::Result<Vec<TrustedHubEntry>> {
     let raw = std::fs::read_to_string(&path)?;
     let doc: DocumentMut = raw.parse()?;
     let mut out = Vec::new();
-    if let Some(agents) = doc.get("trusted_agent").and_then(|i| i.as_array_of_tables()) {
+    if let Some(agents) = doc
+        .get("trusted_agent")
+        .and_then(|i| i.as_array_of_tables())
+    {
         for table in agents.iter() {
             let role = table.get("role").and_then(|i| i.as_str()).unwrap_or("");
             if role != "hub" {
@@ -282,7 +282,10 @@ mod tests {
         use toml_edit::DocumentMut;
         let doc: DocumentMut = raw.parse().expect("parse");
         let mut out = Vec::new();
-        if let Some(agents) = doc.get("trusted_agent").and_then(|i| i.as_array_of_tables()) {
+        if let Some(agents) = doc
+            .get("trusted_agent")
+            .and_then(|i| i.as_array_of_tables())
+        {
             for table in agents.iter() {
                 let role = table.get("role").and_then(|i| i.as_str()).unwrap_or("");
                 if role != "hub" {

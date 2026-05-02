@@ -74,8 +74,7 @@ pub const ABILITY_SEND_TASK: &str = "a2a.client.send_task";
 /// the daemon level (where `set_dispatcher` runs after the boot
 /// sequence completes). Reaching the populated path from a unit
 /// test would race other tests through this same static OnceLock.
-static DISPATCHER_HANDLE: std::sync::OnceLock<Arc<AbilityDispatcher>> =
-    std::sync::OnceLock::new();
+static DISPATCHER_HANDLE: std::sync::OnceLock<Arc<AbilityDispatcher>> = std::sync::OnceLock::new();
 
 /// Daemon bin's post-boot hook to wire the dispatcher into the
 /// outbound-A2A handler. Idempotent (subsequent calls no-op since
@@ -167,7 +166,9 @@ fn send_task_handler(args: Value) -> anyhow::Result<Value> {
 fn required_nonempty_string(args: &Value, key: &str) -> Result<String, String> {
     match args.get(key).and_then(Value::as_str) {
         Some(s) if !s.is_empty() => Ok(s.to_string()),
-        _ => Err(format!("`{key}` is required and must be a non-empty string")),
+        _ => Err(format!(
+            "`{key}` is required and must be a non-empty string"
+        )),
     }
 }
 

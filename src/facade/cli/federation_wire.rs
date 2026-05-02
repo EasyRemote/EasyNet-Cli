@@ -354,23 +354,19 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
 
-    let updated = match upsert_self_trusted_agent(
-        &raw,
-        &agent_uri,
-        &public_key_b64,
-        added_at_unix_ms,
-    ) {
-        Ok(s) => s,
-        Err(err) => {
-            eprintln!(
-                "[easynet join] could not edit realm-trust.toml ({err}); skipping \
+    let updated =
+        match upsert_self_trusted_agent(&raw, &agent_uri, &public_key_b64, added_at_unix_ms) {
+            Ok(s) => s,
+            Err(err) => {
+                eprintln!(
+                    "[easynet join] could not edit realm-trust.toml ({err}); skipping \
                  realm-trust auto-wire. Add the device entry manually under \
                  `[[trusted_agent]]` if you want local hub-mode admission for \
                  this device."
-            );
-            return Ok(());
-        }
-    };
+                );
+                return Ok(());
+            }
+        };
 
     if updated == raw {
         // Idempotent: the entry already matches.
@@ -461,15 +457,13 @@ fn upsert_self_trusted_agent(
     // pubkey-mismatch case is treated identically: the existing
     // entry is authoritative; a re-pair that legitimately rotates
     // the key should go through `easynet reset` first.
-    let already_present = agents
-        .iter()
-        .any(|existing| {
-            existing
-                .get("agent_uri")
-                .and_then(|i| i.as_str())
-                .map(|s| s == agent_uri)
-                .unwrap_or(false)
-        });
+    let already_present = agents.iter().any(|existing| {
+        existing
+            .get("agent_uri")
+            .and_then(|i| i.as_str())
+            .map(|s| s == agent_uri)
+            .unwrap_or(false)
+    });
     if already_present {
         return Ok(doc.to_string());
     }
@@ -510,13 +504,13 @@ fn upsert_federated_peer_in_toml(
     let daemon_table = daemon_item
         .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("[daemon] is not a TOML table"))?;
-    let peers_item = daemon_table
-        .entry("federated_peers")
-        .or_insert_with(|| Item::Table({
+    let peers_item = daemon_table.entry("federated_peers").or_insert_with(|| {
+        Item::Table({
             let mut t = Table::new();
             t.set_implicit(false);
             t
-        }));
+        })
+    });
     let peers_table = peers_item
         .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("[daemon.federated_peers] is not a TOML table"))?;
@@ -580,11 +574,7 @@ fn atomic_write(path: &Path, body: &[u8]) -> anyhow::Result<()> {
     }
     fs::rename(&tmp_path, path).with_context(|| {
         let _ = fs::remove_file(&tmp_path);
-        format!(
-            "atomic rename {} → {}",
-            tmp_path.display(),
-            path.display()
-        )
+        format!("atomic rename {} → {}", tmp_path.display(), path.display())
     })?;
     Ok(())
 }
@@ -599,8 +589,8 @@ fn sighup_running_daemon_best_effort() -> anyhow::Result<()> {
     if !pid_path.exists() {
         return Ok(());
     }
-    let raw = fs::read_to_string(&pid_path)
-        .with_context(|| format!("read {}", pid_path.display()))?;
+    let raw =
+        fs::read_to_string(&pid_path).with_context(|| format!("read {}", pid_path.display()))?;
     let pid: i32 = raw
         .trim()
         .parse()
@@ -927,8 +917,7 @@ added_at_unix_ms = 1
         );
         assert_eq!(row.get("role").and_then(|v| v.as_str()), Some("device"));
 
-        let expected_pk =
-            crate::runtime::publish::derive_owner_public_key_b64("tenant-a", "dev-1");
+        let expected_pk = crate::runtime::publish::derive_owner_public_key_b64("tenant-a", "dev-1");
         assert_eq!(
             row.get("public_key_b64").and_then(|v| v.as_str()),
             Some(expected_pk.as_str()),
@@ -938,8 +927,7 @@ added_at_unix_ms = 1
 
         // Re-running is idempotent: file size unchanged.
         let body_before = body;
-        auto_wire_self_realm_trust_from_credentials(&creds)
-            .expect("second auto-wire is a no-op");
+        auto_wire_self_realm_trust_from_credentials(&creds).expect("second auto-wire is a no-op");
         let body_after = std::fs::read_to_string(&trust_path).expect("file exists");
         assert_eq!(body_after, body_before, "second run is byte-identical");
     }

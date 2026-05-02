@@ -54,8 +54,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{Context, anyhow, bail};
-use serde_json::{Value, json};
+use anyhow::{anyhow, bail, Context};
+use serde_json::{json, Value};
 use tonic::transport::{Endpoint, Uri};
 use tower::service_fn;
 
@@ -194,8 +194,8 @@ pub fn invoke_via_federation_forward(
         "causal_context_bytes": Vec::<u8>::new(),
         "forward_deadline_ms": 0_u64,
     });
-    let forward_args_bytes = serde_json::to_vec(&forward_args)
-        .context("serialise ForwardInvokeRequest")?;
+    let forward_args_bytes =
+        serde_json::to_vec(&forward_args).context("serialise ForwardInvokeRequest")?;
 
     // Build the outer envelope. The caller URI defaults to a
     // generic `easynet:///r/cli/agent/local` so the daemon's
@@ -264,8 +264,7 @@ pub fn invoke_via_federation_forward(
             .connect_with_connector(service_fn(move |_: Uri| {
                 let path = socket.clone();
                 async move {
-                    let stream = tokio::net::UnixStream::connect(path)
-                        .await?;
+                    let stream = tokio::net::UnixStream::connect(path).await?;
                     Ok::<_, std::io::Error>(hyper_util::rt::TokioIo::new(stream))
                 }
             }))
@@ -397,8 +396,7 @@ fn generate_call_id() -> String {
 /// the standard alphabet so a daemon-side decoder using the
 /// `base64` crate would interoperate.
 fn base64_engine_encode(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
     for chunk in bytes.chunks(3) {
         let b0 = chunk[0] as u32;
@@ -434,8 +432,8 @@ mod tests {
 
     #[test]
     fn parse_node_uri_trims_surrounding_whitespace() {
-        let parsed = parse_node_uri("  easynet:///r/realm-b/agent/n1  \n")
-            .expect("whitespace trimmed");
+        let parsed =
+            parse_node_uri("  easynet:///r/realm-b/agent/n1  \n").expect("whitespace trimmed");
         assert_eq!(parsed, "easynet:///r/realm-b/agent/n1");
     }
 
@@ -465,8 +463,8 @@ mod tests {
 
     #[test]
     fn parse_node_uri_rejects_missing_node_id() {
-        let err = parse_node_uri("easynet:///r/realm-b/agent/")
-            .expect_err("empty node id rejected");
+        let err =
+            parse_node_uri("easynet:///r/realm-b/agent/").expect_err("empty node id rejected");
         assert!(format!("{err}").contains("does not parse"));
     }
 
@@ -475,8 +473,8 @@ mod tests {
         // The path component after the tenant MUST be `agent`. A
         // typo like `device` is rejected so the operator notices
         // before the URI hits the daemon.
-        let err = parse_node_uri("easynet:///r/realm-b/device/n1")
-            .expect_err("wrong keyword rejected");
+        let err =
+            parse_node_uri("easynet:///r/realm-b/device/n1").expect_err("wrong keyword rejected");
         assert!(format!("{err}").contains("does not parse"));
     }
 
@@ -510,12 +508,10 @@ mod tests {
             "scheme-arm error must cite easynet.discover ability; got: {msg_scheme}"
         );
 
-        let err_struct =
-            parse_node_uri("easynet:///r/realm-b/device/n1").expect_err("rejected");
+        let err_struct = parse_node_uri("easynet:///r/realm-b/device/n1").expect_err("rejected");
         let msg_struct = format!("{err_struct}");
         assert!(
-            msg_struct.contains("credentials.json")
-                && msg_struct.contains("daemon-config.toml"),
+            msg_struct.contains("credentials.json") && msg_struct.contains("daemon-config.toml"),
             "structural-arm error must cite the same discovery hint; got: {msg_struct}"
         );
     }

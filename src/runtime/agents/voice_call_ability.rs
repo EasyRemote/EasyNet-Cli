@@ -156,9 +156,9 @@ fn join_call_handler(args: Value) -> anyhow::Result<Value> {
         .and_then(Value::as_str)
         .map(str::to_string);
     let mut s = store().lock().unwrap();
-    let call = s.get_mut(&call_id).ok_or_else(|| {
-        anyhow::anyhow!("voice.join_call: call {call_id:?} not found")
-    })?;
+    let call = s
+        .get_mut(&call_id)
+        .ok_or_else(|| anyhow::anyhow!("voice.join_call: call {call_id:?} not found"))?;
     if call.state == "ended" {
         anyhow::bail!("voice.join_call: call {call_id:?} has already ended");
     }
@@ -199,13 +199,11 @@ fn leave_call_handler(args: Value) -> anyhow::Result<Value> {
         .unwrap_or("normal")
         .to_string();
     let mut s = store().lock().unwrap();
-    let call = s.get_mut(&call_id).ok_or_else(|| {
-        anyhow::anyhow!("voice.leave_call: call {call_id:?} not found")
-    })?;
+    let call = s
+        .get_mut(&call_id)
+        .ok_or_else(|| anyhow::anyhow!("voice.leave_call: call {call_id:?} not found"))?;
     let p = call.participants.get_mut(&participant_id).ok_or_else(|| {
-        anyhow::anyhow!(
-            "voice.leave_call: participant {participant_id:?} not in call {call_id:?}"
-        )
+        anyhow::anyhow!("voice.leave_call: participant {participant_id:?} not in call {call_id:?}")
     })?;
     p.left_at_ms = Some(now_ms());
     call.events.push(json!({
@@ -219,14 +217,11 @@ fn leave_call_handler(args: Value) -> anyhow::Result<Value> {
 
 fn end_call_handler(args: Value) -> anyhow::Result<Value> {
     let call_id = require_str(&args, "call_id", "voice.end_call")?.to_string();
-    let end_reason = args
-        .get("end_reason")
-        .and_then(Value::as_u64)
-        .unwrap_or(1) as u32;
+    let end_reason = args.get("end_reason").and_then(Value::as_u64).unwrap_or(1) as u32;
     let mut s = store().lock().unwrap();
-    let call = s.get_mut(&call_id).ok_or_else(|| {
-        anyhow::anyhow!("voice.end_call: call {call_id:?} not found")
-    })?;
+    let call = s
+        .get_mut(&call_id)
+        .ok_or_else(|| anyhow::anyhow!("voice.end_call: call {call_id:?} not found"))?;
     if call.state == "ended" {
         return Ok(json!({
             "call_id": call_id,
@@ -252,9 +247,9 @@ fn end_call_handler(args: Value) -> anyhow::Result<Value> {
 fn watch_call_handler(args: Value) -> anyhow::Result<Value> {
     let call_id = require_str(&args, "call_id", "voice.watch_call")?;
     let s = store().lock().unwrap();
-    let call = s.get(call_id).ok_or_else(|| {
-        anyhow::anyhow!("voice.watch_call: call {call_id:?} not found")
-    })?;
+    let call = s
+        .get(call_id)
+        .ok_or_else(|| anyhow::anyhow!("voice.watch_call: call {call_id:?} not found"))?;
     // v1 returns a snapshot of accumulated events. Streaming is a
     // follow-up: register through `register_stream` once the
     // subscription protocol is wired.
@@ -268,14 +263,11 @@ fn watch_call_handler(args: Value) -> anyhow::Result<Value> {
 fn report_metrics_handler(args: Value) -> anyhow::Result<Value> {
     let call_id = require_str(&args, "call_id", "voice.report_metrics")?.to_string();
     let participant_id = require_str(&args, "participant_id", "voice.report_metrics")?.to_string();
-    let metrics = args
-        .get("metrics")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
+    let metrics = args.get("metrics").cloned().unwrap_or_else(|| json!({}));
     let mut s = store().lock().unwrap();
-    let call = s.get_mut(&call_id).ok_or_else(|| {
-        anyhow::anyhow!("voice.report_metrics: call {call_id:?} not found")
-    })?;
+    let call = s
+        .get_mut(&call_id)
+        .ok_or_else(|| anyhow::anyhow!("voice.report_metrics: call {call_id:?} not found"))?;
     let p = call.participants.get_mut(&participant_id).ok_or_else(|| {
         anyhow::anyhow!(
             "voice.report_metrics: participant {participant_id:?} not in call {call_id:?}"
@@ -445,8 +437,7 @@ mod tests {
         // Full happy path — covers every handler in one test so a
         // regression in any handler trips this.
         let cid = fresh_call_id("rt");
-        let _ = create_call_handler(json!({"call_id": cid}))
-            .expect("create");
+        let _ = create_call_handler(json!({"call_id": cid})).expect("create");
         let s1 = show_call_handler(json!({"call_id": cid})).unwrap();
         assert_eq!(s1.get("state").and_then(Value::as_str), Some("ringing"));
 
@@ -469,7 +460,9 @@ mod tests {
         let watch = watch_call_handler(json!({"call_id": cid})).unwrap();
         let events = watch.get("events").and_then(Value::as_array).unwrap();
         assert!(
-            events.iter().any(|e| e.get("type") == Some(&json!("joined"))),
+            events
+                .iter()
+                .any(|e| e.get("type") == Some(&json!("joined"))),
             "watch must surface join event: {watch}"
         );
 

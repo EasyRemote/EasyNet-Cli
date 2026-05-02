@@ -26,10 +26,10 @@
 
 use clap::{Args, Subcommand};
 
-use crate::facade::cli::federation_gen_cert;
-use crate::facade::cli::federation_peers;
 #[cfg(feature = "axon-pb")]
 use crate::facade::cli::federation_discover;
+use crate::facade::cli::federation_gen_cert;
+use crate::facade::cli::federation_peers;
 
 #[derive(Debug, Args)]
 pub struct FederationArgs {

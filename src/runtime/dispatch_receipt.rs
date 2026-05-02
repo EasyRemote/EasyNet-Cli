@@ -88,12 +88,8 @@ pub fn header_for_ability(
     if let Some((agent, "chat")) = ability_name.split_once('.') {
         let callee_uri = lookup_hosted_uri(file, "llm", agent)?;
         let attestation_placeholder = b"P5-pending".to_vec();
-        return HostedAgentReceiptHeader::new_hosted(
-            callee_uri,
-            host_uri,
-            attestation_placeholder,
-        )
-        .ok();
+        return HostedAgentReceiptHeader::new_hosted(callee_uri, host_uri, attestation_placeholder)
+            .ok();
     }
 
     // Hosted abilities: the dispatching Agent is the host (device-
@@ -152,13 +148,21 @@ mod tests {
     #[test]
     fn consent_ability_emits_hosted_by_header_when_uri_persisted() {
         let mut file = file_with("easynet:///r/acme/agent/01DEV");
-        upsert_hosted_agent(&mut file, "consent", "default", "easynet:///r/acme/agent/01CON");
+        upsert_hosted_agent(
+            &mut file,
+            "consent",
+            "default",
+            "easynet:///r/acme/agent/01CON",
+        );
         let h = header_for_ability("consent.subscribe", &file, None)
             .expect("consent ability must produce a header");
         assert_eq!(h.callee_agent_uri, "easynet:///r/acme/agent/01CON");
         assert_eq!(h.signer_agent_uri, "easynet:///r/acme/agent/01DEV");
         match &h.model {
-            SigningModel::HostedBy { host_uri, host_attestation } => {
+            SigningModel::HostedBy {
+                host_uri,
+                host_attestation,
+            } => {
                 assert_eq!(host_uri, "easynet:///r/acme/agent/01DEV");
                 assert!(!host_attestation.is_empty());
             }
@@ -181,7 +185,12 @@ mod tests {
     #[test]
     fn llm_ability_requires_sub_agent_name_to_resolve_owner() {
         let mut file = file_with("easynet:///r/acme/agent/01DEV");
-        upsert_hosted_agent(&mut file, "llm", "claude", "easynet:///r/acme/agent/01LLM-claude");
+        upsert_hosted_agent(
+            &mut file,
+            "llm",
+            "claude",
+            "easynet:///r/acme/agent/01LLM-claude",
+        );
         // Without a sub-agent name we can't decide which LLM owns
         // the ability — return None.
         assert!(header_for_ability("conversation.send", &file, None).is_none());
@@ -253,6 +262,9 @@ mod tests {
     fn header_passes_validate() {
         let file = file_with("easynet:///r/acme/agent/01DEV");
         let h = header_for_ability("observe.health", &file, None).unwrap();
-        assert!(h.validate().is_ok(), "every emitted header must round-trip validate");
+        assert!(
+            h.validate().is_ok(),
+            "every emitted header must round-trip validate"
+        );
     }
 }

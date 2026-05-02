@@ -104,12 +104,7 @@ impl LoopInvocationDriver for KernelLoopInvocationDriver {
         match receipt.terminal {
             TerminalState::Succeeded => {}
             TerminalState::Cancelled => {
-                anyhow::bail!(
-                    "loop {} {} iter {} cancelled",
-                    loop_id,
-                    kind.as_str(),
-                    iter
-                );
+                anyhow::bail!("loop {} {} iter {} cancelled", loop_id, kind.as_str(), iter);
             }
             TerminalState::Failed { reason } => {
                 anyhow::bail!(
@@ -264,12 +259,7 @@ impl LoopService {
         Ok(())
     }
 
-    pub fn update(
-        &self,
-        id: &LoopId,
-        new_state: LoopState,
-        new_iter: u32,
-    ) -> anyhow::Result<()> {
+    pub fn update(&self, id: &LoopId, new_state: LoopState, new_iter: u32) -> anyhow::Result<()> {
         self.mutate(id, |inst| {
             inst.state = new_state;
             inst.current_iter = new_iter;
@@ -672,10 +662,7 @@ impl LoopService {
 fn is_terminal(state: &LoopState) -> bool {
     matches!(
         state,
-        LoopState::Done
-            | LoopState::Exhausted
-            | LoopState::VerifyMalformed
-            | LoopState::Cancelled
+        LoopState::Done | LoopState::Exhausted | LoopState::VerifyMalformed | LoopState::Cancelled
     )
 }
 
@@ -747,7 +734,14 @@ async fn invoke_blocking(
         driver.invoke(&join_loop_id, iter, &worker_agent, &prompt, kind)
     })
     .await
-    .map_err(|e| anyhow::anyhow!("loop {} {} iter {} join error: {e}", loop_id, kind.as_str(), iter))?
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "loop {} {} iter {} join error: {e}",
+            loop_id,
+            kind.as_str(),
+            iter
+        )
+    })?
 }
 
 impl std::fmt::Debug for LoopService {
@@ -823,12 +817,7 @@ mod tests {
         )))
         .unwrap();
         let id = svc
-            .create(
-                AgentId::new("alice"),
-                "true".into(),
-                3,
-                "do work".into(),
-            )
+            .create(AgentId::new("alice"), "true".into(), 3, "do work".into())
             .unwrap();
         let st = wait_for_terminal(&svc, &id).await;
         assert_eq!(st.state, LoopState::Done);
@@ -892,12 +881,7 @@ mod tests {
         )))
         .unwrap();
         let id = svc
-            .create(
-                AgentId::new("alice"),
-                "true".into(),
-                1,
-                "do work".into(),
-            )
+            .create(AgentId::new("alice"), "true".into(), 1, "do work".into())
             .unwrap();
         let _ = wait_for_terminal(&svc, &id).await;
         let (snapshot, live) = svc.subscribe(&id).unwrap();

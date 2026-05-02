@@ -17,10 +17,10 @@
 use clap::{Args, Subcommand};
 use console::style;
 
-use crate::facade::cli::mission_runs::{self, CancelOutcome, MissionRunOpts};
-use crate::facade::cli::discuss as discuss_cmd;
-use crate::facade::cli::think as think_cmd;
 use crate::eal;
+use crate::facade::cli::discuss as discuss_cmd;
+use crate::facade::cli::mission_runs::{self, CancelOutcome, MissionRunOpts};
+use crate::facade::cli::think as think_cmd;
 use crate::support::output::{self, OutputFormat};
 
 #[derive(Debug, Args)]

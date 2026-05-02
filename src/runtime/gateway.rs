@@ -47,11 +47,7 @@ impl GatewayApi for NoopGateway {
         Ok(())
     }
 
-    fn invoke_remote_ability(
-        &self,
-        target: &RemoteTarget,
-        _args: &Value,
-    ) -> anyhow::Result<Value> {
+    fn invoke_remote_ability(&self, target: &RemoteTarget, _args: &Value) -> anyhow::Result<Value> {
         anyhow::bail!(
             "NoopGateway cannot invoke remote ability {}: no Axon bridge connected \
              (daemon not running in this process)",

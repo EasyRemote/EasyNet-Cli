@@ -44,7 +44,8 @@ use std::os::raw::{c_char, c_void};
 
 use crate::ffi::client::IpcClient;
 use crate::ffi::errors::{
-    set_last_error, ERR_ABILITY_FAILED, ERR_DAEMON_DOWN, ERR_GENERIC, ERR_INVALID_HANDLE, ERR_NULL_POINTER,
+    set_last_error, ERR_ABILITY_FAILED, ERR_DAEMON_DOWN, ERR_GENERIC, ERR_INVALID_HANDLE,
+    ERR_NULL_POINTER,
 };
 use crate::ffi::handle::{get, lib_runtime, EasynetHandle};
 use crate::ffi::strings::{alloc_output_cstring, read_cstr};
@@ -61,8 +62,7 @@ pub type SubscriptionId = u64;
 /// if retention is needed.
 ///
 /// `user_data` is opaque; the lib does not dereference it.
-pub type FrameCallback =
-    unsafe extern "C" fn(user_data: *mut c_void, frame_json: *const c_char);
+pub type FrameCallback = unsafe extern "C" fn(user_data: *mut c_void, frame_json: *const c_char);
 
 /// Generate a request id for an Invoke frame the FFI synthesises.
 ///
@@ -186,9 +186,7 @@ pub unsafe extern "C" fn easynet_ability_invoke(
     };
 
     let resp_result = {
-        let mut client = client_mutex
-            .lock()
-            .expect("ipc client mutex not poisoned");
+        let mut client = client_mutex.lock().expect("ipc client mutex not poisoned");
         rt.block_on(client.round_trip(req))
     };
 
@@ -216,18 +214,14 @@ pub unsafe extern "C" fn easynet_ability_invoke(
             };
             let ptr = alloc_output_cstring(json);
             if ptr.is_null() {
-                set_last_error(
-                    "easynet_ability_invoke: out-of-memory allocating result string",
-                );
+                set_last_error("easynet_ability_invoke: out-of-memory allocating result string");
                 return ERR_GENERIC;
             }
             unsafe { *out_result = ptr };
             crate::ffi::errors::clear_last_error();
             crate::ffi::errors::EASYNET_OK
         }
-        OutgoingFrame::Error {
-            code, message, ..
-        } => {
+        OutgoingFrame::Error { code, message, .. } => {
             set_last_error(format!(
                 "easynet_ability_invoke: daemon returned error \"{code}\": {message}"
             ));
@@ -493,7 +487,9 @@ async fn run_subscription(
                 };
                 // SAFETY: on_frame was validated non-null at the
                 // FFI call site; the C string lives for the call.
-                unsafe { on_frame(ud, cstr.as_ptr()); }
+                unsafe {
+                    on_frame(ud, cstr.as_ptr());
+                }
             }
         })
         .map_err(|e| anyhow::anyhow!("spawn dispatcher thread: {e}"))?;
@@ -665,9 +661,8 @@ mod tests {
         let ability = CString::new("observe.health").unwrap();
         let args = CString::new("{}").unwrap();
         let mut out: *mut c_char = std::ptr::null_mut();
-        let code = unsafe {
-            easynet_ability_invoke(9_999_999, ability.as_ptr(), args.as_ptr(), &mut out)
-        };
+        let code =
+            unsafe { easynet_ability_invoke(9_999_999, ability.as_ptr(), args.as_ptr(), &mut out) };
         assert_eq!(code, ERR_INVALID_HANDLE);
         // out_result must be set to NULL on the failure path so the
         // caller's pre-allocated `*mut c_char` does not carry a
@@ -687,9 +682,8 @@ mod tests {
         // Trailing comma, not legal JSON.
         let bad_args = CString::new("{,}").unwrap();
         let mut out: *mut c_char = std::ptr::null_mut();
-        let code = unsafe {
-            easynet_ability_invoke(h, ability.as_ptr(), bad_args.as_ptr(), &mut out)
-        };
+        let code =
+            unsafe { easynet_ability_invoke(h, ability.as_ptr(), bad_args.as_ptr(), &mut out) };
         assert_eq!(code, ERR_NULL_POINTER);
         assert!(out.is_null());
     }
@@ -704,8 +698,7 @@ mod tests {
         let ability = CString::new("observe.health").unwrap();
         let args = CString::new("{}").unwrap();
         let mut out: *mut c_char = std::ptr::null_mut();
-        let code =
-            unsafe { easynet_ability_invoke(h, ability.as_ptr(), args.as_ptr(), &mut out) };
+        let code = unsafe { easynet_ability_invoke(h, ability.as_ptr(), args.as_ptr(), &mut out) };
         assert_eq!(code, ERR_GENERIC);
     }
 

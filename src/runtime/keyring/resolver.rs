@@ -289,9 +289,7 @@ mod tests {
 
     // ── PR-N4 commit 4/N — FederatedUserResolver ────────────
 
-    use super::super::federated_bindings::{
-        FederatedBindingsStore, FederatedUserBinding,
-    };
+    use super::super::federated_bindings::{FederatedBindingsStore, FederatedUserBinding};
 
     #[test]
     fn federated_user_resolver_local_realm_returns_local() {

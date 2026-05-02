@@ -69,8 +69,7 @@ fn easynet_dir() -> PathBuf {
 fn read_json(path: &std::path::Path) -> anyhow::Result<Value> {
     let s = std::fs::read_to_string(path)
         .map_err(|e| anyhow::anyhow!("read {}: {e}", path.display()))?;
-    serde_json::from_str(&s)
-        .map_err(|e| anyhow::anyhow!("parse {}: {e}", path.display()))
+    serde_json::from_str(&s).map_err(|e| anyhow::anyhow!("parse {}: {e}", path.display()))
 }
 
 fn main() -> anyhow::Result<()> {
@@ -122,7 +121,10 @@ fn main() -> anyhow::Result<()> {
     let outcomes = republish_abilities_via_advertise(&invoker, &tenant_id, &plan);
 
     let calls = invoker.into_calls();
-    println!("== {} federation.advertise_* calls captured ==", calls.len());
+    println!(
+        "== {} federation.advertise_* calls captured ==",
+        calls.len()
+    );
     println!();
 
     println!("-- advertise_agent --");
@@ -195,7 +197,9 @@ fn main() -> anyhow::Result<()> {
         });
 
         if found {
-            println!("  ✓ {agent_name}: advertise_abilities owner={agent_uri} contains {expected_chat}");
+            println!(
+                "  ✓ {agent_name}: advertise_abilities owner={agent_uri} contains {expected_chat}"
+            );
         } else {
             println!("  ❌ {agent_name}: did NOT find {expected_chat} under owner={agent_uri}");
             all_pass = false;
@@ -218,7 +222,9 @@ fn main() -> anyhow::Result<()> {
     println!();
 
     if all_pass {
-        println!("RESULT: PASS — every user agent has its <agent>.chat advertised under its own URA");
+        println!(
+            "RESULT: PASS — every user agent has its <agent>.chat advertised under its own URA"
+        );
         Ok(())
     } else {
         anyhow::bail!("RESULT: FAIL — at least one user agent's chat ability is not advertised")

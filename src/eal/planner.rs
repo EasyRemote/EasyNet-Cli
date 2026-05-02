@@ -272,8 +272,7 @@ fn analyze_statements_with_seed(
                 items.push(AnalyzedItem::Call(step));
             }
             Statement::Call(call) => {
-                let step =
-                    analyze_call(None, call, &mut symbols, anon_counter, items.len())?;
+                let step = analyze_call(None, call, &mut symbols, anon_counter, items.len())?;
                 items.push(AnalyzedItem::Call(step));
             }
             Statement::Loop(l) => {
@@ -355,8 +354,7 @@ fn analyze_loop(l: &LoopBlock, anon_counter: &mut u32) -> anyhow::Result<Analyze
         .iter()
         .filter_map(|it| it.binding().map(|s| s.to_string()))
         .collect();
-    let verify_items =
-        analyze_statements_with_seed(&l.verify, anon_counter, &body_bindings)?;
+    let verify_items = analyze_statements_with_seed(&l.verify, anon_counter, &body_bindings)?;
 
     // RFC §4.4: the last statement in `verify` must be a call whose
     // output carries the termination predicate `done: bool`.
@@ -417,8 +415,7 @@ fn analyze_call(
     }
 
     anyhow::ensure!(
-        !(call.options.optional
-            && matches!(call.options.on_failure, Some(FailurePolicy::Abort))),
+        !(call.options.optional && matches!(call.options.on_failure, Some(FailurePolicy::Abort))),
         "step '{step_id}': `optional` and `on_failure abort` are contradictory; \
          pick one (use `optional` for best-effort, `on_failure abort` for mission-critical)"
     );
@@ -674,10 +671,8 @@ mod tests {
 
     #[test]
     fn duplicate_binding_rejected() {
-        let p = parser::parse(
-            r#"mission "t" { let a = call "x" on "n" let a = call "y" on "n" }"#,
-        )
-        .unwrap();
+        let p = parser::parse(r#"mission "t" { let a = call "x" on "n" let a = call "y" on "n" }"#)
+            .unwrap();
         let err = analyze(&p).unwrap_err();
         assert!(
             format!("{err}").contains("duplicate binding"),
@@ -691,10 +686,7 @@ mod tests {
         // explicit positive count is a misconfiguration that the
         // interpreter's retry path cannot satisfy — catch it at
         // compile time.
-        let p = parser::parse(
-            r#"mission "t" { call "x" on "n" on_failure retry }"#,
-        )
-        .unwrap();
+        let p = parser::parse(r#"mission "t" { call "x" on "n" on_failure retry }"#).unwrap();
         let err = analyze(&p).unwrap_err();
         assert!(
             format!("{err}").contains("retry requires"),
@@ -710,8 +702,7 @@ mod tests {
         // let `optional` win, which made `on_failure abort` a dead
         // annotation in that combination.
         let p =
-            parser::parse(r#"mission "t" { call "x" on "n" optional on_failure abort }"#)
-                .unwrap();
+            parser::parse(r#"mission "t" { call "x" on "n" optional on_failure abort }"#).unwrap();
         let err = analyze(&p).unwrap_err();
         assert!(
             format!("{err}").contains("contradictory"),
@@ -722,8 +713,7 @@ mod tests {
     #[test]
     fn optional_plus_on_failure_skip_is_allowed() {
         let p =
-            parser::parse(r#"mission "t" { call "x" on "n" optional on_failure skip }"#)
-                .unwrap();
+            parser::parse(r#"mission "t" { call "x" on "n" optional on_failure skip }"#).unwrap();
         assert!(analyze(&p).is_ok());
     }
 
@@ -744,10 +734,8 @@ mod tests {
         // user has written "use the output of this call as input to
         // itself," which is an authoring mistake before it's a
         // graph-theoretic cycle.
-        let p = parser::parse(
-            r#"mission "t" { let a = call "x" on "n" with { i = a.output } }"#,
-        )
-        .unwrap();
+        let p = parser::parse(r#"mission "t" { let a = call "x" on "n" with { i = a.output } }"#)
+            .unwrap();
         let err = analyze(&p).unwrap_err();
         let msg = format!("{err}");
         assert!(
@@ -956,10 +944,7 @@ mod tests {
             }"#;
         let p = parser::parse(src).unwrap();
         let err = compile(&p).unwrap_err().to_string();
-        assert!(
-            err.contains("nested loops are not supported"),
-            "got: {err}"
-        );
+        assert!(err.contains("nested loops are not supported"), "got: {err}");
     }
 
     /// Pins RFC §4.4's non-empty-verify invariant. An empty

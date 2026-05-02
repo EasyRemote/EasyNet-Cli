@@ -56,9 +56,9 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use crate::support::shellguard::ast::SimpleCommand;
 #[cfg(test)]
 use crate::support::shellguard::ast::Redirect;
+use crate::support::shellguard::ast::SimpleCommand;
 
 /// Caller-declared write-allowed roots. Empty list means "no
 /// writes allowed at all" — every write redirect rejects.

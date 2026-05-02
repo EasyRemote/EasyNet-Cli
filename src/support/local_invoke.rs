@@ -104,9 +104,7 @@ pub fn invoke_local_ability(ability: &str, args: Value) -> anyhow::Result<Value>
                 ..
             } => {
                 if rid != request_id {
-                    bail!(
-                        "daemon Result returned request_id {rid:?} but we sent {request_id:?}"
-                    );
+                    bail!("daemon Result returned request_id {rid:?} but we sent {request_id:?}");
                 }
                 Ok(value)
             }
@@ -119,9 +117,7 @@ pub fn invoke_local_ability(ability: &str, args: Value) -> anyhow::Result<Value>
                 "daemon error invoking '{ability_owned}' (request_id={:?}, code={code}): {message}",
                 rid.unwrap_or_default()
             ),
-            other => bail!(
-                "daemon returned an unexpected frame for an Invoke request: {other:?}"
-            ),
+            other => bail!("daemon returned an unexpected frame for an Invoke request: {other:?}"),
         }
     })
 }
@@ -181,8 +177,8 @@ mod tests {
         // absence; the message MUST tell the operator how to recover
         // (`easynet runtime start`).
         let _g = crate::facade::cli::test_support::HomeGuard::new();
-        let err = invoke_local_ability("observe.health", json!({}))
-            .expect_err("daemon-down must fail");
+        let err =
+            invoke_local_ability("observe.health", json!({})).expect_err("daemon-down must fail");
         let msg = format!("{err}");
         assert!(
             msg.contains("daemon not running"),

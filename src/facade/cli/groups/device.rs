@@ -40,9 +40,7 @@ use console::style;
 use serde_json::json;
 
 use crate::facade::cli::{config_cmd, devices, join, reset};
-use crate::support::{
-    output::{self, OutputFormat},
-};
+use crate::support::output::{self, OutputFormat};
 
 #[derive(Debug, Args)]
 pub struct DeviceArgs {
@@ -119,17 +117,15 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     // whose owner matches the target node id. v1 only knows about
     // the local node — once federation Invoke ships the daemon-side
     // handler will return per-node ability lists.
-    let abilities = match crate::support::local_invoke::invoke_local_ability(
-        "easynet.discover",
-        json!({}),
-    ) {
-        Ok(catalogue) => catalogue
-            .get("abilities")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default(),
-        Err(_) => Vec::new(),
-    };
+    let abilities =
+        match crate::support::local_invoke::invoke_local_ability("easynet.discover", json!({})) {
+            Ok(catalogue) => catalogue
+                .get("abilities")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
     // Refer to the borrowed slot below as `&node` to keep parity
     // with the legacy variable name; the dereferences are checked.
     let node = &node;
@@ -170,7 +166,10 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
             })
         })
         .unwrap_or_else(|| "UNKNOWN".to_string());
-    let paired = node.get("paired").and_then(|v| v.as_bool()).unwrap_or(false);
+    let paired = node
+        .get("paired")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let online = state == "HEALTHY" || state == "REGISTERED" || state == "STANDALONE";
 
     let dot = if online {

@@ -277,15 +277,9 @@ pub(crate) fn install_skill(
     };
 
     let registry = agents::load_agents()?;
-    let entry = registry
-        .agents
-        .get(agent)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "agent '{}' not registered; run `easynet agent list`",
-                agent
-            )
-        })?;
+    let entry = registry.agents.get(agent).ok_or_else(|| {
+        anyhow::anyhow!("agent '{}' not registered; run `easynet agent list`", agent)
+    })?;
     let agent_root = entry
         .root_path
         .clone()
@@ -365,22 +359,19 @@ fn fetch_github(src: &SkillSource, workdir: &Path) -> anyhow::Result<FetchResult
         "fetch_github called with non-github source {:?}",
         src.kind
     );
-    let (owner, repo) = src
-        .identifier
-        .split_once('/')
-        .ok_or_else(|| anyhow::anyhow!("github identifier must be owner/repo, got {:?}", src.identifier))?;
+    let (owner, repo) = src.identifier.split_once('/').ok_or_else(|| {
+        anyhow::anyhow!(
+            "github identifier must be owner/repo, got {:?}",
+            src.identifier
+        )
+    })?;
 
     // Resolve "default branch" when no ref given.
-    let ref_spec = src
-        .ref_
-        .clone()
-        .unwrap_or_else(|| "HEAD".to_string());
+    let ref_spec = src.ref_.clone().unwrap_or_else(|| "HEAD".to_string());
 
     // Tarball URL — no auth required for public repos.
     // `archive/<ref>.tar.gz` resolves branch names, tags, and SHAs.
-    let tarball_url = format!(
-        "https://codeload.github.com/{owner}/{repo}/tar.gz/{ref_spec}"
-    );
+    let tarball_url = format!("https://codeload.github.com/{owner}/{repo}/tar.gz/{ref_spec}");
 
     let resp = ureq::get(&tarball_url)
         .set("User-Agent", "easynet-cli-skill-install")
@@ -534,7 +525,9 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
 /// `~/.claude/skills/` and `~/.agents/skills/` are populated by the
 /// agent CLIs themselves and by external tooling — EasyNet does not
 /// own these directories, only reads them.
-pub(crate) fn global_skill_pools_for(agent_type: agents::AgentType) -> Vec<(&'static str, std::path::PathBuf)> {
+pub(crate) fn global_skill_pools_for(
+    agent_type: agents::AgentType,
+) -> Vec<(&'static str, std::path::PathBuf)> {
     let home = config::home_dir();
     match agent_type {
         agents::AgentType::ClaudeCode => {
@@ -728,11 +721,9 @@ pub(crate) fn upgrade_skill(
     new_source.ref_ = resolved_target_ref.clone();
     let fetch = fetch_github(&new_source, workdir.path())?;
 
-    let backup = agent_root.join("skills").join(format!(
-        ".{}-backup-{}",
-        name,
-        rand_suffix()
-    ));
+    let backup = agent_root
+        .join("skills")
+        .join(format!(".{}-backup-{}", name, rand_suffix()));
     fs::rename(&skill_dir, &backup)?;
     let result = (|| -> anyhow::Result<InstallRecord> {
         if fs::rename(&fetch.unpacked, &skill_dir).is_err() {
@@ -810,11 +801,7 @@ pub(crate) fn remove_skill(name: &str, agent: &str) -> anyhow::Result<()> {
         .unwrap_or_else(|| config::agents_root().join(agent));
     let skill_dir = agent_root.join("skills").join(name);
     if !skill_dir.exists() {
-        anyhow::bail!(
-            "skill '{}' is not installed on agent '{}'",
-            name,
-            agent
-        );
+        anyhow::bail!("skill '{}' is not installed on agent '{}'", name, agent);
     }
     fs::remove_dir_all(&skill_dir)?;
     Ok(())
@@ -852,8 +839,8 @@ fn parse_source_url(url: &str) -> anyhow::Result<SkillSource> {
 }
 
 pub(crate) fn read_install_record(path: &Path) -> anyhow::Result<InstallRecord> {
-    let text = fs::read_to_string(path)
-        .map_err(|e| anyhow::anyhow!("read {}: {e}", path.display()))?;
+    let text =
+        fs::read_to_string(path).map_err(|e| anyhow::anyhow!("read {}: {e}", path.display()))?;
     Ok(serde_json::from_str(&text)?)
 }
 
@@ -970,11 +957,8 @@ impl TempDirGuard {
     /// `<prefix>-<pid>-<rand>` so concurrent installs of the same
     /// skill don't collide.
     fn create(prefix: &str) -> std::io::Result<Self> {
-        let path = std::env::temp_dir().join(format!(
-            "{prefix}-{}-{}",
-            std::process::id(),
-            rand_suffix()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("{prefix}-{}-{}", std::process::id(), rand_suffix()));
         fs::create_dir_all(&path)?;
         Ok(Self { path })
     }

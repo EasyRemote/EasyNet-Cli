@@ -440,9 +440,7 @@ fn build_reregister_hook(tenant: String, node_id: String, _hostname: String) -> 
                 crate::runtime::federation_client::AdvertisedSigningAuthority::SelfSigned,
             host_node_id: Some(node_id.clone()),
         };
-        let outcome = crate::runtime::advertise::advertise_agent(
-            &invoker, &tenant, &tenant, &args,
-        );
+        let outcome = crate::runtime::advertise::advertise_agent(&invoker, &tenant, &tenant, &args);
         match outcome.result {
             Ok(_) => Ok(()),
             Err(msg) => Err(easynet_axon::error::AxonError::Bridge(format!(
@@ -727,7 +725,11 @@ mod tests {
         let mut t = FakeTransport::new(vec![], shutdown.clone());
         let outcome = heartbeat_loop(&mut t, "tenant", "node", 20, &shutdown);
         assert_eq!(outcome, HeartbeatOutcome::Shutdown);
-        assert_eq!(t.calls(), 0, "no beat must happen after pre-triggered shutdown");
+        assert_eq!(
+            t.calls(),
+            0,
+            "no beat must happen after pre-triggered shutdown"
+        );
     }
 
     #[test]
@@ -783,9 +785,7 @@ mod tests {
         // rejected list and continue.
         let shutdown = ShutdownSignal::new();
         let mut t = FakeTransport::new(
-            vec![Step::Ok(
-                json!({"rejected_nodes": [{"node_id": "node-1"}]}),
-            )],
+            vec![Step::Ok(json!({"rejected_nodes": [{"node_id": "node-1"}]}))],
             shutdown.clone(),
         );
         let outcome = heartbeat_loop(&mut t, "tenant", "node-1", 20, &shutdown);

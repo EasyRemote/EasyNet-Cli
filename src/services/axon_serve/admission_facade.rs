@@ -203,7 +203,10 @@ impl std::fmt::Debug for AdmissionFacade {
             .field("receipt_store", &self.receipt_store)
             .field(
                 "federation_client",
-                &self.federation_client.as_ref().map(|_| "<dyn FederationClient>"),
+                &self
+                    .federation_client
+                    .as_ref()
+                    .map(|_| "<dyn FederationClient>"),
             )
             .field("federated_peers", &self.federated_peers)
             .field("self_realm", &self.self_realm)
@@ -1265,11 +1268,8 @@ mod tests {
         let caller_uri = "easynet:///r/realm/agent/receipt-emitter";
         let callee_uri = "easynet:///r/realm/agent/this-daemon";
         let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(
-                caller_uri,
-                pub_key_b64,
-            )])
-            .expect("anchor"),
+            RealmTrustAnchor::from_entries(vec![backend_entry(caller_uri, pub_key_b64)])
+                .expect("anchor"),
         );
         let facade = AdmissionFacade::new(trust, Some(callee_uri.to_string()));
         assert!(facade.receipt_store().is_empty());
@@ -1343,11 +1343,8 @@ mod tests {
         let caller_uri = "easynet:///r/realm/agent/replay-receipt";
         let callee_uri = "easynet:///r/realm/agent/this-daemon";
         let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(
-                caller_uri,
-                pub_key_b64,
-            )])
-            .expect("anchor"),
+            RealmTrustAnchor::from_entries(vec![backend_entry(caller_uri, pub_key_b64)])
+                .expect("anchor"),
         );
         let facade = AdmissionFacade::new(trust, Some(callee_uri.to_string()));
 

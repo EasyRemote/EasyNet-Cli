@@ -277,7 +277,11 @@ pub async fn run(req: RunRequest) -> Result<RunOutcome, RunError> {
     // pipe everything; we need to read stdout/stderr to apply
     // the cap, and we need to write stdin if the caller gave
     // any.
-    cmd.stdin(if req.stdin.is_some() { Stdio::piped() } else { Stdio::null() });
+    cmd.stdin(if req.stdin.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
@@ -325,8 +329,12 @@ pub async fn run(req: RunRequest) -> Result<RunOutcome, RunError> {
     // ── Stage 3: feed stdin (concurrent with reading) ──
     let stdin_bytes = req.stdin.clone();
     let stdin_task = tokio::spawn(async move {
-        let Some(bytes) = stdin_bytes else { return Ok::<(), io::Error>(()); };
-        let Some(mut pipe) = stdin_pipe else { return Ok(()); };
+        let Some(bytes) = stdin_bytes else {
+            return Ok::<(), io::Error>(());
+        };
+        let Some(mut pipe) = stdin_pipe else {
+            return Ok(());
+        };
         if !bytes.is_empty() {
             pipe.write_all(&bytes).await?;
         }
@@ -351,11 +359,8 @@ pub async fn run(req: RunRequest) -> Result<RunOutcome, RunError> {
     // ── Stage 5: race wait vs. timeout ──
     let timeout = Duration::from_millis(timeout_ms);
     let wait_fut = async {
-        let ((stdout_bytes, stdout_res), (stderr_bytes, stderr_res), status) = tokio::join!(
-            stdout_fut,
-            stderr_fut,
-            child.wait(),
-        );
+        let ((stdout_bytes, stdout_res), (stderr_bytes, stderr_res), status) =
+            tokio::join!(stdout_fut, stderr_fut, child.wait(),);
         let _ = stdout_res;
         let _ = stderr_res;
         (stdout_bytes, stderr_bytes, status)
@@ -397,7 +402,11 @@ pub async fn run(req: RunRequest) -> Result<RunOutcome, RunError> {
                 .await;
                 let (stdout, stderr, status) = match outcome {
                     Ok((s, e, st)) => (s, e, st),
-                    Err(_) => (Vec::new(), Vec::new(), Ok(std::process::ExitStatus::default())),
+                    Err(_) => (
+                        Vec::new(),
+                        Vec::new(),
+                        Ok(std::process::ExitStatus::default()),
+                    ),
                 };
                 let s = status.map_err(RunError::Io)?;
                 (stdout, stderr, s, true)

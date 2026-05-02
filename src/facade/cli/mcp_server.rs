@@ -32,10 +32,7 @@ pub struct McpServerArgs {
 }
 
 pub fn run(args: McpServerArgs) -> anyhow::Result<()> {
-    let server_name = format!(
-        "easynet-mcp-{}",
-        args.agent.as_deref().unwrap_or("device")
-    );
+    let server_name = format!("easynet-mcp-{}", args.agent.as_deref().unwrap_or("device"));
     let config = crate::runtime::agents::profiles::mcp::StdioServerConfig {
         server_name: server_name.clone(),
         tenant_id: args.tenant.clone(),
@@ -46,8 +43,7 @@ pub fn run(args: McpServerArgs) -> anyhow::Result<()> {
         // LLM running inside that workspace.
         agent_name: args.agent.clone(),
     };
-    let configured =
-        crate::runtime::agents::profiles::mcp::build_stdio_server(&config);
+    let configured = crate::runtime::agents::profiles::mcp::build_stdio_server(&config);
 
     eprintln!(
         "[easynet mcp] tenant={} agent={} advertising {} tools (RFC-001 §A3 edge adapter)",

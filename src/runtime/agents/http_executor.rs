@@ -282,8 +282,7 @@ mod tests {
     fn render_url_url_encodes_substituted_values() {
         let mut bindings = serde_json::Map::new();
         bindings.insert("city".into(), Value::String("São Paulo".into()));
-        let url = render_url("https://wttr.in/{{ city }}?format=4", Some(&bindings))
-            .unwrap();
+        let url = render_url("https://wttr.in/{{ city }}?format=4", Some(&bindings)).unwrap();
         assert!(url.contains("S%C3%A3o%20Paulo"), "got {url}");
     }
 

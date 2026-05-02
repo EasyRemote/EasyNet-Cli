@@ -124,9 +124,7 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
     let hash = content_hash(&body);
     let size_bytes = body.as_bytes().len() as u64;
     crate::persistence::config::atomic_write(&skill_md_path, body.as_bytes())
-        .map_err(|e| {
-            anyhow::anyhow!("skill.publish: write {}: {e}", skill_md_path.display())
-        })?;
+        .map_err(|e| anyhow::anyhow!("skill.publish: write {}: {e}", skill_md_path.display()))?;
 
     // Provenance: source.kind = "curator", identifier carries the
     // mission run id that produced this skill so an operator
@@ -167,13 +165,10 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
         )
     })?;
     let install_path = meta_dir.join("install.json");
-    let install_json = serde_json::to_string_pretty(&record).map_err(|e| {
-        anyhow::anyhow!("skill.publish: failed to serialise install.json: {e}")
-    })?;
+    let install_json = serde_json::to_string_pretty(&record)
+        .map_err(|e| anyhow::anyhow!("skill.publish: failed to serialise install.json: {e}"))?;
     crate::persistence::config::atomic_write(&install_path, install_json.as_bytes())
-        .map_err(|e| {
-            anyhow::anyhow!("skill.publish: write {}: {e}", install_path.display())
-        })?;
+        .map_err(|e| anyhow::anyhow!("skill.publish: write {}: {e}", install_path.display()))?;
 
     eprintln!(
         "[skill.publish] owner={owner_id} name={skill_name} dir={} content_hash={hash}",
@@ -279,9 +274,9 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
 // ── helpers ─────────────────────────────────────────────────────────────
 
 fn parse_publish_args(args: &Value) -> anyhow::Result<(String, String, String, Option<String>)> {
-    let obj = args.as_object().ok_or_else(|| {
-        anyhow::anyhow!("skill.publish: args must be a JSON object")
-    })?;
+    let obj = args
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("skill.publish: args must be a JSON object"))?;
     let owner = obj
         .get("owner_agent_id")
         .and_then(Value::as_str)
@@ -317,9 +312,9 @@ fn parse_publish_args(args: &Value) -> anyhow::Result<(String, String, String, O
 }
 
 fn parse_unpublish_args(args: &Value) -> anyhow::Result<(String, String)> {
-    let obj = args.as_object().ok_or_else(|| {
-        anyhow::anyhow!("skill.unpublish: args must be a JSON object")
-    })?;
+    let obj = args
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("skill.unpublish: args must be a JSON object"))?;
     let owner = obj
         .get("owner_agent_id")
         .and_then(Value::as_str)
@@ -344,9 +339,7 @@ fn parse_unpublish_args(args: &Value) -> anyhow::Result<(String, String)> {
 /// Codex has no native skill concept; for codex agents we still
 /// use `<cwd>/skills/` so EasyNet's own listing surfaces the
 /// artifact, but we know the LLM won't auto-load it.
-fn resolve_owner_root_and_type(
-    owner_id: &str,
-) -> anyhow::Result<(PathBuf, agents::AgentType)> {
+fn resolve_owner_root_and_type(owner_id: &str) -> anyhow::Result<(PathBuf, agents::AgentType)> {
     let registry = agents::load_agents()?;
     let entry = registry.agents.get(owner_id).ok_or_else(|| {
         anyhow::anyhow!(
@@ -392,9 +385,7 @@ fn resolve_owner_root_and_type(
 fn skills_dir_for(root: &std::path::Path, agent_type: agents::AgentType) -> PathBuf {
     match agent_type {
         agents::AgentType::ClaudeCode => root.join(".claude").join("skills"),
-        agents::AgentType::Codex | agents::AgentType::CodexAppServer => {
-            root.join("skills")
-        }
+        agents::AgentType::Codex | agents::AgentType::CodexAppServer => root.join("skills"),
     }
 }
 
@@ -622,10 +613,12 @@ mod tests {
             "skill_md": "content",
         }))
         .unwrap();
-        let res = list_handler(json!({"owner_agent_id": name}))
-            .expect("list ok");
+        let res = list_handler(json!({"owner_agent_id": name})).expect("list ok");
         let items = res["items"].as_array().expect("items array");
         let found = items.iter().any(|item| item["name"] == "found-me");
-        assert!(found, "list_handler must surface the just-published skill: {res}");
+        assert!(
+            found,
+            "list_handler must surface the just-published skill: {res}"
+        );
     }
 }

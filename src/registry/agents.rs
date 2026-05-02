@@ -129,9 +129,15 @@ pub struct AgentEntry {
     pub(crate) label: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) env: BTreeMap<String, String>,
-    #[serde(default = "default_timeout", skip_serializing_if = "is_default_timeout")]
+    #[serde(
+        default = "default_timeout",
+        skip_serializing_if = "is_default_timeout"
+    )]
     pub(crate) timeout_secs: u64,
-    #[serde(default = "default_max_output", skip_serializing_if = "is_default_max_output")]
+    #[serde(
+        default = "default_max_output",
+        skip_serializing_if = "is_default_max_output"
+    )]
     pub(crate) max_output_bytes: usize,
 }
 
@@ -511,12 +517,8 @@ fn ensure_v1_backup() -> anyhow::Result<()> {
         return Ok(());
     }
     let data = fs::read(&src).with_context(|| format!("read {}", src.display()))?;
-    config::atomic_write_with_permissions(
-        &bak,
-        &data,
-        config::WritePermissions::OwnerReadWrite,
-    )
-    .with_context(|| format!("write {}", bak.display()))?;
+    config::atomic_write_with_permissions(&bak, &data, config::WritePermissions::OwnerReadWrite)
+        .with_context(|| format!("write {}", bak.display()))?;
     eprintln!(
         "[easynet migrate] backed up pre-v2 registry to {}",
         bak.display()
@@ -763,7 +765,10 @@ mod tests {
         let reg = load_agents().unwrap();
         let alice = &reg.agents["alice"];
         // Registry row's env must be cleared.
-        assert!(alice.env.is_empty(), "registry env must be cleared on migrate");
+        assert!(
+            alice.env.is_empty(),
+            "registry env must be cleared on migrate"
+        );
 
         // .env file must contain both vars.
         let root = alice.root_path.as_ref().unwrap();
@@ -874,10 +879,7 @@ mod tests {
         let reg = load_agents().unwrap();
         assert_eq!(reg.agents["alice"].schema_version, 2);
         let bak = agents_path().with_extension("json.v1.bak");
-        assert!(
-            !bak.exists(),
-            "v2-on-disk registry must not trigger backup"
-        );
+        assert!(!bak.exists(), "v2-on-disk registry must not trigger backup");
     }
 
     #[test]

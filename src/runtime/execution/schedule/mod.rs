@@ -44,9 +44,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use cron::Schedule as CronSchedule;
 use uuid::Uuid;
 
-use crate::runtime::domain::{
-    AgentId, MisfirePolicy, NodeId, ScheduleEntry, ScheduleId, TenantId,
-};
+use crate::runtime::domain::{AgentId, MisfirePolicy, NodeId, ScheduleEntry, ScheduleId, TenantId};
 
 #[derive(Default)]
 pub struct ScheduleService {
@@ -219,13 +217,9 @@ impl ScheduleService {
             };
             let last_fire = last_fire_unix_ms_for(&entry.id)
                 .and_then(|ms| Utc.timestamp_millis_opt(ms).single());
-            let anchor = last_fire.unwrap_or_else(|| {
-                now - chrono::Duration::seconds(catch_up_seconds_for(entry))
-            });
-            let fires: Vec<DateTime<Utc>> = cron
-                .after(&anchor)
-                .take_while(|t| t <= &now)
-                .collect();
+            let anchor = last_fire
+                .unwrap_or_else(|| now - chrono::Duration::seconds(catch_up_seconds_for(entry)));
+            let fires: Vec<DateTime<Utc>> = cron.after(&anchor).take_while(|t| t <= &now).collect();
             if fires.is_empty() {
                 continue;
             }
@@ -397,7 +391,9 @@ mod tests {
         // operators can grep "invalid cron" to find their bad
         // schedule line.
         let svc = ScheduleService::new();
-        let err = svc.add(entry("totally not cron", MisfirePolicy::Skip)).unwrap_err();
+        let err = svc
+            .add(entry("totally not cron", MisfirePolicy::Skip))
+            .unwrap_err();
         assert!(format!("{err}").contains("invalid cron"));
     }
 
@@ -439,8 +435,10 @@ mod tests {
         // Anchor "last fire" to 6 hours ago.
         let now = Utc.with_ymd_and_hms(2026, 4, 25, 12, 0, 0).unwrap();
         let last_fire_ms = (now - chrono::Duration::hours(6)).timestamp_millis();
-        let due =
-            svc.due(now, |sid| if *sid == id { Some(last_fire_ms) } else { None });
+        let due = svc.due(
+            now,
+            |sid| if *sid == id { Some(last_fire_ms) } else { None },
+        );
         assert_eq!(due.len(), 1);
         assert!(due[0].catch_up); // collapsed-from-many is still flagged catch_up
     }
@@ -448,16 +446,21 @@ mod tests {
     #[test]
     fn due_fire_once_policy_emits_exactly_one_fire() {
         let svc = ScheduleService::new();
-        let id = svc.add(entry("* * * * *", MisfirePolicy::FireOnce)).unwrap();
+        let id = svc
+            .add(entry("* * * * *", MisfirePolicy::FireOnce))
+            .unwrap();
         let now = Utc.with_ymd_and_hms(2026, 4, 25, 12, 0, 0).unwrap();
         let last_fire_ms = (now - chrono::Duration::hours(2)).timestamp_millis();
-        let due = svc.due(now, |sid| {
-            if *sid == id {
-                Some(last_fire_ms)
-            } else {
-                None
-            }
-        });
+        let due = svc.due(
+            now,
+            |sid| {
+                if *sid == id {
+                    Some(last_fire_ms)
+                } else {
+                    None
+                }
+            },
+        );
         assert_eq!(due.len(), 1);
         // first miss is the chosen instant
         assert!(due[0].fire_at < now);
@@ -476,13 +479,16 @@ mod tests {
         // = 10:00 + 11:00 + 12:00 — but 10:00 is outside window
         // (now - 2h = 10:00 inclusive, so 10:00 == window edge).
         let last_fire_ms = (now - chrono::Duration::hours(4)).timestamp_millis();
-        let due = svc.due(now, |sid| {
-            if *sid == id {
-                Some(last_fire_ms)
-            } else {
-                None
-            }
-        });
+        let due = svc.due(
+            now,
+            |sid| {
+                if *sid == id {
+                    Some(last_fire_ms)
+                } else {
+                    None
+                }
+            },
+        );
         // Expect 2 or 3 fires (window edge inclusive). The bound
         // is `now - fire <= window`. So 10:00, 11:00, 12:00 fit.
         assert!(due.len() >= 2 && due.len() <= 3);

@@ -32,8 +32,8 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeZone, Utc};
 
-use crate::runtime::execution::schedule::ScheduleService;
 use crate::runtime::agents::chat_ability::ContextLoader;
+use crate::runtime::execution::schedule::ScheduleService;
 
 /// Default horizon: 24 hours. Schedules firing later than this are
 /// excluded from the chat context block so the LLM's prompt stays
@@ -84,11 +84,7 @@ impl ContextLoader for ScheduleLoader {
         "schedule"
     }
 
-    fn load(
-        &self,
-        agent_name: &str,
-        _session_id: &str,
-    ) -> anyhow::Result<Option<String>> {
+    fn load(&self, agent_name: &str, _session_id: &str) -> anyhow::Result<Option<String>> {
         let now = Utc::now();
         let horizon_end = now + chrono::Duration::from_std(self.horizon)?;
 
@@ -136,11 +132,7 @@ impl ContextLoader for ScheduleLoader {
             // Local time would be more readable but not portable
             // across daemon hosts; ISO UTC is unambiguous and the
             // LLM can convert if asked.
-            out.push_str(&format!(
-                "- **{}** (cron `{}`)",
-                when.to_rfc3339(),
-                cron
-            ));
+            out.push_str(&format!("- **{}** (cron `{}`)", when.to_rfc3339(), cron));
             if let Some(p) = prompt {
                 let preview: String = p.chars().take(80).collect();
                 out.push_str(": ");
@@ -232,13 +224,8 @@ mod tests {
         let svc = Arc::new(ScheduleService::new());
         // Add more than the cap so truncation kicks in.
         for i in 0..(MAX_ENTRIES_RENDERED + 3) {
-            svc.add(make_entry(
-                &format!("s{i}"),
-                "alice",
-                "0 * * * *",
-                true,
-            ))
-            .unwrap();
+            svc.add(make_entry(&format!("s{i}"), "alice", "0 * * * *", true))
+                .unwrap();
         }
         let loader = ScheduleLoader::new(svc);
         let text = loader.load("alice", "s-1").unwrap().unwrap();

@@ -79,11 +79,8 @@ pub fn run_eal_exec(
     // render BEFORE handing to the EAL parser so a template error
     // (missing arg, unclosed brace, …) surfaces with the executor
     // label — not as a confusing parse error several layers down.
-    let rendered = crate::runtime::agents::template::render_template(
-        &spec.source,
-        args,
-        "eal executor",
-    )?;
+    let rendered =
+        crate::runtime::agents::template::render_template(&spec.source, args, "eal executor")?;
 
     let started = Instant::now();
     let _ = timeout.unwrap_or_else(|| Duration::from_secs(DEFAULT_TIMEOUT_SECS));

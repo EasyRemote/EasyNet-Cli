@@ -48,8 +48,8 @@ pub struct DevicesArgs {
 }
 
 pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
-    let resp = invoke_local_ability("fleet.list_nodes", json!({}))
-        .context("invoke fleet.list_nodes")?;
+    let resp =
+        invoke_local_ability("fleet.list_nodes", json!({})).context("invoke fleet.list_nodes")?;
     let nodes = resp
         .get("nodes")
         .and_then(Value::as_array)

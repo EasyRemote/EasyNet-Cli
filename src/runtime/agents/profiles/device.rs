@@ -143,8 +143,13 @@ mod tests {
         // and federation.advertise silently drop them on
         // non-joined hosts.
         for name in [
-            "fs.read", "fs.write", "fs.list", "fs.edit",
-            "process.exec", "shell.run", "http.request",
+            "fs.read",
+            "fs.write",
+            "fs.list",
+            "fs.edit",
+            "process.exec",
+            "shell.run",
+            "http.request",
             // PTY family — inhabits fleet.* prefix already, but
             // let's pin them here so a future renamer trips this
             // test instead of silently breaking the catalog. The
@@ -180,7 +185,10 @@ mod tests {
     fn descriptors_for_emit_only_owned_names() {
         let owner = "easynet:///r/acme/agent/01DEV";
         let descriptors = descriptors_for(owner);
-        assert!(!descriptors.is_empty(), "device profile must own at least observe.health");
+        assert!(
+            !descriptors.is_empty(),
+            "device profile must own at least observe.health"
+        );
         for d in &descriptors {
             assert!(
                 owns(&d.name),
@@ -198,9 +206,19 @@ mod tests {
         let descriptors = descriptors_for("easynet:///r/acme/agent/01DEV");
         for d in descriptors {
             if d.name.starts_with("observe.") {
-                assert_eq!(d.visibility, Visibility::Public, "{} must be PUBLIC", d.name);
+                assert_eq!(
+                    d.visibility,
+                    Visibility::Public,
+                    "{} must be PUBLIC",
+                    d.name
+                );
             } else {
-                assert_eq!(d.visibility, Visibility::Scoped, "{} must be SCOPED", d.name);
+                assert_eq!(
+                    d.visibility,
+                    Visibility::Scoped,
+                    "{} must be SCOPED",
+                    d.name
+                );
             }
         }
     }

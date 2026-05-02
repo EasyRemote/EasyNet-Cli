@@ -166,16 +166,10 @@ pub enum UserBindingError {
     InvalidSignature,
     /// `target_realm` field does not match the consuming daemon's
     /// own realm. INV-3 unidirectional check.
-    WrongTargetRealm {
-        expected: String,
-        actual: String,
-    },
+    WrongTargetRealm { expected: String, actual: String },
     /// `issued_at_ms` is older than `USER_BINDING_FRESHNESS_MS`
     /// against the consumer's clock.
-    ExpiredToken {
-        issued_at_ms: u64,
-        now_ms: u64,
-    },
+    ExpiredToken { issued_at_ms: u64, now_ms: u64 },
     /// Source realm's backend pubkey could not be resolved via
     /// PR-N2's FederatedKeyResolver (peer hub down, not
     /// federated, etc.).
@@ -258,10 +252,13 @@ pub fn canonical_user_binding_bytes(token: &UserBindingToken) -> Vec<u8> {
     const DOMAIN_TAG: &[u8] = b"easynet/user-binding/v1\n";
     let mut out = Vec::with_capacity(
         DOMAIN_TAG.len()
-            + 4 + token.source_realm.len()
-            + 4 + token.source_user_uri.len()
+            + 4
+            + token.source_realm.len()
+            + 4
+            + token.source_user_uri.len()
             + ED25519_PUBKEY_LEN
-            + 4 + token.target_realm.len()
+            + 4
+            + token.target_realm.len()
             + 8
             + USER_BINDING_NONCE_LEN,
     );
@@ -318,9 +315,7 @@ pub fn sign_user_binding_token(
 /// (per-call concerns the caller owns the clock + replay store
 /// for). PR-N4 spec §commit 3/N's `consume_federate_user_token`
 /// runs all four checks in order and surfaces typed reasons.
-pub fn verify_user_binding_signature(
-    token: &UserBindingToken,
-) -> Result<(), UserBindingError> {
+pub fn verify_user_binding_signature(token: &UserBindingToken) -> Result<(), UserBindingError> {
     use ed25519_dalek::{Signature, Verifier, VerifyingKey};
     token.validate_lengths()?;
     let pubkey_arr: [u8; ED25519_PUBKEY_LEN] = token
@@ -328,8 +323,8 @@ pub fn verify_user_binding_signature(
         .as_slice()
         .try_into()
         .map_err(|_| UserBindingError::InvalidSignature)?;
-    let pubkey = VerifyingKey::from_bytes(&pubkey_arr)
-        .map_err(|_| UserBindingError::InvalidSignature)?;
+    let pubkey =
+        VerifyingKey::from_bytes(&pubkey_arr).map_err(|_| UserBindingError::InvalidSignature)?;
     let sig_arr: [u8; ED25519_SIG_LEN] = token
         .signature
         .as_slice()
@@ -415,8 +410,7 @@ mod tests {
         let signing = SigningKey::from_bytes(&[0x44; 32]);
         let token = fixture_token(&signing);
         let bytes = serde_json::to_vec(&token).expect("serialise");
-        let restored: UserBindingToken =
-            serde_json::from_slice(&bytes).expect("deserialise");
+        let restored: UserBindingToken = serde_json::from_slice(&bytes).expect("deserialise");
         assert_eq!(token, restored);
     }
 
@@ -476,8 +470,7 @@ mod tests {
             [0xCC; USER_BINDING_NONCE_LEN],
         );
         sign_user_binding_token(&mut token, &attacker_signing);
-        verify_user_binding_signature(&token)
-            .expect_err("signature by wrong key must fail verify");
+        verify_user_binding_signature(&token).expect_err("signature by wrong key must fail verify");
     }
 
     #[test]
@@ -508,7 +501,10 @@ mod tests {
             UserBindingError::UnknownSourceRealm("x".into()).reason(),
             "user_binding_unknown_source_realm"
         );
-        assert_eq!(UserBindingError::ReplayDetected.reason(), "user_binding_replay_detected");
+        assert_eq!(
+            UserBindingError::ReplayDetected.reason(),
+            "user_binding_replay_detected"
+        );
         assert_eq!(
             UserBindingError::Malformed("x".into()).reason(),
             "user_binding_malformed"

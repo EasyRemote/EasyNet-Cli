@@ -125,11 +125,7 @@ pub trait ContextLoader: Send + Sync {
 
     /// Produce the loader's contribution for the given agent +
     /// session, or `None` when there is nothing to contribute.
-    fn load(
-        &self,
-        agent_name: &str,
-        session_id: &str,
-    ) -> anyhow::Result<Option<String>>;
+    fn load(&self, agent_name: &str, session_id: &str) -> anyhow::Result<Option<String>>;
 }
 
 /// Register a `<agent>.chat` handler on the supplied registry for
@@ -286,19 +282,13 @@ pub(crate) fn build_agent_ability_handler(
                     .map(std::time::Duration::from_secs);
                 return match exec {
                     crate::core::ability_spec::AbilityExec::Shell(spec) => {
-                        crate::runtime::agents::shell_executor::run_shell_exec(
-                            spec, &args, timeout,
-                        )
+                        crate::runtime::agents::shell_executor::run_shell_exec(spec, &args, timeout)
                     }
                     crate::core::ability_spec::AbilityExec::Http(spec) => {
-                        crate::runtime::agents::http_executor::run_http_exec(
-                            spec, &args, timeout,
-                        )
+                        crate::runtime::agents::http_executor::run_http_exec(spec, &args, timeout)
                     }
                     crate::core::ability_spec::AbilityExec::Eal(spec) => {
-                        crate::runtime::agents::eal_executor::run_eal_exec(
-                            spec, &args, timeout,
-                        )
+                        crate::runtime::agents::eal_executor::run_eal_exec(spec, &args, timeout)
                     }
                 };
             }
@@ -1033,11 +1023,7 @@ fn stream_handler(
 /// The `<agent>.chat` ability itself is never exposed as a tool to
 /// the LLM (an agent calling its own chat would be infinite-recursion
 /// bait); it is filtered out before any include/exclude rules apply.
-fn enumerate_skills(
-    agent_name: &str,
-    entry: &AgentEntry,
-    selection: &Selection,
-) -> Vec<String> {
+fn enumerate_skills(agent_name: &str, entry: &AgentEntry, selection: &Selection) -> Vec<String> {
     enumerate_skill_specs(agent_name, entry, selection)
         .into_iter()
         .map(|s| s.name().to_string())
@@ -1179,9 +1165,7 @@ const ATTACHMENTS_BUDGET_BYTES: usize = 1024 * 1024;
 ///   * file open/read I/O failure
 ///   * encoding=utf8 on a non-UTF-8 byte sequence
 ///   * accumulated bytes exceed `ATTACHMENTS_BUDGET_BYTES`
-fn materialize_attachments(
-    specs: &[AttachmentSpec],
-) -> anyhow::Result<Option<String>> {
+fn materialize_attachments(specs: &[AttachmentSpec]) -> anyhow::Result<Option<String>> {
     if specs.is_empty() {
         return Ok(None);
     }
@@ -1196,9 +1180,8 @@ fn materialize_attachments(
             );
         }
         let path = std::path::Path::new(&spec.path);
-        let metadata = std::fs::metadata(path).map_err(|e| {
-            anyhow::anyhow!("chat: attachments[{idx}] stat {:?}: {e}", spec.path)
-        })?;
+        let metadata = std::fs::metadata(path)
+            .map_err(|e| anyhow::anyhow!("chat: attachments[{idx}] stat {:?}: {e}", spec.path))?;
         if metadata.len() as usize > budget {
             anyhow::bail!(
                 "chat: attachments[{idx}] {:?} ({} bytes) would exceed the {} byte \
@@ -1208,9 +1191,8 @@ fn materialize_attachments(
                 ATTACHMENTS_BUDGET_BYTES
             );
         }
-        let mut file = std::fs::File::open(path).map_err(|e| {
-            anyhow::anyhow!("chat: attachments[{idx}] open {:?}: {e}", spec.path)
-        })?;
+        let mut file = std::fs::File::open(path)
+            .map_err(|e| anyhow::anyhow!("chat: attachments[{idx}] open {:?}: {e}", spec.path))?;
         // +1 over budget so an oversized file (e.g. one that grew
         // between stat and open) still fails loud rather than
         // truncating silently.
@@ -1261,8 +1243,7 @@ fn materialize_attachments(
 /// attachments path; the alphabet + padding are stable enough to
 /// inline. Mirrors RFC 4648 §4.
 fn base64_encode(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     for chunk in input.chunks(3) {
         let b0 = chunk[0] as u32;
@@ -1389,7 +1370,10 @@ impl ChatArgs {
         if prompt.is_empty() {
             anyhow::bail!("chat: `prompt` must not be empty");
         }
-        let context = obj.get("context").and_then(Value::as_str).map(str::to_string);
+        let context = obj
+            .get("context")
+            .and_then(Value::as_str)
+            .map(str::to_string);
         let session_id = obj
             .get("session_id")
             .and_then(Value::as_str)
@@ -1435,15 +1419,13 @@ fn parse_attachments(value: Option<&Value>) -> anyhow::Result<Vec<AttachmentSpec
     };
     let mut out = Vec::with_capacity(arr.len());
     for (idx, item) in arr.iter().enumerate() {
-        let obj = item.as_object().ok_or_else(|| {
-            anyhow::anyhow!("chat: attachments[{idx}] must be an object")
-        })?;
+        let obj = item
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("chat: attachments[{idx}] must be an object"))?;
         let path = obj
             .get("path")
             .and_then(Value::as_str)
-            .ok_or_else(|| {
-                anyhow::anyhow!("chat: attachments[{idx}].path (string) required")
-            })?
+            .ok_or_else(|| anyhow::anyhow!("chat: attachments[{idx}].path (string) required"))?
             .to_string();
         if path.is_empty() {
             anyhow::bail!("chat: attachments[{idx}].path must not be empty");
@@ -1716,12 +1698,7 @@ mod tests {
         // workspace). The Live half then carries an `error` frame
         // — fine for this test, which only asserts the snapshot.
         let entry = entry();
-        let result = stream_handler(
-            "alice",
-            &entry,
-            &[],
-            json!({"prompt": "hi"}),
-        );
+        let result = stream_handler("alice", &entry, &[], json!({"prompt": "hi"}));
         let source = result.expect("snapshot construction must succeed even if dispatch will fail");
         match source {
             StreamSource::SnapshotThenLive(snapshot, _rx) => {
@@ -1843,7 +1820,10 @@ mod tests {
         }))
         .unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.contains("temperature"), "msg should name the knob: {msg}");
+        assert!(
+            msg.contains("temperature"),
+            "msg should name the knob: {msg}"
+        );
         assert!(msg.contains("not supported"), "msg should explain: {msg}");
     }
 
@@ -1855,7 +1835,10 @@ mod tests {
         }))
         .unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.contains("max_tokens"), "msg should name the knob: {msg}");
+        assert!(
+            msg.contains("max_tokens"),
+            "msg should name the knob: {msg}"
+        );
         assert!(msg.contains("not supported"), "msg should explain: {msg}");
     }
 
@@ -2000,15 +1983,9 @@ mod tests {
         // — both are 8-4-4-4-12 hex with dashes, regardless of the
         // version nibble. The helper must accept both so the chat
         // ability routes resume requests through to either driver.
-        assert!(looks_like_thread_id(
-            "019dd304-60d9-74f2-8085-d4624e195d62"
-        ));
-        assert!(looks_like_thread_id(
-            "38e5640c-6843-4f15-8f3a-2c8de75d0209"
-        ));
-        assert!(looks_like_thread_id(
-            "00000000-0000-0000-0000-000000000000"
-        ));
+        assert!(looks_like_thread_id("019dd304-60d9-74f2-8085-d4624e195d62"));
+        assert!(looks_like_thread_id("38e5640c-6843-4f15-8f3a-2c8de75d0209"));
+        assert!(looks_like_thread_id("00000000-0000-0000-0000-000000000000"));
 
         // Locally-minted `chat-<uuid_like>` ids — `<32-hex>-<16-hex>`
         // — are NOT a driver-issued shape and MUST be rejected so the
@@ -2020,9 +1997,7 @@ mod tests {
         // Edge cases: wrong dash positions, wrong length, non-hex.
         assert!(!looks_like_thread_id(""));
         assert!(!looks_like_thread_id("not-a-uuid"));
-        assert!(!looks_like_thread_id(
-            "019dd304-60d9-74f2-8085-d4624e195d6"
-        )); // 35 chars
+        assert!(!looks_like_thread_id("019dd304-60d9-74f2-8085-d4624e195d6")); // 35 chars
         assert!(!looks_like_thread_id(
             "019dd304-60d9-74f2-8085-d4624e195d622"
         )); // 37 chars
@@ -2129,7 +2104,7 @@ mod tests {
         kernel.set_dispatcher(dispatcher);
 
         let _ = CallMode::Rpc; // keep the import live in case future
-                                 // versions of the test branch on mode.
+                               // versions of the test branch on mode.
 
         let inv = Invocation {
             caller: "easynet://nodes/a".into(),
@@ -2185,9 +2160,7 @@ mod tests {
     #[test]
     fn compose_chat_context_returns_none_when_all_fragments_empty() {
         assert!(compose_chat_context(None, None, &[], None, None).is_none());
-        assert!(
-            compose_chat_context(Some("   "), None, &[], Some("   "), Some("   ")).is_none()
-        );
+        assert!(compose_chat_context(Some("   "), None, &[], Some("   "), Some("   ")).is_none());
     }
 
     #[test]
@@ -2206,8 +2179,14 @@ mod tests {
         let attach_at = out.find("ATTACH").unwrap();
         let caller_at = out.find("CALLER").unwrap();
         assert!(skills_at < loader_at, "skills must precede loader output");
-        assert!(loader_at < attach_at, "loader output must precede attachments");
-        assert!(attach_at < caller_at, "attachments must precede caller context");
+        assert!(
+            loader_at < attach_at,
+            "loader output must precede attachments"
+        );
+        assert!(
+            attach_at < caller_at,
+            "attachments must precede caller context"
+        );
     }
 
     // ── attachments ──────────────────────────────────────────────────
@@ -2454,8 +2433,7 @@ model = "sonnet"
         // (boot-time pre-register and post-boot fallback both call
         // build_agent_ability_handler — see register_for_agent and
         // register_dynamic_agent_fallback).
-        let mut entry =
-            AgentEntry::new(crate::registry::agents::AgentType::ClaudeCode, None);
+        let mut entry = AgentEntry::new(crate::registry::agents::AgentType::ClaudeCode, None);
         // `root_path` is the field that `manifests_for` (and
         // `abilities_for`) read to find the on-disk abilities/
         // directory. Without it the helpers fall back to the
@@ -2463,12 +2441,8 @@ model = "sonnet"
         // through chat dispatch.
         entry.root_path = Some(ws_root.clone());
         let loaders: Arc<Vec<Arc<dyn ContextLoader>>> = Arc::new(Vec::new());
-        let handler = build_agent_ability_handler(
-            "alice".to_string(),
-            entry,
-            loaders,
-            "echo".to_string(),
-        );
+        let handler =
+            build_agent_ability_handler("alice".to_string(), entry, loaders, "echo".to_string());
 
         let envelope = handler(json!({ "value": "hello" }))
             .expect("shell exec must succeed for printf %s hello");

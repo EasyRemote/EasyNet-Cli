@@ -55,8 +55,8 @@ use std::os::raw::c_char;
 
 use crate::ffi::client as ipc_client;
 use crate::ffi::errors::{
-    clear_last_error, set_last_error, EASYNET_OK, ERR_ALREADY_INIT, ERR_DAEMON_DOWN,
-    ERR_GENERIC, ERR_INVALID_HANDLE, ERR_NULL_POINTER, ERR_VERSION_INCOMPATIBLE,
+    clear_last_error, set_last_error, EASYNET_OK, ERR_ALREADY_INIT, ERR_DAEMON_DOWN, ERR_GENERIC,
+    ERR_INVALID_HANDLE, ERR_NULL_POINTER, ERR_VERSION_INCOMPATIBLE,
 };
 use crate::ffi::handle::{alloc, lib_runtime, release, ClientSession, EasynetHandle};
 use crate::ffi::strings::read_cstr;
@@ -124,9 +124,7 @@ pub unsafe extern "C" fn easynet_init(
         match read_cstr(control_path) {
             Ok(s) => std::path::PathBuf::from(s),
             Err(_) => {
-                set_last_error(
-                    "easynet_init: control_path is not a valid UTF-8 C string",
-                );
+                set_last_error("easynet_init: control_path is not a valid UTF-8 C string");
                 return ERR_NULL_POINTER;
             }
         }

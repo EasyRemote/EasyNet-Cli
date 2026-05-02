@@ -490,8 +490,8 @@ pub(crate) fn validate_authored_ability(
 ) -> Result<(), String> {
     use crate::core::ability_spec::{AbilityExec, AbilityManifest};
 
-    let manifest = AbilityManifest::from_toml_str(body)
-        .map_err(|e| format!("manifest parse failed: {e}"))?;
+    let manifest =
+        AbilityManifest::from_toml_str(body).map_err(|e| format!("manifest parse failed: {e}"))?;
     if let Some(AbilityExec::Eal(eal)) = manifest.exec() {
         let program = crate::eal::parser::parse(&eal.source)
             .map_err(|e| format!("EAL source parse failed: {e}"))?;
@@ -757,10 +757,19 @@ fn render_curator_prompt(
     transcript: &[Value],
     catalog: &[CatalogEntry],
 ) -> String {
-    let what = verdict.get("what_to_save").and_then(Value::as_str).unwrap_or("");
+    let what = verdict
+        .get("what_to_save")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     let why = verdict.get("why").and_then(Value::as_str).unwrap_or("");
-    let how = verdict.get("how_to_apply").and_then(Value::as_str).unwrap_or("");
-    let memory_type = verdict.get("memory_type").and_then(Value::as_str).unwrap_or("");
+    let how = verdict
+        .get("how_to_apply")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let memory_type = verdict
+        .get("memory_type")
+        .and_then(Value::as_str)
+        .unwrap_or("");
 
     if target == "ability" {
         // P0 fix: render the owner's existing ability catalog into
@@ -774,7 +783,8 @@ fn render_curator_prompt(
         // trip in the common case.
         let catalog_block = if catalog.is_empty() {
             "(no abilities currently published on this agent — author a chat-fallback \
-             ability without an [exec] block, or a self-contained shell exec)".to_string()
+             ability without an [exec] block, or a self-contained shell exec)"
+                .to_string()
         } else {
             let mut s = String::new();
             for e in catalog {
@@ -839,19 +849,19 @@ Do NOT wrap the output in a markdown fence. Do NOT preface with prose. Output ON
     } else {
         let _ = catalog; // Skill bodies don't reference abilities.
         let _ = transcript; // Reserved for future curator prompts that quote the transcript.
-        // Anthropic-canonical skill body. The earlier prompt let the
-        // curator emit a prose memo with `**Why:**` / `**How to apply:**`
-        // headings (borrowed from the AliveCode memory model). That
-        // produced human-readable text but missed the machine-readable
-        // structure that makes a skill *activate*: Claude Code resolves
-        // skills by scanning `description` for a "use when …" hint and
-        // by matching the `## When This Skill Activates` triggers
-        // against the running prompt. Without those, the skill sits in
-        // `skills_loaded` but never gets reached for. We model the
-        // prompt here on Anthropic's own
-        // `~/.claude/skills/shared/skill-creator/skill-template.md` so
-        // the curator's output is byte-shape compatible with the rest
-        // of the official skill catalog.
+                            // Anthropic-canonical skill body. The earlier prompt let the
+                            // curator emit a prose memo with `**Why:**` / `**How to apply:**`
+                            // headings (borrowed from the AliveCode memory model). That
+                            // produced human-readable text but missed the machine-readable
+                            // structure that makes a skill *activate*: Claude Code resolves
+                            // skills by scanning `description` for a "use when …" hint and
+                            // by matching the `## When This Skill Activates` triggers
+                            // against the running prompt. Without those, the skill sits in
+                            // `skills_loaded` but never gets reached for. We model the
+                            // prompt here on Anthropic's own
+                            // `~/.claude/skills/shared/skill-creator/skill-template.md` so
+                            // the curator's output is byte-shape compatible with the rest
+                            // of the official skill catalog.
         format!(
             r#"You are a curator. The judge has decided that one experience from a recent task is worth saving as a SKILL — a self-contained Claude Code skill that the agent can apply to future similar prompts. Your job is to author the SKILL.md body.
 
@@ -984,9 +994,9 @@ fn validate_authored_skill(body: &str) -> Result<(), String> {
     }
     // Find the closing `---` to bound the front matter.
     let after_open = &trimmed[3..];
-    let close_idx = after_open.find("\n---").ok_or_else(|| {
-        "SKILL.md front-matter has no closing `---` delimiter".to_string()
-    })?;
+    let close_idx = after_open
+        .find("\n---")
+        .ok_or_else(|| "SKILL.md front-matter has no closing `---` delimiter".to_string())?;
     let frontmatter = &after_open[..close_idx];
     for required in ["name:", "description:", "allowed-tools:"] {
         if !frontmatter.contains(required) {
@@ -1160,9 +1170,9 @@ struct ThinkArgsParsed {
 }
 
 fn parse_think_args(args: &Value) -> anyhow::Result<ThinkArgsParsed> {
-    let obj = args.as_object().ok_or_else(|| {
-        anyhow::anyhow!("mission.think: args must be a JSON object")
-    })?;
+    let obj = args
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("mission.think: args must be a JSON object"))?;
     let owner = obj
         .get("owner_agent_id")
         .and_then(Value::as_str)
@@ -1204,10 +1214,7 @@ fn parse_think_args(args: &Value) -> anyhow::Result<ThinkArgsParsed> {
     // dispatched. Operators driving this from `easynet mission
     // think --dry-run` use it to inspect what *would* be published
     // before letting it touch their workspace.
-    let dry_run = obj
-        .get("dry_run")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let dry_run = obj.get("dry_run").and_then(Value::as_bool).unwrap_or(false);
     Ok(ThinkArgsParsed {
         owner,
         judge,
@@ -1561,7 +1568,10 @@ mod tests {
     #[test]
     fn slugify_handles_typical_judgments() {
         assert_eq!(slugify("Use bun, not npm"), "use-bun-not-npm");
-        assert_eq!(slugify("don't mock the database"), "don-t-mock-the-database");
+        assert_eq!(
+            slugify("don't mock the database"),
+            "don-t-mock-the-database"
+        );
         assert_eq!(slugify("汉字 mixed 内容"), "mixed");
         // Empty / pure-symbols → fallback so skill.publish never
         // gets handed an invalid name.
@@ -1795,8 +1805,7 @@ type = "object"
 kind = "eal"
 source = "not valid eal at all {{{"
 "#;
-        let err = validate_authored_ability(body, &[])
-            .expect_err("malformed EAL is rejected");
+        let err = validate_authored_ability(body, &[]).expect_err("malformed EAL is rejected");
         assert!(
             err.contains("EAL source parse failed"),
             "error blames EAL: {err}"
@@ -1938,7 +1947,10 @@ This skill does X.\n";
     /// returns the next canned reply each call; once exhausted, it
     /// cycles. Each call advances the session_id so a test can
     /// distinguish "resumed" from "fresh".
-    fn registry_with_stub_chat(agent: &str, replies: Vec<&'static str>) -> Arc<LocalAbilityRegistry> {
+    fn registry_with_stub_chat(
+        agent: &str,
+        replies: Vec<&'static str>,
+    ) -> Arc<LocalAbilityRegistry> {
         let counter: Arc<StdMutex<usize>> = Arc::new(StdMutex::new(0));
         let replies: Arc<Vec<String>> = Arc::new(replies.into_iter().map(String::from).collect());
         let mut reg = LocalAbilityRegistry::new();
@@ -2013,7 +2025,14 @@ This skill does X.\n";
         // exactly max_cycles times.
         let reg = registry_with_stub_chat(
             "alice",
-            vec!["working on it", "still working", "still working", "still working", "still working", "still working"],
+            vec![
+                "working on it",
+                "still working",
+                "still working",
+                "still working",
+                "still working",
+                "still working",
+            ],
         );
         let resp = think_with_registry(
             &reg,
@@ -2064,10 +2083,7 @@ Use this skill when the user:\n\
 - Asks about grep alternatives\n\
 - Mentions slow searches\n\
 - Wants to scan a codebase\n";
-        let reg = registry_with_stub_chat(
-            "alice",
-            vec!["did the work", verdict, stub_skill_md],
-        );
+        let reg = registry_with_stub_chat("alice", vec!["did the work", verdict, stub_skill_md]);
         let resp = think_with_registry(
             &reg,
             json!({"owner_agent_id": "alice", "prompt": "scan for foo"}),

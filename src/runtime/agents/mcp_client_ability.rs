@@ -99,9 +99,7 @@ fn block_on_async<F: std::future::Future<Output = anyhow::Result<Value>>>(
             // call this sync function that needs to call back into
             // async." Required because the LocalRpcHandler signature
             // is sync.
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(fut)
-            })
+            tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(fut))
         }
         Err(_) => {
             // Test path: no runtime running. Build a single-threaded
@@ -151,13 +149,24 @@ async fn list_handler(svc: &Arc<McpClientService>, _args: Value) -> anyhow::Resu
 async fn call_handler(svc: &Arc<McpClientService>, args: Value) -> anyhow::Result<Value> {
     let server = match args.get("server").and_then(Value::as_str) {
         Some(s) if !s.is_empty() => s.to_string(),
-        _ => return Ok(error_response("`server` is required and must be a non-empty string")),
+        _ => {
+            return Ok(error_response(
+                "`server` is required and must be a non-empty string",
+            ))
+        }
     };
     let tool_name = match args.get("name").and_then(Value::as_str) {
         Some(s) if !s.is_empty() => s.to_string(),
-        _ => return Ok(error_response("`name` is required and must be a non-empty string")),
+        _ => {
+            return Ok(error_response(
+                "`name` is required and must be a non-empty string",
+            ))
+        }
     };
-    let arguments = args.get("arguments").cloned().unwrap_or(Value::Object(Default::default()));
+    let arguments = args
+        .get("arguments")
+        .cloned()
+        .unwrap_or(Value::Object(Default::default()));
 
     match svc
         .rpc(
@@ -267,11 +276,8 @@ for line in sys.stdin:
         )
         .unwrap();
         #[cfg(unix)]
-        std::fs::set_permissions(
-            &script,
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
 
         let svc = McpClientService::from_file(McpClientsFile {
             servers: vec![McpServerSpec {
@@ -299,7 +305,10 @@ for line in sys.stdin:
         let handler = reg.get_rpc(ABILITY_LIST).unwrap();
         let resp = handler(json!({})).unwrap();
         let servers = resp["servers"].as_array().expect("servers is array");
-        assert!(servers.is_empty(), "no config → empty array, not missing key");
+        assert!(
+            servers.is_empty(),
+            "no config → empty array, not missing key"
+        );
     }
 
     #[test]
@@ -309,7 +318,10 @@ for line in sys.stdin:
         let handler = reg.get_rpc(ABILITY_CALL).unwrap();
         let resp = handler(json!({"name": "echo"})).unwrap();
         assert_eq!(resp["isError"], true);
-        assert!(resp["content"][0]["text"].as_str().unwrap().contains("`server`"));
+        assert!(resp["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("`server`"));
     }
 
     #[test]
@@ -319,7 +331,10 @@ for line in sys.stdin:
         let handler = reg.get_rpc(ABILITY_CALL).unwrap();
         let resp = handler(json!({"server": "echo"})).unwrap();
         assert_eq!(resp["isError"], true);
-        assert!(resp["content"][0]["text"].as_str().unwrap().contains("`name`"));
+        assert!(resp["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("`name`"));
     }
 
     #[test]
@@ -330,7 +345,10 @@ for line in sys.stdin:
         let resp = handler(json!({"server": "ghost", "name": "echo"})).unwrap();
         assert_eq!(resp["isError"], true);
         let text = resp["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("ghost"), "error must name the missing server; got {text:?}");
+        assert!(
+            text.contains("ghost"),
+            "error must name the missing server; got {text:?}"
+        );
     }
 
     #[test]
@@ -386,7 +404,10 @@ for line in sys.stdin:
         .unwrap();
         assert_eq!(resp["isError"], false);
         let text = resp["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("hello"), "echoed text must carry our args; got {text:?}");
+        assert!(
+            text.contains("hello"),
+            "echoed text must carry our args; got {text:?}"
+        );
         assert!(text.contains("world"));
     }
 

@@ -37,21 +37,17 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
 
-use crate::persistence::resources::{
-    self, lookup_by_uri, ResourceEntry, ResourceType,
-};
+use crate::persistence::resources::{self, lookup_by_uri, ResourceEntry, ResourceType};
 use crate::runtime::ability_dispatch::{EnvelopeContext, LocalAbilityRegistry, StreamSource};
-use crate::runtime::agents::media_abilities::{
-    ABILITY_MIC_SUBSCRIBE, REASON_SUBJECT_IN_ARGS,
-};
+use crate::runtime::agents::media_abilities::{ABILITY_MIC_SUBSCRIBE, REASON_SUBJECT_IN_ARGS};
 
 pub const REASON_SUBJECT_REQUIRED: &str = "subject_required";
 pub const REASON_RESOURCE_NOT_FOUND: &str = "resource_not_found";
@@ -72,10 +68,7 @@ pub trait MicBackend: Send + Sync {
     /// sample_rate, channels, samples_b64 }`. The backend owns
     /// any worker thread it spawns; closing the broadcast tx
     /// (returned via the channel's lifetime) ends the worker.
-    fn open(
-        &self,
-        entry: &ResourceEntry,
-    ) -> anyhow::Result<broadcast::Receiver<Value>>;
+    fn open(&self, entry: &ResourceEntry) -> anyhow::Result<broadcast::Receiver<Value>>;
 }
 
 // ── CpalMicBackend (real, PR3) ───────────────────────────────
@@ -89,10 +82,7 @@ pub trait MicBackend: Send + Sync {
 pub struct CpalMicBackend;
 
 impl MicBackend for CpalMicBackend {
-    fn open(
-        &self,
-        entry: &ResourceEntry,
-    ) -> anyhow::Result<broadcast::Receiver<Value>> {
+    fn open(&self, entry: &ResourceEntry) -> anyhow::Result<broadcast::Receiver<Value>> {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
         let host = cpal::default_host();
@@ -135,15 +125,33 @@ impl MicBackend for CpalMicBackend {
             .name("easynet-mic-cpal".into())
             .spawn(move || {
                 let stream_result = match sample_format {
-                    cpal::SampleFormat::F32 => {
-                        build_input_stream::<f32>(&device, &stream_config, tx, seq, hardware_id, sample_rate, channels)
-                    }
-                    cpal::SampleFormat::I16 => {
-                        build_input_stream::<i16>(&device, &stream_config, tx, seq, hardware_id, sample_rate, channels)
-                    }
-                    cpal::SampleFormat::U16 => {
-                        build_input_stream::<u16>(&device, &stream_config, tx, seq, hardware_id, sample_rate, channels)
-                    }
+                    cpal::SampleFormat::F32 => build_input_stream::<f32>(
+                        &device,
+                        &stream_config,
+                        tx,
+                        seq,
+                        hardware_id,
+                        sample_rate,
+                        channels,
+                    ),
+                    cpal::SampleFormat::I16 => build_input_stream::<i16>(
+                        &device,
+                        &stream_config,
+                        tx,
+                        seq,
+                        hardware_id,
+                        sample_rate,
+                        channels,
+                    ),
+                    cpal::SampleFormat::U16 => build_input_stream::<u16>(
+                        &device,
+                        &stream_config,
+                        tx,
+                        seq,
+                        hardware_id,
+                        sample_rate,
+                        channels,
+                    ),
                     other => {
                         eprintln!("{ABILITY_MIC_SUBSCRIBE}: unsupported sample format {other:?}");
                         return;
@@ -209,13 +217,7 @@ where
                 bytes.push((s & 0xff) as u8);
                 bytes.push(((s >> 8) & 0xff) as u8);
             }
-            let frame = build_frame(
-                &seq,
-                sample_rate,
-                channels,
-                &hardware_id,
-                &bytes,
-            );
+            let frame = build_frame(&seq, sample_rate, channels, &hardware_id, &bytes);
             // Broadcast send returns Err only when there are no
             // receivers — at that point the subscriber has gone,
             // we drop the frame silently and keep the stream open
@@ -285,10 +287,7 @@ impl ToS16Pcm for u16 {
 pub struct SyntheticMicBackend;
 
 impl MicBackend for SyntheticMicBackend {
-    fn open(
-        &self,
-        entry: &ResourceEntry,
-    ) -> anyhow::Result<broadcast::Receiver<Value>> {
+    fn open(&self, entry: &ResourceEntry) -> anyhow::Result<broadcast::Receiver<Value>> {
         let (tx, rx) = broadcast::channel::<Value>(8);
         let seq = Arc::new(AtomicU64::new(0));
         let bytes = vec![0u8; 960]; // 480 i16 samples
@@ -300,10 +299,7 @@ impl MicBackend for SyntheticMicBackend {
 
 // ── Registration ─────────────────────────────────────────────
 
-pub fn register_with_backend(
-    reg: &mut LocalAbilityRegistry,
-    backend: Arc<dyn MicBackend>,
-) {
+pub fn register_with_backend(reg: &mut LocalAbilityRegistry, backend: Arc<dyn MicBackend>) {
     reg.register_stream_with_envelope(
         ABILITY_MIC_SUBSCRIBE,
         Arc::new(move |env: EnvelopeContext, args: Value| handler(&backend, env, args)),
@@ -404,11 +400,19 @@ mod tests {
             StreamSource::Live(rx) => rx,
             other => panic!("expected Live, got {:?}", other),
         };
-        let frame = rx.try_recv().expect("synthetic backend must publish one frame");
-        assert!(frame.get("samples_b64").is_some(), "frame missing samples_b64: {frame}");
+        let frame = rx
+            .try_recv()
+            .expect("synthetic backend must publish one frame");
+        assert!(
+            frame.get("samples_b64").is_some(),
+            "frame missing samples_b64: {frame}"
+        );
         assert_eq!(frame["channels"], 1);
         assert_eq!(frame["sample_rate"], 48000);
-        assert!(frame["content_type"].as_str().unwrap().contains("audio/L16"));
+        assert!(frame["content_type"]
+            .as_str()
+            .unwrap()
+            .contains("audio/L16"));
         assert_eq!(frame["hardware_id"], "h-mic-e2e");
     }
 

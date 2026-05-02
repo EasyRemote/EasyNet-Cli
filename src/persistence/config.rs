@@ -321,9 +321,7 @@ impl RuntimeState {
     /// the shorter name matches the common case.
     ///
     /// [`DendriteBridge`]: easynet_axon::dendrite_bridge::DendriteBridge
-    pub fn connect_bridge(
-        &self,
-    ) -> anyhow::Result<easynet_axon::dendrite_bridge::DendriteBridge> {
+    pub fn connect_bridge(&self) -> anyhow::Result<easynet_axon::dendrite_bridge::DendriteBridge> {
         crate::support::connect_bridge_to(&self.endpoint)
     }
 }
@@ -350,10 +348,8 @@ impl RuntimeState {
 /// doc for the enforcement story.
 ///
 /// [`DendriteBridge`]: easynet_axon::dendrite_bridge::DendriteBridge
-pub fn load_and_connect() -> anyhow::Result<(
-    easynet_axon::dendrite_bridge::DendriteBridge,
-    RuntimeState,
-)> {
+pub fn load_and_connect(
+) -> anyhow::Result<(easynet_axon::dendrite_bridge::DendriteBridge, RuntimeState)> {
     let state = load()?;
     let bridge = state.connect_bridge()?;
     Ok((bridge, state))

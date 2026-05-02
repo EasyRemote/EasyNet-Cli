@@ -127,10 +127,8 @@ fn open_handler(args: Value) -> anyhow::Result<BidiSource> {
     //   xport_from_handler_tx — handler writes here;
     //                          IPC reads xport_from_handler_rx
     //                          and emits RecvBidi
-    let (xport_to_handler_tx, xport_to_handler_rx) =
-        mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
-    let (xport_from_handler_tx, xport_from_handler_rx) =
-        mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+    let (xport_to_handler_tx, xport_to_handler_rx) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
+    let (xport_from_handler_tx, xport_from_handler_rx) = mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
 
     match parsed.mode {
         Mode::Upload => spawn_upload(parsed.path, xport_to_handler_rx, xport_from_handler_tx),
@@ -194,7 +192,12 @@ fn spawn_upload(
         // applied to writes too.
         if let Some(s) = path.to_str() {
             if super::fs_ability::is_blocked_read_path_for_chat(s) {
-                emit_error(&to_client, "blocked_path", "target path is on the device block list").await;
+                emit_error(
+                    &to_client,
+                    "blocked_path",
+                    "target path is on the device block list",
+                )
+                .await;
                 return;
             }
         }
@@ -222,25 +225,29 @@ fn spawn_upload(
         let mut total: u64 = 0;
 
         loop {
-            let frame = match tokio::time::timeout(UPLOAD_RECV_IDLE_TIMEOUT, from_client.recv()).await {
-                Ok(Some(f)) => f,
-                Ok(None) => {
-                    // Client closed their send side without an
-                    // explicit EOF. Treat as graceful EOF — same
-                    // outcome as receiving {type:"eof"}.
-                    break;
-                }
-                Err(_) => {
-                    let _ = std::fs::remove_file(&staging);
-                    emit_error(
-                        &to_client,
-                        "idle_timeout",
-                        &format!("no chunk received within {} seconds", UPLOAD_RECV_IDLE_TIMEOUT.as_secs()),
-                    )
-                    .await;
-                    return;
-                }
-            };
+            let frame =
+                match tokio::time::timeout(UPLOAD_RECV_IDLE_TIMEOUT, from_client.recv()).await {
+                    Ok(Some(f)) => f,
+                    Ok(None) => {
+                        // Client closed their send side without an
+                        // explicit EOF. Treat as graceful EOF — same
+                        // outcome as receiving {type:"eof"}.
+                        break;
+                    }
+                    Err(_) => {
+                        let _ = std::fs::remove_file(&staging);
+                        emit_error(
+                            &to_client,
+                            "idle_timeout",
+                            &format!(
+                                "no chunk received within {} seconds",
+                                UPLOAD_RECV_IDLE_TIMEOUT.as_secs()
+                            ),
+                        )
+                        .await;
+                        return;
+                    }
+                };
             let frame_type = frame.get("type").and_then(Value::as_str).unwrap_or("");
             match frame_type {
                 "chunk" => {
@@ -267,10 +274,7 @@ fn spawn_upload(
                         emit_error(
                             &to_client,
                             "byte_cap_exceeded",
-                            &format!(
-                                "upload exceeds {} byte cap",
-                                FILE_TRANSFER_BYTE_CAP
-                            ),
+                            &format!("upload exceeds {} byte cap", FILE_TRANSFER_BYTE_CAP),
                         )
                         .await;
                         let _ = std::fs::remove_file(&staging);
@@ -335,7 +339,12 @@ fn spawn_download(path: PathBuf, to_client: mpsc::Sender<Value>) {
         // Path safety on the read side too.
         if let Some(s) = path.to_str() {
             if super::fs_ability::is_blocked_read_path_for_chat(s) {
-                emit_error(&to_client, "blocked_path", "source path is on the device block list").await;
+                emit_error(
+                    &to_client,
+                    "blocked_path",
+                    "source path is on the device block list",
+                )
+                .await;
                 return;
             }
         }
@@ -472,7 +481,9 @@ fn rand_u32() -> u32 {
     nanos ^ bump.wrapping_mul(0x9E3779B1)
 }
 
-fn hex_lower(d: &sha2::digest::generic_array::GenericArray<u8, sha2::digest::typenum::U32>) -> String {
+fn hex_lower(
+    d: &sha2::digest::generic_array::GenericArray<u8, sha2::digest::typenum::U32>,
+) -> String {
     hex_lower_bytes(d.as_slice())
 }
 
@@ -604,10 +615,7 @@ mod tests {
             .send(json!({"type": "chunk", "data": chunk_b64}))
             .await
             .unwrap();
-        to_handler
-            .send(json!({"type": "eof"}))
-            .await
-            .unwrap();
+        to_handler.send(json!({"type": "eof"})).await.unwrap();
 
         let frames = drain_handler_emit(&mut from_handler, 4, Duration::from_secs(3)).await;
         let complete = frames
@@ -659,10 +667,7 @@ mod tests {
         );
 
         // Now finalize.
-        to_handler
-            .send(json!({"type": "eof"}))
-            .await
-            .unwrap();
+        to_handler.send(json!({"type": "eof"})).await.unwrap();
         let _ = drain_handler_emit(&mut from_handler, 2, Duration::from_secs(2)).await;
         assert!(path.exists(), "target must exist after eof + complete");
         let _ = std::fs::remove_file(&path);
@@ -738,7 +743,9 @@ mod tests {
             if f["type"] == "chunk" {
                 if let Some(b64) = f["data"].as_str() {
                     accum.extend_from_slice(
-                        &base64::engine::general_purpose::STANDARD.decode(b64).unwrap(),
+                        &base64::engine::general_purpose::STANDARD
+                            .decode(b64)
+                            .unwrap(),
                     );
                 }
             }
@@ -836,10 +843,7 @@ mod tests {
             .send(json!({"type": "chunk", "data": chunk_b64}))
             .await
             .unwrap();
-        to_handler
-            .send(json!({"type": "eof"}))
-            .await
-            .unwrap();
+        to_handler.send(json!({"type": "eof"})).await.unwrap();
         let frames = drain_handler_emit(&mut from_handler, 4, Duration::from_secs(2)).await;
         // We expect at least one warn and one complete.
         assert!(frames.iter().any(|f| f["type"] == "warn"));

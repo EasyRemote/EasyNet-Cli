@@ -54,9 +54,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use ed25519_dalek::VerifyingKey;
 use easynet_axon::invocation::axiom::KeyResolver;
 use easynet_axon::invocation::{AxonError, AxonErrorKind};
+use ed25519_dalek::VerifyingKey;
 
 use crate::pb::axon::v1::{Envelope, InvokeRequest};
 use crate::services::federation_client::FederationClient;
@@ -244,7 +244,8 @@ impl FederatedKeyResolver {
     /// so existing single-realm setups behave identically.
     fn resolve_local(&self, agent_uri: &str) -> Result<VerifyingKey, AxonError> {
         let entry = self.trust_anchor.lookup(agent_uri).ok_or_else(|| {
-            AxonError::new(AxonErrorKind::InvalidArgument).with_reason("unknown_agent_uri")
+            AxonError::new(AxonErrorKind::InvalidArgument)
+                .with_reason("unknown_agent_uri")
                 .with_message(format!("agent_uri:{agent_uri}"))
         })?;
         let raw = BASE64_STANDARD.decode(&entry.public_key_b64).map_err(|e| {
@@ -377,9 +378,7 @@ impl FederatedKeyResolver {
         let pk_b64 = parsed
             .get("public_key_b64")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                unknown_agent_uri(agent_uri, "resolve_key_response_missing_pubkey")
-            })?;
+            .ok_or_else(|| unknown_agent_uri(agent_uri, "resolve_key_response_missing_pubkey"))?;
         let raw = BASE64_STANDARD.decode(pk_b64).map_err(|e| {
             unknown_agent_uri(agent_uri, &format!("resolve_key_pubkey_b64_decode:{e}"))
         })?;
@@ -416,7 +415,8 @@ impl KeyResolver for FederatedKeyResolver {
 /// realm. Operators reading the reject log see the failure
 /// detail in the AxonError message field.
 fn unknown_agent_uri(agent_uri: &str, detail: &str) -> AxonError {
-    AxonError::new(AxonErrorKind::InvalidArgument).with_reason("unknown_agent_uri")
+    AxonError::new(AxonErrorKind::InvalidArgument)
+        .with_reason("unknown_agent_uri")
         .with_message(format!("agent_uri:{agent_uri}:{detail}"))
 }
 
@@ -487,10 +487,12 @@ mod tests {
             crate::pb::axon::v1::InvokeResponse,
             crate::services::federation_client::FederationClientError,
         > {
-            Err(crate::services::federation_client::FederationClientError::DialFailed {
-                hub: target_hub.clone(),
-                detail: "test-injected failure".to_string(),
-            })
+            Err(
+                crate::services::federation_client::FederationClientError::DialFailed {
+                    hub: target_hub.clone(),
+                    detail: "test-injected failure".to_string(),
+                },
+            )
         }
     }
 
@@ -617,7 +619,9 @@ mod tests {
             Some("realm-a".to_string()),
         );
 
-        let err = resolver.resolve(same_realm_uri).expect_err("same-realm miss");
+        let err = resolver
+            .resolve(same_realm_uri)
+            .expect_err("same-realm miss");
         let err_str = format!("{err:?}");
         assert!(err_str.contains("unknown_agent_uri"));
         // The dial must NOT have fired; the failure detail

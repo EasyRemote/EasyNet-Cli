@@ -129,12 +129,7 @@ impl SharedReceiptStore {
         };
         let len = guard.receipts.len();
         let take = limit.min(len);
-        guard
-            .receipts
-            .iter()
-            .skip(len - take)
-            .cloned()
-            .collect()
+        guard.receipts.iter().skip(len - take).cloned().collect()
     }
 }
 

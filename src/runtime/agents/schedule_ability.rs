@@ -24,9 +24,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
-use crate::runtime::domain::{
-    AgentId, MisfirePolicy, NodeId, ScheduleEntry, ScheduleId, TenantId,
-};
+use crate::runtime::domain::{AgentId, MisfirePolicy, NodeId, ScheduleEntry, ScheduleId, TenantId};
 use crate::runtime::execution::schedule::ScheduleService;
 
 pub const ABILITY_ADD: &str = "schedule.add";
@@ -64,16 +62,11 @@ fn add_handler(svc: &ScheduleService, args: Value) -> anyhow::Result<Value> {
              got {other:?}"
         ),
     };
-    let catch_up_window_secs = args
-        .get("catch_up_window_secs")
-        .and_then(Value::as_u64);
+    let catch_up_window_secs = args.get("catch_up_window_secs").and_then(Value::as_u64);
     let enabled = args.get("enabled").and_then(Value::as_bool).unwrap_or(true);
     // Optional prompt template — see ScheduleEntry::prompt for
     // supported template variables.
-    let prompt = args
-        .get("prompt")
-        .and_then(Value::as_str)
-        .map(String::from);
+    let prompt = args.get("prompt").and_then(Value::as_str).map(String::from);
     let entry = ScheduleEntry {
         id: ScheduleId::new(""),
         tenant: TenantId::default_v1(),

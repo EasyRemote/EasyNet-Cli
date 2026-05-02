@@ -222,9 +222,7 @@ mod tests {
         let vk = VerifyingKey::from_bytes(&pk).unwrap();
         let sig_obj = ed25519_dalek::Signature::from_bytes(&sig);
         assert!(vk.verify(b"payload", &sig_obj).is_ok());
-        assert!(vk
-            .verify(b"different payload", &sig_obj)
-            .is_err());
+        assert!(vk.verify(b"different payload", &sig_obj).is_err());
     }
 
     #[test]

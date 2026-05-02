@@ -100,9 +100,7 @@ pub fn register_for_agent<F>(
     let caller = agent_name;
     reg.register_rpc(
         &qualified,
-        Arc::new(move |args: Value| {
-            dispatch(&caller, &provider, &dispatch_registry_handle, args)
-        }),
+        Arc::new(move |args: Value| dispatch(&caller, &provider, &dispatch_registry_handle, args)),
     );
 }
 
@@ -164,8 +162,7 @@ pub fn dispatch(
                         );
                     }
                     let started_fwd = Instant::now();
-                    let result =
-                        invoker.invoke(target, &parsed.ability, parsed.args.clone());
+                    let result = invoker.invoke(target, &parsed.ability, parsed.args.clone());
                     let elapsed_ms = started_fwd.elapsed().as_millis() as u64;
                     audit_invoke(
                         caller,
@@ -457,9 +454,9 @@ struct InvokeMetadata {
 
 impl InvokeArgs {
     fn parse(raw: &Value) -> anyhow::Result<Self> {
-        let obj = raw.as_object().ok_or_else(|| {
-            anyhow::anyhow!("invalid_args: invoke args must be a JSON object")
-        })?;
+        let obj = raw
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("invalid_args: invoke args must be a JSON object"))?;
 
         let target = match obj.get("target") {
             None | Some(Value::Null) => None,
@@ -468,9 +465,7 @@ impl InvokeArgs {
             }
             Some(Value::String(s)) => Some(s.clone()),
             Some(other) => {
-                anyhow::bail!(
-                    "invalid_args: `target` must be a string (agent name); got {other}"
-                )
+                anyhow::bail!("invalid_args: `target` must be a string (agent name); got {other}")
             }
         };
 
@@ -501,9 +496,7 @@ impl InvokeArgs {
             None | Some(Value::Null) => json!({}),
             Some(v) if v.is_object() => v.clone(),
             Some(other) => {
-                anyhow::bail!(
-                    "invalid_args: `args` must be a JSON object; got {other}"
-                )
+                anyhow::bail!("invalid_args: `args` must be a JSON object; got {other}")
             }
         };
 
@@ -667,7 +660,9 @@ mod tests {
         if handle.set(Arc::clone(&arc_reg)).is_err() {
             panic!("handle set once");
         }
-        let dispatch = arc_reg.resolve_rpc("claude.invoke").expect("invoke registered");
+        let dispatch = arc_reg
+            .resolve_rpc("claude.invoke")
+            .expect("invoke registered");
         move |args| dispatch(args)
     }
 
@@ -713,7 +708,8 @@ mod tests {
             "_idempotency_key": "idem-abc",
             "_timeout_ms": 5000,
             "_future_field_we_dont_read_yet": "value",
-        })).expect("sidecar fields must not be rejected");
+        }))
+        .expect("sidecar fields must not be rejected");
         assert_eq!(parsed.metadata.request_id, "req-deadbeef00112233");
         assert_eq!(
             parsed.metadata.caller_uri,
@@ -731,7 +727,8 @@ mod tests {
         let parsed = InvokeArgs::parse(&json!({
             "ability": "weather",
             "_brand_new_metadata_v3": {"nested": true},
-        })).unwrap();
+        }))
+        .unwrap();
         // Default empty strings, not panic / not error.
         assert_eq!(parsed.metadata.request_id, "");
         assert_eq!(parsed.metadata.caller_uri, "");
@@ -747,7 +744,8 @@ mod tests {
             "ability": "weather",
             "_request_id": 12345,
             "_caller_uri": null,
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(parsed.metadata.request_id, "");
         assert_eq!(parsed.metadata.caller_uri, "");
     }
@@ -758,11 +756,15 @@ mod tests {
         let err = InvokeArgs::parse(&json!({
             "ability": "weather",
             "arguments": {"x": 1},
-        })).unwrap_err();
+        }))
+        .unwrap_err();
         assert!(format!("{err}").contains("unknown field"));
         // Hint should mention the underscore convention so a future
         // operator reading the error knows the proper slot.
-        assert!(format!("{err}").contains("_"), "error should hint at the `_` prefix convention; got: {err}");
+        assert!(
+            format!("{err}").contains("_"),
+            "error should hint at the `_` prefix convention; got: {err}"
+        );
     }
 
     #[test]
@@ -783,7 +785,9 @@ mod tests {
         assert_eq!(a, b);
         // 64-char lowercase hex
         assert_eq!(a.len(), 64);
-        assert!(a.chars().all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()));
+        assert!(a
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()));
     }
 
     #[test]
@@ -796,11 +800,10 @@ mod tests {
     #[test]
     fn invoke_self_ability_dispatches_through_registry() {
         // Caller is claude; target unspecified → resolves to claude.weather.
-        let weather: crate::runtime::ability_dispatch::LocalRpcHandler =
-            Arc::new(|args: Value| {
-                let loc = args.get("location").and_then(Value::as_str).unwrap_or("");
-                Ok(json!({"summary": format!("{loc}: clear 18C")}))
-            });
+        let weather: crate::runtime::ability_dispatch::LocalRpcHandler = Arc::new(|args: Value| {
+            let loc = args.get("location").and_then(Value::as_str).unwrap_or("");
+            Ok(json!({"summary": format!("{loc}: clear 18C")}))
+        });
         let dispatch = fixture(&[("claude.weather", weather)], AgentRegistry::default());
         let resp = dispatch(json!({
             "ability": "weather",
@@ -809,10 +812,7 @@ mod tests {
         .unwrap();
         assert_eq!(resp["target"], "claude");
         assert_eq!(resp["qualified_name"], "claude.weather");
-        assert_eq!(
-            resp["result"]["summary"],
-            json!("Beijing: clear 18C")
-        );
+        assert_eq!(resp["result"]["summary"], json!("Beijing: clear 18C"));
         assert!(resp["elapsed_ms"].is_u64());
     }
 
@@ -1023,7 +1023,10 @@ mod tests {
         // Forward path returns the inner result Value verbatim — the
         // dispatch layer wraps that with the standard envelope.
         assert_eq!(resp["target"], "easynet:///r/exp-realm/agent/alice-node");
-        assert_eq!(resp["qualified_name"], "easynet:///r/exp-realm/agent/alice-node.ping");
+        assert_eq!(
+            resp["qualified_name"],
+            "easynet:///r/exp-realm/agent/alice-node.ping"
+        );
         assert_eq!(resp["result"]["echo"], "from-alice");
 
         fwd::clear_test_routing();
@@ -1072,7 +1075,9 @@ mod tests {
         // know them, because is_federation_target rejects bare names.
         let _g = fwd::test_lock();
         fwd::set_test_knower(|_uri| true);
-        fwd::set_test_router(|_t, _a, _x| panic!("router must not be called for non-federation targets"));
+        fwd::set_test_router(|_t, _a, _x| {
+            panic!("router must not be called for non-federation targets")
+        });
 
         let dispatch = fixture(&[], AgentRegistry::default());
         let err = dispatch(json!({

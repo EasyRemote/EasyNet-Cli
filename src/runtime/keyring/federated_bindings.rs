@@ -96,8 +96,7 @@ impl FederatedBindingsStore {
     /// consume creates the file).
     pub fn open_or_create(path: PathBuf) -> Result<Self> {
         let file: StoreFile = if path.exists() {
-            let bytes = std::fs::read(&path)
-                .with_context(|| format!("read {}", path.display()))?;
+            let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
             if bytes.is_empty() {
                 StoreFile::default()
             } else {
@@ -136,11 +135,7 @@ impl FederatedBindingsStore {
     /// source_user_uri)`. Returns `None` when no such binding
     /// has been consumed.
     #[must_use]
-    pub fn find_local_user(
-        &self,
-        source_realm: &str,
-        source_user_uri: &str,
-    ) -> Option<String> {
+    pub fn find_local_user(&self, source_realm: &str, source_user_uri: &str) -> Option<String> {
         self.inner
             .read()
             .expect("rwlock poisoned")
@@ -166,11 +161,7 @@ impl FederatedBindingsStore {
     /// Atomically write a new binding + remember its nonce.
     /// Persistence is best-effort: when constructed via
     /// `in_memory`, no on-disk write occurs (no path).
-    pub fn record_binding(
-        &self,
-        binding: FederatedUserBinding,
-        nonce_b64: String,
-    ) -> Result<()> {
+    pub fn record_binding(&self, binding: FederatedUserBinding, nonce_b64: String) -> Result<()> {
         let mut guard = self.inner.write().expect("rwlock poisoned");
         let nonces = guard
             .consumed_nonces
@@ -184,8 +175,8 @@ impl FederatedBindingsStore {
         }
         guard.bindings.push(binding);
         if !self.path.as_os_str().is_empty() {
-            let bytes = serde_json::to_vec_pretty(&*guard)
-                .context("serialise federated bindings")?;
+            let bytes =
+                serde_json::to_vec_pretty(&*guard).context("serialise federated bindings")?;
             atomic_write(self.path.as_path(), &bytes)?;
         }
         Ok(())
@@ -196,15 +187,13 @@ impl FederatedBindingsStore {
 /// `realm_trust_anchor::save` uses; keeping the helper local so
 /// the keyring crate doesn't depend on a wider util.
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = path.parent().ok_or_else(|| {
-        anyhow!("federated bindings path {} has no parent", path.display())
-    })?;
-    std::fs::create_dir_all(parent).with_context(|| {
-        format!("create parent dir for {}", path.display())
-    })?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("federated bindings path {} has no parent", path.display()))?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("create parent dir for {}", path.display()))?;
     let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, bytes)
-        .with_context(|| format!("write tmp file {}", tmp.display()))?;
+    std::fs::write(&tmp, bytes).with_context(|| format!("write tmp file {}", tmp.display()))?;
     std::fs::rename(&tmp, path)
         .with_context(|| format!("rename {} to {}", tmp.display(), path.display()))?;
     Ok(())

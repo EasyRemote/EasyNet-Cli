@@ -340,9 +340,9 @@ struct CapturedResult {
 
 // ── Dispatch backend trait (enables test injection) ──
 
+use crate::core::agent_id::AbilityName;
 use crate::eal::error::EalError;
 use crate::eal::ir::IrTarget;
-use crate::core::agent_id::AbilityName;
 
 pub trait StepDispatcher {
     /// Dispatch one step. The runtime sees only the resolved
@@ -677,22 +677,16 @@ fn dispatch_to_agent(
                 .map(std::time::Duration::from_secs);
             return match exec {
                 crate::core::ability_spec::AbilityExec::Shell(spec) => {
-                    crate::runtime::agents::shell_executor::run_shell_exec(
-                        spec, arguments, timeout,
-                    )
-                    .map_err(|e| EalError::Unavailable(format!("shell exec: {e}")))
+                    crate::runtime::agents::shell_executor::run_shell_exec(spec, arguments, timeout)
+                        .map_err(|e| EalError::Unavailable(format!("shell exec: {e}")))
                 }
                 crate::core::ability_spec::AbilityExec::Http(spec) => {
-                    crate::runtime::agents::http_executor::run_http_exec(
-                        spec, arguments, timeout,
-                    )
-                    .map_err(|e| EalError::Unavailable(format!("http exec: {e}")))
+                    crate::runtime::agents::http_executor::run_http_exec(spec, arguments, timeout)
+                        .map_err(|e| EalError::Unavailable(format!("http exec: {e}")))
                 }
                 crate::core::ability_spec::AbilityExec::Eal(spec) => {
-                    crate::runtime::agents::eal_executor::run_eal_exec(
-                        spec, arguments, timeout,
-                    )
-                    .map_err(|e| EalError::Unavailable(format!("eal exec: {e}")))
+                    crate::runtime::agents::eal_executor::run_eal_exec(spec, arguments, timeout)
+                        .map_err(|e| EalError::Unavailable(format!("eal exec: {e}")))
                 }
             };
         }
@@ -839,9 +833,7 @@ fn try_dispatch_via_daemon(qualified_name: &str, arguments: &Value) -> DaemonDis
         {
             Ok(r) => r,
             Err(e) => {
-                return Ok(Err(DaemonDispatch::Error(format!(
-                    "round_trip: {e}"
-                ))));
+                return Ok(Err(DaemonDispatch::Error(format!("round_trip: {e}"))));
             }
         };
         match resp {
@@ -857,9 +849,7 @@ fn try_dispatch_via_daemon(qualified_name: &str, arguments: &Value) -> DaemonDis
                 }
                 Ok(Ok(value))
             }
-            OutgoingFrame::Error {
-                code, message, ..
-            } => {
+            OutgoingFrame::Error { code, message, .. } => {
                 // Map the typed code so the caller can route on intent
                 // rather than string-matching. `not_found` is the
                 // documented daemon code for "no handler for this
@@ -937,8 +927,10 @@ pub fn execute_pooled(
     tenant: &str,
     ir: &MissionIr,
 ) -> anyhow::Result<ExecutionReport> {
-    let dispatcher =
-        PooledBridgeDispatcher::new(endpoint, crate::support::timeouts::BRIDGE_CONNECT_TIMEOUT_MS);
+    let dispatcher = PooledBridgeDispatcher::new(
+        endpoint,
+        crate::support::timeouts::BRIDGE_CONNECT_TIMEOUT_MS,
+    );
     execute_with_dispatcher(&dispatcher, tenant, ir)
 }
 
@@ -975,7 +967,10 @@ pub fn execute_with_endpoint(
     tenant: &str,
     ir: &MissionIr,
 ) -> anyhow::Result<ExecutionReport> {
-    let dispatcher = AgentAwareDispatcher::new(endpoint, crate::support::timeouts::BRIDGE_CONNECT_TIMEOUT_MS);
+    let dispatcher = AgentAwareDispatcher::new(
+        endpoint,
+        crate::support::timeouts::BRIDGE_CONNECT_TIMEOUT_MS,
+    );
     execute_with_dispatcher(&dispatcher, tenant, ir)
 }
 
@@ -998,8 +993,7 @@ pub fn execute_with_dispatcher(
     // `resolve_arguments` consults both so it can tell "skip me because
     // my producer was skipped" apart from "unresolved ref" (which is an
     // analyzer/planner bug). See `ResolveError::UpstreamSkipped`.
-    let mut skipped_bindings: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    let mut skipped_bindings: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut all_traces = CappedTraceBuffer::new();
     let mut completed = 0usize;
     let mut failed = 0usize;
@@ -1148,10 +1142,7 @@ enum StepExecResult {
     /// `ResolveError::UpstreamSkipped`. Classified as `StepOutcome::Skipped`
     /// in `process_step_result` regardless of this step's own
     /// `optional` / `on_failure` flags — propagating skip is the point.
-    SkippedByDependency {
-        message: String,
-        started_at: u64,
-    },
+    SkippedByDependency { message: String, started_at: u64 },
 }
 
 /// Dispatch a batch of steps (identified by `indices` into `steps`) in parallel or sequentially.
@@ -1530,8 +1521,7 @@ fn execute_loop(
         // across iterations. A future RFC may relax the outbound
         // direction; the inner scope stays fresh regardless.
         let mut iter_captured: HashMap<String, CapturedResult> = HashMap::new();
-        let mut iter_skipped: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut iter_skipped: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         eprintln!(
             "  {}",
@@ -1596,7 +1586,11 @@ fn execute_loop(
             .output_binding
             .as_ref()
             .and_then(|b| iter_captured.get(b).map(|c| &c.value))
-            .or_else(|| iter_captured.get(LOOP_VERIFY_SYNTHETIC_BINDING).map(|c| &c.value));
+            .or_else(|| {
+                iter_captured
+                    .get(LOOP_VERIFY_SYNTHETIC_BINDING)
+                    .map(|c| &c.value)
+            });
 
         let verify_bytes = match verify_bytes {
             Some(b) => b,
@@ -1832,9 +1826,7 @@ fn verify_output_done(bytes: &[u8]) -> VerifyDone {
     let v: serde_json::Value = match serde_json::from_slice(bytes) {
         Ok(v) => v,
         Err(e) => {
-            return VerifyDone::Malformed(format!(
-                "verify output is not JSON-decodable ({e})"
-            ));
+            return VerifyDone::Malformed(format!("verify output is not JSON-decodable ({e})"));
         }
     };
     let obj = match v.as_object() {
@@ -1848,9 +1840,9 @@ fn verify_output_done(bytes: &[u8]) -> VerifyDone {
     match obj.get("done") {
         Some(serde_json::Value::Bool(true)) => VerifyDone::True,
         Some(serde_json::Value::Bool(false)) => VerifyDone::False,
-        Some(other) => VerifyDone::Malformed(format!(
-            "verify output `done` must be boolean, got {other}"
-        )),
+        Some(other) => {
+            VerifyDone::Malformed(format!("verify output `done` must be boolean, got {other}"))
+        }
         None => VerifyDone::Malformed(
             "verify output has no top-level `done` field (RFC §4.4)".to_string(),
         ),
@@ -2407,8 +2399,7 @@ mod tests {
     fn synth_trace(id: &str) -> StepTrace {
         StepTrace {
             step_id: id.to_string(),
-            ability: crate::core::agent_id::AbilityName::parse("t")
-                .expect("valid ability name"),
+            ability: crate::core::agent_id::AbilityName::parse("t").expect("valid ability name"),
             target: crate::eal::ir::IrTarget::Device {
                 node_id: "n".to_string(),
             },
@@ -2880,8 +2871,9 @@ mod tests {
     /// collapsed jitter to a constant (e.g. forgot to mix in step_id).
     #[test]
     fn backoff_jitter_varies_across_step_ids() {
-        let values: std::collections::HashSet<u64> =
-            (0..8).map(|i| compute_backoff(1, &format!("s{i}"))).collect();
+        let values: std::collections::HashSet<u64> = (0..8)
+            .map(|i| compute_backoff(1, &format!("s{i}")))
+            .collect();
         assert!(
             values.len() > 1,
             "jitter collapsed to a constant across step ids — SHA256 seed broken?"
@@ -3459,7 +3451,9 @@ mod tests {
         fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
             // Loops are sequential by design — no thread cloning needed
             // for these tests. Signal "fall back to sequential" via Err.
-            Err(EalError::Internal("scripted dispatcher is single-thread".into()))
+            Err(EalError::Internal(
+                "scripted dispatcher is single-thread".into(),
+            ))
         }
     }
 

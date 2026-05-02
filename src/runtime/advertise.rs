@@ -38,8 +38,8 @@
 
 use crate::runtime::ability_descriptor::AbilityDescriptor;
 use crate::runtime::federation_client::{
-    AdvertiseAgentArgs, AdvertiseAgentReceipt, AdvertisedSigningAuthority, ResolveArgs,
-    ResolveFilter, ResolveReceipt, ResolvedAgent, args_to_bytes, parse_receipt_value,
+    args_to_bytes, parse_receipt_value, AdvertiseAgentArgs, AdvertiseAgentReceipt,
+    AdvertisedSigningAuthority, ResolveArgs, ResolveFilter, ResolveReceipt, ResolvedAgent,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -279,11 +279,11 @@ impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
         //    synthesises `agents/easynet:prv:hub:<realm>` which the
         //    runtime's caller-URI check rejects.
         let mut map = std::collections::HashMap::new();
-        map.insert(
-            "easynet.resource_uri".to_string(),
-            resource_uri.to_string(),
-        );
-        if subject_id.as_deref().map(|s| s.contains(":hub:")).unwrap_or(false)
+        map.insert("easynet.resource_uri".to_string(), resource_uri.to_string());
+        if subject_id
+            .as_deref()
+            .map(|s| s.contains(":hub:"))
+            .unwrap_or(false)
             && !self.caller_uri_for_hub.is_empty()
         {
             map.insert(
@@ -633,9 +633,7 @@ pub fn advertise_hosted_agent<I: AbilityInvoker>(
     agent_uri: &str,
     host_uri: &str,
 ) -> AdvertiseOutcome {
-    advertise_hosted_agent_with_host_node(
-        invoker, tenant_id, realm, agent_uri, host_uri, None,
-    )
+    advertise_hosted_agent_with_host_node(invoker, tenant_id, realm, agent_uri, host_uri, None)
 }
 
 /// RFC-002 §5.2 variant: pass host_node_id so forward_invoke knows
@@ -829,7 +827,9 @@ mod tests {
 
         let payload = invoker.last_payload.borrow().clone().unwrap();
         assert_eq!(payload["agent_uri"], "easynet:///r/acme/agent/01DEV");
-        let abilities = payload["abilities"].as_array().expect("abilities must be array");
+        let abilities = payload["abilities"]
+            .as_array()
+            .expect("abilities must be array");
         assert_eq!(abilities.len(), 2);
         assert_eq!(abilities[0]["name"], "observe.health");
         assert_eq!(abilities[0]["visibility"], "PUBLIC");

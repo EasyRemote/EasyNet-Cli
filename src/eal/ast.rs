@@ -31,7 +31,10 @@ pub struct MissionDecl {
 
 #[derive(Debug, Clone)]
 pub enum Statement {
-    LetCall { binding: String, call: CallExpr },
+    LetCall {
+        binding: String,
+        call: CallExpr,
+    },
     Call(CallExpr),
     /// `loop "<name>?" max_iters: N { body { … } verify { … } }`.
     /// See RFC docs/rfc/eal-control-flow-v1.md §3.1. The parser
@@ -109,7 +112,9 @@ pub enum FieldValue {
     Int(i64),
     Float(f64),
     Bool(bool),
-    VarRef { var_name: String },
+    VarRef {
+        var_name: String,
+    },
     /// Inline JSON-object literal. Lets a member-call carry nested
     /// args (e.g. `claude.invoke(args: { location: "Beijing" })`).
     /// Nesting is bounded by the parser's own recursion (no

@@ -76,7 +76,10 @@ use super::*;
 /// Build the production registry inside a HomeGuard so any
 /// HOME-touching boot logic (mcp_clients.json discovery,
 /// agents.json load, etc.) lands in a fresh tempdir.
-fn registry_with_temp_home() -> (Arc<LocalAbilityRegistry>, crate::facade::cli::test_support::HomeGuard) {
+fn registry_with_temp_home() -> (
+    Arc<LocalAbilityRegistry>,
+    crate::facade::cli::test_support::HomeGuard,
+) {
     let guard = crate::facade::cli::test_support::HomeGuard::new();
     // build_registry_for_daemon does the agent-registry load that
     // some abilities need (fleet.list_agents, chat-per-agent etc).
@@ -131,9 +134,7 @@ fn real_observe_health_returns_ok_and_timestamp() {
     // return `ok`. Assert at least one of these is present —
     // the contract is "non-empty, observable response".
     assert!(
-        resp.get("ts").is_some()
-            || resp.get("ok").is_some()
-            || resp.is_object(),
+        resp.get("ts").is_some() || resp.get("ok").is_some() || resp.is_object(),
         "observe.health response unexpected: {resp}"
     );
     assert!(resp.is_object(), "observe.health must return an object");
@@ -243,8 +244,7 @@ fn real_easynet_run_validates_args_before_touching_the_runtime() {
     // running — empty source must produce a precise error
     // message so an LLM-driven caller sees what to fix.
     let (reg, _g) = registry_with_temp_home();
-    let result = dispatcher_for(reg)
-        .execute_rpc(target("easynet.run", json!({ "source": "" })));
+    let result = dispatcher_for(reg).execute_rpc(target("easynet.run", json!({ "source": "" })));
     let err = result.expect_err("empty source must fail validation");
     let msg = format!("{err}");
     assert!(
@@ -263,8 +263,7 @@ fn real_mission_run_alias_validates_args_the_same_way_as_easynet_run() {
     // forgot to register it at all) would either return a
     // different error message or report `not_found`.
     let (reg, _g) = registry_with_temp_home();
-    let result = dispatcher_for(reg)
-        .execute_rpc(target("mission.run", json!({ "source": "" })));
+    let result = dispatcher_for(reg).execute_rpc(target("mission.run", json!({ "source": "" })));
     let err = result.expect_err("empty source must fail validation");
     let msg = format!("{err}");
     assert!(
@@ -337,10 +336,7 @@ fn real_fleet_list_nodes_returns_local_view_envelope() {
 fn real_fleet_describe_node_local_returns_self_envelope() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target(
-            "fleet.describe_node",
-            json!({ "node_id": "local" }),
-        ))
+        .execute_rpc(target("fleet.describe_node", json!({ "node_id": "local" })))
         .expect("fleet.describe_node local");
     assert_eq!(resp.get("is_self"), Some(&json!(true)));
 }
@@ -531,7 +527,9 @@ fn real_voice_watch_call_returns_event_snapshot() {
         .execute_rpc(target("voice.watch_call", json!({"call_id": cid})))
         .expect("watch");
     let events = w.get("events").and_then(Value::as_array).unwrap();
-    assert!(events.iter().any(|e| e.get("type") == Some(&json!("joined"))));
+    assert!(events
+        .iter()
+        .any(|e| e.get("type") == Some(&json!("joined"))));
 }
 
 #[test]
@@ -590,8 +588,8 @@ fn real_discuss_list_turns_returns_empty_for_fresh_room() {
 #[test]
 fn real_mission_discuss_round_rejects_missing_room_id() {
     let (reg, _g) = registry_with_temp_home();
-    let result = dispatcher_for(reg)
-        .execute_rpc(target("mission.discuss_round", json!({"agents": ["a"]})));
+    let result =
+        dispatcher_for(reg).execute_rpc(target("mission.discuss_round", json!({"agents": ["a"]})));
     let err = result.expect_err("missing room_id must fail");
     assert!(format!("{err}").contains("room_id"));
 }
@@ -657,7 +655,10 @@ fn real_policy_evaluate_admits_a_realistic_envelope() {
         "scope": "local",
     });
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("policy.evaluate", json!({"invocation_envelope": envelope})))
+        .execute_rpc(target(
+            "policy.evaluate",
+            json!({"invocation_envelope": envelope}),
+        ))
         .expect("policy.evaluate");
     assert!(resp.is_object());
     // v1 always allows; the response should reflect that somewhere.
@@ -673,7 +674,10 @@ fn real_policy_simulate_returns_a_decision() {
     let (reg, _g) = registry_with_temp_home();
     let envelope = json!({"subject":"x","ability":"observe.health","scope":"local"});
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("policy.simulate", json!({"invocation_envelope": envelope})))
+        .execute_rpc(target(
+            "policy.simulate",
+            json!({"invocation_envelope": envelope}),
+        ))
         .expect("policy.simulate");
     assert!(resp.is_object());
 }
@@ -726,7 +730,10 @@ fn real_fs_write_round_trips_through_real_disk() {
             "encoding": "utf8",
         }),
     );
-    assert_eq!(resp["bytes_written"].as_u64().unwrap(), payload.len() as u64);
+    assert_eq!(
+        resp["bytes_written"].as_u64().unwrap(),
+        payload.len() as u64
+    );
     assert!(resp["content_sha256"].as_str().unwrap().len() == 64);
 
     // Read directly via std::fs, not via fs.read — proves the
@@ -1065,11 +1072,10 @@ fn real_discuss_create_then_post_round_trips_through_the_service() {
     assert!(!room_id.is_empty());
 
     // Post a message into it.
-    let post = d
-        .execute_rpc(target(
-            "discuss.post",
-            json!({"room_id": room_id, "from": "alice", "content": "hello"}),
-        ));
+    let post = d.execute_rpc(target(
+        "discuss.post",
+        json!({"room_id": room_id, "from": "alice", "content": "hello"}),
+    ));
     // Some implementations may require additional fields; assert
     // we either succeeded or got a structured arg error mentioning
     // the missing field — what we want to PROVE is that the call
@@ -1161,7 +1167,9 @@ fn real_schedule_remove_routes_to_handler() {
     ));
     match r {
         Ok(_) => {}
-        Err(e) => assert!(!format!("{e}").to_ascii_lowercase().contains("no rpc handler")),
+        Err(e) => assert!(!format!("{e}")
+            .to_ascii_lowercase()
+            .contains("no rpc handler")),
     }
 }
 
@@ -1213,7 +1221,9 @@ fn real_loop_status_routes_for_unknown_id() {
     let r = d.execute_rpc(target("loop.status", json!({"loop_id": "none"})));
     match r {
         Ok(_) => {}
-        Err(e) => assert!(!format!("{e}").to_ascii_lowercase().contains("no rpc handler")),
+        Err(e) => assert!(!format!("{e}")
+            .to_ascii_lowercase()
+            .contains("no rpc handler")),
     }
 }
 
@@ -1227,7 +1237,9 @@ fn real_loop_cancel_routes_for_unknown_id() {
     let r = d.execute_rpc(target("loop.cancel", json!({"loop_id": "none"})));
     match r {
         Ok(_) => {}
-        Err(e) => assert!(!format!("{e}").to_ascii_lowercase().contains("no rpc handler")),
+        Err(e) => assert!(!format!("{e}")
+            .to_ascii_lowercase()
+            .contains("no rpc handler")),
     }
 }
 
@@ -1289,7 +1301,9 @@ fn real_fleet_skill_install_routes_with_realistic_source() {
     ));
     match r {
         Ok(_) => {}
-        Err(e) => assert!(!format!("{e}").to_ascii_lowercase().contains("no rpc handler")),
+        Err(e) => assert!(!format!("{e}")
+            .to_ascii_lowercase()
+            .contains("no rpc handler")),
     }
 }
 
@@ -1303,7 +1317,9 @@ fn real_fleet_skill_remove_routes_for_unknown_name() {
     ));
     match r {
         Ok(_) => {}
-        Err(e) => assert!(!format!("{e}").to_ascii_lowercase().contains("no rpc handler")),
+        Err(e) => assert!(!format!("{e}")
+            .to_ascii_lowercase()
+            .contains("no rpc handler")),
     }
 }
 
@@ -1317,7 +1333,9 @@ fn real_fleet_skill_upgrade_routes_for_unknown_name() {
     ));
     match r {
         Ok(_) => {}
-        Err(e) => assert!(!format!("{e}").to_ascii_lowercase().contains("no rpc handler")),
+        Err(e) => assert!(!format!("{e}")
+            .to_ascii_lowercase()
+            .contains("no rpc handler")),
     }
 }
 
@@ -1339,7 +1357,9 @@ fn real_ability_publish_routes_with_missing_args() {
     match r {
         Ok(_) => {}
         Err(e) => assert!(
-            !format!("{e}").to_ascii_lowercase().contains("no rpc handler"),
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no rpc handler"),
             "ability.publish must be routed: {e}"
         ),
     }
@@ -1353,7 +1373,9 @@ fn real_ability_unpublish_routes_with_missing_args() {
     match r {
         Ok(_) => {}
         Err(e) => assert!(
-            !format!("{e}").to_ascii_lowercase().contains("no rpc handler"),
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no rpc handler"),
             "ability.unpublish must be routed: {e}"
         ),
     }
@@ -1367,7 +1389,9 @@ fn real_skill_publish_routes_with_missing_args() {
     match r {
         Ok(_) => {}
         Err(e) => assert!(
-            !format!("{e}").to_ascii_lowercase().contains("no rpc handler"),
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no rpc handler"),
             "skill.publish must be routed: {e}"
         ),
     }
@@ -1381,7 +1405,9 @@ fn real_skill_unpublish_routes_with_missing_args() {
     match r {
         Ok(_) => {}
         Err(e) => assert!(
-            !format!("{e}").to_ascii_lowercase().contains("no rpc handler"),
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no rpc handler"),
             "skill.unpublish must be routed: {e}"
         ),
     }
@@ -1401,7 +1427,9 @@ fn real_mission_think_routes_with_missing_args() {
     match r {
         Ok(_) => panic!("mission.think with empty args must error"),
         Err(e) => assert!(
-            !format!("{e}").to_ascii_lowercase().contains("no rpc handler"),
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no rpc handler"),
             "mission.think must be routed: {e}"
         ),
     }
@@ -1416,8 +1444,10 @@ fn real_skill_list_returns_items_array_under_temp_home() {
     let resp = dispatcher_for(reg)
         .execute_rpc(target("skill.list", json!({})))
         .expect("skill.list");
-    assert!(resp.get("items").and_then(Value::as_array).is_some(),
-        "skill.list must return an `items` array; got {resp}");
+    assert!(
+        resp.get("items").and_then(Value::as_array).is_some(),
+        "skill.list must return an `items` array; got {resp}"
+    );
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1545,7 +1575,9 @@ fn real_mcp_client_list_routes_with_no_upstream_configured() {
     let r = dispatcher_for(reg).execute_rpc(target("mcp.client.list", json!({})));
     match r {
         Ok(v) => assert!(v.is_object()),
-        Err(e) => assert!(!format!("{e}").to_ascii_lowercase().contains("no rpc handler")),
+        Err(e) => assert!(!format!("{e}")
+            .to_ascii_lowercase()
+            .contains("no rpc handler")),
     }
 }
 
@@ -1561,7 +1593,9 @@ fn real_mcp_client_call_routes_with_realistic_args() {
             // Common pattern: returns isError=true on unknown server.
             assert!(v.is_object());
         }
-        Err(e) => assert!(!format!("{e}").to_ascii_lowercase().contains("no rpc handler")),
+        Err(e) => assert!(!format!("{e}")
+            .to_ascii_lowercase()
+            .contains("no rpc handler")),
     }
 }
 
@@ -1588,7 +1622,9 @@ fn real_mcp_bridge_call_tool_routes_to_local_dispatch() {
     ));
     match r {
         Ok(v) => assert!(v.is_object()),
-        Err(e) => assert!(!format!("{e}").to_ascii_lowercase().contains("no rpc handler")),
+        Err(e) => assert!(!format!("{e}")
+            .to_ascii_lowercase()
+            .contains("no rpc handler")),
     }
 }
 
@@ -1610,7 +1646,9 @@ fn real_a2a_bridge_send_task_routes_with_realistic_args() {
     ));
     match r {
         Ok(v) => assert!(v.is_object()),
-        Err(e) => assert!(!format!("{e}").to_ascii_lowercase().contains("no rpc handler")),
+        Err(e) => assert!(!format!("{e}")
+            .to_ascii_lowercase()
+            .contains("no rpc handler")),
     }
 }
 
@@ -1627,7 +1665,9 @@ fn real_a2a_client_send_task_routes_with_realistic_args() {
     ));
     match r {
         Ok(v) => assert!(v.is_object()),
-        Err(e) => assert!(!format!("{e}").to_ascii_lowercase().contains("no rpc handler")),
+        Err(e) => assert!(!format!("{e}")
+            .to_ascii_lowercase()
+            .contains("no rpc handler")),
     }
 }
 
@@ -1739,7 +1779,9 @@ fn real_discuss_subscribe_returns_a_stream_source() {
     // need to prove is the handler was reached.
     match r {
         Ok(_) => {}
-        Err(e) => assert!(!format!("{e}").to_ascii_lowercase().contains("no stream handler")),
+        Err(e) => assert!(!format!("{e}")
+            .to_ascii_lowercase()
+            .contains("no stream handler")),
     }
 }
 
@@ -1755,7 +1797,9 @@ fn real_loop_subscribe_returns_a_stream_source() {
     let r = d.execute_stream(t);
     match r {
         Ok(_) => {}
-        Err(e) => assert!(!format!("{e}").to_ascii_lowercase().contains("no stream handler")),
+        Err(e) => assert!(!format!("{e}")
+            .to_ascii_lowercase()
+            .contains("no stream handler")),
     }
 }
 
@@ -1771,7 +1815,9 @@ fn real_fleet_attach_session_returns_a_stream_source_for_unknown_id() {
     let r = d.execute_stream(t);
     match r {
         Ok(_) => {}
-        Err(e) => assert!(!format!("{e}").to_ascii_lowercase().contains("no stream handler")),
+        Err(e) => assert!(!format!("{e}")
+            .to_ascii_lowercase()
+            .contains("no stream handler")),
     }
 }
 
@@ -1838,9 +1884,8 @@ fn real_fleet_pty_session_input_read_resize_round_trip() {
     // fleet.pty_session_input — push a printf line that produces
     // a deterministic stdout marker.
     use base64::Engine;
-    let input_b64 = base64::engine::general_purpose::STANDARD.encode(
-        b"printf 'EASYNET_REAL_PTY_OK\\n'\n",
-    );
+    let input_b64 =
+        base64::engine::general_purpose::STANDARD.encode(b"printf 'EASYNET_REAL_PTY_OK\\n'\n");
     let input = d
         .execute_rpc(target(
             "fleet.pty_session_input",
@@ -1899,7 +1944,10 @@ async fn real_fleet_pty_session_attach_returns_a_bidi_source() {
         .expect("pty_session_create");
     let sid = create["session_id"].as_str().unwrap().to_string();
 
-    let mut t = target("fleet.pty_session_attach", json!({"session_id": sid.clone()}));
+    let mut t = target(
+        "fleet.pty_session_attach",
+        json!({"session_id": sid.clone()}),
+    );
     t.call_mode = CallMode::Bidi;
     let _bidi = d.execute_bidi(t).expect("pty_session_attach bidi");
 
@@ -1945,10 +1993,7 @@ async fn real_fleet_file_transfer_uploads_a_round_trip_through_dispatcher() {
         .send(json!({"type": "chunk", "data": chunk_b64}))
         .await
         .unwrap();
-    bidi.to_client
-        .send(json!({"type": "eof"}))
-        .await
-        .unwrap();
+    bidi.to_client.send(json!({"type": "eof"})).await.unwrap();
 
     // Drain frames until we see complete or timeout.
     let mut from = bidi.from_client;
@@ -1965,7 +2010,10 @@ async fn real_fleet_file_transfer_uploads_a_round_trip_through_dispatcher() {
             _ => break,
         }
     }
-    assert!(got_complete, "expected `complete` frame from fleet.file_transfer");
+    assert!(
+        got_complete,
+        "expected `complete` frame from fleet.file_transfer"
+    );
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
     let _ = std::fs::remove_file(&path);
 }
@@ -2110,9 +2158,7 @@ fn real_meta_list_resources_returns_resources_array() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let resp = invoke("meta.list_resources", json!({}));
     assert!(
-        resp.get("resources")
-            .and_then(Value::as_array)
-            .is_some(),
+        resp.get("resources").and_then(Value::as_array).is_some(),
         "meta.list_resources receipt must carry `resources` array; got {resp}"
     );
 }

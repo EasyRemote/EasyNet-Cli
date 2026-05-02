@@ -251,9 +251,7 @@ mod tests {
     /// descriptor path. The list_abilities handler tolerates an
     /// unset OnceLock (returns the static catalogue alone), so
     /// passing an empty one is the cheapest fixture.
-    fn empty_registry_handle()
-    -> Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>
-    {
+    fn empty_registry_handle() -> Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>> {
         Arc::new(std::sync::OnceLock::new())
     }
 
@@ -307,7 +305,9 @@ mod tests {
         let handler = reg.get_rpc(ABILITY_DESCRIBE).unwrap();
         let resp = handler(json!({})).unwrap();
         assert_eq!(resp["abilities_summary"]["total"], 4);
-        let by_ns = resp["abilities_summary"]["by_namespace"].as_object().unwrap();
+        let by_ns = resp["abilities_summary"]["by_namespace"]
+            .as_object()
+            .unwrap();
         assert_eq!(by_ns["fleet"], 2);
         assert_eq!(by_ns["observe"], 1);
         assert_eq!(by_ns["consent"], 1);

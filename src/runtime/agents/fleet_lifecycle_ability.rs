@@ -311,15 +311,16 @@ mod tests {
                 "agent_type": "codex",
             }))
             .unwrap();
-            assert_eq!(resp["replaced_prior"], true,
-                "second insertion of same name MUST flag replaced_prior=true");
+            assert_eq!(
+                resp["replaced_prior"], true,
+                "second insertion of same name MUST flag replaced_prior=true"
+            );
         });
     }
 
     #[test]
     fn start_agent_rejects_missing_name() {
-        let err = start_agent_handler(json!({"agent_type": "claude-code"}))
-            .unwrap_err();
+        let err = start_agent_handler(json!({"agent_type": "claude-code"})).unwrap_err();
         assert!(format!("{err}").contains("name"));
     }
 
@@ -369,8 +370,10 @@ mod tests {
                 "name_or_uri": "easynet:///r/acme/agent/01LLM-claude"
             }))
             .unwrap();
-            assert_eq!(resp["ack"], true,
-                "URI form must resolve to the same registry row as the bare name");
+            assert_eq!(
+                resp["ack"], true,
+                "URI form must resolve to the same registry row as the bare name"
+            );
         });
     }
 
@@ -408,8 +411,11 @@ mod tests {
         );
         assert_eq!(extract_realm_from_uri(""), None);
         assert_eq!(extract_realm_from_uri("not-a-uri"), None);
-        assert_eq!(extract_realm_from_uri("easynet:///r//agent/x"), None,
-            "empty realm must NOT be considered valid");
+        assert_eq!(
+            extract_realm_from_uri("easynet:///r//agent/x"),
+            None,
+            "empty realm must NOT be considered valid"
+        );
     }
 
     #[test]

@@ -81,15 +81,14 @@ fn create_handler(svc: &DiscussService, args: Value) -> anyhow::Result<Value> {
     let participants: Vec<String> = args
         .get("participants")
         .and_then(Value::as_array)
-        .ok_or_else(|| anyhow::anyhow!("discuss.create: `participants` (array of strings) required"))?
+        .ok_or_else(|| {
+            anyhow::anyhow!("discuss.create: `participants` (array of strings) required")
+        })?
         .iter()
         .filter_map(Value::as_str)
         .map(String::from)
         .collect();
-    let topic = args
-        .get("topic")
-        .and_then(Value::as_str)
-        .map(String::from);
+    let topic = args.get("topic").and_then(Value::as_str).map(String::from);
     let id = svc.create(participants, topic)?;
     Ok(json!({ "room_id": id.as_str() }))
 }
@@ -269,8 +268,7 @@ mod tests {
     #[tokio::test]
     async fn subscribe_since_seq_filters_prior_turns() {
         let svc = fresh();
-        let room = create_handler(&svc, json!({"participants": ["a"]})).unwrap()
-            ["room_id"]
+        let room = create_handler(&svc, json!({"participants": ["a"]})).unwrap()["room_id"]
             .as_str()
             .unwrap()
             .to_string();
@@ -309,8 +307,7 @@ mod tests {
     #[tokio::test]
     async fn post_payload_round_trips_through_subscribe() {
         let svc = fresh();
-        let room = create_handler(&svc, json!({"participants": ["a"]})).unwrap()
-            ["room_id"]
+        let room = create_handler(&svc, json!({"participants": ["a"]})).unwrap()["room_id"]
             .as_str()
             .unwrap()
             .to_string();

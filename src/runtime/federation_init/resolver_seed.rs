@@ -161,7 +161,9 @@ mod tests {
         .unwrap();
         let s = load_from(&p);
         match s {
-            ResolverSeed::Loaded { realm_count, seed, .. } => {
+            ResolverSeed::Loaded {
+                realm_count, seed, ..
+            } => {
                 assert_eq!(realm_count, 2);
                 assert_eq!(
                     seed.realms.get("alice.easynet").unwrap(),

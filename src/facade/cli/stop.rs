@@ -145,9 +145,7 @@ fn stop_easynet_daemon() {
             if net::kill_and_wait(pid, std::time::Duration::from_secs(3)) {
                 output::info(&format!("EasyNet daemon stopped (pid {pid})"));
             } else {
-                output::warn(&format!(
-                    "EasyNet daemon (pid {pid}) did not exit in time"
-                ));
+                output::warn(&format!("EasyNet daemon (pid {pid}) did not exit in time"));
             }
         }
         let _ = std::fs::remove_file(&pid_path);

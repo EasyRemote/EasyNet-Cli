@@ -139,16 +139,15 @@ impl KeyRing {
 /// Default config path: $XDG_CONFIG_HOME/easynet/keyring.json or
 /// platform-specific equivalent.
 pub fn default_keyring_path() -> Result<PathBuf> {
-    let base = dirs::config_dir()
-        .ok_or_else(|| anyhow!("cannot locate user config directory"))?;
+    let base = dirs::config_dir().ok_or_else(|| anyhow!("cannot locate user config directory"))?;
     Ok(base.join("easynet").join(KEYRING_FILE_NAME))
 }
 
 /// Read-only load of a keyring file (does NOT unlock private keys —
 /// that requires the master key from `unlock_master_key`).
 pub fn load_keyring(path: &Path) -> Result<KeyRing> {
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("read keyring at {}", path.display()))?;
+    let bytes =
+        std::fs::read(path).with_context(|| format!("read keyring at {}", path.display()))?;
     let kr: KeyRing = serde_json::from_slice(&bytes)
         .with_context(|| format!("parse keyring at {}", path.display()))?;
     if kr.format_version > KEYRING_FORMAT_VERSION {
@@ -194,8 +193,8 @@ pub fn unlock_master_key(
 ) -> Result<MasterKey> {
     match descriptor.kind {
         MasterKeyKind::Passphrase | MasterKeyKind::OsKeychain => {
-            let pass = passphrase
-                .ok_or_else(|| anyhow!("keyring requires passphrase to unlock"))?;
+            let pass =
+                passphrase.ok_or_else(|| anyhow!("keyring requires passphrase to unlock"))?;
             let salt = b64_decode(&descriptor.salt_b64)?;
             derive_master_key_from_passphrase(pass, &salt)
         }
@@ -222,7 +221,11 @@ pub fn ulid_like() -> String {
     let now_ms = chrono::Utc::now().timestamp_millis();
     let mut rand_bytes = [0u8; 8];
     rand::thread_rng().fill_bytes(&mut rand_bytes);
-    format!("01H{:013X}{}", now_ms, hex::encode(rand_bytes).to_uppercase())
+    format!(
+        "01H{:013X}{}",
+        now_ms,
+        hex::encode(rand_bytes).to_uppercase()
+    )
 }
 
 /// AAD used for AES-GCM seal/open. Binds ciphertext to the key entry

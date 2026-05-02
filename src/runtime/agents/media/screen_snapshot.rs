@@ -35,13 +35,9 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use serde_json::{json, Value};
 
-use crate::persistence::resources::{
-    self, lookup_by_uri, ResourceEntry, ResourceType,
-};
+use crate::persistence::resources::{self, lookup_by_uri, ResourceEntry, ResourceType};
 use crate::runtime::ability_dispatch::{EnvelopeContext, LocalAbilityRegistry};
-use crate::runtime::agents::media_abilities::{
-    ABILITY_SCREEN_SNAPSHOT, REASON_SUBJECT_IN_ARGS,
-};
+use crate::runtime::agents::media_abilities::{ABILITY_SCREEN_SNAPSHOT, REASON_SUBJECT_IN_ARGS};
 
 /// 256 KiB inline cap — same shape as camera.snapshot. A 1080p
 /// JPEG at quality 80 is ~200 KB; 4K is multi-MB and forces the

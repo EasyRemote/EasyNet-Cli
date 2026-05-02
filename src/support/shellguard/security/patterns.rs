@@ -121,10 +121,7 @@ fn check_jq_system(cmd: &SimpleCommand) -> Option<DetectorHit> {
     }
     for arg in cmd.argv.iter().skip(1) {
         // Allow whitespace between `system` and `(` — `jq 'system ("x")'`.
-        let normalized: String = arg
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect();
+        let normalized: String = arg.chars().filter(|c| !c.is_whitespace()).collect();
         if normalized.contains("system(") {
             return Some(DetectorHit {
                 name: "jq-system".to_string(),
@@ -161,7 +158,11 @@ fn check_dd_of_blockdev(cmd: &SimpleCommand) -> Option<DetectorHit> {
                 // Require something after the prefix so `/dev/sd`
                 // alone (an unusual pseudo-name) doesn't match,
                 // but `/dev/sda`, `/dev/sda1`, `/dev/nvme0n1` do.
-                if tail.chars().next().is_some_and(|c| c.is_ascii_alphanumeric()) {
+                if tail
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphanumeric())
+                {
                     return Some(DetectorHit {
                         name: "dd-of-blockdev".to_string(),
                         detail: arg.clone(),
@@ -196,12 +197,18 @@ mod tests {
 
     #[test]
     fn proc_self_environ_via_xxd_rejects() {
-        assert_eq!(check(&cmd(&["xxd", "/proc/self/environ"])).unwrap().name, "proc-self-environ");
+        assert_eq!(
+            check(&cmd(&["xxd", "/proc/self/environ"])).unwrap().name,
+            "proc-self-environ"
+        );
     }
 
     #[test]
     fn proc_pid_environ_rejects() {
-        assert_eq!(check(&cmd(&["cat", "/proc/12345/environ"])).unwrap().name, "proc-pid-environ");
+        assert_eq!(
+            check(&cmd(&["cat", "/proc/12345/environ"])).unwrap().name,
+            "proc-pid-environ"
+        );
     }
 
     #[test]
@@ -223,13 +230,19 @@ mod tests {
 
     #[test]
     fn jq_system_filter_rejects() {
-        assert_eq!(check(&cmd(&["jq", r#"system("rm -rf /")"#])).unwrap().name, "jq-system");
+        assert_eq!(
+            check(&cmd(&["jq", r#"system("rm -rf /")"#])).unwrap().name,
+            "jq-system"
+        );
     }
 
     #[test]
     fn jq_system_with_whitespace_rejects() {
         // `system (...)` — whitespace is normalised out.
-        assert_eq!(check(&cmd(&["jq", "system (\"id\")"])).unwrap().name, "jq-system");
+        assert_eq!(
+            check(&cmd(&["jq", "system (\"id\")"])).unwrap().name,
+            "jq-system"
+        );
     }
 
     #[test]
@@ -248,27 +261,44 @@ mod tests {
 
     #[test]
     fn dd_of_sda_rejects() {
-        assert_eq!(check(&cmd(&["dd", "if=/dev/zero", "of=/dev/sda"])).unwrap().name, "dd-of-blockdev");
+        assert_eq!(
+            check(&cmd(&["dd", "if=/dev/zero", "of=/dev/sda"]))
+                .unwrap()
+                .name,
+            "dd-of-blockdev"
+        );
     }
 
     #[test]
     fn dd_of_sda1_rejects() {
-        assert_eq!(check(&cmd(&["dd", "of=/dev/sda1"])).unwrap().name, "dd-of-blockdev");
+        assert_eq!(
+            check(&cmd(&["dd", "of=/dev/sda1"])).unwrap().name,
+            "dd-of-blockdev"
+        );
     }
 
     #[test]
     fn dd_of_nvme_rejects() {
-        assert_eq!(check(&cmd(&["dd", "of=/dev/nvme0n1"])).unwrap().name, "dd-of-blockdev");
+        assert_eq!(
+            check(&cmd(&["dd", "of=/dev/nvme0n1"])).unwrap().name,
+            "dd-of-blockdev"
+        );
     }
 
     #[test]
     fn dd_of_hda_rejects() {
-        assert_eq!(check(&cmd(&["dd", "of=/dev/hda"])).unwrap().name, "dd-of-blockdev");
+        assert_eq!(
+            check(&cmd(&["dd", "of=/dev/hda"])).unwrap().name,
+            "dd-of-blockdev"
+        );
     }
 
     #[test]
     fn dd_of_mmcblk_rejects() {
-        assert_eq!(check(&cmd(&["dd", "of=/dev/mmcblk0"])).unwrap().name, "dd-of-blockdev");
+        assert_eq!(
+            check(&cmd(&["dd", "of=/dev/mmcblk0"])).unwrap().name,
+            "dd-of-blockdev"
+        );
     }
 
     #[test]

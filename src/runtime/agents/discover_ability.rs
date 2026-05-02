@@ -98,9 +98,7 @@ pub fn register_for_agent<F>(
     let agent = agent_name.clone();
     reg.register_rpc(
         &qualified,
-        Arc::new(move |args: Value| {
-            dispatch(&agent, &provider, &dispatch_registry_handle, args)
-        }),
+        Arc::new(move |args: Value| dispatch(&agent, &provider, &dispatch_registry_handle, args)),
     );
 }
 
@@ -220,9 +218,7 @@ fn delegate_to_provider(
     args: Value,
 ) -> anyhow::Result<Value> {
     if !provider_name.contains('.') {
-        anyhow::bail!(
-            "discover: provider {provider_name:?} must use the `<owner>.<verb>` form"
-        );
+        anyhow::bail!("discover: provider {provider_name:?} must use the `<owner>.<verb>` form");
     }
     let registry = dispatch_registry_handle.get().ok_or_else(|| {
         anyhow::anyhow!(
@@ -274,7 +270,6 @@ fn resolve_via_federation(
     query: Option<&str>,
     top_k: usize,
 ) -> anyhow::Result<Value> {
-
     let (bridge, state) = match crate::persistence::config::load_and_connect() {
         Ok(pair) => pair,
         Err(e) => {
@@ -342,7 +337,12 @@ fn resolve_via_federation(
         _ => None,
     };
     let resolved = match crate::runtime::advertise::resolve_agents_with_filter(
-        &invoker, tenant, &realm, "", true, tenant_filter,
+        &invoker,
+        tenant,
+        &realm,
+        "",
+        true,
+        tenant_filter,
     ) {
         Ok(r) => r,
         Err(e) => {
@@ -377,10 +377,7 @@ fn resolve_via_federation(
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            let input_schema = desc
-                .get("input_schema")
-                .cloned()
-                .unwrap_or(Value::Null);
+            let input_schema = desc.get("input_schema").cloned().unwrap_or(Value::Null);
             let qualified_name = if bare_ability.contains('.') {
                 // Hub-side descriptors sometimes carry the
                 // owner-prefixed name verbatim; preserve it.
@@ -820,14 +817,22 @@ mod tests {
         assert_eq!(s.as_str(), "user");
         assert!(s.is_federated());
         let s = parse_scope(&json!({"scope": "easynet"})).unwrap();
-        assert_eq!(s.as_str(), "user", "easynet alias must canonicalise to user");
+        assert_eq!(
+            s.as_str(),
+            "user",
+            "easynet alias must canonicalise to user"
+        );
         assert!(s.is_federated());
         let s = parse_scope(&json!({"scope": "public"})).unwrap();
         assert_eq!(s.as_str(), "public");
         assert!(s.is_federated());
         // Self / device unchanged.
-        assert!(!parse_scope(&json!({"scope": "self"})).unwrap().is_federated());
-        assert!(!parse_scope(&json!({"scope": "device"})).unwrap().is_federated());
+        assert!(!parse_scope(&json!({"scope": "self"}))
+            .unwrap()
+            .is_federated());
+        assert!(!parse_scope(&json!({"scope": "device"}))
+            .unwrap()
+            .is_federated());
         // Unknown still rejected.
         assert!(parse_scope(&json!({"scope": "fleet"})).is_err());
     }
@@ -908,8 +913,7 @@ mod tests {
     fn self_scope_returns_only_calling_agents_abilities() {
         let weather = AbilityManifest::new("weather", "Fetch weather", obj_schema()).unwrap();
         let (_dir_a, _, entry_a) = workspace_with_manifests("claude", &[("weather", weather)]);
-        let summary =
-            AbilityManifest::new("summarize", "Summarise text", obj_schema()).unwrap();
+        let summary = AbilityManifest::new("summarize", "Summarise text", obj_schema()).unwrap();
         let (_dir_b, _, entry_b) = workspace_with_manifests("codex", &[("summarize", summary)]);
 
         let mut agents = AgentRegistry::default();
@@ -968,7 +972,9 @@ mod tests {
         let h = reg.get_rpc("codex.discover").unwrap();
         let resp = h(json!({"scope": "device", "query": "weather"})).unwrap();
         let cands = resp["candidates"].as_array().unwrap();
-        assert!(cands.iter().any(|c| c["qualified_name"] == "claude.weather"));
+        assert!(cands
+            .iter()
+            .any(|c| c["qualified_name"] == "claude.weather"));
         // Each peer entry must report which tier it matched.
         let weather_entry = cands
             .iter()
@@ -1009,7 +1015,9 @@ mod tests {
         let resp = h(json!({"scope": "device"})).unwrap();
         let cands = resp["candidates"].as_array().unwrap();
         assert!(
-            cands.iter().all(|c| c["qualified_name"] != "claude.internal"),
+            cands
+                .iter()
+                .all(|c| c["qualified_name"] != "claude.internal"),
             "self-visibility ability leaked to peer: {cands:#?}"
         );
     }
@@ -1020,8 +1028,7 @@ mod tests {
             AbilityManifest::new("weather", "Fetches weather data via wttr.in", obj_schema())
                 .unwrap();
         let news =
-            AbilityManifest::new("news", "Daily weather and news digest", obj_schema())
-                .unwrap();
+            AbilityManifest::new("news", "Daily weather and news digest", obj_schema()).unwrap();
         let (_dir, _, entry) =
             workspace_with_manifests("claude", &[("weather", weather), ("news", news)]);
 

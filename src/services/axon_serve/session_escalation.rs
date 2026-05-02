@@ -50,10 +50,10 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 
-use crate::pb::axon::v1::InvokeBidiUp;
 use crate::services::axon_serve::invoke_remote_initiator::{
     call_id_hex, RequestOutcome, SessionRequestError,
 };
+use crate::services::axon_serve::session_initiator::{SessionUpSender, SESSION_STREAM_ID};
 
 /// Default deadline for awaiting a `RequestResult` after the
 /// device queues a Request. PR-N6 spec §"Deadline propagation"
@@ -84,6 +84,7 @@ pub struct EscalationRequest {
 #[derive(Clone, Debug)]
 pub struct SessionEscalationHandle {
     submit: mpsc::Sender<EscalationRequest>,
+    correlation: Arc<EscalationCorrelation>,
 }
 
 impl SessionEscalationHandle {
@@ -118,9 +119,7 @@ impl SessionEscalationHandle {
         // on the device-mode daemon log to confirm forward_invoke
         // actually escalated up the bidi rather than answering
         // from local presence.
-        eprintln!(
-            "[axon-serve] forward_invoke escalated up <self>.session bidi: call_id={id_hex}"
-        );
+        eprintln!("[axon-serve] forward_invoke escalated up <self>.session bidi: call_id={id_hex}");
 
         let (reply_tx, reply_rx) = oneshot::channel();
         let request = EscalationRequest {
@@ -147,13 +146,15 @@ impl SessionEscalationHandle {
             Ok(Ok(outcome)) => outcome,
             Ok(Err(_)) => RequestOutcome::Err {
                 error: SessionRequestError::UpstreamFailure {
-                    reason: "session escalation reply channel dropped without answer"
-                        .to_string(),
+                    reason: "session escalation reply channel dropped without answer".to_string(),
                 },
             },
-            Err(_elapsed) => RequestOutcome::Err {
-                error: SessionRequestError::UpstreamTimeout,
-            },
+            Err(_elapsed) => {
+                self.correlation.cancel(call_id);
+                RequestOutcome::Err {
+                    error: SessionRequestError::UpstreamTimeout,
+                }
+            }
         }
     }
 }
@@ -164,7 +165,7 @@ impl SessionEscalationHandle {
 /// `register`. `Mutex<HashMap>` is fine — concurrent
 /// register/complete is bounded by the `oneshot` semantics
 /// (exactly one register, exactly one complete).
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct EscalationCorrelation {
     inner: Mutex<HashMap<[u8; 16], oneshot::Sender<RequestOutcome>>>,
 }
@@ -206,6 +207,14 @@ impl EscalationCorrelation {
         }
     }
 
+    pub fn cancel(&self, call_id: [u8; 16]) -> bool {
+        let mut guard = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.remove(&call_id).is_some()
+    }
+
     /// Number of pending entries — observability only.
     #[cfg(test)]
     pub fn pending_len(&self) -> usize {
@@ -235,7 +244,7 @@ impl EscalationCorrelation {
 /// reconnect; correlation accumulates and drains per Request).
 #[derive(Clone, Debug, Default)]
 pub struct SharedSessionOutbox {
-    inner: Arc<Mutex<Option<mpsc::Sender<InvokeBidiUp>>>>,
+    inner: Arc<Mutex<Option<SessionUpSender>>>,
 }
 
 impl SharedSessionOutbox {
@@ -254,7 +263,7 @@ impl SharedSessionOutbox {
     /// Subsequent dial attempts (after a reconnect) overwrite
     /// the previous sender; in-flight escalations holding the
     /// old sender clone keep working until that channel closes.
-    pub fn set(&self, sender: mpsc::Sender<InvokeBidiUp>) {
+    pub fn set(&self, sender: SessionUpSender) {
         let mut guard = match self.inner.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
@@ -278,7 +287,7 @@ impl SharedSessionOutbox {
     /// live session is published — the consumer surfaces
     /// `UpstreamFailure { reason: "no live <self>.session bidi" }`.
     #[must_use]
-    pub fn snapshot(&self) -> Option<mpsc::Sender<InvokeBidiUp>> {
+    pub fn snapshot(&self) -> Option<SessionUpSender> {
         let guard = match self.inner.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
@@ -301,7 +310,10 @@ pub fn spawn_escalation_consumer_with_outbox(
     outbox: SharedSessionOutbox,
 ) -> SessionEscalationHandle {
     let (submit_tx, mut submit_rx) = mpsc::channel::<EscalationRequest>(ESCALATION_QUEUE_CAPACITY);
-    let handle = SessionEscalationHandle { submit: submit_tx };
+    let handle = SessionEscalationHandle {
+        submit: submit_tx,
+        correlation: Arc::clone(&correlation),
+    };
 
     tokio::spawn(async move {
         while let Some(request) = submit_rx.recv().await {
@@ -329,8 +341,8 @@ pub fn spawn_escalation_consumer_with_outbox(
 
             correlation.register(call_id, reply);
 
-            let frame = build_session_request_up_frame(call_id, &ability, &args);
-            if let Err(err) = up_tx.send(frame).await {
+            let frame = build_session_request_up_chunk(call_id, &ability, &args);
+            if let Err(err) = up_tx.send_binary_chunk(frame).await {
                 let mut guard = match correlation.inner.lock() {
                     Ok(g) => g,
                     Err(poisoned) => poisoned.into_inner(),
@@ -363,11 +375,12 @@ pub fn spawn_escalation_consumer_with_outbox(
 /// instead so reconnects naturally pick up the fresh sender.
 pub fn spawn_escalation_consumer(
     correlation: Arc<EscalationCorrelation>,
-    up_tx: mpsc::Sender<crate::pb::axon::v1::InvokeBidiUp>,
+    up_tx: SessionUpSender,
 ) -> SessionEscalationHandle {
     let (submit_tx, mut submit_rx) = mpsc::channel::<EscalationRequest>(ESCALATION_QUEUE_CAPACITY);
     let handle = SessionEscalationHandle {
         submit: submit_tx,
+        correlation: Arc::clone(&correlation),
     };
 
     tokio::spawn(async move {
@@ -380,8 +393,8 @@ pub fn spawn_escalation_consumer(
             } = request;
             correlation.register(call_id, reply);
 
-            let frame = build_session_request_up_frame(call_id, &ability, &args);
-            if let Err(err) = up_tx.send(frame).await {
+            let frame = build_session_request_up_chunk(call_id, &ability, &args);
+            if let Err(err) = up_tx.send_binary_chunk(frame).await {
                 // Up-channel closed — the bidi went away mid-flight.
                 // Pull the entry back out and surface upstream
                 // failure to the dispatch caller. The consumer
@@ -409,15 +422,13 @@ pub fn spawn_escalation_consumer(
 /// `SessionDispatch::Request` JSON in a `BinaryChunk` payload.
 /// Mirrors what `dial_and_run_session` writes for non-Request
 /// frames + matches the wire shape PR-N6 §"Wire shape" locks.
-fn build_session_request_up_frame(
+fn build_session_request_up_chunk(
     call_id: [u8; 16],
     ability: &str,
     args: &[u8],
-) -> crate::pb::axon::v1::InvokeBidiUp {
-    use crate::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
-    use crate::pb::axon::v1::{BinaryChunk, InvokeBidiUp};
+) -> crate::pb::axon::v1::BinaryChunk {
+    use crate::pb::axon::v1::BinaryChunk;
     use crate::services::axon_serve::invoke_remote_initiator::SessionDispatch;
-    use crate::services::axon_serve::session_initiator::SESSION_STREAM_ID;
 
     let dispatch = SessionDispatch::Request {
         call_id,
@@ -428,20 +439,17 @@ fn build_session_request_up_frame(
     // the unwrap is justified by the typed enum domain.
     let data = serde_json::to_vec(&dispatch).expect("encode SessionDispatch::Request");
 
-    InvokeBidiUp {
-        sequence: 0,
-        mac: Vec::new(),
-        payload: Some(UpPayload::BinaryChunk(BinaryChunk {
-            stream_id: SESSION_STREAM_ID,
-            data,
-            ..BinaryChunk::default()
-        })),
+    BinaryChunk {
+        stream_id: SESSION_STREAM_ID,
+        data,
+        ..BinaryChunk::default()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pb::axon::v1::InvokeBidiUp;
 
     #[tokio::test]
     async fn escalate_resolves_when_correlation_completes() {
@@ -450,7 +458,8 @@ mod tests {
         // matching RequestResult back into the correlation table.
         let correlation = EscalationCorrelation::new();
         let (up_tx, mut up_rx) = mpsc::channel::<crate::pb::axon::v1::InvokeBidiUp>(8);
-        let handle = spawn_escalation_consumer(Arc::clone(&correlation), up_tx);
+        let handle =
+            spawn_escalation_consumer(Arc::clone(&correlation), SessionUpSender::new(up_tx));
 
         let correlation_for_hub = Arc::clone(&correlation);
         tokio::spawn(async move {
@@ -494,7 +503,8 @@ mod tests {
         // `UpstreamTimeout` rather than hanging forever.
         let correlation = EscalationCorrelation::new();
         let (up_tx, _up_rx_held) = mpsc::channel::<crate::pb::axon::v1::InvokeBidiUp>(8);
-        let handle = spawn_escalation_consumer(Arc::clone(&correlation), up_tx);
+        let handle =
+            spawn_escalation_consumer(Arc::clone(&correlation), SessionUpSender::new(up_tx));
 
         let outcome = handle
             .escalate_with_timeout(
@@ -509,12 +519,7 @@ mod tests {
             } => {}
             other => panic!("expected UpstreamTimeout, got {other:?}"),
         }
-        // Pending entry must be left in the table — the consumer
-        // task can clean it up when the timeout drops the reply
-        // sender (subsequent register replaces it). Pin the
-        // current behavior so a future cleanup change shows up
-        // here.
-        assert_eq!(correlation.pending_len(), 1);
+        assert_eq!(correlation.pending_len(), 0);
     }
 
     #[tokio::test]
@@ -524,7 +529,8 @@ mod tests {
         // Drop the receiver immediately so the consumer's send
         // fails on the very first item.
         drop(up_rx);
-        let handle = spawn_escalation_consumer(Arc::clone(&correlation), up_tx);
+        let handle =
+            spawn_escalation_consumer(Arc::clone(&correlation), SessionUpSender::new(up_tx));
 
         let outcome = handle
             .escalate_with_timeout(
@@ -556,7 +562,10 @@ mod tests {
                 result_bytes: vec![],
             },
         );
-        assert!(!completed, "complete on missing entry must be a silent no-op");
+        assert!(
+            !completed,
+            "complete on missing entry must be a silent no-op"
+        );
     }
 
     // ── PR-N6 C4: outbox-aware consumer wiring tests ──
@@ -571,7 +580,7 @@ mod tests {
     async fn outbox_set_then_clear_round_trip() {
         let outbox = SharedSessionOutbox::new();
         let (tx, _rx) = mpsc::channel::<InvokeBidiUp>(4);
-        outbox.set(tx);
+        outbox.set(SessionUpSender::new(tx));
         assert!(outbox.snapshot().is_some());
         outbox.clear();
         assert!(outbox.snapshot().is_none());
@@ -626,7 +635,7 @@ mod tests {
             spawn_escalation_consumer_with_outbox(Arc::clone(&correlation), outbox.clone());
 
         let (up_tx, mut up_rx) = mpsc::channel::<InvokeBidiUp>(8);
-        outbox.set(up_tx);
+        outbox.set(SessionUpSender::new(up_tx));
 
         let correlation_for_hub = Arc::clone(&correlation);
         tokio::spawn(async move {
@@ -675,7 +684,7 @@ mod tests {
             spawn_escalation_consumer_with_outbox(Arc::clone(&correlation), outbox.clone());
 
         let (up_tx, _up_rx_held) = mpsc::channel::<InvokeBidiUp>(8);
-        outbox.set(up_tx);
+        outbox.set(SessionUpSender::new(up_tx));
         outbox.clear();
 
         let outcome = handle
