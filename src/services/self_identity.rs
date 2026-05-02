@@ -364,6 +364,50 @@ impl SelfIdentity for InMemoryVault {
     }
 }
 
+// ── Join helper ─────────────────────────────────────────────────
+//
+// Phase 3C bridge for `easynet device join`. The pairing flow
+// receives a fresh `(node_id, realm)` from the hub; this helper
+// mints a random Ed25519 seed locally and pushes it into the
+// keyring under the canonical device URI plus a hub-role overlay
+// so the same keypair signs both. Best-effort: if the keyring
+// daemon is offline, log + continue. v4.1.5 deterministic
+// derivation in `boot.rs::load_daemon_identity` keeps the daemon
+// signing as a fallback so the join itself never fails on
+// keyring offline.
+
+/// Build the canonical self URIs for this device. Returns
+/// `(primary_self, role_overlays)`. v4.1.4 shape:
+///   primary  = `easynet:///r/<realm>/device/<node_id>`
+///   overlay  = `easynet:///r/<realm>/hub` (so backend-as-hub on
+///              this host signs with the same keypair)
+pub fn canonical_self_uris(realm: &str, node_id: &str) -> (String, Vec<String>) {
+    let realm = realm.trim();
+    let node_id = node_id.trim();
+    let primary = format!("easynet:///r/{realm}/device/{node_id}");
+    let hub_overlay = format!("easynet:///r/{realm}/hub");
+    (primary, vec![hub_overlay])
+}
+
+/// Mint a fresh ed25519 seed (32 random bytes) hex-encoded so it
+/// fits the keyring's `seed_hex` field. Each call returns a new
+/// keypair; callers persist the result via `KeyringClient::put`.
+pub fn fresh_seed_hex() -> String {
+    use rand::rngs::OsRng;
+    use rand::RngCore;
+    let mut seed = [0u8; 32];
+    OsRng.fill_bytes(&mut seed);
+    hex::encode(seed)
+}
+
+/// Probe whether a keyring daemon is reachable at the default
+/// socket path. Used by the join flow to decide whether to push
+/// the freshly-minted seed into the vault or fall back silently
+/// to deterministic derivation.
+pub fn keyring_daemon_available() -> bool {
+    KeyringClient::default_path().ping().is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

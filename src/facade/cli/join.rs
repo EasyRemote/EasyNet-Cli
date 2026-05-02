@@ -137,6 +137,21 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
         args.peer_hub.as_deref(),
     );
 
+    // URA v4.1.5 Phase 3C — push a fresh device keypair into the
+    // local easynet-keyring vault. The vault is the load-bearing
+    // signing surface for v4.1.5 production: backend (HubURI) and
+    // daemon (DeviceURI) on this host both sign through the same
+    // entry via role-overlay lookup. When the keyring daemon is
+    // offline we fall back to v4.1.4's deterministic
+    // derive_subject_keypair path (boot.rs:695) so the join
+    // itself never fails on keyring availability — the warning
+    // tells the operator the production posture has degraded.
+    if let Err(e) = put_device_keypair_to_keyring(&creds) {
+        output::warn(&format!(
+            "[easynet join] keyring daemon offline ({e}); falling back to deterministic key derivation. Start `easynet-keyring` for production-grade secret isolation."
+        ));
+    }
+
     // LB-52 Gap 3 — mirror the device's own `(uri, pubkey,
     // role=Device)` self-entry into the local realm-trust.toml so
     // a co-located hub-mode daemon admits this device on
@@ -157,6 +172,47 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
     eprintln!();
     output::info("Run `easynet connect` to start the device agent.");
     Ok(())
+}
+
+/// Push a fresh device keypair into the keyring under the
+/// canonical self URI + hub-role overlay. Phase 3C bridge: when
+/// the keyring is reachable, this is the production secret
+/// surface; when offline, the caller logs + continues, and the
+/// daemon falls back to deterministic key derivation per
+/// `boot.rs::load_daemon_identity`.
+///
+/// Returns `Ok(())` when the put landed (or when the entry
+/// already existed — pairing the same node twice is a noop, the
+/// pre-existing entry stays). Errors only on transport faults
+/// the operator should see.
+fn put_device_keypair_to_keyring(creds: &config::Credentials) -> anyhow::Result<()> {
+    use crate::services::self_identity::{
+        canonical_self_uris, fresh_seed_hex, KeyringClient, SelfIdentityError,
+    };
+
+    let realm = creds.tenant_id.trim();
+    let node_id = creds.node_id.trim();
+    if realm.is_empty() || node_id.is_empty() {
+        anyhow::bail!("credentials missing realm or node_id");
+    }
+    let (primary_self, role_overlays) = canonical_self_uris(realm, node_id);
+
+    let client = KeyringClient::default_path();
+    // Probe reachability with a lightweight `list` first so the
+    // operator-facing error is "keyring daemon offline" not
+    // "keyring rejected put". Avoids confusing log lines when the
+    // daemon is just not running.
+    client
+        .list()
+        .map_err(|e| anyhow::anyhow!("keyring daemon ping: {e}"))?;
+
+    match client.put(&primary_self, role_overlays, fresh_seed_hex()) {
+        Ok(()) => Ok(()),
+        // already_exists is benign — re-pairing the same device
+        // keeps the existing keypair. Any other error is real.
+        Err(SelfIdentityError::Rejected { kind, .. }) if kind == "already_exists" => Ok(()),
+        Err(e) => Err(anyhow::anyhow!("keyring put: {e}")),
+    }
 }
 
 fn validate_token_format(token: &str) -> anyhow::Result<()> {
@@ -300,11 +356,14 @@ fn validate_pairing_token(
             preflight.node_id
         );
     }
-    if creds.tenant_id != preflight.tenant_id {
+    // URA v4.1.4: realm_str() picks `realm` first, falls back to
+    // legacy `tenant_id`. Both v4.1.4 and pre-v4.1.4 hubs round-trip.
+    let creds_realm = creds.realm_str();
+    if creds_realm != preflight.tenant_id {
         anyhow::bail!(
-            "Hub returned tenant_id {} but pairing preflight reserved {}; aborting to avoid \
+            "Hub returned realm {} but pairing preflight reserved {}; aborting to avoid \
              deriving credentials under the wrong realm",
-            creds.tenant_id,
+            creds_realm,
             preflight.tenant_id
         );
     }
@@ -377,7 +436,6 @@ mod tests {
             tenant_id: "tenant".into(),
             deploy_signature: "sig".into(),
             hub_api_base: None,
-            realm: None,
             username: None,
         };
         let err = validate_pairing_response(creds).expect_err("missing node_id must fail");
