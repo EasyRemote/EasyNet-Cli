@@ -683,9 +683,16 @@ async fn send_federation_join_prelude(
 ) -> Result<(), tonic::Status> {
     use crate::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
 
-    // Wire shape mirrors the daemon-side JoinRequest in
-    // `federation_wrappers::JoinRequest`: only `agent_uri` and
-    // `tenant_id` are required; axon-runtime tolerates extras.
+    // Wire shape mirrors `federation_wrappers::JoinRequest`:
+    // axon-runtime's deserializer is strict (Deserialize derive,
+    // no #[serde(default)] on either field) and rejects payloads
+    // whose top-level keys differ from `canonical_agent_uri` /
+    // `realm`. Sending `agent_uri` / `tenant_id` (the field names
+    // used by the local daemon's other federation.* requests)
+    // earns InvalidArgument — verified in PR-1 §5 schema-compat
+    // tests and observed in dev as
+    //   `failed to decode JSON arguments: missing field
+    //    canonical_agent_uri`
     let realm = caller_uri
         .strip_prefix("easynet:///r/")
         .and_then(|rest| rest.split_once('/'))
@@ -693,9 +700,8 @@ async fn send_federation_join_prelude(
         .unwrap_or_default();
 
     let body = serde_json::json!({
-        "agent_uri": caller_uri,
-        "tenant_id": realm,
-        "label": "device-mode-prelude",
+        "canonical_agent_uri": caller_uri,
+        "realm": realm,
     });
     let arguments = serde_json::to_vec(&body).map_err(|e| {
         tonic::Status::internal(format!("federation.join prelude serialize: {e}"))
