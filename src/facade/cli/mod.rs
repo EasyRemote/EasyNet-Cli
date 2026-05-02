@@ -212,19 +212,33 @@ pub enum Command {
     #[command(display_order = 10)]
     Completion(completion::CompletionArgs),
 
-    // ── Internal ──────────────────────────────────────────────────────────
+    // ── Top-level shortcuts ──────────────────────────────────────────────
     //
-    // Flat deprecated aliases (`easynet start`, `easynet devices`, …) were
-    // removed before 1.0. The product never shipped under those spellings,
-    // so there is no installed base to pay the carrying cost of dual
-    // command surfaces: parallel help text, parallel completion, parallel
-    // test coverage, and the live hazard of introducing a behavioural
-    // drift between a layered command and its flat alias. Users who find
-    // old docs pointing at `easynet start` will get a clean "command not
-    // found" and the `--help` listing will direct them to the layered
-    // form (`easynet runtime start`). The individual modules (`start.rs`,
-    // `stop.rs`, …) remain as *implementation* — `groups/runtime.rs` and
-    // its siblings call into them.
+    // The three most-frequent verbs (`join`, `start`, `stop`) get
+    // top-level shortcuts so a freshly-installed user can run
+    // `easynet join <token>` / `easynet start` / `easynet stop`
+    // without remembering the layered form. They are *not* renames or
+    // hidden aliases: the layered forms (`easynet device join`,
+    // `easynet runtime start`, `easynet runtime stop`) keep working
+    // unchanged. The shortcut variants forward to the same `JoinArgs`/
+    // `StartArgs`/`StopArgs` types and the same `run` functions, so
+    // there is no behavioural drift surface — Clap parses one struct,
+    // the dispatcher hands off to the same impl regardless of which
+    // path the user typed.
+    /// Pair this device with a hub. Shortcut for `easynet device join`.
+    #[command(display_order = 0)]
+    Join(join::JoinArgs),
+
+    /// Start the local Axon runtime as a background daemon.
+    /// Shortcut for `easynet runtime start`.
+    #[command(display_order = 0)]
+    Start(start::StartArgs),
+
+    /// Stop the local Axon runtime. Shortcut for `easynet runtime stop`.
+    #[command(display_order = 0)]
+    Stop(stop::StopArgs),
+
+    // ── Internal ──────────────────────────────────────────────────────────
     /// Internal heartbeat daemon process (not for direct use).
     #[command(name = "_heartbeat-daemon", hide = true)]
     HeartbeatDaemon,
@@ -247,6 +261,12 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         Command::SelfCmd(args) => groups::selfcmd::run(args),
         Command::Doctor(args) => doctor::run(args),
         Command::Completion(args) => completion::run::<App>(args),
+
+        // Top-level shortcuts — forward to the same impl the layered
+        // forms call. No behaviour difference; only spelling.
+        Command::Join(args) => join::run(args),
+        Command::Start(args) => start::run(args),
+        Command::Stop(args) => stop::run(args),
 
         // Internal
         Command::HeartbeatDaemon => heartbeat::run_daemon(),

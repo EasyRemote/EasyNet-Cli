@@ -211,7 +211,7 @@ pub fn auto_wire_federated_peer_from_credentials(
     }
     let peer_hub = resolution.endpoint();
 
-    let updated = match upsert_federated_peer_in_toml(&raw, &creds.tenant_id, peer_hub) {
+    let with_peer = match upsert_federated_peer_in_toml(&raw, &creds.tenant_id, peer_hub) {
         Ok(s) => s,
         Err(err) => {
             eprintln!(
@@ -220,6 +220,29 @@ pub fn auto_wire_federated_peer_from_credentials(
                  `[daemon.federated_peers]` if you want cross-hub routing for this tenant."
             );
             return Ok(());
+        }
+    };
+
+    // Also align `[daemon].hub_endpoint` to the freshly-paired hub.
+    // A previous `device join` against a different hub (or a Docker
+    // e2e session that pointed the daemon at a localhost listener)
+    // leaves a stale value here that survives subsequent joins
+    // — the device then dials the OLD hub and surfaces as
+    // "PermissionDenied: caller URI is not in the realm trust
+    // anchor" or as "transport error" against an unreachable host.
+    // Same `peer_hub` URL the federated_peers entry just received,
+    // since the device-mode dial target IS the same hub for
+    // single-tenant deploys. Idempotent on a no-op.
+    let updated = match upsert_daemon_hub_endpoint_in_toml(&with_peer, peer_hub) {
+        Ok(s) => s,
+        Err(err) => {
+            eprintln!(
+                "[easynet join] could not align [daemon].hub_endpoint ({err}); the \
+                 federated_peers entry was written but a stale hub_endpoint may \
+                 remain. Edit `[daemon].hub_endpoint` in daemon-config.toml manually \
+                 if `easynet runtime start` dials the wrong host."
+            );
+            with_peer
         }
     };
 
@@ -499,6 +522,29 @@ fn upsert_federated_peer_in_toml(
         .ok_or_else(|| anyhow::anyhow!("[daemon.federated_peers] is not a TOML table"))?;
     peers_table.set_implicit(false);
     peers_table.insert(tenant_id, value(hub_uri));
+
+    Ok(doc.to_string())
+}
+
+/// Set `[daemon].hub_endpoint = <hub_uri>` in the daemon-config TOML
+/// document, preserving every other field. Mirrors the `toml_edit`
+/// discipline of `upsert_federated_peer_in_toml` so operator hand-
+/// formatting / comments survive intact. Idempotent: if the existing
+/// value already matches, the returned string is byte-identical to
+/// the input (the caller can skip the atomic write).
+fn upsert_daemon_hub_endpoint_in_toml(raw: &str, hub_uri: &str) -> anyhow::Result<String> {
+    use toml_edit::{value, DocumentMut, Item, Table};
+
+    let mut doc: DocumentMut = raw.parse().context("parse daemon-config.toml")?;
+
+    let daemon_item = doc
+        .as_table_mut()
+        .entry("daemon")
+        .or_insert_with(|| Item::Table(Table::new()));
+    let daemon_table = daemon_item
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("[daemon] is not a TOML table"))?;
+    daemon_table.insert("hub_endpoint", value(hub_uri));
 
     Ok(doc.to_string())
 }
