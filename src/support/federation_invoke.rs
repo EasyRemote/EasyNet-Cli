@@ -76,10 +76,12 @@ const DEFAULT_DAEMON_GRPC_UDS_PATH: &str = "~/.easynet/daemon.sock";
 /// `agent` URA. Devices are physical hosts (the box running the
 /// daemon); agents are user-owned hosted profiles that live ON
 /// devices. The legacy `/agent/<node>` shape collapsed both into
-/// one segment; v4.1.4 splits them. We accept both forms during
-/// the migration window so operators with stale credentials.json
-/// files keep working — the daemon's strict parser will reject the
-/// old shape post-Phase-4 anyway.
+/// one segment; v4.1.4 splits them. We accept that legacy device-
+/// as-agent form during the migration window and canonicalise it
+/// into `/device/<node>` before the request hits presence lookup.
+/// Real agent URIs (`/agent/<user>.<agent>`) are rejected: cross-
+/// hub `federation.forward_invoke` targets devices, not hosted
+/// user agents.
 pub fn parse_node_uri(node: &str) -> anyhow::Result<String> {
     let trimmed = node.trim();
     if !trimmed.starts_with("easynet:///r/") {
@@ -92,8 +94,9 @@ pub fn parse_node_uri(node: &str) -> anyhow::Result<String> {
     }
     // Past the `r/` prefix, require at least `<realm>/<role>/<node>`
     // so the daemon's parsers have non-empty tenant + node
-    // components to extract. Accept either `device` (v4.1.4
-    // canonical) or `agent` (v1 collapse during migration window).
+    // components to extract. Accept `device` directly; accept
+    // legacy `agent/<node>` only when the tail is the old bare
+    // node-id form, then rewrite it to the canonical device URI.
     let after = trimmed
         .strip_prefix("easynet:///r/")
         .expect("prefix checked above");
@@ -101,15 +104,55 @@ pub fn parse_node_uri(node: &str) -> anyhow::Result<String> {
     let realm = parts.next().unwrap_or("");
     let role = parts.next().unwrap_or("");
     let node_id = parts.next().unwrap_or("");
-    let role_ok = matches!(role, "device" | "agent");
-    if realm.is_empty() || !role_ok || node_id.is_empty() {
+
+    // URI v4.1.4: `/hub` is a complete URA on its own (no id-tail);
+    // it identifies the realm's singleton hub. `--node easynet:///r/<realm>/hub`
+    // is a legitimate target for cross-hub federation.heartbeat /
+    // federation.* calls — the daemon's local presence either
+    // matches it (when the daemon IS the hub) or the cross-hub
+    // dispatcher fans out across federated_peers (when the local
+    // daemon is forwarding on behalf of a CLI bound to a peer
+    // realm).
+    if role == "hub" {
+        if !node_id.is_empty() {
+            bail!(
+                "--node `{trimmed}` has trailing tail after /hub; URI v4.1.4 hub URI is bare \
+                 (no id segment). Expected: easynet:///r/<realm>/hub. \
+                 {URI_DISCOVERY_HINT}"
+            );
+        }
+        if realm.is_empty() {
+            bail!(
+                "--node `{trimmed}` has empty realm. Expected: easynet:///r/<realm>/hub. \
+                 {URI_DISCOVERY_HINT}"
+            );
+        }
+        return Ok(trimmed.to_string());
+    }
+
+    if realm.is_empty()
+        || node_id.is_empty()
+        || node_id.contains('/')
+        || (role == "device" && node_id.contains('.'))
+        || !matches!(role, "device" | "agent")
+    {
         bail!(
             "--node `{trimmed}` does not parse as easynet:///r/<realm>/device/<node-uuid>. \
              Got realm={realm:?}, segment={role:?}, node={node_id:?}. \
              {URI_DISCOVERY_HINT}"
         );
     }
-    Ok(trimmed.to_string())
+    if role == "device" {
+        return Ok(trimmed.to_string());
+    }
+    if node_id.contains('.') {
+        bail!(
+            "--node `{trimmed}` names an agent profile, not a device. \
+             Cross-hub routing requires easynet:///r/<realm>/device/<node-uuid>. \
+             {URI_DISCOVERY_HINT}"
+        );
+    }
+    Ok(crate::uri::device_uri(realm, node_id))
 }
 
 /// Operator-actionable hint appended to every `--node` parse-
@@ -127,7 +170,7 @@ pub fn parse_node_uri(node: &str) -> anyhow::Result<String> {
 const URI_DISCOVERY_HINT: &str = "Where to find a canonical URI today (until PR-N3 cross-realm \
      directory federation ships): \
      (1) `cat ~/.easynet/credentials.json` on the target machine — \
-     concat `easynet:///r/<tenant_id>/agent/<node_id>` from the fields. \
+     concat `easynet:///r/<tenant_id>/device/<node_id>` from the fields. \
      (2) `cat ~/.easynet/daemon-config.toml` and read the \
      `[daemon.federated_peers]` table — keys are tenant ids the \
      local daemon already trusts. \
@@ -437,15 +480,43 @@ mod tests {
     #[test]
     fn parse_node_uri_accepts_canonical_shape() {
         let parsed =
-            parse_node_uri("easynet:///r/realm-b/agent/laptop-bob").expect("canonical accepted");
-        assert_eq!(parsed, "easynet:///r/realm-b/agent/laptop-bob");
+            parse_node_uri("easynet:///r/realm-b/device/laptop-bob").expect("canonical accepted");
+        assert_eq!(parsed, "easynet:///r/realm-b/device/laptop-bob");
+    }
+
+    #[test]
+    fn parse_node_uri_accepts_hub_uri_for_cross_hub_calls() {
+        // URI v4.1.4: bare /hub URI is the realm's singleton hub
+        // identifier — used as `--node` target for cross-hub
+        // federation.heartbeat / federation.* calls.
+        let parsed =
+            parse_node_uri("easynet:///r/peer-realm/hub").expect("v4.1.4 hub URI accepted");
+        assert_eq!(parsed, "easynet:///r/peer-realm/hub");
+    }
+
+    #[test]
+    fn parse_node_uri_rejects_hub_with_trailing_id() {
+        // /hub is a complete URA on its own; trailing tail
+        // indicates v1 `agent/01HUB`-style mistake.
+        let err = parse_node_uri("easynet:///r/realm/hub/01HUB").expect_err("trailing id rejected");
+        assert!(
+            err.to_string().contains("trailing tail"),
+            "expected trailing-tail diagnostic, got: {err}"
+        );
     }
 
     #[test]
     fn parse_node_uri_trims_surrounding_whitespace() {
         let parsed =
-            parse_node_uri("  easynet:///r/realm-b/agent/n1  \n").expect("whitespace trimmed");
-        assert_eq!(parsed, "easynet:///r/realm-b/agent/n1");
+            parse_node_uri("  easynet:///r/realm-b/device/n1  \n").expect("whitespace trimmed");
+        assert_eq!(parsed, "easynet:///r/realm-b/device/n1");
+    }
+
+    #[test]
+    fn parse_node_uri_normalises_legacy_agent_device_shape() {
+        let parsed =
+            parse_node_uri("easynet:///r/realm-b/agent/n1").expect("legacy device accepted");
+        assert_eq!(parsed, "easynet:///r/realm-b/device/n1");
     }
 
     #[test]
@@ -465,7 +536,7 @@ mod tests {
 
     #[test]
     fn parse_node_uri_rejects_missing_tenant() {
-        let err = parse_node_uri("easynet:///r//agent/n1").expect_err("empty tenant rejected");
+        let err = parse_node_uri("easynet:///r//device/n1").expect_err("empty tenant rejected");
         assert!(
             format!("{err}").contains("does not parse"),
             "must surface a structural-mismatch error, got: {err}"
@@ -475,8 +546,22 @@ mod tests {
     #[test]
     fn parse_node_uri_rejects_missing_node_id() {
         let err =
-            parse_node_uri("easynet:///r/realm-b/agent/").expect_err("empty node id rejected");
+            parse_node_uri("easynet:///r/realm-b/device/").expect_err("empty node id rejected");
         assert!(format!("{err}").contains("does not parse"));
+    }
+
+    #[test]
+    fn parse_node_uri_rejects_extra_path_segments() {
+        let err = parse_node_uri("easynet:///r/realm-b/device/n1/ability/x")
+            .expect_err("extra segments rejected");
+        assert!(format!("{err}").contains("does not parse"));
+    }
+
+    #[test]
+    fn parse_node_uri_rejects_real_agent_profile_uri() {
+        let err = parse_node_uri("easynet:///r/realm-b/agent/alice.claude")
+            .expect_err("hosted agent must not be accepted");
+        assert!(format!("{err}").contains("agent profile"));
     }
 
     #[test]
@@ -521,9 +606,9 @@ mod tests {
         );
 
         // Structural-failure: empty realm tail. The role segment
-        // accepts both `device` (v4.1.4 canonical) and `agent` (v1
-        // compat), so use a clearly malformed input — empty realm
-        // — to exercise the structural-arm error path.
+        // accepts both `device` (v4.1.4 canonical) and legacy bare
+        // `agent` tails, so use a clearly malformed input — empty
+        // realm — to exercise the structural-arm error path.
         let err_struct = parse_node_uri("easynet:///r//device/n1").expect_err("rejected");
         let msg_struct = format!("{err_struct}");
         assert!(
