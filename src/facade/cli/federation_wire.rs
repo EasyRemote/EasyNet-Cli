@@ -771,7 +771,7 @@ listen_tcp = "127.0.0.1:50443"
         let raw = "";
         let updated = upsert_self_trusted_agent(
             raw,
-            "easynet:///r/tenant-a/agent/dev-1",
+            "easynet:///r/tenant-a/device/dev-1",
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
             1_700_000_000_000,
         )
@@ -786,7 +786,7 @@ listen_tcp = "127.0.0.1:50443"
         let row = arr[0].as_table().expect("row is a table");
         assert_eq!(
             row.get("agent_uri").and_then(|v| v.as_str()),
-            Some("easynet:///r/tenant-a/agent/dev-1"),
+            Some("easynet:///r/tenant-a/device/dev-1"),
         );
         assert_eq!(row.get("role").and_then(|v| v.as_str()), Some("device"));
         assert_eq!(
@@ -807,14 +807,14 @@ listen_tcp = "127.0.0.1:50443"
         // edit) is authoritative.
         let raw = r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/tenant-a/agent/dev-1"
+agent_uri = "easynet:///r/tenant-a/device/dev-1"
 public_key_b64 = "OPERATOR-WRITTEN-VALUE"
 role = "device"
 added_at_unix_ms = 100
 "#;
         let updated = upsert_self_trusted_agent(
             raw,
-            "easynet:///r/tenant-a/agent/dev-1",
+            "easynet:///r/tenant-a/device/dev-1",
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
             999_999_999_999,
         )
@@ -837,7 +837,7 @@ added_at_unix_ms = 1
 "#;
         let updated = upsert_self_trusted_agent(
             raw,
-            "easynet:///r/tenant-a/agent/dev-1",
+            "easynet:///r/tenant-a/device/dev-1",
             "MY-KEY",
             1_700_000_000_000,
         )
@@ -920,7 +920,7 @@ added_at_unix_ms = 1
         let row = arr[0].as_table().expect("row is a table");
         assert_eq!(
             row.get("agent_uri").and_then(|v| v.as_str()),
-            Some("easynet:///r/tenant-a/agent/dev-1"),
+            Some("easynet:///r/tenant-a/device/dev-1"),
         );
         assert_eq!(row.get("role").and_then(|v| v.as_str()), Some("device"));
 
