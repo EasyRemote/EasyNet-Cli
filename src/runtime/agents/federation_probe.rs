@@ -161,7 +161,7 @@ pub(crate) fn collect_fleet_view() -> FleetView {
         }
     };
 
-    let caller_uri = crate::uri::agent_uri(&creds.tenant_id, &creds.node_id);
+    let caller_uri = crate::uri::device_uri(&creds.tenant_id, &creds.node_id);
     let invoker = BridgeAbilityInvoker::with_caller_uri(&bridge, caller_uri);
 
     let resolve_started = Instant::now();

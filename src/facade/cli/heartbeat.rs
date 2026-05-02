@@ -113,7 +113,7 @@ impl<'a> HeartbeatTransport for DirectBridge<'a> {
         // proper carrier and `federation.advertise_*` /
         // `federation.resolve` use the same caller URI we set
         // here.
-        let device_uri = crate::uri::agent_uri(&tenant, &node_id);
+        let device_uri = crate::uri::device_uri(&tenant, &node_id);
         let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
             self.bridge,
             device_uri,
@@ -149,7 +149,7 @@ impl<'a> HeartbeatTransport for ReconnectingHeartbeat<'a> {
         // failure (its standard contract), so an abilty-level
         // hub rejection still propagates here while a transient
         // dropped connection self-heals.
-        let device_uri = crate::uri::agent_uri(&tenant, &node_id);
+        let device_uri = crate::uri::device_uri(&tenant, &node_id);
         self.bridge.with_bridge(|br| {
             let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
                 br,
@@ -428,7 +428,7 @@ fn rotate_log_if_needed(path: &std::path::Path) {
 fn build_reregister_hook(tenant: String, node_id: String, _hostname: String) -> ReconnectHook {
     use std::rc::Rc;
     Rc::new(move |bridge: &DendriteBridge| -> AxonResult<()> {
-        let device_uri = crate::uri::agent_uri(&tenant, &node_id);
+        let device_uri = crate::uri::device_uri(&tenant, &node_id);
         let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
             bridge,
             device_uri.clone(),
@@ -507,7 +507,7 @@ pub fn run_daemon() -> anyhow::Result<()> {
     // logical scope.
     let realm = tenant.clone();
     let bootstrap_outcome = reconnecting.with_bridge(|br| {
-        let device_uri = crate::uri::agent_uri(&tenant, &node_id);
+        let device_uri = crate::uri::device_uri(&tenant, &node_id);
         let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
             br,
             device_uri,
@@ -544,7 +544,7 @@ pub fn run_daemon() -> anyhow::Result<()> {
     // reconnecting bridge so a transient drop right before
     // shutdown still reaches the hub via one auto-reconnect.
     let reason = outcome.reason();
-    let device_uri = crate::uri::agent_uri(&tenant, &node_id);
+    let device_uri = crate::uri::device_uri(&tenant, &node_id);
     let revoked = reconnecting.with_bridge(|br| {
         let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
             br,

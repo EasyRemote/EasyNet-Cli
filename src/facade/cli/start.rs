@@ -581,7 +581,7 @@ pub(crate) fn build_bootstrap_plan_from(
         // self-signed-must-equal-caller check) sees one form. The
         // bare node_id remains accessible separately via
         // `creds.node_id` when an entry path needs it.
-        host_device_uri: crate::uri::agent_uri(&tenant_id, &node_id),
+        host_device_uri: crate::uri::device_uri(&tenant_id, &node_id),
         // Defaults match plan §1's "default-on consent on
         // interactive hosts"; policy + mcp default off until
         // [profiles] config wiring lands.
@@ -724,7 +724,7 @@ fn run_foreground_with_heartbeat(
     // semantics the legacy RPC had.
     {
         let plan_realm = &creds.tenant_id; // realm == tenant in v1 (see build_bootstrap_plan_from)
-        let device_uri = crate::uri::agent_uri(&creds.tenant_id, &creds.node_id);
+        let device_uri = crate::uri::device_uri(&creds.tenant_id, &creds.node_id);
         let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
             bridge,
             device_uri.clone(),
@@ -1135,7 +1135,7 @@ mod tests {
         assert_eq!(plan.realm, "tenant-test");
         assert_eq!(
             plan.host_device_uri,
-            "easynet:///r/tenant-test/agent/node-test"
+            "easynet:///r/tenant-test/device/node-test"
         );
         assert!(plan.consent, "consent default-on per plan §1");
         assert!(!plan.policy);
@@ -1158,7 +1158,7 @@ mod tests {
         assert_eq!(plan.realm, "tenant-test");
         assert_eq!(
             plan.host_device_uri,
-            "easynet:///r/tenant-test/agent/node-test"
+            "easynet:///r/tenant-test/device/node-test"
         );
     }
 

@@ -137,8 +137,8 @@ pub fn run(args: DiscoverArgs) -> anyhow::Result<()> {
     // reject if its trust set hasn't been wired for that URI.
     let caller_uri = crate::persistence::config::load_credentials()
         .ok()
-        .map(|c| crate::uri::agent_uri(&c.tenant_id, &c.node_id))
-        .unwrap_or_else(|| crate::uri::agent_uri("cli", "local"));
+        .map(|c| crate::uri::device_uri(&c.tenant_id, &c.node_id))
+        .unwrap_or_else(|| crate::uri::device_uri("cli", "local"));
 
     let envelope = Envelope {
         caller: Some(AgentIdentity {

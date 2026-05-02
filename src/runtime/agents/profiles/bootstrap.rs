@@ -137,6 +137,12 @@ pub fn bootstrap_local_agents<M: UriMinter>(
                     // it survives the daemon process, but flag it
                     // with the literal "<unjoined>" realm so the
                     // first post-join save can repair it.
+                    //
+                    // Hosted-agent kind: keeps URI v2 `agent/`
+                    // segment. Only the daemon's own device-profile
+                    // self-URI is `device/<node>`; hosted agents
+                    // (consent / mcp / llm) live in the agent
+                    // namespace.
                     crate::uri::agent_uri("<unjoined>", &id)
                 } else {
                     crate::uri::agent_uri(&plan.realm, &id)
