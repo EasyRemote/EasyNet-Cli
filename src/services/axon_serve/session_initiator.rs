@@ -450,6 +450,32 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
 
     let mut client = InvocationClient::new(channel);
 
+    // Membership prelude (URA v4.1.4 dev unblock): axon-runtime hub
+    // returns `AXON_MEMBERSHIP_REQUIRED` for any caller whose URI is
+    // not in its membership table. The genesis exception is
+    // `federation.join`, which the runtime accepts unsigned. We send
+    // one before opening `<self>.session` so a fresh axon-runtime
+    // (no audit-wal replay, e.g. `--reset-db` dev boot) does not
+    // reject the session bidi for the lifetime of the daemon.
+    //
+    // The call is best-effort: we ignore both "already member" and
+    // transport errors here. The session attempt below is the
+    // authoritative health gate — if join didn't take, the bidi
+    // still surfaces the underlying error and the supervisor's
+    // reconnect loop retries everything.
+    eprintln!(
+        "[session] sending federation.join prelude as {caller_uri} against {hub_endpoint}"
+    );
+    match send_federation_join_prelude(&mut client, &caller_uri).await {
+        Ok(()) => eprintln!("[session] federation.join prelude OK; proceeding to <self>.session"),
+        Err(err) => eprintln!(
+            "[session] federation.join prelude soft-failed (code={:?}, msg={:?}); \
+             proceeding to <self>.session — bidi will surface the error if join was required",
+            err.code(),
+            err.message(),
+        ),
+    }
+
     let (up_tx, up_rx) = mpsc::channel::<InvokeBidiUp>(SESSION_UP_CHANNEL_CAPACITY);
     let outbound_tx = SessionUpSender::new(up_tx.clone());
 
@@ -637,6 +663,67 @@ fn next_backoff(current: Duration) -> Duration {
         SESSION_BACKOFF_MAX
     } else {
         doubled
+    }
+}
+
+/// Send a one-shot `federation.join@1` over the same gRPC channel
+/// the session bidi will open on. Genesis exception in axon-runtime
+/// (`signature_policy=RequireSigned` allows this ability unsigned),
+/// so the call uses an envelope with caller URI only — no signing
+/// material — and a minimal JoinFederationRequest payload.
+///
+/// We treat both success and "already member" as positive outcomes;
+/// any other status is logged by the caller and we continue. The
+/// session bidi's HubRejected error is the authoritative gate
+/// downstream — if join was needed but failed, the bidi surfaces
+/// the right status and the supervisor backs off.
+async fn send_federation_join_prelude(
+    client: &mut crate::pb::axon::v1::invocation_client::InvocationClient<Channel>,
+    caller_uri: &str,
+) -> Result<(), tonic::Status> {
+    use crate::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
+
+    // Wire shape mirrors the daemon-side JoinRequest in
+    // `federation_wrappers::JoinRequest`: only `agent_uri` and
+    // `tenant_id` are required; axon-runtime tolerates extras.
+    let realm = caller_uri
+        .strip_prefix("easynet:///r/")
+        .and_then(|rest| rest.split_once('/'))
+        .map(|(realm, _)| realm.to_string())
+        .unwrap_or_default();
+
+    let body = serde_json::json!({
+        "agent_uri": caller_uri,
+        "tenant_id": realm,
+        "label": "device-mode-prelude",
+    });
+    let arguments = serde_json::to_vec(&body).map_err(|e| {
+        tonic::Status::internal(format!("federation.join prelude serialize: {e}"))
+    })?;
+
+    let request = InvokeRequest {
+        envelope: Some(Envelope {
+            caller: Some(AgentIdentity {
+                uri: caller_uri.to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        function_name: "federation.join".to_string(),
+        arguments,
+        ..Default::default()
+    };
+
+    match client.invoke(request).await {
+        Ok(_) => Ok(()),
+        // Already-a-member is a benign outcome; surface as success.
+        Err(status)
+            if status.code() == tonic::Code::AlreadyExists
+                || status.message().contains("already") =>
+        {
+            Ok(())
+        }
+        Err(status) => Err(status),
     }
 }
 

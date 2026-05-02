@@ -84,11 +84,12 @@ use crate::pb::axon::v1::{
 };
 use crate::services::axon_serve::admission_facade::AdmissionFacade;
 use crate::services::axon_serve::federation_wrappers::{
-    self, ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_FEDERATION_DISCOVER,
-    ABILITY_FEDERATION_FORWARD_INVOKE, ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN,
-    ABILITY_FEDERATION_LIST_USER_DEVICES, ABILITY_FEDERATION_RESOLVE,
+    self, ABILITY_FEDERATION_ADVERTISE_ABILITIES, ABILITY_FEDERATION_ADVERTISE_AGENT,
+    ABILITY_FEDERATION_DISCOVER, ABILITY_FEDERATION_FORWARD_INVOKE, ABILITY_FEDERATION_HEARTBEAT,
+    ABILITY_FEDERATION_JOIN, ABILITY_FEDERATION_LIST_USER_DEVICES, ABILITY_FEDERATION_RESOLVE,
     ABILITY_FEDERATION_RESOLVE_KEY, ABILITY_FEDERATION_REVOKE,
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
+    ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
 };
 use crate::services::axon_serve::invoke_remote_initiator::{
     call_id_hex, InvokeRemoteDown, InvokeRemoteUp, RequestOutcome, SessionDispatch,
@@ -530,6 +531,12 @@ impl Invocation for DaemonInvocationService {
             ABILITY_FEDERATION_ADVERTISE_AGENT => {
                 self.dispatch_federation_advertise_agent(&inner.arguments)
             }
+            ABILITY_FEDERATION_ADVERTISE_ABILITIES => {
+                self.dispatch_federation_advertise_abilities(&inner.arguments)
+            }
+            ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY => {
+                self.dispatch_runtime_bootstrap_self_identity(&inner.arguments)
+            }
             ABILITY_FEDERATION_HEARTBEAT => self.dispatch_federation_heartbeat(&inner.arguments),
             ABILITY_FEDERATION_RESOLVE => self.dispatch_federation_resolve(&inner.arguments),
             ABILITY_FEDERATION_RESOLVE_KEY => {
@@ -716,6 +723,25 @@ impl DaemonInvocationService {
     ) -> Result<Response<InvokeResponse>, Status> {
         let request: federation_wrappers::AdvertiseAgentRequest = parse_json_args(arguments)?;
         let response = federation_wrappers::handle_advertise_agent(&request);
+        wrap_json_response(&response)
+    }
+
+    fn dispatch_federation_advertise_abilities(
+        &self,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let request: federation_wrappers::AdvertiseAbilitiesRequest = parse_json_args(arguments)?;
+        let response = federation_wrappers::handle_advertise_abilities(&request);
+        wrap_json_response(&response)
+    }
+
+    fn dispatch_runtime_bootstrap_self_identity(
+        &self,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let request: federation_wrappers::BootstrapSelfIdentityRequest =
+            parse_json_args(arguments)?;
+        let response = federation_wrappers::handle_bootstrap_self_identity(&request);
         wrap_json_response(&response)
     }
 
