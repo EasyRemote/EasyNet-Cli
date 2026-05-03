@@ -135,17 +135,35 @@ pub fn bootstrap_local_agents<M: UriMinter>(
             .find(|e| e.profile == profile && e.name == name)
             .map(|e| e.agent_uri.clone());
         let (uri, reused) = match existing {
+            Some(existing_uri)
+                if uri_contains_unjoined(&existing_uri)
+                    && !plan.realm.is_empty()
+                    && !plan.user_id.is_empty() =>
+            {
+                // Repair path: this row was minted before the device
+                // joined a realm. `<unjoined>` placeholders cause the
+                // hub-side `federation.resolve` visibility gate to
+                // skip the agent (the gate keys off a real user URA),
+                // so the agent shows up in `agent list` locally but
+                // never appears in backend `/api/v1/agents`. Now that
+                // we know the real realm + user_id post-join, keep
+                // the original agent_id (operators may have
+                // referenced it elsewhere) and rebuild a canonical
+                // URI around it. Persist so the repair is idempotent.
+                let agent_id = extract_agent_id_tail(&existing_uri)
+                    .unwrap_or_else(|| minter.mint_id(profile, name));
+                let repaired = crate::uri::agent_uri(&plan.realm, &plan.user_id, &agent_id);
+                upsert_hosted_agent(file, profile, name, &repaired);
+                (repaired, false)
+            }
             Some(uri) => (uri, true),
             None => {
                 let id = minter.mint_id(profile, name);
                 // URI v4.1.4: agent URI is user-anchored
                 // (`<user>.<agent-id>`). Pre-join state lacks both
                 // realm and user_id; flag with literal `<unjoined>`
-                // for both so the first post-join save can repair it.
-                // Only the daemon's own device-profile self-URI uses
-                // the `device/<uuid>` segment; hosted agents
-                // (consent / policy / mcp / llm) live under
-                // `agent/<user>.<id>`.
+                // for both. The repair branch above corrects it on
+                // the next bootstrap pass after join.
                 let realm = if plan.realm.is_empty() {
                     "<unjoined>"
                 } else {
@@ -208,6 +226,33 @@ pub fn hosted_uris(file: &LocalAgentsFile) -> Vec<(String, String, String)> {
         .iter()
         .map(|e: &HostedAgentEntry| (e.profile.clone(), e.name.clone(), e.agent_uri.clone()))
         .collect()
+}
+
+/// True iff the URI is one of the pre-join placeholders
+/// (`easynet:///r/<unjoined>/...` or `.../agent/<unjoined>.<id>`).
+/// Used by the bootstrap-time repair branch to decide whether a row
+/// in `agents.json` should be re-minted with the now-known realm +
+/// user_id. The check is intentionally substring-based — both the
+/// realm slot and the user_id slot can carry the placeholder, and
+/// either one is enough to fail backend-side visibility filtering.
+fn uri_contains_unjoined(uri: &str) -> bool {
+    uri.contains("<unjoined>")
+}
+
+/// Pull the agent_id tail from a `.../agent/<user>.<agent_id>` URI.
+/// Returns None when the URI doesn't match the expected shape so the
+/// caller can fall back to a fresh mint instead of embedding the
+/// malformed remainder. The split keys on the `.` between user and
+/// agent_id; if the placeholder URI shape evolves to something else
+/// the test in this module catches the regression.
+fn extract_agent_id_tail(uri: &str) -> Option<String> {
+    let after_agent = uri.split("/agent/").nth(1)?;
+    let dot = after_agent.find('.')?;
+    let tail = &after_agent[dot + 1..];
+    if tail.is_empty() {
+        return None;
+    }
+    Some(tail.to_string())
 }
 
 #[cfg(test)]
