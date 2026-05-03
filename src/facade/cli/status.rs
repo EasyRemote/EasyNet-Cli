@@ -69,9 +69,7 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
     let total = entries.len();
     let online = entries
         .iter()
-        .filter(|e| {
-            e.get("status").and_then(Value::as_str) == Some("active")
-        })
+        .filter(|e| e.get("status").and_then(Value::as_str) == Some("active"))
         .count();
     let offline = total.saturating_sub(online);
     output::info(&format!("Nodes: {online} online, {offline} offline"));

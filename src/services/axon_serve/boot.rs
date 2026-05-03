@@ -132,6 +132,9 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     let daemon_uri = daemon_identity
         .as_ref()
         .map(|identity| identity.caller_uri.clone());
+    if let Some(identity) = daemon_identity.as_ref() {
+        maybe_bootstrap_runtime_self_identity(identity);
+    }
     // PR-7 commit 7/N adds an env-override seam: production deploys
     // use `/etc/easynet/realm-trust.toml`; tests / smoke runs set
     // `EASYNET_REALM_TRUST_PATH` to a tempdir-rooted path so the
@@ -813,6 +816,68 @@ fn daemon_identity_from_stored(stored: &StoredDeviceIdentity) -> Option<DaemonId
     })
 }
 
+/// Best-effort runtime-side self-identity bootstrap for daemon boots
+/// that already have a live local runtime.
+///
+/// Why this exists:
+/// - `easynet start` already bootstraps runtime key material before
+///   republishing abilities.
+/// - The heartbeat daemon also bootstraps before its first tick.
+/// - `easynet-daemon` can, however, boot in shapes where neither of
+///   those has fired yet while local CLI surfaces already route
+///   through `BridgeAbilityInvoker` (`device.describe` ->
+///   `federation.resolve`, `fleet.list_nodes`, etc.).
+///
+/// In that window the runtime rejects signed federation reads with
+/// `AXON_EASYNET_SUBJECT_KEY_UNREGISTERED`. Bootstrapping here closes
+/// the gap for any daemon boot that can already see a live runtime.
+///
+/// Best-effort by contract:
+/// - no runtime state file -> silent skip (standalone daemon harnesses)
+/// - runtime down / bridge connect fail -> log + continue
+/// - bootstrap reject -> log + continue
+///
+/// The call is idempotent. If `easynet start` or the heartbeat daemon
+/// already registered the keys, the runtime simply keeps the prior
+/// entries and startup proceeds unchanged.
+fn maybe_bootstrap_runtime_self_identity(identity: &DaemonIdentity) {
+    let Some(realm) = realm_from_agent_uri(&identity.caller_uri) else {
+        return;
+    };
+    let Some(node_id) = device_id_from_caller_uri(&identity.caller_uri) else {
+        return;
+    };
+
+    let state = match crate::persistence::config::load() {
+        Ok(state) => state,
+        Err(_) => return,
+    };
+    let bridge = match state.connect_bridge() {
+        Ok(bridge) => bridge,
+        Err(err) => {
+            eprintln!(
+                "[axon-serve] runtime self-bootstrap skipped for `{node_id}`: \
+                 connect local runtime bridge: {err}"
+            );
+            return;
+        }
+    };
+    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+        &bridge,
+        identity.caller_uri.clone(),
+    );
+    match crate::runtime::publish::bootstrap_self_identity_via_runtime(
+        &invoker, &realm, &realm, &node_id,
+    )
+    .result
+    {
+        Ok(()) => eprintln!(
+            "[axon-serve] runtime self-bootstrap registered trusted-key material for {node_id}"
+        ),
+        Err(msg) => eprintln!("[axon-serve] runtime self-bootstrap failed for {node_id}: {msg}"),
+    }
+}
+
 fn try_load_daemon_seed_from_keyring(self_uri: &str) -> Option<[u8; 32]> {
     use crate::services::keyring::{MasterKeySource, Vault, VaultError};
 
@@ -1454,6 +1519,18 @@ mod tests {
             identity.signing_seed.is_some(),
             "deterministic derive must still work when the keyring is not opted into"
         );
+    }
+
+    #[test]
+    fn runtime_self_bootstrap_is_noop_without_runtime_state() {
+        let _hg = crate::facade::cli::test_support::HomeGuard::new();
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("HOME", temp.path());
+        let identity = DaemonIdentity {
+            caller_uri: "easynet:///r/realm-a/device/device-123".to_string(),
+            signing_seed: None,
+        };
+        maybe_bootstrap_runtime_self_identity(&identity);
     }
 
     #[tokio::test]

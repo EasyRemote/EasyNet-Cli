@@ -30,9 +30,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 #[cfg(test)]
 use chrono::TimeZone;
+use chrono::{DateTime, Utc};
 
 use crate::runtime::agents::chat_ability::ContextLoader;
 use crate::runtime::execution::schedule::ScheduleService;

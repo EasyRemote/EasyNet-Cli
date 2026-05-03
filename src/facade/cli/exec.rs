@@ -27,9 +27,9 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use clap::Args;
 use serde_json::{json, Value};
 
-use crate::support::local_invoke::invoke_local_ability;
 #[cfg(not(feature = "axon-pb"))]
 use crate::support::local_invoke::federation_not_wired_error;
+use crate::support::local_invoke::invoke_local_ability;
 use crate::support::{output, timeouts};
 
 #[derive(Debug, Args)]
@@ -114,11 +114,8 @@ fn decode_exec_stream(result: &Value, field: &str) -> Vec<u8> {
 
 #[cfg(feature = "axon-pb")]
 fn invoke_remote_process_exec(node: &str, payload: Value) -> anyhow::Result<Value> {
-    let target_uri = resolve_remote_target_uri(node)?;
-    let caller_uri = crate::persistence::config::load_credentials()
-        .ok()
-        .filter(|creds| !creds.tenant_id.trim().is_empty() && !creds.node_id.trim().is_empty())
-        .map(|creds| crate::uri::device_uri(creds.tenant_id.trim(), creds.node_id.trim()));
+    let target_uri = crate::support::remote_device::resolve_target_device_uri(node)?;
+    let caller_uri = crate::support::remote_device::caller_device_uri_from_credentials();
     crate::support::federation_invoke::invoke_via_federation_forward(
         "process.exec",
         payload,
@@ -128,21 +125,6 @@ fn invoke_remote_process_exec(node: &str, payload: Value) -> anyhow::Result<Valu
     .with_context(|| {
         format!("invoke process.exec via federation.forward_invoke target={target_uri}")
     })
-}
-
-#[cfg(feature = "axon-pb")]
-fn resolve_remote_target_uri(node: &str) -> anyhow::Result<String> {
-    let trimmed = node.trim();
-    if trimmed.starts_with("easynet:///r/") {
-        return crate::support::federation_invoke::parse_node_uri(trimmed);
-    }
-    let creds = crate::persistence::config::load_credentials().map_err(|_| {
-        anyhow!(
-            "cannot resolve remote node {trimmed:?} without local credentials; pass a canonical \
-             `easynet:///r/<realm>/device/<node>` URI or pair this device first"
-        )
-    })?;
-    Ok(crate::uri::device_uri(&creds.tenant_id, trimmed))
 }
 
 #[cfg(not(feature = "axon-pb"))]

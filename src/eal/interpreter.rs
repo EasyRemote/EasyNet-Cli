@@ -34,7 +34,6 @@ use easynet_axon::dendrite_bridge::DendriteBridge;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-
 /// Convert `Duration::as_millis()` (u128) to u64, saturating at u64::MAX.
 #[inline]
 fn millis_u64(d: Duration) -> u64 {
@@ -401,9 +400,7 @@ fn dispatch_remote_via_forward_invoke(
                 arguments.clone(),
             )
             .map_err(|e| {
-                EalError::Unavailable(format!(
-                    "invoke_local_ability {ability_name} (local): {e}"
-                ))
+                EalError::Unavailable(format!("invoke_local_ability {ability_name} (local): {e}"))
             });
         }
 
@@ -430,9 +427,7 @@ fn dispatch_remote_via_forward_invoke(
             caller_uri.as_deref(),
         )
         .map_err(|e| {
-            EalError::Unavailable(format!(
-                "forward_invoke {ability_name} → {target_uri}: {e}"
-            ))
+            EalError::Unavailable(format!("forward_invoke {ability_name} → {target_uri}: {e}"))
         })
     }
     #[cfg(not(feature = "axon-pb"))]

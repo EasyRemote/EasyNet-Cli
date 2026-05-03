@@ -58,6 +58,12 @@ pub mod ability_toml;
 pub mod admin_status_ability;
 pub mod chat_ability;
 pub mod context_loaders;
+/// `device.describe` — unified-path replacement for the
+/// self-arm of `fleet.describe_node`. Routing is the caller's
+/// job (forward_invoke against the target device URA); this
+/// ability only describes "this device". See
+/// `device_describe_ability` module preamble.
+pub mod device_describe_ability;
 pub mod discover_ability;
 pub mod discuss_ability;
 /// eal_executor — backs `[exec] kind = "eal"` on agent-authored
@@ -82,12 +88,6 @@ pub mod file_transfer_ability;
 pub mod fleet_lifecycle_ability;
 pub mod fleet_list_agents_ability;
 pub mod fleet_ops_ability;
-/// `device.describe` — unified-path replacement for the
-/// self-arm of `fleet.describe_node`. Routing is the caller's
-/// job (forward_invoke against the target device URA); this
-/// ability only describes "this device". See
-/// `device_describe_ability` module preamble.
-pub mod device_describe_ability;
 /// AXIOM §"Tier 2.5" Baseline Locomotion Profile, filesystem
 /// half. Three abilities (`fs.read`, `fs.write`, `fs.list`)
 /// published by every host-embodied agent claiming the
@@ -810,9 +810,7 @@ pub fn description_for(name: &str) -> &'static str {
         "fleet.session_attach" | "fleet.pty_session_attach" => pty_attach_ability::description(),
         "fleet.session_input" | "fleet.pty_session_input" => pty_io_ability::input_description(),
         "fleet.session_read" | "fleet.pty_session_read" => pty_io_ability::read_description(),
-        "fleet.session_resize" | "fleet.pty_session_resize" => {
-            pty_io_ability::resize_description()
-        }
+        "fleet.session_resize" | "fleet.pty_session_resize" => pty_io_ability::resize_description(),
         "fleet.file_transfer" => file_transfer_ability::description(),
         "fleet.start_agent" => fleet_lifecycle_ability::start_agent_description(),
         "fleet.stop_agent" => fleet_lifecycle_ability::stop_agent_description(),

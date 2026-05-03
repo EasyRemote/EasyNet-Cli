@@ -2253,8 +2253,8 @@ fn real_fleet_session_input_read_resize_via_v2_alias() {
     assert_eq!(resize["ack"], json!(true));
 
     use base64::Engine;
-    let input_b64 = base64::engine::general_purpose::STANDARD
-        .encode(b"printf 'EASYNET_V2_PTY_OK\\n'\n");
+    let input_b64 =
+        base64::engine::general_purpose::STANDARD.encode(b"printf 'EASYNET_V2_PTY_OK\\n'\n");
     let input = d
         .execute_rpc(target(
             "fleet.session_input",

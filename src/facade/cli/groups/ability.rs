@@ -284,24 +284,13 @@ fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
 /// `federation.forward_invoke`. Mirrors the same helper in
 /// `cli/abilities.rs::fetch_remote_catalogue` so a future audit
 /// "every CLI surface that asks a peer device for its catalogue"
-/// finds one routing pattern in two call sites.
+/// finds one routing pattern in two call sites. Bare UUID targets
+/// go through the shared cross-hub directory lookup helper before
+/// local-realm fallback.
 #[cfg(feature = "axon-pb")]
 fn invoke_remote_easynet_discover(node: &str) -> anyhow::Result<Value> {
-    let target_uri = if node.starts_with("easynet:///r/") {
-        crate::support::federation_invoke::parse_node_uri(node)?
-    } else {
-        let creds = crate::persistence::config::load_credentials().map_err(|_| {
-            anyhow::anyhow!(
-                "cannot resolve node {node:?}: pass a canonical \
-                 `easynet:///r/<realm>/device/<id>` URI or pair this device first"
-            )
-        })?;
-        crate::uri::device_uri(&creds.tenant_id, node)
-    };
-    let caller_uri = crate::persistence::config::load_credentials()
-        .ok()
-        .filter(|c| !c.tenant_id.trim().is_empty() && !c.node_id.trim().is_empty())
-        .map(|c| crate::uri::device_uri(c.tenant_id.trim(), c.node_id.trim()));
+    let target_uri = crate::support::remote_device::resolve_target_device_uri(node)?;
+    let caller_uri = crate::support::remote_device::caller_device_uri_from_credentials();
     crate::support::federation_invoke::invoke_via_federation_forward(
         "easynet.discover",
         serde_json::json!({}),

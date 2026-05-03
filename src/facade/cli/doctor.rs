@@ -168,7 +168,8 @@ fn federation_check_impl() -> Check {
             let stale = entries
                 .iter()
                 .filter(|e| {
-                    e.get("status").and_then(Value::as_str)
+                    e.get("status")
+                        .and_then(Value::as_str)
                         .map(|s| s != "active")
                         .unwrap_or(true)
                 })
@@ -178,7 +179,8 @@ fn federation_check_impl() -> Check {
                     name: "federation".to_string(),
                     status: CheckStatus::Warn,
                     detail: "no federated directory entries — peers may not be reachable yet, \
-                             or no devices are paired across hubs".to_string(),
+                             or no devices are paired across hubs"
+                        .to_string(),
                     hint: Some(
                         "Check `easynet federation peers` to confirm the trust anchor + \
                          peer daemon health.",
@@ -201,7 +203,10 @@ fn federation_check_impl() -> Check {
                 Check {
                     name: "federation".to_string(),
                     status: CheckStatus::Ok,
-                    detail: format!("{total} entr{} active", if total == 1 { "y" } else { "ies" }),
+                    detail: format!(
+                        "{total} entr{} active",
+                        if total == 1 { "y" } else { "ies" }
+                    ),
                     hint: None,
                 }
             }

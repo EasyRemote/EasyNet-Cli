@@ -166,6 +166,8 @@ fn fetch_local_catalogue() -> anyhow::Result<Vec<Value>> {
 /// `easynet.discover` handler runs and returns its own catalogue;
 /// the forward bridge unwraps the response and we extract the
 /// abilities array the same way `fetch_local_catalogue` does.
+/// Bare UUID targets go through the shared cross-hub directory
+/// lookup helper before falling back to the caller's local realm.
 fn fetch_remote_catalogue(node: &str) -> anyhow::Result<Vec<Value>> {
     let value = invoke_remote_easynet_discover(node)?;
     extract_abilities(&value)
@@ -173,21 +175,8 @@ fn fetch_remote_catalogue(node: &str) -> anyhow::Result<Vec<Value>> {
 
 #[cfg(feature = "axon-pb")]
 fn invoke_remote_easynet_discover(node: &str) -> anyhow::Result<Value> {
-    let target_uri = if node.starts_with("easynet:///r/") {
-        crate::support::federation_invoke::parse_node_uri(node)?
-    } else {
-        let creds = crate::persistence::config::load_credentials().map_err(|_| {
-            anyhow::anyhow!(
-                "cannot resolve node {node:?}: pass a canonical \
-                 `easynet:///r/<realm>/device/<id>` URI or pair this device first"
-            )
-        })?;
-        crate::uri::device_uri(&creds.tenant_id, node)
-    };
-    let caller_uri = crate::persistence::config::load_credentials()
-        .ok()
-        .filter(|c| !c.tenant_id.trim().is_empty() && !c.node_id.trim().is_empty())
-        .map(|c| crate::uri::device_uri(c.tenant_id.trim(), c.node_id.trim()));
+    let target_uri = crate::support::remote_device::resolve_target_device_uri(node)?;
+    let caller_uri = crate::support::remote_device::caller_device_uri_from_credentials();
     crate::support::federation_invoke::invoke_via_federation_forward(
         "easynet.discover",
         serde_json::json!({}),

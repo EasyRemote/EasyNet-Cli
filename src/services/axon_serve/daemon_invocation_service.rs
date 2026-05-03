@@ -392,8 +392,7 @@ impl DaemonInvocationService {
             loop {
                 match events.recv().await {
                     Ok(PresenceEvent::Offline { uri, reason }) => {
-                        let cancelled = watcher_pending
-                            .cancel_for(&uri, "target_offline");
+                        let cancelled = watcher_pending.cancel_for(&uri, "target_offline");
                         if cancelled > 0 {
                             eprintln!(
                                 "[axon-serve] presence-offline-cancel: target_uri={uri} \

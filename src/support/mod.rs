@@ -81,6 +81,8 @@ pub(crate) mod local_invoke;
 pub(crate) mod net;
 pub(crate) mod node;
 pub(crate) mod output;
+#[cfg(feature = "axon-pb")]
+pub(crate) mod remote_device;
 /// AXIOM Tier 2.5 bash safety subsystem. Self-contained set
 /// of helpers (destructive command list, hardened process
 /// runner, AST + security pipeline added in later slices)
