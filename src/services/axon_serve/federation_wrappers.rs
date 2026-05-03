@@ -490,9 +490,7 @@ pub fn handle_resolve(
         })
         .map(|uri| {
             let abilities = if want_abilities {
-                catalog
-                    .and_then(|c| c.get(&uri))
-                    .unwrap_or_default()
+                catalog.and_then(|c| c.get(&uri)).unwrap_or_default()
             } else {
                 Vec::new()
             };
@@ -654,7 +652,7 @@ pub fn handle_discover_with_user_filter(
 
 /// Request payload for `federation.list_user_devices`. The
 /// `tenant_id` is the URI realm component (`<tenant>` in
-/// `easynet:///r/<tenant>/agent/<id>`) — the same shape backend
+/// `easynet:///r/<tenant>/device/<id>`) — the same shape backend
 /// Go uses to key device_pairing rows.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ListUserDevicesRequest {
@@ -685,22 +683,48 @@ pub struct ListUserDevicesResponse {
 /// PresenceRegistry only knows URIs and active/inactive state.
 /// Enriching from the backend's device_pairing table (with
 /// real display_name, last_seen) is N3-6 backend-Go territory.
+///
+/// URI compatibility:
+/// - Canonical v4.1.4 device sessions live under
+///   `easynet:///r/<tenant>/device/<node>`.
+/// - Legacy pre-Phase-2A device sessions may still appear as the
+///   collapsed bare `.../agent/<node>` form.
+/// - Real agent-profile URIs (`.../agent/<user>.<agent>`) are not
+///   device sessions and are ignored here.
 #[must_use]
 pub fn handle_list_user_devices(
     request: &ListUserDevicesRequest,
     registry: &PresenceRegistry,
 ) -> ListUserDevicesResponse {
-    let tenant_prefix = crate::uri::realm_agent_prefix(&request.tenant_id);
+    let tenant_device_prefix = crate::uri::realm_device_prefix(&request.tenant_id);
+    let tenant_legacy_agent_prefix = crate::uri::realm_agent_prefix(&request.tenant_id);
     let snapshot = registry.snapshot();
     let devices = snapshot
         .into_iter()
-        .filter(|uri| uri.starts_with(&tenant_prefix))
+        .filter(|uri| {
+            if uri.starts_with(&tenant_device_prefix) {
+                return true;
+            }
+            uri.strip_prefix(&tenant_legacy_agent_prefix)
+                .map(|tail| !tail.is_empty() && !tail.contains('.') && !tail.contains('/'))
+                .unwrap_or(false)
+        })
         .map(|uri| {
-            // Extract node_id from `easynet:///r/<tenant>/agent/<node_id>`.
-            let node_id = uri
-                .strip_prefix(&tenant_prefix)
-                .map(str::to_string)
-                .unwrap_or_default();
+            // Extract node_id from the canonical v4.1.4
+            // `/device/<node>` tail first; legacy bare
+            // `/agent/<node>` tails stay accepted during the
+            // migration window.
+            let node_id = match crate::uri::parse_ura(&uri) {
+                Ok(parsed) if parsed.kind == crate::uri::URAKind::Device => parsed.device_id,
+                _ => {
+                    let legacy = crate::uri::strip_v1_agent_prefix(&uri);
+                    if legacy == uri {
+                        String::new()
+                    } else {
+                        legacy
+                    }
+                }
+            };
             crate::services::federation_directory::DirectoryEntry {
                 agent_uri: uri,
                 node_id,
@@ -1340,15 +1364,15 @@ mod tests {
         // entries.
         let registry = PresenceRegistry::new();
         registry.insert(
-            "easynet:///r/tenant-a/agent/device-1".to_string(),
+            "easynet:///r/tenant-a/device/device-1".to_string(),
             make_dispatch_sender(),
         );
         registry.insert(
-            "easynet:///r/tenant-a/agent/device-2".to_string(),
+            "easynet:///r/tenant-a/device/device-2".to_string(),
             make_dispatch_sender(),
         );
         registry.insert(
-            "easynet:///r/tenant-b/agent/device-3".to_string(),
+            "easynet:///r/tenant-b/device/device-3".to_string(),
             make_dispatch_sender(),
         );
 
@@ -1360,7 +1384,7 @@ mod tests {
         );
         assert_eq!(resp.devices.len(), 2);
         for entry in &resp.devices {
-            assert!(entry.agent_uri.starts_with("easynet:///r/tenant-a/agent/"));
+            assert!(entry.agent_uri.starts_with("easynet:///r/tenant-a/device/"));
             assert_eq!(entry.origin_realm, None, "speaks for own realm — None");
             assert_eq!(entry.status, "active");
         }
@@ -1370,7 +1394,7 @@ mod tests {
     fn handle_list_user_devices_extracts_node_id_from_uri() {
         let registry = PresenceRegistry::new();
         registry.insert(
-            "easynet:///r/tenant-a/agent/node-xyz".to_string(),
+            "easynet:///r/tenant-a/device/node-xyz".to_string(),
             make_dispatch_sender(),
         );
 
@@ -1385,10 +1409,36 @@ mod tests {
     }
 
     #[test]
+    fn handle_list_user_devices_accepts_legacy_agent_device_shape_only() {
+        let registry = PresenceRegistry::new();
+        registry.insert(
+            "easynet:///r/tenant-a/agent/node-legacy".to_string(),
+            make_dispatch_sender(),
+        );
+        registry.insert(
+            "easynet:///r/tenant-a/agent/alice.claude".to_string(),
+            make_dispatch_sender(),
+        );
+
+        let resp = handle_list_user_devices(
+            &ListUserDevicesRequest {
+                tenant_id: "tenant-a".to_string(),
+            },
+            &registry,
+        );
+        assert_eq!(resp.devices.len(), 1, "real agent URIs must be ignored");
+        assert_eq!(resp.devices[0].node_id, "node-legacy");
+        assert_eq!(
+            resp.devices[0].agent_uri,
+            "easynet:///r/tenant-a/agent/node-legacy"
+        );
+    }
+
+    #[test]
     fn handle_list_user_devices_returns_empty_when_no_match() {
         let registry = PresenceRegistry::new();
         registry.insert(
-            "easynet:///r/tenant-a/agent/device".to_string(),
+            "easynet:///r/tenant-a/device/device".to_string(),
             make_dispatch_sender(),
         );
 

@@ -106,10 +106,7 @@ pub(crate) fn collect_fleet_view() -> FleetView {
         node_id: local.node_id.clone(),
         tenant_id: local.tenant_id.clone(),
         agent_uri: if local.paired {
-            Some(format!(
-                "easynet:///r/{}/agent/{}",
-                local.tenant_id, local.node_id
-            ))
+            Some(crate::uri::device_uri(&local.tenant_id, &local.node_id))
         } else {
             None
         },
@@ -273,18 +270,26 @@ pub(crate) fn node_to_json(node: &FleetNodeSnapshot) -> Value {
     })
 }
 
-/// URI v4.1.4: extract the device UUID from a device-profile URA.
-/// Strict per the v4.1.4 ontology — only `device/<uuid>` URAs are
-/// recognised. v1 `reg/agent.<id>` and v2 `agent/<id>` shapes return
-/// None (caller treats as "not a device row" and skips). Migration
-/// callers needing the legacy shape must `easynet device join`
-/// again to mint a v4.1.4 URA.
+/// Extract the node id from a device-profile URI.
+///
+/// Accepts the canonical v4.1.4 `device/<uuid>` shape first. During
+/// the rolling-upgrade window we also accept the legacy collapsed
+/// `agent/<node>` device form peer hubs may still emit, but we keep
+/// rejecting real agent URIs (`agent/<user>.<agent>`) and malformed
+/// multi-segment tails.
 pub(crate) fn node_id_from_agent_uri(uri: &str) -> Option<String> {
-    let parsed = crate::uri::parse_ura(uri).ok()?;
-    if parsed.device_id.is_empty() {
+    if let Ok(parsed) = crate::uri::parse_ura(uri) {
+        return if parsed.device_id.is_empty() {
+            None
+        } else {
+            Some(parsed.device_id)
+        };
+    }
+    let legacy = crate::uri::strip_v1_agent_prefix(uri);
+    if legacy == uri || legacy.is_empty() || legacy.contains('.') || legacy.contains('/') {
         None
     } else {
-        Some(parsed.device_id)
+        Some(legacy)
     }
 }
 
@@ -408,15 +413,16 @@ mod tests {
     }
 
     #[test]
-    fn node_id_from_v1_v2_shapes_returns_none() {
-        // URI v4.1.4 strict parser: v1 `reg/agent.<id>` and v2
-        // `agent/<id>` shapes are no longer recognised. Caller
-        // treats None as "skip this row" — pre-v4.1.4 credentials
-        // require `easynet device join` to mint a v4.1.4 URA.
+    fn node_id_from_legacy_device_shape_is_accepted_but_real_agents_are_not() {
         assert_eq!(
             node_id_from_agent_uri("easynet:///r/acme/agent/01DEV"),
+            Some("01DEV".to_string()),
+            "legacy collapsed device URI must still project during migration"
+        );
+        assert_eq!(
+            node_id_from_agent_uri("easynet:///r/acme/agent/alice.claude"),
             None,
-            "v2 agent/<id> shape must not parse as a v4.1.4 device"
+            "real agent URIs must not parse as devices"
         );
         assert_eq!(
             node_id_from_agent_uri("easynet:///r/prv/reg/agent.01DEV?tenant_id=acme"),
@@ -428,7 +434,7 @@ mod tests {
     #[test]
     fn device_profile_detection_requires_health_plus_device_surface() {
         let device = ResolvedAgent {
-            uri: "easynet:///r/acme/agent/01DEV".into(),
+            uri: "easynet:///r/acme/device/01DEV".into(),
             status: "active".into(),
             abilities: vec![
                 json!({"name": "observe.health"}),
@@ -449,7 +455,7 @@ mod tests {
         let node = FleetNodeSnapshot {
             node_id: "01DEV".into(),
             tenant_id: "acme".into(),
-            agent_uri: Some("easynet:///r/acme/agent/01DEV".into()),
+            agent_uri: Some("easynet:///r/acme/device/01DEV".into()),
             is_self: false,
             paired: true,
             hub_endpoint: None,

@@ -116,7 +116,7 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
         None => None,
         Some("") => bail!(
             "--node was given but empty; omit the flag to dispatch locally, \
-             or pass a real `easynet:///r/<tenant>/agent/<node>` URI"
+             or pass a real `easynet:///r/<tenant>/device/<node>` URI"
         ),
         Some(node) => {
             #[cfg(feature = "axon-pb")]
@@ -198,11 +198,8 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string);
-            let value = invoke_local_ability_with_subject(
-                &invoke_args.ability,
-                arguments,
-                subject,
-            )?;
+            let value =
+                invoke_local_ability_with_subject(&invoke_args.ability, arguments, subject)?;
             (value, "local daemon".to_string())
         }
     };
@@ -260,7 +257,7 @@ mod tests {
     #[test]
     fn non_canonical_node_uri_returns_actionable_error() {
         // PR-N1 commit 8/N: `--node` now accepts the cross-hub URI
-        // shape `easynet:///r/<tenant>/agent/<node>`. A non-
+        // shape `easynet:///r/<tenant>/device/<node>`. A non-
         // canonical input (bare hostname, https URL, etc.) is
         // rejected with a typed error before any IPC, so a typo
         // never accidentally hits the wire.
