@@ -1082,6 +1082,7 @@ mod tests {
             deploy_signature: "sig".into(),
             hub_api_base: Some("https://api.example.com".into()),
             username: None,
+            hub_pubkey_b64: None,
         }
     }
 

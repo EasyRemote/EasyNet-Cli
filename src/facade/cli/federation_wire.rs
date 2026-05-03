@@ -377,18 +377,21 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
     // 401s with "caller URI ... is not in the realm trust anchor"
     // and the device pins as REMOVED forever.
     //
-    // The hub pubkey: backend's `LoadOrInitHubIdentity(realm)`
-    // mints a fresh random seed at its first boot and stores it
-    // in `~/.easynet-hub/<realm>/identity.json`. We read that file
-    // to get the actual pubkey backend signs with — falling back
-    // to `None` (skip the hub entry) when backend hasn't started
-    // yet. In production: backend boots first, then the operator
-    // joins; the file exists. In a fresh test rig where join runs
-    // before backend ever booted, we skip the hub entry and emit
-    // an INFO log; the operator just re-runs `easynet device join`
-    // (or restarts the daemon) after backend's first boot.
+    // The hub pubkey: cross-machine cold-start (hub in US, CLI in
+    // SG) cannot read `~/.easynet-hub/<realm>/identity.json` because
+    // the file lives on the hub host. The cold-start fix surfaces
+    // the pubkey in `PairingPreflightResp.hub_public_key_b64` so
+    // the device receives it during `validate_pairing_token` and
+    // stashes it on `Credentials.hub_pubkey_b64`. Prefer that when
+    // present; fall back to the on-disk file lookup for single-host
+    // dev rigs where the device + hub share `$HOME`.
     let hub_uri = crate::uri::hub_uri(creds.tenant_id.trim());
-    let hub_pubkey_b64_opt = read_backend_hub_pubkey_b64(creds.tenant_id.trim());
+    let hub_pubkey_b64_opt: Option<String> = creds
+        .hub_pubkey_b64
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| read_backend_hub_pubkey_b64(creds.tenant_id.trim()));
 
     let after_device =
         match upsert_self_trusted_agent(&raw, &agent_uri, &public_key_b64, added_at_unix_ms) {
@@ -904,6 +907,7 @@ listen_tcp = "127.0.0.1:50443"
             deploy_signature: "sig".into(),
             hub_api_base: None,
             username: None,
+            hub_pubkey_b64: None,
         };
         auto_wire_federated_peer_from_credentials(&creds, None).expect("auto-wire");
 
@@ -938,6 +942,7 @@ listen_tcp = "127.0.0.1:50443"
             deploy_signature: "sig".into(),
             hub_api_base: None,
             username: None,
+            hub_pubkey_b64: None,
         };
         auto_wire_federated_peer_from_credentials(&creds, None).expect("empty tenant is no-op");
     }
@@ -1041,6 +1046,7 @@ added_at_unix_ms = 1
             deploy_signature: "sig".into(),
             hub_api_base: None,
             username: None,
+            hub_pubkey_b64: None,
         };
         auto_wire_self_realm_trust_from_credentials(&creds)
             .expect("empty node_id is a no-op (no panic, no write)");
@@ -1106,6 +1112,7 @@ added_at_unix_ms = 1
             deploy_signature: "sig".into(),
             hub_api_base: None,
             username: None,
+            hub_pubkey_b64: None,
         };
         auto_wire_self_realm_trust_from_credentials(&creds).expect("auto-wire ok");
 

@@ -48,6 +48,17 @@ struct PairingPreflight {
     #[serde(rename = "realm", alias = "tenant_id")]
     tenant_id: String,
     node_id: String,
+    /// Realm hub's Ed25519 pubkey (base64). The cold-start
+    /// cross-machine fix: backend surfaces this here so the
+    /// device can write the hub's `(uri, pubkey, role=hub)` row
+    /// into its local `realm-trust.toml` during join, without
+    /// needing on-host access to `~/.easynet-hub/<realm>/
+    /// identity.json`. Empty on pre-v4.1.4 hubs (legacy fallback
+    /// path reads the on-disk identity file when same-host).
+    #[serde(default)]
+    hub_public_key_b64: String,
+    #[serde(default)]
+    hub_agent_uri: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -470,6 +481,18 @@ fn validate_pairing_token(
             preflight.tenant_id
         );
     }
+    // Cross-machine cold-start fix: stash the hub pubkey from
+    // preflight onto the in-memory + on-disk credentials so that
+    // `auto_wire_self_realm_trust_from_credentials` (called by the
+    // join entry point right after this function returns) can
+    // populate the device's `realm-trust.toml` without needing
+    // on-host access to the hub's identity.json file. Empty when
+    // paired against a pre-v4.1.4 hub — the legacy file lookup
+    // path stays as the same-host fallback.
+    let mut creds = creds;
+    if !preflight.hub_public_key_b64.trim().is_empty() {
+        creds.hub_pubkey_b64 = Some(preflight.hub_public_key_b64.trim().to_string());
+    }
     Ok(creds)
 }
 
@@ -540,6 +563,7 @@ mod tests {
             deploy_signature: "sig".into(),
             hub_api_base: None,
             username: None,
+            hub_pubkey_b64: None,
         };
         let err = validate_pairing_response(creds).expect_err("missing node_id must fail");
         assert!(err.to_string().contains("missing node_id"));
@@ -572,6 +596,7 @@ mod tests {
             deploy_signature: "sig".into(),
             hub_api_base: None,
             username: None,
+            hub_pubkey_b64: None,
         };
         backfill_credentials_username_from_auth_session(&mut creds);
         assert_eq!(creds.username.as_deref(), Some("alice"));
@@ -608,6 +633,8 @@ mod tests {
         let preflight = PairingPreflight {
             tenant_id: "tenant-a".into(),
             node_id: "en-test-node".into(),
+            hub_public_key_b64: String::new(),
+            hub_agent_uri: String::new(),
         };
         let payload = build_validate_pairing_payload(&preflight).expect("build payload");
         assert_eq!(payload.node_id, "en-test-node");
@@ -634,6 +661,8 @@ mod tests {
         let preflight = PairingPreflight {
             tenant_id: "tenant-a".into(),
             node_id: "en-test-node".into(),
+            hub_public_key_b64: String::new(),
+            hub_agent_uri: String::new(),
         };
         let err = validate_pairing_token("token_1234", &base, &preflight)
             .expect_err("transport failure should error");

@@ -249,6 +249,7 @@ mod tests {
             deploy_signature: String::new(),
             hub_api_base: None,
             username: None,
+            hub_pubkey_b64: None,
         }
     }
 

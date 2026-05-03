@@ -389,6 +389,16 @@ pub struct Credentials {
     /// by the Phase 14 backend in validate-pairing responses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
+    /// Realm hub's Ed25519 pubkey (base64), captured during pairing
+    /// preflight. Cross-machine cold-start fix (hub in US, CLI in
+    /// SG): the device's `auto_wire_self_realm_trust` step needs
+    /// this to write the hub's `(uri, pubkey, role=hub)` row into
+    /// `realm-trust.toml` without needing on-host access to the
+    /// hub's `~/.easynet-hub/<realm>/identity.json`. Empty when
+    /// paired against a pre-v4.1.4 hub (legacy fallback path reads
+    /// identity.json directly when same-host).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hub_pubkey_b64: Option<String>,
 }
 
 impl Credentials {
@@ -633,6 +643,7 @@ mod tests {
             deploy_signature: String::new(),
             hub_api_base: Some("https://api.example.com/".into()),
             username: None,
+            hub_pubkey_b64: None,
         };
         assert_eq!(creds.api_base(), "https://api.example.com");
     }
@@ -751,6 +762,7 @@ mod tests {
             deploy_signature: String::new(),
             hub_api_base: None,
             username: None,
+            hub_pubkey_b64: None,
         };
         assert_eq!(creds.api_base(), "https://my-hub.example.org");
     }
