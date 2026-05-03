@@ -93,6 +93,19 @@ use crate::services::presence_registry::PresenceRegistry;
 use crate::services::realm_trust_anchor::{RealmTrustAnchor, DEFAULT_REALM_TRUST_PATH};
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
 
+/// Maximum decoded gRPC message size for InvocationServer/Client on
+/// both directions. tonic's default cap is 4 MiB which aborted
+/// `<self>.session` the moment any frame envelope grew past it (real
+/// trigger: file-transfer uploads ≥ 1 MB whose accumulated down
+/// frames cross 4 MiB). 1 GiB is generous enough that legitimate
+/// large abilities (file_transfer, screen.snapshot, mission output)
+/// fit, while still bounded so a malformed counterparty can't OOM
+/// the daemon. Exposed `pub` because the **client** side
+/// (`session_initiator`, `invoke_remote_initiator`) must apply the
+/// same cap as the server side; without that the asymmetry triggers
+/// `OutOfRange: decoded message length too large` mid-stream.
+pub const MAX_INVOCATION_GRPC_MESSAGE_BYTES: usize = 1 << 30;
+
 /// Bring the RFC-003 transport plane online as a sidecar to the
 /// existing easynet-daemon process.
 ///
@@ -137,6 +150,8 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     let trust_anchor_cell = SharedTrustAnchor::new(Arc::new(trust_anchor));
     let presence = Arc::new(PresenceRegistry::new());
     let pending = Arc::new(PendingDispatchMap::new());
+    let pending_stream =
+        Arc::new(crate::services::pending_dispatch::PendingStreamDispatchMap::new());
 
     // Demo-only presence seed (cfg-gated). Production binaries
     // built without `--features demo-fixture` cannot honour the
@@ -145,6 +160,65 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     // the symbol simply isn't there. Demo / e2e scripts pass
     // `cargo build --features demo-fixture` to opt in.
     maybe_seed_demo_presence(&presence);
+
+    // Device-mode self-presence seed.
+    //
+    // In device-mode the daemon's local PresenceRegistry is used by
+    // backend's `federation.resolve` (over the daemon UDS) to answer
+    // "which devices in this realm are online?". The hub-side
+    // presence registry holds the canonical answer, but in
+    // host-mode dev rigs (backend → device daemon UDS, no separate
+    // hub-mode daemon process) the backend never reaches the hub's
+    // presence — it queries this daemon's local one instead.
+    // Pre-this-fix: device daemon's local presence was empty because
+    // <self>.session is an OUTBOUND dial (the daemon dials the hub),
+    // not an inbound register, so nothing populated the local table.
+    // backend's `federation.resolve` then returned no agents; every
+    // device showed REMOVED in /api/v1/devices despite the bidi
+    // being healthy.
+    //
+    // Seed the local presence with the daemon's own URI on boot so
+    // the local resolve answers "yes I'm here" when the operator's
+    // backend asks. The dispatch sender pushes into a drain task
+    // (kept alive as long as the daemon process), so try_send never
+    // observes Closed/Full and the entry stays in the registry.
+    // For actual ability invokes targeting this URI, the
+    // `daemon_invocation_service` <self>.invoke_remote handler
+    // already short-circuits self-targeted invocations to the
+    // local AbilityDispatcher BEFORE try_send fires (see
+    // dispatch_self_targeted_forward_invoke in PR-1 commit 7/9).
+    //
+    // Hub / Both modes don't need this: their local presence is
+    // already populated by inbound device sessions, and the hub
+    // itself is the directory-of-record. Device-only.
+    if matches!(config.mode(), DaemonMode::Device) {
+        if let Some(uri) = daemon_uri.as_ref() {
+            let (noop_tx, mut noop_rx) = tokio::sync::mpsc::channel(
+                crate::services::presence_registry::DISPATCH_CHANNEL_CAPACITY,
+            );
+            // Drain task: holds the receiver alive for the lifetime
+            // of the daemon process. Without this, the receiver
+            // gets dropped when the seeding scope ends and the
+            // sender's first try_send observes Closed → presence
+            // entry deleted → the very state we're trying to fix.
+            tokio::spawn(async move {
+                while let Some(_frame) = noop_rx.recv().await {
+                    // Drop on the floor. The self-targeted
+                    // dispatcher path runs inline through
+                    // local_dispatcher; only out-of-path frames
+                    // (defensive) land here.
+                }
+            });
+            let prior = presence.insert(uri.clone(), noop_tx);
+            if prior.is_none() {
+                eprintln!(
+                    "[axon-serve] device-mode self-presence seeded for `{uri}` \
+                     (drain task holds receiver; \
+                      self-targeted invokes route through local AbilityDispatcher)"
+                );
+            }
+        }
+    }
 
     // Federated_peers cell first so we can hand it to BOTH the
     // DaemonInvocationService (for cross-hub `forward_invoke`
@@ -216,6 +290,7 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     );
     let mut service = DaemonInvocationService::new(Arc::clone(&presence), admission)
         .with_pending(Arc::clone(&pending))
+        .with_pending_stream(Arc::clone(&pending_stream))
         .with_session_realm(config.realm().to_string())
         .with_register_pubkey(
             config.realm().to_string(),
@@ -232,6 +307,12 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
         // 7/9 hole at line 27/32/42/455/497 of
         // `daemon_invocation_service.rs`.
         .with_local_dispatcher(Arc::clone(&dispatcher));
+
+    if let Ok(seed) = crate::services::axon_serve::daemon_invocation_service::read_hub_identity_seed(
+        config.realm(),
+    ) {
+        service = service.with_hub_signing_seed(seed);
+    }
 
     // PR-N1 commit 6/N (boot wiring) + commit 9/N (SIGHUP-aware
     // trust anchor) + commit 10/N (SHIGHUP-aware federated_peers)
@@ -310,10 +391,13 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
         // envelope's caller. Falls back to a generic CLI-style
         // URI when the daemon has no credentials yet (test /
         // smoke builds) so the peer's strict-admission still
-        // sees a non-empty caller field.
+        // sees a non-empty caller field. The fallback uses the
+        // v4.1.5 device shape (`r/cli/device/local`) — the
+        // legacy `r/cli/agent/local` shape would fail the
+        // strict parser (§A.URA-3: agent tail needs a dot).
         let supervisor_caller_uri = daemon_uri
             .clone()
-            .unwrap_or_else(|| "easynet:///r/cli/agent/local".to_string());
+            .unwrap_or_else(|| "easynet:///r/cli/device/local".to_string());
         spawn_federated_directory_streaming_supervisor(
             client,
             federated_peers_cell.clone(),
@@ -376,7 +460,7 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
         } else {
             eprintln!(
                 "[axon-serve] device-mode daemon missing either hub_endpoint or \
-                 credentials.json agent_uri; outbound `<self>.session` not started"
+                 credentials.json device identity; outbound `<self>.session` not started"
             );
         }
     }
@@ -400,6 +484,16 @@ fn spawn_session_supervisor(
         crate::services::axon_serve::session_escalation::SharedSessionOutbox,
     )>,
 ) {
+    // Snapshot the dispatcher's local-ability registry once, before
+    // wrapping it into a `LocalAbilityDispatcher`. The session
+    // supervisor's `federation.advertise_abilities` prelude consumes
+    // this list to populate the hub's `AbilityCatalogStore` so the
+    // backend's `/api/v1/abilities` page surfaces the device's
+    // registered abilities under its URI. Snapshot at boot is fine
+    // — `LocalAbilityRegistry` is constructed once per daemon
+    // process (build_registry_with_services) and never mutated
+    // post-boot.
+    let ability_catalog = dispatcher.local_registry().list_abilities();
     let signing_state = if identity.signing_seed.is_some() {
         "signed frame0"
     } else {
@@ -453,6 +547,7 @@ fn spawn_session_supervisor(
         hub_ca_pem_path,
         dispatcher,
         outbox,
+        ability_catalog,
         cancel_rx,
     ));
 }
@@ -522,7 +617,11 @@ fn spawn_uds_listener(
             .http2_keepalive_interval(Some(Duration::from_secs(5)))
             .http2_keepalive_timeout(Some(Duration::from_secs(10)))
             .tcp_keepalive(Some(Duration::from_secs(15)))
-            .add_service(InvocationServer::new(service))
+            .add_service(
+                InvocationServer::new(service)
+                    .max_decoding_message_size(MAX_INVOCATION_GRPC_MESSAGE_BYTES)
+                    .max_encoding_message_size(MAX_INVOCATION_GRPC_MESSAGE_BYTES),
+            )
             .serve_with_incoming(incoming)
             .await;
         if let Err(err) = result {
@@ -604,7 +703,11 @@ fn spawn_tcp_tls_listener(
 
     tokio::spawn(async move {
         let result = builder
-            .add_service(InvocationServer::new(service))
+            .add_service(
+                InvocationServer::new(service)
+                    .max_decoding_message_size(MAX_INVOCATION_GRPC_MESSAGE_BYTES)
+                    .max_encoding_message_size(MAX_INVOCATION_GRPC_MESSAGE_BYTES),
+            )
             .serve(listen_tcp)
             .await;
         if let Err(err) = result {
@@ -626,6 +729,8 @@ struct StoredDeviceIdentity {
     #[serde(default)]
     agent_uri: Option<String>,
     #[serde(default)]
+    realm: Option<String>,
+    #[serde(default)]
     tenant_id: Option<String>,
     #[serde(default)]
     node_id: Option<String>,
@@ -638,44 +743,68 @@ struct StoredDeviceIdentity {
 /// - legacy sparse fixtures that only carry `agent_uri` still load
 ///   and boot; they simply omit the signing seed and therefore keep
 ///   the old unsigned frame-0 behaviour
-/// - modern credentials with `(tenant_id, node_id)` derive the same
-///   deterministic Ed25519 seed the SDK uses for
+/// - modern credentials with `(realm|tenant_id, node_id)` always
+///   derive the canonical v4.1.4 device URI from those fields,
+///   even when an old `agent_uri` is still persisted alongside
+///   them. This keeps daemon session registration aligned with
+///   CLI-side `forward_invoke` targets during the URI migration.
+/// - once we have the canonical `(realm, node_id)` pair, derive the
+///   same deterministic Ed25519 seed the SDK uses for
 ///   `easynet:prv:reg:agent.<node>`
 fn load_daemon_identity() -> Option<DaemonIdentity> {
     let path = expand_home("~/.easynet/credentials.json");
     let raw = std::fs::read_to_string(&path).ok()?;
     let stored: StoredDeviceIdentity = serde_json::from_str(&raw).ok()?;
+    daemon_identity_from_stored(&stored)
+}
 
-    let caller_uri = stored
-        .agent_uri
+fn daemon_identity_from_stored(stored: &StoredDeviceIdentity) -> Option<DaemonIdentity> {
+    let caller_uri = canonical_caller_uri_from_stored_identity(stored)?;
+
+    let realm = stored
+        .realm
         .as_deref()
         .map(str::trim)
-        .filter(|uri| !uri.is_empty())
+        .filter(|realm| !realm.is_empty())
         .map(str::to_string)
         .or_else(|| {
-            let tenant_id = stored.tenant_id.as_deref()?.trim();
-            let node_id = stored.node_id.as_deref()?.trim();
-            if tenant_id.is_empty() || node_id.is_empty() {
-                return None;
-            }
-            Some(format!("easynet:///r/{tenant_id}/agent/{node_id}"))
-        })?;
-
-    let tenant_id = stored
-        .tenant_id
-        .clone()
-        .or_else(|| tenant_id_from_agent_uri(&caller_uri));
+            stored
+                .tenant_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|tenant| !tenant.is_empty())
+                .map(str::to_string)
+        })
+        .or_else(|| realm_from_agent_uri(&caller_uri));
     let node_id = stored
         .node_id
-        .clone()
-        .or_else(|| node_id_from_agent_uri(&caller_uri));
+        .as_deref()
+        .map(str::trim)
+        .filter(|node| !node.is_empty())
+        .map(str::to_string)
+        .or_else(|| device_id_from_caller_uri(&caller_uri));
 
-    let signing_seed = match (tenant_id.as_deref(), node_id.as_deref()) {
-        (Some(tenant), Some(node)) if !tenant.trim().is_empty() && !node.trim().is_empty() => {
-            let subject_id = format!("easynet:prv:reg:agent.{node}");
-            Some(derive_subject_keypair(tenant.trim(), &subject_id).0)
+    // Phase 3D: prefer the keyring vault's seed when the operator
+    // has opted in via EASYNET_KEYRING_PASSPHRASE. The vault's
+    // primary_self for this device is `caller_uri`; the role
+    // overlay also matches HubURI(realm) on the same host, so
+    // backend (Go side, Phase 3D's Go reader) and daemon (Rust
+    // side here) end up signing with the **same** Ed25519 seed.
+    //
+    // Misses (env unset, vault file missing, this URI not in
+    // vault) silently fall through to the v4.1.4 deterministic
+    // derive — operators who have not yet rolled their daemons
+    // onto the keyring stay unaffected.
+    let signing_seed = if let Some(seed) = try_load_daemon_seed_from_keyring(&caller_uri) {
+        Some(seed)
+    } else {
+        match (realm.as_deref(), node_id.as_deref()) {
+            (Some(realm), Some(node_id)) => {
+                let subject_id = format!("easynet:prv:reg:agent.{node_id}");
+                Some(derive_subject_keypair(realm, &subject_id).0)
+            }
+            _ => None,
         }
-        _ => None,
     };
 
     Some(DaemonIdentity {
@@ -684,55 +813,148 @@ fn load_daemon_identity() -> Option<DaemonIdentity> {
     })
 }
 
-fn tenant_id_from_agent_uri(uri: &str) -> Option<String> {
-    let rest = uri.strip_prefix("easynet:///r/")?;
-    let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
-    let segments: Vec<&str> = path
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect();
-    if segments.is_empty() {
+fn try_load_daemon_seed_from_keyring(self_uri: &str) -> Option<[u8; 32]> {
+    use crate::services::keyring::{MasterKeySource, Vault, VaultError};
+
+    if std::env::var("EASYNET_KEYRING_PASSPHRASE")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .is_none()
+    {
         return None;
     }
-    if segments.len() >= 3 && segments[1] == "agent" {
-        return Some(segments[0].to_string());
+    let path = if let Ok(p) = std::env::var("EASYNET_KEYRING_VAULT_PATH") {
+        std::path::PathBuf::from(p)
+    } else {
+        expand_home(&format!(
+            "~/{}",
+            crate::services::keyring::DEFAULT_VAULT_REL
+        ))
+    };
+    if !path.exists() {
+        return None;
     }
-    if let Some(query_tenant) = query
-        .split('&')
-        .find_map(|pair| pair.strip_prefix("tenant_id=").map(str::to_string))
-    {
-        if !query_tenant.trim().is_empty() {
-            return Some(query_tenant);
+    let source = match MasterKeySource::from_env() {
+        Ok(s) => s,
+        Err(err) => {
+            eprintln!("[axon-serve] keyring: master key source: {err}");
+            return None;
+        }
+    };
+    let vault = match Vault::open(&path, &source) {
+        Ok(v) => v,
+        Err(VaultError::NotFound(_)) => return None,
+        Err(err) => {
+            eprintln!("[axon-serve] keyring: open failed: {err}");
+            return None;
+        }
+    };
+    match vault.export_seed(self_uri) {
+        Ok(seed) => {
+            eprintln!("[axon-serve] keyring: daemon seed for {self_uri} resolved from vault");
+            Some(seed)
+        }
+        Err(VaultError::NotFound(_)) => None,
+        Err(err) => {
+            eprintln!("[axon-serve] keyring: export_seed({self_uri}): {err}");
+            None
         }
     }
-    Some(segments[0].to_string())
 }
 
-fn node_id_from_agent_uri(uri: &str) -> Option<String> {
-    let rest = uri.strip_prefix("easynet:///r/")?;
-    let path = rest.split('?').next().unwrap_or(rest);
-    let segments: Vec<&str> = path
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect();
-    if segments.len() >= 3 && segments[1] == "agent" {
-        return Some(segments[2].to_string());
+fn canonical_caller_uri_from_stored_identity(stored: &StoredDeviceIdentity) -> Option<String> {
+    let realm = stored
+        .realm
+        .as_deref()
+        .map(str::trim)
+        .filter(|realm| !realm.is_empty())
+        .or_else(|| {
+            stored
+                .tenant_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|tenant| !tenant.is_empty())
+        });
+    let node_id = stored
+        .node_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|node| !node.is_empty());
+
+    if let (Some(realm), Some(node_id)) = (realm, node_id) {
+        return Some(crate::uri::device_uri(realm, node_id));
     }
-    if segments.len() >= 3 && segments[1] == "reg" {
-        return segments[2].strip_prefix("agent.").map(str::to_string);
-    }
-    None
+
+    stored
+        .agent_uri
+        .as_deref()
+        .map(str::trim)
+        .filter(|uri| !uri.is_empty())
+        .map(str::to_string)
 }
 
-/// Resolve the realm-trust file path from the env override or fall
-/// back to `/etc/easynet/realm-trust.toml`. The override is the one
-/// seam the PR-7 commit 7/N e2e test uses to redirect the daemon's
-/// trust write to a tempdir; production callers leave it unset.
+// URI v4.1.4: strict parsing via crate::uri::parse_ura, replacing
+// the v1-era wide is_role_segment / hand-rolled segment walks. The
+// daemon's stored caller URI in v4.1.4 is always
+// `easynet:///r/<realm>/device/<device-uuid>` (device-mode CLI's
+// self-identity URA), so we only need to match that one shape.
+//
+// Legacy `easynet:///r/<realm>/reg/agent.<id>?tenant_id=<t>` shapes
+// (URI v1 fallback) and `agent/<id>` shapes (URI v2 transitional)
+// are rejected — pre-v4.1.4 credential files cannot bootstrap
+// signing seeds; users must `easynet device join` again to mint a
+// v4.1.4 credential. Returning `None` triggers the parent code's
+// "skip signing seed" branch (CLI starts unsigned, harmless in dev).
+
+fn realm_from_agent_uri(uri: &str) -> Option<String> {
+    let parsed = crate::uri::parse_ura(uri).ok()?;
+    if parsed.realm.is_empty() {
+        None
+    } else {
+        Some(parsed.realm)
+    }
+}
+
+fn device_id_from_caller_uri(uri: &str) -> Option<String> {
+    let parsed = crate::uri::parse_ura(uri).ok()?;
+    // Only Device-kind URIs carry a device_id field; other kinds
+    // leave it empty. Empty == not a device URA.
+    if parsed.device_id.is_empty() {
+        None
+    } else {
+        Some(parsed.device_id)
+    }
+}
+
+/// Resolve the realm-trust file path. Resolution order:
+///
+/// 1. `EASYNET_REALM_TRUST_PATH` env override (PR-7 commit 7/N
+///    test-redirect seam, also used by docker-e2e fixtures).
+/// 2. `/etc/easynet/realm-trust.toml` — production / packaged
+///    deploys where the file is admin-owned. When this file
+///    exists AND is non-empty we always prefer it.
+/// 3. `$HOME/.easynet/realm-trust.toml` — fallback for host-mode
+///    dev / unprivileged installs. `easynet device join` writes
+///    the device + local-hub trust entries here at pairing time
+///    (see `auto_wire_self_realm_trust_from_credentials`); the
+///    daemon picks them up here without needing `sudo` to write
+///    `/etc/easynet/`.
+///
+/// The home-mode fallback closes the operator-visible "I joined,
+/// the daemon's trust file is empty, admission rejects everything"
+/// failure mode that single-user host-mode installs hit when
+/// neither root nor an env override is in play.
 fn trust_anchor_path_from_env_or_default() -> PathBuf {
     if let Some(override_path) = std::env::var_os("EASYNET_REALM_TRUST_PATH") {
         return expand_home(override_path.to_string_lossy().as_ref());
     }
-    expand_home(DEFAULT_REALM_TRUST_PATH)
+    let etc = expand_home(DEFAULT_REALM_TRUST_PATH);
+    if let Ok(meta) = std::fs::metadata(&etc) {
+        if meta.is_file() && meta.len() > 0 {
+            return etc;
+        }
+    }
+    expand_home("~/.easynet/realm-trust.toml")
 }
 
 fn load_trust_anchor_from(path: &Path) -> RealmTrustAnchor {
@@ -1099,6 +1321,137 @@ mod tests {
     fn expand_home_passthrough_for_absolute_path() {
         let expanded = expand_home("/etc/easynet/realm-trust.toml");
         assert_eq!(expanded, PathBuf::from("/etc/easynet/realm-trust.toml"));
+    }
+
+    #[test]
+    fn canonical_caller_uri_prefers_realm_and_node_over_legacy_agent_uri() {
+        let stored = StoredDeviceIdentity {
+            agent_uri: Some("easynet:///r/legacy/agent/old-node".to_string()),
+            realm: Some("realm-a".to_string()),
+            tenant_id: Some("legacy".to_string()),
+            node_id: Some("device-123".to_string()),
+        };
+        assert_eq!(
+            canonical_caller_uri_from_stored_identity(&stored).as_deref(),
+            Some("easynet:///r/realm-a/device/device-123"),
+        );
+    }
+
+    #[test]
+    fn daemon_identity_from_stored_accepts_realm_only_credentials() {
+        let stored = StoredDeviceIdentity {
+            agent_uri: None,
+            realm: Some("realm-a".to_string()),
+            tenant_id: None,
+            node_id: Some("device-123".to_string()),
+        };
+        let identity = daemon_identity_from_stored(&stored).expect("identity");
+        assert_eq!(
+            identity.caller_uri,
+            "easynet:///r/realm-a/device/device-123"
+        );
+        assert!(
+            identity.signing_seed.is_some(),
+            "realm+node credentials must derive a signing seed"
+        );
+    }
+
+    #[test]
+    fn daemon_identity_from_stored_falls_back_to_agent_uri_when_fields_missing() {
+        let stored = StoredDeviceIdentity {
+            agent_uri: Some("easynet:///r/realm-a/agent/legacy-node".to_string()),
+            realm: None,
+            tenant_id: None,
+            node_id: None,
+        };
+        let identity = daemon_identity_from_stored(&stored).expect("identity");
+        assert_eq!(
+            identity.caller_uri,
+            "easynet:///r/realm-a/agent/legacy-node"
+        );
+        assert!(
+            identity.signing_seed.is_none(),
+            "legacy agent-only credentials stay unsigned until re-pair"
+        );
+    }
+
+    #[test]
+    fn daemon_identity_prefers_keyring_seed_over_deterministic_derive() {
+        use crate::services::keyring::{MasterKeySource, Vault};
+        use ed25519_dalek::SigningKey;
+        use std::sync::Mutex;
+        // Serialise against other env-mutating tests in this file
+        // (HOME, EASYNET_KEYRING_*). They all set_var at top of body
+        // without a guard; this guard ensures no two of them race.
+        static ENV_GUARD: Mutex<()> = Mutex::new(());
+        let _guard = ENV_GUARD.lock().unwrap();
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vault_path = temp.path().join("keyring.enc");
+        let pass = "phase3d-daemon-boot-test";
+
+        // Seed 0xAA repeated 32 times — distinguishable from
+        // anything `derive_subject_keypair` would produce, so we
+        // can pin the test on "this seed came from the vault".
+        let seed = [0xAAu8; 32];
+
+        let primary = "easynet:///r/host-test/device/dev-uuid";
+        let hub_overlay = "easynet:///r/host-test/hub";
+
+        let source = MasterKeySource::Explicit(pass.to_string());
+        let mut vault = Vault::init(&vault_path, &source).expect("init vault");
+        vault
+            .put(primary, vec![hub_overlay.to_string()], hex::encode(seed))
+            .expect("put");
+        vault.seal().expect("seal");
+
+        std::env::set_var("EASYNET_KEYRING_PASSPHRASE", pass);
+        std::env::set_var("EASYNET_KEYRING_VAULT_PATH", &vault_path);
+
+        let stored = StoredDeviceIdentity {
+            agent_uri: None,
+            realm: Some("host-test".to_string()),
+            tenant_id: None,
+            node_id: Some("dev-uuid".to_string()),
+        };
+        let identity = daemon_identity_from_stored(&stored).expect("identity");
+
+        std::env::remove_var("EASYNET_KEYRING_PASSPHRASE");
+        std::env::remove_var("EASYNET_KEYRING_VAULT_PATH");
+
+        assert_eq!(identity.caller_uri, primary);
+        let got = identity.signing_seed.expect("seed");
+        assert_eq!(
+            got, seed,
+            "daemon must use the vault's seed, not the deterministic derive"
+        );
+
+        // Sanity: the resulting keypair is the SAME one as what the
+        // backend (Phase 3D Go reader) will pull from this vault
+        // for the hub overlay — that's the load-bearing v4.1.5
+        // host-mode invariant.
+        let _signer = SigningKey::from_bytes(&got);
+    }
+
+    #[test]
+    fn daemon_identity_falls_back_when_keyring_env_unset() {
+        use std::sync::Mutex;
+        static ENV_GUARD: Mutex<()> = Mutex::new(());
+        let _guard = ENV_GUARD.lock().unwrap();
+        std::env::remove_var("EASYNET_KEYRING_PASSPHRASE");
+        std::env::remove_var("EASYNET_KEYRING_VAULT_PATH");
+
+        let stored = StoredDeviceIdentity {
+            agent_uri: None,
+            realm: Some("realm-no-vault".to_string()),
+            tenant_id: None,
+            node_id: Some("dev-uuid".to_string()),
+        };
+        let identity = daemon_identity_from_stored(&stored).expect("identity");
+        assert!(
+            identity.signing_seed.is_some(),
+            "deterministic derive must still work when the keyring is not opted into"
+        );
     }
 
     #[tokio::test]

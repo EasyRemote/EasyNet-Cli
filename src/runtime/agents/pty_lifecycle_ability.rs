@@ -109,16 +109,23 @@ pub fn register(
     pty: Arc<PtyService>,
     io: Option<crate::runtime::agents::pty_io_ability::PtyIoService>,
 ) {
+    // Two name families register the same handler — see
+    // `pty_io_ability::register` for the rationale (host-mode
+    // backend's PTYDriver dispatches under the axon-runtime
+    // `fleet.session_*` prefix; CLI subcommands and stdio MCP
+    // use the canonical `fleet.pty_session_*` names).
+    use crate::runtime::ability_dispatch::LocalRpcHandler;
     let svc_for_create = Arc::clone(&pty);
-    reg.register_rpc(
-        ABILITY_PTY_SESSION_CREATE,
-        Arc::new(move |args: Value| create_handler(&svc_for_create, args)),
-    );
+    let create_h: LocalRpcHandler =
+        Arc::new(move |args: Value| create_handler(&svc_for_create, args));
+    reg.register_rpc(ABILITY_PTY_SESSION_CREATE, Arc::clone(&create_h));
+    reg.register_rpc("fleet.session_create", create_h);
+
     let pty_for_close = pty;
-    reg.register_rpc(
-        ABILITY_PTY_SESSION_CLOSE,
-        Arc::new(move |args: Value| close_handler(&pty_for_close, io.as_ref(), args)),
-    );
+    let close_h: LocalRpcHandler =
+        Arc::new(move |args: Value| close_handler(&pty_for_close, io.as_ref(), args));
+    reg.register_rpc(ABILITY_PTY_SESSION_CLOSE, Arc::clone(&close_h));
+    reg.register_rpc("fleet.session_close", close_h);
 }
 
 /// `fleet.pty_session_create` handler.

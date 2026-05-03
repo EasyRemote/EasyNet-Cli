@@ -46,6 +46,7 @@ pub const ABILITY_LEAVE_CALL: &str = "voice.leave_call";
 pub const ABILITY_END_CALL: &str = "voice.end_call";
 pub const ABILITY_WATCH_CALL: &str = "voice.watch_call";
 pub const ABILITY_REPORT_METRICS: &str = "voice.report_metrics";
+pub const ABILITY_LIST_CALLS: &str = "voice.list_calls";
 
 #[derive(Debug, Clone)]
 struct CallState {
@@ -101,6 +102,10 @@ pub fn register(reg: &mut LocalAbilityRegistry) {
         ABILITY_REPORT_METRICS,
         Arc::new(|args| report_metrics_handler(args)),
     );
+    reg.register_rpc(
+        ABILITY_LIST_CALLS,
+        Arc::new(|args| list_calls_handler(args)),
+    );
 }
 
 // ── Handlers ─────────────────────────────────────────────────────
@@ -118,9 +123,28 @@ fn create_call_handler(args: Value) -> anyhow::Result<Value> {
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| format!("call-{:x}", now_ms()));
+    let creator_participant_id = args
+        .get("participant_id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     let mut s = store().lock().unwrap();
     if s.contains_key(&call_id) {
         anyhow::bail!("voice.create_call: call_id {call_id:?} already exists");
+    }
+    let mut participants = HashMap::new();
+    if let Some(participant_id) = creator_participant_id.clone() {
+        participants.insert(
+            participant_id.clone(),
+            ParticipantState {
+                participant_id,
+                sdp_offer: None,
+                ice_candidates: Vec::new(),
+                last_metrics: None,
+                joined_at_ms: now_ms(),
+                left_at_ms: None,
+            },
+        );
     }
     let state = CallState {
         call_id: call_id.clone(),
@@ -128,10 +152,14 @@ fn create_call_handler(args: Value) -> anyhow::Result<Value> {
         created_at_ms: now_ms(),
         ended_at_ms: None,
         end_reason: None,
-        participants: HashMap::new(),
+        participants,
         events: Vec::new(),
     };
     s.insert(call_id.clone(), state);
+    eprintln!(
+        "[voice.call] create call_id={} creator_participant_id={:?}",
+        call_id, creator_participant_id
+    );
     Ok(json!({
         "call_id": call_id,
         "state": "ringing",
@@ -162,7 +190,6 @@ fn join_call_handler(args: Value) -> anyhow::Result<Value> {
     if call.state == "ended" {
         anyhow::bail!("voice.join_call: call {call_id:?} has already ended");
     }
-    let was_empty = call.participants.is_empty();
     call.participants.insert(
         participant_id.clone(),
         ParticipantState {
@@ -174,8 +201,9 @@ fn join_call_handler(args: Value) -> anyhow::Result<Value> {
             left_at_ms: None,
         },
     );
-    // First participant transitions the call to active.
-    if was_empty {
+    // A call becomes active once at least two participants are present:
+    // the creator/caller plus the first remote joiner.
+    if call.participants.len() >= 2 {
         call.state = "active";
     }
     call.events.push(json!({
@@ -183,6 +211,13 @@ fn join_call_handler(args: Value) -> anyhow::Result<Value> {
         "participant_id": participant_id,
         "at_ms": now_ms(),
     }));
+    eprintln!(
+        "[voice.call] join call_id={} participant_id={} participant_count={} state={}",
+        call_id,
+        participant_id,
+        call.participants.len(),
+        call.state
+    );
     Ok(json!({
         "call_id": call_id,
         "participant_id": participant_id,
@@ -281,6 +316,17 @@ fn report_metrics_handler(args: Value) -> anyhow::Result<Value> {
         "at_ms": now_ms(),
     }));
     Ok(json!({"call_id": call_id, "participant_id": participant_id, "ack": true}))
+}
+
+fn list_calls_handler(_args: Value) -> anyhow::Result<Value> {
+    let s = store().lock().unwrap();
+    let mut items: Vec<_> = s.values().map(serialize_call).collect();
+    items.sort_by(|a, b| {
+        let lhs = a.get("call_id").and_then(Value::as_str).unwrap_or("");
+        let rhs = b.get("call_id").and_then(Value::as_str).unwrap_or("");
+        lhs.cmp(rhs)
+    });
+    Ok(json!({ "items": items }))
 }
 
 fn serialize_call(call: &CallState) -> Value {
@@ -424,6 +470,18 @@ pub fn report_metrics_input_schema() -> Value {
     })
 }
 
+pub fn list_calls_description() -> &'static str {
+    "List the call signaling sessions currently known to this daemon. \
+     Returns each call's state plus the current participant snapshot."
+}
+
+pub fn list_calls_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,13 +495,17 @@ mod tests {
         // Full happy path — covers every handler in one test so a
         // regression in any handler trips this.
         let cid = fresh_call_id("rt");
-        let _ = create_call_handler(json!({"call_id": cid})).expect("create");
+        let _ = create_call_handler(json!({
+            "call_id": cid,
+            "participant_id": "alice",
+        }))
+        .expect("create");
         let s1 = show_call_handler(json!({"call_id": cid})).unwrap();
         assert_eq!(s1.get("state").and_then(Value::as_str), Some("ringing"));
 
         join_call_handler(json!({
             "call_id": cid,
-            "participant_id": "alice",
+            "participant_id": "bob",
             "sdp_offer": "v=0",
         }))
         .expect("join");
@@ -452,7 +514,7 @@ mod tests {
 
         report_metrics_handler(json!({
             "call_id": cid,
-            "participant_id": "alice",
+            "participant_id": "bob",
             "metrics": { "rtt_ms": 42 },
         }))
         .expect("metrics");
@@ -504,5 +566,21 @@ mod tests {
         let resp = create_call_handler(json!({})).unwrap();
         let cid = resp.get("call_id").and_then(Value::as_str).unwrap();
         assert!(cid.starts_with("call-"));
+    }
+
+    #[test]
+    fn list_calls_returns_created_call() {
+        let cid = fresh_call_id("list");
+        create_call_handler(json!({"call_id": cid})).unwrap();
+        let listed = list_calls_handler(json!({})).unwrap();
+        assert!(
+            listed
+                .get("items")
+                .and_then(Value::as_array)
+                .is_some_and(|items| items
+                    .iter()
+                    .any(|item| item.get("call_id") == Some(&json!(cid)))),
+            "list_calls must surface the created call: {listed}"
+        );
     }
 }

@@ -191,6 +191,8 @@ pub struct ResolveFilter {
 pub struct ResolvedAgent {
     pub uri: String,
     pub status: String,
+    #[serde(default)]
+    pub host_node_id: Option<String>,
     /// Per-ability descriptors as advertised through
     /// `federation.advertise_abilities`. Empty when the resolve
     /// call did not pass `include_abilities = true`. Each entry
@@ -359,8 +361,8 @@ mod tests {
     fn resolved_agents_list_parses_status_strings() {
         let body = json!({
             "agents": [
-                {"uri": "easynet:///r/acme/agent/01HUB", "status": "active"},
-                {"uri": "easynet:///r/acme/agent/01OLD", "status": "revoked"}
+                {"uri": "easynet:///r/acme/hub", "status": "active"},
+                {"uri": "easynet:///r/acme/device/4065c47a-ec6f-4330-87a5-0d69787709b8", "status": "revoked"}
             ]
         });
         let parsed: ResolveReceipt = parse_receipt_value(&body).unwrap();

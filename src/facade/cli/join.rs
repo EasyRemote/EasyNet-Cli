@@ -36,6 +36,16 @@ use crate::support::{output, sysinfo};
 
 #[derive(Debug, Deserialize)]
 struct PairingPreflight {
+    // URA v4.1.4 backend renamed the wire field `tenant_id` → `realm`
+    // (PairingPreflightResp in backend/internal/types/types.go:314).
+    // We deserialize from `realm`, fall back to the legacy
+    // `tenant_id` for compat with pre-v4.1.4 hubs, and expose the
+    // value through the existing `tenant_id` accessor so the rest
+    // of join.rs (assertions, validate-pairing payload) keeps the
+    // same shape — the v1 alias is the carrier on disk in
+    // `credentials.json::tenant_id` until that schema is also
+    // promoted (RFC follow-up).
+    #[serde(rename = "realm", alias = "tenant_id")]
     tenant_id: String,
     node_id: String,
 }
@@ -107,8 +117,29 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
     let preflight = preflight_pairing_token(&token, &validate_base)?;
     output::info("Validating pairing token...");
     let mut creds = validate_pairing_token(&token, &validate_base, &preflight)?;
+    backfill_credentials_username_from_auth_session(&mut creds);
     creds.hub_api_base = hub_api_override;
     config::save_credentials(&creds)?;
+
+    // Ensure a minimal daemon-config.toml exists. Without it the
+    // daemon's axon_serve sidecar refuses to bind the gRPC UDS
+    // (no daemon-config = silent skip), so backend's
+    // `daemon_grpc.Client` never finds the socket and
+    // `axon: disconnected` pins forever — every `/api/v1/devices`
+    // call returns the device as REMOVED no matter how alive
+    // the device's `<self>.session` is on the hub.
+    //
+    // The minimal `device`-mode block is enough: realm + hub_endpoint
+    // both come from credentials.json; uds_path defaults under
+    // HOME via the daemon's own resolver. Idempotent — when a
+    // daemon-config.toml already exists (operator wrote one or a
+    // prior auto-wire ran) we leave it untouched.
+    if let Err(e) = ensure_minimal_daemon_config(&creds) {
+        output::warn(&format!(
+            "[easynet join] could not write default daemon-config.toml: {e}. \
+             Backend will report this device as REMOVED until you write one by hand."
+        ));
+    }
 
     // Best-effort: if this device is also running a hub-mode
     // daemon (i.e. `~/.easynet/daemon-config.toml` exists), seed
@@ -126,6 +157,21 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
         &creds,
         args.peer_hub.as_deref(),
     );
+
+    // URA v4.1.5 Phase 3C — push a fresh device keypair into the
+    // local easynet-keyring vault. The vault is the load-bearing
+    // signing surface for v4.1.5 production: backend (HubURI) and
+    // daemon (DeviceURI) on this host both sign through the same
+    // entry via role-overlay lookup. When the keyring daemon is
+    // offline we fall back to v4.1.4's deterministic
+    // derive_subject_keypair path (boot.rs:695) so the join
+    // itself never fails on keyring availability — the warning
+    // tells the operator the production posture has degraded.
+    if let Err(e) = put_device_keypair_to_keyring(&creds) {
+        output::warn(&format!(
+            "[easynet join] keyring daemon offline ({e}); falling back to deterministic key derivation. Start `easynet-keyring` for production-grade secret isolation."
+        ));
+    }
 
     // LB-52 Gap 3 — mirror the device's own `(uri, pubkey,
     // role=Device)` self-entry into the local realm-trust.toml so
@@ -147,6 +193,102 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
     eprintln!();
     output::info("Run `easynet connect` to start the device agent.");
     Ok(())
+}
+
+/// Push a fresh device keypair into the keyring under the
+/// canonical self URI + hub-role overlay. Phase 3C bridge: when
+/// the keyring is reachable, this is the production secret
+/// Ensure `~/.easynet/daemon-config.toml` exists with at least the
+/// minimal `[daemon]` block so the daemon's axon_serve sidecar
+/// binds the gRPC UDS at boot. Without this file the sidecar
+/// silently skips ("no transport-plane config; skipping gRPC
+/// listener"), backend's daemon_grpc client never finds
+/// `daemon.sock`, and `/api/v1/devices` returns the just-paired
+/// device as REMOVED.
+///
+/// Idempotent: if a config file already exists at the canonical
+/// path we leave it untouched (operator may have hand-written
+/// extra fields like `[daemon.federated_peers]` or hub-mode TLS
+/// pins). Only the no-config case writes a minimal template.
+///
+/// Errors only when the parent directory cannot be created or
+/// the write itself fails — both indicate a filesystem
+/// permission issue the operator must resolve.
+fn ensure_minimal_daemon_config(creds: &config::Credentials) -> anyhow::Result<()> {
+    let path = resolve_daemon_config_path();
+    if path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let realm = if creds.tenant_id.trim().is_empty() {
+        "localhost"
+    } else {
+        creds.tenant_id.trim()
+    };
+    let hub_endpoint = creds.hub_endpoint.trim();
+    let body = format!(
+        "# Auto-generated by `easynet device join` on {now}.\n\
+         # Edit by hand to add `[daemon.federated_peers]`, hub-mode\n\
+         # TLS pins, or override the UDS path. Re-running `easynet\n\
+         # device join` against a different hub will leave this\n\
+         # file untouched (overwrite by hand if needed).\n\
+         [daemon]\n\
+         mode = \"device\"\n\
+         realm = \"{realm}\"\n\
+         hub_endpoint = \"{hub_endpoint}\"\n",
+        now = chrono::Utc::now().to_rfc3339(),
+        realm = realm,
+        hub_endpoint = hub_endpoint,
+    );
+    std::fs::write(&path, body)?;
+    Ok(())
+}
+
+fn resolve_daemon_config_path() -> std::path::PathBuf {
+    let head = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    std::path::Path::new(&head)
+        .join(".easynet")
+        .join("daemon-config.toml")
+}
+
+/// surface; when offline, the caller logs + continues, and the
+/// daemon falls back to deterministic key derivation per
+/// `boot.rs::load_daemon_identity`.
+///
+/// Returns `Ok(())` when the put landed (or when the entry
+/// already existed — pairing the same node twice is a noop, the
+/// pre-existing entry stays). Errors only on transport faults
+/// the operator should see.
+fn put_device_keypair_to_keyring(creds: &config::Credentials) -> anyhow::Result<()> {
+    use crate::services::self_identity::{
+        canonical_self_uris, fresh_seed_hex, KeyringClient, SelfIdentityError,
+    };
+
+    let realm = creds.tenant_id.trim();
+    let node_id = creds.node_id.trim();
+    if realm.is_empty() || node_id.is_empty() {
+        anyhow::bail!("credentials missing realm or node_id");
+    }
+    let (primary_self, role_overlays) = canonical_self_uris(realm, node_id);
+
+    let client = KeyringClient::default_path();
+    // Probe reachability with a lightweight `list` first so the
+    // operator-facing error is "keyring daemon offline" not
+    // "keyring rejected put". Avoids confusing log lines when the
+    // daemon is just not running.
+    client
+        .list()
+        .map_err(|e| anyhow::anyhow!("keyring daemon ping: {e}"))?;
+
+    match client.put(&primary_self, role_overlays, fresh_seed_hex()) {
+        Ok(()) => Ok(()),
+        // already_exists is benign — re-pairing the same device
+        // keeps the existing keypair. Any other error is real.
+        Err(SelfIdentityError::Rejected { kind, .. }) if kind == "already_exists" => Ok(()),
+        Err(e) => Err(anyhow::anyhow!("keyring put: {e}")),
+    }
 }
 
 fn validate_token_format(token: &str) -> anyhow::Result<()> {
@@ -186,6 +328,33 @@ fn validate_pairing_response(creds: config::Credentials) -> anyhow::Result<confi
         anyhow::bail!("pairing response missing node_id");
     }
     Ok(creds)
+}
+
+/// Bridge the migration window where the backend may not yet return
+/// `username` from validate-pairing but the operator already holds a
+/// logged-in auth session that does know it. This keeps
+/// `credentials.json` rich enough for hosted-agent bootstrap on the
+/// first post-join runtime boot, instead of persisting `<unjoined>`
+/// placeholder URIs until a later manual repair.
+fn backfill_credentials_username_from_auth_session(creds: &mut config::Credentials) {
+    if creds
+        .username
+        .as_deref()
+        .is_some_and(|v| !v.trim().is_empty())
+    {
+        return;
+    }
+    let Ok(Some(session)) = crate::facade::cli::auth::load_session() else {
+        return;
+    };
+    let Some(username) = session.username else {
+        return;
+    };
+    let username = username.trim();
+    if username.is_empty() {
+        return;
+    }
+    creds.username = Some(username.to_string());
 }
 
 /// Pick the REST-API base URL the pairing-token validation call
@@ -290,11 +459,14 @@ fn validate_pairing_token(
             preflight.node_id
         );
     }
-    if creds.tenant_id != preflight.tenant_id {
+    // URA v4.1.4: realm_str() picks `realm` first, falls back to
+    // legacy `tenant_id`. Both v4.1.4 and pre-v4.1.4 hubs round-trip.
+    let creds_realm = creds.realm_str();
+    if creds_realm != preflight.tenant_id {
         anyhow::bail!(
-            "Hub returned tenant_id {} but pairing preflight reserved {}; aborting to avoid \
+            "Hub returned realm {} but pairing preflight reserved {}; aborting to avoid \
              deriving credentials under the wrong realm",
-            creds.tenant_id,
+            creds_realm,
             preflight.tenant_id
         );
     }
@@ -367,9 +539,42 @@ mod tests {
             tenant_id: "tenant".into(),
             deploy_signature: "sig".into(),
             hub_api_base: None,
+            username: None,
         };
         let err = validate_pairing_response(creds).expect_err("missing node_id must fail");
         assert!(err.to_string().contains("missing node_id"));
+    }
+
+    #[test]
+    fn backfill_credentials_username_uses_auth_session_when_pairing_response_omits_it() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let state_dir = config::state_dir();
+        std::fs::create_dir_all(&state_dir).expect("create state dir");
+        let session = crate::facade::cli::auth::AuthSession {
+            token: "token".into(),
+            hub_url: "http://127.0.0.1:8080".into(),
+            email: "alice@example.com".into(),
+            user_id: Some("user-uuid".into()),
+            nickname: Some("Alice".into()),
+            username: Some("alice".into()),
+        };
+        std::fs::write(
+            state_dir.join("auth.json"),
+            serde_json::to_vec(&session).expect("serialize session"),
+        )
+        .expect("write auth.json");
+
+        let mut creds = config::Credentials {
+            node_id: "node".into(),
+            credential_token: "cred".into(),
+            hub_endpoint: "axon://hub.example:50051".into(),
+            tenant_id: "tenant".into(),
+            deploy_signature: "sig".into(),
+            hub_api_base: None,
+            username: None,
+        };
+        backfill_credentials_username_from_auth_session(&mut creds);
+        assert_eq!(creds.username.as_deref(), Some("alice"));
     }
 
     #[test]

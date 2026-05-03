@@ -191,6 +191,13 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
         mcp_uri.as_deref(),
         &llm_uris,
     );
+    if let Some(host_node_id) = host_node_id.clone() {
+        for descriptor in &mut descriptors {
+            descriptor
+                .metadata
+                .insert("host_node_id".into(), host_node_id.clone());
+        }
+    }
 
     // Step 5b: advertise the abilities OWNED by each user-installed
     // agent (e.g. `alice.chat` and any per-agent verbs declared in
@@ -228,10 +235,13 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
                     );
                     match desc {
                         Ok(d) => {
-                            let d = d
+                            let mut d = d
                                 .with_description(spec.description())
                                 .with_input_schema(spec.parameters().clone())
                                 .with_source(format!("agent:{name}"));
+                            if let Some(host_node_id) = host_node_id.as_ref() {
+                                d = d.with_metadata_entry("host_node_id", host_node_id.clone());
+                            }
                             descriptors.push(d);
                         }
                         Err(e) => {
@@ -506,27 +516,72 @@ fn derive_subject_public_key_b64(tenant_id: &str, subject_id: &str) -> String {
     pk_b64
 }
 
-/// Extract the node id segment from a canonical device URA.
-/// Accepts both the legacy `easynet:///r/<tenant>/agent/<node>` shape
-/// and the URA-conformant `easynet:///r/<scope>/reg/agent.<node>`
-/// shape. Returns None when the URA does not match either form.
+/// Extract the host device node id from a host-device URI.
+///
+/// Canonical post-v4 fleets use `.../device/<node>`, but the docker
+/// deep-e2e matrix still exercises mixed-shape installs where the
+/// same host may surface as:
+///
+/// - `easynet:///r/<realm>/device/<node>`
+/// - `easynet:///r/<realm>/agent/<node>`
+/// - `easynet:///r/<scope>/reg/device.<node>?tenant_id=<tenant>`
+/// - `easynet:///r/<scope>/reg/agent.<node>?tenant_id=<tenant>`
+///
+/// Hosted-agent advertise must populate `host_node_id` for all of
+/// those inputs; otherwise the backend projects the hosted agent's
+/// own URI tail as `node_id`, which breaks `/api/v1/agents` and the
+/// cross-device deep-e2e assertions. Real agent URIs
+/// (`agent/<user>.<agent>`) remain rejected.
 fn host_node_id_from_uri(uri: &str) -> Option<String> {
-    if let Some(rest) = uri.strip_prefix("easynet:///r/") {
-        // Drop optional query-string suffix.
-        let rest = rest.split('?').next().unwrap_or(rest);
-        let segments: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
-        // Pattern A: <tenant>/agent/<node> (legacy 3-segment)
-        if segments.len() >= 3 && segments[1] == "agent" {
-            return Some(segments[2].to_string());
+    if let Ok(parsed) = crate::uri::parse_ura(uri) {
+        if parsed.kind == crate::uri::URAKind::Device && !parsed.device_id.is_empty() {
+            return Some(parsed.device_id);
         }
-        // Pattern B: <scope>/reg/agent.<node> (URA-conformant)
-        if segments.len() >= 3 && segments[1] == "reg" {
-            if let Some(node) = segments[2].strip_prefix("agent.") {
-                return Some(node.to_string());
+    }
+
+    let legacy_device = crate::uri::strip_v1_agent_prefix(uri);
+    if legacy_device != uri && is_plain_node_id(&legacy_device) {
+        return Some(legacy_device);
+    }
+
+    let rest = uri.strip_prefix("easynet:///r/")?;
+    let (_realm_or_scope, after_realm) = rest.split_once('/')?;
+    let reg_tail = after_realm.strip_prefix("reg/")?;
+    let reg_subject = reg_tail.split('?').next().unwrap_or(reg_tail);
+    for prefix in ["device.", "agent."] {
+        if let Some(node_id) = reg_subject.strip_prefix(prefix) {
+            if is_plain_node_id(node_id) {
+                return Some(node_id.to_string());
             }
         }
     }
+
     None
+}
+
+fn is_plain_node_id(node_id: &str) -> bool {
+    !node_id.is_empty() && !node_id.contains('.') && !node_id.contains('/')
+}
+
+/// URI v2 device-keypair wrapper. Returns `(seed, pk_b64)` for the
+/// device-profile agent under the given realm. Subject ID shape
+/// `easynet:prv:reg:device.<node_id>` (URI v2 device kind).
+///
+/// Phase 14 production deploy switches daemons to use this in place
+/// of `derive_agent_keypair` once the backend trust anchor has been
+/// regenerated under the device-URI shape.
+pub(crate) fn derive_device_keypair(realm: &str, node_id: &str) -> ([u8; 32], String) {
+    let subject_id = format!("easynet:prv:reg:device.{node_id}");
+    derive_subject_keypair(realm, &subject_id)
+}
+
+/// URI v1 (and current production) agent-keypair wrapper. Subject
+/// ID shape `easynet:prv:reg:agent.<node_id>`. Kept as the default
+/// path through Phase 14; the device-shaped wrapper above flips
+/// in only after the backend re-mints its trust anchor.
+pub(crate) fn derive_agent_keypair(realm: &str, node_id: &str) -> ([u8; 32], String) {
+    let subject_id = format!("easynet:prv:reg:agent.{node_id}");
+    derive_subject_keypair(realm, &subject_id)
 }
 
 /// Deterministic keypair derivation used by the SDK's
@@ -765,6 +820,7 @@ mod tests {
     fn plan_for(realm: &str, host: &str) -> BootstrapPlan {
         BootstrapPlan {
             realm: realm.into(),
+            user_id: "test-user".into(),
             host_device_uri: host.into(),
             consent: true,
             policy: false,
@@ -811,6 +867,47 @@ mod tests {
             }
             assert!(o.result.is_ok(), "unexpected Err outcome: {o:?}");
         }
+    }
+
+    #[test]
+    fn host_node_id_from_uri_accepts_current_and_legacy_device_shapes() {
+        // Canonical device URA.
+        assert_eq!(
+            host_node_id_from_uri("easynet:///r/acme/device/01DEV"),
+            Some("01DEV".into())
+        );
+
+        // Legacy device-profile and reg-form shapes still occur in
+        // mixed-fleet deep-e2e and must resolve to the same host.
+        assert_eq!(
+            host_node_id_from_uri("easynet:///r/acme/agent/01DEV"),
+            Some("01DEV".into())
+        );
+        assert_eq!(
+            host_node_id_from_uri("easynet:///r/prv/reg/device.01DEV?tenant_id=acme"),
+            Some("01DEV".into())
+        );
+        assert_eq!(
+            host_node_id_from_uri("easynet:///r/prv/reg/agent.01DEV?tenant_id=acme"),
+            Some("01DEV".into())
+        );
+        assert_eq!(
+            host_node_id_from_uri("easynet:///r/acme/agent/user.alice"),
+            None,
+            "agent URA is never a device host"
+        );
+
+        // Other kinds remain rejected.
+        assert_eq!(
+            host_node_id_from_uri("easynet:///r/acme/resource/01HZ8/fs/etc/hosts"),
+            None
+        );
+        assert_eq!(host_node_id_from_uri("easynet:///r/acme/hub"), None);
+        assert_eq!(host_node_id_from_uri("easynet:///r/acme/user/alice"), None);
+
+        // Malformed inputs — strict parser returns Err, we map to None.
+        assert_eq!(host_node_id_from_uri(""), None);
+        assert_eq!(host_node_id_from_uri("not-a-uri"), None);
     }
 
     #[test]
@@ -883,7 +980,8 @@ mod tests {
         // bootstrap mints a URA for her.
         let plan = BootstrapPlan {
             realm: "acme".into(),
-            host_device_uri: "easynet:///r/acme/agent/01DEV".into(),
+            user_id: "alice".into(),
+            host_device_uri: "easynet:///r/acme/device/01DEV".into(),
             consent: false,
             policy: false,
             mcp: false,
@@ -966,7 +1064,8 @@ mod tests {
         crate::registry::agents::save_agents(&reg).unwrap();
         let plan = BootstrapPlan {
             realm: "acme".into(),
-            host_device_uri: "easynet:///r/acme/agent/01DEV".into(),
+            user_id: "alice".into(),
+            host_device_uri: "easynet:///r/acme/device/01DEV".into(),
             consent: false,
             policy: false,
             mcp: false,
@@ -981,12 +1080,14 @@ mod tests {
         // The device-owner advertise must still carry at least one
         // device-level ability (fs.read is the canary — it has been
         // in the device profile since Tier 2.5 baseline locomotion).
+        // URI v4.1.4: device-profile self-URI uses the `device/` role
+        // segment (was the v1 `agent/` shape).
         let calls = invoker.calls();
         let device_advert = calls
             .iter()
             .find(|(u, p)| {
                 u.contains("federation.advertise_abilities@1")
-                    && p["agent_uri"].as_str() == Some("easynet:///r/acme/agent/01DEV")
+                    && p["agent_uri"].as_str() == Some("easynet:///r/acme/device/01DEV")
             })
             .expect("device-owner advertise_abilities call must still exist");
         let abilities = device_advert.1["abilities"]

@@ -20,7 +20,12 @@ use easynet_axon::reconnect::{ReconnectConfig, ReconnectHook, ReconnectingBridge
 use crate::persistence::config;
 use crate::support::{output, shutdown::ShutdownSignal};
 
-pub const DEFAULT_HEARTBEAT_MS: u64 = 30_000;
+// The runtime-side federation sweeper starts suspecting stale members
+// at ~20 s. The CLI used to wait 30 s before sending the next
+// heartbeat, which guaranteed every long-lived device would self-revoke
+// between the initial advertise and the first tick. Keep the CLI-side
+// cadence aligned with the runtime's 5 s transport heartbeat.
+pub const DEFAULT_HEARTBEAT_MS: u64 = 5_000;
 const MAX_HEARTBEAT_FAILURES: u32 = 10;
 
 // ── Heartbeat env var keys (daemon ↔ parent contract) ───────────────────────
@@ -113,7 +118,7 @@ impl<'a> HeartbeatTransport for DirectBridge<'a> {
         // proper carrier and `federation.advertise_*` /
         // `federation.resolve` use the same caller URI we set
         // here.
-        let device_uri = format!("easynet:///r/{tenant}/agent/{node_id}");
+        let device_uri = crate::uri::device_uri(&tenant, &node_id);
         let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
             self.bridge,
             device_uri,
@@ -149,7 +154,7 @@ impl<'a> HeartbeatTransport for ReconnectingHeartbeat<'a> {
         // failure (its standard contract), so an abilty-level
         // hub rejection still propagates here while a transient
         // dropped connection self-heals.
-        let device_uri = format!("easynet:///r/{tenant}/agent/{node_id}");
+        let device_uri = crate::uri::device_uri(&tenant, &node_id);
         self.bridge.with_bridge(|br| {
             let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
                 br,
@@ -428,7 +433,7 @@ fn rotate_log_if_needed(path: &std::path::Path) {
 fn build_reregister_hook(tenant: String, node_id: String, _hostname: String) -> ReconnectHook {
     use std::rc::Rc;
     Rc::new(move |bridge: &DendriteBridge| -> AxonResult<()> {
-        let device_uri = format!("easynet:///r/{}/agent/{}", tenant, node_id);
+        let device_uri = crate::uri::device_uri(&tenant, &node_id);
         let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
             bridge,
             device_uri.clone(),
@@ -489,6 +494,44 @@ pub fn run_daemon() -> anyhow::Result<()> {
     let reconnecting = ReconnectingBridge::connect(reconnect_config, Some(hook))
         .with_context(|| format!("heartbeat daemon: initial connect to {endpoint}"))?;
 
+    // Bootstrap self-identity into axon-runtime BEFORE the first
+    // heartbeat. Without this the runtime rejects every signed Invoke
+    // (heartbeat, advertise, resolve) with
+    // `AXON_EASYNET_SUBJECT_KEY_UNREGISTERED` until `easynet runtime
+    // start` happens to be the launcher (it bootstraps too). Bare
+    // `easynet-daemon` boot — service / launchd / unit-file path —
+    // never goes through `runtime start`, so the heartbeat sidecar is
+    // the right place: it has the runtime endpoint, runs once per
+    // daemon lifetime, and any long-lived federation surface depends
+    // on it succeeding. Best-effort: a failure logs and continues —
+    // bootstrap is idempotent (first-writer-wins) so subsequent ticks
+    // pay zero cost on success.
+    //
+    // realm == tenant for v1 single-realm; the URI v2 cut-over picks
+    // a separate `realm` field. Until then both fields name the same
+    // logical scope.
+    let realm = tenant.clone();
+    let bootstrap_outcome = reconnecting.with_bridge(|br| {
+        let device_uri = crate::uri::device_uri(&tenant, &node_id);
+        let invoker =
+            crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(br, device_uri);
+        let outcome = crate::runtime::publish::bootstrap_self_identity_via_runtime(
+            &invoker, &tenant, &realm, &node_id,
+        );
+        outcome
+            .result
+            .map_err(easynet_axon::error::AxonError::Bridge)
+    });
+    match bootstrap_outcome {
+        Ok(()) => output::info(&format!(
+            "heartbeat daemon: bootstrapped trusted-key material for {node_id}"
+        )),
+        Err(e) => output::warn(&format!(
+            "heartbeat daemon: runtime.bootstrap_self_identity failed: {e}; signed Invokes \
+             will fail until the runtime accepts this node's key"
+        )),
+    }
+
     let shutdown = ShutdownSignal::new();
     let s = shutdown.clone();
     ctrlc::set_handler(move || {
@@ -504,7 +547,7 @@ pub fn run_daemon() -> anyhow::Result<()> {
     // reconnecting bridge so a transient drop right before
     // shutdown still reaches the hub via one auto-reconnect.
     let reason = outcome.reason();
-    let device_uri = format!("easynet:///r/{}/agent/{}", tenant, node_id);
+    let device_uri = crate::uri::device_uri(&tenant, &node_id);
     let revoked = reconnecting.with_bridge(|br| {
         let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
             br,

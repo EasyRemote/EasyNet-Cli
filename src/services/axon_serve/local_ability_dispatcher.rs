@@ -33,8 +33,11 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use crate::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
@@ -70,6 +73,11 @@ pub struct LocalAbilityDispatcher {
     /// by `call_id`, completing the awaiting dispatcher future.
     escalation_correlation:
         Option<Arc<crate::services::axon_serve::session_escalation::EscalationCorrelation>>,
+    /// Active same-hub remote bidi sessions keyed by dispatcher
+    /// call_id. Today this is only used for `fleet.file_transfer`:
+    /// hub opens the local bidi on the device, then subsequent
+    /// `SessionDispatch::BidiInput` frames route through this table.
+    remote_bidi_sessions: Arc<Mutex<HashMap<u64, mpsc::Sender<Value>>>>,
 }
 
 impl LocalAbilityDispatcher {
@@ -79,6 +87,7 @@ impl LocalAbilityDispatcher {
         Self {
             dispatcher,
             escalation_correlation: None,
+            remote_bidi_sessions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -144,6 +153,260 @@ impl LocalAbilityDispatcher {
             }),
         }
     }
+
+    async fn send_dispatch_up(
+        outbound: &SessionUpSender,
+        dispatch: &SessionDispatch,
+    ) -> Result<(), SessionDispatchError> {
+        let payload = serde_json::to_vec(dispatch).map_err(|err| {
+            SessionDispatchError::Other(format!("encode SessionDispatch frame: {err}"))
+        })?;
+        outbound
+            .send_binary_chunk(BinaryChunk {
+                stream_id: SESSION_STREAM_ID,
+                data: payload,
+                ..BinaryChunk::default()
+            })
+            .await
+            .map_err(|_| SessionDispatchError::Other("outbound channel closed".to_string()))
+    }
+
+    fn file_transfer_terminal_error(call_id: u64, message: impl Into<String>) -> SessionDispatch {
+        SessionDispatch::Result {
+            call_id,
+            payload: Vec::new(),
+            terminal: true,
+            error: Some(message.into()),
+        }
+    }
+
+    fn map_remote_file_transfer_output(
+        call_id: u64,
+        value: &Value,
+    ) -> Result<Option<SessionDispatch>, SessionDispatchError> {
+        match value.get("type").and_then(Value::as_str) {
+            Some("chunk") => {
+                let data_b64 = value.get("data").and_then(Value::as_str).ok_or_else(|| {
+                    SessionDispatchError::Other(
+                        "file_transfer chunk frame missing `data`".to_string(),
+                    )
+                })?;
+                let raw = B64.decode(data_b64).map_err(|err| {
+                    SessionDispatchError::Other(format!(
+                        "file_transfer chunk base64 decode failed: {err}"
+                    ))
+                })?;
+                Ok(Some(SessionDispatch::Result {
+                    call_id,
+                    payload: raw,
+                    terminal: false,
+                    error: None,
+                }))
+            }
+            Some("complete") => {
+                let payload = serde_json::to_vec(value).map_err(|err| {
+                    SessionDispatchError::Other(format!(
+                        "encode file_transfer completion payload: {err}"
+                    ))
+                })?;
+                Ok(Some(SessionDispatch::Result {
+                    call_id,
+                    payload,
+                    terminal: true,
+                    error: None,
+                }))
+            }
+            Some("error") => {
+                let reason = match (
+                    value.get("code").and_then(Value::as_str),
+                    value.get("message").and_then(Value::as_str),
+                ) {
+                    (Some(code), Some(message))
+                        if !code.trim().is_empty() && !message.trim().is_empty() =>
+                    {
+                        format!("{code}: {message}")
+                    }
+                    (_, Some(message)) if !message.trim().is_empty() => message.to_string(),
+                    (Some(code), _) if !code.trim().is_empty() => code.to_string(),
+                    _ => "file_transfer handler returned error".to_string(),
+                };
+                let payload = serde_json::to_vec(value).map_err(|err| {
+                    SessionDispatchError::Other(format!(
+                        "encode file_transfer error payload: {err}"
+                    ))
+                })?;
+                Ok(Some(SessionDispatch::Result {
+                    call_id,
+                    payload,
+                    terminal: true,
+                    error: Some(reason),
+                }))
+            }
+            Some("warn") => Ok(None),
+            Some(other) => Err(SessionDispatchError::Other(format!(
+                "unknown file_transfer handler frame type {other:?}"
+            ))),
+            None => Ok(None),
+        }
+    }
+
+    async fn open_remote_file_transfer_bidi(
+        &self,
+        call_id: u64,
+        ability: &str,
+        args: Vec<u8>,
+        outbound: &SessionUpSender,
+    ) -> Result<(), SessionDispatchError> {
+        if ability != crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER {
+            return Self::send_dispatch_up(
+                outbound,
+                &Self::file_transfer_terminal_error(
+                    call_id,
+                    format!("remote bidi ability `{ability}` is not wired on <self>.session"),
+                ),
+            )
+            .await;
+        }
+
+        let normalized_args = match serde_json::from_slice::<Value>(&args) {
+            Ok(args) => args,
+            Err(err) => {
+                return Self::send_dispatch_up(
+                    outbound,
+                    &Self::file_transfer_terminal_error(
+                        call_id,
+                        format!(
+                            "<self>.session: remote file_transfer received non-JSON args bytes: {err}"
+                        ),
+                    ),
+                )
+                .await;
+            }
+        };
+
+        let target = InvocationTarget {
+            scope: TargetScope::Local,
+            ability: ability.to_string(),
+            normalized_args,
+            call_mode: CallMode::Bidi,
+            subject: None,
+        };
+
+        let bidi_source = match self.dispatcher.execute_bidi(target) {
+            Ok(source) => source,
+            Err(err) => {
+                return Self::send_dispatch_up(
+                    outbound,
+                    &Self::file_transfer_terminal_error(
+                        call_id,
+                        format!("<self>.session: remote file_transfer open failed: {err}"),
+                    ),
+                )
+                .await;
+            }
+        };
+
+        let crate::runtime::ability_dispatch::BidiSource {
+            to_client: handler_in_tx,
+            from_client: mut handler_out_rx,
+        } = bidi_source;
+
+        {
+            let mut guard = match self.remote_bidi_sessions.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            guard.insert(call_id, handler_in_tx);
+        }
+
+        let sessions = Arc::clone(&self.remote_bidi_sessions);
+        let outbound = outbound.clone();
+        tokio::spawn(async move {
+            while let Some(value) = handler_out_rx.recv().await {
+                let mapped = match LocalAbilityDispatcher::map_remote_file_transfer_output(
+                    call_id, &value,
+                ) {
+                    Ok(Some(dispatch)) => dispatch,
+                    Ok(None) => continue,
+                    Err(err) => LocalAbilityDispatcher::file_transfer_terminal_error(
+                        call_id,
+                        format!("<self>.session: remote file_transfer output map failed: {err}"),
+                    ),
+                };
+                let terminal = matches!(mapped, SessionDispatch::Result { terminal: true, .. });
+                if LocalAbilityDispatcher::send_dispatch_up(&outbound, &mapped)
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                if terminal {
+                    break;
+                }
+            }
+            let mut guard = match sessions.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            guard.remove(&call_id);
+        });
+
+        Ok(())
+    }
+
+    async fn forward_remote_file_transfer_input(
+        &self,
+        call_id: u64,
+        payload: Vec<u8>,
+        eof: bool,
+        outbound: &SessionUpSender,
+    ) -> Result<(), SessionDispatchError> {
+        let sender = {
+            let mut guard = match self.remote_bidi_sessions.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let sender = guard.get(&call_id).cloned();
+            if eof {
+                guard.remove(&call_id);
+            }
+            sender
+        };
+
+        let Some(sender) = sender else {
+            return Self::send_dispatch_up(
+                outbound,
+                &Self::file_transfer_terminal_error(
+                    call_id,
+                    format!("remote file_transfer call_id={call_id} is not open on this device"),
+                ),
+            )
+            .await;
+        };
+
+        let frame = if eof {
+            json!({"type": "eof"})
+        } else {
+            json!({"type": "chunk", "data": B64.encode(payload)})
+        };
+        if sender.send(frame).await.is_err() {
+            if eof {
+                // Download-mode file_transfer does not consume the
+                // up-direction at all; the caller's EOF is a best-
+                // effort readiness hint, not a mandatory delivery.
+                return Ok(());
+            }
+            return Self::send_dispatch_up(
+                outbound,
+                &Self::file_transfer_terminal_error(
+                    call_id,
+                    format!("remote file_transfer call_id={call_id} input channel closed"),
+                ),
+            )
+            .await;
+        }
+        Ok(())
+    }
 }
 
 /// Recover a printable message from a `Box<dyn Any + Send>` panic
@@ -183,6 +446,17 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
             return Ok(());
         };
 
+        // Surface a marker even on the cold path: reading the
+        // BinaryChunk size confirms the down-stream is feeding the
+        // dispatcher, distinct from a stalled supervisor or a
+        // transport hang. Without this we cannot tell from logs
+        // alone whether the bidi delivered a frame at all.
+        eprintln!(
+            "[local-ability-dispatcher] handle_down: BinaryChunk stream_id={} data_bytes={}",
+            chunk.stream_id,
+            chunk.data.len()
+        );
+
         let dispatch: SessionDispatch = serde_json::from_slice(&chunk.data).map_err(|err| {
             SessionDispatchError::Other(format!(
                 "session down BinaryChunk is not valid SessionDispatch JSON: {err}"
@@ -213,6 +487,29 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
                 );
                 (call_id, ability, args)
             }
+            SessionDispatch::BidiOpen {
+                call_id,
+                ability,
+                args,
+            } => {
+                eprintln!(
+                    "[local-ability-dispatcher] received BidiOpen frame \
+                     call_id={call_id} ability={ability} args_bytes={}",
+                    args.len()
+                );
+                return self
+                    .open_remote_file_transfer_bidi(call_id, &ability, args, outbound)
+                    .await;
+            }
+            SessionDispatch::BidiInput {
+                call_id,
+                payload,
+                eof,
+            } => {
+                return self
+                    .forward_remote_file_transfer_input(call_id, payload, eof, outbound)
+                    .await;
+            }
             SessionDispatch::RequestResult { call_id, outcome } => {
                 if let Some(correlation) = self.escalation_correlation.as_ref() {
                     let id_hex = call_id_hex(&call_id);
@@ -222,6 +519,11 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
                             "[local-ability-dispatcher] inbound RequestResult \
                              call_id={id_hex} did not match a pending entry; \
                              dropping (caller may have timed out, or hub double-replied)"
+                        );
+                    } else {
+                        eprintln!(
+                            "[local-ability-dispatcher] inbound RequestResult \
+                             call_id={id_hex} matched pending entry; completed"
                         );
                     }
                 } else {
@@ -321,10 +623,12 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
                 terminal,
                 error,
             },
-            SessionDispatch::Dispatch { .. } => {
+            SessionDispatch::Dispatch { .. } | SessionDispatch::BidiOpen { .. } => {
                 unreachable!("local execution never returns Dispatch")
             }
-            SessionDispatch::Request { .. } | SessionDispatch::RequestResult { .. } => {
+            SessionDispatch::BidiInput { .. }
+            | SessionDispatch::Request { .. }
+            | SessionDispatch::RequestResult { .. } => {
                 // PR-N6 wire shape (C2) added these for the
                 // device → hub forward_invoke escalation path.
                 // LocalAbilityDispatcher only handles
@@ -376,6 +680,7 @@ mod tests {
     use super::*;
 
     use serde_json::json;
+    use std::time::Duration;
 
     use crate::runtime::ability_dispatch::LocalAbilityRegistry;
     use crate::runtime::gateway::NoopGateway;
@@ -406,6 +711,18 @@ mod tests {
             args,
         };
         let payload = serde_json::to_vec(&dispatch).expect("encode dispatch");
+        InvokeBidiDown {
+            sequence: 0,
+            payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+                data: payload,
+                ..BinaryChunk::default()
+            })),
+            ..InvokeBidiDown::default()
+        }
+    }
+
+    fn session_frame(dispatch: SessionDispatch) -> InvokeBidiDown {
+        let payload = serde_json::to_vec(&dispatch).expect("encode session dispatch");
         InvokeBidiDown {
             sequence: 0,
             payload: Some(DownPayload::BinaryChunk(BinaryChunk {
@@ -790,5 +1107,160 @@ mod tests {
             }
             other => panic!("expected SessionDispatch::Result, got: {other:?}"),
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn remote_file_transfer_upload_round_trips_over_session_bidi_frames() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp.path().join("upload-from-hub.bin");
+        let bytes = b"remote-file-transfer-over-session";
+
+        let disp = LocalAbilityDispatcher::new(build_real_daemon_dispatcher());
+        let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(8);
+        let session_tx = SessionUpSender::new(tx);
+
+        disp.handle_down(
+            session_frame(SessionDispatch::BidiOpen {
+                call_id: 77,
+                ability: crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER
+                    .to_string(),
+                args: serde_json::to_vec(&json!({
+                    "mode": "upload",
+                    "path": target.to_string_lossy(),
+                }))
+                .expect("encode args"),
+            }),
+            &session_tx,
+        )
+        .await
+        .expect("bidi open succeeds");
+
+        disp.handle_down(
+            session_frame(SessionDispatch::BidiInput {
+                call_id: 77,
+                payload: bytes.to_vec(),
+                eof: false,
+            }),
+            &session_tx,
+        )
+        .await
+        .expect("bidi chunk forwards");
+
+        disp.handle_down(
+            session_frame(SessionDispatch::BidiInput {
+                call_id: 77,
+                payload: Vec::new(),
+                eof: true,
+            }),
+            &session_tx,
+        )
+        .await
+        .expect("bidi eof forwards");
+
+        let reply = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .expect("terminal reply within 3s")
+            .expect("reply produced");
+        let chunk = match reply.payload {
+            Some(UpPayload::BinaryChunk(c)) => c,
+            other => panic!("expected BinaryChunk reply, got: {other:?}"),
+        };
+        let parsed: SessionDispatch = serde_json::from_slice(&chunk.data).expect("Result decodes");
+        match parsed {
+            SessionDispatch::Result {
+                call_id,
+                terminal,
+                error,
+                payload,
+            } => {
+                assert_eq!(call_id, 77);
+                assert!(terminal, "upload completion must be terminal");
+                assert!(error.is_none(), "upload must succeed, got {error:?}");
+                let value: serde_json::Value =
+                    serde_json::from_slice(&payload).expect("payload decodes as JSON");
+                assert_eq!(value.get("type").and_then(|v| v.as_str()), Some("complete"));
+            }
+            other => panic!("expected SessionDispatch::Result, got: {other:?}"),
+        }
+
+        let on_disk = std::fs::read(&target).expect("file written on device side");
+        assert_eq!(on_disk, bytes);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn remote_file_transfer_download_round_trips_over_session_bidi_frames() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp.path().join("download-to-hub.bin");
+        let bytes = b"remote-download-bytes-from-device";
+        std::fs::write(&target, bytes).expect("seed file");
+
+        let disp = LocalAbilityDispatcher::new(build_real_daemon_dispatcher());
+        let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(16);
+        let session_tx = SessionUpSender::new(tx);
+
+        disp.handle_down(
+            session_frame(SessionDispatch::BidiOpen {
+                call_id: 88,
+                ability: crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER
+                    .to_string(),
+                args: serde_json::to_vec(&json!({
+                    "mode": "download",
+                    "path": target.to_string_lossy(),
+                }))
+                .expect("encode args"),
+            }),
+            &session_tx,
+        )
+        .await
+        .expect("bidi open succeeds");
+
+        disp.handle_down(
+            session_frame(SessionDispatch::BidiInput {
+                call_id: 88,
+                payload: Vec::new(),
+                eof: true,
+            }),
+            &session_tx,
+        )
+        .await
+        .expect("download eof hint forwards");
+
+        let mut streamed = Vec::new();
+        let mut saw_terminal = false;
+        for _ in 0..4 {
+            let reply = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+                .await
+                .expect("reply within 3s")
+                .expect("reply produced");
+            let chunk = match reply.payload {
+                Some(UpPayload::BinaryChunk(c)) => c,
+                other => panic!("expected BinaryChunk reply, got: {other:?}"),
+            };
+            let parsed: SessionDispatch =
+                serde_json::from_slice(&chunk.data).expect("Result decodes");
+            match parsed {
+                SessionDispatch::Result {
+                    call_id,
+                    terminal,
+                    error,
+                    payload,
+                } => {
+                    assert_eq!(call_id, 88);
+                    assert!(error.is_none(), "download must succeed, got {error:?}");
+                    if terminal {
+                        saw_terminal = true;
+                        let value: serde_json::Value =
+                            serde_json::from_slice(&payload).expect("payload decodes as JSON");
+                        assert_eq!(value.get("type").and_then(|v| v.as_str()), Some("complete"));
+                        break;
+                    }
+                    streamed.extend_from_slice(&payload);
+                }
+                other => panic!("expected SessionDispatch::Result, got: {other:?}"),
+            }
+        }
+
+        assert_eq!(streamed, bytes);
+        assert!(saw_terminal, "download must emit terminal completion frame");
     }
 }

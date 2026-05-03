@@ -128,10 +128,17 @@ const READ_CHUNK_SIZE: usize = 4096;
 const EXIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 pub fn register(reg: &mut LocalAbilityRegistry, pty: Arc<PtyService>) {
-    reg.register_bidi(
-        ABILITY_PTY_SESSION_ATTACH,
-        Arc::new(move |args: Value| attach_handler(&pty, args)),
-    );
+    use crate::runtime::ability_dispatch::LocalBidiHandler;
+    // Two name families register the same handler — see
+    // `pty_io_ability::register` for the rationale (host-mode
+    // backend's WS terminal handler dispatches under the
+    // axon-runtime `fleet.session_*` prefix; CLI subcommands and
+    // stdio MCP use the canonical `fleet.pty_session_*` names).
+    let pty_for_attach = Arc::clone(&pty);
+    let handler: LocalBidiHandler =
+        Arc::new(move |args: Value| attach_handler(&pty_for_attach, args));
+    reg.register_bidi(ABILITY_PTY_SESSION_ATTACH, Arc::clone(&handler));
+    reg.register_bidi("fleet.session_attach", handler);
 }
 
 fn attach_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<BidiSource> {
@@ -452,6 +459,10 @@ mod tests {
         assert!(
             reg.get_bidi(ABILITY_PTY_SESSION_ATTACH).is_some(),
             "attach must register as a BIDI handler, not RPC/Stream"
+        );
+        assert!(
+            reg.get_bidi("fleet.session_attach").is_some(),
+            "attach must also publish the canonical runtime alias used by backend WS terminal"
         );
     }
 

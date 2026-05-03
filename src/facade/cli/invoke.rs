@@ -57,7 +57,7 @@ use anyhow::{bail, Context};
 use clap::Args;
 use serde_json::Value;
 
-use crate::support::local_invoke::invoke_local_ability;
+use crate::support::local_invoke::invoke_local_ability_with_subject;
 use crate::support::{output, timeouts};
 
 #[derive(Debug, Args)]
@@ -92,6 +92,18 @@ pub struct InvokeArgs {
     /// envelope (timing, exit_code, fulfilled_by) for diagnostics.
     #[arg(long)]
     pub raw: bool,
+    /// AXIOM envelope subject — the resource the ability acts on,
+    /// expressed as a canonical resource URI
+    /// (`easynet:///r/<realm>/resource/<id>`). Required by abilities
+    /// whose contract pins behaviour on a specific resource (e.g.
+    /// `camera.snapshot`, which uses the subject to look up the
+    /// camera's `hardware_id` and `resources.json` entry); ignored
+    /// by abilities that don't consume `EnvelopeContext.subject`.
+    /// Per INV-SUBJECT-ENVELOPE the subject MUST come from the
+    /// envelope, not from `--args` — passing it via `--args
+    /// '{"subject": "..."}'` is rejected by the handler.
+    #[arg(long, value_name = "URI")]
+    pub subject: Option<String>,
 }
 
 pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
@@ -104,7 +116,7 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
         None => None,
         Some("") => bail!(
             "--node was given but empty; omit the flag to dispatch locally, \
-             or pass a real `easynet:///r/<tenant>/agent/<node>` URI"
+             or pass a real `easynet:///r/<tenant>/device/<node>` URI"
         ),
         Some(node) => {
             #[cfg(feature = "axon-pb")]
@@ -143,7 +155,7 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
         Some(target) => {
             // Resolve a real caller URI from credentials.json when
             // available — the CLI's hardcoded fallback
-            // `easynet:///r/cli/agent/local` is rejected by the
+            // `easynet:///r/cli/device/local` is rejected by the
             // local daemon's admission gate the moment the device
             // it runs against is paired (the daemon's realm-trust
             // anchor knows about its own device URI but not about
@@ -151,17 +163,20 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             // `invoke_via_federation_forward`'s `caller_uri`
             // surface; None there preserves the legacy default
             // for unattended fixture scripts that have no
-            // credentials.json.
+            // credentials.json. (The pre-v4.1.5 fallback used
+            // the `/agent/local` shape which fails strict
+            // §A.URA-3 parsing — agent tail must be
+            // `<user-uuid>.<agent-id>`.)
+            // URI v4.1.4 Phase 2F: caller URI for an `easynet
+            // ability invoke --node ...` originating from a daemon
+            // is the daemon's *device* URA, not an agent URA. The
+            // legacy `/agent/<node>` shape collapsed devices into
+            // the agent namespace; v4.1.4 puts the daemon under the
+            // `device` role with the same node-id tail.
             let caller_uri = crate::persistence::config::load_credentials()
                 .ok()
                 .filter(|c| !c.tenant_id.trim().is_empty() && !c.node_id.trim().is_empty())
-                .map(|c| {
-                    format!(
-                        "easynet:///r/{}/agent/{}",
-                        c.tenant_id.trim(),
-                        c.node_id.trim(),
-                    )
-                });
+                .map(|c| crate::uri::device_uri(c.tenant_id.trim(), c.node_id.trim()));
             let value = crate::support::federation_invoke::invoke_via_federation_forward(
                 &invoke_args.ability,
                 arguments,
@@ -180,7 +195,14 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             // rendering — every CLI subcommand goes through this same
             // function per the AXON-RFC-001 ontology that says "every
             // action is an ability invocation".
-            let value = invoke_local_ability(&invoke_args.ability, arguments)?;
+            let subject = invoke_args
+                .subject
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let value =
+                invoke_local_ability_with_subject(&invoke_args.ability, arguments, subject)?;
             (value, "local daemon".to_string())
         }
     };
@@ -238,7 +260,7 @@ mod tests {
     #[test]
     fn non_canonical_node_uri_returns_actionable_error() {
         // PR-N1 commit 8/N: `--node` now accepts the cross-hub URI
-        // shape `easynet:///r/<tenant>/agent/<node>`. A non-
+        // shape `easynet:///r/<tenant>/device/<node>`. A non-
         // canonical input (bare hostname, https URL, etc.) is
         // rejected with a typed error before any IPC, so a typo
         // never accidentally hits the wire.
@@ -248,6 +270,7 @@ mod tests {
             args: None,
             timeout: 60,
             raw: false,
+            subject: None,
         });
         let err = res.expect_err("must reject non-canonical --node");
         let msg = format!("{err}");
@@ -271,6 +294,7 @@ mod tests {
             args: None,
             timeout: 60,
             raw: false,
+            subject: None,
         });
         let err = res.expect_err("must reject empty --node");
         assert!(format!("{err}").contains("empty"));
@@ -286,6 +310,7 @@ mod tests {
             args: Some("{not valid".into()),
             timeout: 60,
             raw: false,
+            subject: None,
         });
         let err = res.expect_err("must reject malformed JSON");
         assert!(format!("{err:#}").contains("parse --args JSON"));

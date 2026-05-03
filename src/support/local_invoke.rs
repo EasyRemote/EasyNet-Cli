@@ -66,6 +66,19 @@ use crate::services::control::frames::{IncomingFrame, OutgoingFrame};
 ///   * Unexpected wire frame: bubbled verbatim so a regression in the
 ///     IPC layer surfaces visibly
 pub fn invoke_local_ability(ability: &str, args: Value) -> anyhow::Result<Value> {
+    invoke_local_ability_with_subject(ability, args, None)
+}
+
+/// Same as [`invoke_local_ability`] but threads an optional
+/// envelope subject through to the daemon. The subject lands in
+/// `EnvelopeContext.subject` for handlers that consume it
+/// (e.g. `camera.snapshot`, which routes its frame from the
+/// resource the subject URI names).
+pub fn invoke_local_ability_with_subject(
+    ability: &str,
+    args: Value,
+    subject: Option<String>,
+) -> anyhow::Result<Value> {
     let control_json = discovery::default_path();
     if !control_json.exists() {
         bail!(
@@ -94,6 +107,7 @@ pub fn invoke_local_ability(ability: &str, args: Value) -> anyhow::Result<Value>
                 request_id: request_id.clone(),
                 ability: ability_owned.clone(),
                 args,
+                subject,
             })
             .await
             .with_context(|| format!("invoke '{ability_owned}' via local daemon"))?;

@@ -184,27 +184,32 @@ fn registry_name_from_input(name_or_uri: &str) -> String {
 /// The real URA is minted by the device-profile at registry boot —
 /// see `runtime::profiles` and `persistence::local_agents`. Until
 /// the boot path is wired to call this ability instead of the CLI
-/// subcommand, we synthesise a shape that follows the §1.4 contract
-/// (`easynet:///r/<realm>/agent/01LLM-<name>`) so a downstream
-/// caller has a valid string to put in their UI / logs. The realm
-/// is read off the persisted host-device entry; pre-join we use
-/// `<unset>` as a visible placeholder.
+/// subcommand, we synthesise a v4.1.4 user-anchored shape
+/// (`easynet:///r/<realm>/agent/<user-uuid>.01LLM-<name>`) so a
+/// downstream caller has a valid string to put in their UI / logs.
+/// Realm + user-uuid are read off the persisted host-device entry;
+/// pre-join we use `<unset>` as a visible placeholder.
 fn derive_canonical_uri(name: &str) -> String {
-    let realm = crate::persistence::local_agents::load()
+    let (realm, user_id) = crate::persistence::local_agents::load()
         .ok()
-        .and_then(|f| extract_realm_from_uri(&f.host_device_agent_uri))
-        .unwrap_or_else(|| "<unset>".to_string());
-    format!("easynet:///r/{realm}/agent/01LLM-{name}")
+        .and_then(|f| extract_realm_user_from_uri(&f.host_device_agent_uri))
+        .unwrap_or_else(|| ("<unset>".to_string(), "<unset>".to_string()));
+    crate::uri::agent_uri(&realm, &user_id, &format!("01LLM-{name}"))
 }
 
-/// Extract `<realm>` from `easynet:///r/<realm>/agent/<id>`.
-/// Returns `None` for empty / malformed input so the caller can
-/// fall back without spreading parse logic across modules.
-fn extract_realm_from_uri(uri: &str) -> Option<String> {
-    uri.strip_prefix("easynet:///r/")
-        .and_then(|rest| rest.split_once('/'))
-        .map(|(realm, _)| realm.to_string())
-        .filter(|r| !r.is_empty())
+/// Extract `(<realm>, <user-uuid>)` from a v4.1.4 host-device agent
+/// URA (`easynet:///r/<realm>/agent/<user-uuid>.<agent-id>`). Returns
+/// `None` on empty / malformed input so the caller can fall back
+/// without spreading parse logic across modules.
+fn extract_realm_user_from_uri(uri: &str) -> Option<(String, String)> {
+    let parsed = crate::uri::parse_ura(uri).ok()?;
+    if parsed.kind != crate::uri::URAKind::Agent {
+        return None;
+    }
+    if parsed.realm.is_empty() || parsed.user_id.is_empty() {
+        return None;
+    }
+    Some((parsed.realm, parsed.user_id))
 }
 
 // ── Discovery surfaces ────────────────────────────────────────
@@ -288,7 +293,18 @@ mod tests {
             .unwrap();
             assert_eq!(resp["replaced_prior"], false);
             let uri = resp["canonical_agent_uri"].as_str().unwrap();
-            assert!(uri.ends_with("/agent/01LLM-claude"), "uri shape: {uri}");
+            // v4.1.4: agent URA is user-anchored
+            // (`/agent/<user>.<id>`). The pre-join placeholder is
+            // literal `<unset>` for both realm and user; the
+            // ability-id keeps its `01LLM-` prefix.
+            assert!(
+                uri.ends_with(".01LLM-claude"),
+                "uri must terminate in .01LLM-claude (got: {uri})"
+            );
+            assert!(
+                uri.contains("/agent/"),
+                "uri must use the agent role segment (got: {uri})"
+            );
 
             // Round-trip: the registry now has the row.
             let registry = agents::load_agents().unwrap();
@@ -404,15 +420,23 @@ mod tests {
     }
 
     #[test]
-    fn extract_realm_from_uri_handles_well_and_malformed_input() {
+    fn extract_realm_user_from_uri_handles_v414_agent_shape() {
+        // v4.1.4 agent URA: r/<realm>/agent/<user>.<agent>
         assert_eq!(
-            extract_realm_from_uri("easynet:///r/acme/agent/01DEV"),
-            Some("acme".to_string())
+            extract_realm_user_from_uri("easynet:///r/acme/agent/u1.claude"),
+            Some(("acme".to_string(), "u1".to_string()))
         );
-        assert_eq!(extract_realm_from_uri(""), None);
-        assert_eq!(extract_realm_from_uri("not-a-uri"), None);
+        // Pre-v4.1.4 single-tail shape is rejected by ParseURA, so
+        // this returns None (caller falls back to <unset>).
         assert_eq!(
-            extract_realm_from_uri("easynet:///r//agent/x"),
+            extract_realm_user_from_uri("easynet:///r/acme/agent/01DEV"),
+            None
+        );
+        assert_eq!(extract_realm_user_from_uri(""), None);
+        assert_eq!(extract_realm_user_from_uri("not-a-uri"), None);
+        // Empty realm is rejected.
+        assert_eq!(
+            extract_realm_user_from_uri("easynet:///r//agent/u1.claude"),
             None,
             "empty realm must NOT be considered valid"
         );

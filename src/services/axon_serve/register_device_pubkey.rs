@@ -28,14 +28,21 @@
 //     "role":           "device" | "backend" | "hub"
 //   }
 //
-// Realm cross-boundary invariant
-// ---------------------------------------------------
-// `agent_uri` MUST belong to the daemon's own realm — i.e. its
-// canonical form must start with `easynet:///r/{daemon.realm}/`.
-// A mismatch rejects with `Status::permission_denied`. This is
-// defense-in-depth: the admission gate already prevents cross-
-// realm callers, but registering an out-of-realm agent is its own
-// trust-boundary violation.
+// Realm cross-boundary rule
+// -------------------------
+// `role = "device"` is allowed to register an out-of-realm
+// `agent_uri`. Production pairing stamps device URIs under the
+// owning user's realm (`tenant_id = user_id`) while the hosting
+// daemon may run a platform realm (for example
+// `easynet-platform`). The trust anchor is keyed by full URI, not
+// by daemon-local realm, so rejecting those device entries would
+// make the pairing flow fundamentally incompatible with the
+// production topology.
+//
+// `role = "backend"` and `role = "hub"` remain daemon-local only.
+// Backend self-identity must match the hosting daemon's realm, and
+// peer-hub entries are operator-curated rather than authored via
+// this write surface.
 //
 // Output
 // ------
@@ -91,8 +98,10 @@ pub struct RegisterResponse {
 ///
 ///   1. Decode `arguments` JSON into `RegisterArgs`. Any decoder
 ///      failure → `Status::invalid_argument`.
-///   2. Validate `agent_uri` belongs to the daemon's realm.
-///      Mismatch → `Status::permission_denied`.
+///   2. Validate `agent_uri` matches the trust-writer policy:
+///      device entries may target any realm, backend/hub entries
+///      must stay daemon-local. Policy mismatch →
+///      `Status::permission_denied`.
 ///   3. Snapshot the current trust anchor, build a new
 ///      `RealmTrustAnchor` with the new entry appended, persist
 ///      it atomically (`save` does tmpfile + fsync + rename), and
@@ -137,11 +146,11 @@ pub fn handle(
             args.agent_uri,
         ))
     })?;
-    if parsed_realm != daemon_realm {
+    if parsed_realm != daemon_realm && !matches!(role, TrustedAgentRole::Device) {
         return Err(Status::permission_denied(format!(
-            "<self>.register_device_pubkey: agent_uri realm `{parsed_realm}` does not match \
-             daemon realm `{daemon_realm}`; cross-realm registration is rejected as a \
-             trust-boundary violation",
+            "<self>.register_device_pubkey: role `{}` requires agent_uri realm `{parsed_realm}` \
+             to match daemon realm `{daemon_realm}`",
+            args.role,
         )));
     }
 
@@ -329,17 +338,34 @@ mod tests {
     }
 
     #[test]
-    fn cross_realm_uri_rejected_with_permission_denied() {
+    fn cross_realm_device_uri_is_allowed() {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
         let args = args_bytes("easynet:///r/r2/agent/intruder", &test_pub_b64(), "device");
 
-        let err = handle(&args, "r1", &path, &cell).expect_err("must reject cross-realm");
+        let result = handle(&args, "r1", &path, &cell).expect("cross-realm device ok");
+        let response: RegisterResponse = serde_json::from_slice(&result).expect("decode");
+        assert!(response.ok);
+        assert!(cell
+            .snapshot()
+            .lookup("easynet:///r/r2/agent/intruder")
+            .is_some());
+        assert!(RealmTrustAnchor::try_load_strict(&path)
+            .expect("disk load")
+            .lookup("easynet:///r/r2/agent/intruder")
+            .is_some());
+    }
+
+    #[test]
+    fn cross_realm_backend_uri_rejected_with_permission_denied() {
+        let (_dir, path) = fresh_path();
+        let cell = empty_cell();
+        let args = args_bytes("easynet:///r/r2/agent/backend", &test_pub_b64(), "backend");
+
+        let err = handle(&args, "r1", &path, &cell).expect_err("must reject cross-realm backend");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
-        assert!(err.message().contains("realm `r2` does not match"));
-        // Cell unchanged.
+        assert!(err.message().contains("role `backend` requires"));
         assert!(cell.snapshot().is_empty());
-        // No file written for a rejected request.
         assert!(!path.exists());
     }
 

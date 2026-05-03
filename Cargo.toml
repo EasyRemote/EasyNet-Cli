@@ -1,6 +1,6 @@
 [package]
 name = "easynet"
-version = "1.25.7"
+version = "1.25.14"
 edition = "2021"
 description = "EasyNet CLI + Hub MCP server + EAL (EasyNet Ability Language)."
 license = "Apache-2.0"
@@ -66,6 +66,17 @@ path = "src/bin/easynet.rs"
 [[bin]]
 name = "easynet-daemon"
 path = "src/bin/easynet-daemon.rs"
+
+# RFC-001 plan v4.1.5 Phase 3A. Long-running per-user vault for
+# the device's Ed25519 keypair. backend / easynet-daemon / CLI all
+# request signatures from this process over UDS — no other path
+# may hold the raw seed bytes. Ships an `easynet-keyring start`
+# semantics: read passphrase, open `~/.easynet/keyring.enc`, bind
+# `~/.easynet/keyring.sock`, accept loop. Stateless on the wire,
+# stateful on disk.
+[[bin]]
+name = "easynet-keyring"
+path = "src/bin/easynet-keyring.rs"
 
 # Maintainer tool. Regenerates every abilities/system/<name>.ability.toml
 # descriptor from the live `published_abilities()` metadata. Run after
@@ -195,6 +206,10 @@ futures = "0.3"
 # bytes::BytesMut backing the codec.
 bytes = "1"
 ureq = { version = "2", features = ["json"] }
+# Hidden password input for `easynet auth login` when --password
+# is omitted. POSIX-only; on Windows rpassword falls back to
+# stdin echo. Pinning v7 (matches ratatui's MSRV in the workspace).
+rpassword = "7"
 # Percent-encoding for HTTP-executor URL templating. The `[exec]
 # kind = "http"` path encodes substituted values automatically so
 # an arg containing a space or non-ASCII char doesn't break the URL.

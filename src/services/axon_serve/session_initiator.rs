@@ -350,6 +350,7 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
     escalation_outbox: Option<
         &crate::services::axon_serve::session_escalation::SharedSessionOutbox,
     >,
+    ability_catalog: &[String],
 ) -> Result<(), SessionError> {
     dial_and_run_session_with_idle_timeout(
         hub_endpoint,
@@ -358,6 +359,7 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
         hub_ca_pem_path,
         dispatcher,
         escalation_outbox,
+        ability_catalog,
         SESSION_IDLE_TIMEOUT,
     )
     .await
@@ -372,6 +374,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     escalation_outbox: Option<
         &crate::services::axon_serve::session_escalation::SharedSessionOutbox,
     >,
+    ability_catalog: &[String],
     idle_timeout: Duration,
 ) -> Result<(), SessionError> {
     let mut endpoint = Endpoint::from_shared(hub_endpoint.clone())
@@ -448,7 +451,82 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
             source: err,
         })?;
 
-    let mut client = InvocationClient::new(channel);
+    // Bump client-side gRPC message limits to match the server side
+    // (`MAX_INVOCATION_GRPC_MESSAGE_BYTES` = 1 GiB). The tonic-default
+    // 4 MiB decoder cap aborted `<self>.session` mid-stream the moment
+    // a single down-frame envelope exceeded ~4 MiB — the symptom was
+    // `OutOfRange: decoded message length too large` on file-transfer
+    // 1 MB+ uploads, where backend's 64 KiB chunks accumulate into
+    // larger framed payloads on the down direction. Server side
+    // already configures both directions; the client side must too.
+    let mut client = InvocationClient::new(channel)
+        .max_decoding_message_size(
+            crate::services::axon_serve::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
+        )
+        .max_encoding_message_size(
+            crate::services::axon_serve::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
+        );
+
+    // Membership prelude (URA v4.1.4 dev unblock): axon-runtime hub
+    // returns `AXON_MEMBERSHIP_REQUIRED` for any caller whose URI is
+    // not in its membership table. The genesis exception is
+    // `federation.join`, which the runtime accepts unsigned. We send
+    // one before opening `<self>.session` so a fresh axon-runtime
+    // (no audit-wal replay, e.g. `--reset-db` dev boot) does not
+    // reject the session bidi for the lifetime of the daemon.
+    //
+    // The call is best-effort: we ignore both "already member" and
+    // transport errors here. The session attempt below is the
+    // authoritative health gate — if join didn't take, the bidi
+    // still surfaces the underlying error and the supervisor's
+    // reconnect loop retries everything.
+    eprintln!("[session] sending federation.join prelude as {caller_uri} against {hub_endpoint}");
+    match send_federation_join_prelude(&mut client, &caller_uri).await {
+        Ok(()) => eprintln!("[session] federation.join prelude OK; proceeding to <self>.session"),
+        Err(err) => eprintln!(
+            "[session] federation.join prelude soft-failed (code={:?}, msg={:?}); \
+             proceeding to <self>.session — bidi will surface the error if join was required",
+            err.code(),
+            err.message(),
+        ),
+    }
+
+    // Ability-catalog prelude (URA v4.1.4 dev unblock): publish
+    // every locally-registered ability the daemon knows about to
+    // the hub's `AbilityCatalogStore` via
+    // `federation.advertise_abilities`. The hub projects this back
+    // through `federation.resolve(include_abilities=true)` to drive
+    // the backend's `/api/v1/abilities` page. Without this, the
+    // catalog page renders empty even when devices have
+    // observe.health / fs.read / fs.write / etc. registered.
+    //
+    // Best-effort: a failed advertise leaves the catalog page
+    // empty for this device but does not block the bidi from
+    // opening. Production daemons retry on every reconnect (the
+    // supervisor calls `dial_and_run_session` per backoff), so a
+    // transient hub outage self-heals on the next loop pass.
+    if !ability_catalog.is_empty() {
+        eprintln!(
+            "[session] sending federation.advertise_abilities prelude with {} abilities",
+            ability_catalog.len()
+        );
+        if let Err(err) =
+            send_advertise_abilities_prelude(&mut client, &caller_uri, ability_catalog).await
+        {
+            eprintln!(
+                "[session] advertise_abilities prelude soft-failed (code={:?}, msg={:?}); \
+                 proceeding — Frontend `/api/v1/abilities` page will be empty for this device \
+                 until the next reconnect",
+                err.code(),
+                err.message(),
+            );
+        } else {
+            eprintln!(
+                "[session] advertise_abilities prelude OK ({} abilities)",
+                ability_catalog.len()
+            );
+        }
+    }
 
     let (up_tx, up_rx) = mpsc::channel::<InvokeBidiUp>(SESSION_UP_CHANNEL_CAPACITY);
     let outbound_tx = SessionUpSender::new(up_tx.clone());
@@ -580,6 +658,7 @@ pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
     hub_ca_pem_path: Option<PathBuf>,
     dispatcher: Arc<D>,
     escalation_outbox: Option<crate::services::axon_serve::session_escalation::SharedSessionOutbox>,
+    ability_catalog: Vec<String>,
     mut cancel: tokio::sync::oneshot::Receiver<()>,
 ) {
     let mut backoff = SESSION_BACKOFF_INITIAL;
@@ -596,6 +675,7 @@ pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
                 hub_ca_pem_path.as_deref(),
                 Arc::clone(&dispatcher),
                 escalation_outbox.as_ref(),
+                &ability_catalog,
             ) => {
                 match result {
                     Ok(()) => {
@@ -638,6 +718,127 @@ fn next_backoff(current: Duration) -> Duration {
     } else {
         doubled
     }
+}
+
+/// Send a one-shot `federation.join@1` over the same gRPC channel
+/// the session bidi will open on. Genesis exception in axon-runtime
+/// (`signature_policy=RequireSigned` allows this ability unsigned),
+/// so the call uses an envelope with caller URI only — no signing
+/// material — and a minimal JoinFederationRequest payload.
+///
+/// We treat both success and "already member" as positive outcomes;
+/// any other status is logged by the caller and we continue. The
+/// session bidi's HubRejected error is the authoritative gate
+/// downstream — if join was needed but failed, the bidi surfaces
+/// the right status and the supervisor backs off.
+async fn send_federation_join_prelude(
+    client: &mut crate::pb::axon::v1::invocation_client::InvocationClient<Channel>,
+    caller_uri: &str,
+) -> Result<(), tonic::Status> {
+    use crate::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
+
+    // Wire shape mirrors `federation_wrappers::JoinRequest`:
+    // axon-runtime's deserializer is strict (Deserialize derive,
+    // no #[serde(default)] on either field) and rejects payloads
+    // whose top-level keys differ from `canonical_agent_uri` /
+    // `realm`. Sending `agent_uri` / `tenant_id` (the field names
+    // used by the local daemon's other federation.* requests)
+    // earns InvalidArgument — verified in PR-1 §5 schema-compat
+    // tests and observed in dev as
+    //   `failed to decode JSON arguments: missing field
+    //    canonical_agent_uri`
+    let realm = caller_uri
+        .strip_prefix("easynet:///r/")
+        .and_then(|rest| rest.split_once('/'))
+        .map(|(realm, _)| realm.to_string())
+        .unwrap_or_default();
+
+    let body = serde_json::json!({
+        "canonical_agent_uri": caller_uri,
+        "realm": realm,
+    });
+    let arguments = serde_json::to_vec(&body)
+        .map_err(|e| tonic::Status::internal(format!("federation.join prelude serialize: {e}")))?;
+
+    let request = InvokeRequest {
+        envelope: Some(Envelope {
+            caller: Some(AgentIdentity {
+                uri: caller_uri.to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        function_name: "federation.join".to_string(),
+        arguments,
+        ..Default::default()
+    };
+
+    match client.invoke(request).await {
+        Ok(_) => Ok(()),
+        // Already-a-member is a benign outcome; surface as success.
+        Err(status)
+            if status.code() == tonic::Code::AlreadyExists
+                || status.message().contains("already") =>
+        {
+            Ok(())
+        }
+        Err(status) => Err(status),
+    }
+}
+
+/// Send a one-shot `federation.advertise_abilities@1` over the same
+/// gRPC channel the session bidi will open on. Publishes the device
+/// daemon's locally-registered ability names to the hub's
+/// `AbilityCatalogStore` so the backend's `/api/v1/abilities` page
+/// can project them under the device's URI.
+///
+/// Each ability is represented by a JSON object with `name` and
+/// `tool_name` fields — the minimum the catalog projection needs.
+/// Richer descriptors (input_schema, description, hints) live in
+/// the runtime's per-ability descriptor and can be added here if a
+/// future projection wants them; v1 advertises just enough to
+/// surface the catalog rows.
+async fn send_advertise_abilities_prelude(
+    client: &mut crate::pb::axon::v1::invocation_client::InvocationClient<Channel>,
+    caller_uri: &str,
+    ability_names: &[String],
+) -> Result<(), tonic::Status> {
+    use crate::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
+
+    let abilities: Vec<serde_json::Value> = ability_names
+        .iter()
+        .map(|name| {
+            serde_json::json!({
+                "name": name,
+                "tool_name": name,
+            })
+        })
+        .collect();
+
+    let body = serde_json::json!({
+        "agent_uri": caller_uri,
+        "abilities": abilities,
+    });
+    let arguments = serde_json::to_vec(&body).map_err(|e| {
+        tonic::Status::internal(format!(
+            "federation.advertise_abilities prelude serialize: {e}"
+        ))
+    })?;
+
+    let request = InvokeRequest {
+        envelope: Some(Envelope {
+            caller: Some(AgentIdentity {
+                uri: caller_uri.to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        function_name: "federation.advertise_abilities".to_string(),
+        arguments,
+        ..Default::default()
+    };
+
+    client.invoke(request).await.map(|_| ())
 }
 
 /// Build the EnvelopeOpen frame 0 a device sends to open
@@ -1085,6 +1286,7 @@ mod tests {
             None,
             dispatcher,
             None,
+            &[],
         )
         .await;
         match result {
@@ -1110,6 +1312,7 @@ mod tests {
                 None,
                 dispatcher,
                 None,
+                &[],
             ),
         )
         .await
@@ -1138,6 +1341,7 @@ mod tests {
             Some(bogus.as_path()),
             dispatcher,
             None,
+            &[],
         )
         .await;
         match result {
@@ -1159,7 +1363,8 @@ mod tests {
             None,
             None,
             dispatcher,
-            None, // PR-N6 C4: no escalation outbox in this test
+            None,       // PR-N6 C4: no escalation outbox in this test
+            Vec::new(), // ability_catalog: empty in tests
             cancel_rx,
         ));
 
@@ -1188,6 +1393,7 @@ mod tests {
             None,
             dispatcher,
             None,
+            &[],
             Duration::from_millis(80),
         )
         .await;
@@ -1213,6 +1419,7 @@ mod tests {
             None,
             dispatcher,
             None,
+            &[],
             Duration::from_secs(1),
         )
         .await;

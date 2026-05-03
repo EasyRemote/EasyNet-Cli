@@ -183,23 +183,13 @@ pub fn try_install_federation_routing(inputs: FederationInitInputs<'_>) -> Feder
     };
 
     // ── Prereq: keyring must hold a device subject ─────────────
-    let device_uri = match keyring.device_subject() {
-        Some(u) => u,
-        None => {
-            // Synthesise + bind on first install. Subsequent calls
-            // re-use the bound subject so re-installs are idempotent.
-            let synth = format!(
-                "easynet:///r/{tenant}/agent/{node}",
-                tenant = creds.tenant_id,
-                node = creds.node_id
-            );
-            if let Err(e) = keyring.set_device_subject(synth.clone()) {
-                return FederationInitOutcome::Failed {
-                    stage: FederationStage::KeyringBind,
-                    reason: format!("keyring.set_device_subject({synth}): {e}"),
-                };
-            }
-            synth
+    let device_uri = match ensure_device_subject(keyring, creds) {
+        Ok(uri) => uri,
+        Err(reason) => {
+            return FederationInitOutcome::Failed {
+                stage: FederationStage::KeyringBind,
+                reason,
+            };
         }
     };
 
@@ -225,6 +215,24 @@ pub fn try_install_federation_routing(inputs: FederationInitInputs<'_>) -> Feder
     }
 }
 
+fn ensure_device_subject(
+    keyring: &Arc<KeyringHandle>,
+    creds: &Credentials,
+) -> Result<String, String> {
+    match keyring.device_subject() {
+        Some(uri) => Ok(uri),
+        None => {
+            // Synthesise + bind on first install. Subsequent calls
+            // re-use the bound subject so re-installs are idempotent.
+            let synth = crate::uri::device_uri(&creds.tenant_id, &creds.node_id);
+            keyring
+                .set_device_subject(synth.clone())
+                .map_err(|e| format!("keyring.set_device_subject({synth}): {e}"))?;
+            Ok(synth)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,6 +248,7 @@ mod tests {
             tenant_id: tenant.into(),
             deploy_signature: String::new(),
             hub_api_base: None,
+            username: None,
         }
     }
 
@@ -329,6 +338,16 @@ mod tests {
             }
             other => panic!("expected Failed{{BridgeUnavailable}}, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn synthesised_device_subject_uses_canonical_device_uri() {
+        let c = creds("acme.com", "node-1");
+        let k = keyring();
+        let expected = crate::uri::device_uri(&c.tenant_id, &c.node_id);
+        let got = ensure_device_subject(&k, &c).expect("subject synthesised");
+        assert_eq!(got, expected);
+        assert_eq!(k.device_subject().as_deref(), Some(expected.as_str()));
     }
 
     // Note: the Installed and AlreadyInstalled paths require a

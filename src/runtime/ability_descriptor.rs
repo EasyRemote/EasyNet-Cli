@@ -149,8 +149,8 @@ pub enum ScopeRule {
     Any,
     /// Allow listed canonical URAs. Prefix matching uses a strict
     /// path-boundary rule (the matched prefix must be followed by
-    /// `/` or end-of-string) so `easynet:///r/acme/agent/01` does
-    /// NOT match `easynet:///r/acme/agent/01ATTACKER`.
+    /// `/` or end-of-string) so `easynet:///r/acme/user/alice`
+    /// does NOT match `easynet:///r/acme/user/alice-evil`.
     OnlyMatching(Vec<String>),
     /// Explicit deny-all. Use when a SCOPED ability is intentionally
     /// off-limits on this axis pending an operator gesture.
@@ -181,8 +181,8 @@ impl ScopeRule {
 /// Path-boundary URI matcher. A bare equality match passes; a
 /// prefix match requires the next character after the prefix to
 /// be `/` or end-of-string. This blocks the
-/// `01` → `01ATTACKER` confusion class without forcing every
-/// caller to remember the trailing-slash convention.
+/// `dev-1` → `dev-1-attacker` confusion class without forcing
+/// every caller to remember the trailing-slash convention.
 fn uri_matches_with_path_boundary(allow: &str, candidate: &str) -> bool {
     if allow == candidate {
         return true;
@@ -232,8 +232,24 @@ pub struct AbilityDescriptor {
     /// `skill.alive-video`. Per `AgentAbilitySpec::new` validation,
     /// must contain at least one `.` (no namespace = no descriptor).
     pub name: String,
-    /// Canonical URA of the Agent that hosts this ability — the
-    /// callee in any Invoke targeting this name.
+    /// Canonical URA of the entity that publishes this ability — the
+    /// `callee` in any Invoke targeting this name. Per AXON-RFC-001
+    /// v4.1.5 §9 (AXIOM seven-tuple), `callee ∈ {hub, device, agent}`,
+    /// and this field accepts any of those shapes:
+    ///
+    ///   * `agent/<user-uuid>.<agent-id>` — hosted user agent
+    ///     (consent / policy / mcp / llm sub-agent abilities).
+    ///   * `device/<device-uuid>`         — device-built-ins
+    ///     (`shell.run`, `fs.read`, `fleet.list_*`, …).
+    ///   * `hub`                          — hub-published abilities
+    ///     (`federation.advertise_*`, `voice.list_calls`, …).
+    ///
+    /// Field name kept as `owner_agent_uri` for wire-compat with
+    /// every existing daemon. §A.URA-5's "agent owns the ability"
+    /// rule applies to ABILITY URIs (`/ability/<...>`-shaped) — it
+    /// does not constrain who may publish a descriptor for a
+    /// device-built-in or hub-built-in verb. A device publishing
+    /// `shell.run` is the canonical pattern, not a violation.
     pub owner_agent_uri: String,
     pub visibility: Visibility,
     pub scope_subjects: ScopeRule,
@@ -434,7 +450,7 @@ mod tests {
     fn public_visibility_is_visible_to_anyone() {
         let d = must(
             "observe.health",
-            "easynet:///r/acme/agent/01DEV",
+            "easynet:///r/acme/device/dev-1",
             Visibility::Public,
         );
         assert!(d.is_visible_to("anybody", "anybody"));
@@ -443,7 +459,7 @@ mod tests {
 
     #[test]
     fn private_visibility_only_visible_to_owner_axis() {
-        let owner = "easynet:///r/acme/agent/01LLM";
+        let owner = "easynet:///r/acme/agent/alice.claude";
         let d = must("skill.design", owner, Visibility::Private);
         assert!(d.is_visible_to(owner, "stranger"));
         assert!(d.is_visible_to("stranger", owner));
@@ -454,7 +470,7 @@ mod tests {
     fn scoped_default_is_any_any_so_admits_everyone() {
         let d = must(
             "conversation.send",
-            "easynet:///r/acme/agent/01LLM",
+            "easynet:///r/acme/agent/alice.claude",
             Visibility::Scoped,
         );
         // Defaults set scope_subjects=Any, scope_agents=Any, so until
@@ -465,21 +481,21 @@ mod tests {
 
     #[test]
     fn scoped_with_only_matching_subjects_filters_strangers() {
-        let owner = "easynet:///r/acme/agent/01LLM";
-        let operator = "easynet:///r/acme/agent/01USR-alice";
+        let owner = "easynet:///r/acme/agent/alice.claude";
+        let operator = "easynet:///r/acme/user/alice";
         let d = must("conversation.send", owner, Visibility::Scoped)
             .with_scope_subjects(ScopeRule::OnlyMatching(vec![operator.into()]));
         assert!(d.is_visible_to("anybody", operator));
-        assert!(!d.is_visible_to("anybody", "easynet:///r/acme/agent/01USR-mallory"));
+        assert!(!d.is_visible_to("anybody", "easynet:///r/acme/user/mallory"));
     }
 
     #[test]
     fn scoped_both_axes_filtered_requires_both_matches() {
-        let backend = "easynet:///r/acme/agent/01BAK";
-        let operator = "easynet:///r/acme/agent/01USR-alice";
+        let backend = "easynet:///r/acme/hub";
+        let operator = "easynet:///r/acme/user/alice";
         let d = must(
             "fleet.list_agents",
-            "easynet:///r/acme/agent/01DEV",
+            "easynet:///r/acme/device/dev-1",
             Visibility::Scoped,
         )
         .with_scope_subjects(ScopeRule::OnlyMatching(vec![operator.into()]))
@@ -495,7 +511,7 @@ mod tests {
     fn scope_rule_none_denies_everything_on_that_axis() {
         let d = must(
             "admin.failover",
-            "easynet:///r/acme/agent/01DEV",
+            "easynet:///r/acme/device/dev-1",
             Visibility::Scoped,
         )
         .with_scope_subjects(ScopeRule::None);
@@ -506,23 +522,24 @@ mod tests {
     fn scope_rule_prefix_match_respects_path_boundary() {
         // §1.6 path-boundary rule: the matched prefix must be
         // followed by `/` or end-of-string. So
-        // `easynet:///r/acme/agent/01DEV` matches itself AND
-        // `easynet:///r/acme/agent/01DEV/sub` (sub-resource of the
-        // same Agent), but NOT `easynet:///r/acme/agent/01DEVATTACKER`
-        // — that would let attacker URAs masquerade as authorised
-        // ones by sharing a prefix.
+        // `easynet:///r/acme/device/dev-1` matches itself AND
+        // `easynet:///r/acme/device/dev-1/sub` (sub-resource of
+        // the same device), but NOT
+        // `easynet:///r/acme/device/dev-1-attacker` — that would
+        // let attacker URAs masquerade as authorised ones by
+        // sharing a prefix.
         let d = must(
             "fleet.list_agents",
-            "easynet:///r/acme/agent/01HUB",
+            "easynet:///r/acme/hub",
             Visibility::Scoped,
         )
         .with_scope_subjects(ScopeRule::OnlyMatching(vec![
-            "easynet:///r/acme/agent/01DEV".into(),
+            "easynet:///r/acme/device/dev-1".into(),
         ]));
-        assert!(d.is_visible_to("anybody", "easynet:///r/acme/agent/01DEV"));
-        assert!(d.is_visible_to("anybody", "easynet:///r/acme/agent/01DEV/sub"));
-        assert!(!d.is_visible_to("anybody", "easynet:///r/acme/agent/01DEVATTACKER"));
-        assert!(!d.is_visible_to("anybody", "easynet:///r/acme/agent/01D"));
+        assert!(d.is_visible_to("anybody", "easynet:///r/acme/device/dev-1"));
+        assert!(d.is_visible_to("anybody", "easynet:///r/acme/device/dev-1/sub"));
+        assert!(!d.is_visible_to("anybody", "easynet:///r/acme/device/dev-1-attacker"));
+        assert!(!d.is_visible_to("anybody", "easynet:///r/acme/device/dev-"));
     }
 
     #[test]
@@ -531,7 +548,7 @@ mod tests {
         metadata.insert("agent_type".into(), "claude-code".into());
         let d = AbilityDescriptor {
             name: "skill.alive-video".into(),
-            owner_agent_uri: "easynet:///r/acme/agent/01LLM".into(),
+            owner_agent_uri: "easynet:///r/acme/agent/alice.claude".into(),
             visibility: Visibility::Scoped,
             scope_subjects: ScopeRule::OnlyMatching(vec!["operator".into()]),
             scope_agents: ScopeRule::Any,

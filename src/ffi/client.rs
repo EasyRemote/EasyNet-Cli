@@ -283,6 +283,7 @@ mod tests {
                 request_id: "ffi-1".into(),
                 ability: "observe.health".into(),
                 args: serde_json::json!({}),
+                subject: None,
             })
             .await
             .expect("round_trip");

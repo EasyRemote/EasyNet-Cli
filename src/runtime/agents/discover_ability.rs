@@ -321,10 +321,7 @@ fn resolve_via_federation(
     // gate rejects with AXON_MEMBERSHIP_REQUIRED — same caller-URI
     // fix we apply at the daemon-boot advertise call site (see
     // `facade::cli::start::republish_via_federation_best_effort`).
-    let device_caller_uri = format!(
-        "easynet:///r/{tenant}/agent/{node_id}",
-        node_id = creds.node_id
-    );
+    let device_caller_uri = crate::uri::device_uri(tenant, &creds.node_id);
     let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
         &bridge,
         device_caller_uri,

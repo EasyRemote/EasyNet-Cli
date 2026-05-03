@@ -323,6 +323,7 @@ mod tests {
             request_id: "smoke-1".into(),
             ability: "observe.health".into(),
             args: serde_json::json!({}),
+            subject: None,
         };
         let payload = serde_json::to_vec(&req).unwrap();
         let len = u32::try_from(payload.len()).unwrap().to_le_bytes();
@@ -574,6 +575,7 @@ mod tests {
             request_id: "after-bad".into(),
             ability: "observe.health".into(),
             args: serde_json::json!({}),
+            subject: None,
         };
         let payload = serde_json::to_vec(&req).unwrap();
         let len = u32::try_from(payload.len()).unwrap().to_le_bytes();

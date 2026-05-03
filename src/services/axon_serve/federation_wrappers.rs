@@ -68,15 +68,19 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::services::advertised_agent_store::{
+    AdvertisedAgentRecord, AdvertisedAgentSigningAuthority, AdvertisedAgentStore,
+};
 use crate::services::presence_registry::PresenceRegistry;
 
 /// `federation.join` — caller's claimed URI is authoritative; no
 /// hub-side `agent/a-X` minting (spec §5.1 URI scheme migration).
 pub const ABILITY_FEDERATION_JOIN: &str = "federation.join";
 
-/// `federation.advertise_agent` — no-op success when the caller's
-/// `<self>.session` is already in the PresenceRegistry; the actual
-/// directory entry is implicit in stream presence.
+/// `federation.advertise_agent` — records hosted-agent directory rows.
+/// PresenceRegistry still owns transport liveness; resolve joins the
+/// two so `/agent/<user>.<agent>` rows surface while online/offline
+/// is derived from the host device's live `<self>.session`.
 pub const ABILITY_FEDERATION_ADVERTISE_AGENT: &str = "federation.advertise_agent";
 
 /// `federation.heartbeat` — warns that liveness is now stream-derived
@@ -84,8 +88,8 @@ pub const ABILITY_FEDERATION_ADVERTISE_AGENT: &str = "federation.advertise_agent
 /// without us re-implementing the unary heartbeat path.
 pub const ABILITY_FEDERATION_HEARTBEAT: &str = "federation.heartbeat";
 
-/// `federation.resolve` — looks up agents in the PresenceRegistry by
-/// prefix. Status always "active" because in-registry equals online.
+/// `federation.resolve` — projects both live PresenceRegistry URIs
+/// and hosted-agent rows whose host device is presently online.
 pub const ABILITY_FEDERATION_RESOLVE: &str = "federation.resolve";
 
 /// `federation.subscribe_directory` — the only federation.* ability
@@ -149,6 +153,27 @@ pub const ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2: &str = "federation.subscrib
 /// realm at its end).
 pub const ABILITY_FEDERATION_LIST_USER_DEVICES: &str = "federation.list_user_devices";
 
+/// `federation.advertise_abilities` — backend self-registration
+/// path. Backend on boot publishes its own ability descriptors
+/// (`aggregate.list_skills_across_fleet` etc.) so they show up in
+/// `federation.resolve(prefix=hub)`. PR-1 staging accepts the call
+/// as a no-op success — the directory is presence-driven via
+/// `<self>.session` membership, so the descriptors don't need
+/// separate persistence. Without the handler the backend's boot
+/// path errors `Unimplemented` and the realm directory is silently
+/// missing every backend-owned ability.
+pub const ABILITY_FEDERATION_ADVERTISE_ABILITIES: &str = "federation.advertise_abilities";
+
+/// `runtime.bootstrap_self_identity` — runtime-self handshake the
+/// backend issues at boot to register its hub-as-agent verifying
+/// key with the hub's KeyResolver. PR-1 staging accepts the call
+/// as a typed ack: the daemon's admission gate already trusts the
+/// caller via the trust anchor file, so the runtime does not need
+/// to re-derive keys. Without this handler the backend panics on
+/// `axon.BootstrapSelfIdentity` at boot and `federation.resolve`
+/// fans out against an empty key cache.
+pub const ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY: &str = "runtime.bootstrap_self_identity";
+
 /// All ten federation.* ability names in deterministic order.
 /// Iteration order is the order PR-4's schema-compat matrix files
 /// land on disk, so changing this slice without updating PR-4
@@ -165,6 +190,7 @@ pub const FEDERATION_ABILITIES: &[&str] = &[
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
     ABILITY_FEDERATION_REVOKE,
     ABILITY_FEDERATION_FORWARD_INVOKE,
+    ABILITY_FEDERATION_ADVERTISE_ABILITIES,
 ];
 
 // ─── federation.join ───────────────────────────────────────────────
@@ -233,11 +259,51 @@ pub fn derive_join_receipt_hash(caller_uri: &str, realm: &str) -> String {
 pub struct AdvertiseAgentRequest {
     /// URI of the agent being advertised.
     pub agent_uri: String,
-    /// Optional URI of a host that proxies for `agent_uri`. When
-    /// present, the dispatcher verifies `host_uri` is in
-    /// PresenceRegistry; PR-1 staging skips that verification.
+    /// New wire shape used by the publisher. Legacy callers may still
+    /// send a top-level `host_uri`, so we accept both.
+    #[serde(default)]
+    pub signing_authority: Option<AdvertiseSigningAuthorityRequest>,
+    #[serde(default)]
+    pub public_key_hex: String,
     #[serde(default)]
     pub host_uri: Option<String>,
+    #[serde(default)]
+    pub host_node_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AdvertiseSigningAuthorityRequest {
+    SelfSigned,
+    HostedBy { host_uri: String },
+}
+
+impl AdvertiseAgentRequest {
+    #[must_use]
+    fn to_record(&self) -> AdvertisedAgentRecord {
+        let signing_authority = match &self.signing_authority {
+            Some(AdvertiseSigningAuthorityRequest::SelfSigned) => {
+                AdvertisedAgentSigningAuthority::SelfSigned
+            }
+            Some(AdvertiseSigningAuthorityRequest::HostedBy { host_uri }) => {
+                AdvertisedAgentSigningAuthority::HostedBy {
+                    host_uri: host_uri.clone(),
+                }
+            }
+            None => match &self.host_uri {
+                Some(host_uri) => AdvertisedAgentSigningAuthority::HostedBy {
+                    host_uri: host_uri.clone(),
+                },
+                None => AdvertisedAgentSigningAuthority::SelfSigned,
+            },
+        };
+        AdvertisedAgentRecord {
+            agent_uri: self.agent_uri.clone(),
+            public_key_hex: self.public_key_hex.clone(),
+            host_node_id: self.host_node_id.clone(),
+            signing_authority,
+        }
+    }
 }
 
 /// Response payload for `federation.advertise_agent`.
@@ -252,16 +318,102 @@ pub struct AdvertiseAgentResponse {
     pub replaced_prior: bool,
 }
 
-/// Handle a `federation.advertise_agent` invocation. PR-1 staging:
-/// no-op success because directory state is implicit in
-/// `<self>.session` membership rather than maintained as a
-/// separate advertise table.
+/// Handle a `federation.advertise_agent` invocation. Presence still
+/// owns liveness; the store just captures the host-device linkage so
+/// resolve can surface hosted agents.
 #[must_use]
-pub fn handle_advertise_agent(_request: &AdvertiseAgentRequest) -> AdvertiseAgentResponse {
+pub fn handle_advertise_agent(
+    request: &AdvertiseAgentRequest,
+    store: Option<&AdvertisedAgentStore>,
+) -> AdvertiseAgentResponse {
+    if let Some(store) = store {
+        store.upsert(request.to_record());
+    }
     AdvertiseAgentResponse {
         ack: true,
         replaced_prior: false,
     }
+}
+
+// ─── federation.advertise_abilities ────────────────────────────────
+
+/// Request payload for `federation.advertise_abilities`. Used by the
+/// backend at boot to publish its own ability catalog (and by every
+/// hosted-agent advertise sweep). The wrapper accepts the request
+/// shape verbatim — the daemon does not persist the abilities; they
+/// surface naturally via `<self>.session` membership during
+/// `federation.resolve(prefix)` fan-outs.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AdvertiseAbilitiesRequest {
+    /// Caller-claimed agent URI publishing the abilities. Captured
+    /// for log context only; admission verifies caller equality
+    /// against the envelope before this wrapper runs.
+    pub agent_uri: String,
+    /// Catalog of ability descriptors. We accept any shape so a
+    /// future descriptor evolution does not require a daemon recompile;
+    /// only the count is reported back.
+    #[serde(default)]
+    pub abilities: Vec<serde_json::Value>,
+}
+
+/// Response payload for `federation.advertise_abilities`. Matches
+/// the wire shape the backend's `aggregator.advertise_abilities`
+/// expects (`ack` + `count`). PR-1 staging always returns
+/// `ack = true`; future PRs may surface partial-failure counts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdvertiseAbilitiesResponse {
+    pub ack: bool,
+    pub count: usize,
+}
+
+/// Handle a `federation.advertise_abilities` invocation. PR-1
+/// staging took this as a no-op stub; PR-fix-N stores the
+/// descriptor list in the daemon's `AbilityCatalogStore` so
+/// `federation.resolve(include_abilities=true)` can project them
+/// back to the backend's `/api/v1/abilities` page.
+#[must_use]
+pub fn handle_advertise_abilities(
+    request: &AdvertiseAbilitiesRequest,
+    catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
+) -> AdvertiseAbilitiesResponse {
+    let count = request.abilities.len();
+    if let Some(store) = catalog {
+        store.upsert(request.agent_uri.clone(), request.abilities.clone());
+    }
+    AdvertiseAbilitiesResponse { ack: true, count }
+}
+
+// ─── runtime.bootstrap_self_identity ───────────────────────────────
+
+/// Request payload for `runtime.bootstrap_self_identity`. The backend
+/// emits this once at boot so the daemon's KeyResolver can pin the
+/// hub's verifying key without waiting for a pairing flow. The shape
+/// is intentionally permissive: any of `agent_uri`, `node_id`,
+/// `tenant_id`, `public_key_b64` may be absent. Daemon-side trust
+/// is anchored in `realm-trust.toml`, so the wrapper's job is to
+/// acknowledge the call and let the boot path proceed.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct BootstrapSelfIdentityRequest {
+    #[serde(default)]
+    pub agent_uri: String,
+    #[serde(default)]
+    pub node_id: String,
+    #[serde(default)]
+    pub tenant_id: String,
+    #[serde(default)]
+    pub public_key_b64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BootstrapSelfIdentityResponse {
+    pub ack: bool,
+}
+
+#[must_use]
+pub fn handle_bootstrap_self_identity(
+    _request: &BootstrapSelfIdentityRequest,
+) -> BootstrapSelfIdentityResponse {
+    BootstrapSelfIdentityResponse { ack: true }
 }
 
 // ─── federation.heartbeat ──────────────────────────────────────────
@@ -306,24 +458,78 @@ pub fn handle_heartbeat(
 // ─── federation.resolve ────────────────────────────────────────────
 
 /// Request payload for `federation.resolve`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct ResolveRequest {
     /// Optional URI prefix to filter the registry on. When absent,
     /// returns every online agent.
     #[serde(default)]
     pub uri_prefix: Option<String>,
+    /// When true, the response carries each agent's
+    /// `abilities[]` from the daemon's `AbilityCatalogStore`
+    /// (populated by `federation.advertise_abilities`). When
+    /// false / absent, the abilities slot is left empty so
+    /// callers paying the wire-bandwidth cost can opt out.
+    #[serde(default)]
+    pub include_abilities: bool,
+    /// Compatibility with the older nested `filter{...}` request
+    /// shape still emitted by some bridge helpers.
+    #[serde(default)]
+    pub filter: Option<ResolveFilterRequest>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ResolveFilterRequest {
+    #[serde(default)]
+    pub agent_uri_prefix: Option<String>,
+    #[serde(default)]
+    pub include_abilities: bool,
+}
+
+impl ResolveRequest {
+    #[must_use]
+    fn effective_uri_prefix(&self) -> Option<&str> {
+        self.uri_prefix.as_deref().or_else(|| {
+            self.filter
+                .as_ref()
+                .and_then(|filter| filter.agent_uri_prefix.as_deref())
+        })
+    }
+
+    #[must_use]
+    fn wants_abilities(&self) -> bool {
+        self.include_abilities
+            || self
+                .filter
+                .as_ref()
+                .map(|filter| filter.include_abilities)
+                .unwrap_or(false)
+    }
 }
 
 /// One agent in a resolve response. Matches the backend Go helper's
 /// `ResolvedAgent` wire shape (`uri`, `status`) so
 /// `axon.ResolveAgents` can unmarshal real daemon receipts without a
 /// JSON field-name shim.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolveAgentSummary {
     /// The agent's URI; deterministic.
     pub uri: String,
     /// Always `"active"` because in-registry equals online; spec §4.
     pub status: String,
+    /// Host device node id for hosted agents. Omitted for self-signed
+    /// entries and older daemons that do not track host linkage.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub host_node_id: Option<String>,
+    /// Catalog of ability descriptors the agent advertised via
+    /// `federation.advertise_abilities`. Populated only when the
+    /// caller sets `include_abilities = true` AND the daemon's
+    /// `AbilityCatalogStore` has a row for this URI; absent
+    /// otherwise. Each entry is the descriptor JSON the device
+    /// emitted (free-form: `{name, tool_name, description, ...}`)
+    /// so the backend can extend the projection without re-reading
+    /// the wire.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub abilities: Vec<serde_json::Value>,
 }
 
 /// Legacy v1 directory-stream projection. Kept separate from
@@ -338,7 +544,7 @@ pub struct AgentSummary {
 }
 
 /// Response payload for `federation.resolve`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolveResponse {
     /// Sorted ascending by `uri` so byte-identical
     /// responses come from byte-identical state.
@@ -346,21 +552,86 @@ pub struct ResolveResponse {
 }
 
 /// Handle a `federation.resolve` invocation.
+///
+/// `catalog` is the optional `AbilityCatalogStore` the daemon
+/// constructs at boot. When `request.include_abilities` is true
+/// AND the store has a row for an in-presence URI, the response
+/// carries that agent's published `abilities[]` verbatim. Hub-mode
+/// daemons in production always wire a catalog; the smoke-test
+/// build-without-catalog path passes `None` and the abilities slot
+/// stays empty (matching pre-PR behaviour).
 #[must_use]
-pub fn handle_resolve(request: &ResolveRequest, registry: &PresenceRegistry) -> ResolveResponse {
-    let snapshot = registry.snapshot();
-    let agents = snapshot
-        .into_iter()
-        .filter(|uri| match &request.uri_prefix {
-            Some(prefix) => uri.starts_with(prefix),
-            None => true,
-        })
-        .map(|uri| ResolveAgentSummary {
-            uri,
-            status: "active".to_string(),
-        })
-        .collect();
-    ResolveResponse { agents }
+pub fn handle_resolve(
+    request: &ResolveRequest,
+    registry: &PresenceRegistry,
+    advertised_agents: Option<&AdvertisedAgentStore>,
+    catalog: Option<&crate::services::ability_catalog_store::AbilityCatalogStore>,
+) -> ResolveResponse {
+    let prefix = request.effective_uri_prefix();
+    let want_abilities = request.wants_abilities();
+    let mut agents = std::collections::BTreeMap::<String, ResolveAgentSummary>::new();
+
+    for uri in registry.snapshot() {
+        if prefix.is_some_and(|p| !uri.starts_with(p)) {
+            continue;
+        }
+        let abilities = if want_abilities {
+            catalog.and_then(|c| c.get(&uri)).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        agents.insert(
+            uri.clone(),
+            ResolveAgentSummary {
+                uri,
+                status: "active".to_string(),
+                host_node_id: None,
+                abilities,
+            },
+        );
+    }
+
+    if let Some(store) = advertised_agents {
+        for record in store.snapshot() {
+            let is_online = match record.host_uri() {
+                Some(host_uri) => registry.lookup(host_uri).is_some(),
+                None => registry.lookup(&record.agent_uri).is_some(),
+            };
+            if !is_online {
+                continue;
+            }
+            if prefix.is_some_and(|p| !record.agent_uri.starts_with(p)) {
+                continue;
+            }
+            let abilities = if want_abilities {
+                catalog
+                    .and_then(|c| c.get(&record.agent_uri))
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            agents
+                .entry(record.agent_uri.clone())
+                .and_modify(|summary| {
+                    if summary.host_node_id.is_none() {
+                        summary.host_node_id = record.host_node_id.clone();
+                    }
+                    if summary.abilities.is_empty() {
+                        summary.abilities = abilities.clone();
+                    }
+                })
+                .or_insert(ResolveAgentSummary {
+                    uri: record.agent_uri,
+                    status: "active".to_string(),
+                    host_node_id: record.host_node_id,
+                    abilities,
+                });
+        }
+    }
+
+    ResolveResponse {
+        agents: agents.into_values().collect(),
+    }
 }
 
 // ─── federation.resolve_key ────────────────────────────────────────
@@ -511,7 +782,7 @@ pub fn handle_discover_with_user_filter(
 
 /// Request payload for `federation.list_user_devices`. The
 /// `tenant_id` is the URI realm component (`<tenant>` in
-/// `easynet:///r/<tenant>/agent/<id>`) — the same shape backend
+/// `easynet:///r/<tenant>/device/<id>`) — the same shape backend
 /// Go uses to key device_pairing rows.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ListUserDevicesRequest {
@@ -542,22 +813,48 @@ pub struct ListUserDevicesResponse {
 /// PresenceRegistry only knows URIs and active/inactive state.
 /// Enriching from the backend's device_pairing table (with
 /// real display_name, last_seen) is N3-6 backend-Go territory.
+///
+/// URI compatibility:
+/// - Canonical v4.1.4 device sessions live under
+///   `easynet:///r/<tenant>/device/<node>`.
+/// - Legacy pre-Phase-2A device sessions may still appear as the
+///   collapsed bare `.../agent/<node>` form.
+/// - Real agent-profile URIs (`.../agent/<user>.<agent>`) are not
+///   device sessions and are ignored here.
 #[must_use]
 pub fn handle_list_user_devices(
     request: &ListUserDevicesRequest,
     registry: &PresenceRegistry,
 ) -> ListUserDevicesResponse {
-    let tenant_prefix = format!("easynet:///r/{}/agent/", request.tenant_id);
+    let tenant_device_prefix = crate::uri::realm_device_prefix(&request.tenant_id);
+    let tenant_legacy_agent_prefix = crate::uri::realm_agent_prefix(&request.tenant_id);
     let snapshot = registry.snapshot();
     let devices = snapshot
         .into_iter()
-        .filter(|uri| uri.starts_with(&tenant_prefix))
+        .filter(|uri| {
+            if uri.starts_with(&tenant_device_prefix) {
+                return true;
+            }
+            uri.strip_prefix(&tenant_legacy_agent_prefix)
+                .map(|tail| !tail.is_empty() && !tail.contains('.') && !tail.contains('/'))
+                .unwrap_or(false)
+        })
         .map(|uri| {
-            // Extract node_id from `easynet:///r/<tenant>/agent/<node_id>`.
-            let node_id = uri
-                .strip_prefix(&tenant_prefix)
-                .map(str::to_string)
-                .unwrap_or_default();
+            // Extract node_id from the canonical v4.1.4
+            // `/device/<node>` tail first; legacy bare
+            // `/agent/<node>` tails stay accepted during the
+            // migration window.
+            let node_id = match crate::uri::parse_ura(&uri) {
+                Ok(parsed) if parsed.kind == crate::uri::URAKind::Device => parsed.device_id,
+                _ => {
+                    let legacy = crate::uri::strip_v1_agent_prefix(&uri);
+                    if legacy == uri {
+                        String::new()
+                    } else {
+                        legacy
+                    }
+                }
+            };
             crate::services::federation_directory::DirectoryEntry {
                 agent_uri: uri,
                 node_id,
@@ -577,8 +874,23 @@ pub fn handle_list_user_devices(
 /// Request payload for `federation.revoke`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RevokeRequest {
-    /// URI of the agent to revoke.
+    /// Modern callers send `agent_uri`; older callers send
+    /// `target_uri`. We accept both.
+    #[serde(default)]
     pub target_uri: String,
+    #[serde(default)]
+    pub agent_uri: String,
+}
+
+impl RevokeRequest {
+    #[must_use]
+    fn effective_target_uri(&self) -> &str {
+        if !self.target_uri.is_empty() {
+            &self.target_uri
+        } else {
+            &self.agent_uri
+        }
+    }
 }
 
 /// Response payload for `federation.revoke`.
@@ -596,9 +908,24 @@ pub struct RevokeResponse {
 /// revoke time so the caller can distinguish a real revoke from a
 /// no-op.
 #[must_use]
-pub fn handle_revoke(request: &RevokeRequest, registry: &PresenceRegistry) -> RevokeResponse {
-    let was_active = registry.lookup(&request.target_uri).is_some();
-    let _displaced = registry.force_revoke(&request.target_uri);
+pub fn handle_revoke(
+    request: &RevokeRequest,
+    registry: &PresenceRegistry,
+    advertised_agents: Option<&AdvertisedAgentStore>,
+) -> RevokeResponse {
+    let target_uri = request.effective_target_uri();
+    let was_active = registry.lookup(target_uri).is_some()
+        || advertised_agents
+            .and_then(|store| store.get(target_uri))
+            .map(|record| match record.host_uri() {
+                Some(host_uri) => registry.lookup(host_uri).is_some(),
+                None => registry.lookup(&record.agent_uri).is_some(),
+            })
+            .unwrap_or(false);
+    let _displaced = registry.force_revoke(target_uri);
+    if let Some(store) = advertised_agents {
+        let _removed = store.remove(target_uri);
+    }
     RevokeResponse {
         ack: true,
         was_active,
@@ -840,7 +1167,18 @@ mod tests {
             ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
             "federation.subscribe_directory_v2"
         );
-        assert_eq!(FEDERATION_ABILITIES.len(), 11);
+        assert_eq!(
+            ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+            "federation.advertise_abilities"
+        );
+        assert_eq!(
+            ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
+            "runtime.bootstrap_self_identity"
+        );
+        // 12 federation.* abilities now wired (added advertise_abilities
+        // for backend self-publish; bootstrap_self_identity is namespaced
+        // under `runtime.*` so it lives outside this set).
+        assert_eq!(FEDERATION_ABILITIES.len(), 12);
     }
 
     #[test]
@@ -887,13 +1225,23 @@ mod tests {
 
     #[test]
     fn handle_advertise_agent_returns_typed_ack() {
+        let store = AdvertisedAgentStore::new();
         let req = AdvertiseAgentRequest {
             agent_uri: "easynet:///r/realm/agent/n1".to_string(),
+            signing_authority: Some(AdvertiseSigningAuthorityRequest::HostedBy {
+                host_uri: "easynet:///r/realm/device/dev-1".to_string(),
+            }),
+            public_key_hex: String::new(),
             host_uri: None,
+            host_node_id: Some("dev-1".to_string()),
         };
-        let resp = handle_advertise_agent(&req);
+        let resp = handle_advertise_agent(&req, Some(&store));
         assert!(resp.ack);
         assert!(!resp.replaced_prior);
+        let stored = store
+            .get("easynet:///r/realm/agent/n1")
+            .expect("advertised agent must be stored");
+        assert_eq!(stored.host_uri(), Some("easynet:///r/realm/device/dev-1"));
     }
 
     #[test]
@@ -931,7 +1279,16 @@ mod tests {
             make_dispatch_sender(),
         );
 
-        let resp = handle_resolve(&ResolveRequest { uri_prefix: None }, &registry);
+        let resp = handle_resolve(
+            &ResolveRequest {
+                uri_prefix: None,
+                include_abilities: false,
+                filter: None,
+            },
+            &registry,
+            None,
+            None,
+        );
         let uris: Vec<&str> = resp.agents.iter().map(|a| a.uri.as_str()).collect();
         assert_eq!(
             uris,
@@ -961,11 +1318,52 @@ mod tests {
         let resp = handle_resolve(
             &ResolveRequest {
                 uri_prefix: Some("easynet:///r/realm-a".to_string()),
+                include_abilities: false,
+                filter: None,
             },
             &registry,
+            None,
+            None,
         );
         assert_eq!(resp.agents.len(), 1);
         assert_eq!(resp.agents[0].uri, "easynet:///r/realm-a/agent/x");
+    }
+
+    #[test]
+    fn handle_resolve_includes_hosted_agent_when_host_device_is_online() {
+        let registry = PresenceRegistry::new();
+        registry.insert(
+            "easynet:///r/realm/device/dev-1".to_string(),
+            make_dispatch_sender(),
+        );
+        let catalog = crate::services::ability_catalog_store::AbilityCatalogStore::new();
+        catalog.upsert(
+            "easynet:///r/realm/agent/user.alice".into(),
+            vec![serde_json::json!({"name":"alice.chat"})],
+        );
+        let advertised = AdvertisedAgentStore::new();
+        advertised.upsert(AdvertisedAgentRecord {
+            agent_uri: "easynet:///r/realm/agent/user.alice".into(),
+            public_key_hex: String::new(),
+            host_node_id: Some("dev-1".into()),
+            signing_authority: AdvertisedAgentSigningAuthority::HostedBy {
+                host_uri: "easynet:///r/realm/device/dev-1".into(),
+            },
+        });
+
+        let resp = handle_resolve(
+            &ResolveRequest {
+                uri_prefix: Some("easynet:///r/realm/agent/".to_string()),
+                include_abilities: true,
+                filter: None,
+            },
+            &registry,
+            Some(&advertised),
+            Some(&catalog),
+        );
+        assert_eq!(resp.agents.len(), 1);
+        assert_eq!(resp.agents[0].uri, "easynet:///r/realm/agent/user.alice");
+        assert_eq!(resp.agents[0].abilities.len(), 1);
     }
 
     #[test]
@@ -1177,15 +1575,15 @@ mod tests {
         // entries.
         let registry = PresenceRegistry::new();
         registry.insert(
-            "easynet:///r/tenant-a/agent/device-1".to_string(),
+            "easynet:///r/tenant-a/device/device-1".to_string(),
             make_dispatch_sender(),
         );
         registry.insert(
-            "easynet:///r/tenant-a/agent/device-2".to_string(),
+            "easynet:///r/tenant-a/device/device-2".to_string(),
             make_dispatch_sender(),
         );
         registry.insert(
-            "easynet:///r/tenant-b/agent/device-3".to_string(),
+            "easynet:///r/tenant-b/device/device-3".to_string(),
             make_dispatch_sender(),
         );
 
@@ -1197,7 +1595,7 @@ mod tests {
         );
         assert_eq!(resp.devices.len(), 2);
         for entry in &resp.devices {
-            assert!(entry.agent_uri.starts_with("easynet:///r/tenant-a/agent/"));
+            assert!(entry.agent_uri.starts_with("easynet:///r/tenant-a/device/"));
             assert_eq!(entry.origin_realm, None, "speaks for own realm — None");
             assert_eq!(entry.status, "active");
         }
@@ -1207,7 +1605,7 @@ mod tests {
     fn handle_list_user_devices_extracts_node_id_from_uri() {
         let registry = PresenceRegistry::new();
         registry.insert(
-            "easynet:///r/tenant-a/agent/node-xyz".to_string(),
+            "easynet:///r/tenant-a/device/node-xyz".to_string(),
             make_dispatch_sender(),
         );
 
@@ -1222,10 +1620,36 @@ mod tests {
     }
 
     #[test]
+    fn handle_list_user_devices_accepts_legacy_agent_device_shape_only() {
+        let registry = PresenceRegistry::new();
+        registry.insert(
+            "easynet:///r/tenant-a/agent/node-legacy".to_string(),
+            make_dispatch_sender(),
+        );
+        registry.insert(
+            "easynet:///r/tenant-a/agent/alice.claude".to_string(),
+            make_dispatch_sender(),
+        );
+
+        let resp = handle_list_user_devices(
+            &ListUserDevicesRequest {
+                tenant_id: "tenant-a".to_string(),
+            },
+            &registry,
+        );
+        assert_eq!(resp.devices.len(), 1, "real agent URIs must be ignored");
+        assert_eq!(resp.devices[0].node_id, "node-legacy");
+        assert_eq!(
+            resp.devices[0].agent_uri,
+            "easynet:///r/tenant-a/agent/node-legacy"
+        );
+    }
+
+    #[test]
     fn handle_list_user_devices_returns_empty_when_no_match() {
         let registry = PresenceRegistry::new();
         registry.insert(
-            "easynet:///r/tenant-a/agent/device".to_string(),
+            "easynet:///r/tenant-a/device/device".to_string(),
             make_dispatch_sender(),
         );
 
@@ -1247,8 +1671,10 @@ mod tests {
         let resp = handle_revoke(
             &RevokeRequest {
                 target_uri: uri.clone(),
+                agent_uri: String::new(),
             },
             &registry,
+            None,
         );
         assert!(resp.ack);
         assert!(resp.was_active);
@@ -1256,16 +1682,33 @@ mod tests {
     }
 
     #[test]
-    fn handle_revoke_on_unknown_uri_reports_was_active_false() {
+    fn handle_revoke_removes_hosted_agent_rows_too() {
         let registry = PresenceRegistry::new();
+        let advertised = AdvertisedAgentStore::new();
+        advertised.upsert(AdvertisedAgentRecord {
+            agent_uri: "easynet:///r/realm/agent/user.alice".into(),
+            public_key_hex: String::new(),
+            host_node_id: Some("dev-1".into()),
+            signing_authority: AdvertisedAgentSigningAuthority::HostedBy {
+                host_uri: "easynet:///r/realm/device/dev-1".into(),
+            },
+        });
         let resp = handle_revoke(
             &RevokeRequest {
-                target_uri: "easynet:///r/realm/agent/missing".to_string(),
+                target_uri: String::new(),
+                agent_uri: "easynet:///r/realm/agent/user.alice".to_string(),
             },
             &registry,
+            Some(&advertised),
         );
         assert!(resp.ack);
         assert!(!resp.was_active);
+        assert!(
+            advertised
+                .get("easynet:///r/realm/agent/user.alice")
+                .is_none(),
+            "revoke must remove advertised hosted-agent rows"
+        );
     }
 
     #[test]

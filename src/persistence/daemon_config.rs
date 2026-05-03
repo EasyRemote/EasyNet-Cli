@@ -400,7 +400,7 @@ mod tests {
     fn device_mode_with_hub_endpoint_is_valid() {
         let cfg = DaemonConfig::from_raw(raw(
             DaemonMode::Device,
-            "easynet-platform",
+            "easynet.run",
             Some("https://hub.example.com:50051"),
             None,
             None,
@@ -409,7 +409,7 @@ mod tests {
         .expect("valid device config");
 
         assert_eq!(cfg.mode(), DaemonMode::Device);
-        assert_eq!(cfg.realm(), "easynet-platform");
+        assert_eq!(cfg.realm(), "easynet.run");
         assert_eq!(cfg.hub_endpoint(), Some("https://hub.example.com:50051"));
         assert!(cfg.listen_tcp().is_none());
     }
@@ -418,7 +418,7 @@ mod tests {
     fn invariant_1_device_with_tcp_is_rejected() {
         let err = DaemonConfig::from_raw(raw(
             DaemonMode::Device,
-            "easynet-platform",
+            "easynet.run",
             Some("https://hub.example.com:50051"),
             Some("0.0.0.0:50051"),
             None,
@@ -433,7 +433,7 @@ mod tests {
     fn invariant_2_tcp_without_cert_is_rejected() {
         let err = DaemonConfig::from_raw(raw(
             DaemonMode::Hub,
-            "easynet-platform",
+            "easynet.run",
             None,
             Some("0.0.0.0:50051"),
             None,
@@ -448,7 +448,7 @@ mod tests {
     fn invariant_2_tcp_with_cert_only_is_rejected() {
         let err = DaemonConfig::from_raw(raw(
             DaemonMode::Hub,
-            "easynet-platform",
+            "easynet.run",
             None,
             Some("0.0.0.0:50051"),
             Some("/etc/easynet/tls/cert.pem"),
@@ -463,7 +463,7 @@ mod tests {
     fn hub_mode_with_full_tls_is_valid() {
         let cfg = DaemonConfig::from_raw(raw(
             DaemonMode::Hub,
-            "easynet-platform",
+            "easynet.run",
             None,
             Some("0.0.0.0:50051"),
             Some("/etc/easynet/tls/cert.pem"),
@@ -486,7 +486,7 @@ mod tests {
     fn both_mode_with_full_tls_is_valid() {
         let cfg = DaemonConfig::from_raw(raw(
             DaemonMode::Both,
-            "easynet-platform",
+            "easynet.run",
             None,
             Some("0.0.0.0:50051"),
             Some("/etc/easynet/tls/cert.pem"),
@@ -531,7 +531,7 @@ mod tests {
     fn invalid_listen_tcp_is_rejected() {
         let err = DaemonConfig::from_raw(raw(
             DaemonMode::Hub,
-            "easynet-platform",
+            "easynet.run",
             None,
             Some("not a socket address"),
             Some("/etc/easynet/tls/cert.pem"),
@@ -546,7 +546,7 @@ mod tests {
     fn device_mode_without_hub_endpoint_is_rejected() {
         let err = DaemonConfig::from_raw(raw(
             DaemonMode::Device,
-            "easynet-platform",
+            "easynet.run",
             None,
             None,
             None,
@@ -561,7 +561,7 @@ mod tests {
     fn default_uds_path_is_used_when_omitted() {
         let cfg = DaemonConfig::from_raw(raw(
             DaemonMode::Hub,
-            "easynet-platform",
+            "easynet.run",
             None,
             Some("0.0.0.0:50051"),
             Some("/etc/easynet/tls/cert.pem"),

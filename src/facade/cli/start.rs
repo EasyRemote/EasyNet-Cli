@@ -546,15 +546,53 @@ fn republish_via_federation_best_effort(
 fn build_bootstrap_plan(
     creds: &config::Credentials,
 ) -> anyhow::Result<crate::runtime::agents::profiles::bootstrap::BootstrapPlan> {
-    build_bootstrap_plan_from(&creds.tenant_id, &creds.node_id)
+    let username = bootstrap_username_for(creds);
+    build_bootstrap_plan_from(&creds.tenant_id, &creds.node_id, &username)
+}
+
+/// Resolve the hosted-agent owner slug used in canonical
+/// `agent/<user>.<id>` URIs.
+///
+/// Primary source is `credentials.json.username`, which the pairing
+/// flow persists once the backend returns the stable username slug.
+/// During the migration window older credentials files may still miss
+/// it even though the operator has a valid auth session; in that case
+/// fall back to `auth.json.username`. We deliberately do NOT fall back
+/// to JWT `user_id` because backend visibility filters anchor on the
+/// stable username slug, and swapping in the UUID would mint another
+/// invisible-but-plausible URI instead of surfacing the missing data.
+pub(crate) fn bootstrap_username_for(creds: &config::Credentials) -> String {
+    if let Some(username) = creds
+        .username
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        return username.to_string();
+    }
+    match crate::facade::cli::auth::load_session() {
+        Ok(Some(session)) => session
+            .username
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .unwrap_or("")
+            .to_string(),
+        Ok(None) | Err(_) => String::new(),
+    }
 }
 
 /// Variant that takes the inputs directly. Public so `agent.rs`'s
 /// publish path can construct the plan from a `(tenant_id,
-/// node_id)` pair already in scope without re-loading credentials.
+/// node_id, username)` triple already in scope without re-loading
+/// credentials. The third argument is the stable username slug the
+/// backend resolves for this user and anchors under `user/` / `agent/`
+/// URIs; pass empty when the device is not yet joined or the slug is
+/// genuinely unavailable.
 pub(crate) fn build_bootstrap_plan_from(
     tenant_id: &str,
     node_id: &str,
+    username: &str,
 ) -> anyhow::Result<crate::runtime::agents::profiles::bootstrap::BootstrapPlan> {
     use crate::runtime::agents::profiles::bootstrap::{BootstrapPlan, LlmSubAgent};
 
@@ -574,6 +612,7 @@ pub(crate) fn build_bootstrap_plan_from(
         // The credentials' realm field maps to the tenant for now;
         // a future config split will separate them.
         realm: tenant_id.to_string(),
+        user_id: username.to_string(),
         // node_id from credentials is the local node identifier
         // (`en-...`). Wrap it in the canonical URA shape so every
         // downstream consumer (advertise_self_signed_device,
@@ -581,7 +620,7 @@ pub(crate) fn build_bootstrap_plan_from(
         // self-signed-must-equal-caller check) sees one form. The
         // bare node_id remains accessible separately via
         // `creds.node_id` when an entry path needs it.
-        host_device_uri: format!("easynet:///r/{tenant_id}/agent/{node_id}"),
+        host_device_uri: crate::uri::device_uri(tenant_id, node_id),
         // Defaults match plan §1's "default-on consent on
         // interactive hosts"; policy + mcp default off until
         // [profiles] config wiring lands.
@@ -724,7 +763,7 @@ fn run_foreground_with_heartbeat(
     // semantics the legacy RPC had.
     {
         let plan_realm = &creds.tenant_id; // realm == tenant in v1 (see build_bootstrap_plan_from)
-        let device_uri = format!("easynet:///r/{}/agent/{}", creds.tenant_id, creds.node_id);
+        let device_uri = crate::uri::device_uri(&creds.tenant_id, &creds.node_id);
         let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
             bridge,
             device_uri.clone(),
@@ -1042,6 +1081,7 @@ mod tests {
             tenant_id: "tenant-test".into(),
             deploy_signature: "sig".into(),
             hub_api_base: Some("https://api.example.com".into()),
+            username: None,
         }
     }
 
@@ -1133,12 +1173,37 @@ mod tests {
         assert_eq!(plan.realm, "tenant-test");
         assert_eq!(
             plan.host_device_uri,
-            "easynet:///r/tenant-test/agent/node-test"
+            "easynet:///r/tenant-test/device/node-test"
         );
         assert!(plan.consent, "consent default-on per plan §1");
         assert!(!plan.policy);
         assert!(!plan.mcp);
         assert!(plan.llm_sub_agents.is_empty());
+    }
+
+    #[test]
+    fn build_bootstrap_plan_falls_back_to_auth_session_username() {
+        let _g = HomeGuard::new();
+        let state_dir = crate::persistence::config::state_dir();
+        std::fs::create_dir_all(&state_dir).expect("create state dir");
+        let session = crate::facade::cli::auth::AuthSession {
+            token: "token".into(),
+            hub_url: "http://127.0.0.1:8080".into(),
+            email: "alice@example.com".into(),
+            user_id: Some("user-uuid".into()),
+            nickname: Some("Alice".into()),
+            username: Some("alice".into()),
+        };
+        std::fs::write(
+            state_dir.join("auth.json"),
+            serde_json::to_vec(&session).expect("serialize session"),
+        )
+        .expect("write auth.json");
+
+        let mut creds = test_creds();
+        creds.username = None;
+        let plan = build_bootstrap_plan(&creds).expect("plan must build");
+        assert_eq!(plan.user_id, "alice");
     }
 
     #[test]
@@ -1152,22 +1217,26 @@ mod tests {
         // for downstream Hub-tier signing — that wrapping is exactly
         // what the federation Invoke surface consumes, so the test
         // pins the wrapped form rather than the raw bare id.
-        let plan = build_bootstrap_plan_from("tenant-test", "node-test").expect("plan must build");
+        let plan = build_bootstrap_plan_from("tenant-test", "node-test", "user-test")
+            .expect("plan must build");
         assert_eq!(plan.realm, "tenant-test");
+        assert_eq!(plan.user_id, "user-test");
         assert_eq!(
             plan.host_device_uri,
-            "easynet:///r/tenant-test/agent/node-test"
+            "easynet:///r/tenant-test/device/node-test"
         );
     }
 
     #[test]
     fn realm_from_agent_uri_extracts_segment() {
+        // URI v4.1.4: hub is realm-singleton (no sub-id); device-id
+        // is bare UUID. Function is shape-agnostic — only the
+        // `<realm>/<rest>` boundary matters.
+        assert_eq!(realm_from_agent_uri("easynet:///r/acme/hub"), Some("acme"));
         assert_eq!(
-            realm_from_agent_uri("easynet:///r/acme/agent/01HUB"),
-            Some("acme")
-        );
-        assert_eq!(
-            realm_from_agent_uri("easynet:///r/contoso/agent/01-blah-blah"),
+            realm_from_agent_uri(
+                "easynet:///r/contoso/device/4065c47a-ec6f-4330-87a5-0d69787709b8"
+            ),
             Some("contoso")
         );
     }

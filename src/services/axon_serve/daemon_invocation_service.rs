@@ -78,17 +78,18 @@ use tonic::{Request, Response, Status, Streaming};
 use crate::pb::axon::v1::invocation_server::Invocation;
 use crate::pb::axon::v1::{
     invoke_bidi_down::Payload as DownPayload, invoke_bidi_up::Payload as UpPayload, AgentIdentity,
-    BidiControl, BinaryChunk, Envelope, EnvelopeOpen, InvocationReceipt, InvocationState,
-    InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeResponse, InvokeServerStreamRequest,
-    InvokeStreamChunk, StreamDescriptor,
+    BidiControl, BinaryChunk, CallerSignature, Envelope, EnvelopeOpen, InvocationReceipt,
+    InvocationState, InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeResponse,
+    InvokeServerStreamRequest, InvokeStreamChunk, StreamDescriptor, SubjectIdentity,
 };
 use crate::services::axon_serve::admission_facade::AdmissionFacade;
 use crate::services::axon_serve::federation_wrappers::{
-    self, ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_FEDERATION_DISCOVER,
-    ABILITY_FEDERATION_FORWARD_INVOKE, ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN,
-    ABILITY_FEDERATION_LIST_USER_DEVICES, ABILITY_FEDERATION_RESOLVE,
+    self, ABILITY_FEDERATION_ADVERTISE_ABILITIES, ABILITY_FEDERATION_ADVERTISE_AGENT,
+    ABILITY_FEDERATION_DISCOVER, ABILITY_FEDERATION_FORWARD_INVOKE, ABILITY_FEDERATION_HEARTBEAT,
+    ABILITY_FEDERATION_JOIN, ABILITY_FEDERATION_LIST_USER_DEVICES, ABILITY_FEDERATION_RESOLVE,
     ABILITY_FEDERATION_RESOLVE_KEY, ABILITY_FEDERATION_REVOKE,
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
+    ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
 };
 use crate::services::axon_serve::invoke_remote_initiator::{
     call_id_hex, InvokeRemoteDown, InvokeRemoteUp, RequestOutcome, SessionDispatch,
@@ -98,10 +99,12 @@ use crate::services::axon_serve::register_device_pubkey::{
     handle as handle_register_device_pubkey, parse_realm_from_uri,
     ABILITY_SELF_REGISTER_DEVICE_PUBKEY,
 };
-use crate::services::axon_serve::session_initiator::ABILITY_SELF_SESSION;
+use crate::services::axon_serve::session_initiator::{SessionSigningSeed, ABILITY_SELF_SESSION};
 use crate::services::federated_peers_cell::SharedFederatedPeers;
 use crate::services::federation_client::FederationClient;
-use crate::services::pending_dispatch::{DispatchResult, PendingDispatchMap};
+use crate::services::pending_dispatch::{
+    DispatchResult, DispatchStreamEvent, PendingDispatchMap, PendingStreamDispatchMap,
+};
 use crate::services::presence_registry::{
     DispatchFrame, DispatchSender, OfflineReason, PresenceRegistry, DISPATCH_CHANNEL_CAPACITY,
 };
@@ -159,6 +162,18 @@ const SESSION_DOWN_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 #[derive(Clone)]
 pub struct DaemonInvocationService {
     presence: Arc<PresenceRegistry>,
+    /// Hosted-agent directory rows published by
+    /// `federation.advertise_agent`. PresenceRegistry tracks live
+    /// device sessions; this store maps `/agent/<user>.<agent>` rows
+    /// back to their host device URI so resolve can project hosted
+    /// agents while deriving liveness from the host's live session.
+    advertised_agents: Arc<crate::services::advertised_agent_store::AdvertisedAgentStore>,
+    /// Per-agent ability catalog populated by
+    /// `federation.advertise_abilities` and projected back through
+    /// `federation.resolve(include_abilities=true)`. Always present
+    /// on production daemons; an `Arc` clone, cheap to share with
+    /// every dispatch handler that needs it.
+    ability_catalog: Arc<crate::services::ability_catalog_store::AbilityCatalogStore>,
     admission: AdmissionFacade,
     /// Cross-call correlation table for `<self>.invoke_remote`
     /// per-call dispatches awaiting a target-device reply on its
@@ -169,6 +184,10 @@ pub struct DaemonInvocationService {
     /// shape; production daemons attach one at boot once PR-2
     /// `<self>.session` accept handler also consumes it.
     pending: Option<Arc<PendingDispatchMap>>,
+    /// Streaming correlation table for remote bidi bridges that
+    /// need chunked replies instead of a single terminal payload.
+    /// Same-hub `fleet.file_transfer` is the first consumer.
+    pending_stream: Option<Arc<PendingStreamDispatchMap>>,
     /// `<self>.register_device_pubkey` handler context (PR-7
     /// commit 5/N). `None` until `with_register_pubkey(...)` wires
     /// it; absence means the ability returns
@@ -183,6 +202,13 @@ pub struct DaemonInvocationService {
     /// a narrow unit test) and the extra PR-2 defense-in-depth check
     /// is skipped.
     session_realm: Option<String>,
+    /// Optional hub signing seed used for cross-hub
+    /// `federation.forward_invoke` peer-envelope signatures. When
+    /// boot preloads the backend hub identity (or tests inject a
+    /// fixture seed), the dispatcher signs without touching disk.
+    /// `None` preserves the legacy on-demand read of
+    /// `~/.easynet-hub/<realm>/identity.json`.
+    hub_signing_seed: Option<SessionSigningSeed>,
     /// **PR-N1 commit 3a/N**. Cross-hub federation client. `None`
     /// until `with_federation_client(...)` wires one; absence
     /// means `federation.forward_invoke` for cross-tenant targets
@@ -269,6 +295,10 @@ impl std::fmt::Debug for DaemonInvocationService {
             .field("register_pubkey", &self.register_pubkey)
             .field("session_realm", &self.session_realm)
             .field(
+                "hub_signing_seed",
+                &self.hub_signing_seed.as_ref().map(|_| "<seed>"),
+            )
+            .field(
                 "federation_client",
                 &self
                     .federation_client
@@ -312,10 +342,18 @@ impl DaemonInvocationService {
     pub fn new(presence: Arc<PresenceRegistry>, admission: AdmissionFacade) -> Self {
         Self {
             presence,
+            advertised_agents: Arc::new(
+                crate::services::advertised_agent_store::AdvertisedAgentStore::new(),
+            ),
+            ability_catalog: Arc::new(
+                crate::services::ability_catalog_store::AbilityCatalogStore::new(),
+            ),
             admission,
             pending: None,
+            pending_stream: None,
             register_pubkey: None,
             session_realm: None,
+            hub_signing_seed: None,
             federation_client: None,
             federated_peers: SharedFederatedPeers::default(),
             federated_directory:
@@ -339,6 +377,12 @@ impl DaemonInvocationService {
     #[must_use]
     pub fn with_pending(mut self, pending: Arc<PendingDispatchMap>) -> Self {
         self.pending = Some(pending);
+        self
+    }
+
+    #[must_use]
+    pub fn with_pending_stream(mut self, pending: Arc<PendingStreamDispatchMap>) -> Self {
+        self.pending_stream = Some(pending);
         self
     }
 
@@ -369,6 +413,17 @@ impl DaemonInvocationService {
     #[must_use]
     pub fn with_session_realm(mut self, daemon_realm: impl Into<String>) -> Self {
         self.session_realm = Some(daemon_realm.into());
+        self
+    }
+
+    /// Attach the hub identity seed used to sign cross-hub
+    /// peer-envelope rewrites. Boot wires this best-effort from
+    /// backend's `~/.easynet-hub/<realm>/identity.json`; tests can
+    /// inject a deterministic fixture to avoid relying on process
+    /// `HOME`.
+    #[must_use]
+    pub fn with_hub_signing_seed(mut self, seed: SessionSigningSeed) -> Self {
+        self.hub_signing_seed = Some(seed);
         self
     }
 
@@ -500,6 +555,31 @@ impl DaemonInvocationService {
         self.subscribe_v2_heartbeat_interval_ms = ms;
         self
     }
+
+    /// Resolve whether `target_uri` names THIS daemon's own
+    /// synchronous-execution surface.
+    ///
+    /// Most deployments wire `AdmissionFacade.daemon_uri()` to the
+    /// device URI from credentials.json. Hub-mode daemons, however,
+    /// are also legitimately addressed as the realm singleton
+    /// `easynet:///r/<realm>/hub`. Device-mode escalation sends that
+    /// hub URI up the session bidi when a CLI asks for
+    /// `--node easynet:///r/<realm>/hub`; without accepting the
+    /// local hub URI here, the hub side misses the self-target fast
+    /// path and surfaces `target_offline` even though the target is
+    /// the daemon itself.
+    fn matches_self_target_uri(&self, target_uri: &str) -> bool {
+        if self
+            .admission
+            .daemon_uri()
+            .is_some_and(|daemon_uri| daemon_uri == target_uri)
+        {
+            return true;
+        }
+        self.session_realm
+            .as_deref()
+            .is_some_and(|realm| crate::uri::hub_uri(realm) == target_uri)
+    }
 }
 
 /// Boxed pinned stream type used for both server-stream and
@@ -529,6 +609,12 @@ impl Invocation for DaemonInvocationService {
             ABILITY_FEDERATION_JOIN => self.dispatch_federation_join(&inner.arguments),
             ABILITY_FEDERATION_ADVERTISE_AGENT => {
                 self.dispatch_federation_advertise_agent(&inner.arguments)
+            }
+            ABILITY_FEDERATION_ADVERTISE_ABILITIES => {
+                self.dispatch_federation_advertise_abilities(&inner.arguments)
+            }
+            ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY => {
+                self.dispatch_runtime_bootstrap_self_identity(&inner.arguments)
             }
             ABILITY_FEDERATION_HEARTBEAT => self.dispatch_federation_heartbeat(&inner.arguments),
             ABILITY_FEDERATION_RESOLVE => self.dispatch_federation_resolve(&inner.arguments),
@@ -650,10 +736,47 @@ impl Invocation for DaemonInvocationService {
                     })?;
                 self.dispatch_self_session_accept(caller_uri, up).await
             }
+            other
+                if matches!(
+                    other,
+                    "fleet.session_attach"
+                        | crate::runtime::agents::pty_attach_ability::ABILITY_PTY_SESSION_ATTACH
+                        | crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER
+                ) =>
+            {
+                // PR-2 staging step: only PTY attach is wired through
+                // the daemon's InvokeBidi → LocalAbilityRegistry
+                // bridge today. Other local bidi abilities still need
+                // a real wire contract; forwarding arbitrary JSON
+                // handler frames over the axon BinaryChunk/Control
+                // surface would be protocol fiction.
+                let local_dispatcher = self.local_dispatcher.as_ref().ok_or_else(|| {
+                    Status::unimplemented(format!(
+                        "easynet-daemon: InvokeBidi ability `{other}` requires the \
+                         PTY attach local-dispatch bridge, but this daemon was booted \
+                         without DaemonInvocationService::with_local_dispatcher(...)"
+                    ))
+                })?;
+                if other == crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER {
+                    if let Some(target_uri) = remote_bidi_target_uri(envelope_open) {
+                        if !self.matches_self_target_uri(&target_uri) {
+                            return self
+                                .dispatch_remote_file_transfer_bidi(
+                                    &target_uri,
+                                    envelope_open,
+                                    up,
+                                )
+                                .await;
+                        }
+                    }
+                }
+                self.dispatch_local_bidi(local_dispatcher, other, envelope_open, up)
+                    .await
+            }
             other => Err(Status::unimplemented(format!(
                 "easynet-daemon: InvokeBidi ability `{other}` is not yet wired; \
-                 LocalAbilityRegistry bidi fallback is the next staging step \
-                 (see team-work/checklists/PR-2-checklist.md)"
+                 only fleet.session_attach/fleet.pty_session_attach/fleet.file_transfer currently bridge \
+                 through the LocalAbilityRegistry bidi fallback"
             ))),
         }
     }
@@ -715,7 +838,32 @@ impl DaemonInvocationService {
         arguments: &[u8],
     ) -> Result<Response<InvokeResponse>, Status> {
         let request: federation_wrappers::AdvertiseAgentRequest = parse_json_args(arguments)?;
-        let response = federation_wrappers::handle_advertise_agent(&request);
+        let response = federation_wrappers::handle_advertise_agent(
+            &request,
+            Some(self.advertised_agents.as_ref()),
+        );
+        wrap_json_response(&response)
+    }
+
+    fn dispatch_federation_advertise_abilities(
+        &self,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let request: federation_wrappers::AdvertiseAbilitiesRequest = parse_json_args(arguments)?;
+        let response = federation_wrappers::handle_advertise_abilities(
+            &request,
+            Some(self.ability_catalog.as_ref()),
+        );
+        wrap_json_response(&response)
+    }
+
+    fn dispatch_runtime_bootstrap_self_identity(
+        &self,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let request: federation_wrappers::BootstrapSelfIdentityRequest =
+            parse_json_args(arguments)?;
+        let response = federation_wrappers::handle_bootstrap_self_identity(&request);
         wrap_json_response(&response)
     }
 
@@ -758,7 +906,12 @@ impl DaemonInvocationService {
         arguments: &[u8],
     ) -> Result<Response<InvokeResponse>, Status> {
         let request: federation_wrappers::ResolveRequest = parse_json_args(arguments)?;
-        let response = federation_wrappers::handle_resolve(&request, &self.presence);
+        let response = federation_wrappers::handle_resolve(
+            &request,
+            &self.presence,
+            Some(self.advertised_agents.as_ref()),
+            Some(self.ability_catalog.as_ref()),
+        );
         wrap_json_response(&response)
     }
 
@@ -898,7 +1051,11 @@ impl DaemonInvocationService {
         arguments: &[u8],
     ) -> Result<Response<InvokeResponse>, Status> {
         let request: federation_wrappers::RevokeRequest = parse_json_args(arguments)?;
-        let response = federation_wrappers::handle_revoke(&request, &self.presence);
+        let response = federation_wrappers::handle_revoke(
+            &request,
+            &self.presence,
+            Some(self.advertised_agents.as_ref()),
+        );
         wrap_json_response(&response)
     }
 
@@ -958,7 +1115,17 @@ impl DaemonInvocationService {
             return self.escalate_forward_invoke(handle, arguments).await;
         }
 
-        let request: federation_wrappers::ForwardInvokeRequest = parse_json_args(arguments)?;
+        let mut request: federation_wrappers::ForwardInvokeRequest = parse_json_args(arguments)?;
+
+        // Postel-boundary: peer hubs from pre-v4.1.4 builds may
+        // ship a `/agent/<bare-uuid>` target URI (the v1/v2
+        // device-as-agent shape). Coerce to the canonical
+        // `/device/<uuid>` form once here so every downstream
+        // use — local-presence lookup, peer-dial envelope, audit
+        // log line — sees the same canonical key. Real
+        // `/agent/<user>.<agent>` URIs and all v4.1.4-canonical
+        // shapes pass through unchanged.
+        request.target_uri = crate::uri::canonicalize_presence_key(&request.target_uri);
 
         let target_tenant = parse_tenant_from_uri(&request.target_uri);
         let local_tenant = self.session_realm.as_deref();
@@ -974,6 +1141,7 @@ impl DaemonInvocationService {
             // cross-hub path.
             (None, Some(_)) => true,
         };
+        let has_local_presence = self.presence.lookup(&request.target_uri).is_some();
 
         // Observable trace for operators debugging answer-sheet /
         // demo runs — proves which dispatch arm fired without
@@ -985,8 +1153,8 @@ impl DaemonInvocationService {
         eprintln!(
             "[axon-serve] federation.forward_invoke dispatch: \
              target_uri={} target_tenant={:?} local_tenant={:?} \
-             is_local_tenant={}",
-            request.target_uri, target_tenant, local_tenant, is_local_tenant,
+             is_local_tenant={} has_local_presence={}",
+            request.target_uri, target_tenant, local_tenant, is_local_tenant, has_local_presence,
         );
 
         // Decode the inner payload up front. The
@@ -1013,64 +1181,49 @@ impl DaemonInvocationService {
         // `Status::failed_precondition(target_offline)` per
         // DEC-N4 §2.1 — the empty-result shape is no longer the
         // wire surface for offline.
-        if is_local_tenant {
-            // **PR-1 commit 7/9 (LB-56) — self-targeted local dispatch**.
-            // When the inbound forward_invoke targets THIS daemon's
-            // own canonical URI, the local-presence push misses by
-            // construction (a hub does not register its own URI in
-            // its PresenceRegistry). Without a synchronous
-            // fall-through to `LocalAbilityRegistry`, the call
-            // surfaces as target_offline even though the target is
-            // perfectly capable of running the ability. This arm
-            // resolves the inner ability against the boot-threaded
-            // `AbilityDispatcher` Arc and stamps the JSON result
-            // bytes inline into ForwardInvokeResponse.result_bytes.
-            //
-            // The semantic difference vs the bidi-push path: this
-            // is a synchronous reply, no reverse-channel correlation
-            // round-trip, no PR-N5 second-receipt update. The
-            // ForwardReceipt is written ONCE with a real result_digest
-            // computed from the bytes returned here.
-            //
-            // Guard: only fires when caller and daemon URIs match
-            // exactly AND the daemon was booted with a local
-            // dispatcher (production hub-mode + both-mode daemons
-            // always have one; test fixtures with `make_service()`
-            // do not, preserving their target_offline expectation).
-            if let (Some(daemon_uri), Some(local_dispatcher)) =
-                (self.admission.daemon_uri(), self.local_dispatcher.as_ref())
-            {
-                if request.target_uri == daemon_uri {
-                    return self.dispatch_self_targeted_forward_invoke(
-                        local_dispatcher,
-                        &inner_payload,
-                        &request,
-                        caller_envelope,
-                        &correlation_call_id,
-                    );
-                }
+        // **PR-1 commit 7/9 (LB-56) — self-targeted local dispatch**.
+        // When the inbound forward_invoke targets THIS daemon's
+        // own canonical URI, the local-presence push misses by
+        // construction (a hub does not register its own URI in
+        // its PresenceRegistry). Without a synchronous
+        // fall-through to `LocalAbilityRegistry`, the call
+        // surfaces as target_offline even though the target is
+        // perfectly capable of running the ability. This arm
+        // resolves the inner ability against the boot-threaded
+        // `AbilityDispatcher` Arc and stamps the JSON result
+        // bytes inline into ForwardInvokeResponse.result_bytes.
+        //
+        // The semantic difference vs the bidi-push path: this
+        // is a synchronous reply, no reverse-channel correlation
+        // round-trip, no PR-N5 second-receipt update. The
+        // ForwardReceipt is written ONCE with a real result_digest
+        // computed from the bytes returned here.
+        //
+        // Guard: only fires when caller and daemon URIs match
+        // exactly AND the daemon was booted with a local
+        // dispatcher (production hub-mode + both-mode daemons
+        // always have one; test fixtures with `make_service()`
+        // do not, preserving their target_offline expectation).
+        if let Some(local_dispatcher) = self.local_dispatcher.as_ref() {
+            if self.matches_self_target_uri(&request.target_uri) {
+                return self.dispatch_self_targeted_forward_invoke(
+                    local_dispatcher,
+                    &inner_payload,
+                    &request,
+                    caller_envelope,
+                    &correlation_call_id,
+                );
             }
+        }
 
-            // **LB-57 Option A — synchronous local-presence dispatch**.
-            // The peer hub-B receives `federation.forward_invoke`
-            // for a device URI in its PresenceRegistry (the demo
-            // case: device-A's CLI → hub-A → hub-B → device-B).
-            // We register a `PendingDispatchMap` entry, push a
-            // `SessionDispatch::Dispatch{call_id, ability, args}`
-            // frame down device-B's session bidi (the same wire
-            // shape `<self>.invoke_remote` already uses), and
-            // await the matching `SessionDispatch::Result` via
-            // `drain_session_up_stream`'s correlation path.
-            //
-            // The previous shape pushed raw inner_envelope bytes
-            // as a BinaryChunk and returned empty result_bytes
-            // immediately — the CLI saw a phantom-success reply
-            // before device-B even ran the ability. That was a
-            // wire-shape mismatch (device's LocalAbilityDispatcher
-            // can only decode SessionDispatch JSON, not raw
-            // inner-envelope JSON) AND a correlation hole (no
-            // pending entry, so the eventual Result complete()
-            // landed as a no-op).
+        // **LB-57 Option A — synchronous local-presence dispatch**.
+        // Presence is keyed by full caller URI, not by the daemon's
+        // own realm. A platform hub may therefore host devices whose
+        // URIs live under many user realms simultaneously. When the
+        // target URI is already present on THIS hub, that concrete
+        // liveness fact wins over any tenant mismatch and we dispatch
+        // locally rather than forcing a spurious cross-hub dial.
+        if has_local_presence {
             match self
                 .dispatch_local_presence_forward_invoke(
                     &request,
@@ -1081,7 +1234,10 @@ impl DaemonInvocationService {
                 .await
             {
                 Ok(response) => return Ok(response),
-                Err(_status) => {
+                Err(status) => {
+                    if !is_local_tenant {
+                        return Err(status);
+                    }
                     // **Same-tenant cross-hub fall-through**.
                     // Local presence missed but the target's tenant
                     // matches ours — the device may be paired on a
@@ -1097,8 +1253,11 @@ impl DaemonInvocationService {
                     if let Some(client) = self.federation_client.as_ref() {
                         let peers_snapshot = self.federated_peers.snapshot();
                         if !peers_snapshot.is_empty() {
-                            let peer_envelope =
-                                build_peer_envelope(caller_envelope, &request.target_uri);
+                            let peer_envelope = build_peer_envelope(
+                                caller_envelope,
+                                &request.target_uri,
+                                self.session_realm.as_deref(),
+                            );
                             // **LB-57 §一 Option A wire shape**.
                             // Re-wrap the call as another
                             // `federation.forward_invoke` for the peer
@@ -1127,12 +1286,21 @@ impl DaemonInvocationService {
                                          ForwardInvokeRequest for same-tenant fan-out: {err}"
                                 ))
                             })?;
-                            let peer_request = InvokeRequest {
+                            let mut peer_request = InvokeRequest {
                                 envelope: Some(peer_envelope),
                                 function_name: ABILITY_FEDERATION_FORWARD_INVOKE.to_string(),
                                 arguments: nested_arguments,
                                 ..InvokeRequest::default()
                             };
+                            if let Some(envelope) = peer_request.envelope.as_mut() {
+                                sign_peer_request_envelope(
+                                    envelope,
+                                    &peer_request.function_name,
+                                    &peer_request.arguments,
+                                    self.session_realm.as_deref(),
+                                    self.hub_signing_seed.as_ref(),
+                                )?;
+                            }
                             // Lex-deterministic iteration; peer
                             // hubs typically number in the
                             // single digits (operator-curated),
@@ -1208,6 +1376,130 @@ impl DaemonInvocationService {
             }
         }
 
+        if is_local_tenant {
+            // Same-tenant but not locally present: fan out across
+            // peer hubs that serve this tenant, then surface a real
+            // target_offline if every peer also misses.
+            match self
+                .dispatch_local_presence_forward_invoke(
+                    &request,
+                    &inner_payload,
+                    caller_envelope,
+                    &correlation_call_id,
+                )
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(_status) => {
+                    // **Same-tenant cross-hub fall-through**.
+                    // Local presence missed but the target's tenant
+                    // matches ours — the device may be paired on a
+                    // peer hub against the same user account. Per
+                    // CTO directive on cross-hub same-account: fan
+                    // out across `federated_peers` (no per-tenant
+                    // routing key when the tenant IS local; we ask
+                    // every peer hub the operator has federated
+                    // with). First-success wins in lex order on
+                    // `peer_realm`. Real `target_offline` only
+                    // surfaces if every peer also misses or no
+                    // peers are wired.
+                    if let Some(client) = self.federation_client.as_ref() {
+                        let peers_snapshot = self.federated_peers.snapshot();
+                        if !peers_snapshot.is_empty() {
+                            let peer_envelope = build_peer_envelope(
+                                caller_envelope,
+                                &request.target_uri,
+                                self.session_realm.as_deref(),
+                            );
+                            let nested = federation_wrappers::ForwardInvokeRequest {
+                                target_uri: request.target_uri.clone(),
+                                inner_envelope_b64: request.inner_envelope_b64.clone(),
+                                causal_context_bytes: request.causal_context_bytes.clone(),
+                                forward_deadline_ms: request.forward_deadline_ms,
+                            };
+                            let nested_arguments = serde_json::to_vec(&nested).map_err(|err| {
+                                Status::internal(format!(
+                                    "federation.forward_invoke: encode nested \
+                                         ForwardInvokeRequest for same-tenant fan-out: {err}"
+                                ))
+                            })?;
+                            let mut peer_request = InvokeRequest {
+                                envelope: Some(peer_envelope),
+                                function_name: ABILITY_FEDERATION_FORWARD_INVOKE.to_string(),
+                                arguments: nested_arguments,
+                                ..InvokeRequest::default()
+                            };
+                            if let Some(envelope) = peer_request.envelope.as_mut() {
+                                sign_peer_request_envelope(
+                                    envelope,
+                                    &peer_request.function_name,
+                                    &peer_request.arguments,
+                                    self.session_realm.as_deref(),
+                                    self.hub_signing_seed.as_ref(),
+                                )?;
+                            }
+                            for (peer_realm, peer_hub_uri) in peers_snapshot.iter() {
+                                let _ = peer_realm;
+                                match client
+                                    .forward_invoke(peer_hub_uri, peer_request.clone())
+                                    .await
+                                {
+                                    Ok(peer_response) => {
+                                        let peer_body: federation_wrappers::ForwardInvokeResponse =
+                                            match serde_json::from_slice(&peer_response.result) {
+                                                Ok(body) => body,
+                                                Err(err) => {
+                                                    eprintln!(
+                                                        "[axon-serve] same-tenant \
+                                                         fan-out peer returned malformed \
+                                                         ForwardInvokeResponse JSON: \
+                                                         {err}; forwarding raw bytes \
+                                                         for forward-compat"
+                                                    );
+                                                    federation_wrappers::ForwardInvokeResponse {
+                                                        result_bytes: peer_response.result.clone(),
+                                                        correlation_call_id: correlation_call_id
+                                                            .clone(),
+                                                    }
+                                                }
+                                            };
+                                        self.admission.receipt_store().record(
+                                            build_forward_receipt(
+                                                &correlation_call_id,
+                                                &request.target_uri,
+                                                caller_envelope,
+                                                Some(&peer_body.result_bytes),
+                                            ),
+                                        );
+                                        let response = federation_wrappers::ForwardInvokeResponse {
+                                            result_bytes: peer_body.result_bytes,
+                                            correlation_call_id,
+                                        };
+                                        return wrap_json_response(&response);
+                                    }
+                                    Err(err) => {
+                                        eprintln!(
+                                            "[axon-serve] same-tenant cross-hub miss \
+                                             on peer realm {peer_realm} hub {peer_hub_uri}: \
+                                             {err}"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    self.admission.receipt_store().record(build_forward_receipt(
+                        &correlation_call_id,
+                        &request.target_uri,
+                        caller_envelope,
+                        None,
+                    ));
+                    return Err(Status::failed_precondition(
+                        federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+                    ));
+                }
+            }
+        }
         // Cross-tenant path. Missing federation client OR
         // missing peer entry both surface as
         // `failed_precondition(target_offline)` per DEC-N4 §2.1
@@ -1263,7 +1555,11 @@ impl DaemonInvocationService {
         // user's identity; PR-N2's FederatedKeyResolver lifts
         // the realm-strict limitation that the legacy
         // bare-inner-ability shape relied on.
-        let peer_envelope = build_peer_envelope(caller_envelope, &request.target_uri);
+        let peer_envelope = build_peer_envelope(
+            caller_envelope,
+            &request.target_uri,
+            self.session_realm.as_deref(),
+        );
         let nested = federation_wrappers::ForwardInvokeRequest {
             target_uri: request.target_uri.clone(),
             inner_envelope_b64: request.inner_envelope_b64.clone(),
@@ -1276,12 +1572,21 @@ impl DaemonInvocationService {
                  for cross-tenant dial: {err}"
             ))
         })?;
-        let peer_request = InvokeRequest {
+        let mut peer_request = InvokeRequest {
             envelope: Some(peer_envelope),
             function_name: ABILITY_FEDERATION_FORWARD_INVOKE.to_string(),
             arguments: nested_arguments,
             ..InvokeRequest::default()
         };
+        if let Some(envelope) = peer_request.envelope.as_mut() {
+            sign_peer_request_envelope(
+                envelope,
+                &peer_request.function_name,
+                &peer_request.arguments,
+                self.session_realm.as_deref(),
+                self.hub_signing_seed.as_ref(),
+            )?;
+        }
 
         match client.forward_invoke(target_hub_uri, peer_request).await {
             Ok(peer_response) => {
@@ -1484,6 +1789,19 @@ impl DaemonInvocationService {
             payload: result_bytes,
             error,
         } = dispatch_result;
+        // Diagnostic: forward the mac-side outcome verbatim so a
+        // session-frame-correlation race is visible in the hub log
+        // without having to attach a debugger. Cheap (one eprintln
+        // per round-trip).
+        eprintln!(
+            "[axon-serve] forward_invoke local-presence dispatch: \
+             target_uri={} ability={} call_id={} → result_bytes={} error={:?}",
+            request.target_uri,
+            inner_payload.ability,
+            call_id,
+            result_bytes.len(),
+            error,
+        );
         if let Some(err) = error {
             return Err(Status::failed_precondition(format!(
                 "federation.forward_invoke: target `{}` ability `{}` failed: {err}",
@@ -1644,6 +1962,513 @@ impl DaemonInvocationService {
             correlation_call_id: correlation_call_id.to_string(),
         };
         wrap_json_response(&response)
+    }
+
+    /// Self-targeted `<self>.invoke_remote` shortcut.
+    ///
+    /// When the daemon receives `<self>.invoke_remote` whose
+    /// subject_device equals its own URI, dispatch the ability
+    /// through the in-process `AbilityDispatcher` and return the
+    /// result on a one-shot down stream. This fires in two
+    /// scenarios:
+    ///
+    ///   1. Host-mode dev rig: backend invokes a fleet.* ability
+    ///      against the local device daemon's own URI. The
+    ///      daemon's PresenceRegistry self-presence seed
+    ///      (boot.rs) makes the target findable; this shortcut
+    ///      dispatches inline without trying to push frames
+    ///      down a drain channel that nobody consumes.
+    ///
+    ///   2. Hub-mode self-call: a hub invoking an ability on
+    ///      its own URI (rare but valid; the hub is a Both-mode
+    ///      daemon and the local AbilityDispatcher hosts its
+    ///      registered tools).
+    ///
+    /// Mirrors `dispatch_self_targeted_forward_invoke` for the
+    /// federation.forward_invoke surface — same idea, different
+    /// envelope shape.
+    async fn dispatch_self_targeted_invoke_remote(
+        &self,
+        local_dispatcher: &Arc<crate::runtime::ability_dispatch::AbilityDispatcher>,
+        subject_device: &str,
+        ability: &str,
+        args: &[u8],
+    ) -> Result<Response<<Self as Invocation>::InvokeBidiStream>, Status> {
+        use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+
+        eprintln!(
+            "[axon-serve] <self>.invoke_remote self-target dispatch: \
+             subject={subject_device} ability={ability}"
+        );
+
+        // args is the JSON-encoded inner-payload bytes (matches
+        // InvokeRemoteUp::Request shape). Decode to a Value so the
+        // local AbilityDispatcher can route. Empty → empty object.
+        let normalized_args: serde_json::Value = if args.is_empty() {
+            serde_json::Value::Object(Default::default())
+        } else {
+            serde_json::from_slice(args).map_err(|err| {
+                Status::invalid_argument(format!(
+                    "<self>.invoke_remote: self-targeted dispatch could not parse \
+                     inner args for ability `{ability}`: {err}"
+                ))
+            })?
+        };
+
+        let target = InvocationTarget {
+            scope: TargetScope::Local,
+            ability: ability.to_string(),
+            normalized_args,
+            call_mode: CallMode::Rpc,
+            subject: None,
+        };
+
+        // execute_rpc is a SYNC call into the LocalAbilityRegistry's
+        // RPC handler. Many real handlers (shell.run, process.exec,
+        // fs.*) internally call `tokio::runtime::Handle::block_on`
+        // to drive their inner async pipeline. Calling block_on
+        // from inside a tokio worker thread panics — that is the
+        // panic we hit at `shell_run_ability.rs:117` when this fn
+        // ran the dispatch directly inside this gRPC service's
+        // tokio task.
+        //
+        // Move the synchronous handler off the tokio worker pool
+        // onto a blocking thread via spawn_blocking. This is the
+        // canonical tokio pattern for "I have sync code that may
+        // do block_on internally" — the blocking pool is sized
+        // separately (default 512), is allowed to call block_on,
+        // and serves exactly this kind of case.
+        let dispatcher_clone = Arc::clone(local_dispatcher);
+        let result_value =
+            tokio::task::spawn_blocking(move || dispatcher_clone.execute_rpc(target))
+                .await
+                .map_err(|join_err| {
+                    Status::internal(format!(
+                        "<self>.invoke_remote: self-targeted handler panicked or \
+                     was cancelled: {join_err}"
+                    ))
+                })?
+                .map_err(|err| {
+                    Status::failed_precondition(format!(
+                "<self>.invoke_remote: self-targeted dispatch of ability `{ability}` failed: {err}"
+            ))
+                })?;
+
+        let payload = serde_json::to_vec(&result_value).map_err(|err| {
+            Status::internal(format!(
+                "<self>.invoke_remote: encode self-targeted result for ability `{ability}`: {err}"
+            ))
+        })?;
+
+        let down = InvokeRemoteDown::Result {
+            payload,
+            error: None,
+        };
+        let frame = build_invoke_remote_terminal_frame(&down)?;
+
+        // One-shot down stream: yield the terminal frame, close.
+        let (down_tx, down_rx) = mpsc::channel::<Result<InvokeBidiDown, Status>>(1);
+        tokio::spawn(async move {
+            let _ = down_tx.send(Ok(frame)).await;
+        });
+        let stream = ReceiverStream::new(down_rx);
+        Ok(Response::new(
+            Box::pin(stream) as BoxedDownStream<InvokeBidiDown>
+        ))
+    }
+
+    async fn dispatch_remote_file_transfer_bidi(
+        &self,
+        target_uri: &str,
+        envelope_open: &EnvelopeOpen,
+        mut up: Streaming<InvokeBidiUp>,
+    ) -> Result<Response<<Self as Invocation>::InvokeBidiStream>, Status> {
+        let pending = self.pending_stream.as_ref().ok_or_else(|| {
+            Status::failed_precondition(
+                "InvokeBidi fleet.file_transfer: daemon was constructed without a \
+                 PendingStreamDispatchMap; boot must call with_pending_stream(...) \
+                 to enable remote file_transfer bridging",
+            )
+        })?;
+        let (session_id, sender) = self.presence.lookup_tracked(target_uri).ok_or_else(|| {
+            Status::failed_precondition(federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON)
+        })?;
+
+        let mut handle = pending.register_pending();
+        let call_id = handle.call_id();
+        let stdout_stream_id = local_bidi_stdout_stream_id(envelope_open);
+
+        let open_frame = build_remote_bidi_open_dispatch_frame(
+            call_id,
+            crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER,
+            &envelope_open.initial_args,
+        )?;
+        match sender.try_send(Ok(open_frame)) {
+            Ok(()) => {}
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                self.presence.remove_if_session(
+                    target_uri,
+                    session_id,
+                    crate::services::presence_registry::OfflineReason::SendFailed,
+                );
+                return Err(Status::failed_precondition(
+                    federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+                ));
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                self.presence.remove_if_session(
+                    target_uri,
+                    session_id,
+                    crate::services::presence_registry::OfflineReason::StreamClosed,
+                );
+                return Err(Status::failed_precondition(
+                    federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+                ));
+            }
+        }
+
+        eprintln!(
+            "[axon-serve] InvokeBidi remote file_transfer bridge: target_uri={} call_id={}",
+            target_uri, call_id,
+        );
+
+        let (down_tx, down_rx) = tokio::sync::mpsc::channel::<Result<InvokeBidiDown, Status>>(16);
+
+        let down_tx_for_results = down_tx.clone();
+        tokio::spawn(async move {
+            while let Some(event) = handle.recv().await {
+                match event {
+                    DispatchStreamEvent::Chunk(bytes) => {
+                        let frame = InvokeBidiDown {
+                            payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+                                stream_id: stdout_stream_id,
+                                data: bytes,
+                                ..BinaryChunk::default()
+                            })),
+                            ..InvokeBidiDown::default()
+                        };
+                        if down_tx_for_results.send(Ok(frame)).await.is_err() {
+                            break;
+                        }
+                    }
+                    DispatchStreamEvent::Terminal(DispatchResult { payload, error }) => {
+                        let frame = match error {
+                            Some(reason) => build_bidi_terminal_receipt_with_payload(
+                                InvocationState::Failed,
+                                reason,
+                                if payload.is_empty() {
+                                    None
+                                } else {
+                                    Some((payload, "application/json"))
+                                },
+                            ),
+                            None => build_bidi_terminal_receipt_with_payload(
+                                InvocationState::Completed,
+                                String::new(),
+                                if payload.is_empty() {
+                                    None
+                                } else {
+                                    Some((payload, "application/json"))
+                                },
+                            ),
+                        };
+                        let _ = down_tx_for_results.send(Ok(frame)).await;
+                        break;
+                    }
+                }
+            }
+        });
+
+        let target_uri_owned = target_uri.to_string();
+        let presence_for_up = Arc::clone(&self.presence);
+        let pending_for_up = Arc::clone(pending);
+        tokio::spawn(async move {
+            let mut expected_up_sequence = 1_u64;
+            let mut eof_sent = false;
+            while let Some(maybe_frame) = up.next().await {
+                let frame = match maybe_frame {
+                    Ok(frame) => frame,
+                    Err(status) => {
+                        let _ = pending_for_up
+                            .finish(
+                                call_id,
+                                DispatchResult {
+                                    payload: Vec::new(),
+                                    error: Some(format!(
+                                        "file_transfer caller stream error: {status}"
+                                    )),
+                                },
+                            )
+                            .await;
+                        return;
+                    }
+                };
+                if frame.sequence != expected_up_sequence {
+                    let _ = pending_for_up
+                        .finish(
+                            call_id,
+                            DispatchResult {
+                                payload: Vec::new(),
+                                error: Some(format!(
+                                    "{REASON_BIDI_FRAME_SEQUENCE}: expected up sequence \
+                                     {expected_up_sequence}, got {}",
+                                    frame.sequence
+                                )),
+                            },
+                        )
+                        .await;
+                    return;
+                }
+                expected_up_sequence = expected_up_sequence.saturating_add(1);
+                let Some(payload) = frame.payload else {
+                    continue;
+                };
+                let bridge_frame = match payload {
+                    UpPayload::BinaryChunk(chunk) => {
+                        build_remote_bidi_input_dispatch_frame(call_id, &chunk.data, false)
+                    }
+                    UpPayload::Control(control)
+                        if matches!(
+                            control.control,
+                            Some(crate::pb::axon::v1::bidi_control::Control::Eof(true))
+                        ) =>
+                    {
+                        eof_sent = true;
+                        build_remote_bidi_input_dispatch_frame(call_id, &[], true)
+                    }
+                    UpPayload::Control(_) | UpPayload::EnvelopeOpen(_) => continue,
+                };
+                match sender.try_send(Ok(bridge_frame)) {
+                    Ok(()) => {}
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        presence_for_up.remove_if_session(
+                            &target_uri_owned,
+                            session_id,
+                            crate::services::presence_registry::OfflineReason::SendFailed,
+                        );
+                        let _ = pending_for_up
+                            .finish(
+                                call_id,
+                                DispatchResult {
+                                    payload: Vec::new(),
+                                    error: Some(
+                                        federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON
+                                            .to_string(),
+                                    ),
+                                },
+                            )
+                            .await;
+                        return;
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                        presence_for_up.remove_if_session(
+                            &target_uri_owned,
+                            session_id,
+                            crate::services::presence_registry::OfflineReason::StreamClosed,
+                        );
+                        let _ = pending_for_up
+                            .finish(
+                                call_id,
+                                DispatchResult {
+                                    payload: Vec::new(),
+                                    error: Some(
+                                        federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON
+                                            .to_string(),
+                                    ),
+                                },
+                            )
+                            .await;
+                        return;
+                    }
+                }
+            }
+
+            if !eof_sent {
+                let _ = sender.try_send(Ok(build_remote_bidi_input_dispatch_frame(
+                    call_id,
+                    &[],
+                    true,
+                )));
+            }
+        });
+
+        let stream = LocalBidiDownStream::new(down_rx);
+        Ok(Response::new(
+            Box::pin(stream) as BoxedDownStream<InvokeBidiDown>
+        ))
+    }
+
+    /// PTY-attach bidi fallback: dispatch the locally-registered
+    /// `fleet.session_attach` / `fleet.pty_session_attach` handler
+    /// through the in-process `AbilityDispatcher` and bridge its
+    /// `BidiSource` (two `mpsc<Value>` channels) onto the gRPC
+    /// `InvokeBidi` up/down streams.
+    ///
+    /// Wire-format adapter
+    /// -------------------
+    /// Backend's WS terminal handler emits raw PTY bytes as
+    /// `InvokeBidiUp::BinaryChunk(stream_id=1, data=raw)`. The
+    /// device-side `pty_attach_ability` handler expects JSON
+    /// `{"type":"stdin","data":"<base64>"}` — its on-the-wire
+    /// shape (see `runtime/agents/pty_attach_ability.rs`). We
+    /// translate at this seam: BinaryChunk → JSON stdin frame on
+    /// the up direction, JSON stdout frame → BinaryChunk on the
+    /// down direction. PtyResize control frames map to a JSON
+    /// `{"type":"resize","cols":N,"rows":N}` shape the handler
+    /// already consumes.
+    async fn dispatch_local_bidi(
+        &self,
+        local_dispatcher: &Arc<crate::runtime::ability_dispatch::AbilityDispatcher>,
+        ability: &str,
+        envelope_open: &EnvelopeOpen,
+        mut up: Streaming<InvokeBidiUp>,
+    ) -> Result<Response<<Self as Invocation>::InvokeBidiStream>, Status> {
+        use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+
+        eprintln!("[axon-serve] InvokeBidi local-dispatcher fallback: ability={ability}");
+
+        // Decode initial_args. Empty → empty object.
+        let normalized_args: serde_json::Value = if envelope_open.initial_args.is_empty() {
+            serde_json::Value::Object(Default::default())
+        } else {
+            serde_json::from_slice(&envelope_open.initial_args).map_err(|err| {
+                Status::invalid_argument(format!(
+                    "InvokeBidi local-dispatcher: initial_args is not valid JSON \
+                     for ability `{ability}`: {err}"
+                ))
+            })?
+        };
+
+        let target = InvocationTarget {
+            scope: TargetScope::Local,
+            ability: ability.to_string(),
+            normalized_args,
+            call_mode: CallMode::Bidi,
+            subject: envelope_open
+                .envelope
+                .as_ref()
+                .and_then(|env| env.subject.as_ref())
+                .map(|subject| subject.uri.clone())
+                .filter(|uri| !uri.is_empty()),
+        };
+
+        let bidi_source = local_dispatcher.execute_bidi(target).map_err(|err| {
+            // No local handler registered → 404 surface so callers
+            // see the same shape as RPC's "no local handler".
+            let msg = err.to_string();
+            if msg.contains("no local bidi handler registered") {
+                Status::not_found(format!("InvokeBidi: {msg}"))
+            } else {
+                Status::failed_precondition(format!(
+                    "InvokeBidi local-dispatcher: dispatch of ability `{ability}` \
+                     failed: {err}"
+                ))
+            }
+        })?;
+
+        let crate::runtime::ability_dispatch::BidiSource {
+            to_client: handler_in_tx,
+            from_client: mut handler_out_rx,
+        } = bidi_source;
+        let wire_kind = local_bidi_wire_kind(ability);
+        let stdout_stream_id = local_bidi_stdout_stream_id(envelope_open);
+
+        // Down-stream: handler-emitted JSON → InvokeBidiDown frames.
+        // Capacity 16 mirrors `INVOKE_REMOTE_DISPATCH_CAPACITY`.
+        let (down_tx, down_rx) = tokio::sync::mpsc::channel::<Result<InvokeBidiDown, Status>>(16);
+
+        // First down-frame MUST be an admission Receipt(Admitted),
+        // per the bidi protocol contract: the client (backend's
+        // wshandler.go:711) refuses to start the input pump until
+        // it sees this. Without it, the local-dispatcher path's
+        // first frame is whatever the handler emits (typically a
+        // BinaryChunk for PTY stdout) and wshandler tears down with
+        // "expected admission receipt as first frame, got kind=1".
+        //
+        // This mirrors the pre-existing receipt emit on the real
+        // <self>.session reverse-channel admission path
+        // (build_session_down_admission_receipt). The local-bidi
+        // fallback was missing it because PR 8682960 wired the
+        // handler frames through without the prelude.
+        if down_tx
+            .send(Ok(build_bidi_admission_receipt()))
+            .await
+            .is_err()
+        {
+            return Err(Status::cancelled(
+                "InvokeBidi local-dispatcher: down-stream closed before admission receipt sent",
+            ));
+        }
+
+        let down_tx_for_handler = down_tx.clone();
+        tokio::spawn(async move {
+            while let Some(value) = handler_out_rx.recv().await {
+                match map_local_bidi_handler_frame(wire_kind, &value, stdout_stream_id) {
+                    LocalBidiHandlerFrame::Forward(frame) => {
+                        if down_tx_for_handler.send(Ok(frame)).await.is_err() {
+                            break;
+                        }
+                    }
+                    LocalBidiHandlerFrame::Terminal(frame) => {
+                        let _ = down_tx_for_handler.send(Ok(frame)).await;
+                        break;
+                    }
+                    LocalBidiHandlerFrame::Ignore => {}
+                    LocalBidiHandlerFrame::ProtocolFailure(reason) => {
+                        let _ = down_tx_for_handler
+                            .send(Ok(build_bidi_terminal_receipt(
+                                InvocationState::Failed,
+                                reason,
+                            )))
+                            .await;
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Up-stream: InvokeBidiUp frames → handler input JSON.
+        tokio::spawn(async move {
+            let mut expected_up_sequence = 1_u64;
+            while let Some(maybe_frame) = up.next().await {
+                let Ok(frame) = maybe_frame else { break };
+                if frame.sequence != expected_up_sequence {
+                    eprintln!(
+                        "[axon-serve] InvokeBidi local-dispatcher: violated \
+                         {REASON_BIDI_FRAME_SEQUENCE}; expected {expected_up_sequence}, got {}",
+                        frame.sequence
+                    );
+                    break;
+                }
+                expected_up_sequence = expected_up_sequence.saturating_add(1);
+                let Some(payload) = frame.payload else {
+                    continue;
+                };
+                match map_local_bidi_up_payload(wire_kind, payload) {
+                    LocalBidiUpFrame::Forward(jsonv) => {
+                        if handler_in_tx.send(jsonv).await.is_err() {
+                            break;
+                        }
+                    }
+                    LocalBidiUpFrame::ForwardAndClose(jsonv) => {
+                        if handler_in_tx.send(jsonv).await.is_err() {
+                            break;
+                        }
+                        break;
+                    }
+                    LocalBidiUpFrame::Close => break,
+                    LocalBidiUpFrame::Ignore => {}
+                }
+            }
+            // Up-stream EOF → drop handler_in_tx so the handler's
+            // reader sees its channel close (graceful disconnect).
+            drop(handler_in_tx);
+        });
+
+        let stream = LocalBidiDownStream::new(down_rx);
+        Ok(Response::new(
+            Box::pin(stream) as BoxedDownStream<InvokeBidiDown>
+        ))
     }
 
     fn dispatch_federation_subscribe_directory_initial(
@@ -1934,6 +2759,46 @@ impl DaemonInvocationService {
             args,
         } = request;
 
+        // Postel-boundary: peer hubs running pre-v4.1.4 builds may
+        // pass a `/agent/<bare-uuid>` device URI; coerce to the
+        // canonical `/device/<uuid>` shape before the registry
+        // lookup. New clients always emit canonical; this is
+        // strictly migration-window compat.
+        let subject_device = crate::uri::canonicalize_presence_key(&subject_device);
+
+        // **Self-targeted invoke_remote shortcut**.
+        //
+        // Host-mode dev rig: backend on the same host as the device's
+        // daemon dials the daemon's UDS to invoke an ability targeting
+        // the device itself. The daemon's local PresenceRegistry has a
+        // self-presence seed (boot.rs) but its DispatchSender is a
+        // drain channel — try_send works but the target never replies
+        // because there's no real session bidi consuming the frame.
+        //
+        // When subject_device == this daemon's own URI AND a
+        // local_dispatcher is wired, dispatch the ability through the
+        // in-process AbilityDispatcher and return the result inline
+        // on a one-shot down stream. Mirrors the
+        // `dispatch_self_targeted_forward_invoke` shortcut at
+        // `dispatch_federation_forward_invoke`'s top arm.
+        //
+        // Production hub-mode (DaemonMode::Both / Hub) reaches this
+        // branch only when caller_uri == its own hub URI invoking
+        // back to itself, which is also the right behaviour:
+        // hub-self ability dispatch goes inline.
+        if let Some(local_dispatcher) = self.local_dispatcher.as_ref() {
+            if self.matches_self_target_uri(&subject_device) {
+                return self
+                    .dispatch_self_targeted_invoke_remote(
+                        local_dispatcher,
+                        &subject_device,
+                        &ability,
+                        &args,
+                    )
+                    .await;
+            }
+        }
+
         let pending = self.pending.as_ref().ok_or_else(|| {
             Status::failed_precondition(
                 "<self>.invoke_remote: daemon was constructed without a \
@@ -2085,6 +2950,7 @@ impl DaemonInvocationService {
         // caller wakes up.
         let presence_for_drain = Arc::clone(&self.presence);
         let pending_for_drain = self.pending.clone();
+        let pending_stream_for_drain = self.pending_stream.clone();
         let caller_uri_for_drain = caller_uri.clone();
         // PR-N6 C3: drain task needs a service handle so inbound
         // `Request` frames can route into the same dispatch arms
@@ -2099,6 +2965,7 @@ impl DaemonInvocationService {
                 registration.session_id,
                 presence_for_drain,
                 pending_for_drain,
+                pending_stream_for_drain,
                 service_for_drain,
             )
             .await
@@ -2142,7 +3009,7 @@ fn build_session_down_keepalive_frame() -> DispatchFrame {
 /// §1.1; the rest of `InvocationReceipt` is informational and the
 /// device's `LocalAbilityDispatcher` ignores `Receipt` payloads
 /// outright (handle_down only acts on `BinaryChunk`).
-fn build_session_down_admission_receipt() -> InvokeBidiDown {
+fn build_bidi_admission_receipt() -> InvokeBidiDown {
     InvokeBidiDown {
         sequence: 0,
         payload: Some(DownPayload::Receipt(InvocationReceipt {
@@ -2150,6 +3017,254 @@ fn build_session_down_admission_receipt() -> InvokeBidiDown {
             ..InvocationReceipt::default()
         })),
         ..InvokeBidiDown::default()
+    }
+}
+
+fn build_session_down_admission_receipt() -> InvokeBidiDown {
+    build_bidi_admission_receipt()
+}
+
+fn build_bidi_terminal_receipt(
+    state: InvocationState,
+    reason: impl Into<String>,
+) -> InvokeBidiDown {
+    build_bidi_terminal_receipt_with_payload(state, reason, None)
+}
+
+fn build_bidi_terminal_receipt_with_payload(
+    state: InvocationState,
+    reason: impl Into<String>,
+    payload: Option<(Vec<u8>, &'static str)>,
+) -> InvokeBidiDown {
+    let (payload_bytes, payload_content_type) = payload
+        .map(|(bytes, content_type)| (bytes, content_type.to_string()))
+        .unwrap_or_default();
+    InvokeBidiDown {
+        payload: Some(DownPayload::Receipt(InvocationReceipt {
+            state: state as i32,
+            reason: reason.into(),
+            payload: payload_bytes,
+            payload_content_type,
+            ..InvocationReceipt::default()
+        })),
+        ..InvokeBidiDown::default()
+    }
+}
+
+const LOCAL_BIDI_DEFAULT_STREAM_ID: u32 = 1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocalBidiWireKind {
+    Pty,
+    FileTransfer,
+}
+
+fn local_bidi_wire_kind(ability: &str) -> LocalBidiWireKind {
+    if ability == crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER {
+        LocalBidiWireKind::FileTransfer
+    } else {
+        LocalBidiWireKind::Pty
+    }
+}
+
+fn local_bidi_stdout_stream_id(envelope_open: &EnvelopeOpen) -> u32 {
+    envelope_open
+        .streams
+        .iter()
+        .map(|stream| stream.stream_id)
+        .find(|stream_id| *stream_id != 0)
+        .unwrap_or(LOCAL_BIDI_DEFAULT_STREAM_ID)
+}
+
+#[derive(Debug)]
+enum LocalBidiHandlerFrame {
+    Forward(InvokeBidiDown),
+    Terminal(InvokeBidiDown),
+    Ignore,
+    ProtocolFailure(String),
+}
+
+#[derive(Debug)]
+enum LocalBidiUpFrame {
+    Forward(serde_json::Value),
+    ForwardAndClose(serde_json::Value),
+    Close,
+    Ignore,
+}
+
+fn map_local_bidi_up_payload(wire_kind: LocalBidiWireKind, payload: UpPayload) -> LocalBidiUpFrame {
+    use crate::pb::axon::v1::bidi_control::Control as ControlVariant;
+    use crate::pb::axon::v1::{BidiControl, PtyResize};
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use serde_json::json;
+
+    match (wire_kind, payload) {
+        (LocalBidiWireKind::Pty, UpPayload::BinaryChunk(chunk)) => {
+            let b64 = B64.encode(&chunk.data);
+            LocalBidiUpFrame::Forward(json!({"type": "stdin", "data": b64}))
+        }
+        (
+            LocalBidiWireKind::Pty,
+            UpPayload::Control(BidiControl {
+                control: Some(ctl), ..
+            }),
+        ) => match ctl {
+            ControlVariant::PtyResize(PtyResize { cols, rows }) => {
+                LocalBidiUpFrame::Forward(json!({"type": "resize", "cols": cols, "rows": rows}))
+            }
+            ControlVariant::Eof(true) => LocalBidiUpFrame::Close,
+            _ => LocalBidiUpFrame::Ignore,
+        },
+        (LocalBidiWireKind::Pty, UpPayload::Control(_)) => LocalBidiUpFrame::Ignore,
+        (LocalBidiWireKind::FileTransfer, UpPayload::BinaryChunk(chunk)) => {
+            let b64 = B64.encode(&chunk.data);
+            LocalBidiUpFrame::Forward(json!({"type": "chunk", "data": b64}))
+        }
+        (
+            LocalBidiWireKind::FileTransfer,
+            UpPayload::Control(BidiControl {
+                control: Some(ctl), ..
+            }),
+        ) => match ctl {
+            ControlVariant::Eof(true) => LocalBidiUpFrame::ForwardAndClose(json!({"type": "eof"})),
+            _ => LocalBidiUpFrame::Ignore,
+        },
+        (LocalBidiWireKind::FileTransfer, UpPayload::Control(_)) => LocalBidiUpFrame::Ignore,
+        (_, UpPayload::EnvelopeOpen(_)) => LocalBidiUpFrame::Ignore,
+    }
+}
+
+fn map_local_bidi_handler_frame(
+    wire_kind: LocalBidiWireKind,
+    value: &serde_json::Value,
+    stdout_stream_id: u32,
+) -> LocalBidiHandlerFrame {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+
+    match wire_kind {
+        LocalBidiWireKind::Pty => match value.get("type").and_then(|field| field.as_str()) {
+            Some("stdout") => {
+                let Some(data_b64) = value.get("data").and_then(|field| field.as_str()) else {
+                    return LocalBidiHandlerFrame::ProtocolFailure(
+                        "InvokeBidi local-dispatcher: PTY stdout frame missing `data`"
+                            .to_string(),
+                    );
+                };
+                let raw = match B64.decode(data_b64) {
+                    Ok(raw) => raw,
+                    Err(err) => {
+                        return LocalBidiHandlerFrame::ProtocolFailure(format!(
+                            "InvokeBidi local-dispatcher: PTY stdout frame base64 decode failed: {err}"
+                        ))
+                    }
+                };
+                LocalBidiHandlerFrame::Forward(InvokeBidiDown {
+                    payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+                        stream_id: stdout_stream_id,
+                        data: raw,
+                        ..BinaryChunk::default()
+                    })),
+                    ..InvokeBidiDown::default()
+                })
+            }
+            Some("exit") => {
+                let reason = match value.get("status") {
+                    Some(serde_json::Value::Number(status)) => {
+                        format!("pty exited with status {status}")
+                    }
+                    Some(serde_json::Value::Null) | None => String::new(),
+                    Some(other) => format!("pty exited with non-integer status {other}"),
+                };
+                LocalBidiHandlerFrame::Terminal(build_bidi_terminal_receipt(
+                    InvocationState::Completed,
+                    reason,
+                ))
+            }
+            Some("warn") => {
+                if let Some(message) = value.get("message").and_then(|field| field.as_str()) {
+                    eprintln!(
+                        "[axon-serve] InvokeBidi local-dispatcher warning from PTY handler: {message}"
+                    );
+                }
+                LocalBidiHandlerFrame::Ignore
+            }
+            _ => LocalBidiHandlerFrame::Ignore,
+        },
+        LocalBidiWireKind::FileTransfer => match value.get("type").and_then(|field| field.as_str())
+        {
+            Some("chunk") => {
+                let Some(data_b64) = value.get("data").and_then(|field| field.as_str()) else {
+                    return LocalBidiHandlerFrame::ProtocolFailure(
+                        "InvokeBidi local-dispatcher: file_transfer chunk frame missing `data`"
+                            .to_string(),
+                    );
+                };
+                let raw = match B64.decode(data_b64) {
+                    Ok(raw) => raw,
+                    Err(err) => {
+                        return LocalBidiHandlerFrame::ProtocolFailure(format!(
+                            "InvokeBidi local-dispatcher: file_transfer chunk frame base64 decode failed: {err}"
+                        ))
+                    }
+                };
+                LocalBidiHandlerFrame::Forward(InvokeBidiDown {
+                    payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+                        stream_id: stdout_stream_id,
+                        data: raw,
+                        ..BinaryChunk::default()
+                    })),
+                    ..InvokeBidiDown::default()
+                })
+            }
+            Some("complete") => match serde_json::to_vec(value) {
+                Ok(payload) => LocalBidiHandlerFrame::Terminal(
+                    build_bidi_terminal_receipt_with_payload(
+                        InvocationState::Completed,
+                        String::new(),
+                        Some((payload, "application/json")),
+                    ),
+                ),
+                Err(err) => LocalBidiHandlerFrame::ProtocolFailure(format!(
+                    "InvokeBidi local-dispatcher: encode file_transfer completion receipt payload failed: {err}"
+                )),
+            },
+            Some("error") => {
+                let reason = match (
+                    value.get("code").and_then(|field| field.as_str()),
+                    value.get("message").and_then(|field| field.as_str()),
+                ) {
+                    (Some(code), Some(message))
+                        if !code.trim().is_empty() && !message.trim().is_empty() =>
+                    {
+                        format!("{code}: {message}")
+                    }
+                    (_, Some(message)) if !message.trim().is_empty() => message.to_string(),
+                    (Some(code), _) if !code.trim().is_empty() => code.to_string(),
+                    _ => "file_transfer handler returned error".to_string(),
+                };
+                match serde_json::to_vec(value) {
+                    Ok(payload) => LocalBidiHandlerFrame::Terminal(
+                        build_bidi_terminal_receipt_with_payload(
+                            InvocationState::Failed,
+                            reason,
+                            Some((payload, "application/json")),
+                        ),
+                    ),
+                    Err(err) => LocalBidiHandlerFrame::ProtocolFailure(format!(
+                        "InvokeBidi local-dispatcher: encode file_transfer error receipt payload failed: {err}"
+                    )),
+                }
+            }
+            Some("warn") => {
+                if let Some(message) = value.get("message").and_then(|field| field.as_str()) {
+                    eprintln!(
+                        "[axon-serve] InvokeBidi local-dispatcher warning from file_transfer handler: {message}"
+                    );
+                }
+                LocalBidiHandlerFrame::Ignore
+            }
+            _ => LocalBidiHandlerFrame::Ignore,
+        }
     }
 }
 
@@ -2178,6 +3293,45 @@ struct SessionDownStream {
     /// yields it and clears the slot. Subsequent polls follow the
     /// recv-then-heartbeat path.
     pending_admission_receipt: Option<InvokeBidiDown>,
+}
+
+struct LocalBidiDownStream {
+    down_rx: tokio::sync::mpsc::Receiver<Result<InvokeBidiDown, Status>>,
+    next_sequence: u64,
+    pending_admission_receipt: Option<InvokeBidiDown>,
+}
+
+impl LocalBidiDownStream {
+    fn new(down_rx: tokio::sync::mpsc::Receiver<Result<InvokeBidiDown, Status>>) -> Self {
+        Self {
+            down_rx,
+            next_sequence: 0,
+            pending_admission_receipt: Some(build_bidi_admission_receipt()),
+        }
+    }
+
+    fn stamp_sequence(&mut self, mut frame: InvokeBidiDown) -> InvokeBidiDown {
+        frame.sequence = self.next_sequence;
+        self.next_sequence = self.next_sequence.saturating_add(1);
+        frame
+    }
+}
+
+impl Stream for LocalBidiDownStream {
+    type Item = Result<InvokeBidiDown, Status>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if let Some(receipt) = self.pending_admission_receipt.take() {
+            return Poll::Ready(Some(Ok(self.stamp_sequence(receipt))));
+        }
+
+        match Pin::new(&mut self.down_rx).poll_recv(cx) {
+            Poll::Ready(Some(Ok(frame))) => Poll::Ready(Some(Ok(self.stamp_sequence(frame)))),
+            Poll::Ready(Some(Err(status))) => Poll::Ready(Some(Err(status))),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
 }
 
 impl SessionDownStream {
@@ -2333,7 +3487,11 @@ impl DaemonInvocationService {
                 // verbatim. The arm choice mirrors the same
                 // `target_tenant == local_tenant` comparison the
                 // inner dispatch performs.
-                emit_session_request_resolution_marker(args, self.session_realm.as_deref());
+                emit_session_request_resolution_marker(
+                    args,
+                    self.session_realm.as_deref(),
+                    &self.presence,
+                );
 
                 match self.dispatch_federation_forward_invoke(None, args).await {
                     Ok(response) => {
@@ -2372,17 +3530,26 @@ impl DaemonInvocationService {
 /// internal `is_local_tenant` computation: a malformed inner
 /// payload or a missing `session_realm` collapses to the local
 /// arm (matching the inner dispatcher's smoke-test fall-through).
-fn emit_session_request_resolution_marker(args: &[u8], local_tenant: Option<&str>) {
+fn emit_session_request_resolution_marker(
+    args: &[u8],
+    local_tenant: Option<&str>,
+    presence: &crate::services::presence_registry::PresenceRegistry,
+) {
     let request: Option<federation_wrappers::ForwardInvokeRequest> =
         serde_json::from_slice(args).ok();
     let target_tenant = request
         .as_ref()
         .and_then(|r| parse_tenant_from_uri(&r.target_uri));
+    let has_local_presence = request
+        .as_ref()
+        .map(|r| presence.lookup(&r.target_uri).is_some())
+        .unwrap_or(false);
 
-    let is_local = match (target_tenant, local_tenant) {
-        (Some(target), Some(local)) => target == local,
-        (_, None) | (None, Some(_)) => true,
-    };
+    let is_local = has_local_presence
+        || match (target_tenant, local_tenant) {
+            (Some(target), Some(local)) => target == local,
+            (_, None) | (None, Some(_)) => true,
+        };
 
     if is_local {
         eprintln!("[session-request] resolved target via local-fast-path");
@@ -2523,6 +3690,7 @@ async fn drain_session_up_stream(
     session_id: crate::services::presence_registry::PresenceSessionId,
     presence: Arc<PresenceRegistry>,
     pending: Option<Arc<PendingDispatchMap>>,
+    pending_stream: Option<Arc<PendingStreamDispatchMap>>,
     service: DaemonInvocationService,
 ) {
     use crate::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
@@ -2608,23 +3776,48 @@ async fn drain_session_up_stream(
             SessionDispatch::Result {
                 call_id,
                 payload,
-                terminal: _terminal,
+                terminal,
                 error,
             } => {
-                let Some(pending) = pending.as_ref() else {
-                    eprintln!(
-                        "[session-accept] {caller_uri} sent Result for call_id={call_id} but \
-                         daemon was constructed without PendingDispatchMap; ignoring"
-                    );
-                    continue;
-                };
-                let dispatch_result = DispatchResult { payload, error };
-                let completed = pending.complete(call_id, dispatch_result);
-                if !completed {
-                    eprintln!(
-                        "[session-accept] {caller_uri} sent Result for call_id={call_id} but \
-                         no pending entry matched (caller may have cancelled); silent no-op"
-                    );
+                if terminal {
+                    let dispatch_result = DispatchResult { payload, error };
+                    let mut completed = false;
+                    if let Some(pending_stream) = pending_stream.as_ref() {
+                        completed = pending_stream
+                            .finish(call_id, dispatch_result.clone())
+                            .await;
+                    }
+                    if !completed {
+                        let Some(pending) = pending.as_ref() else {
+                            eprintln!(
+                                "[session-accept] {caller_uri} sent terminal Result for call_id={call_id} but \
+                                 daemon was constructed without PendingDispatchMap; ignoring"
+                            );
+                            continue;
+                        };
+                        completed = pending.complete(call_id, dispatch_result);
+                    }
+                    if !completed {
+                        eprintln!(
+                            "[session-accept] {caller_uri} sent terminal Result for call_id={call_id} but \
+                             no pending entry matched (caller may have cancelled); silent no-op"
+                        );
+                    }
+                } else {
+                    let Some(pending_stream) = pending_stream.as_ref() else {
+                        eprintln!(
+                            "[session-accept] {caller_uri} sent streaming Result chunk for call_id={call_id} but \
+                             daemon was constructed without PendingStreamDispatchMap; ignoring"
+                        );
+                        continue;
+                    };
+                    let completed = pending_stream.push_chunk(call_id, payload).await;
+                    if !completed {
+                        eprintln!(
+                            "[session-accept] {caller_uri} sent streaming Result chunk for call_id={call_id} but \
+                             no pending stream entry matched; silent no-op"
+                        );
+                    }
                 }
             }
             SessionDispatch::Dispatch { call_id, .. } => {
@@ -2633,6 +3826,20 @@ async fn drain_session_up_stream(
                 eprintln!(
                     "[session-accept] {caller_uri} sent unexpected Dispatch frame \
                      (call_id={call_id}); ignoring"
+                );
+            }
+            SessionDispatch::BidiOpen {
+                call_id, ability, ..
+            } => {
+                eprintln!(
+                    "[session-accept] {caller_uri} sent unexpected BidiOpen frame \
+                     (call_id={call_id} ability={ability}); ignoring"
+                );
+            }
+            SessionDispatch::BidiInput { call_id, eof, .. } => {
+                eprintln!(
+                    "[session-accept] {caller_uri} sent unexpected BidiInput frame \
+                     (call_id={call_id} eof={eof}); ignoring"
                 );
             }
             SessionDispatch::Request {
@@ -2734,7 +3941,7 @@ fn validate_session_realm(
     let caller_realm = parse_realm_from_uri(caller_uri).ok_or_else(|| {
         Status::invalid_argument(format!(
             "<self>.session: caller URI `{caller_uri}` does not match the canonical \
-             `easynet:///r/{{realm}}/agent/{{node}}` shape"
+             `easynet:///r/{{realm}}/...` shape"
         ))
     })?;
 
@@ -2922,16 +4129,268 @@ pub(crate) fn decode_inner_payload(b64: &str) -> Result<InnerPayload, Status> {
 pub(crate) fn build_peer_envelope(
     caller_envelope: Option<&Envelope>,
     target_uri: &str,
+    local_realm: Option<&str>,
 ) -> Envelope {
-    if let Some(env) = caller_envelope {
-        return env.clone();
-    }
-    Envelope {
-        caller: Some(AgentIdentity {
-            uri: target_uri.to_string(),
+    use rand::RngCore as _;
+
+    let mut forwarded = caller_envelope.cloned().unwrap_or_default();
+    let peer_hub_uri = parse_tenant_from_uri(target_uri).map(crate::uri::hub_uri);
+
+    forwarded.caller = Some(AgentIdentity {
+        uri: local_realm
+            .map(crate::uri::hub_uri)
+            .or_else(|| {
+                forwarded
+                    .caller
+                    .as_ref()
+                    .map(|caller| caller.uri.trim().to_string())
+                    .filter(|uri| !uri.is_empty())
+            })
+            .unwrap_or_else(|| target_uri.to_string()),
+        ..AgentIdentity::default()
+    });
+
+    if let Some(peer_hub_uri) = peer_hub_uri.clone() {
+        forwarded.callee = Some(AgentIdentity {
+            uri: peer_hub_uri.clone(),
             ..AgentIdentity::default()
-        }),
-        ..Envelope::default()
+        });
+        if forwarded
+            .subject
+            .as_ref()
+            .map(|subject| subject.uri.trim().is_empty())
+            .unwrap_or(true)
+        {
+            forwarded.subject = Some(SubjectIdentity {
+                uri: caller_envelope
+                    .and_then(|env| env.caller.as_ref())
+                    .map(|caller| caller.uri.trim().to_string())
+                    .filter(|uri| !uri.is_empty())
+                    .unwrap_or(peer_hub_uri),
+                ..SubjectIdentity::default()
+            });
+        }
+    } else {
+        if forwarded
+            .callee
+            .as_ref()
+            .map(|callee| callee.uri.trim().is_empty())
+            .unwrap_or(true)
+        {
+            forwarded.callee = Some(AgentIdentity {
+                uri: target_uri.to_string(),
+                ..AgentIdentity::default()
+            });
+        }
+        if forwarded
+            .subject
+            .as_ref()
+            .map(|subject| subject.uri.trim().is_empty())
+            .unwrap_or(true)
+        {
+            forwarded.subject = Some(SubjectIdentity {
+                uri: caller_envelope
+                    .and_then(|env| env.caller.as_ref())
+                    .map(|caller| caller.uri.trim().to_string())
+                    .filter(|uri| !uri.is_empty())
+                    .unwrap_or_else(|| target_uri.to_string()),
+                ..SubjectIdentity::default()
+            });
+        }
+    }
+
+    if forwarded.invocation_nonce.len() != 16 {
+        let mut nonce = vec![0u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut nonce);
+        forwarded.invocation_nonce = nonce;
+    }
+
+    forwarded
+}
+
+fn sign_peer_request_envelope(
+    envelope: &mut Envelope,
+    ability: &str,
+    arguments: &[u8],
+    local_realm: Option<&str>,
+    hub_signing_seed: Option<&SessionSigningSeed>,
+) -> Result<(), Status> {
+    let Some(realm) = local_realm else {
+        return Ok(());
+    };
+
+    use easynet_axon::invocation::axiom::{
+        canonical_invocation_bytes, AgentIdentity as AxiomAgentIdentity, CausalContext,
+        InvocationEnvelope, SubjectIdentity as AxiomSubjectIdentity, UriProfile,
+    };
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use sha2::{Digest, Sha256};
+
+    envelope.causal_context = None;
+
+    let caller_uri = envelope
+        .caller
+        .as_ref()
+        .map(|caller| caller.uri.trim())
+        .filter(|uri| !uri.is_empty())
+        .ok_or_else(|| {
+            Status::internal("cross-hub forward_invoke signing: caller URI missing after rewrite")
+        })?;
+    let callee_uri = envelope
+        .callee
+        .as_ref()
+        .map(|callee| callee.uri.trim())
+        .filter(|uri| !uri.is_empty())
+        .ok_or_else(|| {
+            Status::internal("cross-hub forward_invoke signing: callee URI missing after rewrite")
+        })?;
+    let subject_uri = envelope
+        .subject
+        .as_ref()
+        .map(|subject| subject.uri.trim())
+        .filter(|uri| !uri.is_empty())
+        .ok_or_else(|| {
+            Status::internal("cross-hub forward_invoke signing: subject URI missing after rewrite")
+        })?;
+    let invocation_nonce: [u8; 16] =
+        envelope
+            .invocation_nonce
+            .as_slice()
+            .try_into()
+            .map_err(|_| {
+                Status::internal(
+                    "cross-hub forward_invoke signing: invocation_nonce must be 16 bytes",
+                )
+            })?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(arguments);
+    let args_digest: [u8; 32] = hasher.finalize().into();
+
+    // Hub identity is a fresh-random Ed25519 seed minted by
+    // backend's `LoadOrInitHubIdentity` at first boot and persisted
+    // to `${HOME}/.easynet-hub/<realm>/identity.json` (see backend
+    // `runtime/subject_context.go::backendIdentityRecord`). The
+    // pre-fix path used `derive_subject_keypair(realm,
+    // "easynet:prv:hub:{realm}")` — deterministically derived from
+    // SHA256(realm + subject_id) — which produced a DIFFERENT key
+    // than the trust-anchor entry (sourced from `identity.json`).
+    // Peer hubs verifying via `federation.resolve_key` saw a
+    // signature/key mismatch and rejected with
+    // `AXON_CALLER_SIGNATURE_INVALID:caller_signature_invalid`.
+    //
+    // Read the on-disk seed in production so the signing key
+    // matches the pubkey the trust anchor advertises. Tests stage
+    // an identity.json under their per-test HomeGuard root via
+    // `stage_test_hub_identity` so the same code path covers both.
+    let hub_seed = match hub_signing_seed.copied() {
+        Some(seed) => seed,
+        None => read_hub_identity_seed(realm).map_err(|err| {
+            Status::internal(format!(
+                "cross-hub forward_invoke signing: load hub identity seed for realm `{realm}`: {err}"
+            ))
+        })?,
+    };
+    let signing_key = SigningKey::from_bytes(&hub_seed);
+    let axiom_envelope = InvocationEnvelope {
+        caller: AxiomAgentIdentity::new(caller_uri, UriProfile::EasynetStrictV2),
+        callee: AxiomAgentIdentity::new(callee_uri, UriProfile::EasynetStrictV2),
+        subject: AxiomSubjectIdentity::new(subject_uri, UriProfile::EasynetStrictV2),
+        ability: ability.to_string(),
+        args_digest,
+        invocation_nonce,
+        causal_context: CausalContext::None,
+    };
+    let signature = signing_key.sign(&canonical_invocation_bytes(&axiom_envelope));
+    envelope.caller_signature = Some(CallerSignature {
+        algorithm: "ed25519".to_string(),
+        signature: signature.to_bytes().to_vec(),
+        ..CallerSignature::default()
+    });
+    Ok(())
+}
+
+/// Load the hub's Ed25519 signing seed for `realm` from the
+/// on-disk identity file backend's `LoadOrInitHubIdentity` writes
+/// at first boot. File shape mirrors backend
+/// `runtime/subject_context.go::backendIdentityRecord`:
+///
+/// ```json
+/// {
+///   "private_key_seed_hex": "<64-hex>",
+///   "agent_uri": "easynet:///r/<realm>/hub",
+///   "created_at_unix_ms": <int>
+/// }
+/// ```
+///
+/// Path: `${HOME}/.easynet-hub/<realm>/identity.json`. In
+/// production hub containers `HOME=/srv/easynet`, so the resolved
+/// path is `/srv/easynet/.easynet-hub/<realm>/identity.json`.
+///
+/// Returns the 32-byte seed. Errors propagate as `String` and the
+/// caller wraps them in `Status::internal`. This helper is only
+/// used by the cross-hub `federation.forward_invoke` signing path
+/// today; the seed is the same one the trust anchor's hub entry
+/// advertises as `public_key_b64`, so a peer's
+/// `federation.resolve_key` lookup → signature verify round trip
+/// closes cleanly.
+///
+/// Tests fall back to the deterministic
+/// `derive_subject_keypair(realm, "easynet:prv:hub:{realm}")`
+/// seed when the on-disk file is missing — this preserves the
+/// pre-fix wire shape for in-process unit tests that don't stage
+/// a `~/.easynet-hub/<realm>/identity.json` fixture, while
+/// production daemons (which always have the file, written by
+/// backend's first-boot bootstrap) take the real-seed path.
+/// The fallback is `cfg(test)`-gated so an accidentally-missing
+/// identity file in production fails loudly rather than silently
+/// substituting a key the peer hub will reject.
+pub(crate) fn read_hub_identity_seed(realm: &str) -> Result<[u8; 32], String> {
+    let home = std::env::var_os("HOME").ok_or_else(|| "HOME unset".to_string())?;
+    let path = std::path::Path::new(&home)
+        .join(".easynet-hub")
+        .join(realm)
+        .join("identity.json");
+    match std::fs::read_to_string(&path) {
+        Ok(raw) => {
+            #[derive(serde::Deserialize)]
+            struct HubIdentityRecord {
+                private_key_seed_hex: String,
+            }
+            let parsed: HubIdentityRecord = serde_json::from_str(&raw)
+                .map_err(|err| format!("parse {}: {err}", path.display()))?;
+            let seed_bytes = hex::decode(parsed.private_key_seed_hex.trim())
+                .map_err(|err| format!("decode hex from {}: {err}", path.display()))?;
+            if seed_bytes.len() != 32 {
+                return Err(format!(
+                    "{} private_key_seed_hex must decode to 32 bytes, got {}",
+                    path.display(),
+                    seed_bytes.len()
+                ));
+            }
+            let mut seed = [0u8; 32];
+            seed.copy_from_slice(&seed_bytes);
+            Ok(seed)
+        }
+        Err(err) => {
+            #[cfg(test)]
+            {
+                let _ = err;
+                // Test fallback: deterministic derive matches the
+                // pre-fix wire shape so existing unit tests that
+                // don't stage an `identity.json` fixture stay
+                // green. Production never takes this path (see
+                // function-level docs).
+                let hub_subject_id = format!("easynet:prv:hub:{realm}");
+                let (seed, _pk_b64) =
+                    crate::runtime::publish::derive_subject_keypair(realm, &hub_subject_id);
+                Ok(seed)
+            }
+            #[cfg(not(test))]
+            {
+                Err(format!("read {}: {err}", path.display()))
+            }
+        }
     }
 }
 
@@ -3070,6 +4529,67 @@ fn build_invoke_remote_dispatch_frame(
     })
 }
 
+fn build_remote_bidi_open_dispatch_frame(
+    call_id: u64,
+    ability: &str,
+    args: &[u8],
+) -> Result<DispatchFrame, Status> {
+    let payload = SessionDispatch::BidiOpen {
+        call_id,
+        ability: ability.to_string(),
+        args: args.to_vec(),
+    };
+    let bytes = serde_json::to_vec(&payload).map_err(|err| {
+        Status::internal(format!(
+            "InvokeBidi remote file_transfer: encode SessionDispatch::BidiOpen: {err}"
+        ))
+    })?;
+    Ok(DispatchFrame {
+        frame: InvokeBidiDown {
+            payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+                stream_id: INVOKE_REMOTE_STREAM_ID,
+                data: bytes,
+                ..BinaryChunk::default()
+            })),
+            ..InvokeBidiDown::default()
+        },
+    })
+}
+
+fn build_remote_bidi_input_dispatch_frame(
+    call_id: u64,
+    payload: &[u8],
+    eof: bool,
+) -> DispatchFrame {
+    let frame = SessionDispatch::BidiInput {
+        call_id,
+        payload: payload.to_vec(),
+        eof,
+    };
+    let data =
+        serde_json::to_vec(&frame).expect("SessionDispatch::BidiInput is statically encodable");
+    DispatchFrame {
+        frame: InvokeBidiDown {
+            payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+                stream_id: INVOKE_REMOTE_STREAM_ID,
+                data,
+                ..BinaryChunk::default()
+            })),
+            ..InvokeBidiDown::default()
+        },
+    }
+}
+
+fn remote_bidi_target_uri(envelope_open: &EnvelopeOpen) -> Option<String> {
+    let callee = envelope_open
+        .envelope
+        .as_ref()
+        .and_then(|env| env.callee.as_ref())
+        .map(|callee| callee.uri.trim())
+        .filter(|uri| !uri.is_empty())?;
+    Some(crate::uri::canonicalize_presence_key(callee))
+}
+
 /// Build the terminal `InvokeBidiDown` frame the
 /// `<self>.invoke_remote` caller's down stream yields. Carries the
 /// `InvokeRemoteDown::Result` JSON in `BinaryChunk.data`.
@@ -3169,7 +4689,14 @@ mod tests {
     /// Test helper daemon URI — admitted by the test admission
     /// facade via the loopback bypass. Tests that exercise
     /// admission rejection construct a different facade.
-    const TEST_DAEMON_URI: &str = "easynet:///r/test-realm/agent/test-daemon";
+    // URI v4.1.4: daemons are devices, not agents. The legacy
+    // `agent/<bare-id>` shape is rewritten to `device/<id>` by
+    // `canonicalize_presence_key` at the forward_invoke
+    // entry point — fixtures must use the canonical shape so
+    // self-target equality holds without going through the
+    // coercer (which would mask a real lookup-key mismatch
+    // bug if it appeared in production).
+    const TEST_DAEMON_URI: &str = "easynet:///r/test-realm/device/test-daemon";
 
     fn make_service() -> DaemonInvocationService {
         let admission = AdmissionFacade::new(
@@ -3177,6 +4704,7 @@ mod tests {
             Some(TEST_DAEMON_URI.to_string()),
         );
         DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
+            .with_hub_signing_seed([0x11; 32])
     }
 
     fn test_envelope() -> Envelope {
@@ -4213,6 +5741,224 @@ mod tests {
     }
 
     #[test]
+    fn map_local_bidi_handler_stdout_decodes_to_binary_chunk() {
+        use base64::Engine as _;
+
+        let frame = map_local_bidi_handler_frame(
+            LocalBidiWireKind::Pty,
+            &serde_json::json!({
+                "type": "stdout",
+                "data": base64::engine::general_purpose::STANDARD.encode(b"hello"),
+            }),
+            7,
+        );
+        match frame {
+            LocalBidiHandlerFrame::Forward(InvokeBidiDown {
+                payload: Some(DownPayload::BinaryChunk(chunk)),
+                ..
+            }) => {
+                assert_eq!(chunk.stream_id, 7);
+                assert_eq!(chunk.data, b"hello");
+            }
+            other => panic!("expected stdout → BinaryChunk, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_local_bidi_handler_exit_becomes_completed_receipt() {
+        let frame = map_local_bidi_handler_frame(
+            LocalBidiWireKind::Pty,
+            &serde_json::json!({
+                "type": "exit",
+                "status": 23,
+            }),
+            1,
+        );
+        match frame {
+            LocalBidiHandlerFrame::Terminal(InvokeBidiDown {
+                payload: Some(DownPayload::Receipt(receipt)),
+                ..
+            }) => {
+                assert_eq!(receipt.state, InvocationState::Completed as i32);
+                assert!(
+                    receipt.reason.contains("23"),
+                    "exit status should surface in the terminal receipt reason"
+                );
+            }
+            other => panic!("expected exit → terminal receipt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_local_bidi_handler_file_transfer_chunk_decodes_to_binary_chunk() {
+        use base64::Engine as _;
+
+        let frame = map_local_bidi_handler_frame(
+            LocalBidiWireKind::FileTransfer,
+            &serde_json::json!({
+                "type": "chunk",
+                "data": base64::engine::general_purpose::STANDARD.encode(b"file-bytes"),
+            }),
+            11,
+        );
+        match frame {
+            LocalBidiHandlerFrame::Forward(InvokeBidiDown {
+                payload: Some(DownPayload::BinaryChunk(chunk)),
+                ..
+            }) => {
+                assert_eq!(chunk.stream_id, 11);
+                assert_eq!(chunk.data, b"file-bytes");
+            }
+            other => panic!("expected file_transfer chunk → BinaryChunk, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_local_bidi_handler_file_transfer_complete_becomes_receipt_with_payload() {
+        let frame = map_local_bidi_handler_frame(
+            LocalBidiWireKind::FileTransfer,
+            &serde_json::json!({
+                "type": "complete",
+                "sha256": "deadbeef",
+                "bytes": 9,
+            }),
+            1,
+        );
+        match frame {
+            LocalBidiHandlerFrame::Terminal(InvokeBidiDown {
+                payload: Some(DownPayload::Receipt(receipt)),
+                ..
+            }) => {
+                assert_eq!(receipt.state, InvocationState::Completed as i32);
+                assert_eq!(receipt.payload_content_type, "application/json");
+                let payload: serde_json::Value =
+                    serde_json::from_slice(&receipt.payload).expect("json payload");
+                assert_eq!(payload["sha256"], "deadbeef");
+                assert_eq!(payload["bytes"], 9);
+            }
+            other => panic!("expected file_transfer complete → terminal receipt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_local_bidi_handler_file_transfer_error_becomes_failed_receipt_with_payload() {
+        let frame = map_local_bidi_handler_frame(
+            LocalBidiWireKind::FileTransfer,
+            &serde_json::json!({
+                "type": "error",
+                "code": "disk_full",
+                "message": "no space left on device",
+            }),
+            1,
+        );
+        match frame {
+            LocalBidiHandlerFrame::Terminal(InvokeBidiDown {
+                payload: Some(DownPayload::Receipt(receipt)),
+                ..
+            }) => {
+                assert_eq!(receipt.state, InvocationState::Failed as i32);
+                assert!(receipt.reason.contains("disk_full"));
+                assert!(receipt.reason.contains("no space left on device"));
+                let payload: serde_json::Value =
+                    serde_json::from_slice(&receipt.payload).expect("json payload");
+                assert_eq!(payload["type"], "error");
+            }
+            other => panic!("expected file_transfer error → failed receipt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_local_bidi_up_payload_translates_file_transfer_binary_chunk() {
+        use base64::Engine as _;
+
+        let mapped = map_local_bidi_up_payload(
+            LocalBidiWireKind::FileTransfer,
+            UpPayload::BinaryChunk(BinaryChunk {
+                data: b"abc".to_vec(),
+                ..BinaryChunk::default()
+            }),
+        );
+        match mapped {
+            LocalBidiUpFrame::Forward(value) => {
+                assert_eq!(value["type"], "chunk");
+                assert_eq!(
+                    value["data"],
+                    base64::engine::general_purpose::STANDARD.encode(b"abc")
+                );
+            }
+            other => panic!("expected file_transfer binary → chunk JSON, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_local_bidi_up_payload_translates_file_transfer_eof_control() {
+        let mapped = map_local_bidi_up_payload(
+            LocalBidiWireKind::FileTransfer,
+            UpPayload::Control(BidiControl {
+                control: Some(crate::pb::axon::v1::bidi_control::Control::Eof(true)),
+            }),
+        );
+        match mapped {
+            LocalBidiUpFrame::ForwardAndClose(value) => {
+                assert_eq!(value["type"], "eof");
+            }
+            other => panic!("expected file_transfer eof → eof JSON, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn local_bidi_down_stream_emits_admission_receipt_before_handler_frames() {
+        use futures::StreamExt as _;
+
+        let (down_tx, down_rx) = tokio::sync::mpsc::channel::<Result<InvokeBidiDown, Status>>(1);
+        down_tx
+            .send(Ok(InvokeBidiDown {
+                payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+                    stream_id: 9,
+                    data: b"payload".to_vec(),
+                    ..BinaryChunk::default()
+                })),
+                ..InvokeBidiDown::default()
+            }))
+            .await
+            .expect("enqueue payload frame");
+        drop(down_tx);
+
+        let mut stream = LocalBidiDownStream::new(down_rx);
+        let first = stream
+            .next()
+            .await
+            .expect("admission receipt frame")
+            .expect("receipt is ok");
+        match first.payload {
+            Some(DownPayload::Receipt(receipt)) => {
+                assert_eq!(first.sequence, 0);
+                assert_eq!(receipt.state, InvocationState::Admitted as i32);
+            }
+            other => panic!("expected admission receipt at sequence 0, got {other:?}"),
+        }
+
+        let second = stream
+            .next()
+            .await
+            .expect("payload frame")
+            .expect("payload is ok");
+        match second.payload {
+            Some(DownPayload::BinaryChunk(chunk)) => {
+                assert_eq!(second.sequence, 1);
+                assert_eq!(chunk.stream_id, 9);
+                assert_eq!(chunk.data, b"payload");
+            }
+            other => panic!("expected payload BinaryChunk at sequence 1, got {other:?}"),
+        }
+
+        assert!(
+            stream.next().await.is_none(),
+            "stream should end after the queued payload frame"
+        );
+    }
+
+    #[test]
     fn validate_session_realm_accepts_same_realm() {
         let anchor = RealmTrustAnchor::default();
         validate_session_realm(
@@ -4221,6 +5967,17 @@ mod tests {
             &anchor,
         )
         .expect("same-realm caller must pass");
+    }
+
+    #[test]
+    fn validate_session_realm_accepts_same_realm_device_uri() {
+        let anchor = RealmTrustAnchor::default();
+        validate_session_realm(
+            "easynet:///r/realm-a/device/device-1",
+            Some("realm-a"),
+            &anchor,
+        )
+        .expect("same-realm device URI must pass");
     }
 
     #[test]
@@ -4369,6 +6126,10 @@ mod tests {
     fn parse_tenant_from_uri_extracts_tenant_component() {
         assert_eq!(
             parse_tenant_from_uri("easynet:///r/realm-a/agent/laptop-1"),
+            Some("realm-a")
+        );
+        assert_eq!(
+            parse_tenant_from_uri("easynet:///r/realm-a/device/device-1"),
             Some("realm-a")
         );
         assert_eq!(
@@ -4619,6 +6380,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn forward_invoke_local_hub_uri_runs_locally_via_local_dispatcher() {
+        // Device-mode escalation targets the local realm's hub URI,
+        // not the hub host's device URI. The hub daemon must treat
+        // `easynet:///r/<realm>/hub` as self-targeted even though
+        // `AdmissionFacade.daemon_uri()` still carries the host
+        // device URI from credentials.json.
+        use crate::runtime::ability_dispatch::{AbilityDispatcher, LocalAbilityRegistry};
+        use crate::runtime::gateway::NoopGateway;
+
+        let mut registry = LocalAbilityRegistry::new();
+        registry.register_rpc(
+            "demo.echo",
+            std::sync::Arc::new(|args| {
+                Ok(serde_json::json!({
+                    "MARKER-C9-HUB": "local-hub-self-target-fired",
+                    "echoed_args": args,
+                }))
+            }),
+        );
+        let dispatcher: Arc<AbilityDispatcher> = Arc::new(AbilityDispatcher::new(
+            Arc::new(registry),
+            Arc::new(NoopGateway::new()),
+        ));
+
+        let svc = make_service()
+            .with_session_realm("test-realm")
+            .with_local_dispatcher(Arc::clone(&dispatcher));
+
+        let response = svc
+            .dispatch_federation_forward_invoke(
+                None,
+                &forward_invoke_args_for_ability(
+                    &crate::uri::hub_uri("test-realm"),
+                    "demo.echo",
+                    serde_json::json!({"k": "hub"}),
+                ),
+            )
+            .await
+            .expect("local hub URI must hit the self-target dispatcher");
+
+        let body = response.into_inner();
+        let parsed: federation_wrappers::ForwardInvokeResponse =
+            serde_json::from_slice(&body.result).expect("body decodes");
+        let result_value: serde_json::Value =
+            serde_json::from_slice(&parsed.result_bytes).expect("result_bytes is JSON");
+        assert_eq!(
+            result_value.get("MARKER-C9-HUB").and_then(|v| v.as_str()),
+            Some("local-hub-self-target-fired"),
+        );
+        assert_eq!(
+            result_value
+                .get("echoed_args")
+                .and_then(|v| v.get("k"))
+                .and_then(|v| v.as_str()),
+            Some("hub"),
+        );
+    }
+
+    #[tokio::test]
     async fn forward_invoke_self_target_without_local_dispatcher_falls_to_target_offline() {
         // Guard: when `local_dispatcher` is None (test fixtures
         // that don't wire one), the self-target arm DOES NOT
@@ -4664,7 +6484,7 @@ mod tests {
         let err = svc
             .dispatch_federation_forward_invoke(
                 None,
-                &forward_invoke_args("easynet:///r/test-realm/agent/some-other-device"),
+                &forward_invoke_args("easynet:///r/test-realm/device/some-other-device"),
             )
             .await
             .expect_err("non-self target ⇒ legacy presence-push path ⇒ target_offline");
@@ -4699,7 +6519,7 @@ mod tests {
         let err = svc
             .dispatch_federation_forward_invoke(
                 None,
-                &forward_invoke_args("easynet:///r/test-realm/agent/local-target"),
+                &forward_invoke_args("easynet:///r/test-realm/device/local-target"),
             )
             .await
             .expect_err("local fast-path miss surfaces target_offline");
@@ -4726,7 +6546,7 @@ mod tests {
         let err = svc
             .dispatch_federation_forward_invoke(
                 None,
-                &forward_invoke_args("easynet:///r/peer-realm/agent/peer-target"),
+                &forward_invoke_args("easynet:///r/peer-realm/device/peer-target"),
             )
             .await
             .expect_err("cross-tenant without client surfaces target_offline");
@@ -4761,7 +6581,7 @@ mod tests {
         let err = svc
             .dispatch_federation_forward_invoke(
                 None,
-                &forward_invoke_args("easynet:///r/unmapped-realm/agent/peer-target"),
+                &forward_invoke_args("easynet:///r/unmapped-realm/device/peer-target"),
             )
             .await
             .expect_err("unmapped tenant surfaces target_offline");
@@ -4804,7 +6624,7 @@ mod tests {
             .with_federation_client(recorder.clone() as Arc<dyn FederationClient>)
             .with_federated_peers(peers);
 
-        let target_uri = "easynet:///r/peer-realm/agent/peer-target";
+        let target_uri = "easynet:///r/peer-realm/device/peer-target";
         let args = forward_invoke_args(target_uri);
         let resp = svc
             .dispatch_federation_forward_invoke(None, &args)
@@ -4850,17 +6670,125 @@ mod tests {
             !nested.inner_envelope_b64.is_empty(),
             "nested wrapper carries the original inner_envelope_b64 verbatim"
         );
-        // PR-N1 commit 11/N (preserved): when the original CLI
-        // request carries no envelope (this test passes None),
-        // the dispatcher synthesises a minimal envelope with
-        // `caller.uri = target_uri` so the peer's URI-only
-        // Device admission arm under DEC-013 admits.
+        // When the original request carries no caller envelope, the
+        // caller hub must still present its own hub URI to the peer.
+        // Using `target_uri` here makes the peer believe the target
+        // device itself initiated the call, which fails trust-anchor
+        // admission and opens the circuit breaker.
         let peer_envelope = calls[0].1.envelope.as_ref().expect("envelope present");
         let peer_caller = peer_envelope
             .caller
             .as_ref()
             .expect("caller identity present");
-        assert_eq!(peer_caller.uri, target_uri);
+        assert_eq!(peer_caller.uri, crate::uri::hub_uri("test-realm"));
+        let peer_callee = peer_envelope
+            .callee
+            .as_ref()
+            .expect("callee identity present");
+        assert_eq!(peer_callee.uri, crate::uri::hub_uri("peer-realm"));
+        let caller_signature = peer_envelope
+            .caller_signature
+            .as_ref()
+            .expect("caller signature present for peer admission");
+        assert_eq!(caller_signature.algorithm, "ed25519");
+        assert!(
+            !caller_signature.signature.is_empty(),
+            "peer envelope signature bytes must be populated"
+        );
+        assert_eq!(
+            peer_envelope.invocation_nonce.len(),
+            16,
+            "peer envelope must carry a fresh 16-byte nonce for strict admission"
+        );
+        let peer_signature = peer_envelope
+            .caller_signature
+            .as_ref()
+            .expect("peer envelope must be signed for cross-hub admission");
+        assert_eq!(peer_signature.algorithm, "ed25519");
+        assert_eq!(
+            peer_signature.signature.len(),
+            64,
+            "peer envelope signature must be one Ed25519 signature"
+        );
+    }
+
+    #[tokio::test]
+    async fn forward_invoke_cross_tenant_peer_request_admits_against_hub_anchor() {
+        // The cross-hub deep harness failure we care about is not
+        // "signature field missing" anymore; it is "peer hub rejects
+        // the rebuilt federation.forward_invoke wrapper with
+        // caller_signature_invalid". Rebuild that exact wrapper via
+        // the caller-hub dispatch path, then feed it into a fresh
+        // AdmissionFacade that trusts the caller hub's public key.
+        //
+        // If this test fails, the signer/canonicalization path is
+        // wrong. If it passes while docker deep e2e still fails, the
+        // remaining bug lives in boot/runtime wiring rather than in
+        // the envelope bytes themselves.
+        use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+        use ed25519_dalek::SigningKey;
+
+        let canned = InvokeResponse {
+            result: br#"{"result_bytes":[]}"#.to_vec(),
+            result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            state: InvocationState::Completed as i32,
+            ..InvokeResponse::default()
+        };
+        let recorder = Arc::new(RecordingFederationClient::new(canned));
+
+        let mut peers = BTreeMap::new();
+        peers.insert(
+            "peer-realm".to_string(),
+            "https://peer-hub.example:50443".to_string(),
+        );
+
+        let svc = make_service()
+            .with_session_realm("test-realm")
+            .with_federation_client(recorder.clone() as Arc<dyn FederationClient>)
+            .with_federated_peers(peers);
+
+        let target_uri = "easynet:///r/peer-realm/device/peer-target";
+        svc.dispatch_federation_forward_invoke(None, &forward_invoke_args(target_uri))
+            .await
+            .expect("cross-tenant wrapper build succeeds");
+
+        let calls = recorder.calls();
+        assert_eq!(calls.len(), 1, "exactly one peer request captured");
+        let peer_request = calls[0].1.clone();
+        let peer_envelope = peer_request
+            .envelope
+            .as_ref()
+            .expect("peer request envelope present");
+        let caller_uri = peer_envelope
+            .caller
+            .as_ref()
+            .expect("caller present")
+            .uri
+            .clone();
+
+        let caller_signing_key = SigningKey::from_bytes(&[0x11; 32]);
+        let caller_pubkey_b64 =
+            BASE64_STANDARD.encode(caller_signing_key.verifying_key().to_bytes());
+        let peer_anchor = Arc::new(
+            RealmTrustAnchor::from_entries(vec![
+                crate::services::realm_trust_anchor::TrustedAgent {
+                    agent_uri: caller_uri,
+                    public_key_b64: caller_pubkey_b64,
+                    role: crate::services::realm_trust_anchor::TrustedAgentRole::Hub,
+                    added_at_unix_ms: 1_714_492_800_000,
+                    origin_tenant_id: Some("test-realm".to_string()),
+                    hub_uri: Some("https://peer-hub.example:50443".to_string()),
+                    tls_ca_pem_path: None,
+                },
+            ])
+            .expect("peer hub trust anchor"),
+        );
+        let peer_admission =
+            AdmissionFacade::new(peer_anchor, Some(crate::uri::hub_uri("peer-realm")));
+
+        peer_admission
+            .verify_invoke(&peer_request)
+            .expect("peer hub must admit the rebuilt signed wrapper");
     }
 
     // ── C1b / DEC-N5 §1: ForwardReceipt dual-write tests ──
@@ -4898,7 +6826,7 @@ mod tests {
         let store_before = svc.admission.receipt_store().len();
         assert_eq!(store_before, 0, "empty store at test start");
 
-        let target_uri = "easynet:///r/peer-realm/agent/peer-target";
+        let target_uri = "easynet:///r/peer-realm/device/peer-target";
         let _resp = svc
             .dispatch_federation_forward_invoke(None, &forward_invoke_args(target_uri))
             .await
@@ -4942,7 +6870,7 @@ mod tests {
         let _err = svc
             .dispatch_federation_forward_invoke(
                 None,
-                &forward_invoke_args("easynet:///r/peer-realm/agent/peer-target"),
+                &forward_invoke_args("easynet:///r/peer-realm/device/peer-target"),
             )
             .await
             .expect_err("target_offline");
@@ -4974,7 +6902,7 @@ mod tests {
         let _err = svc
             .dispatch_federation_forward_invoke(
                 None,
-                &forward_invoke_args("easynet:///r/test-realm/agent/local-target"),
+                &forward_invoke_args("easynet:///r/test-realm/device/local-target"),
             )
             .await
             .expect_err("local fast-path miss");
@@ -5013,7 +6941,7 @@ mod tests {
         const REALM_B: &str = "realm-b";
         const DAEMON_A_URI: &str = "easynet:///r/realm-a/agent/daemon-a";
         const DAEMON_B_URI: &str = "easynet:///r/realm-b/agent/daemon-b";
-        const TARGET_DEVICE_URI: &str = "easynet:///r/realm-b/agent/target-device";
+        const TARGET_DEVICE_URI: &str = "easynet:///r/realm-b/device/target-device";
         const PEER_HUB_URI: &str = "https://daemon-b.example:50443";
 
         // Daemon B's trust anchor: pre-populated with daemon A
@@ -5248,7 +7176,7 @@ mod tests {
         let outcome = svc
             .dispatch_session_request(
                 ABILITY_FEDERATION_FORWARD_INVOKE,
-                &forward_invoke_args("easynet:///r/test-realm/agent/missing-device"),
+                &forward_invoke_args("easynet:///r/test-realm/device/missing-device"),
             )
             .await;
         match outcome {
@@ -5311,7 +7239,7 @@ mod tests {
         let svc = make_service()
             .with_session_realm("test-realm")
             .with_pending(Arc::new(PendingDispatchMap::new()));
-        let target_uri = "easynet:///r/test-realm/agent/local-target";
+        let target_uri = "easynet:///r/test-realm/device/local-target";
 
         let (tx, mut rx) = tokio::sync::mpsc::channel::<
             Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
@@ -5446,7 +7374,7 @@ mod tests {
         let response = svc
             .dispatch_federation_forward_invoke(
                 None,
-                &forward_invoke_args("easynet:///r/peer-realm/agent/peer-target"),
+                &forward_invoke_args("easynet:///r/peer-realm/device/peer-target"),
             )
             .await
             .expect("escalation must surface canned bytes from the bidi hub");
@@ -5511,7 +7439,7 @@ mod tests {
         let err = svc
             .dispatch_federation_forward_invoke(
                 None,
-                &forward_invoke_args("easynet:///r/peer-realm/agent/peer-target"),
+                &forward_invoke_args("easynet:///r/peer-realm/device/peer-target"),
             )
             .await
             .expect_err("TargetOffline must surface as Status::failed_precondition");
@@ -5593,9 +7521,11 @@ mod tests {
         // directly with both arms to pin the branch logic, and
         // rely on the larger e2e test below to confirm the
         // log line actually fires through the dispatch arm.
+        let presence = PresenceRegistry::new();
         emit_session_request_resolution_marker(
-            &forward_invoke_args("easynet:///r/test-realm/agent/local-target"),
+            &forward_invoke_args("easynet:///r/test-realm/device/local-target"),
             Some("test-realm"),
+            &presence,
         );
         // No assertion possible without a stderr capture rig;
         // the function returns unit. Branch coverage IS the
@@ -5617,7 +7547,7 @@ mod tests {
         let outcome = svc
             .dispatch_session_request(
                 ABILITY_FEDERATION_FORWARD_INVOKE,
-                &forward_invoke_args("easynet:///r/realm-X/agent/missing-device"),
+                &forward_invoke_args("easynet:///r/realm-X/device/missing-device"),
             )
             .await;
         match outcome {
@@ -5627,6 +7557,74 @@ mod tests {
             other => panic!(
                 "same-tenant target with empty presence must surface TargetOffline \
                  (proves local-fast-path arm fired), got {other:?}"
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_session_request_routes_local_fast_path_when_cross_realm_target_is_present() {
+        // Platform hubs can host devices whose URIs live under a
+        // user realm different from the hub's own control-plane
+        // realm. If the concrete target URI is already present on
+        // THIS hub, local presence must win over the realm mismatch.
+        let svc = make_service()
+            .with_session_realm("easynet-platform")
+            .with_pending(Arc::new(PendingDispatchMap::new()));
+        let target_uri = "easynet:///r/user-realm/device/present-device";
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<
+            Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
+        >(4);
+        svc.presence.insert(target_uri.to_string(), tx);
+
+        let pending = svc.pending.clone().expect("pending wired above");
+        let pending_for_fake = Arc::clone(&pending);
+        let fake_device = tokio::spawn(async move {
+            let frame = rx
+                .recv()
+                .await
+                .expect("reverse-channel frame arrives")
+                .expect("frame is Ok");
+            use crate::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
+            let chunk = match frame.frame.payload {
+                Some(DownPayload::BinaryChunk(c)) => c,
+                other => panic!("expected BinaryChunk, got {other:?}"),
+            };
+            let dispatch: SessionDispatch =
+                serde_json::from_slice(&chunk.data).expect("frame is SessionDispatch JSON");
+            let SessionDispatch::Dispatch { call_id, .. } = dispatch else {
+                panic!("expected SessionDispatch::Dispatch, got {dispatch:?}");
+            };
+            pending_for_fake.complete(
+                call_id,
+                DispatchResult {
+                    payload: br#"{"marker":"cross-realm-local-presence"}"#.to_vec(),
+                    error: None,
+                },
+            );
+        });
+
+        let outcome = svc
+            .dispatch_session_request(
+                ABILITY_FEDERATION_FORWARD_INVOKE,
+                &forward_invoke_args(target_uri),
+            )
+            .await;
+        fake_device.await.expect("fake device task joins");
+
+        match outcome {
+            RequestOutcome::Ok { result_bytes } => {
+                let body: federation_wrappers::ForwardInvokeResponse =
+                    serde_json::from_slice(&result_bytes).expect("outer body decodes");
+                let inner: serde_json::Value =
+                    serde_json::from_slice(&body.result_bytes).expect("inner result decodes");
+                assert_eq!(
+                    inner.get("marker").and_then(|v| v.as_str()),
+                    Some("cross-realm-local-presence"),
+                );
+            }
+            other => panic!(
+                "cross-realm target already present on this hub must stay on the local fast-path, got {other:?}"
             ),
         }
     }
@@ -5642,7 +7640,7 @@ mod tests {
         let outcome = svc
             .dispatch_session_request(
                 ABILITY_FEDERATION_FORWARD_INVOKE,
-                &forward_invoke_args("easynet:///r/peer-realm/agent/peer-target"),
+                &forward_invoke_args("easynet:///r/peer-realm/device/peer-target"),
             )
             .await;
         match outcome {
@@ -5695,7 +7693,12 @@ mod tests {
         // before returning. The device's response bytes flow
         // through inline as `result_bytes`, not the legacy
         // empty-bytes "delivery accepted" shape.
-        let target_uri = "easynet:///r/test-realm/agent/dev-B";
+        // URI v4.1.4: device target lives under `device/<id>`, not
+        // `agent/<id>`. The forward_invoke entry point coerces
+        // legacy shapes via `canonicalize_presence_key`; fixtures
+        // must register presence under the canonical key so
+        // self-equality holds without going through the coercer.
+        let target_uri = "easynet:///r/test-realm/device/dev-B";
         let presence = std::sync::Arc::new(PresenceRegistry::new());
         let (target_tx, mut target_rx): (DispatchSender, _) = mpsc::channel(8);
         presence.insert(target_uri.to_string(), target_tx);

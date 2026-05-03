@@ -156,6 +156,7 @@ pub unsafe extern "C" fn easynet_ability_invoke(
         request_id: next_invoke_request_id(),
         ability: ability_name,
         args: args_value,
+        subject: None,
     };
 
     // Build / fetch the lib's tokio runtime; hold the IPC client

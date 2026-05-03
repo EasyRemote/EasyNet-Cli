@@ -110,6 +110,9 @@ fn main() -> anyhow::Result<()> {
 
     let plan = BootstrapPlan {
         realm: tenant_id.clone(),
+        // Smoke test: synthetic user id; real boot reads from
+        // creds.username (carries the user-uuid in v4.1.4).
+        user_id: "smoke-user".to_string(),
         host_device_uri: node_id.clone(),
         consent: true,
         policy: false,

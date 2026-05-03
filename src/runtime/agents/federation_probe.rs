@@ -106,10 +106,7 @@ pub(crate) fn collect_fleet_view() -> FleetView {
         node_id: local.node_id.clone(),
         tenant_id: local.tenant_id.clone(),
         agent_uri: if local.paired {
-            Some(format!(
-                "easynet:///r/{}/agent/{}",
-                local.tenant_id, local.node_id
-            ))
+            Some(crate::uri::device_uri(&local.tenant_id, &local.node_id))
         } else {
             None
         },
@@ -161,7 +158,7 @@ pub(crate) fn collect_fleet_view() -> FleetView {
         }
     };
 
-    let caller_uri = format!("easynet:///r/{}/agent/{}", creds.tenant_id, creds.node_id);
+    let caller_uri = crate::uri::device_uri(&creds.tenant_id, &creds.node_id);
     let invoker = BridgeAbilityInvoker::with_caller_uri(&bridge, caller_uri);
 
     let resolve_started = Instant::now();
@@ -273,20 +270,27 @@ pub(crate) fn node_to_json(node: &FleetNodeSnapshot) -> Value {
     })
 }
 
+/// Extract the node id from a device-profile URI.
+///
+/// Accepts the canonical v4.1.4 `device/<uuid>` shape first. During
+/// the rolling-upgrade window we also accept the legacy collapsed
+/// `agent/<node>` device form peer hubs may still emit, but we keep
+/// rejecting real agent URIs (`agent/<user>.<agent>`) and malformed
+/// multi-segment tails.
 pub(crate) fn node_id_from_agent_uri(uri: &str) -> Option<String> {
-    if let Some(rest) = uri.strip_prefix("easynet:///r/") {
-        let rest = rest.split('?').next().unwrap_or(rest);
-        let segments: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
-        if segments.len() >= 3 && segments[1] == "agent" {
-            return Some(segments[2].to_string());
-        }
-        if segments.len() >= 3 && segments[1] == "reg" {
-            if let Some(node) = segments[2].strip_prefix("agent.") {
-                return Some(node.to_string());
-            }
-        }
+    if let Ok(parsed) = crate::uri::parse_ura(uri) {
+        return if parsed.device_id.is_empty() {
+            None
+        } else {
+            Some(parsed.device_id)
+        };
     }
-    None
+    let legacy = crate::uri::strip_v1_agent_prefix(uri);
+    if legacy == uri || legacy.is_empty() || legacy.contains('.') || legacy.contains('/') {
+        None
+    } else {
+        Some(legacy)
+    }
 }
 
 fn is_device_profile_agent(agent: &ResolvedAgent) -> bool {
@@ -399,26 +403,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn node_id_from_legacy_agent_uri_extracts_tail() {
+    fn node_id_from_v414_device_uri_extracts_uuid() {
+        // URI v4.1.4: device-profile URA is `device/<uuid>`.
+        let uuid = "4065c47a-ec6f-4330-87a5-0d69787709b8";
         assert_eq!(
-            node_id_from_agent_uri("easynet:///r/acme/agent/01DEV"),
-            Some("01DEV".to_string())
+            node_id_from_agent_uri(&format!("easynet:///r/localhost/device/{uuid}")),
+            Some(uuid.to_string())
         );
     }
 
     #[test]
-    fn node_id_from_conformant_agent_uri_extracts_tail() {
+    fn node_id_from_legacy_device_shape_is_accepted_but_real_agents_are_not() {
+        assert_eq!(
+            node_id_from_agent_uri("easynet:///r/acme/agent/01DEV"),
+            Some("01DEV".to_string()),
+            "legacy collapsed device URI must still project during migration"
+        );
+        assert_eq!(
+            node_id_from_agent_uri("easynet:///r/acme/agent/alice.claude"),
+            None,
+            "real agent URIs must not parse as devices"
+        );
         assert_eq!(
             node_id_from_agent_uri("easynet:///r/prv/reg/agent.01DEV?tenant_id=acme"),
-            Some("01DEV".to_string())
+            None,
+            "v1 reg/agent.<id> shape must not parse as a v4.1.4 device"
         );
     }
 
     #[test]
     fn device_profile_detection_requires_health_plus_device_surface() {
         let device = ResolvedAgent {
-            uri: "easynet:///r/acme/agent/01DEV".into(),
+            uri: "easynet:///r/acme/device/01DEV".into(),
             status: "active".into(),
+            host_node_id: None,
             abilities: vec![
                 json!({"name": "observe.health"}),
                 json!({"name": "fleet.list_nodes"}),
@@ -427,6 +445,7 @@ mod tests {
         let hosted = ResolvedAgent {
             uri: "easynet:///r/acme/agent/01LLM".into(),
             status: "active".into(),
+            host_node_id: None,
             abilities: vec![json!({"name": "alice.chat"})],
         };
         assert!(is_device_profile_agent(&device));
@@ -438,7 +457,7 @@ mod tests {
         let node = FleetNodeSnapshot {
             node_id: "01DEV".into(),
             tenant_id: "acme".into(),
-            agent_uri: Some("easynet:///r/acme/agent/01DEV".into()),
+            agent_uri: Some("easynet:///r/acme/device/01DEV".into()),
             is_self: false,
             paired: true,
             hub_endpoint: None,

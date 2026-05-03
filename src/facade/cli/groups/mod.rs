@@ -25,6 +25,7 @@
 
 pub mod ability;
 pub mod agent;
+pub mod auth;
 pub mod call;
 pub mod device;
 pub mod federation;

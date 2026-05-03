@@ -828,6 +828,7 @@ fn try_dispatch_via_daemon(qualified_name: &str, arguments: &Value) -> DaemonDis
                 request_id: request_id.clone(),
                 ability,
                 args,
+                subject: None,
             })
             .await
         {

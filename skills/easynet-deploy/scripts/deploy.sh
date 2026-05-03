@@ -39,7 +39,7 @@ deploy_frontend() {
 
 show_status() {
   echo "==> Service Status"
-  ssh "$SERVER" "systemctl status axon-runtime easynet-api --no-pager | head -20"
+  ssh "$SERVER" "systemctl status easynet-daemon easynet-api --no-pager | head -20"
   echo ""
   echo "==> Health Check"
   curl -s "https://easynet.run/api/v1/health"
@@ -52,7 +52,7 @@ show_logs() {
 }
 
 restart_services() {
-  ssh "$SERVER" "systemctl restart axon-runtime easynet-api"
+  ssh "$SERVER" "systemctl restart easynet-daemon easynet-api"
   sleep 2
   show_status
 }
@@ -76,7 +76,7 @@ case "${1:-help}" in
     echo "  frontend  - Build and deploy React frontend"
     echo "  all       - Deploy both"
     echo "  status    - Check service status"
-    echo "  logs      - View logs (default: easynet-api, or: logs axon-runtime)"
+    echo "  logs      - View logs (default: easynet-api, or: logs easynet-daemon)"
     echo "  restart   - Restart all services"
     ;;
 esac

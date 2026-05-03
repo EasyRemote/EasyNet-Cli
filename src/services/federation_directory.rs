@@ -69,8 +69,12 @@ use serde::{Deserialize, Serialize};
 /// machines).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DirectoryEntry {
-    /// Canonical agent URI. Always realm-prefixed
-    /// (`easynet:///r/<realm>/agent/<id>` per PR-7 §5.1).
+    /// Canonical device URI. The JSON field name stays
+    /// `agent_uri` for wire compatibility with older readers, but
+    /// the value carried here is the device-target a caller can
+    /// route `federation.forward_invoke` against:
+    /// `easynet:///r/<realm>/device/<id>` in v4.1.4+, with legacy
+    /// bare `/agent/<node>` tails tolerated during migration.
     pub agent_uri: String,
     /// Stable node id within the realm. Matches the device's
     /// `credentials.json::node_id`.
@@ -112,18 +116,26 @@ pub struct DirectoryEntry {
 /// pairing rows for display_name / last-seen) is N3-6 backend-Go
 /// territory.
 ///
-/// `node_id` is parsed from the URI tail: the segment after
-/// `/agent/`. Non-canonical URIs (which should not appear in the
-/// registry, but defensive handling matters) get `node_id =
-/// agent_uri.clone()` so downstream consumers always have a
-/// non-empty key.
+/// `node_id` is parsed from the URI tail. Canonical v4.1.4 device
+/// URIs use `/device/<node>`; legacy pre-Phase-2A device URIs used
+/// `/agent/<node>`. Non-canonical URIs (which should not appear in
+/// the registry, but defensive handling matters) get
+/// `node_id = agent_uri.clone()` so downstream consumers always
+/// have a non-empty key.
 #[cfg(feature = "axon-pb")]
 #[must_use]
 pub fn presence_uri_to_directory_entry(agent_uri: &str, is_active: bool) -> DirectoryEntry {
-    let node_id = agent_uri
-        .rsplit_once("/agent/")
-        .map(|(_, tail)| tail.to_string())
-        .unwrap_or_else(|| agent_uri.to_string());
+    let node_id = match crate::uri::parse_ura(agent_uri) {
+        Ok(parsed) if parsed.kind == crate::uri::URAKind::Device => parsed.device_id,
+        _ => {
+            let legacy = crate::uri::strip_v1_agent_prefix(agent_uri);
+            if legacy != agent_uri {
+                legacy
+            } else {
+                agent_uri.to_string()
+            }
+        }
+    };
     DirectoryEntry {
         agent_uri: agent_uri.to_string(),
         node_id,
@@ -1038,18 +1050,27 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
         // the peer's strict admission is defence-in-depth.
         let mut nonce = vec![0u8; 16];
         rand::rngs::OsRng.fill_bytes(&mut nonce);
-        let peer_uri_for_envelope = format!("easynet:///r/{peer_realm}/agent/hub");
+        // URI v4.1.4: peer hub is the realm-singleton; no sub-id tail.
+        let peer_uri_for_envelope = crate::uri::hub_uri(&peer_realm);
+        // v4.1.5 §A.URA-7 — `subject ∈ {user, device, resource}`.
+        // Pre-fix this site set `subject = peer_uri_for_envelope` (the
+        // peer hub URI), which violates the constraint (hub is not a
+        // legal subject kind). The natural legal subject for "this
+        // daemon subscribes to peer hub's directory" is the local
+        // daemon's own device URA (which equals `caller_uri`); peer
+        // admission's strict 4-step verify still cross-checks the
+        // signature against the trust anchor entry for this device.
         let envelope = Envelope {
             caller: Some(AgentIdentity {
                 uri: caller_uri.clone(),
                 ..AgentIdentity::default()
             }),
             callee: Some(AgentIdentity {
-                uri: peer_uri_for_envelope.clone(),
+                uri: peer_uri_for_envelope,
                 ..AgentIdentity::default()
             }),
             subject: Some(SubjectIdentity {
-                uri: peer_uri_for_envelope,
+                uri: caller_uri.clone(),
                 ..SubjectIdentity::default()
             }),
             invocation_nonce: nonce,
@@ -2782,8 +2803,8 @@ mod tests {
         #[test]
         fn presence_uri_to_directory_entry_extracts_node_id_from_canonical_shape() {
             let entry =
-                presence_uri_to_directory_entry("easynet:///r/realm-a/agent/device-X", true);
-            assert_eq!(entry.agent_uri, "easynet:///r/realm-a/agent/device-X");
+                presence_uri_to_directory_entry("easynet:///r/realm-a/device/device-X", true);
+            assert_eq!(entry.agent_uri, "easynet:///r/realm-a/device/device-X");
             assert_eq!(entry.node_id, "device-X");
             assert_eq!(entry.status, "active");
             // Local hub speaks for own realm; chokepoint stamps
@@ -2797,8 +2818,16 @@ mod tests {
         #[test]
         fn presence_uri_to_directory_entry_inactive_marks_status_stale() {
             let entry =
-                presence_uri_to_directory_entry("easynet:///r/realm-a/agent/device-X", false);
+                presence_uri_to_directory_entry("easynet:///r/realm-a/device/device-X", false);
             assert_eq!(entry.status, "stale");
+        }
+
+        #[test]
+        fn presence_uri_to_directory_entry_preserves_legacy_agent_device_tail() {
+            let entry =
+                presence_uri_to_directory_entry("easynet:///r/realm-a/agent/device-X", true);
+            assert_eq!(entry.agent_uri, "easynet:///r/realm-a/agent/device-X");
+            assert_eq!(entry.node_id, "device-X");
         }
 
         #[test]
@@ -2814,11 +2843,11 @@ mod tests {
         #[test]
         fn presence_event_online_projects_to_upsert_with_active_status() {
             let evt = presence_event_to_directory_event(&PresenceEvent::Online {
-                uri: "easynet:///r/realm-a/agent/x".to_string(),
+                uri: "easynet:///r/realm-a/device/x".to_string(),
             });
             match evt {
                 DirectoryEvent::Upsert { entry } => {
-                    assert_eq!(entry.agent_uri, "easynet:///r/realm-a/agent/x");
+                    assert_eq!(entry.agent_uri, "easynet:///r/realm-a/device/x");
                     assert_eq!(entry.status, "active");
                 }
                 _ => panic!("expected Upsert; got {evt:?}"),
@@ -2835,12 +2864,12 @@ mod tests {
             ];
             for (reason, expected_str) in cases {
                 let evt = presence_event_to_directory_event(&PresenceEvent::Offline {
-                    uri: "easynet:///r/realm-a/agent/x".to_string(),
+                    uri: "easynet:///r/realm-a/device/x".to_string(),
                     reason,
                 });
                 match evt {
                     DirectoryEvent::Remove { agent_uri, reason } => {
-                        assert_eq!(agent_uri, "easynet:///r/realm-a/agent/x");
+                        assert_eq!(agent_uri, "easynet:///r/realm-a/device/x");
                         assert_eq!(reason, expected_str);
                     }
                     other => panic!("expected Remove for {reason:?}; got {other:?}"),

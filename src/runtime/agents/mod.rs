@@ -522,7 +522,7 @@ pub fn build_registry_with_services(
     let agents_for_a2a = agents.clone();
     a2a_bridge_ability::register(
         &mut reg,
-        move || agents_for_a2a.clone(),
+        move || crate::registry::agents::load_agents().unwrap_or_else(|_| agents_for_a2a.clone()),
         Arc::clone(&local_registry_handle),
     );
     // a2a.client.send_task — outbound A2A. Reads through a process-
@@ -567,7 +567,9 @@ pub fn build_registry_with_services(
     // sub-agents. Cheap-row projection (name, runtime, model, label);
     // for the protocol agent-card view see a2a.bridge.list_skills.
     let agents_for_fleet = agents.clone();
-    fleet_list_agents_ability::register(&mut reg, move || agents_for_fleet.clone());
+    fleet_list_agents_ability::register(&mut reg, move || {
+        crate::registry::agents::load_agents().unwrap_or_else(|_| agents_for_fleet.clone())
+    });
     // admin.status — operator-facing component snapshot. The
     // ability-count provider reads through the same OnceLock the
     // bridge handlers use, so the count is accurate at call time
@@ -810,6 +812,7 @@ pub fn description_for(name: &str) -> &'static str {
         "voice.end_call" => voice_call_ability::end_call_description(),
         "voice.watch_call" => voice_call_ability::watch_call_description(),
         "voice.report_metrics" => voice_call_ability::report_metrics_description(),
+        "voice.list_calls" => voice_call_ability::list_calls_description(),
         "admin.status" => admin_status_ability::description(),
         "ability.publish" => ability_publish_ability::publish_description(),
         "ability.unpublish" => ability_publish_ability::unpublish_description(),
@@ -918,6 +921,7 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "voice.end_call" => voice_call_ability::end_call_input_schema(),
         "voice.watch_call" => voice_call_ability::watch_call_input_schema(),
         "voice.report_metrics" => voice_call_ability::report_metrics_input_schema(),
+        "voice.list_calls" => voice_call_ability::list_calls_input_schema(),
         "admin.status" => admin_status_ability::input_schema(),
         "ability.publish" => ability_publish_ability::publish_input_schema(),
         "ability.unpublish" => ability_publish_ability::unpublish_input_schema(),
@@ -1080,6 +1084,7 @@ mod tests {
             | "voice.end_call"
             | "voice.watch_call"
             | "voice.report_metrics"
+            | "voice.list_calls"
             // mcp.bridge.call_tool / a2a.bridge.send_task — both
             // dispatch into another local ability; the side effects
             // come from that dispatch, not the bridge itself. Sit

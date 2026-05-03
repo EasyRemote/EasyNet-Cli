@@ -83,6 +83,22 @@ pub mod pending_dispatch;
 /// restart. Pure data; no feature gate.
 pub mod federated_peers_cell;
 
+/// Per-agent ability catalog the daemon stores when devices land
+/// `federation.advertise_abilities`. Read by `federation.resolve`
+/// when the caller sets `include_abilities = true` so the backend's
+/// `/api/v1/abilities` page projects every device's published
+/// catalog. Without this store the wrapper acked + dropped, and
+/// the catalog page rendered empty despite advertised data.
+pub mod ability_catalog_store;
+
+/// Hosted-agent directory rows published through
+/// `federation.advertise_agent`. PresenceRegistry owns transport
+/// liveness for device URIs; this store maps hosted agent URIs back
+/// to their host device URI so `federation.resolve` can surface
+/// `/agent/<user>.<agent>` rows while deriving online/offline from
+/// the host's live `<self>.session`.
+pub mod advertised_agent_store;
+
 /// Per-daemon nonce replay store (RFC 001 §5.2 step 4). Wraps the
 /// axon SDK's time-wheel store in `Arc<Mutex<…>>` so a single
 /// instance is shared across every concurrent invoke through the
@@ -98,6 +114,24 @@ pub mod nonce_replay_store;
 /// once at boot and shared by clone between the admission facade
 /// and the register-pubkey handler. DEC-010 mechanism layer.
 pub mod trust_anchor_cell;
+
+/// EasyNet-native device identity vault (RFC-001 plan v4.1.5
+/// Phase 3A). Process-external Ed25519 keypair store sealed under
+/// an Argon2id-derived AES-GCM key. Backend / daemon / CLI on the
+/// same host all reach this module's `Vault` (directly in-process
+/// or over the `easynet-keyring` daemon's UDS) to obtain
+/// signatures without ever holding the raw seed bytes. Role-overlay
+/// lookup means the same keypair signs as both `HubURI(realm)` and
+/// `DeviceURI(realm, uuid)` — the host's identity is unitary across
+/// roles.
+pub mod keyring;
+
+/// SelfIdentity client (RFC-001 plan v4.1.5 Phase 3B). Typed
+/// `sign(self_uri, canonical_bytes) -> Signature` handle backed
+/// by the `easynet-keyring` daemon's UDS or an in-process
+/// `Vault`. Boot wiring picks the impl; callsites take an
+/// `Arc<dyn SelfIdentity>` and never touch raw seed bytes.
+pub mod self_identity;
 
 /// Bounded in-memory store the admission gate records signed
 /// `InvocationReceipt`s into. PR-10 commit 2/N introduces the

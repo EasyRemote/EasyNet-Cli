@@ -168,6 +168,26 @@ pub enum SessionDispatch {
         ability: String,
         args: Vec<u8>,
     },
+    /// Hub → target device. Open one long-lived local bidi handler
+    /// on the target and bind it to `call_id`. Used by the
+    /// same-hub `fleet.file_transfer` bridge: the hub forwards the
+    /// backend's InvokeBidi open to the device's local
+    /// `fleet.file_transfer` ability, then streams caller input via
+    /// `BidiInput` and target output back via non-terminal
+    /// `Result` frames.
+    BidiOpen {
+        call_id: u64,
+        ability: String,
+        args: Vec<u8>,
+    },
+    /// Hub → target device. One incremental input frame for a
+    /// previously-opened remote bidi session. `payload` carries raw
+    /// bytes; `eof=true` closes the input side after this frame.
+    BidiInput {
+        call_id: u64,
+        payload: Vec<u8>,
+        eof: bool,
+    },
     /// Target device → hub. The target ran the ability and is
     /// returning the reply. The session task sees this on the
     /// session up stream and routes it via
@@ -295,7 +315,17 @@ pub async fn invoke_remote(
         .await
         .map_err(|_| Status::internal("up channel closed before frame 0 send"))?;
 
-    let mut client = InvocationClient::new(channel);
+    // Match server-side cap (1 GiB) on both directions. tonic's
+    // default 4 MiB caused `OutOfRange: decoded message length too
+    // large` mid-stream on cross-hub file transfers; see boot.rs for
+    // the rationale on why 1 GiB.
+    let mut client = InvocationClient::new(channel)
+        .max_decoding_message_size(
+            crate::services::axon_serve::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
+        )
+        .max_encoding_message_size(
+            crate::services::axon_serve::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
+        );
     let response = client
         .invoke_bidi(tonic::Request::new(ReceiverStream::new(up_rx)))
         .await?;

@@ -219,7 +219,9 @@ mod tests {
 
     #[test]
     fn selfsigned_records_same_uri_on_both_sides() {
-        let uri = "easynet:///r/acme/agent/01HUB";
+        // URI v4.1.4: hub is realm-singleton (no sub-id); the v2
+        // `agent/01HUB` shape has been retired.
+        let uri = "easynet:///r/acme/hub";
         let h = HostedAgentReceiptHeader::new_selfsigned(uri).unwrap();
         assert_eq!(h.callee_agent_uri, uri);
         assert_eq!(h.signer_agent_uri, uri);
