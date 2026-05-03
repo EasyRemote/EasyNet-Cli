@@ -315,19 +315,6 @@ fn run_add(args: AddArgs) -> anyhow::Result<()> {
 /// only needs the registration to be visible in `ListMCPTools` —
 /// dispatch is a follow-up.
 fn publish_to_local_runtime_best_effort(agent_name: &str, directory: &AgentDirectory) {
-    let (bridge, state) = match crate::persistence::config::load_and_connect() {
-        Ok(p) => p,
-        Err(e) => {
-            output::warn(&format!(
-                "could not reach local axon-runtime to publish manifests: {e}"
-            ));
-            output::warn(
-                "  → run `easynet runtime start` to start it; then `easynet agent add ...` \
-                 again will publish, or restart the daemon to re-register every agent",
-            );
-            return;
-        }
-    };
     let creds = match crate::persistence::config::load_credentials() {
         Ok(c) => c,
         Err(e) => {
@@ -337,20 +324,91 @@ fn publish_to_local_runtime_best_effort(agent_name: &str, directory: &AgentDirec
             return;
         }
     };
-    let tenant_id = state.tenant.as_deref().unwrap_or(&creds.tenant_id);
-    let socket_path = crate::persistence::config::state_dir().join("control.sock");
-    let dispatch_endpoint = format!("ipc://{}", socket_path.display());
+    let username = crate::facade::cli::start::bootstrap_username_for(&creds);
 
-    let _ = (directory, dispatch_endpoint);
-    // RFC-001 P4.8: replace the legacy per-agent register-tool path
-    // with a full federation.advertise_* sweep. The just-added
-    // agent is already in registry.agents, so the bootstrap+advertise
-    // path picks it up; we don't need agent-specific plumbing here.
-    let user_id = creds.username.as_deref().unwrap_or("");
+    if let Ok((bridge, state)) = crate::persistence::config::load_and_connect() {
+        let tenant_id = state.tenant.as_deref().unwrap_or(&creds.tenant_id);
+        let plan = match crate::facade::cli::start::build_bootstrap_plan_from(
+            tenant_id,
+            &creds.node_id,
+            &username,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                output::warn(&format!("publish bootstrap plan: {e}"));
+                return;
+            }
+        };
+        // Pin the caller URI so the bridge's hub-shaped envelope synth
+        // doesn't fall back to the literal-subject path
+        // (`agents/easynet:prv:hub:<realm>`), which axon's membership
+        // gate rejects with AXON_MEMBERSHIP_REQUIRED. Same shape `start.rs`
+        // uses at boot — the difference there was the boot path always
+        // calls `with_caller_uri`; this post-add path was missed.
+        let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+            &bridge,
+            plan.host_device_uri.clone(),
+        );
+        let runtime_publish = publish_bootstrap_plan_via_invoker(tenant_id, &plan, &invoker);
+        // Updating the local axon-runtime keeps the device's own
+        // cross-process tool catalog fresh, but the realm directory
+        // used by backend `/api/v1/agents` / `federation.resolve`
+        // is maintained by the daemon↔hub advertise path. Drive
+        // that second hop explicitly as well so post-boot `agent
+        // add` mutates both surfaces instead of only the local
+        // runtime view.
+        match publish_to_hub_direct_best_effort_silent(
+            tenant_id,
+            &creds.hub_endpoint,
+            &plan.host_device_uri,
+            &plan,
+        ) {
+            Ok(()) => output::detail(
+                "publish-path",
+                "local runtime updated; realm directory advertised directly to the hub",
+            ),
+            Err(hub_msg) => match publish_via_local_daemon_best_effort_silent(
+                tenant_id,
+                &plan.host_device_uri,
+                &plan,
+            ) {
+                Ok(()) => {
+                    output::warn(
+                        "direct hub directory sync failed; local daemon accepted only a local \
+                         publish, so hub-visible agent rows may still be stale",
+                    );
+                    output::warn(&format!("direct hub directory sync failed: {hub_msg}"));
+                    output::detail(
+                        "publish-path",
+                        "local runtime updated; local daemon accepted a non-authoritative local publish",
+                    );
+                }
+                Err(local_msg) => {
+                    output::warn("could not sync the realm directory after local runtime publish");
+                    output::warn(&format!("direct hub directory sync failed: {hub_msg}"));
+                    output::warn(&format!(
+                        "local daemon gRPC directory sync also failed: {local_msg}"
+                    ));
+                    output::warn(
+                        "  → peers and backend `/api/v1/agents` will stay stale until the next successful advertise round",
+                    );
+                }
+            },
+        }
+        if let Err(msg) = runtime_publish {
+            output::warn(&format!(
+                "publish through local axon-runtime reported advertise failures: {msg}"
+            ));
+        }
+        let _ = (agent_name, directory);
+        return;
+    }
+
+    let tenant_id = creds.tenant_id.as_str();
     let plan = match crate::facade::cli::start::build_bootstrap_plan_from(
         tenant_id,
         &creds.node_id,
-        user_id,
+        &username,
     ) {
         Ok(p) => p,
         Err(e) => {
@@ -358,45 +416,28 @@ fn publish_to_local_runtime_best_effort(agent_name: &str, directory: &AgentDirec
             return;
         }
     };
-    // Pin the caller URI so the bridge's hub-shaped envelope synth
-    // doesn't fall back to the literal-subject path
-    // (`agents/easynet:prv:hub:<realm>`), which axon's membership
-    // gate rejects with AXON_MEMBERSHIP_REQUIRED. Same shape `start.rs`
-    // uses at boot — the difference there was the boot path always
-    // calls `with_caller_uri`; this post-add path was missed.
-    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
-        &bridge,
-        plan.host_device_uri.clone(),
-    );
-    let outcomes =
-        crate::runtime::publish::republish_abilities_via_advertise(&invoker, tenant_id, &plan);
-
-    let mut ok = 0usize;
-    let mut total = 0usize;
-    for o in &outcomes {
-        if o.label == "skipped" || o.label == "local-agents.json" {
-            continue;
-        }
-        total += 1;
-        match &o.result {
-            Ok(_) => {
-                ok += 1;
-                if o.label.starts_with("abilities/") {
-                    output::detail("published", &format!("{} {}", o.agent_uri, o.label));
-                }
-            }
-            Err(msg) => {
-                output::warn(&format!("publish {} failed: {msg}", o.label));
-            }
+    match publish_to_hub_direct_best_effort(
+        tenant_id,
+        &creds.hub_endpoint,
+        &plan.host_device_uri,
+        &plan,
+    ) {
+        Ok(()) => output::detail(
+            "publish-path",
+            "local runtime state absent; advertised directly to the hub",
+        ),
+        Err(hub_msg) => {
+            output::warn(
+                "could not reach local axon-runtime to publish manifests: no runtime state",
+            );
+            output::warn(&format!("direct hub publish failed: {hub_msg}"));
+            output::warn(
+                "  → run `easynet runtime start` to start it; then `easynet agent add ...` \
+                 again will publish, or restart the daemon to re-register every agent",
+            );
         }
     }
-    if total > 0 {
-        output::detail(
-            "directory",
-            &format!("{ok}/{total} federation.advertise_* calls — entries visible to peers"),
-        );
-    }
-    let _ = agent_name;
+    let _ = (agent_name, directory);
 }
 
 /// Best-effort unpublish for `easynet agent remove`. Mirror of
@@ -404,22 +445,10 @@ fn publish_to_local_runtime_best_effort(agent_name: &str, directory: &AgentDirec
 /// pattern, calls unregister instead of register. Keeps the local
 /// runtime's MCP tool catalog in sync with the registry.
 fn unpublish_from_local_runtime_best_effort(agent_name: &str, directory: &AgentDirectory) {
-    let (bridge, state) = match crate::persistence::config::load_and_connect() {
-        Ok(p) => p,
-        Err(_) => {
-            // Runtime not running → nothing to unpublish from. Silent;
-            // operator already saw "Removed agent" and the catalog
-            // will refresh on the next runtime restart anyway.
-            return;
-        }
-    };
     let creds = match crate::persistence::config::load_credentials() {
         Ok(c) => c,
         Err(_) => return,
     };
-    let tenant_id = state.tenant.as_deref().unwrap_or(&creds.tenant_id);
-
-    let _ = directory;
     // RFC-001 P4.8: revoke this agent's directory entry via
     // federation.revoke. Look up the URA from local-agents.json
     // (the bootstrap step persists every llm sub-agent under
@@ -442,23 +471,571 @@ fn unpublish_from_local_runtime_best_effort(agent_name: &str, directory: &AgentD
     // fallback the bridge would otherwise synthesise (which the
     // membership gate rejects). See the same fix in
     // `publish_to_local_runtime_best_effort`.
-    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
-        &bridge,
-        file.host_device_agent_uri.clone(),
-    );
     let realm =
         crate::facade::cli::start::realm_from_agent_uri(&file.host_device_agent_uri).unwrap_or("");
-    let outcome = crate::runtime::publish::unpublish_abilities_via_revoke(
-        &invoker,
-        tenant_id,
+    if let Ok((bridge, state)) = crate::persistence::config::load_and_connect() {
+        let tenant_id = state.tenant.as_deref().unwrap_or(&creds.tenant_id);
+        let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+            &bridge,
+            file.host_device_agent_uri.clone(),
+        );
+        if let Err(msg) = revoke_agent_via_invoker(
+            &invoker,
+            tenant_id,
+            realm,
+            &agent_uri,
+            "operator removed agent",
+        ) {
+            output::warn(&format!(
+                "revoke through local axon-runtime reported directory failure: {msg}"
+            ));
+        }
+        let _ = (agent_name, directory);
+        return;
+    }
+
+    let _ = revoke_from_hub_direct_best_effort(
+        &creds.tenant_id,
+        &creds.hub_endpoint,
+        &file.host_device_agent_uri,
         realm,
         &agent_uri,
         "operator removed agent",
     );
-    match outcome.result {
-        Ok(_) => output::detail("revoked", &outcome.agent_uri),
-        Err(msg) => output::warn(&format!("revoke {} failed: {msg}", outcome.agent_uri)),
+    // Runtime not running and direct hub revoke unavailable →
+    // leave the stale directory entry to the next boot's full
+    // advertise sweep / revoke. Silent by contract; operator
+    // already saw "Removed agent".
+    let _ = (agent_name, directory);
+}
+
+fn publish_bootstrap_plan_via_invoker<I: crate::runtime::advertise::AbilityInvoker>(
+    tenant_id: &str,
+    plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
+    invoker: &I,
+) -> Result<(), String> {
+    let outcomes = publish_bootstrap_plan_outcomes_via_invoker(tenant_id, plan, invoker);
+    render_publish_outcomes(&outcomes);
+    publish_outcome_summary(&outcomes)
+}
+
+fn publish_bootstrap_plan_outcomes_via_invoker<I: crate::runtime::advertise::AbilityInvoker>(
+    tenant_id: &str,
+    plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
+    invoker: &I,
+) -> Vec<crate::runtime::publish::PublishOutcome> {
+    crate::runtime::publish::republish_abilities_via_advertise(invoker, tenant_id, plan)
+}
+
+fn publish_bootstrap_plan_via_invoker_silent<I: crate::runtime::advertise::AbilityInvoker>(
+    tenant_id: &str,
+    plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
+    invoker: &I,
+) -> Result<(), String> {
+    let outcomes = publish_bootstrap_plan_outcomes_via_invoker(tenant_id, plan, invoker);
+    publish_outcome_summary(&outcomes)
+}
+
+fn render_publish_outcomes(outcomes: &[crate::runtime::publish::PublishOutcome]) {
+    let mut ok = 0usize;
+    let mut total = 0usize;
+    for outcome in outcomes {
+        if outcome.label == "skipped" || outcome.label == "local-agents.json" {
+            continue;
+        }
+        total += 1;
+        match &outcome.result {
+            Ok(_) => {
+                ok += 1;
+                if outcome.label.starts_with("abilities/") {
+                    output::detail(
+                        "published",
+                        &format!("{} {}", outcome.agent_uri, outcome.label),
+                    );
+                }
+            }
+            Err(msg) => output::warn(&format!("publish {} failed: {msg}", outcome.label)),
+        }
     }
+    if total > 0 {
+        output::detail(
+            "directory",
+            &format!("{ok}/{total} federation.advertise_* calls — entries visible to peers"),
+        );
+    }
+}
+
+fn publish_outcome_summary(
+    outcomes: &[crate::runtime::publish::PublishOutcome],
+) -> Result<(), String> {
+    let mut relevant = 0usize;
+    let mut failures = Vec::new();
+    for outcome in outcomes {
+        if outcome.label == "skipped" || outcome.label == "local-agents.json" {
+            continue;
+        }
+        relevant += 1;
+        if let Err(msg) = &outcome.result {
+            failures.push(format!("{} {}: {msg}", outcome.agent_uri, outcome.label));
+        }
+    }
+    if relevant == 0 {
+        return Err("no federation.advertise_* outcomes produced".into());
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
+}
+
+fn revoke_agent_via_invoker<I: crate::runtime::advertise::AbilityInvoker>(
+    invoker: &I,
+    tenant_id: &str,
+    realm: &str,
+    agent_uri: &str,
+    reason: &str,
+) -> Result<(), String> {
+    let outcome = crate::runtime::publish::unpublish_abilities_via_revoke(
+        invoker, tenant_id, realm, agent_uri, reason,
+    );
+    match outcome.result {
+        Ok(_) => {
+            output::detail("revoked", &outcome.agent_uri);
+            Ok(())
+        }
+        Err(msg) => {
+            output::warn(&format!("revoke {} failed: {msg}", outcome.agent_uri));
+            Err(msg)
+        }
+    }
+}
+
+fn hub_invoke_endpoint(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("hub endpoint is empty".into());
+    }
+    if let Some(rest) = trimmed.strip_prefix("axon://") {
+        return Ok(format!("http://{rest}"));
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return Ok(trimmed.to_string());
+    }
+    if trimmed.contains("://") {
+        return Err(format!("unsupported hub endpoint scheme in `{trimmed}`"));
+    }
+    Ok(format!("http://{trimmed}"))
+}
+
+fn ability_name_from_resource_uri(resource_uri: &str) -> Option<String> {
+    let tail = resource_uri.split("/abilities/").nth(1)?;
+    let without_query = tail.split('?').next().unwrap_or(tail);
+    let ability = without_query
+        .split('@')
+        .next()
+        .unwrap_or(without_query)
+        .trim();
+    if ability.is_empty() {
+        return None;
+    }
+    Some(ability.to_string())
+}
+
+fn direct_hub_trust_match(endpoint_url: &str) -> Option<Option<std::path::PathBuf>> {
+    for path in direct_hub_trust_path_candidates() {
+        let anchor =
+            match crate::services::realm_trust_anchor::RealmTrustAnchor::load_or_empty(&path) {
+                Ok(anchor) => anchor,
+                Err(_) => continue,
+            };
+        if let Some(entry) = anchor.lookup_peer_hub(endpoint_url) {
+            return Some(entry.tls_ca_pem_path.clone());
+        }
+    }
+    None
+}
+
+fn direct_hub_trust_path_candidates() -> Vec<std::path::PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(override_path) = std::env::var_os("EASYNET_REALM_TRUST_PATH") {
+        candidates.push(std::path::PathBuf::from(override_path));
+    }
+    candidates.push(std::path::PathBuf::from(
+        crate::services::realm_trust_anchor::DEFAULT_REALM_TRUST_PATH,
+    ));
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = std::path::PathBuf::from(home);
+        candidates.push(home.join("realm-trust.toml"));
+        candidates.push(home.join(".easynet/realm-trust.toml"));
+    }
+    let mut deduped = Vec::with_capacity(candidates.len());
+    for path in candidates {
+        if !deduped.iter().any(|seen| seen == &path) {
+            deduped.push(path);
+        }
+    }
+    deduped
+}
+
+#[cfg(feature = "axon-pb")]
+struct DirectLocalDaemonAbilityInvoker {
+    caller_uri: String,
+    socket_path: std::path::PathBuf,
+}
+
+#[cfg(feature = "axon-pb")]
+impl DirectLocalDaemonAbilityInvoker {
+    fn new(caller_uri: &str) -> Result<Self, String> {
+        if caller_uri.trim().is_empty() {
+            return Err("host device URI is empty; cannot publish via local daemon".into());
+        }
+        let socket_path = local_daemon_grpc_socket_path();
+        if !socket_path.exists() {
+            return Err(format!(
+                "daemon gRPC socket not found at {}",
+                socket_path.display()
+            ));
+        }
+        Ok(Self {
+            caller_uri: caller_uri.to_string(),
+            socket_path,
+        })
+    }
+
+    fn invoke_function(
+        &self,
+        function_name: &str,
+        payload_json: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let caller_uri = self.caller_uri.clone();
+        let socket_path = self.socket_path.clone();
+        let arguments = serde_json::to_vec(&payload_json)
+            .map_err(|e| format!("encode {function_name} payload: {e}"))?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("build tokio runtime for local daemon publish: {e}"))?;
+
+        runtime.block_on(async move {
+            let endpoint = tonic::transport::Endpoint::try_from("http://[::1]:50051")
+                .map_err(|e| format!("build tonic endpoint: {e}"))?
+                .timeout(std::time::Duration::from_secs(10))
+                .connect_timeout(std::time::Duration::from_secs(5));
+            let channel = endpoint
+                .connect_with_connector(tower::service_fn(move |_: tonic::transport::Uri| {
+                    let path = socket_path.clone();
+                    async move {
+                        let stream = tokio::net::UnixStream::connect(path).await?;
+                        Ok::<_, std::io::Error>(hyper_util::rt::TokioIo::new(stream))
+                    }
+                }))
+                .await
+                .map_err(|e| format!("connect to local daemon gRPC socket: {e}"))?;
+            let mut client = crate::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+            let request = crate::pb::axon::v1::InvokeRequest {
+                envelope: Some(crate::pb::axon::v1::Envelope {
+                    caller: Some(crate::pb::axon::v1::AgentIdentity {
+                        uri: caller_uri.clone(),
+                        ..Default::default()
+                    }),
+                    callee: Some(crate::pb::axon::v1::AgentIdentity {
+                        uri: caller_uri.clone(),
+                        ..Default::default()
+                    }),
+                    subject: Some(crate::pb::axon::v1::SubjectIdentity {
+                        uri: caller_uri,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                function_name: function_name.to_string(),
+                arguments,
+                ..Default::default()
+            };
+            let response = client.invoke(request).await.map_err(|status| {
+                format!(
+                    "local daemon rejected {function_name}: code={:?} message={}",
+                    status.code(),
+                    status.message()
+                )
+            })?;
+            let body = response.into_inner();
+            if body.result.is_empty() {
+                return Ok(serde_json::Value::Null);
+            }
+            serde_json::from_slice(&body.result)
+                .map_err(|e| format!("decode {function_name} response: {e}"))
+        })
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl crate::runtime::advertise::AbilityInvoker for DirectLocalDaemonAbilityInvoker {
+    fn invoke_ability(
+        &self,
+        _tenant_id: &str,
+        resource_uri: &str,
+        payload_json: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let function_name = ability_name_from_resource_uri(resource_uri).ok_or_else(|| {
+            format!("cannot derive ability name from resource URI `{resource_uri}`")
+        })?;
+        self.invoke_function(&function_name, payload_json)
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn local_daemon_grpc_socket_path() -> std::path::PathBuf {
+    let raw = std::env::var("EASYNET_DAEMON_GRPC_UDS")
+        .unwrap_or_else(|_| crate::persistence::daemon_config::DEFAULT_DAEMON_UDS_PATH.to_string());
+    if let Some(rest) = raw.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return std::path::PathBuf::from(home).join(rest);
+        }
+    }
+    std::path::PathBuf::from(raw)
+}
+
+#[cfg(feature = "axon-pb")]
+fn publish_via_local_daemon_best_effort(
+    tenant_id: &str,
+    caller_uri: &str,
+    plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
+) -> Result<(), String> {
+    let invoker = DirectLocalDaemonAbilityInvoker::new(caller_uri)?;
+    publish_bootstrap_plan_via_invoker(tenant_id, plan, &invoker)
+}
+
+#[cfg(feature = "axon-pb")]
+fn publish_via_local_daemon_best_effort_silent(
+    tenant_id: &str,
+    caller_uri: &str,
+    plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
+) -> Result<(), String> {
+    let invoker = DirectLocalDaemonAbilityInvoker::new(caller_uri)?;
+    publish_bootstrap_plan_via_invoker_silent(tenant_id, plan, &invoker)
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn publish_via_local_daemon_best_effort(
+    _tenant_id: &str,
+    _caller_uri: &str,
+    _plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
+) -> Result<(), String> {
+    Err("local daemon publish requires the `axon-pb` feature".into())
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn publish_via_local_daemon_best_effort_silent(
+    _tenant_id: &str,
+    _caller_uri: &str,
+    _plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
+) -> Result<(), String> {
+    Err("local daemon publish requires the `axon-pb` feature".into())
+}
+
+#[cfg(feature = "axon-pb")]
+fn revoke_via_local_daemon_best_effort(
+    tenant_id: &str,
+    caller_uri: &str,
+    realm: &str,
+    agent_uri: &str,
+    reason: &str,
+) -> Result<(), String> {
+    let invoker = DirectLocalDaemonAbilityInvoker::new(caller_uri)?;
+    revoke_agent_via_invoker(&invoker, tenant_id, realm, agent_uri, reason)
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn revoke_via_local_daemon_best_effort(
+    _tenant_id: &str,
+    _caller_uri: &str,
+    _realm: &str,
+    _agent_uri: &str,
+    _reason: &str,
+) -> Result<(), String> {
+    Err("local daemon revoke requires the `axon-pb` feature".into())
+}
+
+#[cfg(feature = "axon-pb")]
+struct DirectHubAbilityInvoker {
+    endpoint: String,
+    caller_uri: String,
+    hub_uri: String,
+}
+
+#[cfg(feature = "axon-pb")]
+impl DirectHubAbilityInvoker {
+    fn new(raw_endpoint: &str, caller_uri: &str, realm: &str) -> Result<Self, String> {
+        if caller_uri.trim().is_empty() {
+            return Err("host device URI is empty; cannot publish to the hub".into());
+        }
+        Ok(Self {
+            endpoint: hub_invoke_endpoint(raw_endpoint)?,
+            caller_uri: caller_uri.to_string(),
+            hub_uri: crate::uri::hub_uri(realm),
+        })
+    }
+
+    fn invoke_function(
+        &self,
+        function_name: &str,
+        payload_json: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let endpoint_url = self.endpoint.clone();
+        let caller_uri = self.caller_uri.clone();
+        let hub_uri = self.hub_uri.clone();
+        let arguments = serde_json::to_vec(&payload_json)
+            .map_err(|e| format!("encode {function_name} payload: {e}"))?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("build tokio runtime for hub publish: {e}"))?;
+
+        runtime.block_on(async move {
+            let mut endpoint = tonic::transport::Endpoint::from_shared(endpoint_url.clone())
+                .map_err(|e| format!("invalid hub endpoint `{endpoint_url}`: {e}"))?
+                .timeout(std::time::Duration::from_secs(10))
+                .connect_timeout(std::time::Duration::from_secs(5));
+
+            if endpoint_url.starts_with("https://") {
+                let tls = match direct_hub_trust_match(&endpoint_url) {
+                    Some(Some(path)) => {
+                        crate::services::federation_client::pinned_tls_config(path.as_path())
+                            .map_err(|e| format!("load pinned CA for `{endpoint_url}`: {e}"))?
+                    }
+                    Some(None) | None => {
+                        tonic::transport::ClientTlsConfig::new().with_native_roots()
+                    }
+                };
+                endpoint = endpoint
+                    .tls_config(tls)
+                    .map_err(|e| format!("configure TLS for `{endpoint_url}`: {e}"))?;
+            }
+
+            let channel = endpoint
+                .connect()
+                .await
+                .map_err(|e| format!("connect to hub `{endpoint_url}`: {e}"))?;
+            let mut client = crate::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+            let request = crate::pb::axon::v1::InvokeRequest {
+                envelope: Some(crate::pb::axon::v1::Envelope {
+                    caller: Some(crate::pb::axon::v1::AgentIdentity {
+                        uri: caller_uri,
+                        ..Default::default()
+                    }),
+                    callee: Some(crate::pb::axon::v1::AgentIdentity {
+                        uri: hub_uri.clone(),
+                        ..Default::default()
+                    }),
+                    subject: Some(crate::pb::axon::v1::SubjectIdentity {
+                        uri: hub_uri,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                function_name: function_name.to_string(),
+                arguments,
+                ..Default::default()
+            };
+            let response = client.invoke(request).await.map_err(|status| {
+                format!(
+                    "hub rejected {function_name}: code={:?} message={}",
+                    status.code(),
+                    status.message()
+                )
+            })?;
+            let body = response.into_inner();
+            if body.result.is_empty() {
+                return Ok(serde_json::Value::Null);
+            }
+            serde_json::from_slice(&body.result)
+                .map_err(|e| format!("decode {function_name} response: {e}"))
+        })
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl crate::runtime::advertise::AbilityInvoker for DirectHubAbilityInvoker {
+    fn invoke_ability(
+        &self,
+        _tenant_id: &str,
+        resource_uri: &str,
+        payload_json: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let function_name = ability_name_from_resource_uri(resource_uri).ok_or_else(|| {
+            format!("cannot derive ability name from resource URI `{resource_uri}`")
+        })?;
+        self.invoke_function(&function_name, payload_json)
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn publish_to_hub_direct_best_effort(
+    tenant_id: &str,
+    hub_endpoint: &str,
+    caller_uri: &str,
+    plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
+) -> Result<(), String> {
+    let invoker = DirectHubAbilityInvoker::new(hub_endpoint, caller_uri, tenant_id)?;
+    publish_bootstrap_plan_via_invoker(tenant_id, plan, &invoker)
+}
+
+#[cfg(feature = "axon-pb")]
+fn publish_to_hub_direct_best_effort_silent(
+    tenant_id: &str,
+    hub_endpoint: &str,
+    caller_uri: &str,
+    plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
+) -> Result<(), String> {
+    let invoker = DirectHubAbilityInvoker::new(hub_endpoint, caller_uri, tenant_id)?;
+    publish_bootstrap_plan_via_invoker_silent(tenant_id, plan, &invoker)
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn publish_to_hub_direct_best_effort(
+    _tenant_id: &str,
+    _hub_endpoint: &str,
+    _caller_uri: &str,
+    _plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
+) -> Result<(), String> {
+    Err("direct hub publish requires the `axon-pb` feature".into())
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn publish_to_hub_direct_best_effort_silent(
+    _tenant_id: &str,
+    _hub_endpoint: &str,
+    _caller_uri: &str,
+    _plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
+) -> Result<(), String> {
+    Err("direct hub publish requires the `axon-pb` feature".into())
+}
+
+#[cfg(feature = "axon-pb")]
+fn revoke_from_hub_direct_best_effort(
+    tenant_id: &str,
+    hub_endpoint: &str,
+    caller_uri: &str,
+    realm: &str,
+    agent_uri: &str,
+    reason: &str,
+) -> Result<(), String> {
+    let invoker = DirectHubAbilityInvoker::new(hub_endpoint, caller_uri, tenant_id)?;
+    revoke_agent_via_invoker(&invoker, tenant_id, realm, agent_uri, reason)
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn revoke_from_hub_direct_best_effort(
+    _tenant_id: &str,
+    _hub_endpoint: &str,
+    _caller_uri: &str,
+    _realm: &str,
+    _agent_uri: &str,
+    _reason: &str,
+) -> Result<(), String> {
+    Err("direct hub revoke requires the `axon-pb` feature".into())
 }
 
 /// Map the legacy `AgentType` tag onto the `RuntimeKind` used
@@ -1478,10 +2055,11 @@ fn run_refresh() -> anyhow::Result<()> {
     })?;
     let creds = crate::persistence::config::load_credentials()
         .map_err(|e| anyhow::anyhow!("load credentials: {e}"))?;
+    let username = crate::facade::cli::start::bootstrap_username_for(&creds);
     let plan = crate::facade::cli::start::build_bootstrap_plan_from(
         &creds.tenant_id,
         &creds.node_id,
-        creds.username.as_deref().unwrap_or(""),
+        &username,
     )?;
     if plan.realm.is_empty() {
         anyhow::bail!(
@@ -1571,6 +2149,159 @@ mod tests {
             model: model.map(str::to_string),
             label: None,
         }
+    }
+
+    #[test]
+    fn hub_invoke_endpoint_rewrites_axon_scheme_to_http() {
+        assert_eq!(
+            hub_invoke_endpoint("axon://hub.example:50051").unwrap(),
+            "http://hub.example:50051"
+        );
+        assert_eq!(
+            hub_invoke_endpoint("https://hub.example:50443").unwrap(),
+            "https://hub.example:50443"
+        );
+        assert_eq!(
+            hub_invoke_endpoint("hub.example:50051").unwrap(),
+            "http://hub.example:50051"
+        );
+    }
+
+    #[test]
+    fn ability_name_from_resource_uri_extracts_name_without_version_or_query() {
+        assert_eq!(
+            ability_name_from_resource_uri(
+                "easynet:///r/prv/hub/acme/abilities/federation.advertise_agent@1?tenant_id=acme"
+            )
+            .as_deref(),
+            Some("federation.advertise_agent")
+        );
+        assert_eq!(ability_name_from_resource_uri("not-a-resource-uri"), None);
+    }
+
+    #[test]
+    fn direct_hub_trust_match_prefers_env_override() {
+        let _home = HomeGuard::new();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let override_path = tmp.path().join("override.toml");
+        fs::write(
+            &override_path,
+            r#"
+[[trusted_agent]]
+agent_uri = "easynet:///r/test-realm/hub"
+public_key_b64 = "AA=="
+role = "hub"
+added_at_unix_ms = 1
+origin_tenant_id = "test-realm"
+hub_uri = "https://hub.example:50443"
+tls_ca_pem_path = "/tmp/env-ca.pem"
+"#,
+        )
+        .expect("write env trust anchor");
+
+        let prev = std::env::var_os("EASYNET_REALM_TRUST_PATH");
+        std::env::set_var("EASYNET_REALM_TRUST_PATH", &override_path);
+        struct EnvGuard(Option<std::ffi::OsString>);
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                match self.0.take() {
+                    Some(v) => std::env::set_var("EASYNET_REALM_TRUST_PATH", v),
+                    None => std::env::remove_var("EASYNET_REALM_TRUST_PATH"),
+                }
+            }
+        }
+        let _guard = EnvGuard(prev);
+
+        assert_eq!(
+            direct_hub_trust_match("https://hub.example:50443"),
+            Some(Some(std::path::PathBuf::from("/tmp/env-ca.pem")))
+        );
+    }
+
+    #[test]
+    fn direct_hub_trust_match_falls_back_to_home_paths() {
+        let _home = HomeGuard::new();
+        let prev = std::env::var_os("EASYNET_REALM_TRUST_PATH");
+        std::env::remove_var("EASYNET_REALM_TRUST_PATH");
+        struct EnvGuard(Option<std::ffi::OsString>);
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                match self.0.take() {
+                    Some(v) => std::env::set_var("EASYNET_REALM_TRUST_PATH", v),
+                    None => std::env::remove_var("EASYNET_REALM_TRUST_PATH"),
+                }
+            }
+        }
+        let _guard = EnvGuard(prev);
+
+        let home = std::path::PathBuf::from(std::env::var_os("HOME").expect("home"));
+        fs::write(
+            home.join("realm-trust.toml"),
+            r#"
+[[trusted_agent]]
+agent_uri = "easynet:///r/test-realm/hub"
+public_key_b64 = "AA=="
+role = "hub"
+added_at_unix_ms = 1
+origin_tenant_id = "test-realm"
+hub_uri = "https://hub.example:50443"
+tls_ca_pem_path = "/tmp/home-ca.pem"
+"#,
+        )
+        .expect("write home trust anchor");
+
+        assert_eq!(
+            direct_hub_trust_match("https://hub.example:50443"),
+            Some(Some(std::path::PathBuf::from("/tmp/home-ca.pem")))
+        );
+    }
+
+    #[test]
+    fn publish_outcome_summary_requires_all_directory_rows_to_succeed() {
+        let outcomes = vec![
+            crate::runtime::publish::PublishOutcome {
+                agent_uri: String::new(),
+                label: "local-agents.json".into(),
+                result: Err("save failed".into()),
+            },
+            crate::runtime::publish::PublishOutcome {
+                agent_uri: "device:1".into(),
+                label: "device".into(),
+                result: Ok(()),
+            },
+            crate::runtime::publish::PublishOutcome {
+                agent_uri: "agent:alice".into(),
+                label: "abilities/3".into(),
+                result: Err("membership required".into()),
+            },
+        ];
+
+        let err = publish_outcome_summary(&outcomes).unwrap_err();
+        assert!(err.contains("agent:alice abilities/3: membership required"));
+        assert!(!err.contains("local-agents.json"));
+    }
+
+    #[test]
+    fn publish_outcome_summary_accepts_clean_directory_rows() {
+        let outcomes = vec![
+            crate::runtime::publish::PublishOutcome {
+                agent_uri: String::new(),
+                label: "local-agents.json".into(),
+                result: Err("save failed".into()),
+            },
+            crate::runtime::publish::PublishOutcome {
+                agent_uri: "device:1".into(),
+                label: "device".into(),
+                result: Ok(()),
+            },
+            crate::runtime::publish::PublishOutcome {
+                agent_uri: "agent:alice".into(),
+                label: "abilities/3".into(),
+                result: Ok(()),
+            },
+        ];
+
+        publish_outcome_summary(&outcomes).expect("directory rows succeeded");
     }
 
     #[test]

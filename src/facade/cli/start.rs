@@ -546,20 +546,53 @@ fn republish_via_federation_best_effort(
 fn build_bootstrap_plan(
     creds: &config::Credentials,
 ) -> anyhow::Result<crate::runtime::agents::profiles::bootstrap::BootstrapPlan> {
-    let user_id = creds.username.as_deref().unwrap_or("").to_string();
-    build_bootstrap_plan_from(&creds.tenant_id, &creds.node_id, &user_id)
+    let username = bootstrap_username_for(creds);
+    build_bootstrap_plan_from(&creds.tenant_id, &creds.node_id, &username)
+}
+
+/// Resolve the hosted-agent owner slug used in canonical
+/// `agent/<user>.<id>` URIs.
+///
+/// Primary source is `credentials.json.username`, which the pairing
+/// flow persists once the backend returns the stable username slug.
+/// During the migration window older credentials files may still miss
+/// it even though the operator has a valid auth session; in that case
+/// fall back to `auth.json.username`. We deliberately do NOT fall back
+/// to JWT `user_id` because backend visibility filters anchor on the
+/// stable username slug, and swapping in the UUID would mint another
+/// invisible-but-plausible URI instead of surfacing the missing data.
+pub(crate) fn bootstrap_username_for(creds: &config::Credentials) -> String {
+    if let Some(username) = creds
+        .username
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        return username.to_string();
+    }
+    match crate::facade::cli::auth::load_session() {
+        Ok(Some(session)) => session
+            .username
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .unwrap_or("")
+            .to_string(),
+        Ok(None) | Err(_) => String::new(),
+    }
 }
 
 /// Variant that takes the inputs directly. Public so `agent.rs`'s
 /// publish path can construct the plan from a `(tenant_id,
-/// node_id, user_id)` triple already in scope without re-loading
-/// credentials. user_id is the user-uuid the device is paired to
-/// (carries the v4.1.4 user-anchor for hosted agent URAs); pass
-/// empty when pre-join.
+/// node_id, username)` triple already in scope without re-loading
+/// credentials. The third argument is the stable username slug the
+/// backend resolves for this user and anchors under `user/` / `agent/`
+/// URIs; pass empty when the device is not yet joined or the slug is
+/// genuinely unavailable.
 pub(crate) fn build_bootstrap_plan_from(
     tenant_id: &str,
     node_id: &str,
-    user_id: &str,
+    username: &str,
 ) -> anyhow::Result<crate::runtime::agents::profiles::bootstrap::BootstrapPlan> {
     use crate::runtime::agents::profiles::bootstrap::{BootstrapPlan, LlmSubAgent};
 
@@ -579,7 +612,7 @@ pub(crate) fn build_bootstrap_plan_from(
         // The credentials' realm field maps to the tenant for now;
         // a future config split will separate them.
         realm: tenant_id.to_string(),
-        user_id: user_id.to_string(),
+        user_id: username.to_string(),
         // node_id from credentials is the local node identifier
         // (`en-...`). Wrap it in the canonical URA shape so every
         // downstream consumer (advertise_self_signed_device,
@@ -1146,6 +1179,31 @@ mod tests {
         assert!(!plan.policy);
         assert!(!plan.mcp);
         assert!(plan.llm_sub_agents.is_empty());
+    }
+
+    #[test]
+    fn build_bootstrap_plan_falls_back_to_auth_session_username() {
+        let _g = HomeGuard::new();
+        let state_dir = crate::persistence::config::state_dir();
+        std::fs::create_dir_all(&state_dir).expect("create state dir");
+        let session = crate::facade::cli::auth::AuthSession {
+            token: "token".into(),
+            hub_url: "http://127.0.0.1:8080".into(),
+            email: "alice@example.com".into(),
+            user_id: Some("user-uuid".into()),
+            nickname: Some("Alice".into()),
+            username: Some("alice".into()),
+        };
+        std::fs::write(
+            state_dir.join("auth.json"),
+            serde_json::to_vec(&session).expect("serialize session"),
+        )
+        .expect("write auth.json");
+
+        let mut creds = test_creds();
+        creds.username = None;
+        let plan = build_bootstrap_plan(&creds).expect("plan must build");
+        assert_eq!(plan.user_id, "alice");
     }
 
     #[test]

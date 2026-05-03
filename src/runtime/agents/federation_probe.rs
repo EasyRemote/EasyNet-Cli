@@ -436,6 +436,7 @@ mod tests {
         let device = ResolvedAgent {
             uri: "easynet:///r/acme/device/01DEV".into(),
             status: "active".into(),
+            host_node_id: None,
             abilities: vec![
                 json!({"name": "observe.health"}),
                 json!({"name": "fleet.list_nodes"}),
@@ -444,6 +445,7 @@ mod tests {
         let hosted = ResolvedAgent {
             uri: "easynet:///r/acme/agent/01LLM".into(),
             status: "active".into(),
+            host_node_id: None,
             abilities: vec![json!({"name": "alice.chat"})],
         };
         assert!(is_device_profile_agent(&device));

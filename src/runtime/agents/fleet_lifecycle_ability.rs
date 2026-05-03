@@ -428,7 +428,10 @@ mod tests {
         );
         // Pre-v4.1.4 single-tail shape is rejected by ParseURA, so
         // this returns None (caller falls back to <unset>).
-        assert_eq!(extract_realm_user_from_uri("easynet:///r/acme/agent/01DEV"), None);
+        assert_eq!(
+            extract_realm_user_from_uri("easynet:///r/acme/agent/01DEV"),
+            None
+        );
         assert_eq!(extract_realm_user_from_uri(""), None);
         assert_eq!(extract_realm_user_from_uri("not-a-uri"), None);
         // Empty realm is rejected.

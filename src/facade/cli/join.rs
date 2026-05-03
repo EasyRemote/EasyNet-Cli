@@ -117,6 +117,7 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
     let preflight = preflight_pairing_token(&token, &validate_base)?;
     output::info("Validating pairing token...");
     let mut creds = validate_pairing_token(&token, &validate_base, &preflight)?;
+    backfill_credentials_username_from_auth_session(&mut creds);
     creds.hub_api_base = hub_api_override;
     config::save_credentials(&creds)?;
 
@@ -329,6 +330,33 @@ fn validate_pairing_response(creds: config::Credentials) -> anyhow::Result<confi
     Ok(creds)
 }
 
+/// Bridge the migration window where the backend may not yet return
+/// `username` from validate-pairing but the operator already holds a
+/// logged-in auth session that does know it. This keeps
+/// `credentials.json` rich enough for hosted-agent bootstrap on the
+/// first post-join runtime boot, instead of persisting `<unjoined>`
+/// placeholder URIs until a later manual repair.
+fn backfill_credentials_username_from_auth_session(creds: &mut config::Credentials) {
+    if creds
+        .username
+        .as_deref()
+        .is_some_and(|v| !v.trim().is_empty())
+    {
+        return;
+    }
+    let Ok(Some(session)) = crate::facade::cli::auth::load_session() else {
+        return;
+    };
+    let Some(username) = session.username else {
+        return;
+    };
+    let username = username.trim();
+    if username.is_empty() {
+        return;
+    }
+    creds.username = Some(username.to_string());
+}
+
 /// Pick the REST-API base URL the pairing-token validation call
 /// should hit. Operators commonly run a self-hosted Hub where the
 /// user-facing portal (`--hub`) and the REST API (`--hub-api`)
@@ -515,6 +543,38 @@ mod tests {
         };
         let err = validate_pairing_response(creds).expect_err("missing node_id must fail");
         assert!(err.to_string().contains("missing node_id"));
+    }
+
+    #[test]
+    fn backfill_credentials_username_uses_auth_session_when_pairing_response_omits_it() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let state_dir = config::state_dir();
+        std::fs::create_dir_all(&state_dir).expect("create state dir");
+        let session = crate::facade::cli::auth::AuthSession {
+            token: "token".into(),
+            hub_url: "http://127.0.0.1:8080".into(),
+            email: "alice@example.com".into(),
+            user_id: Some("user-uuid".into()),
+            nickname: Some("Alice".into()),
+            username: Some("alice".into()),
+        };
+        std::fs::write(
+            state_dir.join("auth.json"),
+            serde_json::to_vec(&session).expect("serialize session"),
+        )
+        .expect("write auth.json");
+
+        let mut creds = config::Credentials {
+            node_id: "node".into(),
+            credential_token: "cred".into(),
+            hub_endpoint: "axon://hub.example:50051".into(),
+            tenant_id: "tenant".into(),
+            deploy_signature: "sig".into(),
+            hub_api_base: None,
+            username: None,
+        };
+        backfill_credentials_username_from_auth_session(&mut creds);
+        assert_eq!(creds.username.as_deref(), Some("alice"));
     }
 
     #[test]

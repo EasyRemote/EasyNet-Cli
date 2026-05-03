@@ -20,7 +20,12 @@ use easynet_axon::reconnect::{ReconnectConfig, ReconnectHook, ReconnectingBridge
 use crate::persistence::config;
 use crate::support::{output, shutdown::ShutdownSignal};
 
-pub const DEFAULT_HEARTBEAT_MS: u64 = 30_000;
+// The runtime-side federation sweeper starts suspecting stale members
+// at ~20 s. The CLI used to wait 30 s before sending the next
+// heartbeat, which guaranteed every long-lived device would self-revoke
+// between the initial advertise and the first tick. Keep the CLI-side
+// cadence aligned with the runtime's 5 s transport heartbeat.
+pub const DEFAULT_HEARTBEAT_MS: u64 = 5_000;
 const MAX_HEARTBEAT_FAILURES: u32 = 10;
 
 // ── Heartbeat env var keys (daemon ↔ parent contract) ───────────────────────
@@ -508,10 +513,8 @@ pub fn run_daemon() -> anyhow::Result<()> {
     let realm = tenant.clone();
     let bootstrap_outcome = reconnecting.with_bridge(|br| {
         let device_uri = crate::uri::device_uri(&tenant, &node_id);
-        let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
-            br,
-            device_uri,
-        );
+        let invoker =
+            crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(br, device_uri);
         let outcome = crate::runtime::publish::bootstrap_self_identity_via_runtime(
             &invoker, &tenant, &realm, &node_id,
         );

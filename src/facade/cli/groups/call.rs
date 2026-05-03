@@ -159,6 +159,27 @@ pub fn run(args: CallArgs) -> anyhow::Result<()> {
     }
 }
 
+fn invoke_call_signaling(ability: &str, args: Value) -> anyhow::Result<Value> {
+    #[cfg(feature = "axon-pb")]
+    if let Ok(creds) = crate::persistence::config::load_credentials() {
+        let realm = creds.realm_str().trim();
+        let node_id = creds.node_id.trim();
+        if !realm.is_empty() && !node_id.is_empty() {
+            let hub_uri = crate::uri::hub_uri(realm);
+            let caller_uri = crate::uri::device_uri(realm, node_id);
+            return crate::support::federation_invoke::invoke_via_federation_forward(
+                ability,
+                args,
+                &hub_uri,
+                Some(&caller_uri),
+            )
+            .with_context(|| format!("invoke {ability} against realm hub"));
+        }
+    }
+
+    invoke_local_ability(ability, args).with_context(|| format!("invoke {ability} locally"))
+}
+
 fn run_create(args: CreateArgs) -> anyhow::Result<()> {
     // Per the ability-only ontology: every CLI subcommand collapses
     // to one Invoke. The voice.create_call handler returns the new
@@ -169,8 +190,13 @@ fn run_create(args: CreateArgs) -> anyhow::Result<()> {
     if !args.call_id.is_empty() {
         body["call_id"] = json!(args.call_id);
     }
-    let result =
-        invoke_local_ability("voice.create_call", body).context("invoke voice.create_call")?;
+    let participant_id = crate::persistence::config::load_credentials()
+        .ok()
+        .map(|creds| creds.node_id)
+        .filter(|node_id| !node_id.trim().is_empty())
+        .unwrap_or_else(|| gethostname::gethostname().to_string_lossy().to_string());
+    body["participant_id"] = json!(participant_id);
+    let result = invoke_call_signaling("voice.create_call", body)?;
     if args.format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
@@ -189,8 +215,7 @@ fn run_create(args: CreateArgs) -> anyhow::Result<()> {
 }
 
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
-    let result = invoke_local_ability("voice.show_call", json!({"call_id": args.call_id}))
-        .context("invoke voice.show_call")?;
+    let result = invoke_call_signaling("voice.show_call", json!({"call_id": args.call_id}))?;
     if args.format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
@@ -215,11 +240,10 @@ fn run_join(args: JoinArgs) -> anyhow::Result<()> {
     let pid = args
         .participant_id
         .unwrap_or_else(|| gethostname::gethostname().to_string_lossy().to_string());
-    let result = invoke_local_ability(
+    let result = invoke_call_signaling(
         "voice.join_call",
         json!({"call_id": args.call_id, "participant_id": pid}),
-    )
-    .context("invoke voice.join_call")?;
+    )?;
     output::success(&format!("Joined call {} as {pid}", args.call_id));
     if let Some(state) = result.get("state").and_then(Value::as_str) {
         output::detail("state", state);
@@ -228,15 +252,14 @@ fn run_join(args: JoinArgs) -> anyhow::Result<()> {
 }
 
 fn run_leave(args: LeaveArgs) -> anyhow::Result<()> {
-    invoke_local_ability(
+    invoke_call_signaling(
         "voice.leave_call",
         json!({
             "call_id": args.call_id,
             "participant_id": args.participant_id,
             "reason": args.reason,
         }),
-    )
-    .context("invoke voice.leave_call")?;
+    )?;
     output::success(&format!(
         "{} left call {}",
         args.participant_id, args.call_id
@@ -245,11 +268,10 @@ fn run_leave(args: LeaveArgs) -> anyhow::Result<()> {
 }
 
 fn run_end(args: EndArgs) -> anyhow::Result<()> {
-    let result = invoke_local_ability(
+    let result = invoke_call_signaling(
         "voice.end_call",
         json!({"call_id": args.call_id, "end_reason": 1}),
-    )
-    .context("invoke voice.end_call")?;
+    )?;
     output::success(&format!("Call {} ended", args.call_id));
     if let Some(state) = result.get("state").and_then(Value::as_str) {
         output::detail("terminal_state", state);
@@ -259,8 +281,7 @@ fn run_end(args: EndArgs) -> anyhow::Result<()> {
 }
 
 fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
-    let result = invoke_local_ability("voice.watch_call", json!({"call_id": args.call_id}))
-        .context("invoke voice.watch_call")?;
+    let result = invoke_call_signaling("voice.watch_call", json!({"call_id": args.call_id}))?;
     let events = result.get("events").and_then(Value::as_array);
     let mut count = 0;
     if let Some(events) = events {
@@ -287,15 +308,14 @@ fn run_metrics(args: MetricsArgs) -> anyhow::Result<()> {
         "concealed_samples": 0,
         "audio_level_dbov": -26.0,
     });
-    let _ = invoke_local_ability(
+    let _ = invoke_call_signaling(
         "voice.report_metrics",
         json!({
             "call_id":        args.call_id,
             "participant_id": args.participant_id,
             "metrics":        metrics,
         }),
-    )
-    .context("invoke voice.report_metrics")?;
+    )?;
     output::success("Metrics reported");
     Ok(())
 }

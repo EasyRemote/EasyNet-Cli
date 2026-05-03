@@ -1083,10 +1083,7 @@ added_at_unix_ms = 1
         let prev_home = std::env::var_os("HOME");
         std::env::set_var("EASYNET_REALM_TRUST_PATH", &trust_path);
         std::env::set_var("HOME", tmp.path());
-        struct EnvGuard(
-            Option<std::ffi::OsString>,
-            Option<std::ffi::OsString>,
-        );
+        struct EnvGuard(Option<std::ffi::OsString>, Option<std::ffi::OsString>);
         impl Drop for EnvGuard {
             fn drop(&mut self) {
                 match self.0.take() {
@@ -1162,8 +1159,8 @@ added_at_unix_ms = 1
         use base64::Engine as _;
         use ed25519_dalek::SigningKey;
         let signing = SigningKey::from_bytes(&staged_seed);
-        let expected_hub_pk = base64::engine::general_purpose::STANDARD
-            .encode(signing.verifying_key().to_bytes());
+        let expected_hub_pk =
+            base64::engine::general_purpose::STANDARD.encode(signing.verifying_key().to_bytes());
         assert_eq!(
             hub_row.get("public_key_b64").and_then(|v| v.as_str()),
             Some(expected_hub_pk.as_str()),

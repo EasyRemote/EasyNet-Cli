@@ -36,9 +36,7 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use clap::Args;
 use serde::{Deserialize, Serialize};
 
-use crate::persistence::config::{
-    atomic_write_with_permissions, state_dir, WritePermissions,
-};
+use crate::persistence::config::{atomic_write_with_permissions, state_dir, WritePermissions};
 
 const DEFAULT_HUB_URL: &str = "http://127.0.0.1:8080";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -63,6 +61,9 @@ pub struct AuthSession {
     /// Display nickname returned by the backend.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nickname: Option<String>,
+    /// Stable username slug used in canonical user/agent URIs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
 }
 
 fn auth_session_path() -> PathBuf {
@@ -80,8 +81,8 @@ pub fn load_session() -> anyhow::Result<Option<AuthSession>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => bail!("read {}: {e}", path.display()),
     };
-    let session: AuthSession = serde_json::from_str(&raw)
-        .with_context(|| format!("parse {}", path.display()))?;
+    let session: AuthSession =
+        serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
     Ok(Some(session))
 }
 
@@ -149,13 +150,14 @@ struct UserResp {
     id: Option<String>,
     #[serde(default)]
     nickname: Option<String>,
+    #[serde(default)]
+    username: Option<String>,
 }
 
 pub fn run_login(args: LoginArgs) -> anyhow::Result<()> {
     let password = match args.password.clone() {
         Some(p) => p,
-        None => rpassword::prompt_password("Password: ")
-            .context("read password")?,
+        None => rpassword::prompt_password("Password: ").context("read password")?,
     };
 
     let hub = args.hub.trim_end_matches('/').to_string();
@@ -174,23 +176,21 @@ pub fn run_login(args: LoginArgs) -> anyhow::Result<()> {
             let nickname = args
                 .nickname
                 .clone()
-                .unwrap_or_else(|| {
-                    args.email
-                        .split('@')
-                        .next()
-                        .unwrap_or("user")
-                        .to_string()
-                });
+                .unwrap_or_else(|| args.email.split('@').next().unwrap_or("user").to_string());
             post_register(&hub, &args.email, &password, &nickname)?
         }
     };
 
+    let user_id = auth.user.as_ref().and_then(|u| u.id.clone());
+    let nickname = auth.user.as_ref().and_then(|u| u.nickname.clone());
+    let username = auth.user.as_ref().and_then(|u| u.username.clone());
     let session = AuthSession {
         token: auth.token,
         hub_url: hub,
         email: args.email,
-        user_id: auth.user.as_ref().and_then(|u| u.id.clone()),
-        nickname: auth.user.and_then(|u| u.nickname),
+        user_id,
+        nickname,
+        username,
     };
     save_session(&session)?;
     println!("✓ logged in as {}", session.email);
@@ -272,6 +272,9 @@ pub fn run_whoami(_args: WhoamiArgs) -> anyhow::Result<()> {
             println!("email:    {}", s.email);
             if let Some(uid) = &s.user_id {
                 println!("user_id:  {uid}");
+            }
+            if let Some(username) = &s.username {
+                println!("username: {username}");
             }
             if let Some(nick) = &s.nickname {
                 println!("nickname: {nick}");
@@ -424,23 +427,29 @@ struct DeviceItem {
 pub fn run_devices(args: DevicesArgs) -> anyhow::Result<()> {
     let resp: DeviceListResp = auth_get_json("/api/v1/devices")?;
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-            "items": resp.items.iter().map(|d| serde_json::json!({
-                "node_id": d.node_id,
-                "display_name": d.display_name,
-                "state": d.state,
-                "os": d.os,
-                "arch": d.arch,
-                "realm": d.realm,
-            })).collect::<Vec<_>>()
-        }))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "items": resp.items.iter().map(|d| serde_json::json!({
+                    "node_id": d.node_id,
+                    "display_name": d.display_name,
+                    "state": d.state,
+                    "os": d.os,
+                    "arch": d.arch,
+                    "realm": d.realm,
+                })).collect::<Vec<_>>()
+            }))?
+        );
         return Ok(());
     }
     if resp.items.is_empty() {
         println!("(no devices — `easynet auth pair | xargs easynet device join` to attach one)");
         return Ok(());
     }
-    println!("{:<38} {:<10} {:<8} {:<10} {:<24}", "NODE_ID", "STATE", "OS", "ARCH", "DISPLAY_NAME");
+    println!(
+        "{:<38} {:<10} {:<8} {:<10} {:<24}",
+        "NODE_ID", "STATE", "OS", "ARCH", "DISPLAY_NAME"
+    );
     for d in &resp.items {
         println!(
             "{:<38} {:<10} {:<8} {:<10} {:<24}",
@@ -484,21 +493,30 @@ pub fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
     let path = format!("/api/v1/devices/{}/abilities", args.node_id);
     let resp: AbilityListResp = auth_get_json(&path)?;
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-            "items": resp.items.iter().map(|a| serde_json::json!({
-                "name": a.name,
-                "tool_name": a.tool_name,
-                "version": a.version,
-                "state": a.state,
-            })).collect::<Vec<_>>()
-        }))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "items": resp.items.iter().map(|a| serde_json::json!({
+                    "name": a.name,
+                    "tool_name": a.tool_name,
+                    "version": a.version,
+                    "state": a.state,
+                })).collect::<Vec<_>>()
+            }))?
+        );
         return Ok(());
     }
     if resp.items.is_empty() {
-        println!("(no abilities advertised by {} — daemon may be offline or no agents joined)", args.node_id);
+        println!(
+            "(no abilities advertised by {} — daemon may be offline or no agents joined)",
+            args.node_id
+        );
         return Ok(());
     }
-    println!("{:<24} {:<24} {:<10} {:<10}", "NAME", "TOOL", "VERSION", "STATE");
+    println!(
+        "{:<24} {:<24} {:<10} {:<10}",
+        "NAME", "TOOL", "VERSION", "STATE"
+    );
     for a in &resp.items {
         println!(
             "{:<24} {:<24} {:<10} {:<10}",
@@ -565,9 +583,9 @@ pub fn run_exec(args: ExecArgs) -> anyhow::Result<()> {
         .set("Content-Type", "application/json")
         .send_json(body)
         .map_err(|e| match e {
-            ureq::Error::Status(401, _) => anyhow!(
-                "HTTP 401 — token expired. Run `easynet auth login <email>` to refresh."
-            ),
+            ureq::Error::Status(401, _) => {
+                anyhow!("HTTP 401 — token expired. Run `easynet auth login <email>` to refresh.")
+            }
             ureq::Error::Status(code, resp) => {
                 let body = resp.into_string().unwrap_or_default();
                 anyhow!("HTTP {code} from {url}: {body}")
@@ -584,7 +602,10 @@ pub fn run_exec(args: ExecArgs) -> anyhow::Result<()> {
     // {stdout, stderr, exit_code} inside `result`. Other tools
     // return whatever shape they want; for them, fall back to
     // pretty JSON since we have no contract.
-    let result = resp.get("result").cloned().unwrap_or(serde_json::Value::Null);
+    let result = resp
+        .get("result")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     let is_error = resp
         .get("is_error")
         .and_then(|v| v.as_bool())
@@ -596,14 +617,8 @@ pub fn run_exec(args: ExecArgs) -> anyhow::Result<()> {
     // shell. Fall back to printing the raw string when the field
     // is something the encoder didn't base64 (best-effort: real
     // shell.run always emits b64).
-    let stdout_raw = result
-        .get("stdout")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let stderr_raw = result
-        .get("stderr")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let stdout_raw = result.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+    let stderr_raw = result.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
     let stdout_bytes = B64
         .decode(stdout_raw.as_bytes())
         .unwrap_or_else(|_| stdout_raw.as_bytes().to_vec());
@@ -727,9 +742,9 @@ pub fn run_device_remove(args: DeviceRemoveArgs) -> anyhow::Result<()> {
         .set("Authorization", &format!("Bearer {}", session.token))
         .call()
         .map_err(|e| match e {
-            ureq::Error::Status(401, _) => anyhow!(
-                "HTTP 401 — token expired. Run `easynet auth login <email>` to refresh."
-            ),
+            ureq::Error::Status(401, _) => {
+                anyhow!("HTTP 401 — token expired. Run `easynet auth login <email>` to refresh.")
+            }
             ureq::Error::Status(code, resp) => {
                 let body = resp.into_string().unwrap_or_default();
                 anyhow!("HTTP {code} from {url}: {body}")
@@ -775,9 +790,9 @@ pub fn run_events(args: EventsArgs) -> anyhow::Result<()> {
         .set("Accept", "text/event-stream")
         .call()
         .map_err(|e| match e {
-            ureq::Error::Status(401, _) => anyhow!(
-                "HTTP 401 — token expired. Run `easynet auth login <email>` to refresh."
-            ),
+            ureq::Error::Status(401, _) => {
+                anyhow!("HTTP 401 — token expired. Run `easynet auth login <email>` to refresh.")
+            }
             ureq::Error::Status(code, resp) => {
                 let body = resp.into_string().unwrap_or_default();
                 anyhow!("HTTP {code} from {url}: {body}")

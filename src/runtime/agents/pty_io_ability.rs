@@ -336,23 +336,20 @@ pub fn register(reg: &mut LocalAbilityRegistry, pty: Arc<PtyService>, io: PtyIoS
     {
         let pty = Arc::clone(&pty);
         let io = io.clone();
-        let handler: LocalRpcHandler =
-            Arc::new(move |args: Value| input_handler(&pty, &io, args));
+        let handler: LocalRpcHandler = Arc::new(move |args: Value| input_handler(&pty, &io, args));
         reg.register_rpc(ABILITY_PTY_SESSION_INPUT, Arc::clone(&handler));
         reg.register_rpc("fleet.session_input", handler);
     }
     {
         let pty = Arc::clone(&pty);
         let io = io.clone();
-        let handler: LocalRpcHandler =
-            Arc::new(move |args: Value| read_handler(&pty, &io, args));
+        let handler: LocalRpcHandler = Arc::new(move |args: Value| read_handler(&pty, &io, args));
         reg.register_rpc(ABILITY_PTY_SESSION_READ, Arc::clone(&handler));
         reg.register_rpc("fleet.session_read", handler);
     }
     {
         let pty = Arc::clone(&pty);
-        let handler: LocalRpcHandler =
-            Arc::new(move |args: Value| resize_handler(&pty, args));
+        let handler: LocalRpcHandler = Arc::new(move |args: Value| resize_handler(&pty, args));
         reg.register_rpc(ABILITY_PTY_SESSION_RESIZE, Arc::clone(&handler));
         reg.register_rpc("fleet.session_resize", handler);
     }

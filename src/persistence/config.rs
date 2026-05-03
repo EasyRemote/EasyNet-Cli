@@ -616,10 +616,7 @@ mod tests {
         // Production yaml hard-codes PublicEndpoint=https://easynet.run:50443
         // (the daemon TLS gRPC port). REST calls have to land on :443,
         // not on the gRPC listener — historic bug.
-        assert_eq!(
-            extract_api_host("https://easynet.run:50443"),
-            "easynet.run"
-        );
+        assert_eq!(extract_api_host("https://easynet.run:50443"), "easynet.run");
         assert_eq!(extract_api_host("https://10.0.0.1:50443"), "10.0.0.1");
         assert_eq!(extract_api_host("https://[::1]:50443"), "[::1]");
         // demo's hub-B port follows the same posture.
