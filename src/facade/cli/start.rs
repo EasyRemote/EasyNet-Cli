@@ -413,7 +413,7 @@ fn spawn_easynet_daemon(node_id: &str) -> Option<std::process::Child> {
 /// of advertise failures so heartbeat, federation join, and other
 /// surfaces stay reachable. The directory just degrades until a
 /// later boot or operator-initiated re-advertise catches up.
-fn republish_via_federation_best_effort(
+pub(crate) fn republish_via_federation_best_effort(
     bridge: &easynet_axon::dendrite_bridge::DendriteBridge,
     creds: &config::Credentials,
 ) {

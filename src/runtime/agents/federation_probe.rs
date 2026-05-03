@@ -70,6 +70,12 @@ pub(crate) struct FleetView {
     pub resolve_latency_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedDeviceRecord {
+    pub node: FleetNodeSnapshot,
+    pub abilities: Vec<Value>,
+}
+
 #[derive(Debug)]
 struct ProbeOutcome {
     online: bool,
@@ -252,6 +258,104 @@ pub(crate) fn collect_fleet_view() -> FleetView {
         federation_view_reason,
         resolve_latency_ms,
     }
+}
+
+/// Resolve one device by concrete `node_id`. Search the caller's own
+/// tenant first, then fall back to the cross-tenant catalogue (`*`)
+/// so `fleet.describe_node` can locate cross-hub peers by the UUID
+/// operators already have in hand.
+pub(crate) fn resolve_device_record(node_id: &str) -> anyhow::Result<Option<ResolvedDeviceRecord>> {
+    let local = local_identity();
+    if !local.paired {
+        return Ok(None);
+    }
+
+    let creds = config::load_credentials()
+        .map_err(|e| anyhow::anyhow!("device credentials are unavailable: {e}"))?;
+    let (bridge, _state) = config::load_and_connect()
+        .map_err(|e| anyhow::anyhow!("local runtime bridge is unavailable: {e}"))?;
+    let caller_uri = crate::uri::device_uri(&creds.tenant_id, &creds.node_id);
+    let invoker = BridgeAbilityInvoker::with_caller_uri(&bridge, caller_uri);
+
+    if let Some(record) = resolve_device_record_with_filter(&invoker, &creds, node_id, None)? {
+        return Ok(Some(record));
+    }
+    resolve_device_record_with_filter(&invoker, &creds, node_id, Some("*".to_string()))
+}
+
+fn resolve_device_record_with_filter(
+    invoker: &BridgeAbilityInvoker<'_>,
+    creds: &config::Credentials,
+    node_id: &str,
+    tenant_filter: Option<String>,
+) -> anyhow::Result<Option<ResolvedDeviceRecord>> {
+    let resolved = advertise::resolve_agents_with_filter(
+        invoker,
+        &creds.tenant_id,
+        &creds.tenant_id,
+        "",
+        true,
+        tenant_filter,
+    )
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "federation.resolve failed against realm {:?}: {e}",
+            creds.tenant_id
+        )
+    })?;
+
+    for agent in resolved {
+        if agent.status != "active" || !is_device_profile_agent(&agent) {
+            continue;
+        }
+        let Some(resolved_node_id) = node_id_from_agent_uri(&agent.uri) else {
+            continue;
+        };
+        if resolved_node_id != node_id {
+            continue;
+        }
+
+        let agent_realm = crate::uri::realm_from_ura(&agent.uri);
+        let is_self = resolved_node_id == creds.node_id && agent_realm == creds.tenant_id;
+        let probe = if is_self {
+            ProbeOutcome {
+                online: true,
+                state: "HEALTHY",
+                probe_status: "local",
+                probe_error: None,
+                latency_ms: None,
+            }
+        } else {
+            probe_remote_device(invoker, &creds.tenant_id, &creds.tenant_id, &agent.uri)
+        };
+
+        return Ok(Some(ResolvedDeviceRecord {
+            node: FleetNodeSnapshot {
+                node_id: resolved_node_id,
+                tenant_id: if agent_realm.is_empty() {
+                    creds.tenant_id.clone()
+                } else {
+                    agent_realm
+                },
+                agent_uri: Some(agent.uri.clone()),
+                is_self,
+                paired: true,
+                hub_endpoint: if is_self && !creds.hub_endpoint.trim().is_empty() {
+                    Some(creds.hub_endpoint.clone())
+                } else {
+                    None
+                },
+                state: probe.state.to_string(),
+                online: probe.online,
+                probe_status: probe.probe_status.to_string(),
+                probe_error: probe.probe_error,
+                latency_ms: probe.latency_ms,
+            },
+            abilities: agent.abilities.clone(),
+        }));
+    }
+
+    Ok(None)
 }
 
 pub(crate) fn node_to_json(node: &FleetNodeSnapshot) -> Value {
@@ -471,5 +575,39 @@ mod tests {
         assert_eq!(value["online"], Value::Bool(false));
         assert_eq!(value["probe_status"], "probe_failed");
         assert_eq!(value["latency_ms"], 123);
+    }
+
+    #[test]
+    fn resolved_device_record_keeps_cross_tenant_realm_and_abilities() {
+        let agent = ResolvedAgent {
+            uri: "easynet:///r/realm-b/device/01DEV".into(),
+            status: "active".into(),
+            host_node_id: None,
+            abilities: vec![
+                json!({"name": "observe.health"}),
+                json!({"name": "shell.run"}),
+            ],
+        };
+        let resolved_node_id = node_id_from_agent_uri(&agent.uri).expect("node id");
+        let realm = crate::uri::realm_from_ura(&agent.uri);
+        let record = ResolvedDeviceRecord {
+            node: FleetNodeSnapshot {
+                node_id: resolved_node_id,
+                tenant_id: realm,
+                agent_uri: Some(agent.uri.clone()),
+                is_self: false,
+                paired: true,
+                hub_endpoint: None,
+                state: "HEALTHY".into(),
+                online: true,
+                probe_status: "reachable".into(),
+                probe_error: None,
+                latency_ms: Some(5),
+            },
+            abilities: agent.abilities.clone(),
+        };
+        assert_eq!(record.node.tenant_id, "realm-b");
+        assert_eq!(record.abilities.len(), 2);
+        assert_eq!(record.abilities[1]["name"], "shell.run");
     }
 }

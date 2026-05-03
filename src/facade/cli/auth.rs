@@ -490,8 +490,33 @@ struct AbilityItem {
 }
 
 pub fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
+    let session = load_session()?
+        .ok_or_else(|| anyhow!("not logged in — run `easynet auth login <email>` first"))?;
     let path = format!("/api/v1/devices/{}/abilities", args.node_id);
-    let resp: AbilityListResp = auth_get_json(&path)?;
+    let url = format!("{}{}", session.hub_url, path);
+    let resp: AbilityListResp = match ureq::get(&url)
+        .timeout(HTTP_TIMEOUT)
+        .set("Authorization", &format!("Bearer {}", session.token))
+        .call()
+    {
+        Ok(resp) => resp.into_json().context("parse response JSON")?,
+        Err(ureq::Error::Status(401, _)) => bail!(
+            "HTTP 401 — token expired or invalid. Run `easynet auth login <email>` to refresh."
+        ),
+        Err(ureq::Error::Status(404, resp)) => {
+            let body = resp.into_string().unwrap_or_default();
+            fallback_device_abilities_from_local_daemon(&args.node_id).map_err(|fallback_err| {
+                anyhow!(
+                    "HTTP 404 from {url}: {body}\nlocal federation fallback failed: {fallback_err}"
+                )
+            })?
+        }
+        Err(ureq::Error::Status(code, resp)) => {
+            let body = resp.into_string().unwrap_or_default();
+            bail!("HTTP {code} from {url}: {body}");
+        }
+        Err(ureq::Error::Transport(e)) => bail!("transport to {url}: {e}"),
+    };
     if args.json {
         println!(
             "{}",
@@ -527,6 +552,50 @@ pub fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+fn fallback_device_abilities_from_local_daemon(node_id: &str) -> anyhow::Result<AbilityListResp> {
+    let node = crate::support::local_invoke::invoke_local_ability(
+        "fleet.describe_node",
+        serde_json::json!({ "node_id": node_id }),
+    )
+    .with_context(|| format!("invoke fleet.describe_node for node {node_id}"))?;
+    let abilities = node
+        .get("abilities")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow!("fleet.describe_node returned no `abilities` array"))?;
+    let items = abilities
+        .iter()
+        .map(ability_item_from_descriptor)
+        .collect::<Vec<_>>();
+    Ok(AbilityListResp { items })
+}
+
+fn ability_item_from_descriptor(value: &serde_json::Value) -> AbilityItem {
+    AbilityItem {
+        name: value
+            .get("name")
+            .or_else(|| value.get("ability_name"))
+            .or_else(|| value.get("tool_name"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        tool_name: value
+            .get("tool_name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        version: value
+            .get("version")
+            .or_else(|| value.get("ability_version"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        state: Some(
+            value
+                .get("state")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("ACTIVE")
+                .to_string(),
+        ),
+    }
 }
 
 #[derive(Debug, Args)]
@@ -851,4 +920,20 @@ pub fn run_events(args: EventsArgs) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ability_item_fallback_maps_federation_descriptor_shape() {
+        let item = ability_item_from_descriptor(&serde_json::json!({
+            "name": "shell.run",
+            "ability_version": "1",
+        }));
+        assert_eq!(item.name.as_deref(), Some("shell.run"));
+        assert_eq!(item.version.as_deref(), Some("1"));
+        assert_eq!(item.state.as_deref(), Some("ACTIVE"));
+    }
 }

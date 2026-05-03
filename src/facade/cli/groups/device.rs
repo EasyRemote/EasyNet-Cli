@@ -117,15 +117,21 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     // whose owner matches the target node id. v1 only knows about
     // the local node — once federation Invoke ships the daemon-side
     // handler will return per-node ability lists.
-    let abilities =
-        match crate::support::local_invoke::invoke_local_ability("easynet.discover", json!({})) {
-            Ok(catalogue) => catalogue
-                .get("abilities")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default(),
-            Err(_) => Vec::new(),
-        };
+    let abilities = node
+        .get("abilities")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_else(|| {
+            match crate::support::local_invoke::invoke_local_ability("easynet.discover", json!({}))
+            {
+                Ok(catalogue) => catalogue
+                    .get("abilities")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default(),
+                Err(_) => Vec::new(),
+            }
+        });
     // Refer to the borrowed slot below as `&node` to keep parity
     // with the legacy variable name; the dereferences are checked.
     let node = &node;

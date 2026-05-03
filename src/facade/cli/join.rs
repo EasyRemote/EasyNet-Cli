@@ -197,6 +197,8 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
     // as the federated_peers auto-wire above.
     let _ = super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds);
 
+    refresh_running_runtime_after_join(&creds);
+
     output::success("Paired successfully");
     output::detail("node_id", &creds.node_id);
     output::detail("hub_endpoint", &creds.hub_endpoint);
@@ -262,6 +264,39 @@ fn resolve_daemon_config_path() -> std::path::PathBuf {
     std::path::Path::new(&head)
         .join(".easynet")
         .join("daemon-config.toml")
+}
+
+/// When the operator paired AFTER starting the local runtime, the
+/// initial boot missed the joined credentials and therefore never ran
+/// the bootstrap/advertise/register sequence that requires realm +
+/// node identity. Refresh that running runtime in place instead of
+/// forcing a restart.
+///
+/// Best-effort by contract:
+/// - no runtime metadata on disk => nothing is running, silently skip
+/// - stale runtime metadata / failed bridge connect => warn, keep join success
+/// - successful connect => reuse the exact same republish helper
+///   `easynet runtime start` already uses so the bootstrap semantics
+///   stay single-sourced
+fn refresh_running_runtime_after_join(creds: &config::Credentials) {
+    let state = match config::load() {
+        Ok(state) => state,
+        Err(_) => return,
+    };
+    match state.connect_bridge() {
+        Ok(bridge) => {
+            output::detail(
+                "runtime",
+                "running runtime detected; refreshing identity + federation advertisement",
+            );
+            super::start::republish_via_federation_best_effort(&bridge, creds);
+        }
+        Err(e) => output::warn(&format!(
+            "paired successfully, but could not refresh the running runtime at {}: {e}. \
+             Restart it with `easynet runtime start` if cross-hub lookups keep failing.",
+            state.endpoint
+        )),
+    }
 }
 
 /// surface; when offline, the caller logs + continues, and the
