@@ -158,6 +158,7 @@ pub(crate) fn resolve_model_with_overrides(
     override_model.or(spec_model).or(entry_model)
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_model(
     spec_model: Option<String>,
     entry_model: Option<String>,
@@ -238,6 +239,7 @@ pub fn send_to_agent(
 /// for a test that happened to use this function without realising;
 /// tests should continue to use `send_to_agent_with_depth` directly so
 /// their bypass is visible at the call site.
+#[cfg(test)]
 pub fn send_external(
     agent_name: &str,
     entry: &AgentEntry,
@@ -247,10 +249,11 @@ pub fn send_external(
     send_to_agent_with_depth(agent_name, entry, prompt, context, None, Some(0), None)
 }
 
-/// Same as `send_external` but lets the caller pin per-call driver
-/// knobs (model, temperature, max_tokens). Used by the chat ability
+/// Pin per-call driver knobs (model, temperature, max_tokens) when
+/// dispatching to a registered agent. Used by the chat ability
 /// handler when the caller passes a `driver` sub-object in their
-/// arguments. `overrides = None` is identical to `send_external`.
+/// arguments. Pass `overrides = None` for the unmodified entry-default
+/// behaviour.
 pub fn send_external_with_overrides(
     agent_name: &str,
     entry: &AgentEntry,

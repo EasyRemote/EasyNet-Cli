@@ -34,7 +34,6 @@ use easynet_axon::dendrite_bridge::DendriteBridge;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::support::bridge_pool::BridgePool;
 
 /// Convert `Duration::as_millis()` (u128) to u64, saturating at u64::MAX.
 #[inline]
@@ -323,6 +322,7 @@ pub enum StepOutcome {
 // ── Public execution result ──
 
 pub struct ExecutionReport {
+    #[allow(dead_code)]
     pub total_elapsed_ms: u64,
     pub steps_completed: usize,
     pub steps_failed: usize,
@@ -540,26 +540,13 @@ impl StepDispatcher for BorrowedBridgeDispatcher<'_> {
 // See `docs/AGENT_IDENTITY.md` invariants 1 and 2.
 
 pub struct AgentAwareDispatcher {
-    pool: Arc<BridgePool>,
     registry: Arc<crate::registry::agents::AgentRegistry>,
 }
 
 impl AgentAwareDispatcher {
-    pub fn new(endpoint: &str, timeout_ms: u64) -> Self {
-        let registry = load_registry_or_warn();
-        let pool = Arc::new(BridgePool::with_adaptive_size(endpoint, timeout_ms));
-        Self {
-            pool,
-            registry: Arc::new(registry),
-        }
-    }
-
-    /// Create a dispatcher with a pre-existing shared pool (for pool reuse across missions).
-    #[allow(dead_code)]
-    pub fn with_pool(pool: Arc<BridgePool>) -> Self {
+    pub fn new(_endpoint: &str, _timeout_ms: u64) -> Self {
         let registry = load_registry_or_warn();
         Self {
-            pool,
             registry: Arc::new(registry),
         }
     }
@@ -615,64 +602,7 @@ impl StepDispatcher for AgentAwareDispatcher {
 
     fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
         Ok(Box::new(AgentAwareDispatcher {
-            pool: Arc::clone(&self.pool),
             registry: Arc::clone(&self.registry),
-        }))
-    }
-}
-
-// ── Pooled Bridge Dispatcher (for MCP server) ──
-//
-// Unlike BorrowedBridgeDispatcher which borrows a single bridge and
-// cannot be cloned for threads, this dispatcher owns an Arc<BridgePool>
-// and supports true parallel dispatch. Used by MCP server's run_mission
-// handler to enable parallel phase execution.
-
-pub struct PooledBridgeDispatcher {
-    pool: Arc<BridgePool>,
-}
-
-impl PooledBridgeDispatcher {
-    #[allow(dead_code)]
-    pub fn new(endpoint: &str, timeout_ms: u64) -> Self {
-        Self {
-            pool: Arc::new(BridgePool::with_adaptive_size(endpoint, timeout_ms)),
-        }
-    }
-
-    /// Create a dispatcher with a pre-existing shared pool (for pool reuse across missions).
-    pub fn with_pool(pool: Arc<BridgePool>) -> Self {
-        Self { pool }
-    }
-}
-
-impl StepDispatcher for PooledBridgeDispatcher {
-    fn dispatch(
-        &self,
-        tenant: &str,
-        target: &IrTarget,
-        ability: &AbilityName,
-        arguments: &Value,
-        timeout_ms: Option<u64>,
-    ) -> Result<Value, EalError> {
-        match target {
-            IrTarget::Device { node_id } => {
-                let _ = (timeout_ms, &self.pool);
-                dispatch_remote_via_forward_invoke(tenant, node_id, ability.as_str(), arguments)
-            }
-            // See note on `BorrowedBridgeDispatcher`: agent target on a
-            // device-only dispatcher is a contract violation.
-            IrTarget::Agent(_) => Err(EalError::Validation(
-                "PooledBridgeDispatcher cannot dispatch to agent targets; \
-                 use AgentAwareDispatcher (e.g. via run_mission_inproc)"
-                    .to_string(),
-            )),
-        }
-    }
-
-    fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
-        Ok(Box::new(PooledBridgeDispatcher {
-            pool: Arc::clone(&self.pool),
         }))
     }
 }
@@ -969,24 +899,6 @@ fn build_agent_prompt(function_name: &str, arguments: &Value) -> String {
 /// Execute a mission using a borrowed bridge (sequential fallback).
 ///
 /// This is the legacy path kept for callers that already hold a bridge.
-/// For parallel execution, prefer `execute_pooled` or `execute_with_endpoint`.
-/// Execute a mission with a pooled bridge dispatcher (parallel-capable, device-only).
-///
-/// Creates a new `PooledBridgeDispatcher` per call. For high-frequency callers
-/// (MCP server), prefer `execute_pooled_shared` with a persistent pool.
-#[allow(dead_code)]
-pub fn execute_pooled(
-    endpoint: &str,
-    tenant: &str,
-    ir: &MissionIr,
-) -> anyhow::Result<ExecutionReport> {
-    let dispatcher = PooledBridgeDispatcher::new(
-        endpoint,
-        crate::support::timeouts::BRIDGE_CONNECT_TIMEOUT_MS,
-    );
-    execute_with_dispatcher(&dispatcher, tenant, ir)
-}
-
 #[allow(dead_code)]
 pub fn execute(
     bridge: &DendriteBridge,
@@ -994,19 +906,6 @@ pub fn execute(
     ir: &MissionIr,
 ) -> anyhow::Result<ExecutionReport> {
     let dispatcher = BorrowedBridgeDispatcher::new(bridge);
-    execute_with_dispatcher(&dispatcher, tenant, ir)
-}
-
-/// Execute a mission reusing a shared BridgePool (amortizes connection cost across missions).
-///
-/// Preferred for high-frequency callers like the MCP server that execute many
-/// missions within a single session.
-pub fn execute_pooled_shared(
-    pool: Arc<BridgePool>,
-    tenant: &str,
-    ir: &MissionIr,
-) -> anyhow::Result<ExecutionReport> {
-    let dispatcher = PooledBridgeDispatcher::with_pool(pool);
     execute_with_dispatcher(&dispatcher, tenant, ir)
 }
 

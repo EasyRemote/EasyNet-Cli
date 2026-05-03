@@ -93,9 +93,10 @@ pub enum MatchMode {
 }
 
 impl Rule {
-    /// Builder convenience — `Rule::prefix("git").any_flags()` /
-    /// `Rule::exact("rm").with_flags(["-f"])`. Tests and
-    /// callers stay readable without boilerplate.
+    /// Builder convenience — `Rule::prefix("git")` /
+    /// `Rule::exact("rm").with_flags(["-f"])`. Test-only today; the
+    /// production rule set is built directly via struct literals.
+    #[cfg(test)]
     pub fn prefix(argv0: impl Into<String>) -> Self {
         Self {
             argv0_prefix: argv0.into(),
@@ -104,6 +105,7 @@ impl Rule {
         }
     }
 
+    #[cfg(test)]
     pub fn exact(argv0: impl Into<String>) -> Self {
         Self {
             argv0_prefix: argv0.into(),
@@ -112,8 +114,8 @@ impl Rule {
         }
     }
 
-    /// Restrict the rule to a specific flag set. Subsequent
-    /// builder calls overwrite the previous value.
+    /// Restrict the rule to a specific flag set.
+    #[cfg(test)]
     pub fn with_flags<I, S>(mut self, flags: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -167,6 +169,7 @@ pub struct RuleSet {
     pub deny: Vec<Rule>,
 }
 
+#[cfg(test)]
 impl RuleSet {
     pub fn new() -> Self {
         Self::default()

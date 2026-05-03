@@ -798,16 +798,6 @@ fn local_daemon_grpc_socket_path() -> std::path::PathBuf {
 }
 
 #[cfg(feature = "axon-pb")]
-fn publish_via_local_daemon_best_effort(
-    tenant_id: &str,
-    caller_uri: &str,
-    plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
-) -> Result<(), String> {
-    let invoker = DirectLocalDaemonAbilityInvoker::new(caller_uri)?;
-    publish_bootstrap_plan_via_invoker(tenant_id, plan, &invoker)
-}
-
-#[cfg(feature = "axon-pb")]
 fn publish_via_local_daemon_best_effort_silent(
     tenant_id: &str,
     caller_uri: &str,
@@ -818,44 +808,12 @@ fn publish_via_local_daemon_best_effort_silent(
 }
 
 #[cfg(not(feature = "axon-pb"))]
-fn publish_via_local_daemon_best_effort(
-    _tenant_id: &str,
-    _caller_uri: &str,
-    _plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
-) -> Result<(), String> {
-    Err("local daemon publish requires the `axon-pb` feature".into())
-}
-
-#[cfg(not(feature = "axon-pb"))]
 fn publish_via_local_daemon_best_effort_silent(
     _tenant_id: &str,
     _caller_uri: &str,
     _plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
 ) -> Result<(), String> {
     Err("local daemon publish requires the `axon-pb` feature".into())
-}
-
-#[cfg(feature = "axon-pb")]
-fn revoke_via_local_daemon_best_effort(
-    tenant_id: &str,
-    caller_uri: &str,
-    realm: &str,
-    agent_uri: &str,
-    reason: &str,
-) -> Result<(), String> {
-    let invoker = DirectLocalDaemonAbilityInvoker::new(caller_uri)?;
-    revoke_agent_via_invoker(&invoker, tenant_id, realm, agent_uri, reason)
-}
-
-#[cfg(not(feature = "axon-pb"))]
-fn revoke_via_local_daemon_best_effort(
-    _tenant_id: &str,
-    _caller_uri: &str,
-    _realm: &str,
-    _agent_uri: &str,
-    _reason: &str,
-) -> Result<(), String> {
-    Err("local daemon revoke requires the `axon-pb` feature".into())
 }
 
 #[cfg(feature = "axon-pb")]
