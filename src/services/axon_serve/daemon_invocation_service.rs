@@ -1860,7 +1860,7 @@ impl DaemonInvocationService {
     /// Mirrors `dispatch_self_targeted_forward_invoke` for the
     /// federation.forward_invoke surface — same idea, different
     /// envelope shape.
-    fn dispatch_self_targeted_invoke_remote(
+    async fn dispatch_self_targeted_invoke_remote(
         &self,
         local_dispatcher: &Arc<crate::runtime::ability_dispatch::AbilityDispatcher>,
         subject_device: &str,
@@ -1896,11 +1896,35 @@ impl DaemonInvocationService {
             subject: None,
         };
 
-        let result_value = local_dispatcher.execute_rpc(target).map_err(|err| {
-            Status::failed_precondition(format!(
-                "<self>.invoke_remote: self-targeted dispatch of ability `{ability}` failed: {err}"
-            ))
-        })?;
+        // execute_rpc is a SYNC call into the LocalAbilityRegistry's
+        // RPC handler. Many real handlers (shell.run, process.exec,
+        // fs.*) internally call `tokio::runtime::Handle::block_on`
+        // to drive their inner async pipeline. Calling block_on
+        // from inside a tokio worker thread panics — that is the
+        // panic we hit at `shell_run_ability.rs:117` when this fn
+        // ran the dispatch directly inside this gRPC service's
+        // tokio task.
+        //
+        // Move the synchronous handler off the tokio worker pool
+        // onto a blocking thread via spawn_blocking. This is the
+        // canonical tokio pattern for "I have sync code that may
+        // do block_on internally" — the blocking pool is sized
+        // separately (default 512), is allowed to call block_on,
+        // and serves exactly this kind of case.
+        let dispatcher_clone = Arc::clone(local_dispatcher);
+        let result_value = tokio::task::spawn_blocking(move || dispatcher_clone.execute_rpc(target))
+            .await
+            .map_err(|join_err| {
+                Status::internal(format!(
+                    "<self>.invoke_remote: self-targeted handler panicked or \
+                     was cancelled: {join_err}"
+                ))
+            })?
+            .map_err(|err| {
+                Status::failed_precondition(format!(
+                    "<self>.invoke_remote: self-targeted dispatch of ability `{ability}` failed: {err}"
+                ))
+            })?;
 
         let payload = serde_json::to_vec(&result_value).map_err(|err| {
             Status::internal(format!(
@@ -2423,12 +2447,14 @@ impl DaemonInvocationService {
             (self.admission.daemon_uri(), self.local_dispatcher.as_ref())
         {
             if subject_device == daemon_uri {
-                return self.dispatch_self_targeted_invoke_remote(
-                    local_dispatcher,
-                    &subject_device,
-                    &ability,
-                    &args,
-                );
+                return self
+                    .dispatch_self_targeted_invoke_remote(
+                        local_dispatcher,
+                        &subject_device,
+                        &ability,
+                        &args,
+                    )
+                    .await;
             }
         }
 

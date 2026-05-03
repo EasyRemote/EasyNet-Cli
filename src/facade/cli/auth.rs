@@ -32,6 +32,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use clap::Args;
 use serde::{Deserialize, Serialize};
 
@@ -353,5 +354,294 @@ pub fn run_pair(args: PairArgs) -> anyhow::Result<()> {
     println!();
     println!("Next:");
     println!("  easynet device join {}", resp.pairing_token);
+    Ok(())
+}
+
+// ── operator-mode HTTP commands ───────────────────────────────
+//
+// These mirror what the frontend's Devices / DeviceDetail pages
+// fetch from /api/v1. They use the JWT cached at ~/.easynet/auth.json
+// — same model as `gh repo list` after `gh auth login`.
+//
+// Why not under `easynet device` (the existing group)?
+// `easynet device list` already exists and talks to the LOCAL
+// daemon UDS via `fleet.list_nodes` (device-mode CLI: "what does
+// THIS device see in its hub federation?"). Operator-mode HTTP
+// is a different lens entirely: "what does the BACKEND know about
+// the realm, viewed as the logged-in user?". Keeping the two
+// surfaces separate avoids overloading verbs that already have a
+// well-known meaning.
+
+fn auth_get_json<T: for<'de> Deserialize<'de>>(path: &str) -> anyhow::Result<T> {
+    let session = load_session()?
+        .ok_or_else(|| anyhow!("not logged in — run `easynet auth login <email>` first"))?;
+    let url = format!("{}{}", session.hub_url, path);
+    let resp = ureq::get(&url)
+        .timeout(HTTP_TIMEOUT)
+        .set("Authorization", &format!("Bearer {}", session.token))
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::Status(401, _) => anyhow!(
+                "HTTP 401 — token expired or invalid. Run `easynet auth login <email>` to refresh."
+            ),
+            ureq::Error::Status(code, resp) => {
+                let body = resp.into_string().unwrap_or_default();
+                anyhow!("HTTP {code} from {url}: {body}")
+            }
+            ureq::Error::Transport(e) => anyhow!("transport to {url}: {e}"),
+        })?;
+    let parsed: T = resp.into_json().context("parse response JSON")?;
+    Ok(parsed)
+}
+
+#[derive(Debug, Args)]
+pub struct DevicesArgs {
+    /// Output as JSON instead of a table.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Deserialize)]
+struct DeviceListResp {
+    items: Vec<DeviceItem>,
+}
+
+#[derive(Deserialize, Debug)]
+struct DeviceItem {
+    node_id: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    os: Option<String>,
+    #[serde(default)]
+    arch: Option<String>,
+    #[serde(default)]
+    realm: Option<String>,
+}
+
+pub fn run_devices(args: DevicesArgs) -> anyhow::Result<()> {
+    let resp: DeviceListResp = auth_get_json("/api/v1/devices")?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "items": resp.items.iter().map(|d| serde_json::json!({
+                "node_id": d.node_id,
+                "display_name": d.display_name,
+                "state": d.state,
+                "os": d.os,
+                "arch": d.arch,
+                "realm": d.realm,
+            })).collect::<Vec<_>>()
+        }))?);
+        return Ok(());
+    }
+    if resp.items.is_empty() {
+        println!("(no devices — `easynet auth pair | xargs easynet device join` to attach one)");
+        return Ok(());
+    }
+    println!("{:<38} {:<10} {:<8} {:<10} {:<24}", "NODE_ID", "STATE", "OS", "ARCH", "DISPLAY_NAME");
+    for d in &resp.items {
+        println!(
+            "{:<38} {:<10} {:<8} {:<10} {:<24}",
+            d.node_id,
+            d.state.as_deref().unwrap_or("-"),
+            d.os.as_deref().unwrap_or("-"),
+            d.arch.as_deref().unwrap_or("-"),
+            d.display_name.as_deref().unwrap_or("-"),
+        );
+    }
+    Ok(())
+}
+
+#[derive(Debug, Args)]
+pub struct AbilitiesArgs {
+    /// Device node_id whose abilities to list.
+    pub node_id: String,
+    /// Output as JSON instead of a table.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Deserialize)]
+struct AbilityListResp {
+    items: Vec<AbilityItem>,
+}
+
+#[derive(Deserialize)]
+struct AbilityItem {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    tool_name: Option<String>,
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+}
+
+pub fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
+    let path = format!("/api/v1/devices/{}/abilities", args.node_id);
+    let resp: AbilityListResp = auth_get_json(&path)?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "items": resp.items.iter().map(|a| serde_json::json!({
+                "name": a.name,
+                "tool_name": a.tool_name,
+                "version": a.version,
+                "state": a.state,
+            })).collect::<Vec<_>>()
+        }))?);
+        return Ok(());
+    }
+    if resp.items.is_empty() {
+        println!("(no abilities advertised by {} — daemon may be offline or no agents joined)", args.node_id);
+        return Ok(());
+    }
+    println!("{:<24} {:<24} {:<10} {:<10}", "NAME", "TOOL", "VERSION", "STATE");
+    for a in &resp.items {
+        println!(
+            "{:<24} {:<24} {:<10} {:<10}",
+            a.name.as_deref().unwrap_or("-"),
+            a.tool_name.as_deref().unwrap_or("-"),
+            a.version.as_deref().unwrap_or("-"),
+            a.state.as_deref().unwrap_or("-"),
+        );
+    }
+    Ok(())
+}
+
+#[derive(Debug, Args)]
+pub struct ExecArgs {
+    /// Device node_id to run the command on.
+    pub node_id: String,
+    /// Shell command line. Wrap in quotes for whole shell strings:
+    ///   easynet auth exec <node> -- "ls /tmp | head -5"
+    /// Or pass tokens after `--`:
+    ///   easynet auth exec <node> -- ls /tmp
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub cmd: Vec<String>,
+    /// Ability tool name to invoke. Default `shell.run`. Override
+    /// to `process.exec` (typed argv) or any other registered tool.
+    #[arg(long, default_value = "shell.run")]
+    pub tool: String,
+    /// Timeout in milliseconds (default 30s).
+    #[arg(long, default_value_t = 30_000)]
+    pub timeout_ms: u32,
+    /// Output as JSON (full backend receipt) instead of stdout / stderr.
+    #[arg(long)]
+    pub json: bool,
+}
+
+pub fn run_exec(args: ExecArgs) -> anyhow::Result<()> {
+    if args.cmd.is_empty() {
+        bail!("no command — usage: easynet auth exec <node_id> -- <cmd> [args ...]");
+    }
+    let session = load_session()?
+        .ok_or_else(|| anyhow!("not logged in — run `easynet auth login <email>` first"))?;
+    // Backend's POST /api/v1/abilities/invoke is what the frontend
+    // uses for ad-hoc exec — `node_id` selects the target device,
+    // `tool_name` picks the ability (shell.run / process.exec /
+    // anything advertised by the device's daemon).
+    let url = format!("{}/api/v1/abilities/invoke", session.hub_url);
+    let arguments = match args.tool.as_str() {
+        // shell.run takes a full command string.
+        "shell.run" | "process.exec" => {
+            serde_json::json!({"command": args.cmd.join(" ")})
+        }
+        // Anything else: pass cmd tokens as an argv array; the
+        // ability handler can interpret as it sees fit.
+        _ => serde_json::json!({"argv": args.cmd}),
+    };
+    let body = serde_json::json!({
+        "tool_name": args.tool,
+        "node_id": args.node_id,
+        "arguments": arguments,
+        "timeout_ms": args.timeout_ms,
+    });
+    let resp: serde_json::Value = ureq::post(&url)
+        .timeout(Duration::from_millis(args.timeout_ms as u64 + 5_000))
+        .set("Authorization", &format!("Bearer {}", session.token))
+        .set("Content-Type", "application/json")
+        .send_json(body)
+        .map_err(|e| match e {
+            ureq::Error::Status(401, _) => anyhow!(
+                "HTTP 401 — token expired. Run `easynet auth login <email>` to refresh."
+            ),
+            ureq::Error::Status(code, resp) => {
+                let body = resp.into_string().unwrap_or_default();
+                anyhow!("HTTP {code} from {url}: {body}")
+            }
+            ureq::Error::Transport(e) => anyhow!("transport to {url}: {e}"),
+        })?
+        .into_json()
+        .context("parse invoke response")?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&resp)?);
+        return Ok(());
+    }
+    // Human view: the shell.run / process.exec contract returns
+    // {stdout, stderr, exit_code} inside `result`. Other tools
+    // return whatever shape they want; for them, fall back to
+    // pretty JSON since we have no contract.
+    let result = resp.get("result").cloned().unwrap_or(serde_json::Value::Null);
+    let is_error = resp
+        .get("is_error")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    // shell.run / process.exec encode stdout/stderr as base64 in
+    // their receipt body so binary output round-trips through JSON
+    // safely. The CLI is a TTY consumer, so decode back to bytes
+    // and stream raw — same shape the operator sees from a local
+    // shell. Fall back to printing the raw string when the field
+    // is something the encoder didn't base64 (best-effort: real
+    // shell.run always emits b64).
+    let stdout_raw = result
+        .get("stdout")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let stderr_raw = result
+        .get("stderr")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let stdout_bytes = B64
+        .decode(stdout_raw.as_bytes())
+        .unwrap_or_else(|_| stdout_raw.as_bytes().to_vec());
+    let stderr_bytes = B64
+        .decode(stderr_raw.as_bytes())
+        .unwrap_or_else(|_| stderr_raw.as_bytes().to_vec());
+    let stdout = String::from_utf8_lossy(&stdout_bytes);
+    let stderr = String::from_utf8_lossy(&stderr_bytes);
+    let exit_code = result.get("exit_code").and_then(|v| v.as_i64());
+
+    if !stdout.is_empty() {
+        print!("{stdout}");
+        if !stdout.ends_with('\n') {
+            println!();
+        }
+    }
+    if !stderr.is_empty() {
+        eprint!("{stderr}");
+        if !stderr.ends_with('\n') {
+            eprintln!();
+        }
+    }
+    if stdout.is_empty() && stderr.is_empty() && !result.is_null() {
+        // Tool's payload doesn't follow shell.run contract; print pretty JSON.
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    }
+    if is_error {
+        if let Some(err_obj) = resp.get("error") {
+            eprintln!(
+                "ability error: {}",
+                serde_json::to_string(err_obj).unwrap_or_default()
+            );
+        }
+    }
+    if let Some(code) = exit_code {
+        if code != 0 {
+            std::process::exit(code as i32);
+        }
+    }
     Ok(())
 }

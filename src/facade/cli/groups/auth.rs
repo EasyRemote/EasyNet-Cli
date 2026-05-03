@@ -47,6 +47,27 @@ pub enum AuthAction {
     ///
     ///   easynet auth pair --quiet | xargs easynet device join
     Pair(auth::PairArgs),
+
+    /// List devices visible to the logged-in user via the backend
+    /// HTTP API (mirrors the frontend's Devices page).
+    ///
+    /// Different from `easynet device list`: that talks to THIS
+    /// host's daemon UDS to ask "what does this device see in
+    /// its hub federation?". `easynet auth devices` talks to the
+    /// backend HTTP API to ask "what does the realm hub know
+    /// about devices owned by this user?".
+    Devices(auth::DevicesArgs),
+
+    /// List a device's advertised abilities via the backend
+    /// HTTP API (mirrors the frontend's DeviceDetail abilities
+    /// list). The device must be ONLINE for non-empty results.
+    Abilities(auth::AbilitiesArgs),
+
+    /// Run a shell command on a device via the backend HTTP API
+    /// (same surface frontend uses for one-shot exec):
+    ///
+    ///   easynet auth exec <node_id> -- ls /
+    Exec(auth::ExecArgs),
 }
 
 pub fn dispatch(args: AuthArgs) -> anyhow::Result<()> {
@@ -55,5 +76,8 @@ pub fn dispatch(args: AuthArgs) -> anyhow::Result<()> {
         AuthAction::Logout(a) => auth::run_logout(a),
         AuthAction::Whoami(a) => auth::run_whoami(a),
         AuthAction::Pair(a) => auth::run_pair(a),
+        AuthAction::Devices(a) => auth::run_devices(a),
+        AuthAction::Abilities(a) => auth::run_abilities(a),
+        AuthAction::Exec(a) => auth::run_exec(a),
     }
 }
