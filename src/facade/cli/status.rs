@@ -2,11 +2,13 @@
 // =======================================
 //
 // File: src/facade/cli/status.rs
-// Description: Hub connection info + fleet summary. Per the
-//              ability-only ontology this command sources its
-//              data from `fleet.list_nodes` and `easynet.discover`
-//              — the same ability surfaces every other CLI
-//              command uses. No direct bridge calls.
+// Description: Hub connection info + fleet summary. Joint-plan
+//              unified path: cross-device enumeration goes through
+//              `federation.discover` (the same surface
+//              `easynet device list` uses); ability count goes
+//              through `easynet.discover`. No more
+//              `fleet.list_nodes` — that handler is on the phase 4
+//              cull list.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -16,7 +18,7 @@ use serde_json::{json, Value};
 
 use crate::persistence::config;
 use crate::support::local_invoke::invoke_local_ability;
-use crate::support::{node, output};
+use crate::support::output;
 
 #[derive(Debug, Args)]
 pub struct StatusArgs {}
@@ -58,36 +60,21 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
         }
     }
 
-    // Fleet view — go through fleet.list_nodes (the canonical
-    // ability surface) so the daemon's federation_view metadata
-    // tells us whether the count is local-only or full.
-    let nodes_envelope = match invoke_local_ability("fleet.list_nodes", serde_json::json!({})) {
-        Ok(v) => v,
-        Err(e) => {
-            output::info(&format!("Fleet: cannot query (`{e}`)"));
-            return Ok(());
-        }
-    };
-    let nodes = nodes_envelope
-        .get("nodes")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let online = nodes.iter().filter(|n| node::is_online(n)).count();
-    let offline = nodes.len() - online;
+    // Fleet view — go through `federation.discover` (the joint-plan
+    // unified path the rest of the CLI uses). DirectoryEntries land
+    // with a `status` field (`active` / `stale` / `draining`); we
+    // count `active` as online so the summary line matches what
+    // `easynet device list` shows.
+    let entries = fetch_directory_entries();
+    let total = entries.len();
+    let online = entries
+        .iter()
+        .filter(|e| {
+            e.get("status").and_then(Value::as_str) == Some("active")
+        })
+        .count();
+    let offline = total.saturating_sub(online);
     output::info(&format!("Nodes: {online} online, {offline} offline"));
-    if let Some(view) = nodes_envelope
-        .get("federation_view")
-        .and_then(Value::as_str)
-    {
-        if view == "local_only" {
-            let reason = nodes_envelope
-                .get("federation_view_reason")
-                .and_then(Value::as_str)
-                .unwrap_or("only the local daemon is visible from this runtime");
-            output::info(&format!("Federation: local-only view ({reason})"));
-        }
-    }
 
     // Ability count — go through easynet.discover (one call,
     // returns the full local catalogue). Cheaper than the legacy
@@ -107,4 +94,26 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
         Err(e) => output::info(&format!("Abilities: cannot query (`{e}`)")),
     }
     Ok(())
+}
+
+/// Pull the federated directory snapshot from the local daemon.
+/// Best-effort: a transport / parse failure surfaces an empty list
+/// + an info line so the rest of the status output still renders
+/// (the operator already saw "daemon up" via `observe.health`
+/// above; whether any peers are advertised is a softer signal).
+#[cfg(feature = "axon-pb")]
+fn fetch_directory_entries() -> Vec<Value> {
+    match crate::support::federation_invoke::invoke_federation_discover(None, None) {
+        Ok(entries) => entries,
+        Err(e) => {
+            output::info(&format!("Fleet: cannot query federation.discover (`{e}`)"));
+            Vec::new()
+        }
+    }
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn fetch_directory_entries() -> Vec<Value> {
+    output::info("Fleet: federation.discover requires the `axon-pb` feature");
+    Vec::new()
 }
