@@ -690,16 +690,39 @@ pub fn run_agents(args: AgentsArgs) -> anyhow::Result<()> {
         println!("(no agents — daemon may be offline, or no hosted agents joined)");
         return Ok(());
     }
-    println!("{:<46} {:<24} {:<10}", "URI", "DISPLAY_NAME", "STATUS");
+    // Backend's `/api/v1/agents` shape (listAgentsLogic.go) is
+    // {agent_id, display_name, node_id, tags, skills:[...]} — no
+    // top-level `uri` or `status` fields. The pre-fix renderer
+    // looked for `uri` / `status` and printed `-` for every row,
+    // which made every agent look offline / unidentified even when
+    // the response carried real data. Render the device that hosts
+    // each agent (NODE_ID) and the skill count so the operator
+    // sees both identity and "what can this agent do".
+    println!(
+        "{:<60} {:<28} {:<38} {:>6}",
+        "AGENT_ID", "DISPLAY_NAME", "NODE_ID", "SKILLS"
+    );
     for a in &resp.items {
-        let uri = a.get("uri").and_then(|v| v.as_str()).unwrap_or("-");
+        let agent_id = a
+            .get("agent_id")
+            .or_else(|| a.get("uri"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("-");
         let name = a
             .get("display_name")
             .or_else(|| a.get("name"))
             .and_then(|v| v.as_str())
             .unwrap_or("-");
-        let status = a.get("status").and_then(|v| v.as_str()).unwrap_or("-");
-        println!("{:<46} {:<24} {:<10}", uri, name, status);
+        let node_id = a.get("node_id").and_then(|v| v.as_str()).unwrap_or("-");
+        let skills = a
+            .get("skills")
+            .and_then(|v| v.as_array())
+            .map(|s| s.len())
+            .unwrap_or(0);
+        println!(
+            "{:<60} {:<28} {:<38} {:>6}",
+            agent_id, name, node_id, skills
+        );
     }
     Ok(())
 }
