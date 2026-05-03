@@ -93,6 +93,19 @@ use crate::services::presence_registry::PresenceRegistry;
 use crate::services::realm_trust_anchor::{RealmTrustAnchor, DEFAULT_REALM_TRUST_PATH};
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
 
+/// Maximum decoded gRPC message size for InvocationServer/Client on
+/// both directions. tonic's default cap is 4 MiB which aborted
+/// `<self>.session` the moment any frame envelope grew past it (real
+/// trigger: file-transfer uploads ≥ 1 MB whose accumulated down
+/// frames cross 4 MiB). 1 GiB is generous enough that legitimate
+/// large abilities (file_transfer, screen.snapshot, mission output)
+/// fit, while still bounded so a malformed counterparty can't OOM
+/// the daemon. Exposed `pub` because the **client** side
+/// (`session_initiator`, `invoke_remote_initiator`) must apply the
+/// same cap as the server side; without that the asymmetry triggers
+/// `OutOfRange: decoded message length too large` mid-stream.
+pub const MAX_INVOCATION_GRPC_MESSAGE_BYTES: usize = 1 << 30;
+
 /// Bring the RFC-003 transport plane online as a sidecar to the
 /// existing easynet-daemon process.
 ///
@@ -137,6 +150,8 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     let trust_anchor_cell = SharedTrustAnchor::new(Arc::new(trust_anchor));
     let presence = Arc::new(PresenceRegistry::new());
     let pending = Arc::new(PendingDispatchMap::new());
+    let pending_stream =
+        Arc::new(crate::services::pending_dispatch::PendingStreamDispatchMap::new());
 
     // Demo-only presence seed (cfg-gated). Production binaries
     // built without `--features demo-fixture` cannot honour the
@@ -178,8 +193,9 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     // itself is the directory-of-record. Device-only.
     if matches!(config.mode(), DaemonMode::Device) {
         if let Some(uri) = daemon_uri.as_ref() {
-            let (noop_tx, mut noop_rx) =
-                tokio::sync::mpsc::channel(crate::services::presence_registry::DISPATCH_CHANNEL_CAPACITY);
+            let (noop_tx, mut noop_rx) = tokio::sync::mpsc::channel(
+                crate::services::presence_registry::DISPATCH_CHANNEL_CAPACITY,
+            );
             // Drain task: holds the receiver alive for the lifetime
             // of the daemon process. Without this, the receiver
             // gets dropped when the seeding scope ends and the
@@ -274,6 +290,7 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     );
     let mut service = DaemonInvocationService::new(Arc::clone(&presence), admission)
         .with_pending(Arc::clone(&pending))
+        .with_pending_stream(Arc::clone(&pending_stream))
         .with_session_realm(config.realm().to_string())
         .with_register_pubkey(
             config.realm().to_string(),
@@ -290,6 +307,12 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
         // 7/9 hole at line 27/32/42/455/497 of
         // `daemon_invocation_service.rs`.
         .with_local_dispatcher(Arc::clone(&dispatcher));
+
+    if let Ok(seed) = crate::services::axon_serve::daemon_invocation_service::read_hub_identity_seed(
+        config.realm(),
+    ) {
+        service = service.with_hub_signing_seed(seed);
+    }
 
     // PR-N1 commit 6/N (boot wiring) + commit 9/N (SIGHUP-aware
     // trust anchor) + commit 10/N (SHIGHUP-aware federated_peers)
@@ -591,7 +614,11 @@ fn spawn_uds_listener(
             .http2_keepalive_interval(Some(Duration::from_secs(5)))
             .http2_keepalive_timeout(Some(Duration::from_secs(10)))
             .tcp_keepalive(Some(Duration::from_secs(15)))
-            .add_service(InvocationServer::new(service))
+            .add_service(
+                InvocationServer::new(service)
+                    .max_decoding_message_size(MAX_INVOCATION_GRPC_MESSAGE_BYTES)
+                    .max_encoding_message_size(MAX_INVOCATION_GRPC_MESSAGE_BYTES),
+            )
             .serve_with_incoming(incoming)
             .await;
         if let Err(err) = result {
@@ -673,7 +700,11 @@ fn spawn_tcp_tls_listener(
 
     tokio::spawn(async move {
         let result = builder
-            .add_service(InvocationServer::new(service))
+            .add_service(
+                InvocationServer::new(service)
+                    .max_decoding_message_size(MAX_INVOCATION_GRPC_MESSAGE_BYTES)
+                    .max_encoding_message_size(MAX_INVOCATION_GRPC_MESSAGE_BYTES),
+            )
             .serve(listen_tcp)
             .await;
         if let Err(err) = result {
@@ -792,7 +823,10 @@ fn try_load_daemon_seed_from_keyring(self_uri: &str) -> Option<[u8; 32]> {
     let path = if let Ok(p) = std::env::var("EASYNET_KEYRING_VAULT_PATH") {
         std::path::PathBuf::from(p)
     } else {
-        expand_home(&format!("~/{}", crate::services::keyring::DEFAULT_VAULT_REL))
+        expand_home(&format!(
+            "~/{}",
+            crate::services::keyring::DEFAULT_VAULT_REL
+        ))
     };
     if !path.exists() {
         return None;
@@ -1364,11 +1398,7 @@ mod tests {
         let source = MasterKeySource::Explicit(pass.to_string());
         let mut vault = Vault::init(&vault_path, &source).expect("init vault");
         vault
-            .put(
-                primary,
-                vec![hub_overlay.to_string()],
-                hex::encode(seed),
-            )
+            .put(primary, vec![hub_overlay.to_string()], hex::encode(seed))
             .expect("put");
         vault.seal().expect("seal");
 
@@ -1388,7 +1418,10 @@ mod tests {
 
         assert_eq!(identity.caller_uri, primary);
         let got = identity.signing_seed.expect("seed");
-        assert_eq!(got, seed, "daemon must use the vault's seed, not the deterministic derive");
+        assert_eq!(
+            got, seed,
+            "daemon must use the vault's seed, not the deterministic derive"
+        );
 
         // Sanity: the resulting keypair is the SAME one as what the
         // backend (Phase 3D Go reader) will pull from this vault

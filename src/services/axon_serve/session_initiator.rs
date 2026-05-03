@@ -451,7 +451,21 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
             source: err,
         })?;
 
-    let mut client = InvocationClient::new(channel);
+    // Bump client-side gRPC message limits to match the server side
+    // (`MAX_INVOCATION_GRPC_MESSAGE_BYTES` = 1 GiB). The tonic-default
+    // 4 MiB decoder cap aborted `<self>.session` mid-stream the moment
+    // a single down-frame envelope exceeded ~4 MiB — the symptom was
+    // `OutOfRange: decoded message length too large` on file-transfer
+    // 1 MB+ uploads, where backend's 64 KiB chunks accumulate into
+    // larger framed payloads on the down direction. Server side
+    // already configures both directions; the client side must too.
+    let mut client = InvocationClient::new(channel)
+        .max_decoding_message_size(
+            crate::services::axon_serve::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
+        )
+        .max_encoding_message_size(
+            crate::services::axon_serve::boot::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
+        );
 
     // Membership prelude (URA v4.1.4 dev unblock): axon-runtime hub
     // returns `AXON_MEMBERSHIP_REQUIRED` for any caller whose URI is
@@ -466,9 +480,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     // authoritative health gate — if join didn't take, the bidi
     // still surfaces the underlying error and the supervisor's
     // reconnect loop retries everything.
-    eprintln!(
-        "[session] sending federation.join prelude as {caller_uri} against {hub_endpoint}"
-    );
+    eprintln!("[session] sending federation.join prelude as {caller_uri} against {hub_endpoint}");
     match send_federation_join_prelude(&mut client, &caller_uri).await {
         Ok(()) => eprintln!("[session] federation.join prelude OK; proceeding to <self>.session"),
         Err(err) => eprintln!(
@@ -745,9 +757,8 @@ async fn send_federation_join_prelude(
         "canonical_agent_uri": caller_uri,
         "realm": realm,
     });
-    let arguments = serde_json::to_vec(&body).map_err(|e| {
-        tonic::Status::internal(format!("federation.join prelude serialize: {e}"))
-    })?;
+    let arguments = serde_json::to_vec(&body)
+        .map_err(|e| tonic::Status::internal(format!("federation.join prelude serialize: {e}")))?;
 
     let request = InvokeRequest {
         envelope: Some(Envelope {
@@ -1352,7 +1363,7 @@ mod tests {
             None,
             None,
             dispatcher,
-            None, // PR-N6 C4: no escalation outbox in this test
+            None,       // PR-N6 C4: no escalation outbox in this test
             Vec::new(), // ability_catalog: empty in tests
             cancel_rx,
         ));
