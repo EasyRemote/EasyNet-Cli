@@ -30,6 +30,14 @@ pub const DEVICE_PROFILE_ABILITY_PREFIXES: &[&str] = &[
     "discuss.",
     "meta.",
     "admin.",
+    // device.* — joint-plan unified-path replacement for the
+    // self-arm of fleet.describe_node. Per the URA `device` role
+    // canonicalisation, ability names follow the noun-verb shape:
+    // `device.describe` describes "this device". Cross-device
+    // routing is the caller's job (forward_invoke against the
+    // target device URA), so the ability namespace lives on the
+    // device profile.
+    "device.",
     // AXIOM Tier 2.5 Baseline Locomotion Profile members. Every
     // host-embodied agent claiming `baseline-locomotion-v1`
     // exposes these via the device profile, so meta.list_abilities
@@ -133,6 +141,8 @@ mod tests {
         assert!(owns("a2a.bridge.list_skills"));
         assert!(owns("a2a.bridge.send_task"));
         assert!(owns("a2a.client.send_task"));
+        // Joint-plan device.* unified-path namespace.
+        assert!(owns("device.describe"));
     }
 
     #[test]

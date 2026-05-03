@@ -82,6 +82,12 @@ pub mod file_transfer_ability;
 pub mod fleet_lifecycle_ability;
 pub mod fleet_list_agents_ability;
 pub mod fleet_ops_ability;
+/// `device.describe` — unified-path replacement for the
+/// self-arm of `fleet.describe_node`. Routing is the caller's
+/// job (forward_invoke against the target device URA); this
+/// ability only describes "this device". See
+/// `device_describe_ability` module preamble.
+pub mod device_describe_ability;
 /// AXIOM §"Tier 2.5" Baseline Locomotion Profile, filesystem
 /// half. Three abilities (`fs.read`, `fs.write`, `fs.list`)
 /// published by every host-embodied agent claiming the
@@ -347,6 +353,14 @@ pub fn build_registry_with_services(
     // register_self, deregister_self). These are the canonical
     // ability surfaces backing the CLI's device + ability subcommands.
     fleet_ops_ability::register(&mut reg);
+    // device.describe — unified-path replacement for the
+    // self-arm of fleet.describe_node. CLI cuts over to
+    // forward_invoke("device.describe", target=<device-URA>);
+    // each daemon describes itself, so cross-realm addressing
+    // is the caller's job (routing through forward_invoke), not
+    // the ability's. fleet.describe_node stays registered until
+    // the legacy-cull phase to keep the rolling window.
+    device_describe_ability::register(&mut reg);
     // voice.* call signaling abilities — `easynet call …`
     // subcommand surface routes through these via the same
     // ability-only invocation path every other CLI surface uses.
@@ -798,6 +812,7 @@ pub fn description_for(name: &str) -> &'static str {
         "fleet.stop_agent" => fleet_lifecycle_ability::stop_agent_description(),
         "fleet.list_nodes" => fleet_ops_ability::list_nodes_description(),
         "fleet.describe_node" => fleet_ops_ability::describe_node_description(),
+        "device.describe" => device_describe_ability::description(),
         "fleet.remove_node" => fleet_ops_ability::remove_node_description(),
         "fleet.deploy_ability" => fleet_ops_ability::deploy_ability_description(),
         "fleet.uninstall_ability" => fleet_ops_ability::uninstall_ability_description(),
@@ -907,6 +922,7 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "fleet.stop_agent" => fleet_lifecycle_ability::stop_agent_input_schema(),
         "fleet.list_nodes" => fleet_ops_ability::list_nodes_input_schema(),
         "fleet.describe_node" => fleet_ops_ability::describe_node_input_schema(),
+        "device.describe" => device_describe_ability::input_schema(),
         "fleet.remove_node" => fleet_ops_ability::remove_node_input_schema(),
         "fleet.deploy_ability" => fleet_ops_ability::deploy_ability_input_schema(),
         "fleet.uninstall_ability" => fleet_ops_ability::uninstall_ability_input_schema(),
@@ -1055,6 +1071,7 @@ mod tests {
             // mutate state — Operational unambiguous.
             | "fleet.list_nodes"
             | "fleet.describe_node"
+            | "device.describe"
             | "fleet.remove_node"
             | "fleet.deploy_ability"
             | "fleet.uninstall_ability"
