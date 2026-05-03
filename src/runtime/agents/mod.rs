@@ -141,6 +141,12 @@ pub mod network_health_ability;
 /// keeping a single ability-only path for both EAL programs and
 /// the operator CLI.
 pub mod orchestration_ability;
+/// RFC-006-B v0.6 — Pages reference system. The first reference
+/// realisation of the Resource Execution Model: publishing a
+/// folder of static bytes as a website. Owns the
+/// `<user>.pages.{publish,unpublish,list,get}` and
+/// `<user>.<project_id>.page.fetch` ability families.
+pub mod pages;
 pub mod permission_ability;
 pub mod ping;
 pub mod policy_ability;
@@ -403,6 +409,30 @@ pub fn build_registry_with_services(
         loaders,
         Arc::clone(&local_registry_handle),
     );
+    // RFC-006-B v0.6 — Pages reference system. Chained AFTER
+    // chat_ability so its fallback resolver is consulted FIRST
+    // (chain_rpc_fallback prepends). The fallback handles
+    // `<user>.pages.{publish,unpublish,list,get}` and
+    // `<user>.<project>.page.fetch`. The default user identity is
+    // sourced from the daemon's published self-identity; for the
+    // MVP we accept the env var `EASYNET_PAGES_USER` so the demo
+    // and tests can pin a deterministic user without reaching
+    // into the keyring resolver. Listener port comes from
+    // `EASYNET_PAGES_PORT` (default 8787).
+    {
+        let user = std::env::var("EASYNET_PAGES_USER")
+            .unwrap_or_else(|_| "self".to_string());
+        let realm = std::env::var("EASYNET_PAGES_REALM")
+            .unwrap_or_else(|_| crate::uri::REALM_EASYNET.to_string());
+        let listener_port = std::env::var("EASYNET_PAGES_PORT")
+            .ok()
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(8787);
+        pages::register(
+            &mut reg,
+            pages::PagesConfig { user, realm, listener_port },
+        );
+    }
     skill_ability::register(&mut reg);
     skill_install_ability::register(&mut reg);
     // ability.publish + ability.unpublish — root meta-abilities. See

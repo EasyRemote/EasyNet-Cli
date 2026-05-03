@@ -246,6 +246,21 @@ thiserror = "1"
 tree-sitter = "0.25"
 tree-sitter-bash = "0.25"
 
+# RFC-006-B v0.6 / Pages reference system — sandbox + state map.
+#  - rustix with `fs` feature: kernel-enforced read sandbox for
+#    `<user>.<project>.page.fetch`. Linux uses `openat2(2)` with
+#    `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS` so path
+#    resolution cannot leave the published folder no matter what `..` or
+#    symlink games an attacker plays. macOS falls back to realpath+prefix
+#    plus O_NOFOLLOW (acknowledged weaker; production targets Linux). v0.6
+#    INV-3 (Deterministic Projection) hinges on this sandbox.
+rustix = { version = "0.38", features = ["fs"] }
+# once_cell::sync::Lazy backs the process-wide PUBLISHED_PROJECTS DashMap
+# in the pages reference system. Already transitively present via tonic;
+# pinned here so the daemon's surface use is documented (mirrors the
+# tokio-stream / tower precedent above).
+once_cell = "1"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

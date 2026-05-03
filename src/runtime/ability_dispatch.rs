@@ -418,6 +418,29 @@ impl LocalAbilityRegistry {
         self.rpc_fallback = Some(resolver);
     }
 
+    /// Chain a new fallback resolver in front of any existing one.
+    /// The new resolver is consulted first; on its `None`, the
+    /// previously-installed resolver (if any) is consulted. Order
+    /// of registration therefore matters at boot — the LAST chained
+    /// resolver wins on competing patterns. Used by reference
+    /// systems (e.g. RFC-006-B Pages) that synthesise per-instance
+    /// abilities at lookup time and must coexist with the
+    /// chat-style `<agent>.<verb>` resolver.
+    pub fn chain_rpc_fallback(&mut self, resolver: LocalFallbackResolver) {
+        match self.rpc_fallback.take() {
+            None => self.rpc_fallback = Some(resolver),
+            Some(prior) => {
+                let chained: LocalFallbackResolver = Arc::new(move |name: &str| {
+                    if let Some(h) = resolver(name) {
+                        return Some(h);
+                    }
+                    prior(name)
+                });
+                self.rpc_fallback = Some(chained);
+            }
+        }
+    }
+
     /// Returns Some when a stream handler is registered for `ability`.
     pub fn get_stream(&self, ability: &str) -> Option<&LocalStreamHandler> {
         self.stream.get(ability)
