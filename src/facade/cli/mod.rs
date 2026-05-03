@@ -125,6 +125,10 @@ pub(crate) mod join;
 pub(crate) mod mcp_install;
 pub(crate) mod mcp_server;
 pub(crate) mod mission_runs;
+/// RFC-006-B v0.6 — `easynet pages` ergonomic wrapper around
+/// `<user>.pages.{publish,unpublish,list,get}` and the
+/// `<user>.<project_id>.page.fetch` family.
+pub(crate) mod pages;
 pub(crate) mod reset;
 pub(crate) mod skill;
 pub(crate) mod skill_install;
@@ -189,6 +193,12 @@ pub enum Command {
     /// owning agent can wrap as an ability; never directly invocable.
     #[command(display_order = 6)]
     Skill(skill::SkillArgs),
+
+    /// Publish a folder of static bytes as a website (RFC-006-B v0.6).
+    /// `easynet pages create papers --folder <path>` mints a project
+    /// resource and serves it at `papers.<user>.pages.localhost:<port>/`.
+    #[command(display_order = 6)]
+    Pages(pages::PagesArgs),
 
     // ── Infrastructure ───────────────────────────────────────────────────
     /// Manage the local Axon runtime (start, stop, status).
@@ -261,6 +271,7 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         Command::Device(args) => groups::device::run(args),
         Command::Mission(args) => groups::mission::run(args),
         Command::Skill(args) => skill::run(args),
+        Command::Pages(args) => pages::run(args),
         Command::Runtime(args) => groups::runtime::run(args),
         Command::Mcp(args) => groups::mcp::run(args),
         Command::Federation(args) => groups::federation::run(args),

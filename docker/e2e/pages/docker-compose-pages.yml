@@ -1,0 +1,47 @@
+# EasyNet-Cli — Pages reference system, Matrix C topology
+# =======================================================
+#
+# File: docker/e2e/pages/docker-compose-pages.yml
+# Description: one-host topology — single daemon container hosting
+#              the Pages listener. The harness inside the same
+#              container exercises the full L1+L2+L3 matrix
+#              (D1-D10).
+#
+# Usage:
+#   # 1. Build the binaries on the host (musl recommended):
+#   cargo build -p easynet --release --features axon-pb \
+#       --target x86_64-unknown-linux-musl \
+#       --bin easynet --bin easynet-daemon
+#
+#   # 2. Build the image:
+#   docker compose -f docker/e2e/pages/docker-compose-pages.yml build
+#
+#   # 3. Run + harness:
+#   docker compose -f docker/e2e/pages/docker-compose-pages.yml up -d
+#   docker compose -f docker/e2e/pages/docker-compose-pages.yml \
+#       exec daemon /opt/harness/pages-mvp.sh
+#
+#   # 4. Tear down (or KEEP_DOCKER_E2E=1 to debug):
+#   docker compose -f docker/e2e/pages/docker-compose-pages.yml down
+#
+# Phase 2 adds a second daemon container + a Go-backend hub
+# container; Phase 3 adds content-addressed federation.
+
+services:
+  daemon:
+    image: easynet-pages-e2e
+    build:
+      context: ../../..
+      dockerfile: docker/e2e/pages/Dockerfile.pages
+      args:
+        BIN_DIR: target/x86_64-unknown-linux-musl/release
+    environment:
+      EASYNET_PAGES_PORT: "8787"
+      EASYNET_PAGES_USER: "alice"
+      EASYNET_PAGES_REALM: "easynet.run"
+    ports:
+      - "8787:8787"
+    # /tmp inside the daemon container is the harness's scratch
+    # space. No volumes mounted from the host on purpose — the
+    # whole point of Matrix C is testing the binary against the
+    # container's own kernel.
