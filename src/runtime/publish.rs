@@ -506,27 +506,26 @@ fn derive_subject_public_key_b64(tenant_id: &str, subject_id: &str) -> String {
     pk_b64
 }
 
-/// Extract the node id segment from a canonical device URA.
-/// Accepts both the legacy `easynet:///r/<tenant>/agent/<node>` shape
-/// and the URA-conformant `easynet:///r/<scope>/reg/agent.<node>`
-/// shape. Returns None when the URA does not match either form.
+/// Extract the host device node id from a canonical host-device URA.
+///
+/// Strict v4.1.5 contract per AXON-RFC-001 §A.URA: the host MUST be
+/// a `device/<uuid>` URA. Legacy shapes (`agent/<node>` device-
+/// profile and `reg/agent.<node>` / `reg/device.<node>` reg-forms)
+/// are rejected — `crate::uri::parse_ura` is the single source of
+/// truth and we do not Postel-permissively accept old shapes. Stuck
+/// legacy devices `device reset && rejoin` to mint a v4.1.5 URI.
+///
+/// Returns `Some(device_id)` only when `parse_ura` confirms
+/// `URAKind::Device`. Anything else — malformed URIs, non-device
+/// kinds (user/agent/ability/hub/resource), and the legacy
+/// `agent/<node>` device-profile fallback — returns `None`.
 fn host_node_id_from_uri(uri: &str) -> Option<String> {
-    if let Some(rest) = uri.strip_prefix("easynet:///r/") {
-        // Drop optional query-string suffix.
-        let rest = rest.split('?').next().unwrap_or(rest);
-        let segments: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
-        // Pattern A: <tenant>/agent/<node> (legacy 3-segment)
-        if segments.len() >= 3 && segments[1] == "agent" {
-            return Some(segments[2].to_string());
-        }
-        // Pattern B: <scope>/reg/agent.<node> (URA-conformant)
-        if segments.len() >= 3 && segments[1] == "reg" {
-            if let Some(node) = segments[2].strip_prefix("agent.") {
-                return Some(node.to_string());
-            }
-        }
+    let parsed = crate::uri::parse_ura(uri).ok()?;
+    if parsed.kind == crate::uri::URAKind::Device && !parsed.device_id.is_empty() {
+        Some(parsed.device_id)
+    } else {
+        None
     }
-    None
 }
 
 /// URI v2 device-keypair wrapper. Returns `(seed, pk_b64)` for the
@@ -833,6 +832,51 @@ mod tests {
             }
             assert!(o.result.is_ok(), "unexpected Err outcome: {o:?}");
         }
+    }
+
+    #[test]
+    fn host_node_id_from_uri_accepts_only_v4_1_5_device_shape() {
+        // v4.1.5 device URA — accepted.
+        assert_eq!(
+            host_node_id_from_uri("easynet:///r/acme/device/01DEV"),
+            Some("01DEV".into())
+        );
+
+        // Legacy shapes — REJECTED per AXON-RFC-001 §A.URA strict
+        // parsing contract. Stuck legacy devices must
+        // `device reset && rejoin` to mint a v4.1.5 device URI.
+        assert_eq!(
+            host_node_id_from_uri("easynet:///r/acme/agent/01DEV"),
+            None,
+            "legacy device-profile shape must be rejected"
+        );
+        assert_eq!(
+            host_node_id_from_uri("easynet:///r/prv/reg/device.01DEV?tenant_id=acme"),
+            None,
+            "legacy reg-form (device.) must be rejected — no `reg/` namespace in v4.1.5"
+        );
+        assert_eq!(
+            host_node_id_from_uri("easynet:///r/prv/reg/agent.01DEV?tenant_id=acme"),
+            None,
+            "legacy reg-form (agent.) must be rejected — no `reg/` namespace in v4.1.5"
+        );
+        assert_eq!(
+            host_node_id_from_uri("easynet:///r/acme/agent/user.alice"),
+            None,
+            "agent URA is never a device host (v4.1.5: agent tail is <user-uuid>.<agent-id>, not a device id)"
+        );
+
+        // Other v4.1.5 kinds — also rejected (they aren't device URIs).
+        assert_eq!(
+            host_node_id_from_uri("easynet:///r/acme/resource/01HZ8/fs/etc/hosts"),
+            None
+        );
+        assert_eq!(host_node_id_from_uri("easynet:///r/acme/hub"), None);
+        assert_eq!(host_node_id_from_uri("easynet:///r/acme/user/alice"), None);
+
+        // Malformed inputs — strict parser returns Err, we map to None.
+        assert_eq!(host_node_id_from_uri(""), None);
+        assert_eq!(host_node_id_from_uri("not-a-uri"), None);
     }
 
     #[test]
