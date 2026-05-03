@@ -391,10 +391,13 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
         // envelope's caller. Falls back to a generic CLI-style
         // URI when the daemon has no credentials yet (test /
         // smoke builds) so the peer's strict-admission still
-        // sees a non-empty caller field.
+        // sees a non-empty caller field. The fallback uses the
+        // v4.1.5 device shape (`r/cli/device/local`) — the
+        // legacy `r/cli/agent/local` shape would fail the
+        // strict parser (§A.URA-3: agent tail needs a dot).
         let supervisor_caller_uri = daemon_uri
             .clone()
-            .unwrap_or_else(|| "easynet:///r/cli/agent/local".to_string());
+            .unwrap_or_else(|| "easynet:///r/cli/device/local".to_string());
         spawn_federated_directory_streaming_supervisor(
             client,
             federated_peers_cell.clone(),

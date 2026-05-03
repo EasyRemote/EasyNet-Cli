@@ -252,7 +252,7 @@ pub fn invoke_via_federation_forward(
         serde_json::to_vec(&forward_args).context("serialise ForwardInvokeRequest")?;
 
     // Build the outer envelope. The caller URI defaults to a
-    // generic `easynet:///r/cli/agent/local` so the daemon's
+    // generic `easynet:///r/cli/device/local` so the daemon's
     // admission gate has something to log; production deployments
     // will override this with the operator's identity once
     // PR-N2 cross-realm signing lands.
@@ -267,8 +267,18 @@ pub fn invoke_via_federation_forward(
     // identity the inner ability runs against). This matches the
     // backend Go side's `daemon_grpc/invoke_remote.go` envelope
     // convention.
+    // v4.1.5 §A.URA-3 strict parsing: agent tail MUST be
+    // `<user-uuid>.<agent-id>` (split on dot). The legacy
+    // `r/cli/agent/local` fallback fails the strict parser
+    // because `local` has no dot. Use the device shape instead —
+    // `r/cli/device/local` parses cleanly (device tail is a bare
+    // token with no dot/slash). The daemon's loopback bypass +
+    // the Postel-permissive admission paths still admit either,
+    // but we want the wire to ship a parseable URA so that any
+    // caller-side strict validator (or a future enforce-mode
+    // flip) does not reject the envelope.
     let resolved_caller_uri = caller_uri
-        .unwrap_or("easynet:///r/cli/agent/local")
+        .unwrap_or("easynet:///r/cli/device/local")
         .to_string();
     // AXIOM §A1: `invocation_nonce` is a 16-byte random value the
     // daemon's admission gate uses to dedup replays

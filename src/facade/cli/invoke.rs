@@ -155,7 +155,7 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
         Some(target) => {
             // Resolve a real caller URI from credentials.json when
             // available — the CLI's hardcoded fallback
-            // `easynet:///r/cli/agent/local` is rejected by the
+            // `easynet:///r/cli/device/local` is rejected by the
             // local daemon's admission gate the moment the device
             // it runs against is paired (the daemon's realm-trust
             // anchor knows about its own device URI but not about
@@ -163,7 +163,10 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             // `invoke_via_federation_forward`'s `caller_uri`
             // surface; None there preserves the legacy default
             // for unattended fixture scripts that have no
-            // credentials.json.
+            // credentials.json. (The pre-v4.1.5 fallback used
+            // the `/agent/local` shape which fails strict
+            // §A.URA-3 parsing — agent tail must be
+            // `<user-uuid>.<agent-id>`.)
             // URI v4.1.4 Phase 2F: caller URI for an `easynet
             // ability invoke --node ...` originating from a daemon
             // is the daemon's *device* URA, not an agent URA. The
