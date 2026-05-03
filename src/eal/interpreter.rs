@@ -355,11 +355,22 @@ use crate::eal::ir::IrTarget;
 /// of the CLI.
 ///
 /// `node_id` accepts:
-///   * a canonical URA `easynet:///r/<realm>/device/<id>`
-///   * a bare uuid — wrapped in `tenant`'s realm
-///   * `local` / empty — falls back to local realm wrap (which
-///     `forward_invoke`'s self-shortcut delivers to local
-///     dispatch without leaving the daemon)
+///   * `local` / empty / this device's own node id — short-circuits to
+///     `invoke_local_ability` against the local daemon's control
+///     socket (skips the forward_invoke gRPC round-trip — there is
+///     nothing to forward to that the local dispatcher does not
+///     already see).
+///   * a canonical URA `easynet:///r/<realm>/device/<id>` — forward.
+///   * a bare uuid that does NOT match this device — wrapped in
+///     `tenant`'s realm and forwarded.
+///
+/// Pre-fix the `local` arm wrapped the literal string `"local"` into
+/// `easynet:///r/<tenant>/device/local`, which forward_invoke then
+/// reported as `target_offline` (the PresenceRegistry has no such
+/// entry — the daemon's self URI uses its real node uuid, not the
+/// keyword). Mission programs that wrote `call "shell.run" on "local"`
+/// therefore failed every step. The local short-circuit fixes that
+/// without changing the EAL surface.
 fn dispatch_remote_via_forward_invoke(
     tenant: &str,
     node_id: &str,
@@ -369,6 +380,33 @@ fn dispatch_remote_via_forward_invoke(
     #[cfg(feature = "axon-pb")]
     {
         let trimmed = node_id.trim();
+
+        // Local short-circuit: `local`, empty, or this device's own
+        // node id all dispatch through the local daemon's control
+        // socket, the same surface every other in-process invocation
+        // uses. Skip the forward_invoke envelope entirely — the
+        // self-target shortcut on the daemon side covers a different
+        // case (canonical self URI), not the keyword `local`.
+        let self_node = crate::persistence::config::load_credentials()
+            .ok()
+            .map(|c| c.node_id);
+        let is_local = trimmed.is_empty()
+            || trimmed.eq_ignore_ascii_case("local")
+            || self_node
+                .as_deref()
+                .is_some_and(|n| !n.is_empty() && trimmed == n);
+        if is_local {
+            return crate::support::local_invoke::invoke_local_ability(
+                ability_name,
+                arguments.clone(),
+            )
+            .map_err(|e| {
+                EalError::Unavailable(format!(
+                    "invoke_local_ability {ability_name} (local): {e}"
+                ))
+            });
+        }
+
         let target_uri = if trimmed.starts_with("easynet:///r/") {
             crate::support::federation_invoke::parse_node_uri(trimmed)
                 .map_err(|e| EalError::Validation(format!("parse target URI: {e}")))?
