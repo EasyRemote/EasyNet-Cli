@@ -97,6 +97,7 @@ pub(crate) mod abilities;
 pub(crate) mod ability_scaffold;
 pub(crate) mod agent;
 pub(crate) mod agent_sessions;
+pub(crate) mod auth;
 pub(crate) mod completion;
 pub(crate) mod config_cmd;
 pub(crate) mod connect;
@@ -156,6 +157,13 @@ pub struct App {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     // ── Core commands ─────────────────────────────────────────────────────
+    /// Log in to / out of an EasyNet backend, mint device-pairing
+    /// tokens. Same model as `gh auth login` / `kubectl login` —
+    /// JWT cached at ~/.easynet/auth.json (mode 0600), every later
+    /// auth-aware command picks it up automatically.
+    #[command(display_order = 0)]
+    Auth(groups::auth::AuthArgs),
+
     /// Manage remote devices — pair, list, exec, terminal.
     #[command(display_order = 1)]
     Device(groups::device::DeviceArgs),
@@ -247,6 +255,7 @@ pub enum Command {
 pub fn run(cmd: Command) -> anyhow::Result<()> {
     match cmd {
         // Layered groups
+        Command::Auth(args) => groups::auth::dispatch(args),
         Command::Agent(args) => groups::agent::run(args),
         Command::Ability(args) => groups::ability::run(args),
         Command::Device(args) => groups::device::run(args),

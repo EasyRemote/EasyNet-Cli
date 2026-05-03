@@ -206,6 +206,10 @@ futures = "0.3"
 # bytes::BytesMut backing the codec.
 bytes = "1"
 ureq = { version = "2", features = ["json"] }
+# Hidden password input for `easynet auth login` when --password
+# is omitted. POSIX-only; on Windows rpassword falls back to
+# stdin echo. Pinning v7 (matches ratatui's MSRV in the workspace).
+rpassword = "7"
 # Percent-encoding for HTTP-executor URL templating. The `[exec]
 # kind = "http"` path encodes substituted values automatically so
 # an arg containing a space or non-ASCII char doesn't break the URL.
