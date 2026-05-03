@@ -58,6 +58,12 @@ pub mod ability_toml;
 pub mod admin_status_ability;
 pub mod chat_ability;
 pub mod context_loaders;
+/// `device.describe` — unified-path replacement for the
+/// self-arm of `fleet.describe_node`. Routing is the caller's
+/// job (forward_invoke against the target device URA); this
+/// ability only describes "this device". See
+/// `device_describe_ability` module preamble.
+pub mod device_describe_ability;
 pub mod discover_ability;
 pub mod discuss_ability;
 /// eal_executor — backs `[exec] kind = "eal"` on agent-authored
@@ -347,6 +353,14 @@ pub fn build_registry_with_services(
     // register_self, deregister_self). These are the canonical
     // ability surfaces backing the CLI's device + ability subcommands.
     fleet_ops_ability::register(&mut reg);
+    // device.describe — unified-path replacement for the
+    // self-arm of fleet.describe_node. CLI cuts over to
+    // forward_invoke("device.describe", target=<device-URA>);
+    // each daemon describes itself, so cross-realm addressing
+    // is the caller's job (routing through forward_invoke), not
+    // the ability's. fleet.describe_node stays registered until
+    // the legacy-cull phase to keep the rolling window.
+    device_describe_ability::register(&mut reg);
     // voice.* call signaling abilities — `easynet call …`
     // subcommand surface routes through these via the same
     // ability-only invocation path every other CLI surface uses.
@@ -787,17 +801,22 @@ pub fn description_for(name: &str) -> &'static str {
         "process.exec" => process_exec_ability::description(),
         "shell.run" => shell_run_ability::description(),
         "http.request" => http_request_ability::description(),
-        "fleet.pty_session_create" => pty_lifecycle_ability::description_create(),
-        "fleet.pty_session_close" => pty_lifecycle_ability::description_close(),
-        "fleet.pty_session_attach" => pty_attach_ability::description(),
-        "fleet.pty_session_input" => pty_io_ability::input_description(),
-        "fleet.pty_session_read" => pty_io_ability::read_description(),
-        "fleet.pty_session_resize" => pty_io_ability::resize_description(),
+        "fleet.session_create" | "fleet.pty_session_create" => {
+            pty_lifecycle_ability::description_create()
+        }
+        "fleet.session_close" | "fleet.pty_session_close" => {
+            pty_lifecycle_ability::description_close()
+        }
+        "fleet.session_attach" | "fleet.pty_session_attach" => pty_attach_ability::description(),
+        "fleet.session_input" | "fleet.pty_session_input" => pty_io_ability::input_description(),
+        "fleet.session_read" | "fleet.pty_session_read" => pty_io_ability::read_description(),
+        "fleet.session_resize" | "fleet.pty_session_resize" => pty_io_ability::resize_description(),
         "fleet.file_transfer" => file_transfer_ability::description(),
         "fleet.start_agent" => fleet_lifecycle_ability::start_agent_description(),
         "fleet.stop_agent" => fleet_lifecycle_ability::stop_agent_description(),
         "fleet.list_nodes" => fleet_ops_ability::list_nodes_description(),
         "fleet.describe_node" => fleet_ops_ability::describe_node_description(),
+        "device.describe" => device_describe_ability::description(),
         "fleet.remove_node" => fleet_ops_ability::remove_node_description(),
         "fleet.deploy_ability" => fleet_ops_ability::deploy_ability_description(),
         "fleet.uninstall_ability" => fleet_ops_ability::uninstall_ability_description(),
@@ -896,17 +915,24 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "process.exec" => process_exec_ability::input_schema(),
         "shell.run" => shell_run_ability::input_schema(),
         "http.request" => http_request_ability::input_schema(),
-        "fleet.pty_session_create" => pty_lifecycle_ability::input_schema_create(),
-        "fleet.pty_session_close" => pty_lifecycle_ability::input_schema_close(),
-        "fleet.pty_session_attach" => pty_attach_ability::input_schema(),
-        "fleet.pty_session_input" => pty_io_ability::input_input_schema(),
-        "fleet.pty_session_read" => pty_io_ability::read_input_schema(),
-        "fleet.pty_session_resize" => pty_io_ability::resize_input_schema(),
+        "fleet.session_create" | "fleet.pty_session_create" => {
+            pty_lifecycle_ability::input_schema_create()
+        }
+        "fleet.session_close" | "fleet.pty_session_close" => {
+            pty_lifecycle_ability::input_schema_close()
+        }
+        "fleet.session_attach" | "fleet.pty_session_attach" => pty_attach_ability::input_schema(),
+        "fleet.session_input" | "fleet.pty_session_input" => pty_io_ability::input_input_schema(),
+        "fleet.session_read" | "fleet.pty_session_read" => pty_io_ability::read_input_schema(),
+        "fleet.session_resize" | "fleet.pty_session_resize" => {
+            pty_io_ability::resize_input_schema()
+        }
         "fleet.file_transfer" => file_transfer_ability::input_schema(),
         "fleet.start_agent" => fleet_lifecycle_ability::start_agent_input_schema(),
         "fleet.stop_agent" => fleet_lifecycle_ability::stop_agent_input_schema(),
         "fleet.list_nodes" => fleet_ops_ability::list_nodes_input_schema(),
         "fleet.describe_node" => fleet_ops_ability::describe_node_input_schema(),
+        "device.describe" => device_describe_ability::input_schema(),
         "fleet.remove_node" => fleet_ops_ability::remove_node_input_schema(),
         "fleet.deploy_ability" => fleet_ops_ability::deploy_ability_input_schema(),
         "fleet.uninstall_ability" => fleet_ops_ability::uninstall_ability_input_schema(),
@@ -1055,12 +1081,30 @@ mod tests {
             // mutate state — Operational unambiguous.
             | "fleet.list_nodes"
             | "fleet.describe_node"
+            | "device.describe"
             | "fleet.remove_node"
             | "fleet.deploy_ability"
             | "fleet.uninstall_ability"
             | "fleet.exec_remote"
             | "fleet.register_self"
             | "fleet.deregister_self"
+            // fleet.session_* shell-session lifecycle abilities.
+            // create / close mutate session state; input / read /
+            // resize push or pull data over an established session;
+            // attach binds the bidi data plane. All operational
+            // because each call IS the work for that session step.
+            | "fleet.session_create"
+            | "fleet.session_close"
+            | "fleet.session_input"
+            | "fleet.session_read"
+            | "fleet.session_resize"
+            | "fleet.session_attach"
+            | "fleet.pty_session_create"
+            | "fleet.pty_session_close"
+            | "fleet.pty_session_input"
+            | "fleet.pty_session_read"
+            | "fleet.pty_session_resize"
+            | "fleet.pty_session_attach"
             // mission.discuss_round — sub-turn orchestration
             // ability. Same Operational class as easynet.run /
             // mission.run because the ability IS the work
@@ -1148,12 +1192,6 @@ mod tests {
             | "process.exec"
             | "shell.run"
             | "http.request"
-            | "fleet.pty_session_create"
-            | "fleet.pty_session_close"
-            | "fleet.pty_session_attach"
-            | "fleet.pty_session_input"
-            | "fleet.pty_session_read"
-            | "fleet.pty_session_resize"
             | "fleet.file_transfer"
             // RFC-005 v3.2 A1–A8 — physical-channel media verbs.
             // Operational by intent: each one drives an external
@@ -1443,9 +1481,9 @@ mod tests {
             // Outbound network
             "http.request",
             // Interactive PTY trio
-            "fleet.pty_session_create",
-            "fleet.pty_session_close",
-            "fleet.pty_session_attach",
+            "fleet.session_create",
+            "fleet.session_close",
+            "fleet.session_attach",
             // Operator surface added in slice 16
             "admin.status",
             "fleet.start_agent",

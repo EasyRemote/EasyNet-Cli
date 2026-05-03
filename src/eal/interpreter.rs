@@ -34,8 +34,6 @@ use easynet_axon::dendrite_bridge::DendriteBridge;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::support::bridge_pool::BridgePool;
-
 /// Convert `Duration::as_millis()` (u128) to u64, saturating at u64::MAX.
 #[inline]
 fn millis_u64(d: Duration) -> u64 {
@@ -323,6 +321,7 @@ pub enum StepOutcome {
 // ── Public execution result ──
 
 pub struct ExecutionReport {
+    #[allow(dead_code)]
     pub total_elapsed_ms: u64,
     pub steps_completed: usize,
     pub steps_failed: usize,
@@ -343,6 +342,104 @@ struct CapturedResult {
 use crate::core::agent_id::AbilityName;
 use crate::eal::error::EalError;
 use crate::eal::ir::IrTarget;
+
+/// Joint-plan unified path for EAL device-targeted dispatch
+/// (海峰 + 凉冰, 2026-05-03). Every cross-device step routes
+/// through `federation.forward_invoke` against the target device
+/// URA — the same surface `easynet ability invoke --node` uses.
+/// Pre-cut every `BorrowedBridgeDispatcher` / `AgentAwareDispatcher` /
+/// `PooledBridgeDispatcher` returned `EalError::Unavailable` for
+/// `IrTarget::Device`; this helper actually performs the call so
+/// EAL programs can target peer devices uniformly with the rest
+/// of the CLI.
+///
+/// `node_id` accepts:
+///   * `local` / empty / this device's own node id — short-circuits to
+///     `invoke_local_ability` against the local daemon's control
+///     socket (skips the forward_invoke gRPC round-trip — there is
+///     nothing to forward to that the local dispatcher does not
+///     already see).
+///   * a canonical URA `easynet:///r/<realm>/device/<id>` — forward.
+///   * a bare uuid that does NOT match this device — wrapped in
+///     `tenant`'s realm and forwarded.
+///
+/// Pre-fix the `local` arm wrapped the literal string `"local"` into
+/// `easynet:///r/<tenant>/device/local`, which forward_invoke then
+/// reported as `target_offline` (the PresenceRegistry has no such
+/// entry — the daemon's self URI uses its real node uuid, not the
+/// keyword). Mission programs that wrote `call "shell.run" on "local"`
+/// therefore failed every step. The local short-circuit fixes that
+/// without changing the EAL surface.
+fn dispatch_remote_via_forward_invoke(
+    tenant: &str,
+    node_id: &str,
+    ability_name: &str,
+    arguments: &Value,
+) -> Result<Value, EalError> {
+    #[cfg(feature = "axon-pb")]
+    {
+        let trimmed = node_id.trim();
+
+        // Local short-circuit: `local`, empty, or this device's own
+        // node id all dispatch through the local daemon's control
+        // socket, the same surface every other in-process invocation
+        // uses. Skip the forward_invoke envelope entirely — the
+        // self-target shortcut on the daemon side covers a different
+        // case (canonical self URI), not the keyword `local`.
+        let self_node = crate::persistence::config::load_credentials()
+            .ok()
+            .map(|c| c.node_id);
+        let is_local = trimmed.is_empty()
+            || trimmed.eq_ignore_ascii_case("local")
+            || self_node
+                .as_deref()
+                .is_some_and(|n| !n.is_empty() && trimmed == n);
+        if is_local {
+            return crate::support::local_invoke::invoke_local_ability(
+                ability_name,
+                arguments.clone(),
+            )
+            .map_err(|e| {
+                EalError::Unavailable(format!("invoke_local_ability {ability_name} (local): {e}"))
+            });
+        }
+
+        let target_uri = if trimmed.starts_with("easynet:///r/") {
+            crate::support::federation_invoke::parse_node_uri(trimmed)
+                .map_err(|e| EalError::Validation(format!("parse target URI: {e}")))?
+        } else if !tenant.is_empty() {
+            crate::uri::device_uri(tenant, trimmed)
+        } else {
+            return Err(EalError::Validation(format!(
+                "cannot resolve EAL device target {trimmed:?}: no tenant in scope; \
+                 pass a canonical `easynet:///r/<realm>/device/<id>` URI"
+            )));
+        };
+
+        let caller_uri = crate::persistence::config::load_credentials()
+            .ok()
+            .filter(|c| !c.tenant_id.trim().is_empty() && !c.node_id.trim().is_empty())
+            .map(|c| crate::uri::device_uri(c.tenant_id.trim(), c.node_id.trim()));
+        crate::support::federation_invoke::invoke_via_federation_forward(
+            ability_name,
+            arguments.clone(),
+            &target_uri,
+            caller_uri.as_deref(),
+        )
+        .map_err(|e| {
+            EalError::Unavailable(format!("forward_invoke {ability_name} → {target_uri}: {e}"))
+        })
+    }
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = (tenant, node_id, ability_name, arguments);
+        Err(EalError::Unavailable(
+            "EAL device-targeted dispatch requires the `axon-pb` feature; \
+             rebuild with `--features axon-pb` (production builds always do)."
+                .to_string(),
+        ))
+    }
+}
 
 pub trait StepDispatcher {
     /// Dispatch one step. The runtime sees only the resolved
@@ -396,34 +493,12 @@ impl StepDispatcher for BorrowedBridgeDispatcher<'_> {
         target: &IrTarget,
         ability: &AbilityName,
         arguments: &Value,
-        timeout_ms: Option<u64>,
+        _timeout_ms: Option<u64>,
     ) -> Result<Value, EalError> {
         match target {
             IrTarget::Device { node_id } => {
-                // RFC-001 P1.5 + RFC-002.2: the legacy MCP-shaped
-                // device-targeted RPC the SDK exposed
-                // (`call_mcp_tool_with_timeout`) was deleted along
-                // with the rest of the legacy gRPC surface. The
-                // canonical replacement for "EAL step targeting
-                // a remote device's ability" is
-                // `federation.forward_invoke` against the device
-                // URA — the same path
-                // `<self>.invoke(target=remote_uri)` takes. EAL's
-                // dispatcher does not yet construct that envelope
-                // (it would need keyring + tenant + realm in the
-                // dispatcher's scope, which today's `BorrowedBridgeDispatcher`
-                // is intentionally lighter than). Surface a typed
-                // Unavailable error pointing operators at the path
-                // that DOES work: the LLM-driven `<self>.invoke`
-                // surface or `mcp.bridge.call_tool` for in-process.
-                let _ = (tenant, ability, node_id, arguments, timeout_ms);
-                Err(EalError::Unavailable(
-                    "EAL device-targeted dispatch via the legacy MCP RPC was \
-                     removed by RFC-001 P1.5; route through \
-                     `<self>.invoke(target=<device-ura>)` (RFC-002.2 forward_invoke) \
-                     or `mcp.bridge.call_tool` for in-process MCP shapes."
-                        .to_string(),
-                ))
+                let _ = &self.bridge;
+                dispatch_remote_via_forward_invoke(tenant, node_id, ability.as_str(), arguments)
             }
             // Agent target on a Device-only dispatcher is a planner /
             // call-site contract violation, not a transient failure —
@@ -460,26 +535,13 @@ impl StepDispatcher for BorrowedBridgeDispatcher<'_> {
 // See `docs/AGENT_IDENTITY.md` invariants 1 and 2.
 
 pub struct AgentAwareDispatcher {
-    pool: Arc<BridgePool>,
     registry: Arc<crate::registry::agents::AgentRegistry>,
 }
 
 impl AgentAwareDispatcher {
-    pub fn new(endpoint: &str, timeout_ms: u64) -> Self {
-        let registry = load_registry_or_warn();
-        let pool = Arc::new(BridgePool::with_adaptive_size(endpoint, timeout_ms));
-        Self {
-            pool,
-            registry: Arc::new(registry),
-        }
-    }
-
-    /// Create a dispatcher with a pre-existing shared pool (for pool reuse across missions).
-    #[allow(dead_code)]
-    pub fn with_pool(pool: Arc<BridgePool>) -> Self {
+    pub fn new(_endpoint: &str, _timeout_ms: u64) -> Self {
         let registry = load_registry_or_warn();
         Self {
-            pool,
             registry: Arc::new(registry),
         }
     }
@@ -527,100 +589,15 @@ impl StepDispatcher for AgentAwareDispatcher {
                 dispatch_to_agent(&self.registry, agent_id, ability, arguments)
             }
             IrTarget::Device { node_id } => {
-                // RFC-001 P1.5 + RFC-002.2: see BorrowedBridgeDispatcher
-                // for the migration rationale. The legacy MCP RPC was
-                // deleted; route remote-device EAL steps through
-                // `<self>.invoke(target=<device-ura>)` (forward_invoke).
-                // Today's AgentAwareDispatcher does not synthesize
-                // that envelope — it would need keyring + tenant +
-                // realm in scope which the dispatcher trait doesn't
-                // carry. Surface a typed Unavailable so EAL programs
-                // see a stable error name and operators can grep
-                // for the migration reason.
-                let _ = (tenant, ability, arguments, timeout_ms, node_id);
-                Err(EalError::Unavailable(
-                    "EAL device-targeted dispatch via the legacy MCP RPC was \
-                     removed by RFC-001 P1.5; route through \
-                     `<self>.invoke(target=<device-ura>)` (RFC-002.2 forward_invoke) \
-                     or `mcp.bridge.call_tool` for in-process MCP shapes."
-                        .to_string(),
-                ))
+                let _ = timeout_ms;
+                dispatch_remote_via_forward_invoke(tenant, node_id, ability.as_str(), arguments)
             }
         }
     }
 
     fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
         Ok(Box::new(AgentAwareDispatcher {
-            pool: Arc::clone(&self.pool),
             registry: Arc::clone(&self.registry),
-        }))
-    }
-}
-
-// ── Pooled Bridge Dispatcher (for MCP server) ──
-//
-// Unlike BorrowedBridgeDispatcher which borrows a single bridge and
-// cannot be cloned for threads, this dispatcher owns an Arc<BridgePool>
-// and supports true parallel dispatch. Used by MCP server's run_mission
-// handler to enable parallel phase execution.
-
-pub struct PooledBridgeDispatcher {
-    pool: Arc<BridgePool>,
-}
-
-impl PooledBridgeDispatcher {
-    #[allow(dead_code)]
-    pub fn new(endpoint: &str, timeout_ms: u64) -> Self {
-        Self {
-            pool: Arc::new(BridgePool::with_adaptive_size(endpoint, timeout_ms)),
-        }
-    }
-
-    /// Create a dispatcher with a pre-existing shared pool (for pool reuse across missions).
-    pub fn with_pool(pool: Arc<BridgePool>) -> Self {
-        Self { pool }
-    }
-}
-
-impl StepDispatcher for PooledBridgeDispatcher {
-    fn dispatch(
-        &self,
-        tenant: &str,
-        target: &IrTarget,
-        ability: &AbilityName,
-        arguments: &Value,
-        timeout_ms: Option<u64>,
-    ) -> Result<Value, EalError> {
-        match target {
-            IrTarget::Device { node_id } => {
-                // RFC-001 P1.5 + RFC-002.2: see BorrowedBridgeDispatcher
-                // for the migration rationale. The legacy MCP RPC is
-                // gone; route through forward_invoke or
-                // mcp.bridge.call_tool. Pool is intentionally not
-                // checked out — surfacing the typed error fast keeps
-                // the caller's diagnostic clean.
-                let _ = (tenant, ability, arguments, timeout_ms, node_id, &self.pool);
-                Err(EalError::Unavailable(
-                    "EAL device-targeted dispatch via the legacy MCP RPC was \
-                     removed by RFC-001 P1.5; route through \
-                     `<self>.invoke(target=<device-ura>)` (RFC-002.2 forward_invoke) \
-                     or `mcp.bridge.call_tool` for in-process MCP shapes."
-                        .to_string(),
-                ))
-            }
-            // See note on `BorrowedBridgeDispatcher`: agent target on a
-            // device-only dispatcher is a contract violation.
-            IrTarget::Agent(_) => Err(EalError::Validation(
-                "PooledBridgeDispatcher cannot dispatch to agent targets; \
-                 use AgentAwareDispatcher (e.g. via run_mission_inproc)"
-                    .to_string(),
-            )),
-        }
-    }
-
-    fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
-        Ok(Box::new(PooledBridgeDispatcher {
-            pool: Arc::clone(&self.pool),
         }))
     }
 }
@@ -917,24 +894,6 @@ fn build_agent_prompt(function_name: &str, arguments: &Value) -> String {
 /// Execute a mission using a borrowed bridge (sequential fallback).
 ///
 /// This is the legacy path kept for callers that already hold a bridge.
-/// For parallel execution, prefer `execute_pooled` or `execute_with_endpoint`.
-/// Execute a mission with a pooled bridge dispatcher (parallel-capable, device-only).
-///
-/// Creates a new `PooledBridgeDispatcher` per call. For high-frequency callers
-/// (MCP server), prefer `execute_pooled_shared` with a persistent pool.
-#[allow(dead_code)]
-pub fn execute_pooled(
-    endpoint: &str,
-    tenant: &str,
-    ir: &MissionIr,
-) -> anyhow::Result<ExecutionReport> {
-    let dispatcher = PooledBridgeDispatcher::new(
-        endpoint,
-        crate::support::timeouts::BRIDGE_CONNECT_TIMEOUT_MS,
-    );
-    execute_with_dispatcher(&dispatcher, tenant, ir)
-}
-
 #[allow(dead_code)]
 pub fn execute(
     bridge: &DendriteBridge,
@@ -942,19 +901,6 @@ pub fn execute(
     ir: &MissionIr,
 ) -> anyhow::Result<ExecutionReport> {
     let dispatcher = BorrowedBridgeDispatcher::new(bridge);
-    execute_with_dispatcher(&dispatcher, tenant, ir)
-}
-
-/// Execute a mission reusing a shared BridgePool (amortizes connection cost across missions).
-///
-/// Preferred for high-frequency callers like the MCP server that execute many
-/// missions within a single session.
-pub fn execute_pooled_shared(
-    pool: Arc<BridgePool>,
-    tenant: &str,
-    ir: &MissionIr,
-) -> anyhow::Result<ExecutionReport> {
-    let dispatcher = PooledBridgeDispatcher::with_pool(pool);
     execute_with_dispatcher(&dispatcher, tenant, ir)
 }
 

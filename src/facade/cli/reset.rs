@@ -95,26 +95,34 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
     // message lied to the operator on transient Hub failures, which then
     // looked indistinguishable from a successful clean-up in the audit
     // trail.
-    if config::load_credentials().is_ok() {
+    //
+    // Joint-plan unified path (phase 1.4): when the daemon is still
+    // alive (the `--force` path bypasses guard 1, so this is the only
+    // condition that lands here) call `federation.revoke` against
+    // this device's URA. The legacy `fleet.deregister_self` ability
+    // was an ack-only no-op — the hub never learned the device went
+    // away, so directory entries lingered until the keepalive sweep.
+    // The new path reaches `PresenceRegistry::force_revoke` and the
+    // advertised-agent store immediately, so a downstream
+    // `device list` from any peer hub shows the device gone the
+    // instant `device reset --force` returns.
+    if let Some(creds) = config::load_credentials().ok() {
         if let Some(ref state) = runtime_state {
-            // Per ability-only ontology this is `fleet.deregister_self`.
-            // Best-effort: the daemon may already be drained, and
-            // this command's primary job is to wipe LOCAL state.
-            // The legacy `bridge.deregister_node` was removed by
-            // AXON-RFC-001 P1.5. We attempt the ability invocation;
-            // failure is logged and reset continues.
-            match crate::support::local_invoke::invoke_local_ability(
-                "fleet.deregister_self",
-                serde_json::json!({}),
-            ) {
-                Ok(_) => output::info("Node deregistered (local acknowledgement)"),
-                Err(e) => output::warn(&format!(
-                    "fleet.deregister_self failed (continuing local reset): {e}"
-                )),
+            if state.pid.is_some_and(net::is_pid_alive) {
+                let device_uri = crate::uri::device_uri(&creds.tenant_id, &creds.node_id);
+                match invoke_federation_revoke_for_reset(&device_uri) {
+                    Ok(_) => output::info("Device deregistered with hub (federation.revoke)"),
+                    Err(e) => output::warn(&format!(
+                        "federation.revoke failed (continuing local reset): {e}"
+                    )),
+                }
+            } else {
+                // Daemon already torn down (typical normal-path reset
+                // post `easynet stop`): the heartbeat sidecar already
+                // ran its SIGTERM `federation.revoke` hook, so this
+                // arm is a no-op by design.
+                let _ = state;
             }
-            // Suppress unused-binding warning for the runtime state
-            // until the federation Invoke surface consumes it again.
-            let _ = state;
         }
     }
 
@@ -128,4 +136,20 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
     config::delete_credentials()?;
     output::success("Device credentials removed");
     Ok(())
+}
+
+#[cfg(feature = "axon-pb")]
+fn invoke_federation_revoke_for_reset(device_uri: &str) -> anyhow::Result<()> {
+    crate::support::federation_invoke::invoke_federation_revoke(
+        device_uri,
+        "device-reset",
+        Some(device_uri),
+    )
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn invoke_federation_revoke_for_reset(_device_uri: &str) -> anyhow::Result<()> {
+    Err(crate::support::local_invoke::federation_not_wired_error(
+        "deregistering this device on reset",
+    ))
 }

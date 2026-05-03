@@ -120,10 +120,31 @@ impl Drop for PendingHandle {
     }
 }
 
+/// Per-call-id pending entry. Carries the `target_uri` of the
+/// device the caller is waiting on so a `PresenceEvent::Offline`
+/// for that URI can fail-fast every outstanding waiter targeting
+/// it (PR-N6 mid-flight cancellation: pre-fix the daemon's
+/// `forward_invoke` `await_reply()` blocked indefinitely when the
+/// target session dropped, surfacing on the operator side as a
+/// 30s HTTP timeout instead of an immediate `target_offline`).
+struct PendingEntry {
+    sender: oneshot::Sender<DispatchResult>,
+    target_uri: String,
+}
+
 #[derive(Debug, Default)]
 struct PendingDispatchInner {
-    entries: DashMap<u64, oneshot::Sender<DispatchResult>>,
+    entries: DashMap<u64, PendingEntry>,
     next_call_id: AtomicU64,
+}
+
+impl std::fmt::Debug for PendingEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingEntry")
+            .field("target_uri", &self.target_uri)
+            .field("sender", &"<oneshot::Sender>")
+            .finish()
+    }
 }
 
 /// Shared correlation table between `<self>.invoke_remote` (writer)
@@ -139,14 +160,32 @@ impl PendingDispatchMap {
         Self::default()
     }
 
-    /// Register a new pending dispatch and return both the assigned
-    /// call_id (in `PendingHandle::call_id`) and an awaitable handle
-    /// that fulfils when the matching `complete(call_id, ...)` fires.
+    /// Register a new pending dispatch with no target URI. Kept for
+    /// callers that haven't been wired to the cancel-on-offline path
+    /// yet — they simply won't be auto-cancelled when the target
+    /// goes offline (the legacy "wait until oneshot drops" behaviour).
     pub fn register_pending(&self) -> PendingHandle {
+        self.register_pending_for("")
+    }
+
+    /// Register a new pending dispatch keyed to a specific
+    /// `target_uri`. When that URI's session goes offline the
+    /// daemon's presence-event watcher calls `cancel_for(uri,
+    /// "target_offline")` to release every outstanding waiter
+    /// immediately, instead of letting the caller block on the
+    /// HTTP / gRPC request timeout (30s) for a session that's
+    /// already known-dead.
+    pub fn register_pending_for(&self, target_uri: &str) -> PendingHandle {
         let sequence = self.inner.next_call_id.fetch_add(1, Ordering::Relaxed);
         let call_id = sequence << 1;
         let (tx, rx) = oneshot::channel();
-        self.inner.entries.insert(call_id, tx);
+        self.inner.entries.insert(
+            call_id,
+            PendingEntry {
+                sender: tx,
+                target_uri: target_uri.to_string(),
+            },
+        );
         PendingHandle {
             call_id,
             map: Arc::clone(&self.inner),
@@ -160,9 +199,37 @@ impl PendingDispatchMap {
     /// no-op path so the caller can log if it cares.
     pub fn complete(&self, call_id: u64, result: DispatchResult) -> bool {
         match self.inner.entries.remove(&call_id) {
-            Some((_, sender)) => sender.send(result).is_ok(),
+            Some((_, entry)) => entry.sender.send(result).is_ok(),
             None => false,
         }
+    }
+
+    /// Cancel every outstanding pending dispatch whose `target_uri`
+    /// matches. Called from the daemon's presence-event watcher
+    /// when a `<self>.session` reverse channel drops — without this,
+    /// `forward_invoke` callers would block on `oneshot::Receiver`
+    /// until their HTTP request timeout fired (typically 30s) for a
+    /// target whose offline state is already known. Returns the
+    /// number of entries cancelled.
+    pub fn cancel_for(&self, target_uri: &str, error_reason: &str) -> usize {
+        let to_cancel: Vec<u64> = self
+            .inner
+            .entries
+            .iter()
+            .filter(|e| e.value().target_uri == target_uri)
+            .map(|e| *e.key())
+            .collect();
+        let mut count = 0;
+        for call_id in to_cancel {
+            if let Some((_, entry)) = self.inner.entries.remove(&call_id) {
+                let _ = entry.sender.send(DispatchResult {
+                    payload: Vec::new(),
+                    error: Some(error_reason.to_string()),
+                });
+                count += 1;
+            }
+        }
+        count
     }
 
     /// Number of currently-outstanding pending dispatches. Used by

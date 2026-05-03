@@ -149,9 +149,9 @@ pub enum IrStep {
 
 impl IrStep {
     /// `Some(&IrCall)` when this step is a flat invocation; `None`
-    /// for the block variants. Used by planner passes that only care
-    /// about flat call shape (e.g. the worst-case call-count bound
-    /// walks the tree and treats each `Call` leaf as one invocation).
+    /// for the block variants. Used by tests that walk the IR
+    /// expecting flat call shape.
+    #[cfg(test)]
     pub fn as_call(&self) -> Option<&IrCall> {
         match self {
             IrStep::Call(c) => Some(c),

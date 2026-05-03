@@ -97,12 +97,11 @@ pub const INVOKE_DEFAULT_SECS: u64 = 3600;
 /// legitimately run for tens of minutes without being stuck.
 pub const AGENT_SEND_DEFAULT_SECS: u64 = 3600;
 
-/// Default per-cycle deadline for `easynet think`, in seconds. Each
-/// cycle is one think + one action; the budget covers both. 1 hour
-/// matches the per-cycle worst case observed when the worker is
-/// running long tool sequences (file reads, build invocations, …) —
-/// the operator's intent in setting `max_cycles=N` is "let the model
-/// take N actual cycles", not "fail with a timeout mid-cycle".
+/// Default per-cycle deadline for `easynet think`, in seconds.
+/// Test-only today — `easynet think` is not yet wired through this
+/// constant in production code. Kept under `#[cfg(test)]` so a
+/// future caller picks the same 1-hour budget when it lands.
+#[cfg(test)]
 pub const THINK_DEFAULT_SECS: u64 = 3600;
 
 /// How long a `DendriteBridge::connect` may block before we declare

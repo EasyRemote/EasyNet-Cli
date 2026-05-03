@@ -376,6 +376,43 @@ impl DaemonInvocationService {
     /// `Result` frames back up their session streams.
     #[must_use]
     pub fn with_pending(mut self, pending: Arc<PendingDispatchMap>) -> Self {
+        // Spawn a presence-event watcher that fail-fasts every
+        // pending dispatch whose target_uri just went offline.
+        // Without this hook, `forward_invoke`'s `await_reply()`
+        // blocks on the oneshot until the operator-side HTTP
+        // request times out (~30s) for a target session that's
+        // already known-dead — surfacing as "your invoke just
+        // hung" UX. See pending_dispatch.rs::cancel_for for the
+        // matching producer.
+        let watcher_pending = Arc::clone(&pending);
+        let watcher_presence = Arc::clone(&self.presence);
+        tokio::spawn(async move {
+            use crate::services::presence_registry::PresenceEvent;
+            let mut events = watcher_presence.subscribe_events();
+            loop {
+                match events.recv().await {
+                    Ok(PresenceEvent::Offline { uri, reason }) => {
+                        let cancelled = watcher_pending.cancel_for(&uri, "target_offline");
+                        if cancelled > 0 {
+                            eprintln!(
+                                "[axon-serve] presence-offline-cancel: target_uri={uri} \
+                                 reason={reason:?} cancelled={cancelled} pending dispatch(es)"
+                            );
+                        }
+                    }
+                    Ok(PresenceEvent::Online { .. }) => {
+                        // Nothing to do on online — pending entries
+                        // for new sessions register fresh.
+                    }
+                    Err(_) => {
+                        // Broadcast channel closed → registry
+                        // dropped → daemon shutting down. Exit the
+                        // watcher cleanly.
+                        return;
+                    }
+                }
+            }
+        });
         self.pending = Some(pending);
         self
     }
@@ -1737,7 +1774,14 @@ impl DaemonInvocationService {
         // fast device reply lands a real `complete()` rather
         // than a no-op (race-free correlation, same contract as
         // `dispatch_invoke_remote`).
-        let handle = pending.register_pending();
+        //
+        // Use `register_pending_for(target_uri)` so the daemon's
+        // presence-offline watcher (`with_pending` ctor hook) can
+        // fail-fast this entry the moment `<self>.session` for
+        // `request.target_uri` drops mid-call — without this the
+        // `await_reply()` below blocks on the oneshot until the
+        // operator-side HTTP timeout fires.
+        let handle = pending.register_pending_for(&request.target_uri);
         let call_id = handle.call_id();
 
         let dispatch_frame = build_invoke_remote_dispatch_frame(
@@ -2820,7 +2864,11 @@ impl DaemonInvocationService {
         // Register pending entry BEFORE pushing the dispatch frame —
         // otherwise the target could reply faster than we can register
         // and the reply would land as a no-op `complete`.
-        let handle = pending.register_pending();
+        //
+        // `register_pending_for(target)` so the presence-offline
+        // watcher fail-fasts this entry if the target session drops
+        // mid-call (matches the forward_invoke path above).
+        let handle = pending.register_pending_for(&subject_device);
         let call_id = handle.call_id();
 
         let dispatch_frame = build_invoke_remote_dispatch_frame(call_id, &ability, &args)?;

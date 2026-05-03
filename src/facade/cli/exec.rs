@@ -2,31 +2,33 @@
 // =====================================
 //
 // File: src/facade/cli/exec.rs
-// Description: One-shot remote command execution. Per the
-//              ability-only ontology this is `fleet.exec_remote`
-//              invoked on the local daemon; the daemon either
-//              runs the command in-process (when `node == local`)
-//              or forwards through federation transport (when
-//              the target is a remote node id).
+// Description: One-shot remote command execution. Local targets
+//              dispatch to `process.exec` through the local daemon;
+//              remote targets reuse the same
+//              `federation.forward_invoke` path that powers
+//              `easynet ability invoke --node`.
 //
 // What this CLI shim does
 // -----------------------
 //   1. Validate args (node + non-empty command).
-//   2. Map args → JSON.
-//   3. invoke_local_ability("fleet.exec_remote", body).
+//   2. Map argv → the `process.exec` JSON contract.
+//   3. Route locally or remotely depending on the target.
 //   4. Pipe stdout / stderr / exit_code from the response.
 //
-// Local case: handler delegates to `process.exec`. Remote case:
-// handler forwards via federation Invoke (returns typed
-// federation_not_wired until that transport ships).
+// `process.exec` is the structured execution surface (argv, no
+// shell interpretation). That matches this CLI's historical
+// semantics better than `shell.run`.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use anyhow::Context;
+use anyhow::{anyhow, Context};
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use clap::Args;
-use serde_json::json;
+use serde_json::{json, Value};
 
+#[cfg(not(feature = "axon-pb"))]
+use crate::support::local_invoke::federation_not_wired_error;
 use crate::support::local_invoke::invoke_local_ability;
 use crate::support::{output, timeouts};
 
@@ -54,29 +56,97 @@ pub fn run(args: ExecArgs) -> anyhow::Result<()> {
     );
 
     let timeout_ms = timeouts::effective_ms(args.timeout).map_err(anyhow::Error::msg)?;
-    let result = invoke_local_ability(
-        "fleet.exec_remote",
-        json!({
-            "node_id": args.node,
-            "command": args.command,
-            "timeout_ms": timeout_ms,
-        }),
-    )
-    .context("invoke fleet.exec_remote")?;
+    let payload = json!({
+        "command": args.command[0].clone(),
+        "args": args.command[1..].to_vec(),
+        "timeout_ms": timeout_ms,
+    });
+    let result = if is_local_exec_target(&args.node) {
+        invoke_local_ability("process.exec", payload).context("invoke process.exec")?
+    } else {
+        invoke_remote_process_exec(&args.node, payload)?
+    };
 
-    if let Some(stdout) = result.get("stdout").and_then(|v| v.as_str()) {
-        print!("{stdout}");
+    if result.get("ok").and_then(Value::as_bool) == Some(false) {
+        let message = result
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("process.exec failed before spawn");
+        let code = result
+            .get("code")
+            .and_then(Value::as_str)
+            .unwrap_or("PROCESS_EXEC_FAILED");
+        return Err(anyhow!("{code}: {message}"));
     }
-    if let Some(stderr) = result.get("stderr").and_then(|v| v.as_str()) {
-        if !stderr.is_empty() {
-            eprint!("{stderr}");
-        }
+
+    let stdout = decode_exec_stream(&result, "stdout");
+    let stderr = decode_exec_stream(&result, "stderr");
+    if !stdout.is_empty() {
+        print!("{}", String::from_utf8_lossy(&stdout));
     }
-    if let Some(code) = result.get("exit_code").and_then(serde_json::Value::as_i64) {
+    if !stderr.is_empty() {
+        eprint!("{}", String::from_utf8_lossy(&stderr));
+    }
+    if let Some(code) = result.get("exit_code").and_then(Value::as_i64) {
         if code != 0 {
             anyhow::bail!("command exited with code {code}");
         }
     }
     output::success("done");
     Ok(())
+}
+
+fn is_local_exec_target(node: &str) -> bool {
+    let trimmed = node.trim();
+    if trimmed.is_empty() || trimmed == "local" {
+        return true;
+    }
+    crate::persistence::config::load_credentials()
+        .ok()
+        .is_some_and(|creds| trimmed == creds.node_id)
+}
+
+fn decode_exec_stream(result: &Value, field: &str) -> Vec<u8> {
+    let raw = result.get(field).and_then(Value::as_str).unwrap_or("");
+    B64.decode(raw.as_bytes())
+        .unwrap_or_else(|_| raw.as_bytes().to_vec())
+}
+
+#[cfg(feature = "axon-pb")]
+fn invoke_remote_process_exec(node: &str, payload: Value) -> anyhow::Result<Value> {
+    let target_uri = crate::support::remote_device::resolve_target_device_uri(node)?;
+    let caller_uri = crate::support::remote_device::caller_device_uri_from_credentials();
+    crate::support::federation_invoke::invoke_via_federation_forward(
+        "process.exec",
+        payload,
+        &target_uri,
+        caller_uri.as_deref(),
+    )
+    .with_context(|| {
+        format!("invoke process.exec via federation.forward_invoke target={target_uri}")
+    })
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn invoke_remote_process_exec(node: &str, _payload: Value) -> anyhow::Result<Value> {
+    Err(federation_not_wired_error(&format!(
+        "running a one-shot command on remote node {node:?}"
+    )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_exec_target_accepts_literal_local() {
+        assert!(is_local_exec_target("local"));
+        assert!(is_local_exec_target(""));
+    }
+
+    #[test]
+    fn decode_exec_stream_falls_back_to_plain_text() {
+        let value = json!({"stdout": "hello"});
+        assert_eq!(decode_exec_stream(&value, "stdout"), b"hello");
+    }
 }

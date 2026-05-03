@@ -167,14 +167,11 @@ fn short_correlation_id() -> String {
 /// trying to do (e.g. `"list remote devices"`, `"deploy ability to a
 /// remote node"`); it is splice into the message so the operator
 /// sees the verb that failed in front of the same explanation.
+#[cfg(not(feature = "axon-pb"))]
 pub fn federation_not_wired_error(action: &str) -> anyhow::Error {
     anyhow::anyhow!(
-        "{action} requires the federation Invoke surface, which was removed by \
-         AXON-RFC-001 P1.5 and has not yet been re-published as a federation-tier \
-         ability. Local-only operations remain available — see `easynet ability list` \
-         for what this node can do without federation. The replacement (Invoke \
-         against an Agent ability on the realm) ships in a follow-up; this command \
-         will be re-wired without changing its CLI shape when it lands."
+        "{action} requires the `axon-pb` feature; rebuild with \
+         `cargo build --features axon-pb` (production builds always do)."
     )
 }
 

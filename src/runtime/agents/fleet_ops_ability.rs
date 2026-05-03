@@ -166,14 +166,14 @@ fn describe_node_handler(args: Value) -> anyhow::Result<Value> {
     if node_id.is_empty() {
         anyhow::bail!("fleet.describe_node: `node_id` is required");
     }
-    let view = federation_probe::collect_fleet_view();
-    let local_id = view
-        .nodes
-        .iter()
-        .find(|n| n.is_self)
-        .map(|n| n.node_id.as_str())
-        .unwrap_or("local");
-    if is_local_target(node_id, local_id) {
+    let (local_id, _tenant, _hub, paired) = local_identity();
+    if is_local_target(node_id, &local_id) {
+        if paired {
+            if let Some(record) = federation_probe::resolve_device_record(&local_id)? {
+                return Ok(node_json_with_abilities(&record.node, record.abilities));
+            }
+        }
+        let view = federation_probe::collect_fleet_view();
         let node = view
             .nodes
             .iter()
@@ -181,15 +181,28 @@ fn describe_node_handler(args: Value) -> anyhow::Result<Value> {
             .ok_or_else(|| anyhow::anyhow!("fleet.describe_node: local node is unavailable"))?;
         return Ok(federation_probe::node_to_json(node));
     }
-    if let Some(node) = view.nodes.iter().find(|n| n.node_id == node_id) {
-        return Ok(federation_probe::node_to_json(node));
+    if let Some(record) = federation_probe::resolve_device_record(node_id)? {
+        return Ok(node_json_with_abilities(&record.node, record.abilities));
     }
+
+    let view = federation_probe::collect_fleet_view();
     let suffix = view
         .federation_view_reason
         .as_deref()
         .map(|reason| format!(" ({reason})"))
         .unwrap_or_default();
     anyhow::bail!("fleet.describe_node: node {node_id:?} not found{suffix}");
+}
+
+fn node_json_with_abilities(
+    node: &federation_probe::FleetNodeSnapshot,
+    abilities: Vec<Value>,
+) -> Value {
+    let mut value = federation_probe::node_to_json(node);
+    if let Value::Object(map) = &mut value {
+        map.insert("abilities".to_string(), Value::Array(abilities));
+    }
+    value
 }
 
 // ── fleet.remove_node ────────────────────────────────────────────
@@ -539,12 +552,20 @@ mod tests {
 
     #[test]
     fn describe_node_with_local_returns_self_envelope() {
+        // HomeGuard isolates ~/.easynet so the handler runs the
+        // unpaired-fallback arm (collect_fleet_view's self node).
+        // The paired arm goes through federation_probe::resolve_device_record
+        // which dials the local runtime bridge — absent in unit tests.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
         let resp = describe_node_handler(json!({"node_id": "local"})).unwrap();
         assert_eq!(resp.get("is_self"), Some(&json!(true)));
     }
 
     #[test]
     fn describe_node_with_remote_returns_not_found() {
+        // Same HomeGuard isolation: unpaired fallback bails
+        // "node X not found" without reaching the runtime bridge.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
         let err = describe_node_handler(json!({"node_id": "some-remote"})).unwrap_err();
         assert!(format!("{err}").contains("not found"));
     }

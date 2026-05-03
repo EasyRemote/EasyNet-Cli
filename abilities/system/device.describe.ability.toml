@@ -1,0 +1,7 @@
+schema_version = "1"
+name = "device.describe"
+description = "Describe the device hosting THIS daemon. No arguments — cross-device addressing is the caller's job (route through federation.forward_invoke against the target device URA). Returns the same envelope shape `fleet.describe_node` produced for its self-arm so existing CLI renderers keep working unchanged."
+
+[input_schema]
+type = "object"
+additionalProperties = false

@@ -111,6 +111,7 @@ pub fn evaluate(commands: &[SimpleCommand], c: &Constraints) -> PathVerdict {
 
 /// Convenience: skip the stage when no write-allowed roots
 /// were declared. Returns Ok if `c` is `None`.
+#[cfg(test)]
 pub fn evaluate_or_skip(commands: &[SimpleCommand], c: Option<&Constraints>) -> PathVerdict {
     match c {
         Some(c) => evaluate(commands, c),

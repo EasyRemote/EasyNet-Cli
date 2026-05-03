@@ -135,8 +135,7 @@ mod tests {
         // (consent / policy / mcp / llm) use the user-anchored
         // `agent/<user-uuid>.<agent-id>` shape per §A.URA-5.
         let device_uri = "easynet:///r/acme/device/4065c47a-ec6f-4330-87a5-0d69787709b8";
-        let consent_uri =
-            "easynet:///r/acme/agent/00000000-0000-0000-0000-000000000001.consent";
+        let consent_uri = "easynet:///r/acme/agent/00000000-0000-0000-0000-000000000001.consent";
         let all = all_descriptors_for_host(device_uri, Some(consent_uri), None, None, &[]);
         let owners: std::collections::HashSet<&str> =
             all.iter().map(|d| d.owner_agent_uri.as_str()).collect();

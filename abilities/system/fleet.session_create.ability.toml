@@ -1,0 +1,32 @@
+schema_version = "1"
+name = "fleet.session_create"
+description = "Create an interactive PTY session and return its opaque session_id. Pair with fleet.pty_session_attach (data plane) and fleet.pty_session_close (lifecycle teardown). Part of the baseline-locomotion-v1 profile."
+
+[input_schema]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties.cols]
+type = "integer"
+minimum = 1
+maximum = 65535
+
+[input_schema.properties.command]
+type = "string"
+minLength = 1
+
+[input_schema.properties.command_args]
+type = "array"
+items = { type = "string" }
+
+[input_schema.properties.cwd]
+type = "string"
+
+[input_schema.properties.env]
+type = "object"
+additionalProperties = { type = "string" }
+
+[input_schema.properties.rows]
+type = "integer"
+minimum = 1
+maximum = 65535

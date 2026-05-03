@@ -1,23 +1,43 @@
-// EasyNet CLI — `easynet device list` / `easynet device show`
-// =============================================================
+// EasyNet CLI — `easynet device list`
+// =====================================
 //
 // File: src/facade/cli/devices.rs
-// Description: Read-only views over the fleet's device nodes.
-//              `list` enumerates every node visible from this
-//              daemon; `show <id>` describes one. Both go through
-//              the canonical fleet.* ability surface
-//              (`fleet.list_nodes`, `fleet.describe_node`)
-//              registered on the local daemon, in line with the
-//              ability-only ontology — the CLI never reaches for
-//              a transport directly.
+// Description: Read-only enumeration of every device the
+//              federation surfaces. Routes through the daemon's
+//              `federation.discover` ability — the same surface
+//              `easynet federation discover` exposes — and
+//              filters the returned `DirectoryEntry` set down to
+//              URA-kind = `device` projections.
 //
-// Pre-rewrite this file called `bridge.list_nodes(...)` directly,
-// the AXON-RFC-001 P1.5 victim. The replacement abilities live in
-// `runtime::agents::fleet_ops_ability` and have a stable JSON
-// envelope: `{nodes: [...], federation_view: "local_only" | ... }`.
-// v1 returns the local device only; the federation_view field
-// surfaces the limitation so an operator who expected peer entries
-// sees why none appeared.
+// Why the cut over from `fleet.list_nodes`
+// -----------------------------------------
+// `fleet.list_nodes` was the AXON-RFC-001 P1.5 placeholder that
+// fanned out only the local probe view + a same-realm
+// `federation.resolve` fallback. The joint plan
+// (海峰 + 凉冰, 2026-05-03) collapses every cross-device dispatch
+// onto `federation.forward_invoke`; for read-only directory
+// queries the canonical surface is `federation.discover`. One
+// helper, one path; the legacy `fleet.list_nodes` arm gets
+// removed in the cull phase.
+//
+// Wire shape (post-cut)
+// ---------------------
+// `federation.discover` returns `{ entries: [DirectoryEntry] }`
+// per `services::federation_directory::DirectoryEntry`:
+//
+//   {
+//     agent_uri: "easynet:///r/<realm>/device/<id>",
+//     node_id: "<id>",
+//     display_name: <Option<String>>,
+//     status: "active" | "stale" | "draining",
+//     origin_realm: <Option<String>>,
+//     hub_endpoint: <Option<String>>,
+//     last_seen_unix_ms: <Option<i64>>,
+//   }
+//
+// We project this into the row shape the existing renderer
+// expects (`node_id`, `state`, `online`, `last_seen_unix_ms`,
+// `is_self`, `agent_uri`, …) so the print path is unchanged.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -28,7 +48,6 @@ use console::style;
 use serde_json::{json, Value};
 
 use crate::persistence::config;
-use crate::support::local_invoke::invoke_local_ability;
 use crate::support::{
     node,
     output::{self, OutputFormat},
@@ -51,16 +70,21 @@ pub struct DevicesArgs {
 }
 
 pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
-    let resp =
-        invoke_local_ability("fleet.list_nodes", json!({})).context("invoke fleet.list_nodes")?;
-    let nodes = resp
-        .get("nodes")
-        .and_then(Value::as_array)
-        .cloned()
+    let creds = config::load_credentials().ok();
+    let current_node_id = creds
+        .as_ref()
+        .map(|c| c.node_id.clone())
         .unwrap_or_default();
-    let current_node_id = config::load_credentials()
-        .map(|c| c.node_id)
-        .unwrap_or_default();
+    let self_uri = creds
+        .as_ref()
+        .map(|c| crate::uri::device_uri(&c.tenant_id, &c.node_id));
+
+    let entries = fetch_directory_entries(self_uri.as_deref())?;
+    let nodes: Vec<Value> = entries
+        .into_iter()
+        .filter(|e| is_device_entry(e))
+        .map(|e| project_directory_entry(e, self_uri.as_deref()))
+        .collect();
 
     let filtered: Vec<Value> = nodes
         .into_iter()
@@ -76,11 +100,15 @@ pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
         .collect();
 
     if args.format == OutputFormat::Json {
-        // Surface the full envelope (including `federation_view`) so
-        // a script can detect "this is the local-only view" without
-        // re-issuing the call. Keeps parity with the ability handler.
-        let mut envelope = resp;
-        envelope["nodes"] = Value::Array(filtered);
+        // Wrap in an envelope so a JSON consumer can detect the
+        // origin (`federation_view: "federated"`) without re-
+        // running the call. The shape is intentionally
+        // forward-compatible with the v1 envelope so existing
+        // scripts that read `nodes` keep working.
+        let envelope = json!({
+            "nodes": filtered,
+            "federation_view": "federated",
+        });
         println!("{}", serde_json::to_string_pretty(&envelope)?);
         return Ok(());
     }
@@ -97,7 +125,6 @@ pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Header
     println!(
         "  {} {}",
         style(format!("{}", filtered.len())).bold(),
@@ -113,27 +140,99 @@ pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
         print_device(n, &current_node_id);
     }
 
-    // Surface the federation view limitation as a footer when
-    // active. A daemon that reports `local_only` is not a bug — it
-    // just hasn't joined a federation yet (or the federation Invoke
-    // replacement isn't published) — but the operator should know
-    // why the list is short.
-    if let Some(view) = resp_field(&resp, "federation_view") {
-        if view == "local_only" {
-            if let Some(reason) = resp_field(&resp, "federation_view_reason") {
-                println!();
-                output::info(&format!("federation view: local-only — {reason}"));
-            }
-        }
-    }
-
     Ok(())
 }
 
-fn resp_field(_resp: &Value, _key: &str) -> Option<String> {
-    // Re-fetch via direct lookup; kept as a helper so a future
-    // envelope-shape change touches one place.
-    _resp.get(_key).and_then(Value::as_str).map(str::to_string)
+#[cfg(feature = "axon-pb")]
+fn fetch_directory_entries(self_uri: Option<&str>) -> anyhow::Result<Vec<Value>> {
+    crate::support::federation_invoke::invoke_federation_discover(None, self_uri)
+        .context("invoke federation.discover for device list")
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn fetch_directory_entries(_self_uri: Option<&str>) -> anyhow::Result<Vec<Value>> {
+    Err(crate::support::local_invoke::federation_not_wired_error(
+        "listing devices via federation.discover",
+    ))
+}
+
+/// True when a `DirectoryEntry` projects an URA-kind = `device`
+/// agent. Anything else (`agent/<user>.<agent>`, hub URIs,
+/// resource URIs) is a non-device row and gets dropped from the
+/// device-list view.
+fn is_device_entry(entry: &Value) -> bool {
+    let uri = entry.get("agent_uri").and_then(Value::as_str).unwrap_or("");
+    if uri.is_empty() {
+        return false;
+    }
+    crate::uri::parse_ura(uri)
+        .map(|p| !p.device_id.is_empty() && p.agent_id.is_empty())
+        .unwrap_or(false)
+}
+
+/// Project a `DirectoryEntry` into the row shape `print_device`
+/// + `node::is_online` / `node::node_state_str` already consume.
+/// The mapping is straight-line: `status: "active"` → `state:
+/// "HEALTHY"`, `status: "stale"` → `state: "SUSPECT"` (sweep-
+/// candidate), `status: "draining"` → `state: "DRAINING"`. Any
+/// other value lands as `state: "UNKNOWN"` rather than crashing
+/// the renderer.
+fn project_directory_entry(entry: Value, self_uri: Option<&str>) -> Value {
+    let agent_uri = entry
+        .get("agent_uri")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let node_id = entry
+        .get("node_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let display_name = entry
+        .get("display_name")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let status = entry
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("active");
+    let state = match status {
+        "active" => "HEALTHY",
+        "stale" => "SUSPECT",
+        "draining" => "DRAINING",
+        _ => "UNKNOWN",
+    };
+    let online = state == "HEALTHY" || state == "REGISTERED";
+    let last_seen_unix_ms = entry.get("last_seen_unix_ms").cloned();
+    let origin_realm = entry
+        .get("origin_realm")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let hub_endpoint = entry
+        .get("hub_endpoint")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let is_self = self_uri.map(|u| u == agent_uri).unwrap_or(false);
+
+    let mut row = json!({
+        "node_id": node_id,
+        "agent_uri": agent_uri,
+        "display_name": display_name,
+        "state": state,
+        "online": online,
+        "is_self": is_self,
+        "paired": true,
+    });
+    if let Some(v) = last_seen_unix_ms {
+        row["last_seen_unix_ms"] = v;
+    }
+    if let Some(realm) = origin_realm {
+        row["tenant_id"] = Value::String(realm);
+    }
+    if let Some(endpoint) = hub_endpoint {
+        row["hub_endpoint"] = Value::String(endpoint);
+    }
+    row
 }
 
 fn print_device(n: &Value, current_node_id: &str) {
@@ -191,10 +290,6 @@ fn device_display_name<'a>(n: &'a Value, node_id: &'a str) -> &'a str {
         .get("display_name")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty());
-    // URI v4.1.4: device-id is a bare UUID. Trim to leading hex
-    // group when no display_name is set so device tables stay
-    // readable. Pre-v4.1.4 `en-`-prefixed ids also get caught (the
-    // length check is generous).
     let short_id = if node_id.len() > SHORT_NODE_ID_LEN {
         node_id.get(..SHORT_NODE_ID_LEN).unwrap_or(node_id)
     } else {
@@ -266,5 +361,54 @@ fn style_state(state: &str) -> String {
         "DRAINING" => format!("{}", style("Draining").dim()),
         "REMOVED" => format!("{}", style("Offline").dim()),
         _ => format!("{}", style(state).dim()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_device_entry_accepts_canonical_device_ura() {
+        let entry = json!({
+            "agent_uri": "easynet:///r/easynet.run/device/abc-123",
+        });
+        assert!(is_device_entry(&entry));
+    }
+
+    #[test]
+    fn is_device_entry_rejects_agent_ura() {
+        let entry = json!({
+            "agent_uri": "easynet:///r/easynet.run/agent/alice.claude",
+        });
+        assert!(!is_device_entry(&entry));
+    }
+
+    #[test]
+    fn project_maps_active_to_healthy_and_marks_self() {
+        let entry = json!({
+            "agent_uri": "easynet:///r/r1/device/n1",
+            "node_id": "n1",
+            "status": "active",
+            "origin_realm": "r1",
+        });
+        let row = project_directory_entry(entry, Some("easynet:///r/r1/device/n1"));
+        assert_eq!(row["state"], "HEALTHY");
+        assert_eq!(row["online"], true);
+        assert_eq!(row["is_self"], true);
+        assert_eq!(row["tenant_id"], "r1");
+    }
+
+    #[test]
+    fn project_maps_stale_to_suspect_offline() {
+        let entry = json!({
+            "agent_uri": "easynet:///r/r1/device/n2",
+            "node_id": "n2",
+            "status": "stale",
+        });
+        let row = project_directory_entry(entry, None);
+        assert_eq!(row["state"], "SUSPECT");
+        assert_eq!(row["online"], false);
+        assert_eq!(row["is_self"], false);
     }
 }

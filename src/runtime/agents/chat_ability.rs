@@ -1023,6 +1023,7 @@ fn stream_handler(
 /// The `<agent>.chat` ability itself is never exposed as a tool to
 /// the LLM (an agent calling its own chat would be infinite-recursion
 /// bait); it is filtered out before any include/exclude rules apply.
+#[cfg(test)]
 fn enumerate_skills(agent_name: &str, entry: &AgentEntry, selection: &Selection) -> Vec<String> {
     enumerate_skill_specs(agent_name, entry, selection)
         .into_iter()

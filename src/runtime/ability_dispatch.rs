@@ -41,7 +41,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use tokio::sync::{broadcast, mpsc};
 
-use crate::runtime::gateway_api::{GatewayApi, RemoteTarget};
+use crate::runtime::gateway_api::GatewayApi;
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
 /// One in-process RPC handler. Boxed closure so the registry can
@@ -485,13 +485,25 @@ impl AbilityDispatcher {
                     ),
                 }
             }
-            TargetScope::Remote { node } => self.gateway.invoke_remote_ability(
-                &RemoteTarget {
-                    node,
-                    ability: target.ability,
-                },
-                &target.normalized_args,
-            ),
+            TargetScope::Remote { node } => {
+                // Joint-plan phase 4: TargetScope::Remote no longer
+                // routes through GatewayApi (deleted along with
+                // NoopGateway's invoke_remote_ability stub). Any
+                // caller that still constructs a Remote target
+                // should be migrated to
+                // `support::federation_invoke::invoke_via_federation_forward`
+                // — every CLI surface and EAL dispatcher already
+                // did. Surface a typed error rather than silently
+                // bouncing to `Local` so a regression that adds a
+                // new Remote caller fails loud.
+                let _ = node;
+                anyhow::bail!(
+                    "AbilityDispatcher::execute_rpc no longer accepts \
+                     TargetScope::Remote; route through \
+                     `federation.forward_invoke` (see \
+                     `support::federation_invoke::invoke_via_federation_forward`)."
+                )
+            }
         }
     }
 
@@ -771,11 +783,16 @@ mod tests {
     }
 
     #[test]
-    fn remote_target_routes_through_gateway() {
-        // The remote path goes through GatewayApi. NoopGateway
-        // returns a clear "not connected" error; we just need to
-        // see that the dispatcher reached for it instead of
-        // looking up the local registry.
+    fn remote_target_returns_unified_path_redirect() {
+        // Joint-plan phase 4: `TargetScope::Remote` no longer
+        // routes through GatewayApi (deleted along with
+        // NoopGateway's invoke_remote_ability stub). Cross-device
+        // dispatch flows through
+        // `support::federation_invoke::invoke_via_federation_forward`
+        // instead. The dispatcher surfaces a typed error
+        // pointing the caller at the new path so a stale Remote
+        // construction fails loud instead of silently bouncing
+        // to Local.
         let dispatcher = AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
         let target = InvocationTarget {
             scope: TargetScope::Remote {
@@ -789,8 +806,8 @@ mod tests {
         let err = dispatcher.execute_rpc(target).unwrap_err();
         let msg = format!("{err}");
         assert!(
-            msg.contains("NoopGateway"),
-            "error must come from the gateway, got: {msg}"
+            msg.contains("federation.forward_invoke") || msg.contains("federation_invoke"),
+            "error must redirect to the unified path, got: {msg}"
         );
     }
 

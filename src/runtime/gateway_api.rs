@@ -32,15 +32,6 @@
 use crate::runtime::domain::NodeId;
 use serde_json::Value;
 
-/// Remote-ability target. v1 always carries explicit `node_id` +
-/// `ability` fields; v2 will fold these into the Invocation's
-/// URA-based `callee` when signed invocation ships.
-#[derive(Debug, Clone)]
-pub struct RemoteTarget {
-    pub node: NodeId,
-    pub ability: String,
-}
-
 /// A peer node as seen by this daemon's Axon registration.
 #[derive(Debug, Clone)]
 pub struct PeerInfo {
@@ -51,32 +42,22 @@ pub struct PeerInfo {
     pub labels: std::collections::BTreeMap<String, Value>,
 }
 
-/// v1 GatewayApi surface. Every Axon-facing method the Execution
-/// layer uses goes through here.
+/// GatewayApi surface — non-dispatch Axon-facing methods used by
+/// the Execution layer.
 ///
-/// v1 signatures return `Result<_>` synchronously; v2 will add
-/// async variants. The DendriteBridge owner (`runtime::gateway`)
-/// is the sole concrete implementor.
+/// Joint-plan phase 4 (海峰 + 凉冰, 2026-05-03) removed
+/// `invoke_remote_ability` / `subscribe_remote_ability` along with
+/// the `TargetScope::Remote` dispatch branch they backed. Cross-
+/// device dispatch now flows through the daemon's
+/// `federation.forward_invoke` ability instead — one path, one
+/// helper (`support::federation_invoke::invoke_via_federation_forward`).
+/// The remaining trait methods (publish_ability / list_peers /
+/// send_heartbeat) describe lifecycle / discovery surfaces that
+/// are unrelated to remote dispatch and stay.
 pub trait GatewayApi: Send + Sync {
     /// Publish a local ability on the Axon adapter so federated
     /// peers can discover and invoke it.
     fn publish_ability(&self, name: &str, description: &str, schema: &Value) -> anyhow::Result<()>;
-
-    /// Invoke a remote ability via `send_a2a_task`. Returns the
-    /// response value when the remote side responds RPC-style. For
-    /// streaming abilities, see `subscribe_remote_ability`.
-    fn invoke_remote_ability(&self, target: &RemoteTarget, args: &Value) -> anyhow::Result<Value>;
-
-    /// Subscribe to a streaming remote ability. v1 returns a boxed
-    /// callback installer; v2 will switch to a proper Stream type
-    /// once stream routing stability is confirmed (see plan §Axon
-    /// SDK 能力 unstable-stream fallback).
-    fn subscribe_remote_ability(
-        &self,
-        target: &RemoteTarget,
-        args: &Value,
-        on_frame: Box<dyn FnMut(Value) + Send>,
-    ) -> anyhow::Result<()>;
 
     /// List currently-reachable peers (this node excluded).
     fn list_peers(&self) -> anyhow::Result<Vec<PeerInfo>>;

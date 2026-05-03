@@ -10,7 +10,6 @@
 // ----------------
 // This module now contains only infrastructure primitives:
 //
-//   bridge_pool.rs — DendriteBridge connection pool (lock-free)
 //   net.rs         — host/port parsing and PID discovery
 //   node.rs        — `nodes[]` interpretation helpers (online, state)
 //   output.rs      — terminal formatting (tables, colors, JSON/plain)
@@ -55,7 +54,6 @@
 //     use crate::persistence::config;          // on-disk state
 //     use crate::registry::agents;             // agent registry
 //     use crate::core::agent_id::NodeId;   // typed identity
-//     use crate::support::bridge_pool;          // transport
 //
 // Architectural Position
 // ----------------------
@@ -66,7 +64,6 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-pub(crate) mod bridge_pool;
 /// PR-N1 commit 8/N: CLI bridge from `easynet ability invoke
 /// --node` to the local daemon's `federation.forward_invoke`
 /// gRPC ability. Mirrors the placement of `local_invoke.rs` so a
@@ -84,6 +81,8 @@ pub(crate) mod local_invoke;
 pub(crate) mod net;
 pub(crate) mod node;
 pub(crate) mod output;
+#[cfg(feature = "axon-pb")]
+pub(crate) mod remote_device;
 /// AXIOM Tier 2.5 bash safety subsystem. Self-contained set
 /// of helpers (destructive command list, hardened process
 /// runner, AST + security pipeline added in later slices)

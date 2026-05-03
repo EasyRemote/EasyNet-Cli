@@ -490,8 +490,33 @@ struct AbilityItem {
 }
 
 pub fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
+    let session = load_session()?
+        .ok_or_else(|| anyhow!("not logged in — run `easynet auth login <email>` first"))?;
     let path = format!("/api/v1/devices/{}/abilities", args.node_id);
-    let resp: AbilityListResp = auth_get_json(&path)?;
+    let url = format!("{}{}", session.hub_url, path);
+    let resp: AbilityListResp = match ureq::get(&url)
+        .timeout(HTTP_TIMEOUT)
+        .set("Authorization", &format!("Bearer {}", session.token))
+        .call()
+    {
+        Ok(resp) => resp.into_json().context("parse response JSON")?,
+        Err(ureq::Error::Status(401, _)) => bail!(
+            "HTTP 401 — token expired or invalid. Run `easynet auth login <email>` to refresh."
+        ),
+        Err(ureq::Error::Status(404, resp)) => {
+            let body = resp.into_string().unwrap_or_default();
+            fallback_device_abilities_from_local_daemon(&args.node_id).map_err(|fallback_err| {
+                anyhow!(
+                    "HTTP 404 from {url}: {body}\nlocal federation fallback failed: {fallback_err}"
+                )
+            })?
+        }
+        Err(ureq::Error::Status(code, resp)) => {
+            let body = resp.into_string().unwrap_or_default();
+            bail!("HTTP {code} from {url}: {body}");
+        }
+        Err(ureq::Error::Transport(e)) => bail!("transport to {url}: {e}"),
+    };
     if args.json {
         println!(
             "{}",
@@ -527,6 +552,111 @@ pub fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+/// Joint-plan unified path: when the backend HTTP API can't find a
+/// device (typically cross-hub), fall back to the daemon's
+/// `device.describe` ability — the same surface
+/// `easynet device show` uses post-phase-1.2.
+///
+/// Routing matches the rest of the CLI:
+///   * `node_id` matches this device's own node id → invoke
+///     `device.describe` locally over the control socket.
+///   * Otherwise → resolve the target as a canonical device URA:
+///     cross-hub directory hit first, local-realm fallback second,
+///     then forward_invoke `device.describe`.
+///     The backend HTTP API surface only exposes bare uuid today,
+///     but a canonical URA still lands here correctly if passed by
+///     a future caller.
+///
+/// The legacy `fleet.describe_node` path handled both arms server-
+/// side; the daemon-side handler is on the phase 4 cull list. This
+/// helper preserves the operator-visible behaviour while the
+/// dependency moves.
+fn fallback_device_abilities_from_local_daemon(node_id: &str) -> anyhow::Result<AbilityListResp> {
+    let node = describe_node_via_unified_path(node_id)
+        .with_context(|| format!("invoke device.describe for node {node_id}"))?;
+    let abilities = node
+        .get("abilities")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow!("device.describe returned no `abilities` array"))?;
+    let items = abilities
+        .iter()
+        .map(ability_item_from_descriptor)
+        .collect::<Vec<_>>();
+    Ok(AbilityListResp { items })
+}
+
+fn describe_node_via_unified_path(node_id: &str) -> anyhow::Result<serde_json::Value> {
+    let trimmed = node_id.trim();
+    let creds = crate::persistence::config::load_credentials().ok();
+    let local_node = creds
+        .as_ref()
+        .map(|c| c.node_id.clone())
+        .unwrap_or_default();
+    let local_tenant = creds
+        .as_ref()
+        .map(|c| c.tenant_id.clone())
+        .unwrap_or_default();
+
+    let is_local = !local_node.is_empty() && trimmed == local_node;
+    if is_local {
+        return crate::support::local_invoke::invoke_local_ability(
+            "device.describe",
+            serde_json::json!({}),
+        )
+        .context("invoke device.describe (local)");
+    }
+
+    describe_node_remote(trimmed, &local_tenant)
+}
+
+#[cfg(feature = "axon-pb")]
+fn describe_node_remote(node: &str, local_tenant: &str) -> anyhow::Result<serde_json::Value> {
+    let _ = local_tenant;
+    let target_uri = crate::support::remote_device::resolve_target_device_uri(node)?;
+    let caller_uri = crate::support::remote_device::caller_device_uri_from_credentials();
+    crate::support::federation_invoke::invoke_via_federation_forward(
+        "device.describe",
+        serde_json::json!({}),
+        &target_uri,
+        caller_uri.as_deref(),
+    )
+    .with_context(|| format!("forward device.describe to target={target_uri}"))
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn describe_node_remote(node: &str, _local_tenant: &str) -> anyhow::Result<serde_json::Value> {
+    Err(crate::support::local_invoke::federation_not_wired_error(
+        &format!("describing remote device {node:?}"),
+    ))
+}
+
+fn ability_item_from_descriptor(value: &serde_json::Value) -> AbilityItem {
+    AbilityItem {
+        name: value
+            .get("name")
+            .or_else(|| value.get("ability_name"))
+            .or_else(|| value.get("tool_name"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        tool_name: value
+            .get("tool_name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        version: value
+            .get("version")
+            .or_else(|| value.get("ability_version"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        state: Some(
+            value
+                .get("state")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("ACTIVE")
+                .to_string(),
+        ),
+    }
 }
 
 #[derive(Debug, Args)]
@@ -690,16 +820,39 @@ pub fn run_agents(args: AgentsArgs) -> anyhow::Result<()> {
         println!("(no agents — daemon may be offline, or no hosted agents joined)");
         return Ok(());
     }
-    println!("{:<46} {:<24} {:<10}", "URI", "DISPLAY_NAME", "STATUS");
+    // Backend's `/api/v1/agents` shape (listAgentsLogic.go) is
+    // {agent_id, display_name, node_id, tags, skills:[...]} — no
+    // top-level `uri` or `status` fields. The pre-fix renderer
+    // looked for `uri` / `status` and printed `-` for every row,
+    // which made every agent look offline / unidentified even when
+    // the response carried real data. Render the device that hosts
+    // each agent (NODE_ID) and the skill count so the operator
+    // sees both identity and "what can this agent do".
+    println!(
+        "{:<60} {:<28} {:<38} {:>6}",
+        "AGENT_ID", "DISPLAY_NAME", "NODE_ID", "SKILLS"
+    );
     for a in &resp.items {
-        let uri = a.get("uri").and_then(|v| v.as_str()).unwrap_or("-");
+        let agent_id = a
+            .get("agent_id")
+            .or_else(|| a.get("uri"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("-");
         let name = a
             .get("display_name")
             .or_else(|| a.get("name"))
             .and_then(|v| v.as_str())
             .unwrap_or("-");
-        let status = a.get("status").and_then(|v| v.as_str()).unwrap_or("-");
-        println!("{:<46} {:<24} {:<10}", uri, name, status);
+        let node_id = a.get("node_id").and_then(|v| v.as_str()).unwrap_or("-");
+        let skills = a
+            .get("skills")
+            .and_then(|v| v.as_array())
+            .map(|s| s.len())
+            .unwrap_or(0);
+        println!(
+            "{:<60} {:<28} {:<38} {:>6}",
+            agent_id, name, node_id, skills
+        );
     }
     Ok(())
 }
@@ -828,4 +981,20 @@ pub fn run_events(args: EventsArgs) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ability_item_fallback_maps_federation_descriptor_shape() {
+        let item = ability_item_from_descriptor(&serde_json::json!({
+            "name": "shell.run",
+            "ability_version": "1",
+        }));
+        assert_eq!(item.name.as_deref(), Some("shell.run"));
+        assert_eq!(item.version.as_deref(), Some("1"));
+        assert_eq!(item.state.as_deref(), Some("ACTIVE"));
+    }
 }

@@ -37,7 +37,7 @@
 use anyhow::Context;
 use clap::{Args, Subcommand};
 use console::style;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::facade::cli::{config_cmd, devices, join, reset};
 use crate::support::output::{self, OutputFormat};
@@ -102,30 +102,49 @@ pub fn run(args: DeviceArgs) -> anyhow::Result<()> {
 }
 
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
-    // Per the ability-only ontology this command is one
-    // `fleet.describe_node` invocation against the local daemon.
-    // The daemon-side handler returns the node envelope (or
-    // `federation_not_wired` for a remote id while the federation
-    // Invoke replacement is being landed).
-    let node = crate::support::local_invoke::invoke_local_ability(
-        "fleet.describe_node",
-        json!({ "node_id": args.node_id }),
-    )
-    .with_context(|| format!("describe node {}", args.node_id))?;
+    // Joint-plan unified path (海峰 + 凉冰, 2026-05-03): every
+    // cross-device dispatch flows through
+    // `federation.forward_invoke`; each daemon describes ITSELF via
+    // `device.describe` (no `node_id` argument). The CLI is the
+    // routing-decision site:
+    //   * `args.node_id` looks like a canonical URA  → forward to it
+    //   * bare uuid that matches this device's node id → describe self
+    //   * any other bare uuid                          → first consult
+    //                                                    federation.discover
+    //                                                    for a cross-hub
+    //                                                    realm hit, then
+    //                                                    fall back to the
+    //                                                    local realm only
+    //                                                    if discovery
+    //                                                    cannot answer
+    //   * `local`                                      → describe self
+    //
+    // This collapses the legacy `fleet.describe_node {node_id}` shape
+    // — which had a self-arm AND a same-realm `federation.resolve`
+    // fallback baked into the handler — onto the single path every
+    // other cross-device call already takes.
+    let node = describe_target(&args.node_id)
+        .with_context(|| format!("describe node {}", args.node_id))?;
 
     // Hosted-ability list is `easynet.discover` filtered to entries
     // whose owner matches the target node id. v1 only knows about
     // the local node — once federation Invoke ships the daemon-side
     // handler will return per-node ability lists.
-    let abilities =
-        match crate::support::local_invoke::invoke_local_ability("easynet.discover", json!({})) {
-            Ok(catalogue) => catalogue
-                .get("abilities")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default(),
-            Err(_) => Vec::new(),
-        };
+    let abilities = node
+        .get("abilities")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_else(|| {
+            match crate::support::local_invoke::invoke_local_ability("easynet.discover", json!({}))
+            {
+                Ok(catalogue) => catalogue
+                    .get("abilities")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default(),
+                Err(_) => Vec::new(),
+            }
+        });
     // Refer to the borrowed slot below as `&node` to keep parity
     // with the legacy variable name; the dereferences are checked.
     let node = &node;
@@ -257,6 +276,56 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
 }
 
 fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
+    // Joint-plan unified path: `device remove` calls
+    // `federation.revoke` directly through the daemon's gRPC
+    // InvocationServer (the same surface
+    // `runtime/advertise.rs::revoke_agent` and the heartbeat
+    // sidecar's shutdown hook use). The legacy `fleet.remove_node`
+    // ability was a P1.5 placeholder — local-arm refused with
+    // "use device reset", remote-arm raised `federation_not_wired`
+    // — so it never moved real federation state. The new path
+    // reaches the hub's `PresenceRegistry::force_revoke` and the
+    // advertised-agent store so downstream `device list` / `auth
+    // devices` immediately stop returning the entry.
+
+    // Block self-removal — the operator should use
+    // `easynet device reset` for that (the local side of the same
+    // operation, which also clears `~/.easynet/credentials.json`).
+    let creds = crate::persistence::config::load_credentials().ok();
+    let local_node = creds
+        .as_ref()
+        .map(|c| c.node_id.clone())
+        .unwrap_or_default();
+    let local_tenant = creds
+        .as_ref()
+        .map(|c| c.tenant_id.clone())
+        .unwrap_or_default();
+
+    let trimmed = args.node_id.trim();
+    let target_uri = if trimmed.starts_with("easynet:///r/") {
+        canonicalize_remove_target_uri(trimmed)?
+    } else if !local_tenant.is_empty() {
+        crate::uri::device_uri(&local_tenant, trimmed)
+    } else {
+        anyhow::bail!(
+            "cannot resolve node {trimmed:?}: pass a canonical \
+             `easynet:///r/<realm>/device/<id>` URI or pair this device first"
+        );
+    };
+
+    let local_uri = if !local_tenant.is_empty() && !local_node.is_empty() {
+        crate::uri::device_uri(&local_tenant, &local_node)
+    } else {
+        String::new()
+    };
+    if !local_uri.is_empty() && local_uri == target_uri {
+        anyhow::bail!(
+            "refusing to revoke this device's own URI ({local_uri}); use \
+             `easynet device reset` to clear local credentials and \
+             deregister cleanly."
+        );
+    }
+
     if !args.yes {
         let prompt = format!(
             "Drain and deregister substrate '{}' from the federation?",
@@ -268,23 +337,97 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
         }
     }
 
-    // One ability invocation: `fleet.remove_node`. The daemon-side
-    // handler refuses to remove the local device (operator should
-    // use `easynet device reset` for that — it is the local side
-    // of the same operation) and surfaces `federation_not_wired`
-    // for remote ids until the Invoke replacement ships.
-    let result = crate::support::local_invoke::invoke_local_ability(
-        "fleet.remove_node",
-        json!({
-            "node_id": args.node_id,
-            "reason":  args.reason,
-        }),
-    )
-    .with_context(|| format!("remove {}", args.node_id))?;
+    invoke_revoke(&target_uri, &args.reason, local_uri.as_str())
+        .with_context(|| format!("revoke {target_uri}"))?;
 
     output::success(&format!("removed {}", args.node_id));
-    if !result.is_null() {
-        println!("{}", serde_json::to_string_pretty(&result)?);
-    }
     Ok(())
+}
+
+#[cfg(feature = "axon-pb")]
+fn canonicalize_remove_target_uri(uri: &str) -> anyhow::Result<String> {
+    crate::support::federation_invoke::parse_node_uri(uri)
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn canonicalize_remove_target_uri(uri: &str) -> anyhow::Result<String> {
+    Ok(uri.to_string())
+}
+
+#[cfg(feature = "axon-pb")]
+fn invoke_revoke(target_uri: &str, reason: &str, caller_uri: &str) -> anyhow::Result<()> {
+    let caller_opt = if caller_uri.is_empty() {
+        None
+    } else {
+        Some(caller_uri)
+    };
+    crate::support::federation_invoke::invoke_federation_revoke(target_uri, reason, caller_opt)
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn invoke_revoke(target_uri: &str, _reason: &str, _caller_uri: &str) -> anyhow::Result<()> {
+    Err(crate::support::local_invoke::federation_not_wired_error(
+        &format!("revoking {target_uri:?}"),
+    ))
+}
+
+/// Joint-plan unified-path dispatch for `easynet device show`.
+///
+/// Resolves `node_id` (either a canonical URA or a bare uuid /
+/// the literal `local`) into the right `device.describe` call:
+///
+///   * `local` or matches this daemon's own node id → invoke
+///     `device.describe` locally over the control socket.
+///   * canonical URA pointing at a remote device → forward_invoke
+///     `device.describe` against that URA.
+///   * bare uuid that does not match local → wrap in this device's
+///     realm and forward_invoke (matches the legacy
+///     `fleet.describe_node` same-realm fallback).
+fn describe_target(node_id: &str) -> anyhow::Result<Value> {
+    let trimmed = node_id.trim();
+    let creds = crate::persistence::config::load_credentials().ok();
+    let local_node = creds
+        .as_ref()
+        .map(|c| c.node_id.clone())
+        .unwrap_or_default();
+    let local_tenant = creds
+        .as_ref()
+        .map(|c| c.tenant_id.clone())
+        .unwrap_or_default();
+
+    let is_local = trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("local")
+        || (!local_node.is_empty() && trimmed == local_node);
+
+    if is_local {
+        return crate::support::local_invoke::invoke_local_ability(
+            "device.describe",
+            serde_json::json!({}),
+        )
+        .context("invoke device.describe (local)");
+    }
+
+    invoke_remote_describe(trimmed, &local_tenant)
+}
+
+#[cfg(feature = "axon-pb")]
+fn invoke_remote_describe(node: &str, local_tenant: &str) -> anyhow::Result<Value> {
+    let _ = local_tenant;
+    let target_uri = crate::support::remote_device::resolve_target_device_uri(node)?;
+
+    let caller_uri = crate::support::remote_device::caller_device_uri_from_credentials();
+    crate::support::federation_invoke::invoke_via_federation_forward(
+        "device.describe",
+        serde_json::json!({}),
+        &target_uri,
+        caller_uri.as_deref(),
+    )
+    .with_context(|| format!("forward device.describe to target={target_uri}"))
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn invoke_remote_describe(node: &str, _local_tenant: &str) -> anyhow::Result<Value> {
+    Err(crate::support::local_invoke::federation_not_wired_error(
+        &format!("describing remote device {node:?}"),
+    ))
 }

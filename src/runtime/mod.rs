@@ -18,11 +18,6 @@
 //   context         — Thread-local dispatch context (mission id,
 //                     depth, origin) with env-var fallback for
 //                     subprocess children.
-//   conversation    — Multi-agent round-robin `discuss` pattern
-//                     (read by `facade::cli::discuss`). Lives at
-//                     runtime-top rather than under drivers/
-//                     because it is runtime-agnostic — it composes
-//                     any two adapter-registered agents.
 //   process_runner  — Shared subprocess helpers (spawn, line
 //                     callbacks, byte caps).
 //   run_store       — Per-run on-disk layout
@@ -40,7 +35,6 @@
 pub(crate) mod abilities;
 pub(crate) mod adapter;
 pub(crate) mod context;
-pub(crate) mod conversation;
 pub(crate) mod directory;
 pub(crate) mod dispatch;
 pub(crate) mod drivers;

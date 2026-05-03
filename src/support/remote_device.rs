@@ -1,0 +1,154 @@
+// EasyNet CLI — shared remote-device resolution helpers
+// ======================================================
+//
+// File: src/support/remote_device.rs
+// Description: Canonical helper for CLI surfaces that accept either a
+//              device URA or a bare node UUID and need to forward a
+//              call to the right remote device.
+//
+// Why this exists
+// ---------------
+// Several CLI surfaces historically open-coded the same routing rule:
+//
+//   1. If the user passes a canonical `easynet:///r/<realm>/device/<id>`
+//      URI, validate and use it directly.
+//   2. If the user passes a bare UUID, first ask the local daemon's
+//      federated directory (`federation.discover`) whether that node is
+//      currently known under a DIFFERENT realm.
+//   3. Only if the directory cannot answer, fall back to wrapping the
+//      UUID in the caller's local realm.
+//
+// Before this helper existed, `device show` had the fixed two-stage
+// lookup while `auth abilities`, `ability list/show`, and
+// `ability exec` still used the old "always wrap in local realm"
+// branch. That drift is exactly how a cross-hub UUID regressed in one
+// CLI surface after being fixed in another.
+//
+// The helper centralises the routing rule so every caller keeps the
+// same semantics and future bug fixes land in one place.
+//
+// Author: Silan Hu <silan.hu@u.nus.edu>
+// Copyright (c) 2026 EasyNet. All rights reserved.
+
+use anyhow::anyhow;
+use serde_json::Value;
+
+/// Best-effort caller URI for federation-forwarded requests.
+///
+/// When local credentials are present and non-empty, returns the
+/// canonical device URI for this caller. Otherwise returns `None` and
+/// the lower-level federation helper falls back to its own synthetic
+/// `easynet:///r/cli/device/local` caller.
+pub(crate) fn caller_device_uri_from_credentials() -> Option<String> {
+    crate::persistence::config::load_credentials()
+        .ok()
+        .filter(|creds| !creds.tenant_id.trim().is_empty() && !creds.node_id.trim().is_empty())
+        .map(|creds| crate::uri::device_uri(creds.tenant_id.trim(), creds.node_id.trim()))
+}
+
+/// Resolve a CLI `node` argument into a canonical device URA.
+///
+/// Resolution order:
+/// 1. Canonical URA passes through after strict validation.
+/// 2. Bare UUID hits the local daemon's federated directory first so
+///    cross-hub devices preserve their real realm.
+/// 3. Only if the directory cannot answer do we fall back to wrapping
+///    in the local realm from `credentials.json`.
+pub(crate) fn resolve_target_device_uri(node: &str) -> anyhow::Result<String> {
+    let local_tenant = crate::persistence::config::load_credentials()
+        .ok()
+        .and_then(|creds| {
+            let tenant = creds.tenant_id.trim();
+            if tenant.is_empty() {
+                None
+            } else {
+                Some(tenant.to_string())
+            }
+        });
+    resolve_target_device_uri_with_lookup(
+        node,
+        local_tenant.as_deref(),
+        lookup_node_uri_in_directory,
+    )
+}
+
+fn resolve_target_device_uri_with_lookup<F>(
+    node: &str,
+    local_tenant: Option<&str>,
+    lookup: F,
+) -> anyhow::Result<String>
+where
+    F: FnOnce(&str) -> Option<String>,
+{
+    let trimmed = node.trim();
+    if trimmed.starts_with("easynet:///r/") {
+        return crate::support::federation_invoke::parse_node_uri(trimmed);
+    }
+    if let Some(uri) = lookup(trimmed) {
+        return Ok(uri);
+    }
+    if let Some(local_tenant) = local_tenant.filter(|tenant| !tenant.is_empty()) {
+        return Ok(crate::uri::device_uri(local_tenant, trimmed));
+    }
+    Err(anyhow!(
+        "cannot resolve node {trimmed:?}: federation.discover returned no match and \
+         no local realm is wired (pair this device first or pass a canonical \
+         `easynet:///r/<realm>/device/<id>` URI)"
+    ))
+}
+
+/// Walk the local daemon's federated directory for a `DirectoryEntry`
+/// whose `node_id` equals `node`. Returns the entry's canonical
+/// device URA. Best-effort only: discover failures must not block the
+/// legacy local-realm fallback.
+fn lookup_node_uri_in_directory(node: &str) -> Option<String> {
+    let entries = crate::support::federation_invoke::invoke_federation_discover(None, None).ok()?;
+    for entry in entries {
+        if entry.get("node_id").and_then(Value::as_str) == Some(node) {
+            if let Some(uri) = entry.get("agent_uri").and_then(Value::as_str) {
+                return Some(uri.to_string());
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_uri_passes_through() {
+        let uri = "easynet:///r/peer/device/node-1";
+        let resolved = resolve_target_device_uri_with_lookup(uri, Some("local"), |_| None)
+            .expect("canonical URI");
+        assert_eq!(resolved, uri);
+    }
+
+    #[test]
+    fn directory_hit_beats_local_realm_fallback() {
+        let resolved = resolve_target_device_uri_with_lookup("node-1", Some("realm-a"), |_| {
+            Some("easynet:///r/realm-b/device/node-1".to_string())
+        })
+        .expect("directory hit");
+        assert_eq!(resolved, "easynet:///r/realm-b/device/node-1");
+    }
+
+    #[test]
+    fn local_realm_fallback_is_used_when_directory_misses() {
+        let resolved = resolve_target_device_uri_with_lookup("node-2", Some("realm-a"), |_| None)
+            .expect("fallback");
+        assert_eq!(resolved, "easynet:///r/realm-a/device/node-2");
+    }
+
+    #[test]
+    fn missing_directory_and_realm_surfaces_actionable_error() {
+        let err = resolve_target_device_uri_with_lookup("node-3", None, |_| None)
+            .expect_err("missing realm must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("pair this device first"),
+            "error must explain the recovery path, got: {msg}"
+        );
+    }
+}

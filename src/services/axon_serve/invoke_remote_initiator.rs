@@ -65,9 +65,11 @@ use tonic::transport::Channel;
 use tonic::Status;
 
 use crate::pb::axon::v1::invocation_client::InvocationClient;
+#[cfg(test)]
+use crate::pb::axon::v1::BinaryChunk;
 use crate::pb::axon::v1::{
-    invoke_bidi_up::Payload as UpPayload, BinaryChunk, EnvelopeOpen, InvocationTarget,
-    InvokeBidiUp, StreamDescriptor,
+    invoke_bidi_up::Payload as UpPayload, EnvelopeOpen, InvocationTarget, InvokeBidiUp,
+    StreamDescriptor,
 };
 
 /// Daemon-side ability name this initiator targets. The daemon's

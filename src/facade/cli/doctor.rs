@@ -151,66 +151,62 @@ fn check_runtime() -> Check {
 }
 
 fn check_federation() -> Check {
-    // Per the ability-only ontology this check goes through
-    // `fleet.list_nodes` — the same surface every other CLI
-    // surface uses — instead of the dead `bridge.list_nodes`
-    // path that pre-rewrite returned a hard error here.
-    match crate::support::local_invoke::invoke_local_ability(
-        "fleet.list_nodes",
-        serde_json::json!({}),
-    ) {
-        Ok(envelope) => {
-            let count = envelope
-                .get("nodes")
-                .and_then(serde_json::Value::as_array)
-                .map(|a| a.len())
-                .unwrap_or(0);
-            let view = envelope
-                .get("federation_view")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            let reason = envelope
-                .get("federation_view_reason")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("no federation detail provided");
-            let peer_probe_failed = envelope
-                .get("nodes")
-                .and_then(serde_json::Value::as_array)
-                .map(|nodes| {
-                    nodes.iter().any(|n| {
-                        n.get("is_self") != Some(&serde_json::Value::Bool(true))
-                            && (!n
-                                .get("online")
-                                .and_then(serde_json::Value::as_bool)
-                                .unwrap_or(false)
-                                || n.get("probe_status").and_then(serde_json::Value::as_str)
-                                    == Some("probe_failed"))
-                    })
+    // Joint-plan unified path: cross-device enumeration goes through
+    // `federation.discover` (the same surface `easynet device list`
+    // and `easynet runtime status` use). DirectoryEntries carry a
+    // `status` field (`active` / `stale` / `draining`); `non-active`
+    // is the doctor's "peer probe failed" equivalent in the new shape.
+    federation_check_impl()
+}
+
+#[cfg(feature = "axon-pb")]
+fn federation_check_impl() -> Check {
+    use serde_json::Value;
+    match crate::support::federation_invoke::invoke_federation_discover(None, None) {
+        Ok(entries) => {
+            let total = entries.len();
+            let stale = entries
+                .iter()
+                .filter(|e| {
+                    e.get("status")
+                        .and_then(Value::as_str)
+                        .map(|s| s != "active")
+                        .unwrap_or(true)
                 })
-                .unwrap_or(false);
-            if view == "local_only" {
+                .count();
+            if total == 0 {
                 Check {
                     name: "federation".to_string(),
                     status: CheckStatus::Warn,
-                    detail: format!("{count} node(s); local-only view: {reason}"),
+                    detail: "no federated directory entries — peers may not be reachable yet, \
+                             or no devices are paired across hubs"
+                        .to_string(),
                     hint: Some(
-                        "The daemon is reachable, but this runtime cannot currently see peers.",
+                        "Check `easynet federation peers` to confirm the trust anchor + \
+                         peer daemon health.",
                     ),
                 }
-            } else if peer_probe_failed {
+            } else if stale > 0 {
                 Check {
                     name: "federation".to_string(),
                     status: CheckStatus::Warn,
-                    detail: format!("{count} node(s) discovered, but at least one peer probe failed"),
+                    detail: format!(
+                        "{total} entr{} discovered, but {stale} are not active (stale / draining)",
+                        if total == 1 { "y" } else { "ies" }
+                    ),
                     hint: Some(
-                        "Check realm membership, peer daemon health, and cross-device forward_invoke reachability.",
+                        "Stale entries indicate the source daemon's heartbeat lapsed; \
+                         restart the peer daemon or wait for the next sweep tick.",
                     ),
                 }
             } else {
                 Check {
                     name: "federation".to_string(),
                     status: CheckStatus::Ok,
-                    detail: format!("{count} node(s) reachable"),
+                    detail: format!(
+                        "{total} entr{} active",
+                        if total == 1 { "y" } else { "ies" }
+                    ),
                     hint: None,
                 }
             }
@@ -218,9 +214,21 @@ fn check_federation() -> Check {
         Err(e) => Check {
             name: "federation".to_string(),
             status: CheckStatus::Warn,
-            detail: format!("fleet.list_nodes unavailable: {e}"),
+            detail: format!("federation.discover unavailable: {e}"),
             hint: Some("Check that the daemon is running (`easynet runtime status`)."),
         },
+    }
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn federation_check_impl() -> Check {
+    Check {
+        name: "federation".to_string(),
+        status: CheckStatus::Warn,
+        detail: "federation.discover requires the `axon-pb` build feature".to_string(),
+        hint: Some(
+            "Production builds always include `axon-pb`; this is likely a minimal-feature build.",
+        ),
     }
 }
 
