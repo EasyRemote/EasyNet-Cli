@@ -191,6 +191,8 @@ pub struct ResolveFilter {
 pub struct ResolvedAgent {
     pub uri: String,
     pub status: String,
+    #[serde(default)]
+    pub host_node_id: Option<String>,
     /// Per-ability descriptors as advertised through
     /// `federation.advertise_abilities`. Empty when the resolve
     /// call did not pass `include_abilities = true`. Each entry

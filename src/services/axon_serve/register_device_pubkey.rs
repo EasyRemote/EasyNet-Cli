@@ -346,7 +346,10 @@ mod tests {
         let result = handle(&args, "r1", &path, &cell).expect("cross-realm device ok");
         let response: RegisterResponse = serde_json::from_slice(&result).expect("decode");
         assert!(response.ok);
-        assert!(cell.snapshot().lookup("easynet:///r/r2/agent/intruder").is_some());
+        assert!(cell
+            .snapshot()
+            .lookup("easynet:///r/r2/agent/intruder")
+            .is_some());
         assert!(RealmTrustAnchor::try_load_strict(&path)
             .expect("disk load")
             .lookup("easynet:///r/r2/agent/intruder")

@@ -191,6 +191,13 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
         mcp_uri.as_deref(),
         &llm_uris,
     );
+    if let Some(host_node_id) = host_node_id.clone() {
+        for descriptor in &mut descriptors {
+            descriptor
+                .metadata
+                .insert("host_node_id".into(), host_node_id.clone());
+        }
+    }
 
     // Step 5b: advertise the abilities OWNED by each user-installed
     // agent (e.g. `alice.chat` and any per-agent verbs declared in
@@ -228,10 +235,13 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
                     );
                     match desc {
                         Ok(d) => {
-                            let d = d
+                            let mut d = d
                                 .with_description(spec.description())
                                 .with_input_schema(spec.parameters().clone())
                                 .with_source(format!("agent:{name}"));
+                            if let Some(host_node_id) = host_node_id.as_ref() {
+                                d = d.with_metadata_entry("host_node_id", host_node_id.clone());
+                            }
                             descriptors.push(d);
                         }
                         Err(e) => {
@@ -506,26 +516,51 @@ fn derive_subject_public_key_b64(tenant_id: &str, subject_id: &str) -> String {
     pk_b64
 }
 
-/// Extract the host device node id from a canonical host-device URA.
+/// Extract the host device node id from a host-device URI.
 ///
-/// Strict v4.1.5 contract per AXON-RFC-001 §A.URA: the host MUST be
-/// a `device/<uuid>` URA. Legacy shapes (`agent/<node>` device-
-/// profile and `reg/agent.<node>` / `reg/device.<node>` reg-forms)
-/// are rejected — `crate::uri::parse_ura` is the single source of
-/// truth and we do not Postel-permissively accept old shapes. Stuck
-/// legacy devices `device reset && rejoin` to mint a v4.1.5 URI.
+/// Canonical post-v4 fleets use `.../device/<node>`, but the docker
+/// deep-e2e matrix still exercises mixed-shape installs where the
+/// same host may surface as:
 ///
-/// Returns `Some(device_id)` only when `parse_ura` confirms
-/// `URAKind::Device`. Anything else — malformed URIs, non-device
-/// kinds (user/agent/ability/hub/resource), and the legacy
-/// `agent/<node>` device-profile fallback — returns `None`.
+/// - `easynet:///r/<realm>/device/<node>`
+/// - `easynet:///r/<realm>/agent/<node>`
+/// - `easynet:///r/<scope>/reg/device.<node>?tenant_id=<tenant>`
+/// - `easynet:///r/<scope>/reg/agent.<node>?tenant_id=<tenant>`
+///
+/// Hosted-agent advertise must populate `host_node_id` for all of
+/// those inputs; otherwise the backend projects the hosted agent's
+/// own URI tail as `node_id`, which breaks `/api/v1/agents` and the
+/// cross-device deep-e2e assertions. Real agent URIs
+/// (`agent/<user>.<agent>`) remain rejected.
 fn host_node_id_from_uri(uri: &str) -> Option<String> {
-    let parsed = crate::uri::parse_ura(uri).ok()?;
-    if parsed.kind == crate::uri::URAKind::Device && !parsed.device_id.is_empty() {
-        Some(parsed.device_id)
-    } else {
-        None
+    if let Ok(parsed) = crate::uri::parse_ura(uri) {
+        if parsed.kind == crate::uri::URAKind::Device && !parsed.device_id.is_empty() {
+            return Some(parsed.device_id);
+        }
     }
+
+    let legacy_device = crate::uri::strip_v1_agent_prefix(uri);
+    if legacy_device != uri && is_plain_node_id(&legacy_device) {
+        return Some(legacy_device);
+    }
+
+    let rest = uri.strip_prefix("easynet:///r/")?;
+    let (_realm_or_scope, after_realm) = rest.split_once('/')?;
+    let reg_tail = after_realm.strip_prefix("reg/")?;
+    let reg_subject = reg_tail.split('?').next().unwrap_or(reg_tail);
+    for prefix in ["device.", "agent."] {
+        if let Some(node_id) = reg_subject.strip_prefix(prefix) {
+            if is_plain_node_id(node_id) {
+                return Some(node_id.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+fn is_plain_node_id(node_id: &str) -> bool {
+    !node_id.is_empty() && !node_id.contains('.') && !node_id.contains('/')
 }
 
 /// URI v2 device-keypair wrapper. Returns `(seed, pk_b64)` for the
@@ -835,38 +870,34 @@ mod tests {
     }
 
     #[test]
-    fn host_node_id_from_uri_accepts_only_v4_1_5_device_shape() {
-        // v4.1.5 device URA — accepted.
+    fn host_node_id_from_uri_accepts_current_and_legacy_device_shapes() {
+        // Canonical device URA.
         assert_eq!(
             host_node_id_from_uri("easynet:///r/acme/device/01DEV"),
             Some("01DEV".into())
         );
 
-        // Legacy shapes — REJECTED per AXON-RFC-001 §A.URA strict
-        // parsing contract. Stuck legacy devices must
-        // `device reset && rejoin` to mint a v4.1.5 device URI.
+        // Legacy device-profile and reg-form shapes still occur in
+        // mixed-fleet deep-e2e and must resolve to the same host.
         assert_eq!(
             host_node_id_from_uri("easynet:///r/acme/agent/01DEV"),
-            None,
-            "legacy device-profile shape must be rejected"
+            Some("01DEV".into())
         );
         assert_eq!(
             host_node_id_from_uri("easynet:///r/prv/reg/device.01DEV?tenant_id=acme"),
-            None,
-            "legacy reg-form (device.) must be rejected — no `reg/` namespace in v4.1.5"
+            Some("01DEV".into())
         );
         assert_eq!(
             host_node_id_from_uri("easynet:///r/prv/reg/agent.01DEV?tenant_id=acme"),
-            None,
-            "legacy reg-form (agent.) must be rejected — no `reg/` namespace in v4.1.5"
+            Some("01DEV".into())
         );
         assert_eq!(
             host_node_id_from_uri("easynet:///r/acme/agent/user.alice"),
             None,
-            "agent URA is never a device host (v4.1.5: agent tail is <user-uuid>.<agent-id>, not a device id)"
+            "agent URA is never a device host"
         );
 
-        // Other v4.1.5 kinds — also rejected (they aren't device URIs).
+        // Other kinds remain rejected.
         assert_eq!(
             host_node_id_from_uri("easynet:///r/acme/resource/01HZ8/fs/etc/hosts"),
             None

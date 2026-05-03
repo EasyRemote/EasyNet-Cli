@@ -450,10 +450,7 @@ mod tests {
         // `<unjoined>` placeholder because it only rejects `.`/`/`/
         // empty in the user-id slot, not arbitrary opaque tokens.
         let uri = "easynet:///r/<unjoined>/agent/<unjoined>.consent-default-0";
-        assert_eq!(
-            extract_agent_id_tail(uri),
-            Some("consent-default-0".into())
-        );
+        assert_eq!(extract_agent_id_tail(uri), Some("consent-default-0".into()));
     }
 
     #[test]
