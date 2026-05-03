@@ -37,7 +37,7 @@
 use anyhow::Context;
 use clap::{Args, Subcommand};
 use console::style;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::facade::cli::{config_cmd, devices, join, reset};
 use crate::support::output::{self, OutputFormat};
@@ -102,16 +102,25 @@ pub fn run(args: DeviceArgs) -> anyhow::Result<()> {
 }
 
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
-    // Per the ability-only ontology this command is one
-    // `fleet.describe_node` invocation against the local daemon.
-    // The daemon-side handler returns the node envelope (or
-    // `federation_not_wired` for a remote id while the federation
-    // Invoke replacement is being landed).
-    let node = crate::support::local_invoke::invoke_local_ability(
-        "fleet.describe_node",
-        json!({ "node_id": args.node_id }),
-    )
-    .with_context(|| format!("describe node {}", args.node_id))?;
+    // Joint-plan unified path (海峰 + 凉冰, 2026-05-03): every
+    // cross-device dispatch flows through
+    // `federation.forward_invoke`; each daemon describes ITSELF via
+    // `device.describe` (no `node_id` argument). The CLI is the
+    // routing-decision site:
+    //   * `args.node_id` looks like a canonical URA  → forward to it
+    //   * bare uuid that matches this device's node id → describe self
+    //   * any other bare uuid                          → wrap in the
+    //                                                    local realm's
+    //                                                    device URA
+    //                                                    and forward
+    //   * `local`                                      → describe self
+    //
+    // This collapses the legacy `fleet.describe_node {node_id}` shape
+    // — which had a self-arm AND a same-realm `federation.resolve`
+    // fallback baked into the handler — onto the single path every
+    // other cross-device call already takes.
+    let node = describe_target(&args.node_id)
+        .with_context(|| format!("describe node {}", args.node_id))?;
 
     // Hosted-ability list is `easynet.discover` filtered to entries
     // whose owner matches the target node id. v1 only knows about
@@ -293,4 +302,74 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
         println!("{}", serde_json::to_string_pretty(&result)?);
     }
     Ok(())
+}
+
+/// Joint-plan unified-path dispatch for `easynet device show`.
+///
+/// Resolves `node_id` (either a canonical URA or a bare uuid /
+/// the literal `local`) into the right `device.describe` call:
+///
+///   * `local` or matches this daemon's own node id → invoke
+///     `device.describe` locally over the control socket.
+///   * canonical URA pointing at a remote device → forward_invoke
+///     `device.describe` against that URA.
+///   * bare uuid that does not match local → wrap in this device's
+///     realm and forward_invoke (matches the legacy
+///     `fleet.describe_node` same-realm fallback).
+fn describe_target(node_id: &str) -> anyhow::Result<Value> {
+    let trimmed = node_id.trim();
+    let creds = crate::persistence::config::load_credentials().ok();
+    let local_node = creds.as_ref().map(|c| c.node_id.clone()).unwrap_or_default();
+    let local_tenant = creds
+        .as_ref()
+        .map(|c| c.tenant_id.clone())
+        .unwrap_or_default();
+
+    let is_local = trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("local")
+        || (!local_node.is_empty() && trimmed == local_node);
+
+    if is_local {
+        return crate::support::local_invoke::invoke_local_ability(
+            "device.describe",
+            serde_json::json!({}),
+        )
+        .context("invoke device.describe (local)");
+    }
+
+    invoke_remote_describe(trimmed, &local_tenant)
+}
+
+#[cfg(feature = "axon-pb")]
+fn invoke_remote_describe(node: &str, local_tenant: &str) -> anyhow::Result<Value> {
+    let target_uri = if node.starts_with("easynet:///r/") {
+        crate::support::federation_invoke::parse_node_uri(node)?
+    } else if !local_tenant.is_empty() {
+        crate::uri::device_uri(local_tenant, node)
+    } else {
+        anyhow::bail!(
+            "cannot resolve node {node:?}: pass a canonical \
+             `easynet:///r/<realm>/device/<id>` URI or pair this device first \
+             so the bare-uuid form can be wrapped in the local realm"
+        );
+    };
+
+    let caller_uri = crate::persistence::config::load_credentials()
+        .ok()
+        .filter(|c| !c.tenant_id.trim().is_empty() && !c.node_id.trim().is_empty())
+        .map(|c| crate::uri::device_uri(c.tenant_id.trim(), c.node_id.trim()));
+    crate::support::federation_invoke::invoke_via_federation_forward(
+        "device.describe",
+        serde_json::json!({}),
+        &target_uri,
+        caller_uri.as_deref(),
+    )
+    .with_context(|| format!("forward device.describe to target={target_uri}"))
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn invoke_remote_describe(node: &str, _local_tenant: &str) -> anyhow::Result<Value> {
+    Err(crate::support::local_invoke::federation_not_wired_error(
+        &format!("describing remote device {node:?}"),
+    ))
 }
