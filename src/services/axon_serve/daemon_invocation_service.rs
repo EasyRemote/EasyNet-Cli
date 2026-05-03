@@ -666,10 +666,33 @@ impl Invocation for DaemonInvocationService {
                     })?;
                 self.dispatch_self_session_accept(caller_uri, up).await
             }
+            other
+                if matches!(
+                    other,
+                    "fleet.session_attach"
+                        | crate::runtime::agents::pty_attach_ability::ABILITY_PTY_SESSION_ATTACH
+                ) =>
+            {
+                // PR-2 staging step: only PTY attach is wired through
+                // the daemon's InvokeBidi → LocalAbilityRegistry
+                // bridge today. Other local bidi abilities still need
+                // a real wire contract; forwarding arbitrary JSON
+                // handler frames over the axon BinaryChunk/Control
+                // surface would be protocol fiction.
+                let local_dispatcher = self.local_dispatcher.as_ref().ok_or_else(|| {
+                    Status::unimplemented(format!(
+                        "easynet-daemon: InvokeBidi ability `{other}` requires the \
+                         PTY attach local-dispatch bridge, but this daemon was booted \
+                         without DaemonInvocationService::with_local_dispatcher(...)"
+                    ))
+                })?;
+                self.dispatch_local_bidi(local_dispatcher, other, envelope_open, up)
+                    .await
+            }
             other => Err(Status::unimplemented(format!(
                 "easynet-daemon: InvokeBidi ability `{other}` is not yet wired; \
-                 LocalAbilityRegistry bidi fallback is the next staging step \
-                 (see team-work/checklists/PR-2-checklist.md)"
+                 only fleet.session_attach/fleet.pty_session_attach currently bridge \
+                 through the LocalAbilityRegistry bidi fallback"
             ))),
         }
     }
@@ -1902,6 +1925,161 @@ impl DaemonInvocationService {
         ))
     }
 
+    /// PTY-attach bidi fallback: dispatch the locally-registered
+    /// `fleet.session_attach` / `fleet.pty_session_attach` handler
+    /// through the in-process `AbilityDispatcher` and bridge its
+    /// `BidiSource` (two `mpsc<Value>` channels) onto the gRPC
+    /// `InvokeBidi` up/down streams.
+    ///
+    /// Wire-format adapter
+    /// -------------------
+    /// Backend's WS terminal handler emits raw PTY bytes as
+    /// `InvokeBidiUp::BinaryChunk(stream_id=1, data=raw)`. The
+    /// device-side `pty_attach_ability` handler expects JSON
+    /// `{"type":"stdin","data":"<base64>"}` — its on-the-wire
+    /// shape (see `runtime/agents/pty_attach_ability.rs`). We
+    /// translate at this seam: BinaryChunk → JSON stdin frame on
+    /// the up direction, JSON stdout frame → BinaryChunk on the
+    /// down direction. PtyResize control frames map to a JSON
+    /// `{"type":"resize","cols":N,"rows":N}` shape the handler
+    /// already consumes.
+    async fn dispatch_local_bidi(
+        &self,
+        local_dispatcher: &Arc<crate::runtime::ability_dispatch::AbilityDispatcher>,
+        ability: &str,
+        envelope_open: &EnvelopeOpen,
+        mut up: Streaming<InvokeBidiUp>,
+    ) -> Result<Response<<Self as Invocation>::InvokeBidiStream>, Status> {
+        use crate::pb::axon::v1::bidi_control::Control as ControlVariant;
+        use crate::pb::axon::v1::{BidiControl, PtyResize};
+        use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+        use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+        use serde_json::json;
+
+        eprintln!("[axon-serve] InvokeBidi local-dispatcher fallback: ability={ability}");
+
+        // Decode initial_args. Empty → empty object.
+        let normalized_args: serde_json::Value = if envelope_open.initial_args.is_empty() {
+            serde_json::Value::Object(Default::default())
+        } else {
+            serde_json::from_slice(&envelope_open.initial_args).map_err(|err| {
+                Status::invalid_argument(format!(
+                    "InvokeBidi local-dispatcher: initial_args is not valid JSON \
+                     for ability `{ability}`: {err}"
+                ))
+            })?
+        };
+
+        let target = InvocationTarget {
+            scope: TargetScope::Local,
+            ability: ability.to_string(),
+            normalized_args,
+            call_mode: CallMode::Bidi,
+            subject: envelope_open
+                .envelope
+                .as_ref()
+                .and_then(|env| env.subject.as_ref())
+                .map(|subject| subject.uri.clone())
+                .filter(|uri| !uri.is_empty()),
+        };
+
+        let bidi_source = local_dispatcher.execute_bidi(target).map_err(|err| {
+            // No local handler registered → 404 surface so callers
+            // see the same shape as RPC's "no local handler".
+            let msg = err.to_string();
+            if msg.contains("no local bidi handler registered") {
+                Status::not_found(format!("InvokeBidi: {msg}"))
+            } else {
+                Status::failed_precondition(format!(
+                    "InvokeBidi local-dispatcher: dispatch of ability `{ability}` \
+                     failed: {err}"
+                ))
+            }
+        })?;
+
+        let crate::runtime::ability_dispatch::BidiSource {
+            to_client: handler_in_tx,
+            from_client: mut handler_out_rx,
+        } = bidi_source;
+        let stdout_stream_id = local_bidi_stdout_stream_id(envelope_open);
+
+        // Down-stream: handler-emitted JSON → InvokeBidiDown frames.
+        // Capacity 16 mirrors `INVOKE_REMOTE_DISPATCH_CAPACITY`.
+        let (down_tx, down_rx) = tokio::sync::mpsc::channel::<Result<InvokeBidiDown, Status>>(16);
+        let down_tx_for_handler = down_tx.clone();
+        tokio::spawn(async move {
+            while let Some(value) = handler_out_rx.recv().await {
+                match map_local_bidi_handler_frame(&value, stdout_stream_id) {
+                    LocalBidiHandlerFrame::Forward(frame) => {
+                        if down_tx_for_handler.send(Ok(frame)).await.is_err() {
+                            break;
+                        }
+                    }
+                    LocalBidiHandlerFrame::Terminal(frame) => {
+                        let _ = down_tx_for_handler.send(Ok(frame)).await;
+                        break;
+                    }
+                    LocalBidiHandlerFrame::Ignore => {}
+                    LocalBidiHandlerFrame::ProtocolFailure(reason) => {
+                        let _ = down_tx_for_handler
+                            .send(Ok(build_bidi_terminal_receipt(
+                                InvocationState::Failed,
+                                reason,
+                            )))
+                            .await;
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Up-stream: InvokeBidiUp frames → handler input JSON.
+        tokio::spawn(async move {
+            let mut expected_up_sequence = 1_u64;
+            while let Some(maybe_frame) = up.next().await {
+                let Ok(frame) = maybe_frame else { break };
+                if frame.sequence != expected_up_sequence {
+                    eprintln!(
+                        "[axon-serve] InvokeBidi local-dispatcher: violated \
+                         {REASON_BIDI_FRAME_SEQUENCE}; expected {expected_up_sequence}, got {}",
+                        frame.sequence
+                    );
+                    break;
+                }
+                expected_up_sequence = expected_up_sequence.saturating_add(1);
+                let Some(payload) = frame.payload else {
+                    continue;
+                };
+                let jsonv = match payload {
+                    UpPayload::BinaryChunk(chunk) => {
+                        // Raw PTY bytes from WS → JSON stdin shape
+                        let b64 = B64.encode(&chunk.data);
+                        json!({"type": "stdin", "data": b64})
+                    }
+                    UpPayload::Control(BidiControl { control: Some(ctl) }) => match ctl {
+                        ControlVariant::PtyResize(PtyResize { cols, rows }) => {
+                            json!({"type": "resize", "cols": cols, "rows": rows})
+                        }
+                        ControlVariant::Eof(true) => break,
+                        _ => continue,
+                    },
+                    _ => continue,
+                };
+                if handler_in_tx.send(jsonv).await.is_err() {
+                    break;
+                }
+            }
+            // Up-stream EOF → drop handler_in_tx so the handler's
+            // reader sees its channel close (graceful disconnect).
+            drop(handler_in_tx);
+        });
+
+        let stream = LocalBidiDownStream::new(down_rx);
+        Ok(Response::new(
+            Box::pin(stream) as BoxedDownStream<InvokeBidiDown>
+        ))
+    }
+
     fn dispatch_federation_subscribe_directory_initial(
         &self,
     ) -> Result<Response<<Self as Invocation>::InvokeStreamStream>, Status> {
@@ -2217,10 +2395,9 @@ impl DaemonInvocationService {
         // branch only when caller_uri == its own hub URI invoking
         // back to itself, which is also the right behaviour:
         // hub-self ability dispatch goes inline.
-        if let (Some(daemon_uri), Some(local_dispatcher)) = (
-            self.admission.daemon_uri(),
-            self.local_dispatcher.as_ref(),
-        ) {
+        if let (Some(daemon_uri), Some(local_dispatcher)) =
+            (self.admission.daemon_uri(), self.local_dispatcher.as_ref())
+        {
             if subject_device == daemon_uri {
                 return self.dispatch_self_targeted_invoke_remote(
                     local_dispatcher,
@@ -2439,7 +2616,7 @@ fn build_session_down_keepalive_frame() -> DispatchFrame {
 /// §1.1; the rest of `InvocationReceipt` is informational and the
 /// device's `LocalAbilityDispatcher` ignores `Receipt` payloads
 /// outright (handle_down only acts on `BinaryChunk`).
-fn build_session_down_admission_receipt() -> InvokeBidiDown {
+fn build_bidi_admission_receipt() -> InvokeBidiDown {
     InvokeBidiDown {
         sequence: 0,
         payload: Some(DownPayload::Receipt(InvocationReceipt {
@@ -2447,6 +2624,98 @@ fn build_session_down_admission_receipt() -> InvokeBidiDown {
             ..InvocationReceipt::default()
         })),
         ..InvokeBidiDown::default()
+    }
+}
+
+fn build_session_down_admission_receipt() -> InvokeBidiDown {
+    build_bidi_admission_receipt()
+}
+
+fn build_bidi_terminal_receipt(
+    state: InvocationState,
+    reason: impl Into<String>,
+) -> InvokeBidiDown {
+    InvokeBidiDown {
+        payload: Some(DownPayload::Receipt(InvocationReceipt {
+            state: state as i32,
+            reason: reason.into(),
+            ..InvocationReceipt::default()
+        })),
+        ..InvokeBidiDown::default()
+    }
+}
+
+const LOCAL_BIDI_DEFAULT_STREAM_ID: u32 = 1;
+
+fn local_bidi_stdout_stream_id(envelope_open: &EnvelopeOpen) -> u32 {
+    envelope_open
+        .streams
+        .iter()
+        .map(|stream| stream.stream_id)
+        .find(|stream_id| *stream_id != 0)
+        .unwrap_or(LOCAL_BIDI_DEFAULT_STREAM_ID)
+}
+
+#[derive(Debug)]
+enum LocalBidiHandlerFrame {
+    Forward(InvokeBidiDown),
+    Terminal(InvokeBidiDown),
+    Ignore,
+    ProtocolFailure(String),
+}
+
+fn map_local_bidi_handler_frame(
+    value: &serde_json::Value,
+    stdout_stream_id: u32,
+) -> LocalBidiHandlerFrame {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+
+    match value.get("type").and_then(|field| field.as_str()) {
+        Some("stdout") => {
+            let Some(data_b64) = value.get("data").and_then(|field| field.as_str()) else {
+                return LocalBidiHandlerFrame::ProtocolFailure(
+                    "InvokeBidi local-dispatcher: PTY stdout frame missing `data`".to_string(),
+                );
+            };
+            let raw = match B64.decode(data_b64) {
+                Ok(raw) => raw,
+                Err(err) => {
+                    return LocalBidiHandlerFrame::ProtocolFailure(format!(
+                        "InvokeBidi local-dispatcher: PTY stdout frame base64 decode failed: {err}"
+                    ))
+                }
+            };
+            LocalBidiHandlerFrame::Forward(InvokeBidiDown {
+                payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+                    stream_id: stdout_stream_id,
+                    data: raw,
+                    ..BinaryChunk::default()
+                })),
+                ..InvokeBidiDown::default()
+            })
+        }
+        Some("exit") => {
+            let reason = match value.get("status") {
+                Some(serde_json::Value::Number(status)) => {
+                    format!("pty exited with status {status}")
+                }
+                Some(serde_json::Value::Null) | None => String::new(),
+                Some(other) => format!("pty exited with non-integer status {other}"),
+            };
+            LocalBidiHandlerFrame::Terminal(build_bidi_terminal_receipt(
+                InvocationState::Completed,
+                reason,
+            ))
+        }
+        Some("warn") => {
+            if let Some(message) = value.get("message").and_then(|field| field.as_str()) {
+                eprintln!(
+                    "[axon-serve] InvokeBidi local-dispatcher warning from PTY handler: {message}"
+                );
+            }
+            LocalBidiHandlerFrame::Ignore
+        }
+        _ => LocalBidiHandlerFrame::Ignore,
     }
 }
 
@@ -2475,6 +2744,45 @@ struct SessionDownStream {
     /// yields it and clears the slot. Subsequent polls follow the
     /// recv-then-heartbeat path.
     pending_admission_receipt: Option<InvokeBidiDown>,
+}
+
+struct LocalBidiDownStream {
+    down_rx: tokio::sync::mpsc::Receiver<Result<InvokeBidiDown, Status>>,
+    next_sequence: u64,
+    pending_admission_receipt: Option<InvokeBidiDown>,
+}
+
+impl LocalBidiDownStream {
+    fn new(down_rx: tokio::sync::mpsc::Receiver<Result<InvokeBidiDown, Status>>) -> Self {
+        Self {
+            down_rx,
+            next_sequence: 0,
+            pending_admission_receipt: Some(build_bidi_admission_receipt()),
+        }
+    }
+
+    fn stamp_sequence(&mut self, mut frame: InvokeBidiDown) -> InvokeBidiDown {
+        frame.sequence = self.next_sequence;
+        self.next_sequence = self.next_sequence.saturating_add(1);
+        frame
+    }
+}
+
+impl Stream for LocalBidiDownStream {
+    type Item = Result<InvokeBidiDown, Status>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if let Some(receipt) = self.pending_admission_receipt.take() {
+            return Poll::Ready(Some(Ok(self.stamp_sequence(receipt))));
+        }
+
+        match Pin::new(&mut self.down_rx).poll_recv(cx) {
+            Poll::Ready(Some(Ok(frame))) => Poll::Ready(Some(Ok(self.stamp_sequence(frame)))),
+            Poll::Ready(Some(Err(status))) => Poll::Ready(Some(Err(status))),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
 }
 
 impl SessionDownStream {
@@ -4527,6 +4835,105 @@ mod tests {
         let err = extract_envelope_open(&frame).expect_err("must reject");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(err.message().contains("no payload"));
+    }
+
+    #[test]
+    fn map_local_bidi_handler_stdout_decodes_to_binary_chunk() {
+        use base64::Engine as _;
+
+        let frame = map_local_bidi_handler_frame(
+            &serde_json::json!({
+                "type": "stdout",
+                "data": base64::engine::general_purpose::STANDARD.encode(b"hello"),
+            }),
+            7,
+        );
+        match frame {
+            LocalBidiHandlerFrame::Forward(InvokeBidiDown {
+                payload: Some(DownPayload::BinaryChunk(chunk)),
+                ..
+            }) => {
+                assert_eq!(chunk.stream_id, 7);
+                assert_eq!(chunk.data, b"hello");
+            }
+            other => panic!("expected stdout → BinaryChunk, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_local_bidi_handler_exit_becomes_completed_receipt() {
+        let frame = map_local_bidi_handler_frame(
+            &serde_json::json!({
+                "type": "exit",
+                "status": 23,
+            }),
+            1,
+        );
+        match frame {
+            LocalBidiHandlerFrame::Terminal(InvokeBidiDown {
+                payload: Some(DownPayload::Receipt(receipt)),
+                ..
+            }) => {
+                assert_eq!(receipt.state, InvocationState::Completed as i32);
+                assert!(
+                    receipt.reason.contains("23"),
+                    "exit status should surface in the terminal receipt reason"
+                );
+            }
+            other => panic!("expected exit → terminal receipt, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn local_bidi_down_stream_emits_admission_receipt_before_handler_frames() {
+        use futures::StreamExt as _;
+
+        let (down_tx, down_rx) = tokio::sync::mpsc::channel::<Result<InvokeBidiDown, Status>>(1);
+        down_tx
+            .send(Ok(InvokeBidiDown {
+                payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+                    stream_id: 9,
+                    data: b"payload".to_vec(),
+                    ..BinaryChunk::default()
+                })),
+                ..InvokeBidiDown::default()
+            }))
+            .await
+            .expect("enqueue payload frame");
+        drop(down_tx);
+
+        let mut stream = LocalBidiDownStream::new(down_rx);
+        let first = stream
+            .next()
+            .await
+            .expect("admission receipt frame")
+            .expect("receipt is ok");
+        match first.payload {
+            Some(DownPayload::Receipt(receipt)) => {
+                assert_eq!(first.sequence, 0);
+                assert_eq!(receipt.state, InvocationState::Admitted as i32);
+            }
+            other => panic!("expected admission receipt at sequence 0, got {other:?}"),
+        }
+
+        let second = stream
+            .next()
+            .await
+            .expect("payload frame")
+            .expect("payload is ok");
+        match second.payload {
+            Some(DownPayload::BinaryChunk(chunk)) => {
+                assert_eq!(second.sequence, 1);
+                assert_eq!(chunk.stream_id, 9);
+                assert_eq!(chunk.data, b"payload");
+            }
+            other => panic!("expected payload BinaryChunk at sequence 1, got {other:?}"),
+        }
+
+        assert!(
+            stream.next().await.is_none(),
+            "stream should end after the queued payload frame"
+        );
     }
 
     #[test]
