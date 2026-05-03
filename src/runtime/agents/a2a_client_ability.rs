@@ -55,39 +55,14 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::{AbilityDispatcher, LocalAbilityRegistry};
-use crate::runtime::domain::NodeId;
-use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
 pub const ABILITY_SEND_TASK: &str = "a2a.client.send_task";
 
-/// Process-wide dispatcher handle. Populated by the daemon bin
-/// after `AbilityDispatcher::new(...)` completes; left unset in
-/// tests, where the handler's not-initialised path is what we
-/// verify. Static rather than per-`register` arg because the
-/// dispatcher is built downstream of `build_registry_with_services`,
-/// so threading a per-call OnceLock through every caller would
-/// touch every test that builds a registry. The static seam
-/// isolates the concern to the daemon bin's boot sequence.
-///
-/// Tests that want the populated path live as integration tests at
-/// the daemon level (where `set_dispatcher` runs after the boot
-/// sequence completes). Reaching the populated path from a unit
-/// test would race other tests through this same static OnceLock.
-static DISPATCHER_HANDLE: std::sync::OnceLock<Arc<AbilityDispatcher>> = std::sync::OnceLock::new();
-
-/// Daemon bin's post-boot hook to wire the dispatcher into the
-/// outbound-A2A handler. Idempotent (subsequent calls no-op since
-/// OnceLock only takes the first set), so a daemon that re-runs its
-/// boot sequence (hot-reload future) doesn't crash here.
-pub fn set_dispatcher(dispatcher: Arc<AbilityDispatcher>) {
-    let _ = DISPATCHER_HANDLE.set(dispatcher);
-}
-
-/// Register a2a.client.send_task on the registry. Closes over the
-/// process-wide DISPATCHER_HANDLE — populated separately by
-/// `set_dispatcher` after the dispatcher exists. Until that lock
-/// is set, the handler returns ok:false on every call.
+/// Register `a2a.client.send_task` on the registry. Stateless;
+/// every call dials the local daemon's `federation.forward_invoke`
+/// surface fresh — same wire path the rest of the CLI's
+/// cross-device dispatch takes after the joint-plan unification.
 pub fn register(reg: &mut LocalAbilityRegistry) {
     reg.register_rpc(
         ABILITY_SEND_TASK,
@@ -100,19 +75,17 @@ pub fn register(reg: &mut LocalAbilityRegistry) {
 /// Args: `{ "target_node_uri": "<URI>", "agent_name": "<agent>",
 ///          "skill_name": "<verb>", "args": <json-value> }`.
 ///
-/// `target_node_uri` is the remote node's identifier as the
-/// resolver / gateway expects it — for v1 a `NodeId` is just a
-/// string wrapper, so we pass the caller's value through.
+/// Routes through `federation.forward_invoke` against the target
+/// device URA — the same unified path
+/// `easynet ability invoke --node <URA>` and EAL
+/// `IrTarget::Device` use after the joint-plan cut over. Pre-cut
+/// this handler tried to drive the dispatcher's now-deleted
+/// `TargetScope::Remote` branch, which only ever reached
+/// `NoopGateway` and bailed "no Axon bridge connected".
 ///
 /// Returns: `{ ok, result?, error? }` — same envelope shape
 /// `a2a.bridge.send_task` (the inbound side) returns, so a planner
 /// that handles the inbound shape handles the outbound shape too.
-///
-/// Failure paths surface as `{ok:false, error:...}` rather than
-/// `Err`. The dispatcher's error from a remote bail-out (e.g. the
-/// gateway can't reach the node) becomes a structured caller-
-/// visible response; only programmer errors (lock poisoning,
-/// genuinely impossible states) bubble as `Err`.
 fn send_task_handler(args: Value) -> anyhow::Result<Value> {
     let target_node = match required_nonempty_string(&args, "target_node_uri") {
         Ok(s) => s,
@@ -128,34 +101,54 @@ fn send_task_handler(args: Value) -> anyhow::Result<Value> {
     };
     let task_args = args.get("args").cloned().unwrap_or(Value::Null);
 
-    let Some(dispatcher) = DISPATCHER_HANDLE.get() else {
-        return Ok(error_response(
-            "dispatcher not initialised (production: daemon-bin's set_dispatcher hook; \
-             tests deliberately leave this unset)",
-        ));
-    };
+    let ability = format!("{agent_name}.{skill_name}");
 
-    let target = InvocationTarget {
-        scope: TargetScope::Remote {
-            node: NodeId::new(target_node),
-        },
-        ability: format!("{agent_name}.{skill_name}"),
-        normalized_args: task_args,
-        call_mode: CallMode::Rpc,
-        // PR-DISPATCHER-SUBJECT: A2A skill invocation does not
-        // currently carry an AXIOM `subject`; the remote skill is
-        // identified by ability name only. Future A2A wire schema
-        // extension can populate this.
-        subject: None,
-    };
+    #[cfg(feature = "axon-pb")]
+    {
+        let target_uri = if target_node.starts_with("easynet:///r/") {
+            match crate::support::federation_invoke::parse_node_uri(&target_node) {
+                Ok(uri) => uri,
+                Err(e) => return Ok(error_response(&format!("parse target_node_uri: {e}"))),
+            }
+        } else {
+            // Bare uuid path: wrap in the local daemon's realm.
+            // Without credentials we cannot do this safely — surface
+            // a structured error so the caller knows to pass a URA.
+            match crate::persistence::config::load_credentials() {
+                Ok(c) if !c.tenant_id.trim().is_empty() => {
+                    crate::uri::device_uri(&c.tenant_id, target_node.trim())
+                }
+                _ => {
+                    return Ok(error_response(
+                        "target_node_uri must be a canonical \
+                         `easynet:///r/<realm>/device/<id>` URI when no local \
+                         credentials are available",
+                    ));
+                }
+            }
+        };
 
-    // The dispatcher's error already names the failure (e.g. "no
-    // gateway", "remote node unreachable"); we forward verbatim
-    // rather than prefix "remote dispatch failed:" — that prefix
-    // would double up in the rendered message.
-    match dispatcher.execute_rpc(target) {
-        Ok(value) => Ok(json!({ "ok": true, "result": value })),
-        Err(e) => Ok(error_response(&format!("{e}"))),
+        let caller_uri = crate::persistence::config::load_credentials()
+            .ok()
+            .filter(|c| !c.tenant_id.trim().is_empty() && !c.node_id.trim().is_empty())
+            .map(|c| crate::uri::device_uri(c.tenant_id.trim(), c.node_id.trim()));
+        match crate::support::federation_invoke::invoke_via_federation_forward(
+            &ability,
+            task_args,
+            &target_uri,
+            caller_uri.as_deref(),
+        ) {
+            Ok(value) => Ok(json!({ "ok": true, "result": value })),
+            Err(e) => Ok(error_response(&format!("{e}"))),
+        }
+    }
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = (ability, task_args, target_node);
+        Ok(error_response(
+            "a2a.client.send_task requires the `axon-pb` feature; \
+             rebuild with `--features axon-pb` (production builds always do).",
+        ))
     }
 }
 
@@ -281,20 +274,32 @@ mod tests {
     }
 
     #[test]
-    fn send_task_with_unset_dispatcher_handle_returns_ok_false_no_panic() {
-        // The DISPATCHER_HANDLE is never populated by tests (see
-        // module-doc on the static). All-fields-valid call MUST
-        // surface the not-initialised error, NOT panic.
+    fn send_task_without_daemon_socket_returns_ok_false_no_panic() {
+        // Joint-plan phase 4: a2a.client.send_task no longer
+        // requires a process-wide dispatcher handle — every call
+        // dials `federation.forward_invoke` over the daemon UDS
+        // fresh. Tests run without a daemon, so the call path
+        // surfaces a structured `ok: false` envelope (NOT panic)
+        // with a message naming the missing daemon transport or
+        // the parse arm if the URI shape rejects first.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
         let arc = fresh_registry();
         let handler = arc.get_rpc(ABILITY_SEND_TASK).unwrap();
         let resp = handler(json!({
-            "target_node_uri": "easynet:///r/acme/node/N1",
+            "target_node_uri": "easynet:///r/acme/device/N1",
             "agent_name": "claude",
             "skill_name": "chat",
         }))
         .unwrap();
         assert_eq!(resp["ok"], false);
-        assert!(resp["error"].as_str().unwrap().contains("not initialised"));
+        let msg = resp["error"].as_str().unwrap();
+        assert!(
+            msg.contains("daemon")
+                || msg.contains("federation")
+                || msg.contains("credentials")
+                || msg.contains("axon-pb"),
+            "must surface a structured transport / config error; got: {msg}"
+        );
     }
 
     #[test]

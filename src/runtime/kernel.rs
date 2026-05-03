@@ -563,7 +563,7 @@ impl KernelApi for Kernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::gateway_api::{PeerInfo, RemoteTarget};
+    use crate::runtime::gateway_api::PeerInfo;
     use crate::runtime::invocation::{CausalContext, Invocation};
     use serde_json::json;
 
@@ -575,21 +575,6 @@ mod tests {
             _name: &str,
             _description: &str,
             _schema: &serde_json::Value,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn invoke_remote_ability(
-            &self,
-            _target: &RemoteTarget,
-            _args: &serde_json::Value,
-        ) -> anyhow::Result<serde_json::Value> {
-            Ok(serde_json::Value::Null)
-        }
-        fn subscribe_remote_ability(
-            &self,
-            _target: &RemoteTarget,
-            _args: &serde_json::Value,
-            _on_frame: Box<dyn FnMut(serde_json::Value) + Send>,
         ) -> anyhow::Result<()> {
             Ok(())
         }

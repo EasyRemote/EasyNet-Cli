@@ -434,24 +434,31 @@ mod tests {
     }
 
     #[test]
-    fn run_with_remote_node_returns_a_precise_actionable_error() {
-        // `--node <other>` MUST refuse rather than silently
-        // dispatching locally — same contract as
-        // `easynet ability invoke`. A script that previously
-        // relied on federation-wide listing should fail loud, not
-        // get a partial local-only result and call it the
-        // federation view.
+    fn run_with_remote_node_routes_through_forward_invoke() {
+        // Joint-plan phase 1.5: `--node <other>` no longer hard-bails
+        // — it forwards `easynet.discover` to the target device URA
+        // through `federation.forward_invoke`. In a unit-test
+        // environment the local daemon UDS is absent, so the call
+        // surfaces as either "daemon not running" / "cannot resolve
+        // node ... without local credentials" / "forward
+        // easynet.discover to target=...". The contract this test
+        // pins is "remote node attempts the forward path" — error
+        // message MUST mention either the forward target or one of
+        // the resolution-stage errors so a script can grep for it.
         let err = run(AbilitiesArgs {
             agent: None,
             node: Some("some-remote-node".into()),
             pattern: String::new(),
             format: OutputFormat::Table,
         })
-        .expect_err("remote --node must be rejected");
+        .expect_err("remote --node without daemon must surface a typed error");
         let msg = format!("{err}");
         assert!(
-            msg.contains("federation") || msg.contains("--node"),
-            "must mention --node / federation status; got: {msg}"
+            msg.contains("forward")
+                || msg.contains("daemon")
+                || msg.contains("credentials")
+                || msg.contains("federation"),
+            "must mention forward / daemon / credentials / federation; got: {msg}"
         );
     }
 

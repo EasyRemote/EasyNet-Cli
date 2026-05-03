@@ -2162,3 +2162,150 @@ fn real_meta_list_resources_returns_resources_array() {
         "meta.list_resources receipt must carry `resources` array; got {resp}"
     );
 }
+
+// ── Joint-plan unified path: new published abilities ─────────────
+//
+// `every_published_ability_has_a_real_invoke_test` walks this file
+// for quoted ability names. Each `#[test]` below mentions the new
+// ability in a quoted string so the coverage walker sees it.
+
+#[test]
+fn real_device_describe_returns_self_envelope() {
+    // `device.describe` is the joint-plan replacement for the
+    // self-arm of `fleet.describe_node`. It takes no arguments and
+    // always describes "this device". HomeGuard isolates the
+    // creds/runtime state so the unpaired-fallback path runs
+    // deterministically.
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let resp = invoke("device.describe", json!({}));
+    assert!(
+        resp.get("node_id").is_some(),
+        "device.describe receipt must carry `node_id`; got {resp}"
+    );
+    assert_eq!(resp.get("is_self"), Some(&json!(true)));
+}
+
+#[test]
+fn real_fleet_session_create_close_round_trip_via_v2_alias() {
+    // `fleet.session_create` / `fleet.session_close` are the v2
+    // canonical names; `fleet.pty_session_*` stay registered as
+    // aliases during the rolling window. Coverage walker pins both
+    // namespaces — this test exercises the v2 names; the existing
+    // `real_fleet_pty_session_create_then_close_round_trip` exercises
+    // the legacy aliases.
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
+    let mut reg = LocalAbilityRegistry::new();
+    super::pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
+    let d = dispatcher_for(Arc::new(reg));
+
+    let create = d
+        .execute_rpc(target("fleet.session_create", json!({})))
+        .expect("fleet.session_create");
+    let session_id = create["session_id"]
+        .as_str()
+        .expect("session_id in response")
+        .to_string();
+    assert!(!session_id.is_empty());
+
+    let close = d
+        .execute_rpc(target(
+            "fleet.session_close",
+            json!({"session_id": session_id}),
+        ))
+        .expect("fleet.session_close");
+    assert_eq!(close["ack"], json!(true));
+}
+
+#[test]
+fn real_fleet_session_input_read_resize_via_v2_alias() {
+    // Mirror of `real_fleet_pty_session_input_read_resize_round_trip`
+    // exercising the v2 aliases. Same PTY service / IO service
+    // wiring; same printf marker pattern.
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
+    let io = super::pty_io_ability::PtyIoService::new();
+    let mut reg = LocalAbilityRegistry::new();
+    super::pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(io.clone()));
+    super::pty_io_ability::register(&mut reg, Arc::clone(&pty), io);
+    let d = dispatcher_for(Arc::new(reg));
+
+    let create = d
+        .execute_rpc(target("fleet.session_create", json!({})))
+        .expect("fleet.session_create");
+    let sid = create["session_id"].as_str().unwrap().to_string();
+
+    let resize = d
+        .execute_rpc(target(
+            "fleet.session_resize",
+            json!({"session_id": sid.clone(), "cols": 132, "rows": 50}),
+        ))
+        .expect("fleet.session_resize");
+    assert_eq!(resize["ack"], json!(true));
+
+    use base64::Engine;
+    let input_b64 = base64::engine::general_purpose::STANDARD
+        .encode(b"printf 'EASYNET_V2_PTY_OK\\n'\n");
+    let input = d
+        .execute_rpc(target(
+            "fleet.session_input",
+            json!({"session_id": sid.clone(), "data": input_b64}),
+        ))
+        .expect("fleet.session_input");
+    assert_eq!(input["ack"], json!(true));
+
+    let mut accum = String::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline && !accum.contains("EASYNET_V2_PTY_OK") {
+        let resp = d
+            .execute_rpc(target(
+                "fleet.session_read",
+                json!({"session_id": sid.clone(), "timeout": 1.0}),
+            ))
+            .expect("fleet.session_read");
+        if let Some(b64) = resp["output"].as_str() {
+            if !b64.is_empty() {
+                let raw = base64::engine::general_purpose::STANDARD
+                    .decode(b64)
+                    .unwrap_or_default();
+                accum.push_str(&String::from_utf8_lossy(&raw));
+            }
+        }
+    }
+    assert!(
+        accum.contains("EASYNET_V2_PTY_OK"),
+        "v2 alias data plane round-trip did not see marker; got: {accum}"
+    );
+}
+
+#[test]
+fn real_fleet_session_attach_is_registered_as_bidi() {
+    // `fleet.session_attach` is the v2 alias of
+    // `fleet.pty_session_attach` — bidi-shape ability the data
+    // plane uses. We just pin "the registry knows about it under
+    // the v2 name" — full bidi round-trip coverage already lives
+    // on the legacy alias's test.
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
+    let mut reg = LocalAbilityRegistry::new();
+    super::pty_attach_ability::register(&mut reg, pty);
+    assert!(
+        reg.get_bidi("fleet.session_attach").is_some(),
+        "fleet.session_attach (v2 alias) must be registered as bidi"
+    );
+}
+
+#[test]
+fn real_voice_list_calls_returns_items_array() {
+    // `voice.list_calls` projects the in-process call store as
+    // `{items: [...]}`. The store is a process-wide OnceLock so
+    // residue from sibling voice.* tests can land in the response;
+    // we only assert the wire contract (the `items` key exists and
+    // is an array), not that it's empty.
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let resp = invoke("voice.list_calls", json!({}));
+    assert!(
+        resp.get("items").and_then(Value::as_array).is_some(),
+        "voice.list_calls receipt must carry `items` array; got {resp}"
+    );
+}

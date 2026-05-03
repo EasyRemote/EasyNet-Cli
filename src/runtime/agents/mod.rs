@@ -801,12 +801,18 @@ pub fn description_for(name: &str) -> &'static str {
         "process.exec" => process_exec_ability::description(),
         "shell.run" => shell_run_ability::description(),
         "http.request" => http_request_ability::description(),
-        "fleet.pty_session_create" => pty_lifecycle_ability::description_create(),
-        "fleet.pty_session_close" => pty_lifecycle_ability::description_close(),
-        "fleet.pty_session_attach" => pty_attach_ability::description(),
-        "fleet.pty_session_input" => pty_io_ability::input_description(),
-        "fleet.pty_session_read" => pty_io_ability::read_description(),
-        "fleet.pty_session_resize" => pty_io_ability::resize_description(),
+        "fleet.session_create" | "fleet.pty_session_create" => {
+            pty_lifecycle_ability::description_create()
+        }
+        "fleet.session_close" | "fleet.pty_session_close" => {
+            pty_lifecycle_ability::description_close()
+        }
+        "fleet.session_attach" | "fleet.pty_session_attach" => pty_attach_ability::description(),
+        "fleet.session_input" | "fleet.pty_session_input" => pty_io_ability::input_description(),
+        "fleet.session_read" | "fleet.pty_session_read" => pty_io_ability::read_description(),
+        "fleet.session_resize" | "fleet.pty_session_resize" => {
+            pty_io_ability::resize_description()
+        }
         "fleet.file_transfer" => file_transfer_ability::description(),
         "fleet.start_agent" => fleet_lifecycle_ability::start_agent_description(),
         "fleet.stop_agent" => fleet_lifecycle_ability::stop_agent_description(),
@@ -911,12 +917,18 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "process.exec" => process_exec_ability::input_schema(),
         "shell.run" => shell_run_ability::input_schema(),
         "http.request" => http_request_ability::input_schema(),
-        "fleet.pty_session_create" => pty_lifecycle_ability::input_schema_create(),
-        "fleet.pty_session_close" => pty_lifecycle_ability::input_schema_close(),
-        "fleet.pty_session_attach" => pty_attach_ability::input_schema(),
-        "fleet.pty_session_input" => pty_io_ability::input_input_schema(),
-        "fleet.pty_session_read" => pty_io_ability::read_input_schema(),
-        "fleet.pty_session_resize" => pty_io_ability::resize_input_schema(),
+        "fleet.session_create" | "fleet.pty_session_create" => {
+            pty_lifecycle_ability::input_schema_create()
+        }
+        "fleet.session_close" | "fleet.pty_session_close" => {
+            pty_lifecycle_ability::input_schema_close()
+        }
+        "fleet.session_attach" | "fleet.pty_session_attach" => pty_attach_ability::input_schema(),
+        "fleet.session_input" | "fleet.pty_session_input" => pty_io_ability::input_input_schema(),
+        "fleet.session_read" | "fleet.pty_session_read" => pty_io_ability::read_input_schema(),
+        "fleet.session_resize" | "fleet.pty_session_resize" => {
+            pty_io_ability::resize_input_schema()
+        }
         "fleet.file_transfer" => file_transfer_ability::input_schema(),
         "fleet.start_agent" => fleet_lifecycle_ability::start_agent_input_schema(),
         "fleet.stop_agent" => fleet_lifecycle_ability::stop_agent_input_schema(),
@@ -1078,6 +1090,23 @@ mod tests {
             | "fleet.exec_remote"
             | "fleet.register_self"
             | "fleet.deregister_self"
+            // fleet.session_* shell-session lifecycle abilities.
+            // create / close mutate session state; input / read /
+            // resize push or pull data over an established session;
+            // attach binds the bidi data plane. All operational
+            // because each call IS the work for that session step.
+            | "fleet.session_create"
+            | "fleet.session_close"
+            | "fleet.session_input"
+            | "fleet.session_read"
+            | "fleet.session_resize"
+            | "fleet.session_attach"
+            | "fleet.pty_session_create"
+            | "fleet.pty_session_close"
+            | "fleet.pty_session_input"
+            | "fleet.pty_session_read"
+            | "fleet.pty_session_resize"
+            | "fleet.pty_session_attach"
             // mission.discuss_round — sub-turn orchestration
             // ability. Same Operational class as easynet.run /
             // mission.run because the ability IS the work
@@ -1165,12 +1194,6 @@ mod tests {
             | "process.exec"
             | "shell.run"
             | "http.request"
-            | "fleet.pty_session_create"
-            | "fleet.pty_session_close"
-            | "fleet.pty_session_attach"
-            | "fleet.pty_session_input"
-            | "fleet.pty_session_read"
-            | "fleet.pty_session_resize"
             | "fleet.file_transfer"
             // RFC-005 v3.2 A1–A8 — physical-channel media verbs.
             // Operational by intent: each one drives an external
@@ -1460,9 +1483,9 @@ mod tests {
             // Outbound network
             "http.request",
             // Interactive PTY trio
-            "fleet.pty_session_create",
-            "fleet.pty_session_close",
-            "fleet.pty_session_attach",
+            "fleet.session_create",
+            "fleet.session_close",
+            "fleet.session_attach",
             // Operator surface added in slice 16
             "admin.status",
             "fleet.start_agent",
