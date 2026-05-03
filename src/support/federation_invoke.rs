@@ -423,6 +423,121 @@ pub fn invoke_via_federation_forward(
     })
 }
 
+/// Cross-realm directory query against the local daemon's
+/// `federation.discover` ability. Returns the parsed
+/// `entries: [DirectoryEntry]` array verbatim. The single
+/// dial path (UDS gRPC InvocationClient → daemon's
+/// `dispatch_federation_discover`) is shared with
+/// `easynet federation discover`'s own subcommand — having
+/// one helper means `device list` / `auth devices` / future
+/// fan-out callers cannot drift on caller URI / envelope
+/// shape.
+///
+/// Args:
+///   * `agent_uri_filter` — optional URI filter passed verbatim
+///     to the daemon. `None` returns the full federated
+///     directory; `Some(uri)` returns at most one entry (lex
+///     tie-break on peer realm).
+///   * `caller_uri` — optional caller URI for the envelope. When
+///     `None`, falls back to the device URI minted from
+///     `credentials.json`, then the generic
+///     `easynet:///r/cli/device/local` placeholder. The daemon's
+///     loopback bypass admits both shapes.
+///
+/// Returns the `entries` array as a `Vec<Value>` (each element
+/// is a `DirectoryEntry`-shaped JSON object).
+pub fn invoke_federation_discover(
+    agent_uri_filter: Option<&str>,
+    caller_uri: Option<&str>,
+) -> anyhow::Result<Vec<Value>> {
+    let socket_path = expand_home(DEFAULT_DAEMON_GRPC_UDS_PATH);
+    if !socket_path.exists() {
+        bail!(
+            "daemon not running (no gRPC socket at {}). \
+             Start it with `easynet runtime start`.",
+            socket_path.display()
+        );
+    }
+
+    let mut req_args = json!({});
+    if let Some(uri) = agent_uri_filter {
+        req_args["agent_uri"] = Value::String(uri.to_string());
+    }
+    let arg_bytes = serde_json::to_vec(&req_args).context("encode discover args")?;
+
+    let resolved_caller = caller_uri
+        .map(str::to_string)
+        .or_else(|| {
+            crate::persistence::config::load_credentials()
+                .ok()
+                .map(|c| crate::uri::device_uri(&c.tenant_id, &c.node_id))
+        })
+        .unwrap_or_else(|| crate::uri::device_uri("cli", "local"));
+
+    let envelope = Envelope {
+        caller: Some(AgentIdentity {
+            uri: resolved_caller.clone(),
+            ..AgentIdentity::default()
+        }),
+        callee: Some(AgentIdentity {
+            uri: resolved_caller.clone(),
+            ..AgentIdentity::default()
+        }),
+        subject: Some(SubjectIdentity {
+            uri: resolved_caller,
+            ..SubjectIdentity::default()
+        }),
+        ..Envelope::default()
+    };
+
+    let request = InvokeRequest {
+        envelope: Some(envelope),
+        function_name: "federation.discover".to_string(),
+        arguments: arg_bytes,
+        ..InvokeRequest::default()
+    };
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("build tokio runtime for federation.discover")?;
+
+    let response = runtime.block_on(async move {
+        let socket = socket_path.clone();
+        let endpoint = Endpoint::try_from("http://[::1]:50051")
+            .context("build tonic endpoint")?
+            .timeout(Duration::from_secs(10))
+            .connect_timeout(Duration::from_secs(5));
+        let channel = endpoint
+            .connect_with_connector(service_fn(move |_: Uri| {
+                let path = socket.clone();
+                async move {
+                    let stream = tokio::net::UnixStream::connect(path).await?;
+                    Ok::<_, std::io::Error>(hyper_util::rt::TokioIo::new(stream))
+                }
+            }))
+            .await
+            .context("connect to local daemon gRPC UDS")?;
+        let mut client = InvocationClient::new(channel);
+        let resp = client.invoke(request).await.map_err(|status| {
+            anyhow!(
+                "daemon rejected federation.discover: code={:?} message={}",
+                status.code(),
+                status.message()
+            )
+        })?;
+        Ok::<_, anyhow::Error>(resp.into_inner())
+    })?;
+
+    let body: Value =
+        serde_json::from_slice(&response.result).context("decode discover response body")?;
+    Ok(body
+        .get("entries")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default())
+}
+
 /// Tilde-expand `~/...` paths the same way the rest of the daemon
 /// codebase does. Centralised here so the helper does not depend
 /// on `services::axon_serve::boot::expand_home` (which lives behind
