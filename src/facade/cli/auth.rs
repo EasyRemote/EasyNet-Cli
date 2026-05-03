@@ -554,21 +554,90 @@ pub fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Joint-plan unified path: when the backend HTTP API can't find a
+/// device (typically cross-hub), fall back to the daemon's
+/// `device.describe` ability — the same surface
+/// `easynet device show` uses post-phase-1.2.
+///
+/// Routing matches the rest of the CLI:
+///   * `node_id` matches this device's own node id → invoke
+///     `device.describe` locally over the control socket.
+///   * Otherwise → wrap the bare uuid in this caller's realm and
+///     forward_invoke `device.describe`. (Cross-hub bare-uuid wrap
+///     uses the caller's realm by design; passing a canonical URA
+///     lands here too via `parse_node_uri`-style branching, but the
+///     backend HTTP API surface only exposes bare uuid today, so
+///     bare-uuid is the only path exercised.)
+///
+/// The legacy `fleet.describe_node` path handled both arms server-
+/// side; the daemon-side handler is on the phase 4 cull list. This
+/// helper preserves the operator-visible behaviour while the
+/// dependency moves.
 fn fallback_device_abilities_from_local_daemon(node_id: &str) -> anyhow::Result<AbilityListResp> {
-    let node = crate::support::local_invoke::invoke_local_ability(
-        "fleet.describe_node",
-        serde_json::json!({ "node_id": node_id }),
-    )
-    .with_context(|| format!("invoke fleet.describe_node for node {node_id}"))?;
+    let node = describe_node_via_unified_path(node_id)
+        .with_context(|| format!("invoke device.describe for node {node_id}"))?;
     let abilities = node
         .get("abilities")
         .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow!("fleet.describe_node returned no `abilities` array"))?;
+        .ok_or_else(|| anyhow!("device.describe returned no `abilities` array"))?;
     let items = abilities
         .iter()
         .map(ability_item_from_descriptor)
         .collect::<Vec<_>>();
     Ok(AbilityListResp { items })
+}
+
+fn describe_node_via_unified_path(node_id: &str) -> anyhow::Result<serde_json::Value> {
+    let trimmed = node_id.trim();
+    let creds = crate::persistence::config::load_credentials().ok();
+    let local_node = creds.as_ref().map(|c| c.node_id.clone()).unwrap_or_default();
+    let local_tenant = creds
+        .as_ref()
+        .map(|c| c.tenant_id.clone())
+        .unwrap_or_default();
+
+    let is_local = !local_node.is_empty() && trimmed == local_node;
+    if is_local {
+        return crate::support::local_invoke::invoke_local_ability(
+            "device.describe",
+            serde_json::json!({}),
+        )
+        .context("invoke device.describe (local)");
+    }
+
+    describe_node_remote(trimmed, &local_tenant)
+}
+
+#[cfg(feature = "axon-pb")]
+fn describe_node_remote(node: &str, local_tenant: &str) -> anyhow::Result<serde_json::Value> {
+    let target_uri = if node.starts_with("easynet:///r/") {
+        crate::support::federation_invoke::parse_node_uri(node)?
+    } else if !local_tenant.is_empty() {
+        crate::uri::device_uri(local_tenant, node)
+    } else {
+        anyhow::bail!(
+            "cannot resolve node {node:?}: pair this device first or pass a canonical \
+             `easynet:///r/<realm>/device/<id>` URI"
+        );
+    };
+    let caller_uri = crate::persistence::config::load_credentials()
+        .ok()
+        .filter(|c| !c.tenant_id.trim().is_empty() && !c.node_id.trim().is_empty())
+        .map(|c| crate::uri::device_uri(c.tenant_id.trim(), c.node_id.trim()));
+    crate::support::federation_invoke::invoke_via_federation_forward(
+        "device.describe",
+        serde_json::json!({}),
+        &target_uri,
+        caller_uri.as_deref(),
+    )
+    .with_context(|| format!("forward device.describe to target={target_uri}"))
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn describe_node_remote(node: &str, _local_tenant: &str) -> anyhow::Result<serde_json::Value> {
+    Err(crate::support::local_invoke::federation_not_wired_error(
+        &format!("describing remote device {node:?}"),
+    ))
 }
 
 fn ability_item_from_descriptor(value: &serde_json::Value) -> AbilityItem {
