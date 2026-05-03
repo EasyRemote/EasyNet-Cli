@@ -240,19 +240,24 @@ fn uri_contains_unjoined(uri: &str) -> bool {
 }
 
 /// Pull the agent_id tail from a `.../agent/<user>.<agent_id>` URI.
-/// Returns None when the URI doesn't match the expected shape so the
-/// caller can fall back to a fresh mint instead of embedding the
-/// malformed remainder. The split keys on the `.` between user and
-/// agent_id; if the placeholder URI shape evolves to something else
-/// the test in this module catches the regression.
+/// Returns None when the URI doesn't parse as a v4.1.5 agent URA so
+/// the caller can fall back to a fresh mint instead of embedding the
+/// malformed remainder.
+///
+/// Strict-parser rule (silan's `feedback_no_legacy_ura`): every URI
+/// parse goes through `crate::uri::parse_ura`. Hand-rolled
+/// `split("/agent/")` would silently accept legacy `r/<scope>/reg/agent.<id>`
+/// URNs and other non-v4.1.5 shapes, defeating the canonical-shape
+/// invariant the rest of the codebase has been clamped to.
 fn extract_agent_id_tail(uri: &str) -> Option<String> {
-    let after_agent = uri.split("/agent/").nth(1)?;
-    let dot = after_agent.find('.')?;
-    let tail = &after_agent[dot + 1..];
-    if tail.is_empty() {
+    let parsed = crate::uri::parse_ura(uri).ok()?;
+    if parsed.kind != crate::uri::URAKind::Agent {
         return None;
     }
-    Some(tail.to_string())
+    if parsed.agent_id.is_empty() {
+        return None;
+    }
+    Some(parsed.agent_id)
 }
 
 #[cfg(test)]
@@ -428,5 +433,51 @@ mod tests {
         plan.host_device_uri = "easynet:///r/acme/device/01DEV".into();
         let _ = bootstrap_local_agents(&plan, &mut file, &CountingMinter::new());
         assert_eq!(file.host_device_agent_uri, "easynet:///r/acme/device/01DEV");
+    }
+
+    // ── extract_agent_id_tail: strict v4.1.5 parser only ─────────
+
+    #[test]
+    fn extract_agent_id_tail_returns_id_for_canonical_agent_uri() {
+        let uri = "easynet:///r/acme/agent/alice.claude";
+        assert_eq!(extract_agent_id_tail(uri), Some("claude".into()));
+    }
+
+    #[test]
+    fn extract_agent_id_tail_returns_id_for_pre_join_placeholder_uri() {
+        // The repair branch reads pre-join URIs out of agents.json
+        // when the device joins a realm. parse_ura admits the
+        // `<unjoined>` placeholder because it only rejects `.`/`/`/
+        // empty in the user-id slot, not arbitrary opaque tokens.
+        let uri = "easynet:///r/<unjoined>/agent/<unjoined>.consent-default-0";
+        assert_eq!(
+            extract_agent_id_tail(uri),
+            Some("consent-default-0".into())
+        );
+    }
+
+    #[test]
+    fn extract_agent_id_tail_rejects_legacy_reg_form() {
+        // Legacy `r/<scope>/reg/agent.<id>` URN — the v1 RFC-001
+        // shape that pre-dates the six-role v4.1.5 ontology. Strict
+        // parser refuses; old hand-rolled `split("/agent/")` would
+        // have silently returned a malformed tail.
+        let uri = "easynet:///r/acme/reg/agent.claude";
+        assert!(extract_agent_id_tail(uri).is_none());
+    }
+
+    #[test]
+    fn extract_agent_id_tail_rejects_device_uri() {
+        // device URA has no agent_id slot; reject so the caller
+        // mints a fresh one rather than embedding a malformed tail.
+        let uri = "easynet:///r/acme/device/01DEV";
+        assert!(extract_agent_id_tail(uri).is_none());
+    }
+
+    #[test]
+    fn extract_agent_id_tail_rejects_garbage() {
+        assert!(extract_agent_id_tail("").is_none());
+        assert!(extract_agent_id_tail("not-a-uri").is_none());
+        assert!(extract_agent_id_tail("easynet:///r/acme").is_none());
     }
 }
