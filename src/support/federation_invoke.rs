@@ -538,6 +538,109 @@ pub fn invoke_federation_discover(
         .unwrap_or_default())
 }
 
+/// `federation.revoke` against the local daemon's gRPC
+/// InvocationServer. Removes the named Agent's directory entry on
+/// the hub. CLI lifecycle surfaces (`easynet device remove`,
+/// `easynet device reset --force`) call this helper instead of the
+/// legacy `fleet.remove_node` / `fleet.deregister_self` ack-only
+/// stubs.
+///
+/// Args:
+///   * `agent_uri` — canonical URI of the Agent to revoke (typically
+///     a device URA `easynet:///r/<realm>/device/<id>`).
+///   * `reason` — operator-supplied label, written through to the
+///     receipt for audit. `"deregister"` / `"reset"` are common.
+///   * `caller_uri` — same fallback chain as
+///     `invoke_federation_discover`.
+///
+/// Returns `Ok(())` on a successful ack from the daemon. Best-effort
+/// by contract on the hub side, but this helper still surfaces
+/// transport / parse errors so callers can log them honestly.
+pub fn invoke_federation_revoke(
+    agent_uri: &str,
+    reason: &str,
+    caller_uri: Option<&str>,
+) -> anyhow::Result<()> {
+    let socket_path = expand_home(DEFAULT_DAEMON_GRPC_UDS_PATH);
+    if !socket_path.exists() {
+        bail!(
+            "daemon not running (no gRPC socket at {}). \
+             Start it with `easynet runtime start`.",
+            socket_path.display()
+        );
+    }
+
+    let req_args = json!({
+        "agent_uri": agent_uri,
+        "reason": reason,
+    });
+    let arg_bytes = serde_json::to_vec(&req_args).context("encode revoke args")?;
+
+    let resolved_caller = caller_uri
+        .map(str::to_string)
+        .or_else(|| {
+            crate::persistence::config::load_credentials()
+                .ok()
+                .map(|c| crate::uri::device_uri(&c.tenant_id, &c.node_id))
+        })
+        .unwrap_or_else(|| crate::uri::device_uri("cli", "local"));
+
+    let envelope = Envelope {
+        caller: Some(AgentIdentity {
+            uri: resolved_caller.clone(),
+            ..AgentIdentity::default()
+        }),
+        callee: Some(AgentIdentity {
+            uri: resolved_caller.clone(),
+            ..AgentIdentity::default()
+        }),
+        subject: Some(SubjectIdentity {
+            uri: resolved_caller,
+            ..SubjectIdentity::default()
+        }),
+        ..Envelope::default()
+    };
+
+    let request = InvokeRequest {
+        envelope: Some(envelope),
+        function_name: "federation.revoke".to_string(),
+        arguments: arg_bytes,
+        ..InvokeRequest::default()
+    };
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("build tokio runtime for federation.revoke")?;
+
+    runtime.block_on(async move {
+        let socket = socket_path.clone();
+        let endpoint = Endpoint::try_from("http://[::1]:50051")
+            .context("build tonic endpoint")?
+            .timeout(Duration::from_secs(10))
+            .connect_timeout(Duration::from_secs(5));
+        let channel = endpoint
+            .connect_with_connector(service_fn(move |_: Uri| {
+                let path = socket.clone();
+                async move {
+                    let stream = tokio::net::UnixStream::connect(path).await?;
+                    Ok::<_, std::io::Error>(hyper_util::rt::TokioIo::new(stream))
+                }
+            }))
+            .await
+            .context("connect to local daemon gRPC UDS")?;
+        let mut client = InvocationClient::new(channel);
+        let _ = client.invoke(request).await.map_err(|status| {
+            anyhow!(
+                "daemon rejected federation.revoke: code={:?} message={}",
+                status.code(),
+                status.message()
+            )
+        })?;
+        Ok::<_, anyhow::Error>(())
+    })
+}
+
 /// Tilde-expand `~/...` paths the same way the rest of the daemon
 /// codebase does. Centralised here so the helper does not depend
 /// on `services::axon_serve::boot::expand_home` (which lives behind
