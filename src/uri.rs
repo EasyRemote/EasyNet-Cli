@@ -170,18 +170,10 @@ impl fmt::Display for ParseError {
             ParseError::EmptyRealm => f.write_str("URI missing <realm> segment"),
             ParseError::EmptyRole => f.write_str("URI missing <role> segment"),
             ParseError::UserMissingTail => f.write_str("user URI requires <user-uuid> tail"),
-            ParseError::UserBadShape => {
-                f.write_str("user-id must be bare (no dots/slashes)")
-            }
-            ParseError::DeviceMissingTail => {
-                f.write_str("device URI requires <device-uuid> tail")
-            }
-            ParseError::DeviceBadShape => {
-                f.write_str("device-id must be bare (no dots/slashes)")
-            }
-            ParseError::AgentMissingTail => {
-                f.write_str("agent URI requires <user>.<agent> tail")
-            }
+            ParseError::UserBadShape => f.write_str("user-id must be bare (no dots/slashes)"),
+            ParseError::DeviceMissingTail => f.write_str("device URI requires <device-uuid> tail"),
+            ParseError::DeviceBadShape => f.write_str("device-id must be bare (no dots/slashes)"),
+            ParseError::AgentMissingTail => f.write_str("agent URI requires <user>.<agent> tail"),
             ParseError::AgentBadShape => {
                 f.write_str("agent tail must be <user>.<agent>; agent-id must not contain '.'")
             }
@@ -244,7 +236,10 @@ pub fn hub_uri(realm: &str) -> String {
 /// stripped so `/Users/...` and `Users/...` produce the same URI.
 pub fn resource_uri(realm: &str, user_id: &str, ns: ResourceNamespace, path: &str) -> String {
     let clean = path.strip_prefix('/').unwrap_or(path);
-    format!("{URI_SCHEME}{realm}/resource/{user_id}/{}/{clean}", ns.as_str())
+    format!(
+        "{URI_SCHEME}{realm}/resource/{user_id}/{}/{clean}",
+        ns.as_str()
+    )
 }
 
 // ── Realm-scoped prefixes (federation.resolve filters) ─────────
@@ -369,8 +364,7 @@ pub fn parse_ura(uri: &str) -> Result<ParsedURA, ParseError> {
             if tail.is_empty() {
                 return Err(ParseError::ResourceMissingTail);
             }
-            let (uid, after_user) =
-                tail.split_once('/').ok_or(ParseError::ResourceMissingNs)?;
+            let (uid, after_user) = tail.split_once('/').ok_or(ParseError::ResourceMissingNs)?;
             if uid.is_empty() {
                 return Err(ParseError::ResourceEmptyUser);
             }
@@ -642,8 +636,7 @@ mod tests {
 
     #[test]
     fn parse_resource_rejects_unknown_namespace() {
-        let err =
-            parse_ura("easynet:///r/localhost/resource/u1/notarealns/x").unwrap_err();
+        let err = parse_ura("easynet:///r/localhost/resource/u1/notarealns/x").unwrap_err();
         match err {
             ParseError::ResourceUnknownNs(ref ns) => assert_eq!(ns, "notarealns"),
             other => panic!("wanted ResourceUnknownNs, got {other:?}"),
@@ -665,14 +658,8 @@ mod tests {
     #[test]
     fn display_id_per_kind() {
         let uuid = "u1";
-        assert_eq!(
-            display_id(&user_uri("localhost", uuid)),
-            "u1"
-        );
-        assert_eq!(
-            display_id(&device_uri("localhost", "dev-1")),
-            "dev-1"
-        );
+        assert_eq!(display_id(&user_uri("localhost", uuid)), "u1");
+        assert_eq!(display_id(&device_uri("localhost", "dev-1")), "dev-1");
         assert_eq!(
             display_id(&agent_uri("localhost", uuid, "claude")),
             "u1.claude"
