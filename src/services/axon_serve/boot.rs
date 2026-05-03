@@ -1309,6 +1309,8 @@ mod tests {
 
     #[test]
     fn expand_home_with_tilde_uses_home_env() {
+        // HomeGuard serialises HOME mutation across the suite.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
         std::env::set_var("HOME", "/tmp/easynet-test-home");
         let expanded = expand_home("~/.easynet/daemon.sock");
         assert_eq!(
@@ -1459,6 +1461,7 @@ mod tests {
         // Point HOME at an empty temp dir so the loader sees no
         // daemon-config.toml. This is the production-realistic case
         // for any device that has not yet been migrated to PR-1.
+        let _hg = crate::facade::cli::test_support::HomeGuard::new();
         let temp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", temp.path());
         let registry = Arc::new(crate::runtime::ability_dispatch::LocalAbilityRegistry::default());
@@ -1544,6 +1547,7 @@ added_at_unix_ms = 1714492800000
         // 2-daemon TLS round-trip; this exercise pins the boot
         // path so that test starts from a known-not-crashing
         // base.
+        let _hg = crate::facade::cli::test_support::HomeGuard::new();
         let temp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", temp.path());
 

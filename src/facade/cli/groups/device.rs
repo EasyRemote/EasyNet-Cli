@@ -402,17 +402,7 @@ fn describe_target(node_id: &str) -> anyhow::Result<Value> {
 
 #[cfg(feature = "axon-pb")]
 fn invoke_remote_describe(node: &str, local_tenant: &str) -> anyhow::Result<Value> {
-    let target_uri = if node.starts_with("easynet:///r/") {
-        crate::support::federation_invoke::parse_node_uri(node)?
-    } else if !local_tenant.is_empty() {
-        crate::uri::device_uri(local_tenant, node)
-    } else {
-        anyhow::bail!(
-            "cannot resolve node {node:?}: pass a canonical \
-             `easynet:///r/<realm>/device/<id>` URI or pair this device first \
-             so the bare-uuid form can be wrapped in the local realm"
-        );
-    };
+    let target_uri = resolve_remote_target_uri(node, local_tenant)?;
 
     let caller_uri = crate::persistence::config::load_credentials()
         .ok()
@@ -425,6 +415,53 @@ fn invoke_remote_describe(node: &str, local_tenant: &str) -> anyhow::Result<Valu
         caller_uri.as_deref(),
     )
     .with_context(|| format!("forward device.describe to target={target_uri}"))
+}
+
+/// Resolve `node` into a canonical device URA. URA passes through;
+/// bare uuid first tries the federation directory (cross-hub
+/// devices live in their own realm, NOT the local tenant) and only
+/// falls back to wrapping in `local_tenant` when the directory
+/// can't speak. Without this two-stage lookup, every cross-hub
+/// `device show <bare-uuid>` ended up dispatched to
+/// `easynet:///r/<local-tenant>/device/<id>` — a target that does
+/// not exist on the peer hub, which then surfaces as
+/// `target_offline` from forward_invoke.
+#[cfg(feature = "axon-pb")]
+fn resolve_remote_target_uri(node: &str, local_tenant: &str) -> anyhow::Result<String> {
+    if node.starts_with("easynet:///r/") {
+        return crate::support::federation_invoke::parse_node_uri(node);
+    }
+    if let Some(uri) = lookup_node_uri_in_directory(node) {
+        return Ok(uri);
+    }
+    if !local_tenant.is_empty() {
+        return Ok(crate::uri::device_uri(local_tenant, node));
+    }
+    anyhow::bail!(
+        "cannot resolve node {node:?}: federation.discover returned no \
+         match and no local realm is wired (pair this device first or \
+         pass a canonical `easynet:///r/<realm>/device/<id>` URI)"
+    );
+}
+
+/// Walk the local daemon's federated directory for a `DirectoryEntry`
+/// whose `node_id` equals `node`. Returns the entry's `agent_uri`
+/// (a canonical device URA carrying the peer's real realm). `None`
+/// when the directory is empty / the call fails / no entry matches.
+/// Best-effort: a daemon outage must not block the legacy "wrap in
+/// local realm" fallback.
+#[cfg(feature = "axon-pb")]
+fn lookup_node_uri_in_directory(node: &str) -> Option<String> {
+    let entries =
+        crate::support::federation_invoke::invoke_federation_discover(None, None).ok()?;
+    for entry in entries {
+        if entry.get("node_id").and_then(Value::as_str) == Some(node) {
+            if let Some(uri) = entry.get("agent_uri").and_then(Value::as_str) {
+                return Some(uri.to_string());
+            }
+        }
+    }
+    None
 }
 
 #[cfg(not(feature = "axon-pb"))]

@@ -552,12 +552,20 @@ mod tests {
 
     #[test]
     fn describe_node_with_local_returns_self_envelope() {
+        // HomeGuard isolates ~/.easynet so the handler runs the
+        // unpaired-fallback arm (collect_fleet_view's self node).
+        // The paired arm goes through federation_probe::resolve_device_record
+        // which dials the local runtime bridge — absent in unit tests.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
         let resp = describe_node_handler(json!({"node_id": "local"})).unwrap();
         assert_eq!(resp.get("is_self"), Some(&json!(true)));
     }
 
     #[test]
     fn describe_node_with_remote_returns_not_found() {
+        // Same HomeGuard isolation: unpaired fallback bails
+        // "node X not found" without reaching the runtime bridge.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
         let err = describe_node_handler(json!({"node_id": "some-remote"})).unwrap_err();
         assert!(format!("{err}").contains("not found"));
     }

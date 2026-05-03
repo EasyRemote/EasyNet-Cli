@@ -453,11 +453,20 @@ fn real_voice_show_call_unknown_call_errors() {
 
 #[test]
 fn real_voice_join_call_transitions_call_to_active() {
+    // voice.* in-process state machine: a call goes "active"
+    // when ≥2 participants are present (creator + first remote
+    // joiner per voice_call_ability::join_call_handler comment).
+    // The test must therefore pre-populate the creator via
+    // `voice.create_call` taking a `participant_id`, then add
+    // the second via `voice.join_call`.
     let (reg, _g) = registry_with_temp_home();
     let cid = unique_call_id("join");
     let dispatcher = dispatcher_for(reg);
     dispatcher
-        .execute_rpc(target("voice.create_call", json!({"call_id": cid.clone()})))
+        .execute_rpc(target(
+            "voice.create_call",
+            json!({"call_id": cid.clone(), "participant_id": "creator"}),
+        ))
         .expect("create");
     dispatcher
         .execute_rpc(target(

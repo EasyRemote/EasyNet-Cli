@@ -884,12 +884,16 @@ listen_tcp = "127.0.0.1:50443"
         //
         // This test creates a daemon-config under HOME, runs the
         // auto-wire, and asserts that [daemon].hub_endpoint is the
-        // creds value, NOT the 50443 guess.
+        // creds value, NOT the 50443 guess. HomeGuard serialises
+        // HOME mutation against every other test that touches it
+        // — without the guard a parallel agent_sessions /
+        // boot::tests run was racing and seeing this test's
+        // tempdir survive into its own setup.
         use std::io::Write;
-        let tmp = tempfile::tempdir().expect("tempdir");
-        std::env::set_var("HOME", tmp.path());
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let tmp_home = std::path::PathBuf::from(std::env::var("HOME").unwrap());
 
-        let cfg_path = tmp.path().join(".easynet").join("daemon-config.toml");
+        let cfg_path = tmp_home.join(".easynet").join("daemon-config.toml");
         std::fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
         let mut f = std::fs::File::create(&cfg_path).unwrap();
         writeln!(
@@ -1061,6 +1065,11 @@ added_at_unix_ms = 1
         // hub pubkey. Asserts the file contains BOTH:
         //   - device entry (deterministic pubkey derivation)
         //   - hub entry (pubkey derived from staged seed)
+        //
+        // HomeGuard serialises HOME mutation against every other
+        // test that touches it; without it parallel test runs were
+        // racing the EnvGuard's restore window.
+        let _hg = crate::facade::cli::test_support::HomeGuard::new();
         let tmp = tempfile::tempdir().expect("tempdir");
         let trust_path = tmp.path().join("realm-trust.toml");
 
