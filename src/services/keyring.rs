@@ -233,8 +233,13 @@ impl MasterKeySource {
 
 /// Argon2id derive `(salt, passphrase) → 32-byte key`.
 fn derive_master_key(passphrase: &str, salt: &[u8]) -> Result<[u8; AES_KEY_LEN], VaultError> {
-    let params = Params::new(KDF_MEMORY_KIB, KDF_TIME_COST, KDF_PARALLELISM, Some(AES_KEY_LEN))
-        .map_err(|e| VaultError::Kdf(format!("argon2 params: {e}")))?;
+    let params = Params::new(
+        KDF_MEMORY_KIB,
+        KDF_TIME_COST,
+        KDF_PARALLELISM,
+        Some(AES_KEY_LEN),
+    )
+    .map_err(|e| VaultError::Kdf(format!("argon2 params: {e}")))?;
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut out = [0u8; AES_KEY_LEN];
     argon
@@ -529,14 +534,22 @@ fn signing_key_from_entry(entry: &KeyringEntry) -> Result<SigningKey, VaultError
     Ok(SigningKey::from_bytes(&arr))
 }
 
-fn encrypt(key: &[u8; AES_KEY_LEN], nonce: &[u8; AES_NONCE_LEN], plaintext: &[u8]) -> Result<Vec<u8>, VaultError> {
+fn encrypt(
+    key: &[u8; AES_KEY_LEN],
+    nonce: &[u8; AES_NONCE_LEN],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, VaultError> {
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
     cipher
         .encrypt(Nonce::from_slice(nonce), plaintext)
         .map_err(|e| VaultError::Crypto(format!("aes-gcm encrypt: {e}")))
 }
 
-fn decrypt(key: &[u8; AES_KEY_LEN], nonce: &[u8; AES_NONCE_LEN], ciphertext: &[u8]) -> Result<Vec<u8>, VaultError> {
+fn decrypt(
+    key: &[u8; AES_KEY_LEN],
+    nonce: &[u8; AES_NONCE_LEN],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, VaultError> {
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
     cipher
         .decrypt(Nonce::from_slice(nonce), ciphertext)
@@ -630,19 +643,10 @@ pub enum KeyringRequest {
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum KeyringResponse {
     Ok,
-    Signature {
-        signature_b64: String,
-    },
-    PublicKey {
-        public_key_b64: String,
-    },
-    List {
-        entries: Vec<String>,
-    },
-    Error {
-        kind: String,
-        message: String,
-    },
+    Signature { signature_b64: String },
+    PublicKey { public_key_b64: String },
+    List { entries: Vec<String> },
+    Error { kind: String, message: String },
 }
 
 impl KeyringResponse {
@@ -913,19 +917,10 @@ mod tests {
     #[test]
     fn vault_error_to_response_kind_strings_stable() {
         let cases = vec![
-            (
-                VaultError::NotFound("u".into()),
-                "not_found",
-            ),
-            (
-                VaultError::AlreadyExists("u".into()),
-                "already_exists",
-            ),
+            (VaultError::NotFound("u".into()), "not_found"),
+            (VaultError::AlreadyExists("u".into()), "already_exists"),
             (VaultError::BadSeedLen { got: 5 }, "bad_seed_len"),
-            (
-                VaultError::Crypto("decrypt".into()),
-                "crypto",
-            ),
+            (VaultError::Crypto("decrypt".into()), "crypto"),
         ];
         for (err, want_kind) in cases {
             match vault_error_to_response(err) {

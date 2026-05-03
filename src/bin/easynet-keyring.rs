@@ -87,10 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(
-            &socket_path,
-            std::fs::Permissions::from_mode(0o600),
-        )?;
+        std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))?;
     }
     eprintln!(
         "[easynet-keyring] listening on {} (mode 0600)",
@@ -107,15 +104,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // SIGINT and unlinking before exit makes the operator's
     // restart cycle smooth.
     tokio::spawn(async move {
-        let mut sigterm = match tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::terminate(),
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("[easynet-keyring] cannot watch SIGTERM: {e}");
-                return;
-            }
-        };
+        let mut sigterm =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("[easynet-keyring] cannot watch SIGTERM: {e}");
+                    return;
+                }
+            };
         let mut sigint =
             match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()) {
                 Ok(s) => s,
@@ -206,10 +202,7 @@ async fn dispatch(req: KeyringRequest, vault: &Arc<Mutex<Vault>>) -> KeyringResp
             {
                 Ok(b) => b,
                 Err(e) => {
-                    return KeyringResponse::err(
-                        "base64",
-                        format!("canonical_bytes_b64: {e}"),
-                    )
+                    return KeyringResponse::err("base64", format!("canonical_bytes_b64: {e}"))
                 }
             };
             let guard = vault.lock().await;
@@ -275,14 +268,19 @@ fn resolve_master_key_source() -> Result<MasterKeySource, Box<dyn std::error::Er
         std::io::stderr().flush().ok();
         let mut pass = String::new();
         std::io::stdin().read_line(&mut pass)?;
-        let pass = pass.trim_end_matches('\n').trim_end_matches('\r').to_string();
+        let pass = pass
+            .trim_end_matches('\n')
+            .trim_end_matches('\r')
+            .to_string();
         if pass.is_empty() {
             return Err("[easynet-keyring] empty passphrase rejected".into());
         }
         return Ok(MasterKeySource::Explicit(pass));
     }
-    Err("[easynet-keyring] no master-key source: set EASYNET_KEYRING_PASSPHRASE or run on a TTY"
-        .into())
+    Err(
+        "[easynet-keyring] no master-key source: set EASYNET_KEYRING_PASSPHRASE or run on a TTY"
+            .into(),
+    )
 }
 
 fn atty_stdin() -> bool {

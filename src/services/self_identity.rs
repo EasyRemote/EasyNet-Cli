@@ -411,7 +411,7 @@ pub fn keyring_daemon_available() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::keyring::{Vault, MasterKeySource};
+    use crate::services::keyring::{MasterKeySource, Vault};
     use ed25519_dalek::Verifier;
     use rand::rngs::OsRng;
     use rand::RngCore;
