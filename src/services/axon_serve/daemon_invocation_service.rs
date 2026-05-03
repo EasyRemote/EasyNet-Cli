@@ -2006,6 +2006,30 @@ impl DaemonInvocationService {
         // Down-stream: handler-emitted JSON → InvokeBidiDown frames.
         // Capacity 16 mirrors `INVOKE_REMOTE_DISPATCH_CAPACITY`.
         let (down_tx, down_rx) = tokio::sync::mpsc::channel::<Result<InvokeBidiDown, Status>>(16);
+
+        // First down-frame MUST be an admission Receipt(Admitted),
+        // per the bidi protocol contract: the client (backend's
+        // wshandler.go:711) refuses to start the input pump until
+        // it sees this. Without it, the local-dispatcher path's
+        // first frame is whatever the handler emits (typically a
+        // BinaryChunk for PTY stdout) and wshandler tears down with
+        // "expected admission receipt as first frame, got kind=1".
+        //
+        // This mirrors the pre-existing receipt emit on the real
+        // <self>.session reverse-channel admission path
+        // (build_session_down_admission_receipt). The local-bidi
+        // fallback was missing it because PR 8682960 wired the
+        // handler frames through without the prelude.
+        if down_tx
+            .send(Ok(build_bidi_admission_receipt()))
+            .await
+            .is_err()
+        {
+            return Err(Status::cancelled(
+                "InvokeBidi local-dispatcher: down-stream closed before admission receipt sent",
+            ));
+        }
+
         let down_tx_for_handler = down_tx.clone();
         tokio::spawn(async move {
             while let Some(value) = handler_out_rx.recv().await {
