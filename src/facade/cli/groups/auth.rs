@@ -68,6 +68,20 @@ pub enum AuthAction {
     ///
     ///   easynet auth exec <node_id> -- ls /
     Exec(auth::ExecArgs),
+
+    /// List agents visible to the logged-in user via the backend
+    /// HTTP API (mirrors the frontend's Agents page).
+    Agents(auth::AgentsArgs),
+
+    /// Tail the realm hub's SSE event stream (mirrors the
+    /// frontend's live event panel). Optional `--node` filter
+    /// keeps only events whose JSON payload mentions a given
+    /// node_id.
+    Events(auth::EventsArgs),
+
+    /// Remove a device from this realm via the backend HTTP API.
+    /// Asks for confirmation unless `-y/--yes` is passed.
+    DeviceRemove(auth::DeviceRemoveArgs),
 }
 
 pub fn dispatch(args: AuthArgs) -> anyhow::Result<()> {
@@ -79,5 +93,8 @@ pub fn dispatch(args: AuthArgs) -> anyhow::Result<()> {
         AuthAction::Devices(a) => auth::run_devices(a),
         AuthAction::Abilities(a) => auth::run_abilities(a),
         AuthAction::Exec(a) => auth::run_exec(a),
+        AuthAction::Agents(a) => auth::run_agents(a),
+        AuthAction::Events(a) => auth::run_events(a),
+        AuthAction::DeviceRemove(a) => auth::run_device_remove(a),
     }
 }

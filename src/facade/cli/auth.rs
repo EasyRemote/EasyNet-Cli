@@ -645,3 +645,172 @@ pub fn run_exec(args: ExecArgs) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+// ── agents ─────────────────────────────────────────────────────
+
+#[derive(Debug, Args)]
+pub struct AgentsArgs {
+    /// Output as JSON instead of a table.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Deserialize)]
+struct AgentListResp {
+    items: Vec<serde_json::Value>,
+}
+
+pub fn run_agents(args: AgentsArgs) -> anyhow::Result<()> {
+    let resp: AgentListResp = auth_get_json("/api/v1/agents")?;
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "items": resp.items,
+            }))?
+        );
+        return Ok(());
+    }
+    if resp.items.is_empty() {
+        println!("(no agents — daemon may be offline, or no hosted agents joined)");
+        return Ok(());
+    }
+    println!("{:<46} {:<24} {:<10}", "URI", "DISPLAY_NAME", "STATUS");
+    for a in &resp.items {
+        let uri = a.get("uri").and_then(|v| v.as_str()).unwrap_or("-");
+        let name = a
+            .get("display_name")
+            .or_else(|| a.get("name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("-");
+        let status = a.get("status").and_then(|v| v.as_str()).unwrap_or("-");
+        println!("{:<46} {:<24} {:<10}", uri, name, status);
+    }
+    Ok(())
+}
+
+// ── device remove (HTTP-side) ─────────────────────────────────
+
+#[derive(Debug, Args)]
+pub struct DeviceRemoveArgs {
+    /// Device node_id to remove.
+    pub node_id: String,
+    /// Skip the interactive confirmation.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
+}
+
+pub fn run_device_remove(args: DeviceRemoveArgs) -> anyhow::Result<()> {
+    let session = load_session()?
+        .ok_or_else(|| anyhow!("not logged in — run `easynet auth login <email>` first"))?;
+
+    if !args.yes {
+        eprint!("remove device {} from this realm? [y/N] ", args.node_id);
+        use std::io::{self, BufRead, Write};
+        io::stderr().flush().ok();
+        let mut line = String::new();
+        io::stdin().lock().read_line(&mut line).ok();
+        let trimmed = line.trim().to_lowercase();
+        if trimmed != "y" && trimmed != "yes" {
+            println!("(aborted)");
+            return Ok(());
+        }
+    }
+
+    let url = format!(
+        "{}/api/v1/devices/{}",
+        session.hub_url,
+        urlencoding::encode(&args.node_id)
+    );
+    let resp_str = ureq::delete(&url)
+        .timeout(HTTP_TIMEOUT)
+        .set("Authorization", &format!("Bearer {}", session.token))
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::Status(401, _) => anyhow!(
+                "HTTP 401 — token expired. Run `easynet auth login <email>` to refresh."
+            ),
+            ureq::Error::Status(code, resp) => {
+                let body = resp.into_string().unwrap_or_default();
+                anyhow!("HTTP {code} from {url}: {body}")
+            }
+            ureq::Error::Transport(e) => anyhow!("transport to {url}: {e}"),
+        })?
+        .into_string()
+        .unwrap_or_default();
+    println!("✓ removed {}", args.node_id);
+    if !resp_str.is_empty() {
+        println!("  {resp_str}");
+    }
+    Ok(())
+}
+
+// ── events (SSE tail) ──────────────────────────────────────────
+
+#[derive(Debug, Args)]
+pub struct EventsArgs {
+    /// Optional device node_id filter — show only events for this device.
+    #[arg(long)]
+    pub node: Option<String>,
+
+    /// Stop after this many events. 0 = stream forever.
+    #[arg(long, default_value_t = 0)]
+    pub limit: usize,
+}
+
+pub fn run_events(args: EventsArgs) -> anyhow::Result<()> {
+    let session = load_session()?
+        .ok_or_else(|| anyhow!("not logged in — run `easynet auth login <email>` first"))?;
+
+    // Backend's /api/v1/events accepts the JWT as a query param
+    // (matches the frontend's EventSource which can't set headers).
+    // SSE wire shape: lines of `data: <json>\n\n`, one event per
+    // double-newline. We use ureq with a streaming reader rather
+    // than a real SSE client because the dependency footprint is
+    // smaller and we only need the happy-path tail.
+    let url = format!("{}/api/v1/events?token={}", session.hub_url, session.token);
+    // No request timeout: SSE stream is long-lived; rely on
+    // transport defaults for connect.
+    let resp = ureq::get(&url)
+        .set("Accept", "text/event-stream")
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::Status(401, _) => anyhow!(
+                "HTTP 401 — token expired. Run `easynet auth login <email>` to refresh."
+            ),
+            ureq::Error::Status(code, resp) => {
+                let body = resp.into_string().unwrap_or_default();
+                anyhow!("HTTP {code} from {url}: {body}")
+            }
+            ureq::Error::Transport(e) => anyhow!("transport to {url}: {e}"),
+        })?;
+
+    use std::io::BufRead;
+    let reader = std::io::BufReader::new(resp.into_reader());
+    let mut count = 0usize;
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("(stream read error: {e})");
+                break;
+            }
+        };
+        // SSE frames: `data: <payload>` lines, blank line ends event.
+        // We just print the data payload as-is.
+        if let Some(payload) = line.strip_prefix("data: ") {
+            // Optional node filter.
+            if let Some(want) = &args.node {
+                if !payload.contains(want) {
+                    continue;
+                }
+            }
+            println!("{payload}");
+            count += 1;
+            if args.limit > 0 && count >= args.limit {
+                break;
+            }
+        }
+    }
+    Ok(())
+}
