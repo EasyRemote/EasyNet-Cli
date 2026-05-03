@@ -41,8 +41,11 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use crate::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
+#[cfg(test)]
 use crate::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
-use crate::pb::axon::v1::{BinaryChunk, InvokeBidiDown, InvokeBidiUp};
+use crate::pb::axon::v1::{BinaryChunk, InvokeBidiDown};
+#[cfg(test)]
+use crate::pb::axon::v1::InvokeBidiUp;
 use crate::runtime::ability_dispatch::AbilityDispatcher;
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use crate::services::axon_serve::invoke_remote_initiator::{call_id_hex, SessionDispatch};
