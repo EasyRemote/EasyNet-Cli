@@ -49,7 +49,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use clap::Args;
 use serde_json::Value;
 
@@ -82,27 +82,20 @@ pub struct AbilitiesArgs {
 }
 
 pub fn run(args: AbilitiesArgs) -> anyhow::Result<()> {
-    // --node remote pinning is reserved-but-unimplemented post
-    // P1.5. Behave the same way `easynet ability invoke` does: an
-    // empty value is a shell-expansion accident; a non-empty value
-    // gets a precise error pointing at the missing federation
-    // Invoke entry. Calling code that *means* "local node" should
-    // omit --node entirely.
-    match args.node.as_deref().map(str::trim) {
-        None => {} // local — the only supported scope today
+    // Joint-plan unified path: `--node` is now wired through
+    // `federation.forward_invoke` against the target device URA.
+    // Each daemon's `easynet.discover` ability returns its OWN
+    // catalogue; cross-device discovery is the caller's job
+    // (forward_invoke routes through the target's daemon).
+    let abilities = match args.node.as_deref().map(str::trim) {
+        None | Some("local") => fetch_local_catalogue()?,
         Some("") => bail!(
             "--node was given but empty; omit the flag to list local abilities, \
-             or pass a real node id once federation Invoke is wired"
+             or pass `easynet:///r/<realm>/device/<id>` to list a peer device's \
+             catalogue."
         ),
-        Some(_) => bail!(
-            "remote pinning via --node is not wired in this build. The federation \
-             RPC that backed it was removed by AXON-RFC-001 P1.5; the replacement \
-             (Invoke against an Agent ability on the realm) ships in a follow-up. \
-             Until then, omit --node to list the local catalogue."
-        ),
-    }
-
-    let abilities = fetch_local_catalogue()?;
+        Some(node) => fetch_remote_catalogue(node)?,
+    };
     let filtered = filter_abilities(abilities, args.agent.as_deref(), &args.pattern)?;
 
     if args.format == OutputFormat::Json {
@@ -164,16 +157,63 @@ pub fn run(args: AbilitiesArgs) -> anyhow::Result<()> {
 /// stay byte-identical to every other CLI surface.
 fn fetch_local_catalogue() -> anyhow::Result<Vec<Value>> {
     let value = invoke_local_ability("easynet.discover", serde_json::json!({}))?;
+    extract_abilities(&value)
+}
+
+/// Joint-plan unified path: `easynet ability list --node <URA>`
+/// forwards `easynet.discover` to the target device through
+/// `federation.forward_invoke`. The peer daemon's local
+/// `easynet.discover` handler runs and returns its own catalogue;
+/// the forward bridge unwraps the response and we extract the
+/// abilities array the same way `fetch_local_catalogue` does.
+fn fetch_remote_catalogue(node: &str) -> anyhow::Result<Vec<Value>> {
+    let value = invoke_remote_easynet_discover(node)?;
+    extract_abilities(&value)
+}
+
+#[cfg(feature = "axon-pb")]
+fn invoke_remote_easynet_discover(node: &str) -> anyhow::Result<Value> {
+    let target_uri = if node.starts_with("easynet:///r/") {
+        crate::support::federation_invoke::parse_node_uri(node)?
+    } else {
+        let creds = crate::persistence::config::load_credentials().map_err(|_| {
+            anyhow::anyhow!(
+                "cannot resolve node {node:?}: pass a canonical \
+                 `easynet:///r/<realm>/device/<id>` URI or pair this device first"
+            )
+        })?;
+        crate::uri::device_uri(&creds.tenant_id, node)
+    };
+    let caller_uri = crate::persistence::config::load_credentials()
+        .ok()
+        .filter(|c| !c.tenant_id.trim().is_empty() && !c.node_id.trim().is_empty())
+        .map(|c| crate::uri::device_uri(c.tenant_id.trim(), c.node_id.trim()));
+    crate::support::federation_invoke::invoke_via_federation_forward(
+        "easynet.discover",
+        serde_json::json!({}),
+        &target_uri,
+        caller_uri.as_deref(),
+    )
+    .with_context(|| format!("forward easynet.discover to target={target_uri}"))
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn invoke_remote_easynet_discover(node: &str) -> anyhow::Result<Value> {
+    Err(crate::support::local_invoke::federation_not_wired_error(
+        &format!("listing abilities on remote node {node:?}"),
+    ))
+}
+
+fn extract_abilities(value: &Value) -> anyhow::Result<Vec<Value>> {
     // The handler returns `{"abilities": [...]}`. Tolerate the
     // older spelling `tools` for forward-compat in case a follow-up
     // renames it; either way we extract a Vec<Value>.
-    let abilities = value
+    Ok(value
         .get("abilities")
         .or_else(|| value.get("tools"))
         .and_then(Value::as_array)
         .cloned()
-        .unwrap_or_default();
-    Ok(abilities)
+        .unwrap_or_default())
 }
 
 /// Apply `--agent` + `--pattern` filtering. Both are AND-composed:

@@ -50,7 +50,7 @@ use console::style;
 use serde_json::Value;
 
 use crate::facade::cli::{abilities, ability_scaffold, deploy, exec, invoke};
-use crate::support::local_invoke::{federation_not_wired_error, invoke_local_ability};
+use crate::support::local_invoke::invoke_local_ability;
 use crate::support::output::{self, OutputFormat};
 
 #[derive(Debug, Args)]
@@ -137,28 +137,25 @@ pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
 }
 
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
-    // --node is reserved-but-not-implemented per the same pattern as
-    // every other CLI surface that pre-dated the AXON-RFC-001 P1.5
-    // federation cull. A scripted caller passing `--node <id>` MUST
-    // see a precise error rather than silently get the local entry
-    // for whichever ability happened to share the name.
-    if args
-        .node
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|s| !s.is_empty())
-    {
-        return Err(federation_not_wired_error(
-            "showing an ability hosted on a remote node",
-        ));
-    }
-
-    // Pull the catalogue from the local daemon — the only authority
-    // post-P1.5 — and find the requested ability by exact name.
-    // `easynet.discover` returns an `{abilities: [...]}` envelope
-    // matching the shape `easynet ability list` consumes.
-    let catalogue = invoke_local_ability("easynet.discover", serde_json::json!({}))
-        .context("invoke easynet.discover")?;
+    // Joint-plan unified path: `--node` is now wired through
+    // `federation.forward_invoke` against the target device URA;
+    // `easynet.discover` runs on the peer daemon, the result
+    // bridges back, we filter by ability name client-side. Match
+    // the routing rules `ability list --node` and `device show`
+    // settled on so a single `--node` flag means the same thing
+    // across the whole CLI.
+    let catalogue = match args.node.as_deref().map(str::trim) {
+        None | Some("local") => invoke_local_ability("easynet.discover", serde_json::json!({}))
+            .context("invoke easynet.discover")?,
+        Some("") => {
+            anyhow::bail!(
+                "--node was given but empty; omit the flag to show abilities on the \
+                 local daemon, or pass `easynet:///r/<realm>/device/<id>` to show \
+                 an ability hosted on a peer device."
+            );
+        }
+        Some(node) => invoke_remote_easynet_discover(node)?,
+    };
     let abilities = catalogue
         .get("abilities")
         .or_else(|| catalogue.get("tools"))
@@ -280,4 +277,43 @@ fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
         println!("{}", serde_json::to_string_pretty(&result)?);
     }
     Ok(())
+}
+
+/// Joint-plan unified path: `easynet ability show --node <URA>`
+/// forwards `easynet.discover` to the target device through
+/// `federation.forward_invoke`. Mirrors the same helper in
+/// `cli/abilities.rs::fetch_remote_catalogue` so a future audit
+/// "every CLI surface that asks a peer device for its catalogue"
+/// finds one routing pattern in two call sites.
+#[cfg(feature = "axon-pb")]
+fn invoke_remote_easynet_discover(node: &str) -> anyhow::Result<Value> {
+    let target_uri = if node.starts_with("easynet:///r/") {
+        crate::support::federation_invoke::parse_node_uri(node)?
+    } else {
+        let creds = crate::persistence::config::load_credentials().map_err(|_| {
+            anyhow::anyhow!(
+                "cannot resolve node {node:?}: pass a canonical \
+                 `easynet:///r/<realm>/device/<id>` URI or pair this device first"
+            )
+        })?;
+        crate::uri::device_uri(&creds.tenant_id, node)
+    };
+    let caller_uri = crate::persistence::config::load_credentials()
+        .ok()
+        .filter(|c| !c.tenant_id.trim().is_empty() && !c.node_id.trim().is_empty())
+        .map(|c| crate::uri::device_uri(c.tenant_id.trim(), c.node_id.trim()));
+    crate::support::federation_invoke::invoke_via_federation_forward(
+        "easynet.discover",
+        serde_json::json!({}),
+        &target_uri,
+        caller_uri.as_deref(),
+    )
+    .with_context(|| format!("forward easynet.discover to target={target_uri}"))
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn invoke_remote_easynet_discover(node: &str) -> anyhow::Result<Value> {
+    Err(crate::support::local_invoke::federation_not_wired_error(
+        &format!("showing an ability on remote node {node:?}"),
+    ))
 }
