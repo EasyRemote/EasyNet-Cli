@@ -91,6 +91,14 @@ pub mod federated_peers_cell;
 /// the catalog page rendered empty despite advertised data.
 pub mod ability_catalog_store;
 
+/// Hosted-agent directory rows published through
+/// `federation.advertise_agent`. PresenceRegistry owns transport
+/// liveness for device URIs; this store maps hosted agent URIs back
+/// to their host device URI so `federation.resolve` can surface
+/// `/agent/<user>.<agent>` rows while deriving online/offline from
+/// the host's live `<self>.session`.
+pub mod advertised_agent_store;
+
 /// Per-daemon nonce replay store (RFC 001 §5.2 step 4). Wraps the
 /// axon SDK's time-wheel store in `Arc<Mutex<…>>` so a single
 /// instance is shared across every concurrent invoke through the

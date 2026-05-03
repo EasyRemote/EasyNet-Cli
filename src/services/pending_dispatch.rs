@@ -40,9 +40,12 @@
 //
 // Invariants
 // ----------
-// 1. **Unique call_id per dispatch**: callers get monotonic IDs from
-//    `next_call_id()`. The map is keyed by this ID; collisions never
-//    happen modulo a 64-bit wrap (geological time).
+// 1. **Unique call_id per unary dispatch**: callers get monotonic IDs
+//    from `next_call_id()`, then encode them into the even-numbered
+//    namespace (`seq << 1`). `PendingStreamDispatchMap` reserves the
+//    odd-numbered namespace for streamed bidi calls, so the two
+//    routing tables can never race on the same session-wide `call_id`.
+//    Collisions still only happen modulo a 64-bit wrap (geological time).
 // 2. **At-most-once completion**: a `complete(id, ...)` after the
 //    matching pending entry has been removed (caller cancelled or
 //    a prior `complete` already fired) is a silent no-op rather
@@ -61,12 +64,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 /// Result the target device sent back for a cross-device dispatch.
 /// Mirrors the shape `<self>.session`'s receive task will hand off
 /// when it sees a `Result` frame on the session up stream.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DispatchResult {
     /// Reply payload from the target ability (opaque bytes).
     pub payload: Vec<u8>,
@@ -140,7 +143,8 @@ impl PendingDispatchMap {
     /// call_id (in `PendingHandle::call_id`) and an awaitable handle
     /// that fulfils when the matching `complete(call_id, ...)` fires.
     pub fn register_pending(&self) -> PendingHandle {
-        let call_id = self.inner.next_call_id.fetch_add(1, Ordering::Relaxed);
+        let sequence = self.inner.next_call_id.fetch_add(1, Ordering::Relaxed);
+        let call_id = sequence << 1;
         let (tx, rx) = oneshot::channel();
         self.inner.entries.insert(call_id, tx);
         PendingHandle {
@@ -163,6 +167,97 @@ impl PendingDispatchMap {
 
     /// Number of currently-outstanding pending dispatches. Used by
     /// the daemon boot log + PR-10 canary verification + tests.
+    pub fn outstanding(&self) -> usize {
+        self.inner.entries.len()
+    }
+}
+
+/// One streamed event flowing back from a target device's remote
+/// bidi session. Same-hub remote `fleet.file_transfer` uses this:
+/// zero or more `Chunk`s followed by exactly one `Terminal`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DispatchStreamEvent {
+    Chunk(Vec<u8>),
+    Terminal(DispatchResult),
+}
+
+pub struct PendingStreamHandle {
+    call_id: u64,
+    map: Arc<PendingStreamDispatchInner>,
+    rx: Option<mpsc::Receiver<DispatchStreamEvent>>,
+}
+
+impl PendingStreamHandle {
+    pub fn call_id(&self) -> u64 {
+        self.call_id
+    }
+
+    pub async fn recv(&mut self) -> Option<DispatchStreamEvent> {
+        let rx = self.rx.as_mut().expect("recv called after stream taken");
+        rx.recv().await
+    }
+}
+
+impl Drop for PendingStreamHandle {
+    fn drop(&mut self) {
+        self.map.entries.remove(&self.call_id);
+    }
+}
+
+#[derive(Debug, Default)]
+struct PendingStreamDispatchInner {
+    entries: DashMap<u64, mpsc::Sender<DispatchStreamEvent>>,
+    next_call_id: AtomicU64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PendingStreamDispatchMap {
+    inner: Arc<PendingStreamDispatchInner>,
+}
+
+impl PendingStreamDispatchMap {
+    const CHANNEL_CAPACITY: usize = 32;
+
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn register_pending(&self) -> PendingStreamHandle {
+        // SessionDispatch::Result frames share one session-wide
+        // keyspace across unary and streaming paths. Reserve odd
+        // call_ids for streaming so a late terminal/chunk frame cannot
+        // accidentally complete a unary waiter (or vice versa).
+        let sequence = self.inner.next_call_id.fetch_add(1, Ordering::Relaxed);
+        let call_id = (sequence << 1) | 1;
+        let (tx, rx) = mpsc::channel(Self::CHANNEL_CAPACITY);
+        self.inner.entries.insert(call_id, tx);
+        PendingStreamHandle {
+            call_id,
+            map: Arc::clone(&self.inner),
+            rx: Some(rx),
+        }
+    }
+
+    pub async fn push_chunk(&self, call_id: u64, payload: Vec<u8>) -> bool {
+        let Some(sender) = self.inner.entries.get(&call_id).map(|entry| entry.clone()) else {
+            return false;
+        };
+        sender
+            .send(DispatchStreamEvent::Chunk(payload))
+            .await
+            .is_ok()
+    }
+
+    pub async fn finish(&self, call_id: u64, result: DispatchResult) -> bool {
+        match self.inner.entries.remove(&call_id) {
+            Some((_, sender)) => sender
+                .send(DispatchStreamEvent::Terminal(result))
+                .await
+                .is_ok(),
+            None => false,
+        }
+    }
+
     pub fn outstanding(&self) -> usize {
         self.inner.entries.len()
     }
@@ -257,8 +352,23 @@ mod tests {
         let h1 = map.register_pending();
         let h2 = map.register_pending();
         let h3 = map.register_pending();
-        assert_eq!(h1.call_id() + 1, h2.call_id());
-        assert_eq!(h2.call_id() + 1, h3.call_id());
+        assert_eq!(h1.call_id() + 2, h2.call_id());
+        assert_eq!(h2.call_id() + 2, h3.call_id());
+        assert_eq!(
+            h1.call_id() & 1,
+            0,
+            "unary call_ids live in the even namespace"
+        );
+        assert_eq!(
+            h2.call_id() & 1,
+            0,
+            "unary call_ids live in the even namespace"
+        );
+        assert_eq!(
+            h3.call_id() & 1,
+            0,
+            "unary call_ids live in the even namespace"
+        );
     }
 
     #[tokio::test]
@@ -303,5 +413,83 @@ mod tests {
 
         let result = handle.await_reply().await;
         assert!(result.is_err(), "dropped sender surfaces as RecvError");
+    }
+
+    #[tokio::test]
+    async fn pending_stream_map_yields_chunk_then_terminal() {
+        let map = PendingStreamDispatchMap::new();
+        let mut handle = map.register_pending();
+        let id = handle.call_id();
+
+        let writer = {
+            let map = map.clone();
+            tokio::spawn(async move {
+                assert!(map.push_chunk(id, b"part-1".to_vec()).await);
+                assert!(
+                    map.finish(
+                        id,
+                        DispatchResult {
+                            payload: br#"{"sha256":"abc"}"#.to_vec(),
+                            error: None,
+                        },
+                    )
+                    .await
+                );
+            })
+        };
+
+        assert_eq!(
+            handle.recv().await,
+            Some(DispatchStreamEvent::Chunk(b"part-1".to_vec()))
+        );
+        assert_eq!(
+            handle.recv().await,
+            Some(DispatchStreamEvent::Terminal(DispatchResult {
+                payload: br#"{"sha256":"abc"}"#.to_vec(),
+                error: None,
+            }))
+        );
+        writer.await.expect("writer joined");
+    }
+
+    #[tokio::test]
+    async fn pending_stream_handle_drop_removes_entry() {
+        let map = PendingStreamDispatchMap::new();
+        let handle = map.register_pending();
+        let id = handle.call_id();
+        assert_eq!(map.outstanding(), 1);
+        drop(handle);
+        assert_eq!(map.outstanding(), 0);
+        assert!(
+            !map.finish(
+                id,
+                DispatchResult {
+                    payload: Vec::new(),
+                    error: None,
+                },
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn unary_and_stream_call_id_namespaces_do_not_overlap() {
+        let unary = PendingDispatchMap::new();
+        let stream = PendingStreamDispatchMap::new();
+
+        let unary_one = unary.register_pending();
+        let unary_two = unary.register_pending();
+        let stream_one = stream.register_pending();
+        let stream_two = stream.register_pending();
+
+        assert_eq!(unary_one.call_id() & 1, 0);
+        assert_eq!(unary_two.call_id() & 1, 0);
+        assert_eq!(stream_one.call_id() & 1, 1);
+        assert_eq!(stream_two.call_id() & 1, 1);
+
+        assert_ne!(unary_one.call_id(), stream_one.call_id());
+        assert_ne!(unary_one.call_id(), stream_two.call_id());
+        assert_ne!(unary_two.call_id(), stream_one.call_id());
+        assert_ne!(unary_two.call_id(), stream_two.call_id());
     }
 }

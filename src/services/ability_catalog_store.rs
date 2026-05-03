@@ -116,7 +116,10 @@ mod tests {
     fn upsert_then_get_round_trips() {
         let store = AbilityCatalogStore::new();
         let abilities = vec![json!({"name": "fs.read"}), json!({"name": "ping"})];
-        store.upsert("easynet:///r/easynet.run/device/abc".into(), abilities.clone());
+        store.upsert(
+            "easynet:///r/easynet.run/device/abc".into(),
+            abilities.clone(),
+        );
         let got = store
             .get("easynet:///r/easynet.run/device/abc")
             .expect("get matches upsert");
@@ -138,7 +141,9 @@ mod tests {
     fn upsert_empty_list_stores_empty_not_none() {
         let store = AbilityCatalogStore::new();
         store.upsert("uri".into(), Vec::new());
-        let got = store.get("uri").expect("empty advertise still surfaces a row");
+        let got = store
+            .get("uri")
+            .expect("empty advertise still surfaces a row");
         assert!(got.is_empty());
     }
 }
