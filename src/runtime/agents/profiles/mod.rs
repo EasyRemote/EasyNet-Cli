@@ -111,7 +111,10 @@ mod tests {
 
     #[test]
     fn aggregator_with_only_device_returns_device_descriptors_only() {
-        let device_uri = "easynet:///r/acme/agent/01DEV";
+        // URA v4.1.5 §A.URA-1: device URIs use the `device` role
+        // (not the legacy v1 `agent/01DEV` placeholder). Production
+        // mints this via `crate::uri::device_uri` (start.rs:623).
+        let device_uri = "easynet:///r/acme/device/4065c47a-ec6f-4330-87a5-0d69787709b8";
         let all = all_descriptors_for_host(device_uri, None, None, None, &[]);
         assert!(!all.is_empty());
         for d in &all {
@@ -127,8 +130,13 @@ mod tests {
         // chat handlers because no AgentRegistry is loaded). Device
         // and consent are guaranteed; llm/policy/mcp depend on
         // optional sub-systems and are exercised in their own tests.
-        let device_uri = "easynet:///r/acme/agent/01DEV";
-        let consent_uri = "easynet:///r/acme/agent/01CON";
+        // URA v4.1.5: device-profile is anchored on the `device`
+        // role (built-ins owned by the device); hosted-user agents
+        // (consent / policy / mcp / llm) use the user-anchored
+        // `agent/<user-uuid>.<agent-id>` shape per §A.URA-5.
+        let device_uri = "easynet:///r/acme/device/4065c47a-ec6f-4330-87a5-0d69787709b8";
+        let consent_uri =
+            "easynet:///r/acme/agent/00000000-0000-0000-0000-000000000001.consent";
         let all = all_descriptors_for_host(device_uri, Some(consent_uri), None, None, &[]);
         let owners: std::collections::HashSet<&str> =
             all.iter().map(|d| d.owner_agent_uri.as_str()).collect();

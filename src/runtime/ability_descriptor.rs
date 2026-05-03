@@ -232,8 +232,24 @@ pub struct AbilityDescriptor {
     /// `skill.alive-video`. Per `AgentAbilitySpec::new` validation,
     /// must contain at least one `.` (no namespace = no descriptor).
     pub name: String,
-    /// Canonical URA of the Agent that hosts this ability — the
-    /// callee in any Invoke targeting this name.
+    /// Canonical URA of the entity that publishes this ability — the
+    /// `callee` in any Invoke targeting this name. Per AXON-RFC-001
+    /// v4.1.5 §9 (AXIOM seven-tuple), `callee ∈ {hub, device, agent}`,
+    /// and this field accepts any of those shapes:
+    ///
+    ///   * `agent/<user-uuid>.<agent-id>` — hosted user agent
+    ///     (consent / policy / mcp / llm sub-agent abilities).
+    ///   * `device/<device-uuid>`         — device-built-ins
+    ///     (`shell.run`, `fs.read`, `fleet.list_*`, …).
+    ///   * `hub`                          — hub-published abilities
+    ///     (`federation.advertise_*`, `voice.list_calls`, …).
+    ///
+    /// Field name kept as `owner_agent_uri` for wire-compat with
+    /// every existing daemon. §A.URA-5's "agent owns the ability"
+    /// rule applies to ABILITY URIs (`/ability/<...>`-shaped) — it
+    /// does not constrain who may publish a descriptor for a
+    /// device-built-in or hub-built-in verb. A device publishing
+    /// `shell.run` is the canonical pattern, not a violation.
     pub owner_agent_uri: String,
     pub visibility: Visibility,
     pub scope_subjects: ScopeRule,
