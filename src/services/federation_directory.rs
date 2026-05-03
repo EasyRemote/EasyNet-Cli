@@ -1052,17 +1052,25 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
         rand::rngs::OsRng.fill_bytes(&mut nonce);
         // URI v4.1.4: peer hub is the realm-singleton; no sub-id tail.
         let peer_uri_for_envelope = crate::uri::hub_uri(&peer_realm);
+        // v4.1.5 §A.URA-7 — `subject ∈ {user, device, resource}`.
+        // Pre-fix this site set `subject = peer_uri_for_envelope` (the
+        // peer hub URI), which violates the constraint (hub is not a
+        // legal subject kind). The natural legal subject for "this
+        // daemon subscribes to peer hub's directory" is the local
+        // daemon's own device URA (which equals `caller_uri`); peer
+        // admission's strict 4-step verify still cross-checks the
+        // signature against the trust anchor entry for this device.
         let envelope = Envelope {
             caller: Some(AgentIdentity {
                 uri: caller_uri.clone(),
                 ..AgentIdentity::default()
             }),
             callee: Some(AgentIdentity {
-                uri: peer_uri_for_envelope.clone(),
+                uri: peer_uri_for_envelope,
                 ..AgentIdentity::default()
             }),
             subject: Some(SubjectIdentity {
-                uri: peer_uri_for_envelope,
+                uri: caller_uri.clone(),
                 ..SubjectIdentity::default()
             }),
             invocation_nonce: nonce,
