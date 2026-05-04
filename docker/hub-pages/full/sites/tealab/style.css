@@ -1,0 +1,189 @@
+:root {
+  --bg: #faf7f2;
+  --ink: #1f2a23;
+  --muted: #6b7a70;
+  --accent: #2f6b4f;
+  --accent-dark: #1f4a36;
+  --line: #e3ddd1;
+  --card: #ffffff;
+  --shadow: 0 1px 2px rgba(31, 42, 35, 0.04), 0 8px 24px rgba(31, 42, 35, 0.06);
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: ui-serif, Georgia, "Iowan Old Style", serif;
+  background: var(--bg);
+  color: var(--ink);
+  line-height: 1.55;
+}
+
+.site-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.25rem 2rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--card);
+}
+.brand { display: flex; align-items: center; gap: 0.6rem; }
+.brand h1 { margin: 0; font-size: 1.4rem; letter-spacing: 0.02em; }
+.logo { font-size: 1.6rem; }
+
+nav a {
+  margin-left: 1.25rem;
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 0.95rem;
+}
+nav a:hover { color: var(--accent); }
+
+.hero {
+  max-width: 880px;
+  margin: 3rem auto 2rem;
+  padding: 0 1.5rem;
+  text-align: center;
+}
+.hero h2 { font-size: 2.4rem; margin: 0 0 0.6rem; }
+.hero p { color: var(--muted); font-size: 1.05rem; max-width: 56ch; margin: 0 auto; }
+
+main {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 3rem;
+}
+.section-title {
+  font-size: 1.2rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 1.25rem;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+.card:hover { transform: translateY(-2px); box-shadow: 0 2px 4px rgba(31, 42, 35, 0.06), 0 12px 28px rgba(31, 42, 35, 0.10); }
+
+.card .origin {
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 0.4rem;
+}
+.card h3 { margin: 0 0 0.35rem; font-size: 1.15rem; }
+.card .desc { color: var(--muted); font-size: 0.92rem; flex: 1; }
+.card .row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 1rem;
+}
+.card .price { font-weight: 600; font-size: 1.05rem; }
+.card .grams { color: var(--muted); font-size: 0.85rem; }
+
+button {
+  font-family: inherit;
+  background: var(--accent);
+  color: white;
+  border: 0;
+  padding: 0.55rem 1rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.92rem;
+}
+button:hover:not(:disabled) { background: var(--accent-dark); }
+button:disabled { background: #c2cdc6; cursor: not-allowed; }
+
+.cart-panel {
+  position: fixed;
+  right: 1.5rem;
+  bottom: 1.5rem;
+  width: 280px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1rem 1.1rem;
+  box-shadow: var(--shadow);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+.cart-panel h3 { margin: 0 0 0.6rem; font-size: 1rem; }
+.cart-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 0.6rem;
+  max-height: 160px;
+  overflow-y: auto;
+  font-size: 0.88rem;
+}
+.cart-list li {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.25rem 0;
+  border-bottom: 1px dashed var(--line);
+}
+.cart-list li:last-child { border-bottom: 0; }
+.cart-total {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+  margin: 0.4rem 0 0.7rem;
+  font-size: 0.95rem;
+}
+.cart-panel button { width: 100%; }
+.receipt {
+  margin-top: 0.7rem;
+  background: #f0ece2;
+  padding: 0.6rem;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  max-height: 180px;
+  overflow: auto;
+}
+.receipt:empty { display: none; }
+
+.about {
+  max-width: 720px;
+  margin: 2rem auto 4rem;
+  padding: 0 1.5rem;
+  text-align: center;
+}
+.about h2 { font-size: 1.4rem; }
+.about p { color: var(--muted); }
+
+footer {
+  border-top: 1px solid var(--line);
+  background: var(--card);
+  padding: 1.25rem;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+footer a { color: var(--accent); }
+
+.loading { color: var(--muted); font-style: italic; }
+
+@media (max-width: 720px) {
+  .cart-panel { position: static; width: auto; margin: 1.5rem; }
+  .hero h2 { font-size: 1.8rem; }
+}

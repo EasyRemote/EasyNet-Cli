@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chef's Table NYC — A Private Supper Club</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="grain"></div>
+
+  <header class="hero">
+    <nav class="topnav">
+      <div class="brand">
+        <span class="brand-mark">CT</span>
+        <span class="brand-divider"></span>
+        <span class="brand-name">Chef's Table NYC</span>
+      </div>
+      <div class="topnav-meta">
+        <span>EST. 2019</span>
+        <span class="dot"></span>
+        <span>Private Supper Club</span>
+        <span class="dot"></span>
+        <span>By Reservation Only</span>
+      </div>
+    </nav>
+
+    <div class="hero-inner">
+      <p class="eyebrow">Five evenings each month</p>
+      <h1>An unmarked door,<br><em>a single long table.</em></h1>
+      <p class="lede">Twelve seats. One menu. No second seating. Chef's Table NYC is a private tasting counter operating out of a converted townhouse in the West Village. Address shared with confirmed guests only.</p>
+      <a href="#calendar" class="cta">View the calendar &nbsp;→</a>
+    </div>
+
+    <div class="hero-foot">
+      <div><span class="num">5</span><span class="lbl">Dinners / month</span></div>
+      <div><span class="num">10–14</span><span class="lbl">Seats per night</span></div>
+      <div><span class="num">8</span><span class="lbl">Courses, on average</span></div>
+      <div><span class="num">1</span><span class="lbl">Long oak table</span></div>
+    </div>
+  </header>
+
+  <section class="philosophy">
+    <div class="rule"></div>
+    <p>
+      <em>"</em>You will not find us on a map application. There is no signage,
+      no host stand, no printed menu at the table. What you will find,
+      if your reservation is confirmed, is an oak door, a brass bell,
+      and a chef who has been cooking for you since dawn.<em>"</em>
+    </p>
+    <p class="signature">— M. Rousseau, Founding Chef</p>
+    <div class="rule"></div>
+  </section>
+
+  <section class="calendar" id="calendar">
+    <header class="section-head">
+      <p class="eyebrow">Upcoming Service</p>
+      <h2>The Calendar</h2>
+      <p class="sub">Each evening is a single ticketed seating beginning at 7:30 PM. Reserve a seat below — your card is not charged until the chef confirms your party within 24 hours.</p>
+    </header>
+
+    <div id="menus" class="menus">
+      <div class="loading">Loading the calendar…</div>
+    </div>
+  </section>
+
+  <section class="reserve" id="reserve">
+    <header class="section-head">
+      <p class="eyebrow">Hold Your Seat</p>
+      <h2>Reservation Request</h2>
+      <p class="sub">A single form for a single seat. Parties up to four, subject to availability on the chosen evening. Selection of dinner is required to submit.</p>
+    </header>
+
+    <form id="reservation-form" class="form-card">
+      <div class="form-row">
+        <label>
+          <span>Choose your evening</span>
+          <select name="menu_id" id="menu-select" required>
+            <option value="">— select a date —</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="form-row two">
+        <label>
+          <span>Full name</span>
+          <input type="text" name="name" required autocomplete="name" placeholder="As it appears on your ID">
+        </label>
+        <label>
+          <span>Email</span>
+          <input type="email" name="email" required autocomplete="email" placeholder="you@domain.com">
+        </label>
+      </div>
+
+      <div class="form-row two">
+        <label>
+          <span>Party size</span>
+          <select name="party_size" required>
+            <option value="1">1 — solo</option>
+            <option value="2" selected>2</option>
+            <option value="3">3</option>
+            <option value="4">4 (chef's discretion)</option>
+          </select>
+        </label>
+        <label>
+          <span>Telephone</span>
+          <input type="tel" name="phone" autocomplete="tel" placeholder="(212) 555-0188">
+        </label>
+      </div>
+
+      <div class="form-row">
+        <label>
+          <span>Dietary notes &amp; allergies</span>
+          <textarea name="dietary_notes" rows="3" placeholder="Allergies, restrictions, religious observances, anything we should know. The kitchen accommodates serious allergies but cannot deviate from the tasting concept."></textarea>
+        </label>
+      </div>
+
+      <div class="form-foot">
+        <p class="fineprint">By submitting, you agree to a 72-hour cancellation policy and to our discretion in seating arrangement at the long table.</p>
+        <button type="submit" class="cta cta-dark">
+          <span class="cta-label">Request the table</span>
+          <span class="cta-arrow">→</span>
+        </button>
+      </div>
+    </form>
+
+    <div id="confirmation" class="confirmation hidden"></div>
+  </section>
+
+  <footer class="foot">
+    <div class="foot-inner">
+      <div>
+        <span class="brand-mark sm">CT</span>
+        <p>Chef's Table NYC — a private supper club operated under a New York State catering permit. Open Saturdays only, by confirmed reservation.</p>
+      </div>
+      <div class="foot-meta">
+        <p>concierge@chefstable.nyc</p>
+        <p>West Village · address shared with confirmed guests</p>
+        <p class="micro">© 2026 Chef's Table Hospitality LLC</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+kind = "echo"
+
+[extra]
+booking_id = "CT-NYC-2026-0427"
+status = "confirmed"
+confirmation_sent = true
+arrival_window = "7:30 PM – 7:45 PM"
+location_hint = "Address sent via email 24 hours before service"
+dress_code = "Smart elegant"
+deposit_charged = true
+cancellation_policy = "Full refund up to 72 hours before service"
+host = "Chef's Table NYC"

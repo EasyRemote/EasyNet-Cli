@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TeaLab — Artisan Tea, Carefully Sourced</title>
+  <meta name="description" content="TeaLab is a small artisan tea shop selling five hand-picked teas from single-origin gardens.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">🍃</span>
+      <h1>TeaLab</h1>
+    </div>
+    <nav aria-label="Primary">
+      <a href="#shop">Shop</a>
+      <a href="#about">About</a>
+      <a href="#cart">Cart</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <h2>Five teas. One small lab.</h2>
+    <p>Each lot is cupped, scored, and roasted in our Brooklyn workshop. No blends, no fillers — just single-origin leaf, traceable to the garden.</p>
+  </section>
+
+  <main id="shop">
+    <h2 class="section-title">Today's selection</h2>
+    <div id="items" class="grid" aria-live="polite">
+      <p class="loading">Loading teas…</p>
+    </div>
+  </main>
+
+  <aside id="cart" class="cart-panel" aria-label="Cart">
+    <h3>Your cart</h3>
+    <ul id="cart-items" class="cart-list"></ul>
+    <p class="cart-total"><span>Total</span><span id="cart-total">$0</span></p>
+    <button id="checkout" type="button" disabled>Checkout</button>
+    <pre id="receipt" class="receipt" aria-live="polite"></pre>
+  </aside>
+
+  <section id="about" class="about">
+    <h2>About TeaLab</h2>
+    <p>We started in a one-room kitchen in 2024. Today we work with seven gardens across Yunnan, Uji, and Darjeeling, shipping micro-lots while the leaves are still vivid.</p>
+  </section>
+
+  <footer>
+    <p>© 2026 TeaLab · Brooklyn, NY · <a href="mailto:hello@tealab.example">hello@tealab.example</a></p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
