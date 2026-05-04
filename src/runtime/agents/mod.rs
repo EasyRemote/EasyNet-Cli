@@ -35,6 +35,15 @@
 
 pub mod a2a_bridge_ability;
 pub mod a2a_client_ability;
+/// RFC-006-C v0.1 — `<user>.api_key.{create,list,revoke}` ability
+/// family for OpenAI-compatibility bearer tokens. Independent of
+/// the RFC-002 keyring vault (different threat model: bearer
+/// capability vs cryptographic identity).
+pub mod api_key_ability;
+/// RFC-006-C v0.1 — `01HUB.openai.{chat_completions,list_models}`
+/// adapter abilities. The OpenAI streaming protocol becomes a
+/// transport view over chat-base ability dispatch sequences.
+pub mod openai_compat_ability;
 /// ability.publish + ability.unpublish — root meta-abilities that
 /// let a curator session (spawned by mission.think) materialise a
 /// new ability into a registered agent's abilities/ directory, or
@@ -430,8 +439,19 @@ pub fn build_registry_with_services(
             .unwrap_or(8787);
         pages::register(
             &mut reg,
-            pages::PagesConfig { user, realm, listener_port },
+            pages::PagesConfig { user: user.clone(), realm, listener_port },
+            Arc::clone(&local_registry_handle),
         );
+        // RFC-006-C v0.1 — API key abilities. Register under the
+        // same `user` identity pages used so a single user owns
+        // both surface families on this daemon.
+        api_key_ability::register(&mut reg, &user);
+        // RFC-006-C v0.1 — OpenAI adapter abilities (hub-rooted).
+        // Wire the dispatch handle so the adapter can invoke
+        // chat-base abilities directly through the in-process
+        // registry (avoiding IPC self-deadlock).
+        openai_compat_ability::set_dispatch_handle(Arc::clone(&local_registry_handle));
+        openai_compat_ability::register(&mut reg);
     }
     skill_ability::register(&mut reg);
     skill_install_ability::register(&mut reg);

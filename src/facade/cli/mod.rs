@@ -129,6 +129,10 @@ pub(crate) mod mission_runs;
 /// `<user>.pages.{publish,unpublish,list,get}` and the
 /// `<user>.<project_id>.page.fetch` family.
 pub(crate) mod pages;
+/// RFC-006-C v0.1 — `easynet api-key` for OpenAI-compat bearer
+/// tokens, and `easynet llm-api` for chat-completion calls.
+pub(crate) mod api_key_cli;
+pub(crate) mod llm_api;
 pub(crate) mod reset;
 pub(crate) mod skill;
 pub(crate) mod skill_install;
@@ -199,6 +203,16 @@ pub enum Command {
     /// resource and serves it at `papers.<user>.pages.localhost:<port>/`.
     #[command(display_order = 6)]
     Pages(pages::PagesArgs),
+
+    /// Mint / list / revoke OpenAI-compat API keys (RFC-006-C v0.1).
+    #[command(name = "api-key", display_order = 6)]
+    ApiKey(api_key_cli::ApiKeyArgs),
+
+    /// One-shot OpenAI-compat chat completion against any chat-base
+    /// ability registered on this daemon. `easynet llm-api "<prompt>"`
+    /// (RFC-006-C v0.1).
+    #[command(name = "llm-api", display_order = 6)]
+    LlmApi(llm_api::LlmApiArgs),
 
     // ── Infrastructure ───────────────────────────────────────────────────
     /// Manage the local Axon runtime (start, stop, status).
@@ -272,6 +286,8 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         Command::Mission(args) => groups::mission::run(args),
         Command::Skill(args) => skill::run(args),
         Command::Pages(args) => pages::run(args),
+        Command::ApiKey(args) => api_key_cli::run(args),
+        Command::LlmApi(args) => llm_api::run(args),
         Command::Runtime(args) => groups::runtime::run(args),
         Command::Mcp(args) => groups::mcp::run(args),
         Command::Federation(args) => groups::federation::run(args),

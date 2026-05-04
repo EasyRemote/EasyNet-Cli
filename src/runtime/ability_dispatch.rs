@@ -395,6 +395,15 @@ impl LocalAbilityRegistry {
         self.rpc.get(ability)
     }
 
+    /// List all statically-registered RPC ability names. Does NOT
+    /// include names that only resolve through the fallback chain
+    /// (those are synthesised at lookup time and have no static
+    /// listing). Used by RFC-006-C `01HUB.openai.list_models` to
+    /// project chat-base abilities into the /v1/models response.
+    pub fn list_rpc_names(&self) -> Vec<String> {
+        self.rpc.keys().cloned().collect()
+    }
+
     /// Owned-clone counterpart that consults the fallback resolver
     /// on a registry miss. Existing call sites that take `&Arc<...>`
     /// keep using `get_rpc`; the dispatcher's execute path uses this

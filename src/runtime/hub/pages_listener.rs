@@ -37,7 +37,17 @@ use super::pages_serve_ability::{serve_bytes, ServedBytes};
 /// Returns immediately; the listener runs until the process exits.
 pub async fn run(port: u16) -> anyhow::Result<()> {
     let app = Router::new().fallback(any(handle));
-    let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+    // Bind address: 127.0.0.1 by default (dev mode, Mac host
+    // daemon). When running inside a container the daemon needs
+    // to accept from the container's published-port mapping, so
+    // honour `EASYNET_PAGES_BIND` (e.g. `0.0.0.0`) — INV-1
+    // (Adapter Purity) is unaffected; the bind address is purely
+    // a transport concern.
+    let bind_host = std::env::var("EASYNET_PAGES_BIND")
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
+    let addr: SocketAddr = format!("{bind_host}:{port}")
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid bind addr {bind_host}:{port}: {e}"))?;
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| anyhow::anyhow!("pages listener bind failed on {addr}: {e}"))?;
@@ -74,6 +84,34 @@ fn parse_pages_host(host: &str) -> Option<(String, String)> {
 async fn handle(req: Request<Body>) -> Response<Body> {
     let method = req.method().clone();
 
+    let path = req.uri().path().to_string();
+    if path.is_empty() {
+        return text_response(StatusCode::NOT_FOUND, "missing path\n");
+    }
+
+    // ─── /v1/* — RFC-006-C OpenAI-compatibility endpoints ────────
+    // These are realm-level (not per-project), so they route on
+    // path BEFORE the Host-based pages routing. CORS preflight
+    // is permitted for cross-origin browser-side OpenAI clients.
+    if path == "/v1/chat/completions" {
+        if matches!(method, axum::http::Method::OPTIONS) {
+            return cors_preflight();
+        }
+        if !matches!(method, axum::http::Method::POST) {
+            return text_response(StatusCode::METHOD_NOT_ALLOWED, "use POST\n");
+        }
+        return handle_v1_chat_completions(req).await;
+    }
+    if path == "/v1/models" {
+        if matches!(method, axum::http::Method::OPTIONS) {
+            return cors_preflight();
+        }
+        if !matches!(method, axum::http::Method::GET | axum::http::Method::POST) {
+            return text_response(StatusCode::METHOD_NOT_ALLOWED, "use GET\n");
+        }
+        return handle_v1_models().await;
+    }
+
     let host_header = req
         .headers()
         .get(header::HOST)
@@ -83,11 +121,6 @@ async fn handle(req: Request<Body>) -> Response<Body> {
         Some(pair) => pair,
         None => return text_response(StatusCode::NOT_FOUND, "unknown host\n"),
     };
-
-    let path = req.uri().path().to_string();
-    if path.is_empty() {
-        return text_response(StatusCode::NOT_FOUND, "missing path\n");
-    }
 
     // ─── /api/<verb> route — RFC-006-B v0.6 §10 dynamic backend ─
     if let Some(verb) = path.strip_prefix("/api/") {
@@ -290,6 +323,162 @@ fn api_response(value: serde_json::Value) -> Response<Body> {
         HeaderValue::from_static("no-store"),
     );
     builder.body(Body::from(body)).expect("api response build")
+}
+
+// ─── RFC-006-C OpenAI-compat handlers ──────────────────────────
+
+/// `GET /v1/models` — list chat-base abilities as OpenAI models.
+async fn handle_v1_models() -> Response<Body> {
+    let result = tokio::task::spawn_blocking(|| {
+        crate::runtime::agents::openai_compat_ability::handle_list_models(
+            serde_json::json!({}),
+        )
+    })
+    .await;
+
+    match result {
+        Ok(Ok(value)) => json_response_with_cors(StatusCode::OK, value),
+        Ok(Err(e)) => text_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("list_models failed: {e}\n"),
+        ),
+        Err(_) => text_response(StatusCode::INTERNAL_SERVER_ERROR, "panic\n"),
+    }
+}
+
+/// `POST /v1/chat/completions` — OpenAI-shape chat completion.
+/// Streaming (`stream:true`) emits SSE; non-streaming returns one JSON.
+async fn handle_v1_chat_completions(req: Request<Body>) -> Response<Body> {
+    // Parse Authorization → Bearer token. Missing → 401.
+    let bearer = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer ").map(|s| s.trim().to_string()));
+
+    let body_bytes = match axum::body::to_bytes(req.into_body(), 4 * 1024 * 1024).await {
+        Ok(b) => b,
+        Err(_) => return text_response(StatusCode::BAD_REQUEST, "body too large\n"),
+    };
+    let request_body: serde_json::Value =
+        match serde_json::from_slice(&body_bytes) {
+            Ok(v) => v,
+            Err(e) => {
+                return text_response(
+                    StatusCode::BAD_REQUEST,
+                    &format!("invalid JSON body: {e}\n"),
+                );
+            }
+        };
+
+    let stream = request_body
+        .get("stream")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    // Build the adapter args envelope.
+    let mut adapter_args = serde_json::json!({ "request": request_body });
+    if let Some(token) = &bearer {
+        adapter_args["auth_token"] = serde_json::json!(token);
+    }
+
+    // Run the adapter on the blocking pool (it can take a long
+    // time — calls into the agent dispatcher).
+    let adapter_result = tokio::task::spawn_blocking(move || {
+        crate::runtime::agents::openai_compat_ability::handle_chat_completions(adapter_args)
+    })
+    .await;
+
+    let value = match adapter_result {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => {
+            let msg = e.to_string();
+            // INV-2 auth errors map to 401.
+            let status = if msg.contains("auth failed") || msg.contains("api key") {
+                StatusCode::UNAUTHORIZED
+            } else if msg.contains("not registered") || msg.contains("not chat-base") {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            return text_response(status, &format!("error: {msg}\n"));
+        }
+        Err(_) => return text_response(StatusCode::INTERNAL_SERVER_ERROR, "panic\n"),
+    };
+
+    if !stream {
+        // Unary path. Strip easynet-only metadata and return.
+        let mut response = value;
+        if let serde_json::Value::Object(ref mut m) = response {
+            m.remove("easynet_user_uri");
+        }
+        return json_response_with_cors(StatusCode::OK, response);
+    }
+
+    // Streaming path: walk the chunks list and emit SSE.
+    let chunks = value
+        .get("chunks")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let done = value
+        .get("done_sentinel")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("[DONE]")
+        .to_string();
+    sse_response(chunks, done)
+}
+
+/// Build a Server-Sent-Events response from a list of OpenAI
+/// chunk objects. Sends each as `data: {json}\n\n`, then a
+/// `data: [DONE]\n\n` sentinel.
+///
+/// Implementation note: axum's `Body::from_stream` would be the
+/// cleanest path, but for simplicity v0.1 buffers everything into
+/// one body. The chunks are tiny (≤ ~256 bytes each); there is no
+/// observable lag for typical reply sizes (< 8 KiB). v0.2 will
+/// switch to a real `Body::from_stream` once the underlying chat
+/// ability becomes a true bidi (so the chunks arrive over time
+/// rather than all at once).
+fn sse_response(chunks: Vec<serde_json::Value>, done: String) -> Response<Body> {
+    let mut buf = String::with_capacity(chunks.len() * 256);
+    for chunk in chunks {
+        let line = serde_json::to_string(&chunk).unwrap_or_else(|_| "{}".to_string());
+        buf.push_str("data: ");
+        buf.push_str(&line);
+        buf.push_str("\n\n");
+    }
+    buf.push_str("data: ");
+    buf.push_str(&done);
+    buf.push_str("\n\n");
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"))
+        .header(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))
+        .header("Access-Control-Allow-Origin", HeaderValue::from_static("*"))
+        .header("X-Accel-Buffering", HeaderValue::from_static("no"))
+        .body(Body::from(buf))
+        .expect("sse response build")
+}
+
+/// JSON response with CORS open. Used by /v1/models and /v1/chat/completions
+/// (non-streaming).
+fn json_response_with_cors(
+    status: StatusCode,
+    value: serde_json::Value,
+) -> Response<Body> {
+    let body = serde_json::to_vec(&value).unwrap_or_default();
+    let mut builder = Response::builder().status(status);
+    let headers = builder.headers_mut().expect("builder always has headers");
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    headers.insert(header::CONTENT_LENGTH, HeaderValue::from(body.len()));
+    headers.insert("Access-Control-Allow-Origin", HeaderValue::from_static("*"));
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    builder.body(Body::from(body)).expect("json/cors response build")
 }
 
 #[cfg(test)]
