@@ -155,6 +155,7 @@ pub mod orchestration_ability;
 /// folder of static bytes as a website. Owns the
 /// `<user>.pages.{publish,unpublish,list,get}` and
 /// `<user>.<project_id>.page.fetch` ability families.
+pub mod files;
 pub mod pages;
 pub mod permission_ability;
 pub mod ping;
@@ -437,10 +438,19 @@ pub fn build_registry_with_services(
             .ok()
             .and_then(|s| s.parse::<u16>().ok())
             .unwrap_or(8787);
+        let pages_realm = realm.clone();
         pages::register(
             &mut reg,
             pages::PagesConfig { user: user.clone(), realm, listener_port },
             Arc::clone(&local_registry_handle),
+        );
+        // Files reference system: content-addressed blob store
+        // serving `/v1/files{,/<id>/content}` + chat-multimodal URA
+        // dereferences. Same `<user>` identity as pages so one
+        // user owns both surface families.
+        files::register(
+            &mut reg,
+            files::FilesConfig { user: user.clone(), realm: pages_realm },
         );
         // RFC-006-C v0.1 — API key abilities. Register under the
         // same `user` identity pages used so a single user owns

@@ -567,15 +567,18 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
                 owners.insert(owner.to_string());
             }
         }
-        // Synthesise the `pages` agent unconditionally — pages
-        // abilities (`<user>.pages.{publish,list,get,unpublish}` +
-        // dynamic `<user>.<project>.page.fetch`) register via the
-        // late-binding resolver fallback, so they aren't in
-        // `ability_catalog` at session-prelude time. The hub's
-        // pages_public handler addresses callee=agent/<user>.pages
-        // for every page.fetch invocation, so always advertise it.
+        // Synthesise pages-and-files agents unconditionally — both
+        // ability families (`<user>.pages.<verb>` + dynamic
+        // `<user>.<project>.page.fetch`; `<user>.files.<verb>`)
+        // register via the late-binding resolver fallback, so
+        // they aren't in `ability_catalog` at session-prelude
+        // time. The backend's pages_public + files handlers
+        // address `agent/<user>.{pages,files}` for every fetch /
+        // upload, so the AdvertisedAgentStore must carry the
+        // host_uri for both.
         if !user_segment.is_empty() && user_segment != "self" {
             owners.insert("pages".to_string());
+            owners.insert("files".to_string());
         }
         if !realm.is_empty() && !user_segment.is_empty() && !owners.is_empty() {
             eprintln!(

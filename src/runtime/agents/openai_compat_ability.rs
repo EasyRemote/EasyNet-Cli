@@ -180,7 +180,7 @@ pub fn handle_chat_completions(args: Value) -> anyhow::Result<Value> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("missing required field: model"))?
         .to_string();
-    let messages = request
+    let mut messages = request
         .get("messages")
         .and_then(Value::as_array)
         .cloned()
@@ -188,6 +188,14 @@ pub fn handle_chat_completions(args: Value) -> anyhow::Result<Value> {
     if messages.is_empty() {
         anyhow::bail!("messages array is empty");
     }
+    // Multimodal URA-deref: walk every message's content blocks
+    // and inline-fetch any `easynet:///r/.../resource/...` URI.
+    // Replaces the URI with a `data:<mime>;base64,<...>` form so
+    // the chat-base ability handles bytes, not protocol-aware URI
+    // resolution. RFC-006-C extension: agent inputs may carry
+    // EasyNet resource references; the adapter is the single
+    // place that turns them into bytes.
+    deref_easynet_uris_in_messages(&mut messages);
 
     let target_ability = resolve_model_to_ability(&model_str);
     if !is_chat_base(&target_ability) {
@@ -409,4 +417,132 @@ pub fn register(reg: &mut LocalAbilityRegistry) {
         "01HUB.openai.list_models",
         Arc::new(handle_list_models) as LocalRpcHandler,
     );
+}
+
+// ─── EasyNet URA dereference for multimodal message content ──────
+//
+// OpenAI multimodal request shape:
+//
+//   { "role": "user",
+//     "content": [
+//       { "type": "text", "text": "..." },
+//       { "type": "image_url",
+//         "image_url": { "url": "easynet:///r/.../resource/..." } },
+//       { "type": "input_image",
+//         "image_url": { "url": "easynet:///..." } },
+//       { "type": "file",
+//         "file": { "url": "easynet:///..." } },
+//     ]
+//   }
+//
+// For every block whose `*.url` field starts `easynet:///`, the
+// adapter dispatches `<owner>.files.get` (for `<u>.files/<sha>`
+// shapes) or `<owner>.<project>.page.fetch` (for pages-shape
+// resources) and replaces the URL with a `data:<mime>;base64,<...>`
+// form before forwarding to the chat-base ability. The agent gets
+// bytes, not URIs — it doesn't need protocol awareness.
+
+fn deref_easynet_uris_in_messages(messages: &mut Vec<Value>) {
+    for msg in messages.iter_mut() {
+        let Some(content) = msg.get_mut("content") else { continue };
+        let Some(arr) = content.as_array_mut() else { continue };
+        for block in arr.iter_mut() {
+            // Image blocks: `image_url.url` or `input_image.image_url.url`.
+            for nested_key in &["image_url", "input_image"] {
+                if let Some(nested) = block.get_mut(*nested_key) {
+                    if let Some(url) = nested.get_mut("url") {
+                        if let Some(s) = url.as_str() {
+                            if s.starts_with("easynet:///r/") {
+                                if let Ok(data_url) = deref_to_data_url(s) {
+                                    *url = Value::String(data_url);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // File blocks: `file.url` or `file.file_url`.
+            if let Some(file) = block.get_mut("file") {
+                for url_key in &["url", "file_url"] {
+                    if let Some(url) = file.get_mut(*url_key) {
+                        if let Some(s) = url.as_str() {
+                            if s.starts_with("easynet:///r/") {
+                                if let Ok(data_url) = deref_to_data_url(s) {
+                                    *url = Value::String(data_url);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Resolve an `easynet:///r/<realm>/resource/<owner>/<path>` URI
+/// through the local ability dispatcher and return a
+/// `data:<mime>;base64,<...>` URL.
+fn deref_to_data_url(uri: &str) -> anyhow::Result<String> {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+
+    let parsed = crate::uri::parse_ura(uri)
+        .map_err(|e| anyhow::anyhow!("deref `{uri}`: parse: {e}"))?;
+    if !matches!(parsed.kind, crate::uri::URAKind::Resource) {
+        anyhow::bail!("deref `{uri}`: not a resource URA");
+    }
+    // Owner segment is `<userID>.<owner-tail>` for v4.1.5 dot-id
+    // resources (pages: `<u>.<project>`; files: `<u>.files`). Pick
+    // the ability dispatch shape based on the owner-tail.
+    let id_part = &parsed.user_id;
+    let path = &parsed.path;
+    let (ability, args) = match id_part.split_once('.') {
+        Some((_user, "files")) => (
+            format!("{id_part}.get"),
+            json!({ "uri": uri, "path": path }),
+        ),
+        Some((_user, project)) => {
+            // Pages-shape: `<user>.<project>.page.fetch` with
+            // `path` arg.
+            let owner_user = id_part.split('.').next().unwrap_or("");
+            let _ = owner_user;
+            let mut pf_path = path.clone();
+            if !pf_path.starts_with('/') {
+                pf_path = format!("/{pf_path}");
+            }
+            (
+                format!("{id_part}.page.fetch"),
+                json!({ "path": pf_path, "project_id": project }),
+            )
+        }
+        None => anyhow::bail!("deref `{uri}`: owner segment lacks dot"),
+    };
+    let handle = DISPATCH_HANDLE
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("deref: dispatch handle not set"))?;
+    let registry = handle
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("deref: dispatch handle empty"))?;
+    let handler = registry
+        .get_rpc(&ability)
+        .cloned()
+        .or_else(|| registry.resolve_rpc(&ability))
+        .ok_or_else(|| anyhow::anyhow!("deref `{uri}`: ability `{ability}` not registered"))?;
+    let resp = handler(args)
+        .map_err(|e| anyhow::anyhow!("deref `{uri}`: {ability} failed: {e}"))?;
+    let bytes_b64 = resp
+        .get("bytes_b64")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("deref `{uri}`: response missing bytes_b64"))?;
+    let mime = resp
+        .get("content_type")
+        .and_then(Value::as_str)
+        .unwrap_or("application/octet-stream");
+    // Re-encode through base64 to canonicalize (handler already
+    // returns standard b64 padded; this is belt-and-braces).
+    let raw = STANDARD
+        .decode(bytes_b64.as_bytes())
+        .map_err(|e| anyhow::anyhow!("deref `{uri}`: b64 decode: {e}"))?;
+    let canon = STANDARD.encode(raw);
+    Ok(format!("data:{mime};base64,{canon}"))
 }

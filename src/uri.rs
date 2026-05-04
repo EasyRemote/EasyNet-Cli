@@ -361,26 +361,56 @@ pub fn parse_ura(uri: &str) -> Result<ParsedURA, ParseError> {
             out.kind = URAKind::Hub;
         }
         "resource" => {
+            // v4.1.5 §A.URA-7: resource tail is
+            // `<dot-id-part>/<slash-path-part>`. The dot-id-part
+            // identifies the resource owner (e.g. `<user>.<project>`
+            // for pages, `<user>.files` for content-addressed files);
+            // the slash-path-part addresses bytes inside that owner.
+            //
+            // The legacy v4.1.4 shape `resource/<userID>/<namespace>/<path>`
+            // (namespace ∈ {fs,process,pty,shell,http}) still parses
+            // when the segment after the userID matches a known
+            // namespace AND the userID has no internal dot (preserving
+            // the typed-substrate channel reading). New code should
+            // emit the v4.1.5 dot-id form.
             if tail.is_empty() {
                 return Err(ParseError::ResourceMissingTail);
             }
-            let (uid, after_user) = tail.split_once('/').ok_or(ParseError::ResourceMissingNs)?;
-            if uid.is_empty() {
+            let (id_part, path_part) = match tail.split_once('/') {
+                Some((id, rest)) => (id, rest),
+                None => (tail, ""),
+            };
+            if id_part.is_empty() {
                 return Err(ParseError::ResourceEmptyUser);
             }
-            let (ns_str, path) = match after_user.split_once('/') {
-                Some((n, p)) => (n, p),
-                None => (after_user, ""),
-            };
-            if ns_str.is_empty() {
-                return Err(ParseError::ResourceEmptyNs);
+            // Backward-compat sniff: legacy `<bare-user>/<namespace>/<path>`
+            // had no dot in the user segment AND the next segment was
+            // a known namespace. Honour it.
+            let dot_idx = id_part.find('.');
+            if dot_idx.is_none() {
+                if let Some((ns_str, deep_path)) = path_part.split_once('/') {
+                    if let Some(ns) = ResourceNamespace::from_str(ns_str) {
+                        out.kind = URAKind::Resource;
+                        out.user_id = id_part.to_string();
+                        out.namespace = Some(ns);
+                        out.path = deep_path.to_string();
+                        return Ok(out);
+                    }
+                } else if let Some(ns) = ResourceNamespace::from_str(path_part) {
+                    out.kind = URAKind::Resource;
+                    out.user_id = id_part.to_string();
+                    out.namespace = Some(ns);
+                    out.path = String::new();
+                    return Ok(out);
+                }
             }
-            let ns = ResourceNamespace::from_str(ns_str)
-                .ok_or_else(|| ParseError::ResourceUnknownNs(ns_str.to_string()))?;
+            // v4.1.5 dot-id-part shape. user_id absorbs the entire
+            // owner identity (`<user>.<owner-tail>`); namespace stays
+            // None. Path-part may be empty (resource root reference).
             out.kind = URAKind::Resource;
-            out.user_id = uid.to_string();
-            out.namespace = Some(ns);
-            out.path = path.to_string();
+            out.user_id = id_part.to_string();
+            out.namespace = None;
+            out.path = path_part.to_string();
         }
         other => return Err(ParseError::UnknownRole(other.to_string())),
     }
