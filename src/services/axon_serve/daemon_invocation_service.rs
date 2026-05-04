@@ -596,15 +596,26 @@ impl DaemonInvocationService {
     /// Resolve whether `target_uri` names THIS daemon's own
     /// synchronous-execution surface.
     ///
-    /// Most deployments wire `AdmissionFacade.daemon_uri()` to the
-    /// device URI from credentials.json. Hub-mode daemons, however,
-    /// are also legitimately addressed as the realm singleton
-    /// `easynet:///r/<realm>/hub`. Device-mode escalation sends that
-    /// hub URI up the session bidi when a CLI asks for
-    /// `--node easynet:///r/<realm>/hub`; without accepting the
-    /// local hub URI here, the hub side misses the self-target fast
-    /// path and surfaces `target_offline` even though the target is
-    /// the daemon itself.
+    /// Three valid shapes per RFC-001 + RFC-006-C v0.1:
+    ///   (1) `easynet:///r/<realm>/device/<deviceID>` — the daemon's
+    ///       device identity from credentials.json. Standard.
+    ///   (2) `easynet:///r/<realm>/hub` — the realm-singleton hub URI;
+    ///       hub-mode daemons answer to this in addition to (1).
+    ///   (3) `easynet:///r/<realm>/agent/<userID>.<agentID>` — the
+    ///       agent URI of an agent the daemon currently hosts. v4.1.5
+    ///       §9 callee ∈ {hub, device, agent}; RFC-006-C §INV-2 +
+    ///       RFC-006-B v0.6 §URL require the wire callee on a chat-
+    ///       base or page.fetch invocation to be the agent URA, not
+    ///       the device. Recognise it here so the local fast path
+    ///       fires instead of falling through to "target offline".
+    ///
+    /// Match for (3): the daemon hosts agent `<X>` iff its local
+    /// dispatcher has an ability registered with prefix `<X>.`. We
+    /// extract the bare agent segment (after the user/agent dot
+    /// boundary) from the URI and check the dispatcher's ability list
+    /// for any name starting `<agent>.`. This is O(n_abilities) but
+    /// only fires on remote-arriving invocations and the table is
+    /// small (tens of entries).
     fn matches_self_target_uri(&self, target_uri: &str) -> bool {
         if self
             .admission
@@ -613,9 +624,43 @@ impl DaemonInvocationService {
         {
             return true;
         }
-        self.session_realm
+        if self
+            .session_realm
             .as_deref()
             .is_some_and(|realm| crate::uri::hub_uri(realm) == target_uri)
+        {
+            return true;
+        }
+        // (3) agent URA — accept if we host an ability whose tail
+        // matches `<agentID>` in any owner shape:
+        //   • `<userID>.<agentID>.<verb>`     (AbilityURI splitn(3,'.'))
+        //   • `<userName>.<agentID>.<verb>`   (Pages registers under
+        //     username from EASYNET_PAGES_USER; backend may send UUID
+        //     in the user segment)
+        //   • `<agentID>.<verb>`              (daemon-flat shape used
+        //     by `<agent>.chat` in single-user mode)
+        //
+        // The userID-to-username mapping is intentionally not
+        // resolved here — admission elsewhere ensures the caller has
+        // a delegation proof bound to the user segment, so an
+        // attacker cannot exploit the lenient agentID match.
+        if let Some((_user_seg, agent_seg)) = parse_agent_owner_pair_from_uri(target_uri) {
+            if let Some(dispatcher) = self.local_dispatcher.as_ref() {
+                let agent_dot = format!("{agent_seg}.");
+                let agent_dot_owned = format!(".{agent_seg}.");
+                if dispatcher
+                    .local_registry()
+                    .list_abilities()
+                    .iter()
+                    .any(|name| {
+                        name.starts_with(&agent_dot) || name.contains(&agent_dot_owned)
+                    })
+                {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 
@@ -822,6 +867,23 @@ impl Invocation for DaemonInvocationService {
 /// Pull the `EnvelopeOpen` payload out of frame 0 of an
 /// `InvokeBidi` up stream. Returns `Status::invalid_argument` for
 /// any non-EnvelopeOpen first frame, since the axon protocol
+/// Extract the `(userID, agentID)` pair from an
+/// `agent/<userID>.<agentID>` URI. Returns `None` for any other role
+/// or for malformed URIs. Used by `matches_self_target_uri` to detect
+/// when a remote-arriving invocation names an agent that this daemon
+/// hosts (RFC-006-C v0.1 + RFC-006-B v0.6 §URL: callee on chat-base
+/// / page.fetch is the agent URA, not the device URA).
+fn parse_agent_owner_pair_from_uri(target_uri: &str) -> Option<(String, String)> {
+    let parsed = crate::uri::parse_ura(target_uri).ok()?;
+    if !matches!(parsed.kind, crate::uri::URAKind::Agent) {
+        return None;
+    }
+    if parsed.user_id.is_empty() || parsed.agent_id.is_empty() {
+        return None;
+    }
+    Some((parsed.user_id, parsed.agent_id))
+}
+
 /// mandates frame 0 is the EnvelopeOpen.
 fn extract_envelope_open(frame: &InvokeBidiUp) -> Result<&EnvelopeOpen, Status> {
     match frame.payload.as_ref() {
