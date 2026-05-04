@@ -53,97 +53,70 @@ pub struct AdvertiseOutcome {
     pub result: Result<AdvertiseAgentReceipt, String>,
 }
 
-/// Resource URI form expected by the bridge for federation.* calls
-/// against the hub-profile Agent. `<realm>` is filled at call time
-/// from the daemon's join receipt; `<hub_uri>` segment is fixed
-/// because every realm has exactly one canonical hub-profile Agent.
-// v4.1.5 §A.URA-7: every URI is `easynet:///r/<realm>/<role>/<tail>`.
-// `<role>` ∈ {user, device, agent, ability, hub, resource}. The
-// pre-RFC-001 `r/prv/hub/<realm>/abilities/<name>@<ver>?tenant_id=<t>`
-// form is dead — `prv/hub/<realm>` is not a legal role tail, `@<ver>`
-// + `?tenant_id=<t>` are not part of the spec. Tenant binding lives
-// on the envelope, not in the URI.
-//
-// Hub-rooted abilities are owned by the realm-singleton hub agent;
-// the v4.1.5 owner segment is the literal `01HUB` per RFC-006-C v0.1
-// (see EasyNet/backend/internal/handler/openai/* for prior art with
-// `01HUB.openai.chat_completions`). `federation` is the agent-id;
-// `<verb>` is the ability-id. AbilityURI splitn(3, '.') means the
-// daemon dispatcher's `function_name` field stays as the bare verb
-// shape "federation.<verb>" while the URI carries the full owner.
-const FED_ADVERTISE_AGENT_ABILITY_FMT: &str =
-    "easynet:///r/{realm}/ability/01HUB.federation.advertise_agent";
-
-const FED_ADVERTISE_ABILITIES_ABILITY_FMT: &str =
-    "easynet:///r/{realm}/ability/01HUB.federation.advertise_abilities";
-
-/// `federation.resolve` — read-only directory query against the
-/// realm's hub. Hub-rooted ability per v4.1.5 + RFC-006-C convention.
-const FED_RESOLVE_ABILITY_FMT: &str =
-    "easynet:///r/{realm}/ability/01HUB.federation.resolve";
-
-/// `federation.revoke` — voluntary leave (or operator-initiated
-/// revocation) of an Agent's directory entry. CLI shutdown calls
-/// this on the daemon's own device-profile URI to remove its
-/// directory presence cleanly. RFC-001 §A14 reserves this hub
-/// ability for the legacy `deregister_node` migration path.
-const FED_REVOKE_ABILITY_FMT: &str =
-    "easynet:///r/{realm}/ability/01HUB.federation.revoke";
-
-/// `federation.heartbeat` — membership liveness ping. Periodically
-/// re-stamps the hub's `last_heartbeat_unix_ms` so the directory
-/// sweep doesn't evict the daemon's record. Replaces the legacy
-/// gRPC `NodeHeartbeat` RPC removed by AXON-RFC-001 P1.5.
-const FED_HEARTBEAT_ABILITY_FMT: &str =
-    "easynet:///r/{realm}/ability/01HUB.federation.heartbeat";
-
-/// RFC-002 §5.1 federation.resolve_key — agent_uri → public_key
-/// lookup against the realm directory.
-const FED_RESOLVE_KEY_ABILITY_FMT: &str =
-    "easynet:///r/{realm}/ability/01HUB.federation.resolve_key";
-
-/// RFC-002 §5.2 federation.forward_invoke — hub-mediated cross-
-/// device dispatch.
-const FED_FORWARD_INVOKE_ABILITY_FMT: &str =
-    "easynet:///r/{realm}/ability/01HUB.federation.forward_invoke";
-
-/// Build the v4.1.5 standard ability URI for `federation.advertise_agent`
-/// owned by the realm's hub. Public so call sites can construct the
-/// URI consistently without re-typing the format string.
+/// Internal bridge compatibility URI builder for hub-served
+/// `federation.*` abilities.
 ///
-/// `tenant_id` is accepted for caller-side bridge compatibility only;
-/// it does NOT appear in the URI. Tenant binding rides the envelope
-/// per RFC-001 §A.URA-7 + memory `feedback_no_legacy_ura.md`.
+/// Why this still uses the legacy `/r/prv/hub/<realm>/abilities/...`
+/// shape:
+///   1. `DendriteBridge::ability_call_raw` still canonicalises and
+///      derives subject ids from the pre-v4.1.5 EasyNet ability URI
+///      grammar.
+///   2. The daemon dispatch surface only keys on the extracted
+///      ability name (`federation.<verb>`), so the on-the-wire hub
+///      function remains correct once the bridge accepts the call.
+///   3. Regressing this to the newer `r/<realm>/ability/...` form
+///      makes `federation.advertise_agent` never reach the hub,
+///      leaving `AdvertisedAgentStore` empty and every
+///      agent-URI-based public route falling through to
+///      `target_offline`.
+const LEGACY_HUB_ABILITY_URI_FMT: &str =
+    "easynet:///r/prv/hub/{realm}/abilities/{ability}@1?tenant_id={tenant}";
+
+const FED_ADVERTISE_AGENT_ABILITY_NAME: &str = "federation.advertise_agent";
+const FED_ADVERTISE_ABILITIES_ABILITY_NAME: &str = "federation.advertise_abilities";
+const FED_RESOLVE_ABILITY_NAME: &str = "federation.resolve";
+const FED_REVOKE_ABILITY_NAME: &str = "federation.revoke";
+const FED_HEARTBEAT_ABILITY_NAME: &str = "federation.heartbeat";
+const FED_RESOLVE_KEY_ABILITY_NAME: &str = "federation.resolve_key";
+const FED_FORWARD_INVOKE_ABILITY_NAME: &str = "federation.forward_invoke";
+
+fn legacy_hub_ability_resource_uri(realm: &str, tenant_id: &str, ability_name: &str) -> String {
+    LEGACY_HUB_ABILITY_URI_FMT
+        .replace("{realm}", realm)
+        .replace("{ability}", ability_name)
+        .replace("{tenant}", tenant_id)
+}
+
+/// Build the bridge-compatible resource URI for
+/// `federation.advertise_agent`.
 pub fn advertise_agent_resource_uri(realm: &str, _tenant_id: &str) -> String {
-    FED_ADVERTISE_AGENT_ABILITY_FMT.replace("{realm}", realm)
+    legacy_hub_ability_resource_uri(realm, _tenant_id, FED_ADVERTISE_AGENT_ABILITY_NAME)
 }
 
 pub fn advertise_abilities_resource_uri(realm: &str, _tenant_id: &str) -> String {
-    FED_ADVERTISE_ABILITIES_ABILITY_FMT.replace("{realm}", realm)
+    legacy_hub_ability_resource_uri(realm, _tenant_id, FED_ADVERTISE_ABILITIES_ABILITY_NAME)
 }
 
-/// Build the v4.1.5 standard ability URI for `federation.resolve`
-/// owned by the realm's hub. Inbound counterpart to `advertise_*`:
+/// Build the bridge-compatible resource URI for
+/// `federation.resolve`. Inbound counterpart to `advertise_*`:
 /// peers query this to discover what every other agent in the realm
 /// has published.
 pub fn resolve_resource_uri(realm: &str, _tenant_id: &str) -> String {
-    FED_RESOLVE_ABILITY_FMT.replace("{realm}", realm)
+    legacy_hub_ability_resource_uri(realm, _tenant_id, FED_RESOLVE_ABILITY_NAME)
 }
 
-/// Build the v4.1.5 standard ability URI for `federation.revoke`
-/// owned by the realm's hub. Used by the CLI shutdown path to remove
-/// the daemon's own directory entry — replaces the deprecated
-/// `bridge.deregister_node` gRPC call.
+/// Build the bridge-compatible resource URI for
+/// `federation.revoke`. Used by the CLI shutdown path to remove the
+/// daemon's own directory entry.
 pub fn revoke_resource_uri(realm: &str, _tenant_id: &str) -> String {
-    FED_REVOKE_ABILITY_FMT.replace("{realm}", realm)
+    legacy_hub_ability_resource_uri(realm, _tenant_id, FED_REVOKE_ABILITY_NAME)
 }
 
-/// Build the v4.1.5 standard ability URI for `federation.heartbeat`
-/// owned by the realm's hub. Periodic invocation keeps the daemon's
-/// directory entry alive. Replaces the deprecated
-/// `bridge.NodeHeartbeat` keepalive RPC.
+/// Build the bridge-compatible resource URI for
+/// `federation.heartbeat`. Periodic invocation keeps the daemon's
+/// directory entry alive.
 pub fn heartbeat_resource_uri(realm: &str, _tenant_id: &str) -> String {
-    FED_HEARTBEAT_ABILITY_FMT.replace("{realm}", realm)
+    legacy_hub_ability_resource_uri(realm, _tenant_id, FED_HEARTBEAT_ABILITY_NAME)
 }
 
 /// Wire shape for `federation.advertise_abilities` arguments. Not in
@@ -542,8 +515,8 @@ pub fn resolve_key<I: AbilityInvoker>(
     realm: &str,
     agent_uri: &str,
 ) -> Result<crate::runtime::federation_client::ResolveKeyReceipt, String> {
-    let resource_uri = FED_RESOLVE_KEY_ABILITY_FMT.replace("{realm}", realm);
-    let _ = tenant_id; // tenant rides envelope, not URI (v4.1.5)
+    let resource_uri =
+        legacy_hub_ability_resource_uri(realm, tenant_id, FED_RESOLVE_KEY_ABILITY_NAME);
     let payload = serde_json::json!({ "agent_uri": agent_uri });
     let response = invoker.invoke_ability(tenant_id, &resource_uri, payload)?;
     let receipt_body = unwrap_result_json(response);
@@ -563,7 +536,8 @@ pub fn forward_invoke<I: AbilityInvoker>(
 ) -> Result<crate::runtime::federation_client::ForwardInvokeReceipt, String> {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
-    let resource_uri = FED_FORWARD_INVOKE_ABILITY_FMT.replace("{realm}", realm);
+    let resource_uri =
+        legacy_hub_ability_resource_uri(realm, tenant_id, FED_FORWARD_INVOKE_ABILITY_NAME);
     let arguments_bytes =
         serde_json::to_vec(arguments).map_err(|e| format!("encode forward args: {e}"))?;
     let arguments_b64 = STANDARD.encode(&arguments_bytes);
@@ -703,18 +677,28 @@ mod tests {
 
     #[test]
     fn resource_uri_substitutes_realm_correctly() {
-        // v4.1.5: hub-rooted federation abilities live under
-        // `01HUB.federation.<verb>` per RFC-006-C convention. The
-        // legacy `r/prv/hub/<realm>/abilities/<name>@<ver>?tenant_id=<t>`
-        // shape is dead — `prv` is not a v4.1.5 role and
-        // `?tenant_id=...` was never spec.
+        // Internal bridge compatibility still uses the legacy
+        // `/r/prv/hub/<realm>/abilities/<name>@1?tenant_id=<t>`
+        // shape even though user-facing URAs have already moved to
+        // the v4.1.4 role taxonomy.
         assert_eq!(
             advertise_agent_resource_uri("acme", "tenant-1"),
-            "easynet:///r/acme/ability/01HUB.federation.advertise_agent"
+            "easynet:///r/prv/hub/acme/abilities/federation.advertise_agent@1?tenant_id=tenant-1"
         );
         assert_eq!(
             advertise_abilities_resource_uri("contoso", "tenant-2"),
-            "easynet:///r/contoso/ability/01HUB.federation.advertise_abilities"
+            "easynet:///r/prv/hub/contoso/abilities/federation.advertise_abilities@1?tenant_id=tenant-2"
+        );
+    }
+
+    #[test]
+    fn subject_id_parser_understands_legacy_hub_ability_uri() {
+        assert_eq!(
+            subject_id_from_resource_uri(
+                "easynet:///r/prv/hub/acme/abilities/federation.advertise_agent@1?tenant_id=tenant-1"
+            )
+            .as_deref(),
+            Some("easynet:prv:hub:acme")
         );
     }
 
@@ -849,7 +833,7 @@ mod tests {
         let _ = advertise_abilities(&invoker, "tenant", "acme", "u", &[]).unwrap();
         assert_eq!(
             invoker.last_resource_uri.borrow().as_deref().unwrap(),
-            "easynet:///r/acme/ability/01HUB.federation.advertise_abilities"
+            "easynet:///r/prv/hub/acme/abilities/federation.advertise_abilities@1?tenant_id=tenant"
         );
     }
 }

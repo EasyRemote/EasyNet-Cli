@@ -304,13 +304,13 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
 /// Inputs:
 ///   * `invoker` — same `BridgeAbilityInvoker` used by advertise;
 ///     wraps the dendrite-bridge `ability_call_raw` path. The
-///     resource URI is the v4.1.5 standard ability shape
-///     `easynet:///r/<realm>/ability/01HUB.runtime.register_local_tool`
-///     (hub-rooted, owner=01HUB convention). The `runtime.*`
-///     namespace is intercepted before membership + admission checks
-///     (rpc_handlers.rs::is_runtime_admin_ability) so the hub-style
-///     subject is purely a URI shape, not an actual hub-routing
-///     decision.
+///     resource URI deliberately stays on the bridge-compatible
+///     legacy hub ability shape
+///     `easynet:///r/prv/hub/<realm>/abilities/runtime.register_local_tool@1?tenant_id=<tenant>`.
+///     The `runtime.*` namespace is intercepted before membership +
+///     admission checks (rpc_handlers.rs::is_runtime_admin_ability),
+///     so the hub-shaped subject is purely a bridge admission key,
+///     not an actual hub-routing decision.
 ///   * `tenant_id` — runtime key namespace.
 ///   * `realm` — used to construct the URI's subject_value. Any non-
 ///     empty value works since runtime.* is intercepted by ability
@@ -342,11 +342,10 @@ pub fn register_local_tools_via_runtime<I: AbilityInvoker>(
     // Invoke and gets NoBinding.
     let names = collect_daemon_owned_ability_names();
 
-    // v4.1.5 standard ability URI: hub-owned, owner segment=01HUB.
-    // tenant binding rides the envelope, not the URI (RFC-001 §A.URA-7
-    // + memory `feedback_no_legacy_ura.md`).
-    let resource_uri =
-        format!("easynet:///r/{realm}/ability/01HUB.runtime.register_local_tool");
+    // Runtime admin calls share the same bridge compatibility
+    // constraint as federation.*: the current Dendrite bridge still
+    // canonicalises `/r/prv/hub/<realm>/abilities/<name>@1` URIs.
+    let resource_uri = runtime_admin_resource_uri(realm, tenant_id, "runtime.register_local_tool");
     for name in names {
         let args = build_register_args(tenant_id, node_id, &name, dispatch_endpoint);
         let result = invoker.invoke_ability(tenant_id, &resource_uri, args);
@@ -416,7 +415,7 @@ pub fn bootstrap_self_identity_via_runtime<I: AbilityInvoker>(
     // existing node when the (node_id, public_key) tuple is novel,
     // so the second call doesn't overwrite the first.
     let resource_uri =
-        format!("easynet:///r/{realm}/ability/01HUB.runtime.bootstrap_self_identity");
+        runtime_admin_resource_uri(realm, tenant_id, "runtime.bootstrap_self_identity");
     let agent_key_b64 = derive_owner_public_key_b64(tenant_id, node_id);
     let agent_args = serde_json::json!({
         "tenant_id": tenant_id,
@@ -503,7 +502,7 @@ pub(crate) fn derive_owner_public_key_b64(tenant_id: &str, node_id: &str) -> Str
 
 /// Hub-profile counterpart of `derive_owner_public_key_b64`. Returns
 /// the public key the bridge will sign under for hub-shaped resource
-/// URIs (`r/<realm>/ability/01HUB.<verb>`). The SDK's
+/// URIs (`r/prv/hub/<realm>/abilities/<verb>@1?tenant_id=...`). The SDK's
 /// `default_auth_for_subject` derives a DIFFERENT key for the hub
 /// subject than for the agent subject, so the daemon needs to
 /// register both — see `bootstrap_self_identity_via_runtime`.
@@ -691,7 +690,7 @@ pub fn unpublish_abilities_via_revoke<I: AbilityInvoker>(
     agent_uri: &str,
     reason: &str,
 ) -> PublishOutcome {
-    let resource_uri = format!("easynet:///r/{realm}/ability/01HUB.federation.revoke");
+    let resource_uri = crate::runtime::advertise::revoke_resource_uri(realm, tenant_id);
     let payload = serde_json::json!({
         "agent_uri": agent_uri,
         "reason": reason,
@@ -722,6 +721,10 @@ fn first_uri(outcomes: &[BootstrapOutcome], profile: &str, name: &str) -> Option
         .iter()
         .find(|o| o.profile == profile && o.name == name)
         .map(|o| o.agent_uri.clone())
+}
+
+fn runtime_admin_resource_uri(realm: &str, tenant_id: &str, ability_name: &str) -> String {
+    format!("easynet:///r/prv/hub/{realm}/abilities/{ability_name}@1?tenant_id={tenant_id}")
 }
 
 #[cfg(test)]
@@ -1089,7 +1092,7 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(
             calls[0].0,
-            "easynet:///r/acme/ability/01HUB.federation.revoke"
+            "easynet:///r/prv/hub/acme/abilities/federation.revoke@1?tenant_id=tenant"
         );
         assert_eq!(calls[0].1["agent_uri"], "easynet:///r/acme/agent/01OLD");
         assert_eq!(calls[0].1["reason"], "operator removed");
@@ -1183,12 +1186,12 @@ mod tests {
     }
 
     #[test]
-    fn register_local_tools_uses_canonical_runtime_admin_uri() {
-        // The bridge requires a 5-segment /r URI, and the runtime
-        // intercepts `runtime.*` ability names before admission/
-        // membership gates. We pin both shape constraints here so
-        // future refactors of the URI builder don't quietly break
-        // the dispatch registration.
+    fn register_local_tools_uses_bridge_compatible_runtime_admin_uri() {
+        // The bridge still canonicalises the legacy hub ability
+        // grammar, while the runtime still intercepts `runtime.*`
+        // before membership gates. Pin the exact compatibility
+        // shape so publish doesn't silently regress back to a URI
+        // the bridge rejects before the call reaches the daemon.
         let _h = HomeGuard::new();
         let invoker = CountingInvoker::new(serde_json::json!({"ack": true}));
         let outcomes = register_local_tools_via_runtime(
@@ -1205,16 +1208,17 @@ mod tests {
             !outcomes.is_empty(),
             "register must walk at least one ability"
         );
-        // Every call must hit the canonical hub-style runtime admin
+        // Every call must hit the bridge-compatible runtime admin
         // resource URI; ability_name on the wire derives from the
-        // URI tail, so a wrong shape silently misroutes.
+        // URI tail, so a wrong shape silently prevents dispatch
+        // registration from ever reaching the daemon.
         let calls = invoker.calls();
         assert_eq!(calls.len(), outcomes.len(), "1 call per ability");
         for (uri, payload) in &calls {
             assert_eq!(
                 uri,
-                "easynet:///r/acme/ability/01HUB.runtime.register_local_tool",
-                "register URI must be the v4.1.5 hub-rooted ability shape"
+                "easynet:///r/prv/hub/acme/abilities/runtime.register_local_tool@1?tenant_id=tenant",
+                "register URI must stay bridge-compatible"
             );
             assert_eq!(payload["tenant_id"], "tenant");
             assert_eq!(payload["node_id"], "node-01DEV");

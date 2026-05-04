@@ -526,6 +526,84 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
                 ability_catalog.len()
             );
         }
+
+        // Hosted-agent advertise prelude (RFC-006-B v0.6 §URL +
+        // RFC-006-C v0.1 §INV-2). The hub's
+        // `lookup_target_with_agent_fallback` consults
+        // `AdvertisedAgentStore` when the wire callee is an agent
+        // URA `agent/<u>.<a>`; without these advertise calls the
+        // store is empty and chat-base / page.fetch invocations
+        // fall through to `target_offline`.
+        //
+        // Owner segments derived from the local ability catalog:
+        // every ability whose tail is `<owner>.<rest>` implies the
+        // daemon hosts agent `<owner>` (skip hub-rooted `01HUB.*`
+        // and the placeholder `<self>.*` shapes). Each unique
+        // `<owner>` is advertised once as
+        // `agent/<owner>.<owner>` HostedBy <caller_uri>; the user-
+        // segment of the agent URA matches the daemon's owner
+        // convention (EASYNET_PAGES_USER for pages, agent_name
+        // for chat-base).
+        let realm = caller_uri
+            .strip_prefix("easynet:///r/")
+            .and_then(|s| s.split_once('/'))
+            .map(|(r, _)| r.to_string())
+            .unwrap_or_default();
+        let user_segment = std::env::var("EASYNET_PAGES_USER").unwrap_or_default();
+        let mut owners: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
+        for name in ability_catalog {
+            if let Some((owner, _rest)) = name.split_once('.') {
+                if owner == "01HUB" || owner == "<self>" || owner.is_empty() {
+                    continue;
+                }
+                if owner == user_segment {
+                    // `<user>.pages.<verb>` — owner segment IS the
+                    // user-segment, agent name lives one level
+                    // deeper. We pick that up below by walking the
+                    // second segment.
+                    continue;
+                }
+                owners.insert(owner.to_string());
+            }
+        }
+        // Synthesise the `pages` agent unconditionally — pages
+        // abilities (`<user>.pages.{publish,list,get,unpublish}` +
+        // dynamic `<user>.<project>.page.fetch`) register via the
+        // late-binding resolver fallback, so they aren't in
+        // `ability_catalog` at session-prelude time. The hub's
+        // pages_public handler addresses callee=agent/<user>.pages
+        // for every page.fetch invocation, so always advertise it.
+        if !user_segment.is_empty() && user_segment != "self" {
+            owners.insert("pages".to_string());
+        }
+        if !realm.is_empty() && !user_segment.is_empty() && !owners.is_empty() {
+            eprintln!(
+                "[session] sending federation.advertise_agent prelude for {} agent(s) \
+                 under user `{}`: {:?}",
+                owners.len(),
+                user_segment,
+                owners.iter().collect::<Vec<_>>()
+            );
+            for owner in &owners {
+                let agent_uri =
+                    format!("easynet:///r/{realm}/agent/{user_segment}.{owner}");
+                if let Err(err) =
+                    send_advertise_agent_prelude(&mut client, &caller_uri, &agent_uri).await
+                {
+                    eprintln!(
+                        "[session] advertise_agent {agent_uri} prelude soft-failed \
+                         (code={:?}, msg={:?})",
+                        err.code(),
+                        err.message(),
+                    );
+                }
+            }
+            eprintln!(
+                "[session] advertise_agent prelude done ({} agent(s))",
+                owners.len()
+            );
+        }
     }
 
     let (up_tx, up_rx) = mpsc::channel::<InvokeBidiUp>(SESSION_UP_CHANNEL_CAPACITY);
@@ -798,6 +876,48 @@ async fn send_federation_join_prelude(
 /// the runtime's per-ability descriptor and can be added here if a
 /// future projection wants them; v1 advertises just enough to
 /// surface the catalog rows.
+/// Session-prelude variant of `federation.advertise_agent`. The
+/// device tells the hub "I host agent `<agent_uri>`"; the hub
+/// upserts an `AdvertisedAgentRecord { agent_uri, host_uri }` so
+/// later inbound invocations addressed to that agent URA resolve
+/// to this device's bidi sender via
+/// `lookup_target_with_agent_fallback`.
+async fn send_advertise_agent_prelude(
+    client: &mut crate::pb::axon::v1::invocation_client::InvocationClient<Channel>,
+    caller_uri: &str,
+    agent_uri: &str,
+) -> Result<(), tonic::Status> {
+    use crate::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
+
+    let body = serde_json::json!({
+        "agent_uri": agent_uri,
+        "signing_authority": {
+            "kind": "hosted_by",
+            "host_uri": caller_uri,
+        },
+    });
+    let arguments = serde_json::to_vec(&body).map_err(|e| {
+        tonic::Status::internal(format!(
+            "federation.advertise_agent prelude serialize: {e}"
+        ))
+    })?;
+
+    let request = InvokeRequest {
+        envelope: Some(Envelope {
+            caller: Some(AgentIdentity {
+                uri: caller_uri.to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        function_name: "federation.advertise_agent".to_string(),
+        arguments,
+        ..Default::default()
+    };
+
+    client.invoke(request).await.map(|_| ())
+}
+
 async fn send_advertise_abilities_prelude(
     client: &mut crate::pb::axon::v1::invocation_client::InvocationClient<Channel>,
     caller_uri: &str,
