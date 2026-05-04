@@ -207,7 +207,22 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
         // to approve. Claude Code's CLI accepts `mcp__<server>` to
         // mean "every tool from this MCP server is pre-allowed".
         "--allowedTools".to_string(),
+        // Pre-authorise the EasyNet-shaped agent loop.
+        //
+        // `Bash(easynet:*)` is what a freshly-installed agent
+        // needs to actually run the steps its seeded skills teach
+        // (e.g. `easynet pages create`, `easynet ability deploy`)
+        // — without it, the agent reads `easynet-pages-author`
+        // SKILL.md and then stalls asking the (non-interactive)
+        // dispatcher to approve every shell call. `Bash(curl:*)`
+        // is included so the agent can verify its own deploy by
+        // hitting the URL it just published.
+        //
+        // The rest of the list is unchanged from the prior allow
+        // set (Bash safe-readers + Read/Write/Edit + the EasyNet
+        // MCP namespace).
         "Bash(open:*) Bash(ls:*) Bash(cat:*) Bash(pwd) Bash(mkdir:*) \
+         Bash(easynet:*) Bash(curl:*) \
          Read Write Edit Glob Grep mcp__easynet"
             .to_string(),
     ];

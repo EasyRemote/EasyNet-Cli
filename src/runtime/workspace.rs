@@ -175,6 +175,24 @@ pub fn ensure_from_directory(dir: &AgentDirectory) -> anyhow::Result<PathBuf> {
     // pattern as `skill.publish` in `runtime::agents::skill_publish_ability`.
     write_collaborate_seed(&root, runtime)?;
 
+    // RFC-006-B v0.6 — seed the `easynet-pages-author` skill so
+    // a freshly-installed agent can ship a real website on this
+    // machine without any prior briefing. The skill walks the
+    // agent through the project layout, the static + TOML-API
+    // surface, and the `easynet pages create` deploy. Same path-
+    // routing rule as `easynet-collaborate`: claude-code reads
+    // `<root>/.claude/skills/`, codex reads `<root>/.agents/skills/`.
+    write_pages_author_seed(&root, runtime)?;
+
+    // Seed the `easynet-ability-author` skill so the same agent
+    // that learns to publish pages can also write the *real*
+    // backend that `kind="ability"` api manifests forward to.
+    // Pair with pages-author: pages teaches "frontend +
+    // declarative TOML manifest", ability-author teaches "deploy
+    // a real ability the manifest points at". Together they
+    // close the agent-driven full-stack loop silan asked for.
+    write_ability_author_seed(&root, runtime)?;
+
     Ok(root)
 }
 
@@ -390,6 +408,59 @@ fn collaborate_seed_dir(ws: &Path, runtime: RuntimeKind) -> PathBuf {
 /// `include_str!` so editing the markdown is enough; no Rust recompile
 /// is needed for a content change in the same release.
 const COLLABORATE_SKILL_MD: &str = include_str!("../../skills/easynet-collaborate/SKILL.md");
+
+/// Seed the `easynet-pages-author` skill (RFC-006-B v0.6) so a freshly-
+/// installed agent knows how to write a website + tiny declarative
+/// backend, then deploy it via `easynet pages create`. Mirrors the
+/// `write_collaborate_seed` shape: `include_str!` body, runtime-aware
+/// directory, atomic write.
+fn write_pages_author_seed(ws: &Path, runtime: RuntimeKind) -> anyhow::Result<()> {
+    let skill_dir = pages_author_seed_dir(ws, runtime);
+    fs::create_dir_all(&skill_dir)?;
+    config::atomic_write(&skill_dir.join("SKILL.md"), PAGES_AUTHOR_SKILL_MD.as_bytes())?;
+    Ok(())
+}
+
+/// Pick the seed-skill directory for `easynet-pages-author` per
+/// runtime. Claude Code: `<ws>/.claude/skills/easynet-pages-author/`.
+/// Codex: `<ws>/.agents/skills/easynet-pages-author/`.
+fn pages_author_seed_dir(ws: &Path, runtime: RuntimeKind) -> PathBuf {
+    let parent = match runtime {
+        RuntimeKind::ClaudeCode => ws.join(".claude").join("skills"),
+        RuntimeKind::Codex | RuntimeKind::CodexAppServer => ws.join(".agents").join("skills"),
+    };
+    parent.join("easynet-pages-author")
+}
+
+/// `easynet-pages-author` seed body. Source of truth:
+/// `skills/easynet-pages-author/SKILL.md`. Editing the markdown
+/// recompiles the daemon binary at next build but does not require
+/// a manual sync step.
+const PAGES_AUTHOR_SKILL_MD: &str =
+    include_str!("../../skills/easynet-pages-author/SKILL.md");
+
+/// Seed `easynet-ability-author` — pairs with pages-author so a
+/// single agent learns both ends of the full-stack loop.
+fn write_ability_author_seed(ws: &Path, runtime: RuntimeKind) -> anyhow::Result<()> {
+    let skill_dir = ability_author_seed_dir(ws, runtime);
+    fs::create_dir_all(&skill_dir)?;
+    config::atomic_write(
+        &skill_dir.join("SKILL.md"),
+        ABILITY_AUTHOR_SKILL_MD.as_bytes(),
+    )?;
+    Ok(())
+}
+
+fn ability_author_seed_dir(ws: &Path, runtime: RuntimeKind) -> PathBuf {
+    let parent = match runtime {
+        RuntimeKind::ClaudeCode => ws.join(".claude").join("skills"),
+        RuntimeKind::Codex | RuntimeKind::CodexAppServer => ws.join(".agents").join("skills"),
+    };
+    parent.join("easynet-ability-author")
+}
+
+const ABILITY_AUTHOR_SKILL_MD: &str =
+    include_str!("../../skills/easynet-ability-author/SKILL.md");
 
 // ── Shared ───────────────────────────────────────────────────────────────────
 

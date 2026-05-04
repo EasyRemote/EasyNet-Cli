@@ -293,6 +293,22 @@ fn run_add(args: AddArgs) -> anyhow::Result<()> {
     }
     output::detail("root", &directory.root().display().to_string());
 
+    // Eagerly project the workspace so the seeded skills (the
+    // `easynet-collaborate` and `easynet-pages-author` SKILL.md
+    // files) are on disk immediately after `agent add`, not
+    // lazily on the first dispatch. Operators using a freshly-
+    // added agent through `claude --resume` (or any non-easynet
+    // entry path) get the briefing without an EasyNet round-trip
+    // first. Best-effort: a projection failure logs but does not
+    // fail the registration.
+    if let Err(e) = crate::runtime::workspace::ensure_from_directory(&directory) {
+        eprintln!(
+            "[agent add warn] could not project workspace at {}: {e:#}; \
+             skills will land on first dispatch",
+            directory.root().display()
+        );
+    }
+
     // Publish the new agent's manifests to the local axon-runtime so
     // they appear in `ListMCPTools` (and therefore the EasyNet
     // frontend's Abilities catalog) immediately. Best-effort — see

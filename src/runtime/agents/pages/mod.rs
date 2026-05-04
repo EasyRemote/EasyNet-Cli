@@ -59,8 +59,17 @@ pub struct PagesConfig {
 /// `PUBLISHED_PROJECTS` for `<user>.<project>.page.fetch` requests
 /// and dispatches to fixed handlers for `<user>.pages.{publish,
 /// unpublish, list, get}`.
-pub fn register(reg: &mut LocalAbilityRegistry, config: PagesConfig) {
+///
+/// `dispatch_handle` is the post-build OnceLock seam pointing at
+/// the live registry. The api `kind="ability"` branch reaches
+/// through it to invoke any other ability the agent has deployed.
+pub fn register(
+    reg: &mut LocalAbilityRegistry,
+    config: PagesConfig,
+    dispatch_handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+) {
     let resolver_config = config.clone();
+    api::set_dispatch_handle(dispatch_handle);
 
     // Build a placeholder Arc for the publish handler (which needs
     // a registry handle for `register_fetch_ability`). v0 keeps

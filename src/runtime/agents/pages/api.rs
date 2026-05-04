@@ -43,17 +43,33 @@
 
 use std::os::fd::AsFd;
 use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 
+use once_cell::sync::Lazy;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::sandbox::open_beneath;
 use super::state::PUBLISHED_PROJECTS;
+use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+
+/// Process-wide handle to the live ability registry. Set once at
+/// boot by `pages::register`; read by the `kind="ability"` branch
+/// to dispatch requests directly through the in-process registry
+/// instead of round-tripping through the daemon's own IPC socket
+/// (which would self-deadlock).
+static DISPATCH_HANDLE: Lazy<
+    std::sync::OnceLock<Arc<OnceLock<Arc<LocalAbilityRegistry>>>>,
+> = Lazy::new(std::sync::OnceLock::new);
+
+pub(crate) fn set_dispatch_handle(handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>>) {
+    let _ = DISPATCH_HANDLE.set(handle);
+}
 
 /// One TOML manifest under `<project>/api/<verb>.toml`.
 #[derive(Debug, Deserialize)]
 struct ApiManifest {
-    /// Execution mode. v0: `"static_json"` or `"echo"`.
+    /// Execution mode. v0: `"static_json"` | `"echo"` | `"ability"`.
     #[serde(default = "default_kind")]
     kind: String,
     /// For `kind = "static_json"`: the JSON value to return.
@@ -63,6 +79,11 @@ struct ApiManifest {
     /// echoed request body before responding.
     #[serde(default)]
     extra: Option<toml::Value>,
+    /// For `kind = "ability"`: the fully-qualified local ability
+    /// name to invoke. e.g. `web-builder.todo.add_task`. The HTTP
+    /// request body is forwarded verbatim as the ability's args.
+    #[serde(default)]
+    ability: Option<String>,
 }
 
 fn default_kind() -> String {
@@ -182,6 +203,50 @@ pub fn handle_api(user: &str, project_id: &str, verb: &str, args: Value) -> anyh
             Ok(json!({
                 "status":       200,
                 "body":         merged,
+                "content_type": "application/json; charset=utf-8",
+            }))
+        }
+        "ability" => {
+            // The manifest forwards the request to a real EasyNet
+            // ability — silan's "agent writes a real backend"
+            // case. Body becomes the ability's args verbatim;
+            // ability response becomes the HTTP body.
+            let target = manifest.ability.ok_or_else(|| {
+                anyhow::anyhow!("api manifest kind=ability requires `ability = \"<name>\"`")
+            })?;
+            let body = args.get("body").cloned().unwrap_or(Value::Null);
+            let invoke_args = match body {
+                Value::Null => json!({}),
+                v => v,
+            };
+            // Reach into the live registry directly — we are
+            // already inside the daemon process, so an IPC round
+            // trip would self-deadlock the dispatcher.
+            let handle = DISPATCH_HANDLE.get().ok_or_else(|| {
+                anyhow::anyhow!("dispatch handle not set; pages::register must run at boot")
+            })?;
+            let registry = handle.get().ok_or_else(|| {
+                anyhow::anyhow!("dispatch handle empty; build site forgot to populate OnceLock")
+            })?;
+            // Look up: static registry first, then fallback resolver
+            // chain (this is how chat-agent / pages handlers find
+            // each other through the same `<owner>.<verb>` shape).
+            let handler = registry.get_rpc(&target).cloned().or_else(|| {
+                // chain through the public fallback method
+                registry.resolve_rpc(&target)
+            });
+            let handler = handler.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "ability `{target}` not found in registry. Was it deployed via \
+                     `easynet ability deploy`?"
+                )
+            })?;
+            let result = handler(invoke_args).map_err(|e| {
+                anyhow::anyhow!("ability `{target}` failed: {e}")
+            })?;
+            Ok(json!({
+                "status":       200,
+                "body":         result,
                 "content_type": "application/json; charset=utf-8",
             }))
         }
