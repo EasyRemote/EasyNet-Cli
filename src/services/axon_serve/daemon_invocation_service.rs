@@ -662,6 +662,42 @@ impl DaemonInvocationService {
         }
         false
     }
+
+    /// Agent-aware presence resolution.
+    ///
+    /// Tries `presence.lookup_tracked(target_uri)` first (works for
+    /// device-URI callees, the legacy shape). On miss, if the target
+    /// is an agent URA `agent/<userID>.<agentID>`, consult the
+    /// `AdvertisedAgentStore` populated by inbound
+    /// `federation.advertise_agent` invocations: the device that
+    /// hosts that agent registered its host_uri linkage there.
+    /// Follow `host_uri` and re-lookup against PresenceRegistry.
+    ///
+    /// This is the hub-side half of RFC-006-B v0.6 §URL: a chat-base
+    /// or page.fetch invocation names the user's agent, and the hub
+    /// must route that to whichever device is currently hosting the
+    /// agent. The advertise_agent → host_uri chain encodes that
+    /// "currently hosting" linkage; PresenceRegistry encodes the
+    /// "currently online" bit. AND of the two = "online host of this
+    /// agent".
+    fn lookup_target_with_agent_fallback(
+        &self,
+        target_uri: &str,
+    ) -> Option<(crate::services::presence_registry::PresenceSessionId, DispatchSender)> {
+        if let Some(slot) = self.presence.lookup_tracked(target_uri) {
+            return Some(slot);
+        }
+        // Only attempt the host-URI fallback for agent URAs; bare
+        // device URIs that miss the registry are simply offline.
+        if !matches!(
+            crate::uri::kind_from_ura(target_uri),
+            crate::uri::URAKind::Agent
+        ) {
+            return None;
+        }
+        let host_uri = self.advertised_agents.get(target_uri)?.host_uri()?.to_string();
+        self.presence.lookup_tracked(&host_uri)
+    }
 }
 
 /// Boxed pinned stream type used for both server-stream and
@@ -1936,7 +1972,9 @@ impl DaemonInvocationService {
         &self,
         request: &federation_wrappers::ForwardInvokeRequest,
     ) -> Result<(), Status> {
-        let Some((session_id, sender)) = self.presence.lookup_tracked(&request.target_uri) else {
+        let Some((session_id, sender)) =
+            self.lookup_target_with_agent_fallback(&request.target_uri)
+        else {
             return Err(Status::failed_precondition(
                 federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
             ));
@@ -2196,7 +2234,7 @@ impl DaemonInvocationService {
                  to enable remote file_transfer bridging",
             )
         })?;
-        let (session_id, sender) = self.presence.lookup_tracked(target_uri).ok_or_else(|| {
+        let (session_id, sender) = self.lookup_target_with_agent_fallback(target_uri).ok_or_else(|| {
             Status::failed_precondition(federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON)
         })?;
 
@@ -2914,8 +2952,7 @@ impl DaemonInvocationService {
         })?;
 
         let (target_session_id, target_sender) = self
-            .presence
-            .lookup_tracked(&subject_device)
+            .lookup_target_with_agent_fallback(&subject_device)
             .ok_or_else(|| {
                 Status::not_found(format!(
                     "<self>.invoke_remote: target `{subject_device}` is not in PresenceRegistry; \

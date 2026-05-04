@@ -531,7 +531,7 @@ mod tests {
         assert_eq!(
             node_id_from_agent_uri("easynet:///r/prv/reg/agent.01DEV?tenant_id=acme"),
             None,
-            "v1 reg/agent.<id> shape must not parse as a v4.1.4 device"
+            "legacy reg/agent.<id>?tenant_id=<t> shape is invalid v4.1.5 URA"
         );
     }
 

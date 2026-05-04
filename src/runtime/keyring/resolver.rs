@@ -236,13 +236,13 @@ mod tests {
     #[test]
     fn local_resolver_finds_bound_entry() {
         let (h, _dir) = handle();
-        let subject = "easynet:///r/prv/reg/agent.foo".to_string();
+        let subject = "easynet:///r/test.local/agent/u.foo".to_string();
         h.create_entry("agent_signing", Some(subject.clone()))
             .unwrap();
         let r = LocalKeyringResolver::new(h);
         assert!(r.resolve(&subject).is_ok());
         assert!(matches!(
-            r.resolve("easynet:///r/prv/reg/agent.unknown").unwrap_err(),
+            r.resolve("easynet:///r/test.local/agent/u.unknown").unwrap_err(),
             KeyResolveError::Unknown
         ));
     }
@@ -252,16 +252,16 @@ mod tests {
         let (h, _dir) = handle();
         let entry = h.create_entry("agent_signing", None).unwrap();
         h.peer_add(
-            "easynet:///r/org/reg/agent.alice",
+            "easynet:///r/test.local/agent/u.alice",
             &entry.public_key_b64,
             None,
             None,
         )
         .unwrap();
         let r = PeerKeyringResolver::new(h);
-        assert!(r.resolve("easynet:///r/org/reg/agent.alice").is_ok());
+        assert!(r.resolve("easynet:///r/test.local/agent/u.alice").is_ok());
         assert!(matches!(
-            r.resolve("easynet:///r/org/reg/agent.bob").unwrap_err(),
+            r.resolve("easynet:///r/test.local/agent/u.bob").unwrap_err(),
             KeyResolveError::Unknown
         ));
     }
@@ -271,17 +271,17 @@ mod tests {
         let (h, _dir) = handle();
         let entry = h.create_entry("agent_signing", None).unwrap();
         h.peer_add(
-            "easynet:///r/org/reg/agent.alice",
+            "easynet:///r/test.local/agent/u.alice",
             &entry.public_key_b64,
             None,
             None,
         )
         .unwrap();
         let chain = default_chain(h);
-        assert!(chain.resolve("easynet:///r/org/reg/agent.alice").is_ok());
+        assert!(chain.resolve("easynet:///r/test.local/agent/u.alice").is_ok());
         assert!(matches!(
             chain
-                .resolve("easynet:///r/prv/reg/agent.unknown")
+                .resolve("easynet:///r/test.local/agent/u.unknown")
                 .unwrap_err(),
             KeyResolveError::Unknown
         ));

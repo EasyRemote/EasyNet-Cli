@@ -645,17 +645,20 @@ fn hub_invoke_endpoint(raw: &str) -> Result<String, String> {
 }
 
 fn ability_name_from_resource_uri(resource_uri: &str) -> Option<String> {
-    let tail = resource_uri.split("/abilities/").nth(1)?;
-    let without_query = tail.split('?').next().unwrap_or(tail);
-    let ability = without_query
-        .split('@')
-        .next()
-        .unwrap_or(without_query)
-        .trim();
-    if ability.is_empty() {
+    // v4.1.5: ability URIs are
+    // `easynet:///r/<realm>/ability/<owner>.<agent>.<verb>`. Hub-rooted
+    // abilities use owner=01HUB convention. The "ability name" surfaced
+    // here for routing decisions is `<agent>.<verb>` (everything after
+    // the owner segment), e.g. "federation.advertise_agent" for
+    // "01HUB.federation.advertise_agent".
+    let parsed = crate::uri::parse_ura(resource_uri).ok()?;
+    if parsed.kind != crate::uri::URAKind::Ability {
         return None;
     }
-    Some(ability.to_string())
+    if parsed.agent_id.is_empty() || parsed.ability_id.is_empty() {
+        return None;
+    }
+    Some(format!("{}.{}", parsed.agent_id, parsed.ability_id))
 }
 
 fn direct_hub_trust_match(endpoint_url: &str) -> Option<Option<std::path::PathBuf>> {
@@ -2142,10 +2145,12 @@ mod tests {
     }
 
     #[test]
-    fn ability_name_from_resource_uri_extracts_name_without_version_or_query() {
+    fn ability_name_from_resource_uri_extracts_v4_1_5_ability_id() {
+        // v4.1.5 hub-rooted ability: owner=01HUB, agent=federation,
+        // verb=advertise_agent → ability_id = "federation.advertise_agent".
         assert_eq!(
             ability_name_from_resource_uri(
-                "easynet:///r/prv/hub/acme/abilities/federation.advertise_agent@1?tenant_id=acme"
+                "easynet:///r/acme/ability/01HUB.federation.advertise_agent"
             )
             .as_deref(),
             Some("federation.advertise_agent")

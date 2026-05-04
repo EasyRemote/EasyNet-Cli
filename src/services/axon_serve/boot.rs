@@ -958,18 +958,18 @@ fn canonical_caller_uri_from_stored_identity(stored: &StoredDeviceIdentity) -> O
         .map(str::to_string)
 }
 
-// URI v4.1.4: strict parsing via crate::uri::parse_ura, replacing
-// the v1-era wide is_role_segment / hand-rolled segment walks. The
-// daemon's stored caller URI in v4.1.4 is always
-// `easynet:///r/<realm>/device/<device-uuid>` (device-mode CLI's
-// self-identity URA), so we only need to match that one shape.
+// URI v4.1.5: strict parsing via crate::uri::parse_ura per memory
+// `feedback_no_legacy_ura.md`. The daemon's stored caller URI in
+// v4.1.5 is always `easynet:///r/<realm>/device/<device-uuid>`
+// (device-mode CLI's self-identity URA), so we only need to match
+// that one shape.
 //
-// Legacy `easynet:///r/<realm>/reg/agent.<id>?tenant_id=<t>` shapes
-// (URI v1 fallback) and `agent/<id>` shapes (URI v2 transitional)
-// are rejected — pre-v4.1.4 credential files cannot bootstrap
-// signing seeds; users must `easynet device join` again to mint a
-// v4.1.4 credential. Returning `None` triggers the parent code's
-// "skip signing seed" branch (CLI starts unsigned, harmless in dev).
+// Legacy `r/{prv,org}/reg/agent.<id>?tenant_id=<t>` (URI v1) and
+// `agent/<bare-id>` (URI v2 transitional) shapes are rejected —
+// pre-v4.1.5 credential files cannot bootstrap signing seeds; users
+// must `easynet device join` again to mint a v4.1.5 credential.
+// Returning `None` triggers the parent code's "skip signing seed"
+// branch (CLI starts unsigned, harmless in dev).
 
 fn realm_from_agent_uri(uri: &str) -> Option<String> {
     let parsed = crate::uri::parse_ura(uri).ok()?;
