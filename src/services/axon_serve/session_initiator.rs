@@ -549,7 +549,26 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
             .and_then(|s| s.split_once('/'))
             .map(|(r, _)| r.to_string())
             .unwrap_or_default();
-        let user_segment = std::env::var("EASYNET_PAGES_USER").unwrap_or_default();
+        // user_segment resolution order (most authoritative first):
+        //   1. EASYNET_PAGES_USER env — explicit operator override,
+        //      used in the docker e2e harness + multi-user dev rigs.
+        //   2. credentials.json `username` — set by `easynet device join`
+        //      after the backend resolves the pairing token to a user
+        //      account. This is the production path on silan's Mac.
+        // Empty means "no joined user identity available"; the
+        // hosted-agent advertise prelude is a no-op in that case
+        // (caller is in a transitional state and will republish on
+        // reconnect once credentials are present).
+        let user_segment = std::env::var("EASYNET_PAGES_USER")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .or_else(|| {
+                crate::persistence::config::load_credentials()
+                    .ok()
+                    .and_then(|c| c.username)
+                    .filter(|v| !v.is_empty())
+            })
+            .unwrap_or_default();
         let mut owners: std::collections::BTreeSet<String> =
             std::collections::BTreeSet::new();
         for name in ability_catalog {
