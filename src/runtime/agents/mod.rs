@@ -246,12 +246,68 @@ use crate::runtime::execution::pty::PtyService;
 use crate::runtime::execution::schedule::ScheduleService;
 use crate::runtime::execution::session::SessionService;
 
+/// Identity + configuration the registry build needs to mint
+/// user-rooted ability families (pages, files, api_key). The
+/// `<user>` slot is sourced explicitly so the registry build is
+/// pure — no global env-var reads, no thread-locals, no implicit
+/// dependence on credentials.json. Production callers
+/// (`bin/easynet-daemon.rs`, supervisor reboots) read
+/// EASYNET_PAGES_USER + credentials.json once at boot and pass
+/// the resolved value here. Tests that exercise the user-rooted
+/// surface pass a fixed username; unpaired-daemon tests pass
+/// `None` and the family stays unregistered.
+#[derive(Debug, Clone, Default)]
+pub struct PagesIdentity {
+    /// Username segment for `<user>.api_key.*` / `<user>.pages.*` /
+    /// `<user>.files.*`. `None` means "this daemon isn't paired
+    /// yet" — the user-rooted families are skipped (no
+    /// `self.api_key.*` placeholder leak).
+    pub user: Option<String>,
+    /// Realm the user-rooted handlers stamp into URAs. Defaults
+    /// to `crate::uri::REALM_EASYNET`.
+    pub realm: Option<String>,
+    /// HTTP listener port for the pages server. `None` falls back
+    /// to the historical 8787.
+    pub listener_port: Option<u16>,
+}
+
+impl PagesIdentity {
+    /// Resolve from the boot-time env vars. Read ONCE at process
+    /// startup; downstream callers receive the resolved struct.
+    /// Tests should not call this — they construct
+    /// `PagesIdentity` directly so the registry shape is
+    /// deterministic regardless of process env state.
+    pub fn from_env() -> Self {
+        let user = std::env::var("EASYNET_PAGES_USER")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .or_else(|| {
+                crate::persistence::config::load_credentials()
+                    .ok()
+                    .and_then(|c| c.username)
+                    .filter(|v| !v.is_empty())
+            });
+        Self {
+            user,
+            realm: std::env::var("EASYNET_PAGES_REALM").ok().filter(|v| !v.is_empty()),
+            listener_port: std::env::var("EASYNET_PAGES_PORT")
+                .ok()
+                .and_then(|s| s.parse::<u16>().ok()),
+        }
+    }
+}
+
 /// Build a `LocalAbilityRegistry` populated with every v1 system
 /// ability handler. Suitable for early-boot smoke tests + the
 /// `published_ability_names` helper that the discovery publisher
 /// consumes. Tests get fresh empty sub-services and an empty agent
 /// registry; the daemon bin calls `build_registry_with_services`
 /// instead with its real Kernel handles + loaded agents.
+///
+/// **No env-var read**: the registry shape is determined by the
+/// arguments alone. Tests that don't care about the user-rooted
+/// surface pass a default `PagesIdentity` (user = None) and get
+/// a deterministic catalogue regardless of any leaked env state.
 pub fn build_registry() -> Arc<LocalAbilityRegistry> {
     build_registry_with_services(
         Arc::new(SessionService::new()),
@@ -261,6 +317,7 @@ pub fn build_registry() -> Arc<LocalAbilityRegistry> {
         Arc::new(LoopService::new()),
         &AgentRegistry::default(),
         Arc::new(Vec::new()),
+        PagesIdentity::default(),
     )
 }
 
@@ -281,6 +338,7 @@ pub fn build_registry_with_services(
     loop_svc: Arc<LoopService>,
     agents: &AgentRegistry,
     loaders: Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>,
+    pages_identity: PagesIdentity,
 ) -> Arc<LocalAbilityRegistry> {
     let mut reg = LocalAbilityRegistry::new();
     ping::register(&mut reg);
@@ -430,36 +488,44 @@ pub fn build_registry_with_services(
     // into the keyring resolver. Listener port comes from
     // `EASYNET_PAGES_PORT` (default 8787).
     {
-        let user = std::env::var("EASYNET_PAGES_USER")
-            .unwrap_or_else(|_| "self".to_string());
-        let realm = std::env::var("EASYNET_PAGES_REALM")
-            .unwrap_or_else(|_| crate::uri::REALM_EASYNET.to_string());
-        let listener_port = std::env::var("EASYNET_PAGES_PORT")
-            .ok()
-            .and_then(|s| s.parse::<u16>().ok())
-            .unwrap_or(8787);
-        let pages_realm = realm.clone();
-        pages::register(
-            &mut reg,
-            pages::PagesConfig { user: user.clone(), realm, listener_port },
-            Arc::clone(&local_registry_handle),
-        );
-        // Files reference system: content-addressed blob store
-        // serving `/v1/files{,/<id>/content}` + chat-multimodal URA
-        // dereferences. Same `<user>` identity as pages so one
-        // user owns both surface families.
-        files::register(
-            &mut reg,
-            files::FilesConfig { user: user.clone(), realm: pages_realm },
-        );
-        // RFC-006-C v0.1 — API key abilities. Register under the
-        // same `user` identity pages used so a single user owns
-        // both surface families on this daemon.
-        api_key_ability::register(&mut reg, &user);
-        // RFC-006-C v0.1 — OpenAI adapter abilities (hub-rooted).
-        // Wire the dispatch handle so the adapter can invoke
-        // chat-base abilities directly through the in-process
-        // registry (avoiding IPC self-deadlock).
+        // User-rooted ability families (`<user>.api_key.*`,
+        // `<user>.pages.*`, `<user>.files.*`). Identity sourced
+        // explicitly from the `pages_identity` argument — no
+        // env-var read here.
+        //
+        // M5 of the system-namespace migration banned the `<self>`
+        // placeholder; an unpaired daemon (`pages_identity.user`
+        // is None) skips the user-rooted family entirely. The
+        // ability surface returns once pairing completes and the
+        // supervisor rebuilds the registry with a populated
+        // identity.
+        if let Some(user) = pages_identity.user.clone() {
+            let realm = pages_identity
+                .realm
+                .clone()
+                .unwrap_or_else(|| crate::uri::REALM_EASYNET.to_string());
+            let listener_port = pages_identity.listener_port.unwrap_or(8787);
+            let pages_realm = realm.clone();
+            pages::register(
+                &mut reg,
+                pages::PagesConfig { user: user.clone(), realm, listener_port },
+                Arc::clone(&local_registry_handle),
+            );
+            // Files reference system: content-addressed blob store
+            // serving `/v1/files{,/<id>/content}` + chat-multimodal
+            // URA dereferences. Same `<user>` identity as pages so
+            // one user owns both surface families.
+            files::register(
+                &mut reg,
+                files::FilesConfig { user: user.clone(), realm: pages_realm },
+            );
+            // RFC-006-C v0.1 — API key abilities. Register under the
+            // same `user` identity pages used so a single user owns
+            // both surface families on this daemon.
+            api_key_ability::register(&mut reg, &user);
+        }
+        // RFC-006-C v0.1 — device-local OpenAI shim. Device-owned,
+        // no `<user>` slot — registers regardless of pairing state.
         openai_compat_ability::set_dispatch_handle(Arc::clone(&local_registry_handle));
         openai_compat_ability::register(&mut reg);
     }
@@ -550,8 +616,8 @@ pub fn build_registry_with_services(
         );
     }
 
-    // RFC-002 §3.3: register `<self>.keyring.*` for the daemon's
-    // own self-bundle, scoped under the literal owner `<self>`.
+    // RFC-002 §3.3: register `device.keyring.*` for the daemon's
+    // own self-bundle, scoped under the literal owner `device`.
     // The daemon publishes its 10 keyring abilities under this
     // namespace so any local agent can call them through the
     // standard dispatch path. Auto-init the on-disk store when
@@ -562,16 +628,23 @@ pub fn build_registry_with_services(
     // resolver layer copes with absence by treating every URA
     // as Unknown.
     //
+    // The legacy owner string was `<self>` — a "this device"
+    // alias. v4.1.5 onward names the actor explicitly: keyring
+    // belongs to the device, so the owner is `device`. The
+    // catalogue now lists these as `device.keyring.<verb>`,
+    // matching the URA `callee = device/<id>` that already
+    // covers them.
+    //
     // EASYNET_KEYRING_DISABLE=1 skips auto-init entirely. Tests
     // that don't want side effects on the user's real keyring
     // file set this; production daemons leave it unset.
     if std::env::var("EASYNET_KEYRING_DISABLE").is_err() {
         match init_keyring_for_daemon() {
             Ok(handle) => {
-                crate::runtime::keyring::abilities::register_for_owner(&mut reg, "<self>", handle);
+                crate::runtime::keyring::abilities::register_for_owner(&mut reg, "device", handle);
             }
             Err(e) => {
-                eprintln!("warn: keyring auto-init failed; <self>.keyring.* unavailable: {e}");
+                eprintln!("warn: keyring auto-init failed; device.keyring.* unavailable: {e}");
             }
         }
     }
@@ -587,6 +660,7 @@ pub fn build_registry_with_services(
         &mut reg,
         profiles::load_host_descriptors,
         Arc::clone(&local_registry_handle),
+        pages_identity.user.clone(),
     );
     // a2a.bridge.list_skills — same edge-adapter pattern as the MCP
     // bridge above, but for the A2A agent-card surface. Closes over
@@ -723,6 +797,7 @@ pub fn build_registry_for_daemon(
     schedule: Arc<ScheduleService>,
     loop_svc: Arc<LoopService>,
     loaders: Option<Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>>,
+    pages_identity: PagesIdentity,
 ) -> Arc<LocalAbilityRegistry> {
     let agents = match crate::registry::agents::load_agents() {
         Ok(r) => r,
@@ -737,7 +812,7 @@ pub fn build_registry_for_daemon(
     let loaders = loaders
         .unwrap_or_else(|| Arc::new(context_loaders::default_loaders(Arc::clone(&schedule))));
     build_registry_with_services(
-        sessions, perms, discuss, schedule, loop_svc, &agents, loaders,
+        sessions, perms, discuss, schedule, loop_svc, &agents, loaders, pages_identity,
     )
 }
 
@@ -749,8 +824,60 @@ pub fn build_registry_for_daemon(
 ///
 /// The list is built from the live registry to avoid name drift
 /// between the publisher and the dispatcher.
+///
+/// **M2 of the system-namespace migration**: at M1 every system
+/// ability registered both a legacy name (e.g. `fs.read`) and a
+/// canonical name (e.g. `device.fs.read`); the registry's
+/// `list_abilities()` returns both. This function FILTERS to
+/// canonical-only at M2 — legacy entries become hidden aliases
+/// for inbound dispatch only and are no longer advertised on the
+/// hub agent roster, the TOML manifest catalogue, or the LLM
+/// discover surface. The `is_canonical_or_unmapped` predicate
+/// retains every name whose first segment is in
+/// `{device, hub, <agent-id>, <user-id>}` (canonical / per-agent
+/// / per-user) and drops legacy first segments belonging to the
+/// closed system-namespace set.
+///
+/// At M3 the legacy entries are removed entirely from the
+/// registry; the filter then becomes a no-op.
 pub fn published_ability_names() -> Vec<String> {
-    build_registry().list_abilities()
+    build_registry()
+        .list_abilities()
+        .into_iter()
+        .filter(|name| is_canonical_or_unmapped(name))
+        .collect()
+}
+
+/// True iff `name` is a canonical post-M2 ability name (or a name
+/// without a legacy/canonical pair, e.g. per-agent / per-user
+/// verbs that always lived under their owner's prefix).
+///
+/// Drops the closed set of legacy first-segments that the M1
+/// dual-aliasing covers — those names are still dispatchable
+/// (M1 retained both bindings) but should not appear in any
+/// catalogue surface that publishes "what to call". Public
+/// surfaces (advertise prelude, TOML manifests, MCP bridge,
+/// LLM discover) emit canonical only; legacy continues to work
+/// for any caller that has them hard-coded, but isn't
+/// advertised.
+///
+/// `M3` deletes the legacy registrations entirely; this filter
+/// becomes a no-op then.
+pub fn is_canonical_or_unmapped(name: &str) -> bool {
+    // Legacy first-segments — closed set per M1 mapping table.
+    // Names with these heads are filtered OUT (legacy alias of
+    // a canonical pair).
+    const LEGACY_HEADS: &[&str] = &[
+        "fs", "http", "shell", "process", "fleet", "observe", "admin", "easynet", "meta",
+        "mission", "schedule", "loop", "discuss", "mcp", "a2a", "policy", "ability", "camera",
+        "mic", "screen", "speaker", "voice", "skill", "consent", "01HUB",
+    ];
+    if let Some((head, _)) = name.split_once('.') {
+        if LEGACY_HEADS.contains(&head) {
+            return false;
+        }
+    }
+    true
 }
 
 /// One row of a system ability's discovery + registration metadata.
@@ -784,11 +911,11 @@ pub fn published_abilities() -> Vec<SystemAbilityMetadata> {
         .into_iter()
         .filter(|name| !name.ends_with(".chat"))
         // RFC-002 §3.3 keyring abilities are owner-namespaced under
-        // `<self>` and self-described by `keyring::abilities` — they
+        // `device` and self-described by `keyring::abilities` — they
         // don't go through the system descriptor table. Filter them
         // for the same reason `<agent>.chat` is filtered: their
         // schema lives inside the registering module, not here.
-        .filter(|name| !name.starts_with("<self>.keyring."))
+        .filter(|name| !name.starts_with("device.keyring."))
         .map(|name| SystemAbilityMetadata {
             description: description_for(&name),
             input_schema: input_schema_for(&name),
@@ -808,97 +935,97 @@ pub fn published_abilities() -> Vec<SystemAbilityMetadata> {
 /// filter strips them, but other callers may not).
 pub fn description_for(name: &str) -> &'static str {
     match name {
-        "observe.health" => ping::description(),
-        "observe.network_health" => network_health_ability::description(),
-        "policy.evaluate" => policy_ability::evaluate_description(),
-        "policy.simulate" => policy_ability::simulate_description(),
-        "fleet.list_sessions" => session_ability::list_description(),
-        "fleet.attach_session" => session_ability::attach_description(),
-        "consent.subscribe" => permission_ability::subscribe_description(),
-        "consent.decide" => permission_ability::decide_description(),
-        "consent.list_pending" => permission_ability::list_pending_description(),
-        "discuss.create" => discuss_ability::create_description(),
-        "discuss.post" => discuss_ability::post_description(),
-        "discuss.subscribe" => discuss_ability::subscribe_description(),
-        "discuss.list_turns" => discuss_ability::list_turns_description(),
-        "schedule.add" => schedule_ability::add_description(),
-        "schedule.list" => schedule_ability::list_description(),
-        "schedule.remove" => schedule_ability::remove_description(),
-        "schedule.enable" => schedule_ability::enable_description(),
-        "loop.create" => loop_ability::create_description(),
-        "loop.status" => loop_ability::status_description(),
-        "loop.subscribe" => loop_ability::subscribe_description(),
-        "loop.cancel" => loop_ability::cancel_description(),
-        "fleet.list_abilities" => skill_ability::list_description(),
-        "fleet.skill_install" => skill_install_ability::install_description(),
-        "fleet.skill_remove" => skill_install_ability::remove_description(),
-        "fleet.skill_upgrade" => skill_install_ability::upgrade_description(),
-        "mcp.bridge.list_tools" => mcp_bridge_ability::list_tools_description(),
-        "mcp.bridge.call_tool" => mcp_bridge_ability::call_tool_description(),
-        "a2a.bridge.list_skills" => a2a_bridge_ability::list_skills_description(),
-        "a2a.bridge.send_task" => a2a_bridge_ability::send_task_description(),
-        "a2a.client.send_task" => a2a_client_ability::send_task_description(),
-        "mcp.client.list" => mcp_client_ability::list_description(),
-        "mcp.client.call" => mcp_client_ability::call_description(),
-        "fleet.list_agents" => fleet_list_agents_ability::list_agents_description(),
-        "meta.describe" => meta_ability::describe_description(),
-        "meta.list_abilities" => meta_ability::list_abilities_description(),
+        "device.observe.health" => ping::description(),
+        "device.observe.network_health" => network_health_ability::description(),
+        "device.policy.evaluate" => policy_ability::evaluate_description(),
+        "device.policy.simulate" => policy_ability::simulate_description(),
+        "device.fleet.list_sessions" => session_ability::list_description(),
+        "device.fleet.attach_session" => session_ability::attach_description(),
+        "device.consent.subscribe" => permission_ability::subscribe_description(),
+        "device.consent.decide" => permission_ability::decide_description(),
+        "device.consent.list_pending" => permission_ability::list_pending_description(),
+        "device.discuss.create" => discuss_ability::create_description(),
+        "device.discuss.post" => discuss_ability::post_description(),
+        "device.discuss.subscribe" => discuss_ability::subscribe_description(),
+        "device.discuss.list_turns" => discuss_ability::list_turns_description(),
+        "device.schedule.add" => schedule_ability::add_description(),
+        "device.schedule.list" => schedule_ability::list_description(),
+        "device.schedule.remove" => schedule_ability::remove_description(),
+        "device.schedule.enable" => schedule_ability::enable_description(),
+        "device.loop.create" => loop_ability::create_description(),
+        "device.loop.status" => loop_ability::status_description(),
+        "device.loop.subscribe" => loop_ability::subscribe_description(),
+        "device.loop.cancel" => loop_ability::cancel_description(),
+        "device.fleet.list_abilities" => skill_ability::list_description(),
+        "device.fleet.skill_install" => skill_install_ability::install_description(),
+        "device.fleet.skill_remove" => skill_install_ability::remove_description(),
+        "device.fleet.skill_upgrade" => skill_install_ability::upgrade_description(),
+        "device.mcp.bridge.list_tools" => mcp_bridge_ability::list_tools_description(),
+        "device.mcp.bridge.call_tool" => mcp_bridge_ability::call_tool_description(),
+        "device.a2a.bridge.list_skills" => a2a_bridge_ability::list_skills_description(),
+        "device.a2a.bridge.send_task" => a2a_bridge_ability::send_task_description(),
+        "device.a2a.client.send_task" => a2a_client_ability::send_task_description(),
+        "device.mcp.client.list" => mcp_client_ability::list_description(),
+        "device.mcp.client.call" => mcp_client_ability::call_description(),
+        "device.fleet.list_agents" => fleet_list_agents_ability::list_agents_description(),
+        "device.meta.describe" => meta_ability::describe_description(),
+        "device.meta.list_abilities" => meta_ability::list_abilities_description(),
         // `easynet.discover` is the canonical user-facing alias for
         // meta.list_abilities. The handler is the same; the
         // description points at the alias deliberately so a peer
         // browsing the catalogue with `meta.list_abilities` and one
         // browsing with `easynet.discover` see the same prose.
-        "easynet.discover" => meta_ability::list_abilities_description(),
-        "easynet.run" => mission_ability::run_description(),
-        "mission.run" => mission_ability::run_description(),
-        "easynet.track" => mission_ability::track_description(),
-        "easynet.cancel" => mission_ability::cancel_description(),
+        "device.easynet.discover" => meta_ability::list_abilities_description(),
+        "device.easynet.run" => mission_ability::run_description(),
+        "device.mission.run" => mission_ability::run_description(),
+        "device.easynet.track" => mission_ability::track_description(),
+        "device.easynet.cancel" => mission_ability::cancel_description(),
         // AXIOM §"Tier 2.5" Baseline Locomotion — filesystem half.
-        "fs.read" => fs_ability::description_read(),
-        "fs.write" => fs_ability::description_write(),
-        "fs.list" => fs_ability::description_list(),
-        "fs.edit" => fs_edit_ability::description(),
-        "process.exec" => process_exec_ability::description(),
-        "shell.run" => shell_run_ability::description(),
-        "http.request" => http_request_ability::description(),
-        "fleet.session_create" | "fleet.pty_session_create" => {
+        "device.fs.read" => fs_ability::description_read(),
+        "device.fs.write" => fs_ability::description_write(),
+        "device.fs.list" => fs_ability::description_list(),
+        "device.fs.edit" => fs_edit_ability::description(),
+        "device.process.exec" => process_exec_ability::description(),
+        "device.shell.run" => shell_run_ability::description(),
+        "device.http.request" => http_request_ability::description(),
+        "device.fleet.session_create" | "device.fleet.pty_session_create" => {
             pty_lifecycle_ability::description_create()
         }
-        "fleet.session_close" | "fleet.pty_session_close" => {
+        "device.fleet.session_close" | "device.fleet.pty_session_close" => {
             pty_lifecycle_ability::description_close()
         }
-        "fleet.session_attach" | "fleet.pty_session_attach" => pty_attach_ability::description(),
-        "fleet.session_input" | "fleet.pty_session_input" => pty_io_ability::input_description(),
-        "fleet.session_read" | "fleet.pty_session_read" => pty_io_ability::read_description(),
-        "fleet.session_resize" | "fleet.pty_session_resize" => pty_io_ability::resize_description(),
-        "fleet.file_transfer" => file_transfer_ability::description(),
-        "fleet.start_agent" => fleet_lifecycle_ability::start_agent_description(),
-        "fleet.stop_agent" => fleet_lifecycle_ability::stop_agent_description(),
-        "fleet.list_nodes" => fleet_ops_ability::list_nodes_description(),
-        "fleet.describe_node" => fleet_ops_ability::describe_node_description(),
+        "device.fleet.session_attach" | "device.fleet.pty_session_attach" => pty_attach_ability::description(),
+        "device.fleet.session_input" | "device.fleet.pty_session_input" => pty_io_ability::input_description(),
+        "device.fleet.session_read" | "device.fleet.pty_session_read" => pty_io_ability::read_description(),
+        "device.fleet.session_resize" | "device.fleet.pty_session_resize" => pty_io_ability::resize_description(),
+        "device.fleet.file_transfer" => file_transfer_ability::description(),
+        "device.fleet.start_agent" => fleet_lifecycle_ability::start_agent_description(),
+        "device.fleet.stop_agent" => fleet_lifecycle_ability::stop_agent_description(),
+        "device.fleet.list_nodes" => fleet_ops_ability::list_nodes_description(),
+        "device.fleet.describe_node" => fleet_ops_ability::describe_node_description(),
         "device.describe" => device_describe_ability::description(),
-        "fleet.remove_node" => fleet_ops_ability::remove_node_description(),
-        "fleet.deploy_ability" => fleet_ops_ability::deploy_ability_description(),
-        "fleet.uninstall_ability" => fleet_ops_ability::uninstall_ability_description(),
-        "fleet.exec_remote" => fleet_ops_ability::exec_remote_description(),
-        "fleet.register_self" => fleet_ops_ability::register_self_description(),
-        "fleet.deregister_self" => fleet_ops_ability::deregister_self_description(),
-        "mission.discuss_round" => orchestration_ability::discuss_round_description(),
-        "voice.create_call" => voice_call_ability::create_call_description(),
-        "voice.show_call" => voice_call_ability::show_call_description(),
-        "voice.join_call" => voice_call_ability::join_call_description(),
-        "voice.leave_call" => voice_call_ability::leave_call_description(),
-        "voice.end_call" => voice_call_ability::end_call_description(),
-        "voice.watch_call" => voice_call_ability::watch_call_description(),
-        "voice.report_metrics" => voice_call_ability::report_metrics_description(),
-        "voice.list_calls" => voice_call_ability::list_calls_description(),
-        "admin.status" => admin_status_ability::description(),
-        "ability.publish" => ability_publish_ability::publish_description(),
-        "ability.unpublish" => ability_publish_ability::unpublish_description(),
-        "skill.publish" => skill_publish_ability::publish_description(),
-        "skill.unpublish" => skill_publish_ability::unpublish_description(),
-        "skill.list" => skill_publish_ability::list_description(),
-        "mission.think" => think_ability::description(),
+        "device.fleet.remove_node" => fleet_ops_ability::remove_node_description(),
+        "device.fleet.deploy_ability" => fleet_ops_ability::deploy_ability_description(),
+        "device.fleet.uninstall_ability" => fleet_ops_ability::uninstall_ability_description(),
+        "device.fleet.exec_remote" => fleet_ops_ability::exec_remote_description(),
+        "device.fleet.register_self" => fleet_ops_ability::register_self_description(),
+        "device.fleet.deregister_self" => fleet_ops_ability::deregister_self_description(),
+        "device.mission.discuss_round" => orchestration_ability::discuss_round_description(),
+        "device.voice.create_call" => voice_call_ability::create_call_description(),
+        "device.voice.show_call" => voice_call_ability::show_call_description(),
+        "device.voice.join_call" => voice_call_ability::join_call_description(),
+        "device.voice.leave_call" => voice_call_ability::leave_call_description(),
+        "device.voice.end_call" => voice_call_ability::end_call_description(),
+        "device.voice.watch_call" => voice_call_ability::watch_call_description(),
+        "device.voice.report_metrics" => voice_call_ability::report_metrics_description(),
+        "device.voice.list_calls" => voice_call_ability::list_calls_description(),
+        "device.admin.status" => admin_status_ability::description(),
+        "device.ability.publish" => ability_publish_ability::publish_description(),
+        "device.ability.unpublish" => ability_publish_ability::unpublish_description(),
+        "device.skill.publish" => skill_publish_ability::publish_description(),
+        "device.skill.unpublish" => skill_publish_ability::unpublish_description(),
+        "device.skill.list" => skill_publish_ability::list_description(),
+        "device.mission.think" => think_ability::description(),
         // RFC-005 v3.2 A1–A8 — media abilities. `media_abilities`
         // owns the single source of truth (the `ABILITIES` table);
         // the projection here is one Option lookup, no per-name
@@ -910,7 +1037,44 @@ pub fn description_for(name: &str) -> &'static str {
         list_resources_ability::ABILITY_META_LIST_RESOURCES => {
             list_resources_ability::description()
         }
+        // RFC-006-C v0.1 — device-local OpenAI protocol shim. The
+        // handler runs on this host and only sees host-local
+        // chat-base abilities; there is no hub round-trip in the
+        // call path. Hub-side OpenAI adapters (if any realm hub
+        // chooses to advertise them) live behind `hub.openai.*`,
+        // queried through `federation.resolve` — the device daemon
+        // never pre-registers a `hub.*` name.
+        "device.openai.chat_completions" => {
+            "OpenAI-compatible /v1/chat/completions served by the \
+             device daemon. Forwards a chat-completion request to a \
+             host-local chat-base ability (`<agent>.chat`) and \
+             projects the streaming/non-streaming reply into \
+             OpenAI's response shape."
+        }
+        "device.openai.list_models" => {
+            "OpenAI-compatible /v1/models served by the device daemon. \
+             Returns every host-local chat-base ability \
+             (`<agent>.chat`) the calling identity has dispatch grants \
+             on, projected as OpenAI `Model` objects."
+        }
         _ if name.ends_with(".chat") => "Send a chat prompt to the locally-installed agent.",
+        // `<user>.api_key.{create,list,revoke}` — user-rooted
+        // credential-lifecycle abilities. `<user>` is the active
+        // identity at registry-build time (uuid in prod,
+        // `"test"` in fixtures); the description must match by
+        // suffix rather than full name so a new user doesn't
+        // silently fall through to "(system ability)".
+        _ if name.ends_with(".api_key.create") => {
+            "Issue a new API key for the calling user. Returns the bearer secret once; \
+             the daemon stores only a hashed fingerprint."
+        }
+        _ if name.ends_with(".api_key.list") => {
+            "List the calling user's API keys (fingerprints + metadata, no secrets)."
+        }
+        _ if name.ends_with(".api_key.revoke") => {
+            "Revoke an API key by its fingerprint. The bearer is rejected immediately on \
+             every subsequent call."
+        }
         _ => "(system ability)",
     }
 }
@@ -927,94 +1091,94 @@ pub fn description_for(name: &str) -> &'static str {
 /// against the live registry to surface that drift.
 pub fn input_schema_for(name: &str) -> serde_json::Value {
     match name {
-        "observe.health" => ping::input_schema(),
-        "observe.network_health" => network_health_ability::input_schema(),
-        "policy.evaluate" => policy_ability::evaluate_input_schema(),
-        "policy.simulate" => policy_ability::simulate_input_schema(),
-        "fleet.list_sessions" => session_ability::list_input_schema(),
-        "fleet.attach_session" => session_ability::attach_input_schema(),
-        "consent.subscribe" => permission_ability::subscribe_input_schema(),
-        "consent.decide" => permission_ability::decide_input_schema(),
-        "consent.list_pending" => permission_ability::list_pending_input_schema(),
-        "discuss.create" => discuss_ability::create_input_schema(),
-        "discuss.post" => discuss_ability::post_input_schema(),
-        "discuss.subscribe" => discuss_ability::subscribe_input_schema(),
-        "discuss.list_turns" => discuss_ability::list_turns_input_schema(),
-        "schedule.add" => schedule_ability::add_input_schema(),
-        "schedule.list" => schedule_ability::list_input_schema(),
-        "schedule.remove" => schedule_ability::remove_input_schema(),
-        "schedule.enable" => schedule_ability::enable_input_schema(),
-        "loop.create" => loop_ability::create_input_schema(),
-        "loop.status" => loop_ability::status_input_schema(),
-        "loop.subscribe" => loop_ability::subscribe_input_schema(),
-        "loop.cancel" => loop_ability::cancel_input_schema(),
-        "fleet.list_abilities" => skill_ability::list_input_schema(),
-        "fleet.skill_install" => skill_install_ability::install_input_schema(),
-        "fleet.skill_remove" => skill_install_ability::remove_input_schema(),
-        "fleet.skill_upgrade" => skill_install_ability::upgrade_input_schema(),
-        "mcp.bridge.list_tools" => mcp_bridge_ability::list_tools_input_schema(),
-        "mcp.bridge.call_tool" => mcp_bridge_ability::call_tool_input_schema(),
-        "a2a.bridge.list_skills" => a2a_bridge_ability::list_skills_input_schema(),
-        "a2a.bridge.send_task" => a2a_bridge_ability::send_task_input_schema(),
-        "a2a.client.send_task" => a2a_client_ability::send_task_input_schema(),
-        "mcp.client.list" => mcp_client_ability::list_input_schema(),
-        "mcp.client.call" => mcp_client_ability::call_input_schema(),
-        "fleet.list_agents" => fleet_list_agents_ability::list_agents_input_schema(),
-        "meta.describe" => meta_ability::describe_input_schema(),
-        "meta.list_abilities" => meta_ability::list_abilities_input_schema(),
-        "easynet.discover" => meta_ability::list_abilities_input_schema(),
-        "easynet.run" => mission_ability::run_input_schema(),
-        "mission.run" => mission_ability::run_input_schema(),
-        "easynet.track" => mission_ability::track_input_schema(),
-        "easynet.cancel" => mission_ability::cancel_input_schema(),
+        "device.observe.health" => ping::input_schema(),
+        "device.observe.network_health" => network_health_ability::input_schema(),
+        "device.policy.evaluate" => policy_ability::evaluate_input_schema(),
+        "device.policy.simulate" => policy_ability::simulate_input_schema(),
+        "device.fleet.list_sessions" => session_ability::list_input_schema(),
+        "device.fleet.attach_session" => session_ability::attach_input_schema(),
+        "device.consent.subscribe" => permission_ability::subscribe_input_schema(),
+        "device.consent.decide" => permission_ability::decide_input_schema(),
+        "device.consent.list_pending" => permission_ability::list_pending_input_schema(),
+        "device.discuss.create" => discuss_ability::create_input_schema(),
+        "device.discuss.post" => discuss_ability::post_input_schema(),
+        "device.discuss.subscribe" => discuss_ability::subscribe_input_schema(),
+        "device.discuss.list_turns" => discuss_ability::list_turns_input_schema(),
+        "device.schedule.add" => schedule_ability::add_input_schema(),
+        "device.schedule.list" => schedule_ability::list_input_schema(),
+        "device.schedule.remove" => schedule_ability::remove_input_schema(),
+        "device.schedule.enable" => schedule_ability::enable_input_schema(),
+        "device.loop.create" => loop_ability::create_input_schema(),
+        "device.loop.status" => loop_ability::status_input_schema(),
+        "device.loop.subscribe" => loop_ability::subscribe_input_schema(),
+        "device.loop.cancel" => loop_ability::cancel_input_schema(),
+        "device.fleet.list_abilities" => skill_ability::list_input_schema(),
+        "device.fleet.skill_install" => skill_install_ability::install_input_schema(),
+        "device.fleet.skill_remove" => skill_install_ability::remove_input_schema(),
+        "device.fleet.skill_upgrade" => skill_install_ability::upgrade_input_schema(),
+        "device.mcp.bridge.list_tools" => mcp_bridge_ability::list_tools_input_schema(),
+        "device.mcp.bridge.call_tool" => mcp_bridge_ability::call_tool_input_schema(),
+        "device.a2a.bridge.list_skills" => a2a_bridge_ability::list_skills_input_schema(),
+        "device.a2a.bridge.send_task" => a2a_bridge_ability::send_task_input_schema(),
+        "device.a2a.client.send_task" => a2a_client_ability::send_task_input_schema(),
+        "device.mcp.client.list" => mcp_client_ability::list_input_schema(),
+        "device.mcp.client.call" => mcp_client_ability::call_input_schema(),
+        "device.fleet.list_agents" => fleet_list_agents_ability::list_agents_input_schema(),
+        "device.meta.describe" => meta_ability::describe_input_schema(),
+        "device.meta.list_abilities" => meta_ability::list_abilities_input_schema(),
+        "device.easynet.discover" => meta_ability::list_abilities_input_schema(),
+        "device.easynet.run" => mission_ability::run_input_schema(),
+        "device.mission.run" => mission_ability::run_input_schema(),
+        "device.easynet.track" => mission_ability::track_input_schema(),
+        "device.easynet.cancel" => mission_ability::cancel_input_schema(),
         // AXIOM §"Tier 2.5" Baseline Locomotion — filesystem half.
-        "fs.read" => fs_ability::input_schema_read(),
-        "fs.write" => fs_ability::input_schema_write(),
-        "fs.list" => fs_ability::input_schema_list(),
-        "fs.edit" => fs_edit_ability::input_schema(),
-        "process.exec" => process_exec_ability::input_schema(),
-        "shell.run" => shell_run_ability::input_schema(),
-        "http.request" => http_request_ability::input_schema(),
-        "fleet.session_create" | "fleet.pty_session_create" => {
+        "device.fs.read" => fs_ability::input_schema_read(),
+        "device.fs.write" => fs_ability::input_schema_write(),
+        "device.fs.list" => fs_ability::input_schema_list(),
+        "device.fs.edit" => fs_edit_ability::input_schema(),
+        "device.process.exec" => process_exec_ability::input_schema(),
+        "device.shell.run" => shell_run_ability::input_schema(),
+        "device.http.request" => http_request_ability::input_schema(),
+        "device.fleet.session_create" | "device.fleet.pty_session_create" => {
             pty_lifecycle_ability::input_schema_create()
         }
-        "fleet.session_close" | "fleet.pty_session_close" => {
+        "device.fleet.session_close" | "device.fleet.pty_session_close" => {
             pty_lifecycle_ability::input_schema_close()
         }
-        "fleet.session_attach" | "fleet.pty_session_attach" => pty_attach_ability::input_schema(),
-        "fleet.session_input" | "fleet.pty_session_input" => pty_io_ability::input_input_schema(),
-        "fleet.session_read" | "fleet.pty_session_read" => pty_io_ability::read_input_schema(),
-        "fleet.session_resize" | "fleet.pty_session_resize" => {
+        "device.fleet.session_attach" | "device.fleet.pty_session_attach" => pty_attach_ability::input_schema(),
+        "device.fleet.session_input" | "device.fleet.pty_session_input" => pty_io_ability::input_input_schema(),
+        "device.fleet.session_read" | "device.fleet.pty_session_read" => pty_io_ability::read_input_schema(),
+        "device.fleet.session_resize" | "device.fleet.pty_session_resize" => {
             pty_io_ability::resize_input_schema()
         }
-        "fleet.file_transfer" => file_transfer_ability::input_schema(),
-        "fleet.start_agent" => fleet_lifecycle_ability::start_agent_input_schema(),
-        "fleet.stop_agent" => fleet_lifecycle_ability::stop_agent_input_schema(),
-        "fleet.list_nodes" => fleet_ops_ability::list_nodes_input_schema(),
-        "fleet.describe_node" => fleet_ops_ability::describe_node_input_schema(),
+        "device.fleet.file_transfer" => file_transfer_ability::input_schema(),
+        "device.fleet.start_agent" => fleet_lifecycle_ability::start_agent_input_schema(),
+        "device.fleet.stop_agent" => fleet_lifecycle_ability::stop_agent_input_schema(),
+        "device.fleet.list_nodes" => fleet_ops_ability::list_nodes_input_schema(),
+        "device.fleet.describe_node" => fleet_ops_ability::describe_node_input_schema(),
         "device.describe" => device_describe_ability::input_schema(),
-        "fleet.remove_node" => fleet_ops_ability::remove_node_input_schema(),
-        "fleet.deploy_ability" => fleet_ops_ability::deploy_ability_input_schema(),
-        "fleet.uninstall_ability" => fleet_ops_ability::uninstall_ability_input_schema(),
-        "fleet.exec_remote" => fleet_ops_ability::exec_remote_input_schema(),
-        "fleet.register_self" => fleet_ops_ability::register_self_input_schema(),
-        "fleet.deregister_self" => fleet_ops_ability::deregister_self_input_schema(),
-        "mission.discuss_round" => orchestration_ability::discuss_round_input_schema(),
-        "voice.create_call" => voice_call_ability::create_call_input_schema(),
-        "voice.show_call" => voice_call_ability::show_call_input_schema(),
-        "voice.join_call" => voice_call_ability::join_call_input_schema(),
-        "voice.leave_call" => voice_call_ability::leave_call_input_schema(),
-        "voice.end_call" => voice_call_ability::end_call_input_schema(),
-        "voice.watch_call" => voice_call_ability::watch_call_input_schema(),
-        "voice.report_metrics" => voice_call_ability::report_metrics_input_schema(),
-        "voice.list_calls" => voice_call_ability::list_calls_input_schema(),
-        "admin.status" => admin_status_ability::input_schema(),
-        "ability.publish" => ability_publish_ability::publish_input_schema(),
-        "ability.unpublish" => ability_publish_ability::unpublish_input_schema(),
-        "skill.publish" => skill_publish_ability::publish_input_schema(),
-        "skill.unpublish" => skill_publish_ability::unpublish_input_schema(),
-        "skill.list" => skill_publish_ability::list_input_schema(),
-        "mission.think" => think_ability::input_schema(),
+        "device.fleet.remove_node" => fleet_ops_ability::remove_node_input_schema(),
+        "device.fleet.deploy_ability" => fleet_ops_ability::deploy_ability_input_schema(),
+        "device.fleet.uninstall_ability" => fleet_ops_ability::uninstall_ability_input_schema(),
+        "device.fleet.exec_remote" => fleet_ops_ability::exec_remote_input_schema(),
+        "device.fleet.register_self" => fleet_ops_ability::register_self_input_schema(),
+        "device.fleet.deregister_self" => fleet_ops_ability::deregister_self_input_schema(),
+        "device.mission.discuss_round" => orchestration_ability::discuss_round_input_schema(),
+        "device.voice.create_call" => voice_call_ability::create_call_input_schema(),
+        "device.voice.show_call" => voice_call_ability::show_call_input_schema(),
+        "device.voice.join_call" => voice_call_ability::join_call_input_schema(),
+        "device.voice.leave_call" => voice_call_ability::leave_call_input_schema(),
+        "device.voice.end_call" => voice_call_ability::end_call_input_schema(),
+        "device.voice.watch_call" => voice_call_ability::watch_call_input_schema(),
+        "device.voice.report_metrics" => voice_call_ability::report_metrics_input_schema(),
+        "device.voice.list_calls" => voice_call_ability::list_calls_input_schema(),
+        "device.admin.status" => admin_status_ability::input_schema(),
+        "device.ability.publish" => ability_publish_ability::publish_input_schema(),
+        "device.ability.unpublish" => ability_publish_ability::unpublish_input_schema(),
+        "device.skill.publish" => skill_publish_ability::publish_input_schema(),
+        "device.skill.unpublish" => skill_publish_ability::unpublish_input_schema(),
+        "device.skill.list" => skill_publish_ability::list_input_schema(),
+        "device.mission.think" => think_ability::input_schema(),
         // RFC-005 v3.2 A1–A8 — media abilities. Same single-source
         // -of-truth pattern as `description_for` above.
         n if media_abilities::input_schema(n).is_some() => {
@@ -1023,6 +1187,59 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         list_resources_ability::ABILITY_META_LIST_RESOURCES => {
             list_resources_ability::input_schema()
         }
+        // RFC-006-C v0.1 — device-local OpenAI shim. Schemas mirror
+        // the OpenAI request envelopes the handler accepts (chat
+        // completion body, plus an `auth_token` bearer for the
+        // device-local api_key store).
+        "device.openai.chat_completions" => serde_json::json!({
+            "type": "object",
+            "required": ["request"],
+            "properties": {
+                "request": {
+                    "type": "object",
+                    "description": "OpenAI-compatible /v1/chat/completions request body."
+                },
+                "auth_token": {
+                    "type": "string",
+                    "description": "Bearer token bound to a `<user>.api_key` entry on this host."
+                }
+            }
+        }),
+        "device.openai.list_models" => serde_json::json!({
+            "type": "object",
+            "properties": {
+                "auth_token": {
+                    "type": "string",
+                    "description": "Bearer token bound to a `<user>.api_key` entry on this host."
+                }
+            }
+        }),
+        // `<user>.api_key.{create,list,revoke}` — see the matching
+        // suffix arms in `description_for` for the rationale on
+        // why these match by suffix rather than full name.
+        n if n.ends_with(".api_key.create") => serde_json::json!({
+            "type": "object",
+            "properties": {
+                "label": {
+                    "type": "string",
+                    "description": "Optional operator-facing label for the new key."
+                }
+            }
+        }),
+        n if n.ends_with(".api_key.list") => serde_json::json!({
+            "type": "object",
+            "additionalProperties": false
+        }),
+        n if n.ends_with(".api_key.revoke") => serde_json::json!({
+            "type": "object",
+            "required": ["fingerprint"],
+            "properties": {
+                "fingerprint": {
+                    "type": "string",
+                    "description": "Fingerprint of the key to revoke (from .api_key.list)."
+                }
+            }
+        }),
         _ => serde_json::json!({ "type": "object" }),
     }
 }
@@ -1080,55 +1297,55 @@ mod tests {
         }
         match name {
             // ── Introspection ───────────────────────────────────
-            "meta.describe"
-            | "meta.list_abilities"
+            "device.meta.describe"
+            | "device.meta.list_abilities"
             // `easynet.discover` is a user-facing alias for
             // meta.list_abilities; same handler, same layer.
-            | "easynet.discover"
+            | "device.easynet.discover"
             // `easynet.track` reads the persisted run dir of a
             // prior easynet.run. Pure read of derived state →
             // Introspection, same logic that puts schedule.list
             // / loop.status here.
-            | "easynet.track"
-            | "mcp.bridge.list_tools"
+            | "device.easynet.track"
+            | "device.mcp.bridge.list_tools"
             // mcp.client.list — aggregate read of every configured
             // upstream MCP server's tools/list. No mutation;
             // belongs with the introspection-layer reads.
-            | "mcp.client.list"
-            | "a2a.bridge.list_skills"
-            | "fleet.list_agents"
-            | "fleet.list_abilities"
-            | "fleet.list_sessions"
-            | "consent.list_pending"
+            | "device.mcp.client.list"
+            | "device.a2a.bridge.list_skills"
+            | "device.fleet.list_agents"
+            | "device.fleet.list_abilities"
+            | "device.fleet.list_sessions"
+            | "device.consent.list_pending"
             // RFC-005 v3.2 A9 — meta.list_resources is a pure read of
             // the local resources table (same shape as
             // meta.list_abilities); Introspection by definition.
-            | "meta.list_resources"
+            | "device.meta.list_resources"
             // discuss.list_turns — RPC snapshot of a room transcript.
             // Pure read; same Introspection class as schedule.list.
-            | "discuss.list_turns"
-            | "schedule.list"
-            | "loop.status"
+            | "device.discuss.list_turns"
+            | "device.schedule.list"
+            | "device.loop.status"
             // skill.list — facade over fleet.list_abilities for the
             // curator path. Pure read; Introspection like every other
             // *.list verb.
-            | "skill.list" => Some(AbilityLayer::Introspection),
+            | "device.skill.list" => Some(AbilityLayer::Introspection),
             // ── Control / decision ──────────────────────────────
-            "policy.evaluate"
-            | "policy.simulate"
-            | "consent.decide"
-            | "consent.subscribe" => Some(AbilityLayer::Control),
+            "device.policy.evaluate"
+            | "device.policy.simulate"
+            | "device.consent.decide"
+            | "device.consent.subscribe" => Some(AbilityLayer::Control),
             // ── Observation ─────────────────────────────────────
-            "observe.health"
-            | "observe.network_health"
-            | "admin.status" => Some(AbilityLayer::Observation),
+            "device.observe.health"
+            | "device.observe.network_health"
+            | "device.admin.status" => Some(AbilityLayer::Observation),
             // ── Operational (per-feature business verbs) ────────
-            "fleet.attach_session"
-            | "fleet.start_agent"
-            | "fleet.stop_agent"
-            | "fleet.skill_install"
-            | "fleet.skill_remove"
-            | "fleet.skill_upgrade"
+            "device.fleet.attach_session"
+            | "device.fleet.start_agent"
+            | "device.fleet.stop_agent"
+            | "device.fleet.skill_install"
+            | "device.fleet.skill_remove"
+            | "device.fleet.skill_upgrade"
             // fleet.* device + ability operations. list_nodes /
             // describe_node read state but conceptually they sit
             // with the federation-tier *operations* (peer
@@ -1139,99 +1356,99 @@ mod tests {
             // verbs (remove_node, deploy_ability, uninstall_ability,
             // exec_remote, register_self, deregister_self)
             // mutate state — Operational unambiguous.
-            | "fleet.list_nodes"
-            | "fleet.describe_node"
+            | "device.fleet.list_nodes"
+            | "device.fleet.describe_node"
             | "device.describe"
-            | "fleet.remove_node"
-            | "fleet.deploy_ability"
-            | "fleet.uninstall_ability"
-            | "fleet.exec_remote"
-            | "fleet.register_self"
-            | "fleet.deregister_self"
+            | "device.fleet.remove_node"
+            | "device.fleet.deploy_ability"
+            | "device.fleet.uninstall_ability"
+            | "device.fleet.exec_remote"
+            | "device.fleet.register_self"
+            | "device.fleet.deregister_self"
             // fleet.session_* shell-session lifecycle abilities.
             // create / close mutate session state; input / read /
             // resize push or pull data over an established session;
             // attach binds the bidi data plane. All operational
             // because each call IS the work for that session step.
-            | "fleet.session_create"
-            | "fleet.session_close"
-            | "fleet.session_input"
-            | "fleet.session_read"
-            | "fleet.session_resize"
-            | "fleet.session_attach"
-            | "fleet.pty_session_create"
-            | "fleet.pty_session_close"
-            | "fleet.pty_session_input"
-            | "fleet.pty_session_read"
-            | "fleet.pty_session_resize"
-            | "fleet.pty_session_attach"
+            | "device.fleet.session_create"
+            | "device.fleet.session_close"
+            | "device.fleet.session_input"
+            | "device.fleet.session_read"
+            | "device.fleet.session_resize"
+            | "device.fleet.session_attach"
+            | "device.fleet.pty_session_create"
+            | "device.fleet.pty_session_close"
+            | "device.fleet.pty_session_input"
+            | "device.fleet.pty_session_read"
+            | "device.fleet.pty_session_resize"
+            | "device.fleet.pty_session_attach"
             // mission.discuss_round — sub-turn orchestration
             // ability. Same Operational class as easynet.run /
             // mission.run because the ability IS the work
             // (running one human-bracketed sub-turn of a
             // multi-agent discussion).
-            | "mission.discuss_round"
+            | "device.mission.discuss_round"
             // mission.think — long-running worker+judge loop. Same
             // Operational rationale: the ability IS the work
             // (running an N-cycle reflective loop with two
             // independent chat sessions).
-            | "mission.think"
+            | "device.mission.think"
             // voice.* call signaling abilities. State-mutating
             // (create / join / leave / end / report_metrics) and
             // state-reading (show / watch) — Operational by intent
             // because the call IS the work. Same shape as
             // discuss.subscribe / loop.subscribe sit here.
-            | "voice.create_call"
-            | "voice.show_call"
-            | "voice.join_call"
-            | "voice.leave_call"
-            | "voice.end_call"
-            | "voice.watch_call"
-            | "voice.report_metrics"
-            | "voice.list_calls"
+            | "device.voice.create_call"
+            | "device.voice.show_call"
+            | "device.voice.join_call"
+            | "device.voice.leave_call"
+            | "device.voice.end_call"
+            | "device.voice.watch_call"
+            | "device.voice.report_metrics"
+            | "device.voice.list_calls"
             // mcp.bridge.call_tool / a2a.bridge.send_task — both
             // dispatch into another local ability; the side effects
             // come from that dispatch, not the bridge itself. Sit
             // with the operational verbs because the call surface
             // IS the work.
-            | "mcp.bridge.call_tool"
+            | "device.mcp.bridge.call_tool"
             // mcp.client.call — outbound mirror of bridge.call_tool.
             // Same operational classification: dispatching
             // delegates side effects to the upstream tool.
-            | "mcp.client.call"
-            | "a2a.bridge.send_task"
+            | "device.mcp.client.call"
+            | "device.a2a.bridge.send_task"
             // a2a.client.send_task — outbound mirror of bridge.send_task.
             // Same operational classification: dispatching crosses
             // a wire and mutates the remote node's state.
-            | "a2a.client.send_task"
-            | "discuss.create"
-            | "discuss.post"
-            | "discuss.subscribe"
-            | "schedule.add"
-            | "schedule.remove"
-            | "schedule.enable"
-            | "loop.create"
-            | "loop.subscribe"
-            | "loop.cancel"
+            | "device.a2a.client.send_task"
+            | "device.discuss.create"
+            | "device.discuss.post"
+            | "device.discuss.subscribe"
+            | "device.schedule.add"
+            | "device.schedule.remove"
+            | "device.schedule.enable"
+            | "device.loop.create"
+            | "device.loop.subscribe"
+            | "device.loop.cancel"
             // EAL orchestration. easynet.run / mission.run compile
             // and execute a program (potentially multi-step,
             // potentially cross-agent); easynet.cancel mutates the
             // run state of an in-flight mission. Same Operational
             // class as loop.{create,cancel} for the same reason —
             // the ability IS the work.
-            | "easynet.run"
-            | "mission.run"
-            | "easynet.cancel"
+            | "device.easynet.run"
+            | "device.mission.run"
+            | "device.easynet.cancel"
             // ability.publish / ability.unpublish / skill.publish /
             // skill.unpublish — curator-driven sinks for judge-validated
             // experience. State-mutating (writes/removes manifests under
             // an agent's workspace). Operational because the ability IS
             // the work, in the same class as fleet.deploy_ability /
             // fleet.skill_install.
-            | "ability.publish"
-            | "ability.unpublish"
-            | "skill.publish"
-            | "skill.unpublish"
+            | "device.ability.publish"
+            | "device.ability.unpublish"
+            | "device.skill.publish"
+            | "device.skill.unpublish"
             // AXIOM §"Tier 2.5" Baseline Locomotion Profile,
             // filesystem half. fs.read is technically read-only
             // but it returns business content, not just metadata
@@ -1239,32 +1456,55 @@ mod tests {
             // mutates state. fs.list returns directory metadata
             // but its purpose is to enable subsequent fs.read /
             // fs.write — Operational by intent.
-            | "fs.read"
-            | "fs.write"
-            | "fs.list"
-            | "fs.edit"
+            | "device.fs.read"
+            | "device.fs.write"
+            | "device.fs.list"
+            | "device.fs.edit"
             // AXIOM Tier 2.5 execution members. process.exec
             // and shell.run are unconditionally Operational —
             // they spawn processes that may do anything; even
             // with the 8-stage shellguard pipeline gating
             // shell.run dispatch, the layer classification
             // tracks privilege not invocation safety.
-            | "process.exec"
-            | "shell.run"
-            | "http.request"
-            | "fleet.file_transfer"
+            | "device.process.exec"
+            | "device.shell.run"
+            | "device.http.request"
+            | "device.fleet.file_transfer"
             // RFC-005 v3.2 A1–A8 — physical-channel media verbs.
             // Operational by intent: each one drives an external
             // device (mic / camera / speaker / screen) or remote
             // model (voice / asr). Subject = resource_uri.
-            | "mic.subscribe"
-            | "camera.subscribe"
-            | "camera.snapshot"
-            | "screen.subscribe"
-            | "screen.snapshot"
-            | "speaker.publish"
-            | "voice.subscribe"
-            | "voice.transcribe" => Some(AbilityLayer::Operational),
+            | "device.mic.subscribe"
+            | "device.camera.subscribe"
+            | "device.camera.snapshot"
+            | "device.screen.subscribe"
+            | "device.screen.snapshot"
+            | "device.speaker.publish"
+            | "device.voice.subscribe"
+            | "device.voice.transcribe"
+            // RFC-006-C v0.1 — device-local OpenAI protocol shim.
+            // chat_completions IS the work (forwards a generation
+            // request to a host-local chat-base ability);
+            // list_models reads the caller's dispatch-grant set,
+            // but its operational role is "answer /v1/models for
+            // the OpenAI surface" — both are Operational rather
+            // than Introspection.
+            | "device.openai.chat_completions"
+            | "device.openai.list_models"
+            => Some(AbilityLayer::Operational),
+            // `<user>.api_key.{create,list,revoke}` — user-rooted
+            // credential-lifecycle verbs. `<user>` is the active
+            // identity (uuid in prod, `"test"` in fixtures), so we
+            // match by suffix rather than enumerating one identity.
+            // All three are Operational because the ability IS the
+            // work (issuing / listing / revoking a credential), in
+            // the same class as ability.publish / skill.publish.
+            n if n.ends_with(".api_key.create")
+                || n.ends_with(".api_key.list")
+                || n.ends_with(".api_key.revoke") =>
+            {
+                Some(AbilityLayer::Operational)
+            }
             _ => None,
         }
     }
@@ -1279,10 +1519,10 @@ mod tests {
         let names = published_ability_names();
         let unclassified: Vec<String> = names
             .iter()
-            // <self>.keyring.* abilities have their own ontology
+            // device.keyring.* abilities have their own ontology
             // (RFC-002 §3.3) and are not classified by the system
             // ability layer table.
-            .filter(|n| !n.starts_with("<self>.keyring."))
+            .filter(|n| !n.starts_with("device.keyring."))
             .filter(|n| classify_ability(n).is_none())
             .cloned()
             .collect();
@@ -1302,9 +1542,9 @@ mod tests {
         // classify as Introspection. A regression that moved one of
         // them to a different layer would fragment the discovery story.
         for name in [
-            "meta.list_abilities",
-            "mcp.bridge.list_tools",
-            "a2a.bridge.list_skills",
+            "device.meta.list_abilities",
+            "device.mcp.bridge.list_tools",
+            "device.a2a.bridge.list_skills",
         ] {
             assert_eq!(
                 classify_ability(name),
@@ -1323,7 +1563,7 @@ mod tests {
         let reg = build_registry();
         let names = reg.list_abilities();
         assert!(
-            names.iter().any(|n| n == "observe.health"),
+            names.iter().any(|n| n == "device.observe.health"),
             "observe.health must be in the v1 registry; got {names:?}"
         );
     }
@@ -1531,23 +1771,23 @@ mod tests {
         let names: std::collections::BTreeSet<String> = reg.list_abilities().into_iter().collect();
         let must_have = [
             // Filesystem half
-            "fs.read",
-            "fs.write",
-            "fs.list",
-            "fs.edit",
+            "device.fs.read",
+            "device.fs.write",
+            "device.fs.list",
+            "device.fs.edit",
             // Execution half
-            "process.exec",
-            "shell.run",
+            "device.process.exec",
+            "device.shell.run",
             // Outbound network
-            "http.request",
+            "device.http.request",
             // Interactive PTY trio
-            "fleet.session_create",
-            "fleet.session_close",
-            "fleet.session_attach",
+            "device.fleet.session_create",
+            "device.fleet.session_close",
+            "device.fleet.session_attach",
             // Operator surface added in slice 16
-            "admin.status",
-            "fleet.start_agent",
-            "fleet.stop_agent",
+            "device.admin.status",
+            "device.fleet.start_agent",
+            "device.fleet.stop_agent",
         ];
         let missing: Vec<&str> = must_have
             .iter()
@@ -1576,7 +1816,7 @@ mod tests {
         let metas = published_abilities();
         let skill = metas
             .iter()
-            .find(|m| m.name == "fleet.list_abilities")
+            .find(|m| m.name == "device.fleet.list_abilities")
             .expect("fleet.list_abilities must be in published_abilities");
         // Description must NOT be the unknown-name fallback.
         // `(system ability)` is what `description_for` returns when
@@ -1619,6 +1859,7 @@ mod tests {
             Arc::new(LoopService::new()),
             &agents,
             Arc::new(Vec::new()),
+            crate::runtime::agents::PagesIdentity::default(),
         );
         // Sanity: the registry itself does include alice.chat.
         assert!(reg.list_abilities().iter().any(|n| n == "alice.chat"));
@@ -1651,10 +1892,10 @@ mod tests {
             if name.ends_with(".chat") {
                 continue;
             }
-            // `<self>.keyring.*` abilities are RFC-002-owner-scoped;
+            // `device.keyring.*` abilities are RFC-002-owner-scoped;
             // their metadata lives in `keyring::abilities`, not the
             // system descriptor table. Same exception shape as chat.
-            if name.starts_with("<self>.keyring.") {
+            if name.starts_with("device.keyring.") {
                 continue;
             }
             let desc = description_for(&name);
@@ -1708,6 +1949,7 @@ mod tests {
             Arc::new(LoopService::new()),
             &agents,
             Arc::new(Vec::new()),
+            crate::runtime::agents::PagesIdentity::default(),
         );
         let names = reg.list_abilities();
         assert!(
@@ -1743,6 +1985,7 @@ mod tests {
             Arc::new(LoopService::new()),
             &agents,
             Arc::new(Vec::new()),
+            crate::runtime::agents::PagesIdentity::default(),
         );
         let names = reg.list_abilities();
 
@@ -1761,7 +2004,7 @@ mod tests {
             None => std::env::remove_var("EASYNET_KEYRING_PASS"),
         }
 
-        // All 10 abilities must be present under <self>.keyring.*.
+        // All 10 abilities must be present under device.keyring.*.
         for verb in [
             "create",
             "list",
@@ -1774,12 +2017,64 @@ mod tests {
             "peer_add",
             "peer_list",
         ] {
-            let want = format!("<self>.keyring.{verb}");
+            let want = format!("device.keyring.{verb}");
             assert!(
                 names.iter().any(|n| n == &want),
                 "{want} must be registered; got {names:?}"
             );
         }
         assert!(path.exists(), "keyring file must have been auto-created");
+    }
+
+    /// **M5 lint** — every catalogue entry must be partitioned
+    /// under one of the four owner-prefix shapes from the
+    /// truth-table spec: `device.*`, `hub.*`, `<agent-id>.*`,
+    /// `<user-id>.*`. A new system ability that lands without
+    /// a `device.` / `hub.` prefix fails this test, forcing the
+    /// author to either (a) fix the registration site or (b)
+    /// argue with the spec. The closed sets of legacy roots
+    /// (`fs.`, `fleet.`, `01HUB.`, …) MUST stay drained — M3
+    /// already deleted the registrations, M5 pins them.
+    #[test]
+    fn published_catalogue_uses_only_canonical_prefixes() {
+        const FORBIDDEN_LEGACY_HEADS: &[&str] = &[
+            "fs", "http", "shell", "process", "fleet", "observe", "admin",
+            "easynet", "meta", "mission", "schedule", "loop", "discuss", "mcp",
+            "a2a", "policy", "ability", "camera", "mic", "screen", "speaker",
+            "voice", "skill", "consent", "01HUB",
+        ];
+        let names = published_ability_names();
+        let mut violations: Vec<String> = Vec::new();
+        for n in &names {
+            if let Some((head, _)) = n.split_once('.') {
+                if FORBIDDEN_LEGACY_HEADS.contains(&head) {
+                    violations.push(n.clone());
+                }
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "post-M3 catalogue must use canonical prefixes only; \
+             found legacy-prefixed names: {violations:?}"
+        );
+    }
+
+    /// **M5 lint** — `<self>` token never appears as a first
+    /// segment in the published catalogue. The wire-pinned trio
+    /// (`<self>.session`, `<self>.invoke_remote`,
+    /// `<self>.register_device_pubkey`) goes through wire-only
+    /// constants; they are NOT registered into the discoverable
+    /// catalogue. If they ever leak, this test fails and the
+    /// regression is caught at CI rather than in an LLM seeing
+    /// a `<self>.*` entry and getting confused.
+    #[test]
+    fn published_catalogue_never_contains_self_alias() {
+        let names = published_ability_names();
+        let leaks: Vec<&String> =
+            names.iter().filter(|n| n.starts_with("<self>")).collect();
+        assert!(
+            leaks.is_empty(),
+            "post-M5 catalogue must not expose <self>.* names; got {leaks:?}"
+        );
     }
 }

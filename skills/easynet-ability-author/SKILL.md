@@ -1,6 +1,6 @@
 ---
 name: easynet-ability-author
-description: Author, deploy, and orchestrate EasyNet abilities and EAL missions. Use this skill when asked to create abilities for edge devices, write EAL programs, deploy to devices, or build multi-agent workflows. Covers ability.json schema, EAL language syntax, agent dispatch, and the full deploy/invoke lifecycle.
+description: Author, deploy, and orchestrate EasyNet abilities and EAL missions. Use this skill when asked to create abilities for edge devices, write EAL programs, deploy to devices, or build multi-agent workflows. Covers device.ability.json schema, EAL language syntax, agent dispatch, and the full deploy/invoke lifecycle.
 compatibility: Requires easynet CLI built and on PATH
 metadata:
   author: easynet
@@ -35,7 +35,7 @@ easynet agent doctor    # check agent availability
 
 ### Create a simple ability
 
-Create a directory with `ability.json`:
+Create a directory with `device.ability.json`:
 
 ```bash
 mkdir -p /tmp/my-ability
@@ -151,7 +151,7 @@ easynet mission run my-program.eal --emit-ir
 easynet mission run my-program.eal
 ```
 
-## ability.json Schema
+## device.ability.json Schema
 
 ```json
 {
@@ -224,7 +224,7 @@ mission "edge-inference" {
 mission "smart-deploy" {
   // Ask Claude to generate an ability for a task
   let ability_spec = call "design" on "claude" with {
-    prompt = "Design an ability.json that monitors CPU temperature on Linux. Output valid JSON only."
+    prompt = "Design an device.ability.json that monitors CPU temperature on Linux. Output valid JSON only."
   } timeout 60
 
   // Deploy the generated ability to a device
@@ -259,7 +259,7 @@ mission "collaborative-article" {
 ## Deploy lifecycle
 
 ```
-ability.json  →  easynet deploy <dir> --to <node>
+device.ability.json  →  easynet deploy <dir> --to <node>
                       │
                       ├── Phase 1: Publish (register in Hub)
                       ├── Phase 2: Install (materialize on node)

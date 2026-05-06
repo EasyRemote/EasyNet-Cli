@@ -17,7 +17,7 @@
 // -----------------------
 //   1. Validate args locally (path exists, node id non-empty).
 //   2. Map args → JSON request body.
-//   3. invoke_local_ability("fleet.deploy_ability", body).
+//   3. invoke_local_ability("device.fleet.deploy_ability", body).
 //   4. Print the daemon's response.
 //
 // All policy (manifest validation, signature handling, ordering of
@@ -63,7 +63,7 @@ pub fn run(args: DeployArgs) -> anyhow::Result<()> {
         style(&args.node).cyan()
     );
     let result = invoke_local_ability(
-        "fleet.deploy_ability",
+        "device.fleet.deploy_ability",
         json!({
             "path": args.path,
             "node_id": args.node,

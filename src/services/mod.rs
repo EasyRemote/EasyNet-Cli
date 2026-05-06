@@ -99,6 +99,14 @@ pub mod ability_catalog_store;
 /// the host's live `<self>.session`.
 pub mod advertised_agent_store;
 
+/// AXON-RFC-001 v4.1.7 hub-broadcast contract — caches hub-owned
+/// ability descriptors that the realm hub pushes via
+/// `federation.join` (full snapshot) + `federation.heartbeat`
+/// (incremental diff). `meta.list_abilities scope=realm` merges
+/// this cache with the device-local registry so users see both
+/// device-owned and hub-owned abilities through one query.
+pub mod hub_published_ability_store;
+
 /// Per-daemon nonce replay store (RFC 001 §5.2 step 4). Wraps the
 /// axon SDK's time-wheel store in `Arc<Mutex<…>>` so a single
 /// instance is shared across every concurrent invoke through the

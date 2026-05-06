@@ -60,8 +60,31 @@ pub struct RevokeArgs {
     pub id_prefix: String,
 }
 
-fn current_user() -> String {
-    std::env::var("EASYNET_PAGES_USER").unwrap_or_else(|_| "self".to_string())
+fn current_user() -> anyhow::Result<String> {
+    // Production: read username from `EASYNET_PAGES_USER` env (e2e
+    // / multi-user dev rigs) or `credentials.json` (paired
+    // device). M5 of the system-namespace migration banned the
+    // `<self>` placeholder — an unpaired daemon has no
+    // user-rooted ability surface, so the CLI MUST surface the
+    // missing-identity error rather than silently dialling
+    // `self.api_key.*` (which the registry no longer answers).
+    if let Some(v) = std::env::var("EASYNET_PAGES_USER")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        return Ok(v);
+    }
+    if let Some(v) = crate::persistence::config::load_credentials()
+        .ok()
+        .and_then(|c| c.username)
+        .filter(|s| !s.is_empty())
+    {
+        return Ok(v);
+    }
+    anyhow::bail!(
+        "no user identity bound to this daemon — run `easynet device pair` first \
+         (or set EASYNET_PAGES_USER for dev rigs)"
+    )
 }
 
 pub fn run(args: ApiKeyArgs) -> anyhow::Result<()> {
@@ -73,7 +96,7 @@ pub fn run(args: ApiKeyArgs) -> anyhow::Result<()> {
 }
 
 fn run_create(a: CreateArgs) -> anyhow::Result<()> {
-    let user = current_user();
+    let user = current_user()?;
     let ability = format!("{user}.api_key.create");
     let mut args = json!({});
     if let Some(label) = a.label {
@@ -108,7 +131,7 @@ fn run_create(a: CreateArgs) -> anyhow::Result<()> {
 }
 
 fn run_list(a: ListArgs) -> anyhow::Result<()> {
-    let user = current_user();
+    let user = current_user()?;
     let ability = format!("{user}.api_key.list");
     let result = invoke_local_ability(&ability, json!({}))?;
     if a.json {
@@ -142,7 +165,7 @@ fn run_list(a: ListArgs) -> anyhow::Result<()> {
 }
 
 fn run_revoke(a: RevokeArgs) -> anyhow::Result<()> {
-    let user = current_user();
+    let user = current_user()?;
     let ability = format!("{user}.api_key.revoke");
     let result = invoke_local_ability(&ability, json!({ "id_prefix": a.id_prefix }))?;
     let revoked = result

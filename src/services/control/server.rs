@@ -321,7 +321,7 @@ mod tests {
         let mut client = UnixStream::connect(&path).await.expect("connect");
         let req = IncomingFrame::Invoke {
             request_id: "smoke-1".into(),
-            ability: "observe.health".into(),
+            ability: "device.observe.health".into(),
             args: serde_json::json!({}),
             subject: None,
         };
@@ -573,7 +573,7 @@ mod tests {
         // Now send a valid frame to confirm the connection survived.
         let req = IncomingFrame::Invoke {
             request_id: "after-bad".into(),
-            ability: "observe.health".into(),
+            ability: "device.observe.health".into(),
             args: serde_json::json!({}),
             subject: None,
         };

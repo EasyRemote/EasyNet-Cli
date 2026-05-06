@@ -84,7 +84,7 @@ use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
 /// Wire name. Pinned because the CLI (`easynet mission think`) and
 /// any future EAL caller bind to it by string.
-pub const ABILITY_THINK: &str = "mission.think";
+pub const ABILITY_THINK: &str = "device.mission.think";
 
 /// Default max worker+judge cycles. Mirrors `mission.discuss_round`'s
 /// default — same rationale (give the model enough turns to
@@ -108,9 +108,11 @@ pub fn register(
     reg: &mut LocalAbilityRegistry,
     dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
 ) {
+    use crate::runtime::ability_dispatch::OwnerKind;
     let handle = Arc::clone(&dispatch_registry_handle);
-    reg.register_rpc(
-        ABILITY_THINK,
+    reg.register_rpc_with_owner(
+        "device.mission.think",
+        OwnerKind::Device,
         Arc::new(move |args| think_handler(&handle, args)),
     );
 }

@@ -385,24 +385,24 @@ pub fn parse_ura(uri: &str) -> Result<ParsedURA, ParseError> {
             }
             // Backward-compat sniff: legacy `<bare-user>/<namespace>/<path>`
             // had no dot in the user segment AND the next segment was
-            // a known namespace. Honour it.
+            // a known namespace. When `id_part` has no dot, we are
+            // committed to the legacy shape — a bare-user form with
+            // an unknown namespace is a parse error, not a fallthrough
+            // to the v4.1.5 dot-id reading (the bare id has no dot
+            // to begin with, so v4.1.5 cannot match it anyway).
             let dot_idx = id_part.find('.');
             if dot_idx.is_none() {
-                if let Some((ns_str, deep_path)) = path_part.split_once('/') {
-                    if let Some(ns) = ResourceNamespace::from_str(ns_str) {
-                        out.kind = URAKind::Resource;
-                        out.user_id = id_part.to_string();
-                        out.namespace = Some(ns);
-                        out.path = deep_path.to_string();
-                        return Ok(out);
-                    }
-                } else if let Some(ns) = ResourceNamespace::from_str(path_part) {
-                    out.kind = URAKind::Resource;
-                    out.user_id = id_part.to_string();
-                    out.namespace = Some(ns);
-                    out.path = String::new();
-                    return Ok(out);
-                }
+                let (ns_str, deep_path) = match path_part.split_once('/') {
+                    Some((ns, rest)) => (ns, rest),
+                    None => (path_part, ""),
+                };
+                let ns = ResourceNamespace::from_str(ns_str)
+                    .ok_or_else(|| ParseError::ResourceUnknownNs(ns_str.to_string()))?;
+                out.kind = URAKind::Resource;
+                out.user_id = id_part.to_string();
+                out.namespace = Some(ns);
+                out.path = deep_path.to_string();
+                return Ok(out);
             }
             // v4.1.5 dot-id-part shape. user_id absorbs the entire
             // owner identity (`<user>.<owner-tail>`); namespace stays
@@ -763,5 +763,49 @@ mod tests {
 
         let multi_seg = "easynet:///r/realm/agent/a/b/c";
         assert_eq!(canonicalize_presence_key(multi_seg), multi_seg);
+    }
+
+    #[test]
+    fn parse_agent_uri_with_friendly_minted_agent_id() {
+        // RFC v4.1.5 §A.URA-3: agent URA splits on the first dot
+        // into `<userID>.<agentID>`. The bootstrap minter
+        // (UuidMinter::mint_id) post-RFC-001-v4.1.7 emits the
+        // operator-meaningful `<profile>-<name>` form for
+        // <agentID> so the URA itself carries a readable label
+        // — no out-of-band display_name metadata needed. Pin the
+        // contract here so a future grammar tightening (e.g.
+        // forbidding `-` in agent_id) trips this test before
+        // breaking the friendly-name story.
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "easynet:///r/hub-a.local/agent/deep-a-1778042344.consent-default",
+                "deep-a-1778042344",
+                "consent-default",
+            ),
+            (
+                "easynet:///r/hub-a.local/agent/deep-a-1778042344.llm-deep-agent-1778042349",
+                "deep-a-1778042344",
+                "llm-deep-agent-1778042349",
+            ),
+            (
+                "easynet:///r/hub-a.local/agent/alice.mcp-fs-bridge",
+                "alice",
+                "mcp-fs-bridge",
+            ),
+            // Synthetic pages/files agents stay on bare `<user>.<agent>`.
+            (
+                "easynet:///r/hub-a.local/agent/deep-a-1778042344.files",
+                "deep-a-1778042344",
+                "files",
+            ),
+        ];
+        for (uri, want_user, want_agent) in cases {
+            let p = parse_ura(uri).unwrap_or_else(|e| {
+                panic!("parse {uri}: {e:?}")
+            });
+            assert_eq!(p.kind, URAKind::Agent, "{uri}");
+            assert_eq!(&p.user_id, want_user, "{uri}");
+            assert_eq!(&p.agent_id, want_agent, "{uri}");
+        }
     }
 }

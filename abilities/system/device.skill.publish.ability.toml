@@ -1,0 +1,22 @@
+schema_version = "1"
+name = "device.skill.publish"
+description = "Publish a curator-authored skill into a registered agent's skills/<name>/ directory. The skill body becomes SKILL.md; provenance is recorded in .easynet/install.json. Refuses to overwrite an existing skill — call skill.unpublish first to replace."
+
+[input_schema]
+type = "object"
+required = ["owner_agent_id", "skill_name", "skill_md"]
+
+[input_schema.properties.mission_run_id]
+type = "string"
+description = "Optional. The curator's mission run id, recorded as install provenance."
+
+[input_schema.properties.owner_agent_id]
+type = "string"
+
+[input_schema.properties.skill_md]
+type = "string"
+description = "SKILL.md body. The full text installed as the skill's description."
+
+[input_schema.properties.skill_name]
+type = "string"
+description = "Slug used as the directory name. ASCII alnum + `-`/`_` only."

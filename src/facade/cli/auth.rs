@@ -669,9 +669,11 @@ pub struct ExecArgs {
     ///   easynet auth exec <node> -- ls /tmp
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub cmd: Vec<String>,
-    /// Ability tool name to invoke. Default `shell.run`. Override
-    /// to `process.exec` (typed argv) or any other registered tool.
-    #[arg(long, default_value = "shell.run")]
+    /// Ability tool name to invoke. Default `device.shell.run`.
+    /// Override to `device.process.exec` (typed argv) or any other
+    /// registered tool. Bare `shell.run` / `process.exec` are
+    /// accepted as legacy aliases and auto-prefixed with `device.`.
+    #[arg(long, default_value = "device.shell.run")]
     pub tool: String,
     /// Timeout in milliseconds (default 30s).
     #[arg(long, default_value_t = 30_000)]
@@ -692,9 +694,18 @@ pub fn run_exec(args: ExecArgs) -> anyhow::Result<()> {
     // `tool_name` picks the ability (shell.run / process.exec /
     // anything advertised by the device's daemon).
     let url = format!("{}/api/v1/abilities/invoke", session.hub_url);
-    let arguments = match args.tool.as_str() {
-        // shell.run takes a full command string.
-        "shell.run" | "process.exec" => {
+    // Auto-prefix legacy bare names with `device.` so a caller that
+    // still types `--tool shell.run` lands on the canonical handler
+    // post-RFC-001 v4.1.7. Names already prefixed (`device.*`,
+    // `hub.*`, agent-rooted) pass through unchanged.
+    let canonical_tool = match args.tool.as_str() {
+        "shell.run" => "device.shell.run".to_string(),
+        "process.exec" => "device.process.exec".to_string(),
+        other => other.to_string(),
+    };
+    let arguments = match canonical_tool.as_str() {
+        // shell.run / process.exec take a full command string.
+        "device.shell.run" | "device.process.exec" => {
             serde_json::json!({"command": args.cmd.join(" ")})
         }
         // Anything else: pass cmd tokens as an argv array; the
@@ -702,7 +713,7 @@ pub fn run_exec(args: ExecArgs) -> anyhow::Result<()> {
         _ => serde_json::json!({"argv": args.cmd}),
     };
     let body = serde_json::json!({
-        "tool_name": args.tool,
+        "tool_name": canonical_tool,
         "node_id": args.node_id,
         "arguments": arguments,
         "timeout_ms": args.timeout_ms,
@@ -990,10 +1001,10 @@ mod tests {
     #[test]
     fn ability_item_fallback_maps_federation_descriptor_shape() {
         let item = ability_item_from_descriptor(&serde_json::json!({
-            "name": "shell.run",
+            "name": "device.shell.run",
             "ability_version": "1",
         }));
-        assert_eq!(item.name.as_deref(), Some("shell.run"));
+        assert_eq!(item.name.as_deref(), Some("device.shell.run"));
         assert_eq!(item.version.as_deref(), Some("1"));
         assert_eq!(item.state.as_deref(), Some("ACTIVE"));
     }

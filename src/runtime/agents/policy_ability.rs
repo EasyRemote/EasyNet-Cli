@@ -51,8 +51,9 @@ use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
-pub const ABILITY_EVALUATE: &str = "policy.evaluate";
-pub const ABILITY_SIMULATE: &str = "policy.simulate";
+use crate::runtime::ability_dispatch::OwnerKind;
+pub const ABILITY_EVALUATE: &str = "device.policy.evaluate";
+pub const ABILITY_SIMULATE: &str = "device.policy.simulate";
 
 /// v1 decision-cache TTL. Long enough that a chatty admission gate
 /// doesn't re-call evaluate per envelope, short enough that a
@@ -62,12 +63,14 @@ pub const ABILITY_SIMULATE: &str = "policy.simulate";
 const DECISION_TTL_SECS: i64 = 300;
 
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    reg.register_rpc(
-        ABILITY_EVALUATE,
+    reg.register_rpc_with_owner(
+        "device.policy.evaluate",
+        OwnerKind::Device,
         Arc::new(|args: Value| evaluate_handler(args)),
     );
-    reg.register_rpc(
-        ABILITY_SIMULATE,
+    reg.register_rpc_with_owner(
+        "device.policy.simulate",
+        OwnerKind::Device,
         Arc::new(|args: Value| simulate_handler(args)),
     );
 }

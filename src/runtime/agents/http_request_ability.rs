@@ -68,8 +68,9 @@ use sha2::{Digest, Sha256};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
+use crate::runtime::ability_dispatch::OwnerKind;
 /// Wire name. Pinned by AXIOM Tier 2.5.
-pub const ABILITY_NAME: &str = "http.request";
+pub const ABILITY_NAME: &str = "device.http.request";
 
 /// Profile version echoed in every receipt.
 pub const PROFILE_VERSION: &str = "baseline-locomotion-v1";
@@ -115,7 +116,7 @@ const REDACTED_HEADER_NAMES: &[&str] = &[
 const ALLOWED_SCHEMES: &[&str] = &["http", "https"];
 
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    reg.register_rpc(ABILITY_NAME, Arc::new(handler));
+    reg.register_rpc_with_owner("device.http.request", OwnerKind::Device, Arc::new(handler));
 }
 
 fn handler(args: Value) -> Result<Value> {

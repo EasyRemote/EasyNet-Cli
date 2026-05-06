@@ -165,6 +165,13 @@ async fn main() -> anyhow::Result<()> {
     // we pass None. A test or the standalone MCP server that
     // wants chat without any context injection passes
     // Some(Arc::new(Vec::new())) instead.
+    // Resolve user-rooted ability identity ONCE at daemon boot.
+    // EASYNET_PAGES_USER + credentials.json get read here and
+    // never again — the resolved value flows through to
+    // build_registry_for_daemon as an explicit argument so the
+    // registry build is deterministic and free of global env
+    // state.
+    let pages_identity = agents::PagesIdentity::from_env();
     let registry = agents::build_registry_for_daemon(
         kernel.session_service(),
         kernel.permission_service(),
@@ -172,6 +179,7 @@ async fn main() -> anyhow::Result<()> {
         kernel.schedule_service(),
         kernel.loop_service(),
         None,
+        pages_identity,
     );
 
     // Stage-2 dispatcher (executor). Wired with the unified registry

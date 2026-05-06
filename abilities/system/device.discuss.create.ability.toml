@@ -1,0 +1,15 @@
+schema_version = "1"
+name = "device.discuss.create"
+description = "Create a multi-agent discussion room. Returns a fresh `room_id` participants can post into."
+
+[input_schema]
+type = "object"
+required = ["participants"]
+additionalProperties = false
+
+[input_schema.properties.participants]
+type = "array"
+items = { type = "string" }
+
+[input_schema.properties.topic]
+type = "string"

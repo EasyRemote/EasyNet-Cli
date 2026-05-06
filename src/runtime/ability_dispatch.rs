@@ -227,6 +227,51 @@ pub type LocalBidiHandlerWithEnvelope =
 /// registry stays clone-friendly on the Arc share.
 pub type LocalFallbackResolver = Arc<dyn Fn(&str) -> Option<LocalRpcHandler> + Send + Sync>;
 
+/// What kind of actor owns the ability — the AXIOM seven-tuple
+/// `callee` form for this verb.
+///
+/// Per the owner-truth-table spec
+/// (`docs/spec/owner-truth-table/ability-owner-truth-table.tex`)
+/// every registered ability falls into exactly one of these
+/// categories. The registry stores it alongside the handler so
+/// downstream consumers (`meta.list_abilities` synth, advertise
+/// prelude, CLI render layer) can read owner-kind without
+/// sniffing the name string.
+///
+/// **M0 of the system-namespace migration (RFC-001 v4.1.6 carrier).**
+/// Before M0 the registry was keyed only on the name; meta_ability
+/// derived owner via `name.starts_with("01HUB.")` and friends, and
+/// the session-prelude algorithm derived "agent identity" from
+/// `name.split_once('.')`. Both are flat-namespace conflations that
+/// shipped a P0 regression on the Frontend Agents page (29 fake
+/// agents from 24 system namespaces). This enum is the structural
+/// fix — owner is declared at registration, not inferred from name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OwnerKind {
+    /// Hosted by THIS device's daemon directly. Examples (terminal
+    /// state): `device.fs.read`, `device.fleet.list_nodes`,
+    /// `device.keyring.sign`, `device.session`, `device.invoke_remote`.
+    Device,
+    /// Hosted by the realm hub (federation-tier). Examples (terminal
+    /// state): `hub.openai.chat_completions`, `hub.openai.list_models`.
+    /// The handler may execute on the device daemon as a hub-local
+    /// proxy, but the protocol owner is the hub.
+    Hub,
+    /// Hosted by a sub-agent on this device. The contained string is
+    /// the sub-agent's `agent_id` (e.g. `"codex"`, `"web-builder"`,
+    /// `"consent"`). The full owner URA is
+    /// `easynet:///r/<realm>/agent/<user-uuid>.<agent_id>`; the
+    /// realm + user are read from credentials at advertise time.
+    Agent(String),
+    /// Hosted by a user (the daemon's pages-user / canonical user).
+    /// The contained string is the user-id slot used at registration
+    /// time — the slug from `credentials.username` today; will
+    /// transition to `credentials.user_id` (UUID) per Q4 of the
+    /// truth-table spec. Example (terminal state):
+    /// `<user-uuid>.api_key.create`.
+    User(String),
+}
+
 /// Local-ability registry. Keyed by full ability name. v1 shape is
 /// a `BTreeMap` for deterministic iteration order; the registry
 /// is read-mostly (built once at daemon start, queried per
@@ -254,6 +299,18 @@ pub struct LocalAbilityRegistry {
     rpc_with_env: BTreeMap<String, LocalRpcHandlerWithEnvelope>,
     stream_with_env: BTreeMap<String, LocalStreamHandlerWithEnvelope>,
     bidi_with_env: BTreeMap<String, LocalBidiHandlerWithEnvelope>,
+    /// Owner kind per ability name. Keyed identically to the six
+    /// handler maps above (a name lives in exactly one handler map
+    /// AND in exactly one entry here). M0 of the system-namespace
+    /// migration: every register call records the owner here so
+    /// downstream consumers stop sniffing the name string. Legacy
+    /// `register_rpc` / `register_stream` / `register_bidi` /
+    /// `register_*_with_envelope` shims default to `OwnerKind::Device`
+    /// — the safe choice for the bulk of today's catalogue, since
+    /// 80%+ of system abilities are device-bundle. Per-call sites
+    /// migrate to the `_with_owner` variants commit-by-commit; the
+    /// shims are deleted at M0 commit 6.
+    owner: BTreeMap<String, OwnerKind>,
 }
 
 impl std::fmt::Debug for LocalAbilityRegistry {
@@ -270,6 +327,7 @@ impl std::fmt::Debug for LocalAbilityRegistry {
             .field("rpc_with_env_count", &self.rpc_with_env.len())
             .field("stream_with_env_count", &self.stream_with_env.len())
             .field("bidi_with_env_count", &self.bidi_with_env.len())
+            .field("owner_count", &self.owner.len())
             .field("has_rpc_fallback", &self.rpc_fallback.is_some())
             .finish()
     }
@@ -280,18 +338,76 @@ impl LocalAbilityRegistry {
         Self::default()
     }
 
-    /// Register an RPC handler under `ability`. Replaces any prior
-    /// handler at the same key — the daemon owns this registry and
-    /// is the only writer, so accidental duplicate registration
-    /// would be a bug at startup, not a race.
+    /// Register an RPC handler under `ability` with explicit owner.
+    /// Replaces any prior handler at the same key — the daemon owns
+    /// this registry and is the only writer, so accidental duplicate
+    /// registration would be a bug at startup, not a race.
+    ///
+    /// **M0 of the system-namespace migration.** New call sites
+    /// must use this variant; the legacy [`register_rpc`] is a
+    /// transitional shim that defaults `owner` to
+    /// [`OwnerKind::Device`]. Once every call site has migrated
+    /// (M0 commit 6) the shim is deleted.
+    pub fn register_rpc_with_owner(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        handler: LocalRpcHandler,
+    ) {
+        let name = ability.into();
+        self.owner.insert(name.clone(), owner);
+        self.rpc.insert(name, handler);
+    }
+
+    /// Register an RPC handler under `ability`. Owner defaults to
+    /// [`OwnerKind::Device`] — the safe choice for the bulk of
+    /// today's catalogue (80%+ of system abilities are device-
+    /// bundle). New call sites should use [`register_rpc_with_owner`]
+    /// to declare the actual owner explicitly.
+    ///
+    /// As of M0 commit 5 of the system-namespace migration, every
+    /// production register site has migrated to the `_with_owner`
+    /// family; this shim is retained only because a handful of
+    /// test fixtures across the agents module still use it
+    /// (`test.api_key.*`-style harness wiring), and migrating them
+    /// adds zero owner-attribution value. M0 commit 6 (a separate,
+    /// optional follow-up PR) deletes the shim once those tests
+    /// are also converted.
     pub fn register_rpc(&mut self, ability: impl Into<String>, handler: LocalRpcHandler) {
-        self.rpc.insert(ability.into(), handler);
+        self.register_rpc_with_owner(ability, OwnerKind::Device, handler);
+    }
+
+    /// Register a stream handler with explicit owner. See
+    /// [`register_rpc_with_owner`] for the M0 migration rationale.
+    pub fn register_stream_with_owner(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        handler: LocalStreamHandler,
+    ) {
+        let name = ability.into();
+        self.owner.insert(name.clone(), owner);
+        self.stream.insert(name, handler);
     }
 
     /// Register a stream handler under `ability`. Same single-
-    /// writer model as `register_rpc`.
+    /// writer model as `register_rpc`. Transitional shim;
+    /// defaults owner to `OwnerKind::Device`.
     pub fn register_stream(&mut self, ability: impl Into<String>, handler: LocalStreamHandler) {
-        self.stream.insert(ability.into(), handler);
+        self.register_stream_with_owner(ability, OwnerKind::Device, handler);
+    }
+
+    /// Register a bidi handler with explicit owner. See
+    /// [`register_rpc_with_owner`] for the M0 migration rationale.
+    pub fn register_bidi_with_owner(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        handler: LocalBidiHandler,
+    ) {
+        let name = ability.into();
+        self.owner.insert(name.clone(), owner);
+        self.bidi.insert(name, handler);
     }
 
     /// Register a bidi handler under `ability`. Same single-writer
@@ -305,8 +421,25 @@ impl LocalAbilityRegistry {
     /// (registry lookup, validation, channel construction) must
     /// surface as `Err` from the closure so §I3 holds: a failed
     /// open never produces a half-live session.
+    ///
+    /// Transitional shim; defaults owner to `OwnerKind::Device`.
     pub fn register_bidi(&mut self, ability: impl Into<String>, handler: LocalBidiHandler) {
-        self.bidi.insert(ability.into(), handler);
+        self.register_bidi_with_owner(ability, OwnerKind::Device, handler);
+    }
+
+    /// Register an envelope-aware RPC handler with explicit owner.
+    /// See [`register_rpc_with_owner`] for the M0 migration
+    /// rationale and [`register_rpc_with_envelope`] for the
+    /// envelope-context contract.
+    pub fn register_rpc_with_envelope_and_owner(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        handler: LocalRpcHandlerWithEnvelope,
+    ) {
+        let name = ability.into();
+        self.owner.insert(name.clone(), owner);
+        self.rpc_with_env.insert(name, handler);
     }
 
     /// Register an envelope-aware RPC handler. Used by abilities
@@ -319,33 +452,78 @@ impl LocalAbilityRegistry {
     /// context. Mutually exclusive with `register_rpc` per ability
     /// — registering both is a startup bug (caller picks one
     /// shape per ability).
+    ///
+    /// Transitional shim; defaults owner to `OwnerKind::Device`.
     pub fn register_rpc_with_envelope(
         &mut self,
         ability: impl Into<String>,
         handler: LocalRpcHandlerWithEnvelope,
     ) {
-        self.rpc_with_env.insert(ability.into(), handler);
+        self.register_rpc_with_envelope_and_owner(ability, OwnerKind::Device, handler);
+    }
+
+    /// Envelope-aware stream variant with explicit owner. See
+    /// [`register_rpc_with_owner`] for the M0 migration rationale.
+    pub fn register_stream_with_envelope_and_owner(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        handler: LocalStreamHandlerWithEnvelope,
+    ) {
+        let name = ability.into();
+        self.owner.insert(name.clone(), owner);
+        self.stream_with_env.insert(name, handler);
     }
 
     /// Envelope-aware stream variant. See `register_rpc_with_envelope`
-    /// for the rationale.
+    /// for the rationale. Transitional shim; defaults owner to
+    /// `OwnerKind::Device`.
     pub fn register_stream_with_envelope(
         &mut self,
         ability: impl Into<String>,
         handler: LocalStreamHandlerWithEnvelope,
     ) {
-        self.stream_with_env.insert(ability.into(), handler);
+        self.register_stream_with_envelope_and_owner(ability, OwnerKind::Device, handler);
+    }
+
+    /// Envelope-aware bidi variant with explicit owner. See
+    /// [`register_rpc_with_owner`] for the M0 migration rationale.
+    pub fn register_bidi_with_envelope_and_owner(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        handler: LocalBidiHandlerWithEnvelope,
+    ) {
+        let name = ability.into();
+        self.owner.insert(name.clone(), owner);
+        self.bidi_with_env.insert(name, handler);
     }
 
     /// Envelope-aware bidi variant. See `register_rpc_with_envelope`
-    /// for the rationale.
+    /// for the rationale. Transitional shim; defaults owner to
+    /// `OwnerKind::Device`.
     pub fn register_bidi_with_envelope(
         &mut self,
         ability: impl Into<String>,
         handler: LocalBidiHandlerWithEnvelope,
     ) {
-        self.bidi_with_env.insert(ability.into(), handler);
+        self.register_bidi_with_envelope_and_owner(ability, OwnerKind::Device, handler);
     }
+
+    /// Look up the owner kind for a registered ability. Returns
+    /// `None` when the ability has not been registered (or was
+    /// registered before owner tracking landed — should not happen
+    /// after M0 commit 1).
+    ///
+    /// Use this from synth paths and advertise scanners INSTEAD of
+    /// sniffing the name string. The 2026-05-05 keyring rename
+    /// regression on the Frontend Agents page was caused by a synth
+    /// path doing `name.starts_with("01HUB.")`; reading owner here
+    /// makes that class of bug structurally impossible.
+    pub fn lookup_owner(&self, ability: &str) -> Option<&OwnerKind> {
+        self.owner.get(ability)
+    }
+
 
     /// Lookup helper — exposed because PR-ATTACH onwards will need
     /// a way to introspect "what abilities does this daemon
@@ -1111,6 +1289,354 @@ mod tests {
         PeerInfo {
             node: NodeId::new("x"),
             labels: BTreeMap::new(),
+        }
+    }
+
+    // ── M0 commit 1: OwnerKind round-trip ─────────────────────────
+
+    fn ok_handler() -> LocalRpcHandler {
+        Arc::new(|_args| Ok(json!({"ok": true})))
+    }
+
+    #[test]
+    fn owner_round_trips_for_representative_samples_via_register_with_owner() {
+        // Pin the contract: every ability registered via the
+        // `_with_owner` family round-trips through `lookup_owner`
+        // with the exact OwnerKind variant the call site declared.
+        // No name-string sniffing — the registry is the source of
+        // truth for owner kind. M0 of the system-namespace migration.
+        let mut reg = LocalAbilityRegistry::new();
+        reg.register_rpc_with_owner(
+            "device.fs.read",
+            OwnerKind::Device,
+            ok_handler(),
+        );
+        reg.register_rpc_with_owner(
+            "hub.openai.chat_completions",
+            OwnerKind::Hub,
+            ok_handler(),
+        );
+        reg.register_rpc_with_owner(
+            "consent.decide",
+            OwnerKind::Agent("consent".to_string()),
+            ok_handler(),
+        );
+        reg.register_rpc_with_owner(
+            "00000000-0000-0000-0000-000000000001.api_key.create",
+            OwnerKind::User("00000000-0000-0000-0000-000000000001".to_string()),
+            ok_handler(),
+        );
+
+        assert_eq!(reg.lookup_owner("device.fs.read"), Some(&OwnerKind::Device));
+        assert_eq!(
+            reg.lookup_owner("hub.openai.chat_completions"),
+            Some(&OwnerKind::Hub)
+        );
+        assert_eq!(
+            reg.lookup_owner("consent.decide"),
+            Some(&OwnerKind::Agent("consent".to_string()))
+        );
+        assert_eq!(
+            reg.lookup_owner("00000000-0000-0000-0000-000000000001.api_key.create"),
+            Some(&OwnerKind::User(
+                "00000000-0000-0000-0000-000000000001".to_string()
+            ))
+        );
+        // Unregistered ability returns None — synth paths can use
+        // this to detect "not in our local registry" without falling
+        // back to name-string sniffing.
+        assert_eq!(reg.lookup_owner("not.registered"), None);
+    }
+
+    #[test]
+    fn legacy_register_rpc_shim_defaults_owner_to_device() {
+        // The transitional shim. Lets every existing register call
+        // site compile unchanged at M0 commit 1; sites migrate to
+        // the `_with_owner` family commit-by-commit through M0
+        // commits 2-5; the shim is removed at M0 commit 6.
+        // Guarantees the shim default matches the documented
+        // contract ("80%+ of system abilities are device-bundle").
+        let mut reg = LocalAbilityRegistry::new();
+        reg.register_rpc("legacy.shim.smoke", ok_handler());
+        assert_eq!(
+            reg.lookup_owner("legacy.shim.smoke"),
+            Some(&OwnerKind::Device),
+        );
+    }
+
+    #[test]
+    fn owner_tracking_works_across_all_six_register_variants() {
+        // M0 D4 decision: thread OwnerKind across every register
+        // variant (rpc/stream/bidi × with-envelope/without).
+        // Without this we'd ship sniffing fallbacks for the half-
+        // covered variants — the same flat-namespace bug class
+        // that the migration is closing.
+        let mut reg = LocalAbilityRegistry::new();
+
+        let stream_handler: LocalStreamHandler =
+            Arc::new(|_args| Ok(StreamSource::Snapshot(vec![])));
+        let bidi_handler: LocalBidiHandler = Arc::new(|_args| {
+            let (tx_to_client, _rx_to_client) = mpsc::channel::<Value>(1);
+            let (_tx_from_client, rx_from_client) = mpsc::channel::<Value>(1);
+            Ok(BidiSource {
+                to_client: tx_to_client,
+                from_client: rx_from_client,
+            })
+        });
+        let rpc_env: LocalRpcHandlerWithEnvelope =
+            Arc::new(|_ctx, _args| Ok(json!({})));
+        let stream_env: LocalStreamHandlerWithEnvelope =
+            Arc::new(|_ctx, _args| Ok(StreamSource::Snapshot(vec![])));
+        let bidi_env: LocalBidiHandlerWithEnvelope = Arc::new(|_ctx, _args| {
+            let (tx_to_client, _rx_to_client) = mpsc::channel::<Value>(1);
+            let (_tx_from_client, rx_from_client) = mpsc::channel::<Value>(1);
+            Ok(BidiSource {
+                to_client: tx_to_client,
+                from_client: rx_from_client,
+            })
+        });
+
+        reg.register_rpc_with_owner("a.rpc", OwnerKind::Hub, ok_handler());
+        reg.register_stream_with_owner(
+            "a.stream",
+            OwnerKind::Agent("codex".to_string()),
+            stream_handler,
+        );
+        reg.register_bidi_with_owner(
+            "a.bidi",
+            OwnerKind::User("u-1".to_string()),
+            bidi_handler,
+        );
+        reg.register_rpc_with_envelope_and_owner("a.rpc.env", OwnerKind::Device, rpc_env);
+        reg.register_stream_with_envelope_and_owner(
+            "a.stream.env",
+            OwnerKind::Hub,
+            stream_env,
+        );
+        reg.register_bidi_with_envelope_and_owner(
+            "a.bidi.env",
+            OwnerKind::Agent("web-builder".to_string()),
+            bidi_env,
+        );
+
+        assert_eq!(reg.lookup_owner("a.rpc"), Some(&OwnerKind::Hub));
+        assert_eq!(
+            reg.lookup_owner("a.stream"),
+            Some(&OwnerKind::Agent("codex".to_string()))
+        );
+        assert_eq!(
+            reg.lookup_owner("a.bidi"),
+            Some(&OwnerKind::User("u-1".to_string()))
+        );
+        assert_eq!(reg.lookup_owner("a.rpc.env"), Some(&OwnerKind::Device));
+        assert_eq!(reg.lookup_owner("a.stream.env"), Some(&OwnerKind::Hub));
+        assert_eq!(
+            reg.lookup_owner("a.bidi.env"),
+            Some(&OwnerKind::Agent("web-builder".to_string()))
+        );
+    }
+
+    // ── M1: dual-name (aliased) registration ────────────────────────
+
+    #[test]
+    fn legacy_names_rejected_post_m3() {
+        // M3 contract: legacy names are no longer registered. A
+        // dispatcher invocation against a legacy name surfaces
+        // `AbilityNotFound`. Pin so a future revert that re-adds
+        // dual-aliasing has to argue with this test rather than
+        // silently re-introducing the legacy half.
+        let mut reg = LocalAbilityRegistry::new();
+        reg.register_rpc_with_owner(
+            "device.fs.read",
+            OwnerKind::Device,
+            Arc::new(|_args: Value| Ok(json!({"ok": true}))),
+        );
+        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+
+        // Canonical works.
+        let mut t_can = ping_target_local();
+        t_can.ability = "device.fs.read".into();
+        let r = dispatcher.execute_rpc(t_can).unwrap();
+        assert_eq!(r, json!({"ok": true}));
+
+        // Legacy is gone.
+        let mut t_leg = ping_target_local();
+        t_leg.ability = "fs.read".into();
+        let err = dispatcher.execute_rpc(t_leg).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("fs.read"),
+            "AbilityNotFound message must name the legacy ability; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn canonical_register_records_owner() {
+        // The owner table must carry an entry for the canonical
+        // name. A future synth path that reads `lookup_owner` and
+        // gets `None` would produce orphaned descriptors.
+        let mut reg = LocalAbilityRegistry::new();
+        reg.register_rpc_with_owner(
+            "hub.openai.chat_completions",
+            OwnerKind::Hub,
+            Arc::new(|_args: Value| Ok(json!({}))),
+        );
+        // Canonical lookup returns Hub.
+        assert_eq!(
+            reg.lookup_owner("hub.openai.chat_completions"),
+            Some(&OwnerKind::Hub)
+        );
+        // Post-M3 legacy lookup returns None (alias retired).
+        assert_eq!(
+            reg.lookup_owner("01HUB.openai.chat_completions"),
+            None,
+            "post-M3 legacy name must not be in the owner table"
+        );
+    }
+
+    #[test]
+    fn canonical_only_lists_in_catalogue() {
+        // Post-M3: `list_abilities()` returns canonical names
+        // only — the legacy alias has been removed from the
+        // registry. Pin so a future revert that re-introduces
+        // dual-aliasing has to argue with this test rather than
+        // silently re-doubling the catalogue.
+        let mut reg = LocalAbilityRegistry::new();
+        reg.register_rpc_with_owner(
+            "device.shell.run",
+            OwnerKind::Device,
+            Arc::new(|_args: Value| Ok(json!({}))),
+        );
+        let names = reg.list_abilities();
+        assert!(names.iter().any(|n| n == "device.shell.run"));
+        assert!(
+            !names.iter().any(|n| n == "shell.run"),
+            "post-M3 legacy name must not appear in list_abilities()"
+        );
+    }
+
+    #[test]
+    fn last_writer_wins_on_duplicate_canonical_registration() {
+        // Pin: registering `device.foo` twice with different
+        // handlers produces "last write wins" semantics. The
+        // single-writer model documents this; the test makes
+        // sure no future change accidentally fan-outs the
+        // dispatch (e.g. a bag-of-handlers + walk-and-pick
+        // shape). Replaces the M1-era
+        // `aliased_canonical_does_not_collide_with_existing_registrations`
+        // test which exercised the same invariant against the
+        // `_aliased` family.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let first_calls = Arc::new(AtomicUsize::new(0));
+        let second_calls = Arc::new(AtomicUsize::new(0));
+        let mut reg = LocalAbilityRegistry::new();
+        let f = Arc::clone(&first_calls);
+        reg.register_rpc_with_owner(
+            "device.x.foo",
+            OwnerKind::Device,
+            Arc::new(move |_args| {
+                f.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({"who": "first"}))
+            }),
+        );
+        let s = Arc::clone(&second_calls);
+        reg.register_rpc_with_owner(
+            "device.x.foo",
+            OwnerKind::Device,
+            Arc::new(move |_args| {
+                s.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({"who": "second"}))
+            }),
+        );
+        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let mut t = ping_target_local();
+        t.ability = "device.x.foo".into();
+        let resp = dispatcher.execute_rpc(t).unwrap();
+        // The aliased registration replaced the prior entry —
+        // single-writer "last write wins" semantics.
+        assert_eq!(resp, json!({"who": "second"}));
+        assert_eq!(first_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(second_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn owner_tracking_works_across_all_six_register_variants_post_m3() {
+        // Post-M3: every register variant records the owner under
+        // the canonical name only. Per the D4 decision, M0
+        // threaded OwnerKind across all six variants; M3 retains
+        // that breadth (the legacy `_aliased` mirror has been
+        // retired).
+        let mut reg = LocalAbilityRegistry::new();
+        let stream_handler: LocalStreamHandler =
+            Arc::new(|_args| Ok(StreamSource::Snapshot(vec![])));
+        let bidi_handler: LocalBidiHandler = Arc::new(|_args| {
+            let (tx_to_client, _rx_to_client) = mpsc::channel::<Value>(1);
+            let (_tx_from_client, rx_from_client) = mpsc::channel::<Value>(1);
+            Ok(BidiSource {
+                to_client: tx_to_client,
+                from_client: rx_from_client,
+            })
+        });
+        let rpc_env: LocalRpcHandlerWithEnvelope = Arc::new(|_ctx, _args| Ok(json!({})));
+        let stream_env: LocalStreamHandlerWithEnvelope =
+            Arc::new(|_ctx, _args| Ok(StreamSource::Snapshot(vec![])));
+        let bidi_env: LocalBidiHandlerWithEnvelope = Arc::new(|_ctx, _args| {
+            let (tx_to_client, _rx_to_client) = mpsc::channel::<Value>(1);
+            let (_tx_from_client, rx_from_client) = mpsc::channel::<Value>(1);
+            Ok(BidiSource {
+                to_client: tx_to_client,
+                from_client: rx_from_client,
+            })
+        });
+
+        reg.register_rpc_with_owner(
+            "device.x.rpc",
+            OwnerKind::Device,
+            Arc::new(|_| Ok(json!({}))),
+        );
+        reg.register_stream_with_owner(
+            "device.x.stream",
+            OwnerKind::Device,
+            stream_handler,
+        );
+        reg.register_bidi_with_owner("device.x.bidi", OwnerKind::Device, bidi_handler);
+        reg.register_rpc_with_envelope_and_owner(
+            "device.x.rpc.env",
+            OwnerKind::Device,
+            rpc_env,
+        );
+        reg.register_stream_with_envelope_and_owner(
+            "device.x.stream.env",
+            OwnerKind::Device,
+            stream_env,
+        );
+        reg.register_bidi_with_envelope_and_owner(
+            "device.x.bidi.env",
+            OwnerKind::Device,
+            bidi_env,
+        );
+
+        for n in [
+            "device.x.rpc",
+            "device.x.stream",
+            "device.x.bidi",
+            "device.x.rpc.env",
+            "device.x.stream.env",
+            "device.x.bidi.env",
+        ] {
+            assert_eq!(
+                reg.lookup_owner(n),
+                Some(&OwnerKind::Device),
+                "{n} should be registered with Device owner"
+            );
+        }
+        // Pin: legacy unprefixed forms are NOT registered post-M3.
+        for legacy in ["x.rpc", "x.stream", "x.bidi", "x.rpc.env", "x.stream.env", "x.bidi.env"] {
+            assert_eq!(
+                reg.lookup_owner(legacy),
+                None,
+                "post-M3 legacy name {legacy} must not be in the owner table"
+            );
         }
     }
 }

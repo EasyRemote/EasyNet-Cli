@@ -37,10 +37,11 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::execution::pty::{PtyCreateSpec, PtyService, PtySessionId};
 
-pub const ABILITY_PTY_SESSION_CREATE: &str = "fleet.pty_session_create";
-pub const ABILITY_PTY_SESSION_CLOSE: &str = "fleet.pty_session_close";
+pub const ABILITY_PTY_SESSION_CREATE: &str = "device.fleet.pty_session_create";
+pub const ABILITY_PTY_SESSION_CLOSE: &str = "device.fleet.pty_session_close";
 
 /// Description published by the dispatcher's `description_for`
 /// arm. Mirrors AXIOM Tier 2.5 §"Baseline Locomotion / pty"
@@ -118,14 +119,30 @@ pub fn register(
     let svc_for_create = Arc::clone(&pty);
     let create_h: LocalRpcHandler =
         Arc::new(move |args: Value| create_handler(&svc_for_create, args));
-    reg.register_rpc(ABILITY_PTY_SESSION_CREATE, Arc::clone(&create_h));
-    reg.register_rpc("fleet.session_create", create_h);
+    reg.register_rpc_with_owner(
+        "device.fleet.pty_session_create",
+        OwnerKind::Device,
+        Arc::clone(&create_h),
+    );
+    reg.register_rpc_with_owner(
+        "device.fleet.session_create",
+        OwnerKind::Device,
+        create_h,
+    );
 
     let pty_for_close = pty;
     let close_h: LocalRpcHandler =
         Arc::new(move |args: Value| close_handler(&pty_for_close, io.as_ref(), args));
-    reg.register_rpc(ABILITY_PTY_SESSION_CLOSE, Arc::clone(&close_h));
-    reg.register_rpc("fleet.session_close", close_h);
+    reg.register_rpc_with_owner(
+        "device.fleet.pty_session_close",
+        OwnerKind::Device,
+        Arc::clone(&close_h),
+    );
+    reg.register_rpc_with_owner(
+        "device.fleet.session_close",
+        OwnerKind::Device,
+        close_h,
+    );
 }
 
 /// `fleet.pty_session_create` handler.

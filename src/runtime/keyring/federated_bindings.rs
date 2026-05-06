@@ -49,7 +49,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
 /// One federated-user-binding record. Written by realm B's
-/// `<self>.keyring.consume_federate_user_token` after the four-
+/// `device.keyring.consume_federate_user_token` after the four-
 /// check verify chain passes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FederatedUserBinding {

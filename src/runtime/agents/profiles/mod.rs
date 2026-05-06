@@ -12,7 +12,7 @@
 //!              loop.*, discuss.* (host-resident operational abilities)
 //!   consent  — consent.* (human-in-the-loop approval flow)
 //!   policy   — policy.* (admission policy evaluation)
-//!   mcp      — mcp.bridge.* + mcp.client.* (edge MCP adapter, single
+//!   mcp      — device.mcp.bridge.* + device.mcp.client.* (edge MCP adapter, single
 //!              Agent owns both inbound and outbound per RFC §1 [P6])
 //!   llm      — conversation.*, session.*, meta.* per LLM sub-agent
 //!              (claude / codex / etc.)
@@ -45,7 +45,7 @@ pub mod policy;
 ///
 /// Single source of truth for the recipe used by both the MCP stdio
 /// server (advertised tool surface) and the in-process
-/// `mcp.bridge.list_tools` ability handler — keeping them on one
+/// `device.mcp.bridge.list_tools` ability handler — keeping them on one
 /// helper is what guarantees external and internal MCP callers see
 /// the same catalog.
 pub fn load_host_descriptors() -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {

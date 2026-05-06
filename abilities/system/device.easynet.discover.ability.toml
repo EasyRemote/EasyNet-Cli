@@ -1,0 +1,12 @@
+schema_version = "1"
+name = "device.easynet.discover"
+description = "Return the full local AbilityDescriptor catalogue. Canonical Invoke surface for ability discovery; the MCP-shaped projection lives at mcp.bridge.list_tools for external MCP clients."
+
+[input_schema]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties.scope]
+type = "string"
+enum = ["local", "realm"]
+description = "`local` (default) returns device-owned abilities only. `realm` adds hub-published abilities the realm hub broadcast at join + heartbeat (RFC-001 v4.1.7)."

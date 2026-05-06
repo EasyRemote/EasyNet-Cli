@@ -1,0 +1,15 @@
+schema_version = "1"
+name = "device.discuss.list_turns"
+description = "Snapshot every turn in a room from `since_seq` (default 0) onwards as a one-shot RPC. Sibling of `discuss.subscribe` for callers that don't need a long-lived stream — CLI rendering after a sub-turn, EAL programs reading transcripts as data."
+
+[input_schema]
+type = "object"
+required = ["room_id"]
+additionalProperties = false
+
+[input_schema.properties.room_id]
+type = "string"
+
+[input_schema.properties.since_seq]
+type = "integer"
+minimum = 0

@@ -1072,7 +1072,7 @@ mod tests {
             .filter_map(|a| a["name"].as_str())
             .collect();
         assert!(
-            names.iter().any(|n| *n == "fs.read"),
+            names.iter().any(|n| *n == "device.fs.read"),
             "device descriptors must survive per-agent stitch; got names = {names:?}"
         );
     }

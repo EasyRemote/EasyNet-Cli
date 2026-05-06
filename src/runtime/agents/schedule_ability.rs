@@ -24,26 +24,37 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::domain::{AgentId, MisfirePolicy, NodeId, ScheduleEntry, ScheduleId, TenantId};
 use crate::runtime::execution::schedule::ScheduleService;
 
-pub const ABILITY_ADD: &str = "schedule.add";
-pub const ABILITY_LIST: &str = "schedule.list";
-pub const ABILITY_REMOVE: &str = "schedule.remove";
-pub const ABILITY_ENABLE: &str = "schedule.enable";
+pub const ABILITY_ADD: &str = "device.schedule.add";
+pub const ABILITY_LIST: &str = "device.schedule.list";
+pub const ABILITY_REMOVE: &str = "device.schedule.remove";
+pub const ABILITY_ENABLE: &str = "device.schedule.enable";
 
 pub fn register(reg: &mut LocalAbilityRegistry, svc: Arc<ScheduleService>) {
     let a = Arc::clone(&svc);
-    reg.register_rpc(ABILITY_ADD, Arc::new(move |args| add_handler(&a, args)));
+    reg.register_rpc_with_owner(
+        "device.schedule.add",
+        OwnerKind::Device,
+        Arc::new(move |args| add_handler(&a, args)),
+    );
     let b = Arc::clone(&svc);
-    reg.register_rpc(ABILITY_LIST, Arc::new(move |args| list_handler(&b, args)));
+    reg.register_rpc_with_owner(
+        "device.schedule.list",
+        OwnerKind::Device,
+        Arc::new(move |args| list_handler(&b, args)),
+    );
     let c = Arc::clone(&svc);
-    reg.register_rpc(
-        ABILITY_REMOVE,
+    reg.register_rpc_with_owner(
+        "device.schedule.remove",
+        OwnerKind::Device,
         Arc::new(move |args| remove_handler(&c, args)),
     );
-    reg.register_rpc(
-        ABILITY_ENABLE,
+    reg.register_rpc_with_owner(
+        "device.schedule.enable",
+        OwnerKind::Device,
         Arc::new(move |args| enable_handler(&svc, args)),
     );
 }

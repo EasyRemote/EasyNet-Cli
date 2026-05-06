@@ -1,0 +1,7 @@
+schema_version = "1"
+name = "device.fleet.deregister_self"
+description = "Inverse of fleet.register_self at shutdown. v1 acknowledges intent; federation fan-out lands with the Invoke replacement."
+
+[input_schema]
+type = "object"
+additionalProperties = false

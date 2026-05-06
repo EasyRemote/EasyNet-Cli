@@ -651,14 +651,36 @@ fn ability_name_from_resource_uri(resource_uri: &str) -> Option<String> {
     // here for routing decisions is `<agent>.<verb>` (everything after
     // the owner segment), e.g. "federation.advertise_agent" for
     // "01HUB.federation.advertise_agent".
-    let parsed = crate::uri::parse_ura(resource_uri).ok()?;
-    if parsed.kind != crate::uri::URAKind::Ability {
+    if let Ok(parsed) = crate::uri::parse_ura(resource_uri) {
+        if parsed.kind == crate::uri::URAKind::Ability
+            && !parsed.agent_id.is_empty()
+            && !parsed.ability_id.is_empty()
+        {
+            return Some(format!("{}.{}", parsed.agent_id, parsed.ability_id));
+        }
+    }
+    // Pre-v4.1.5 fallback: `runtime::publish` still emits the legacy
+    // hub-rooted advertise-call URI shape
+    // `easynet:///r/prv/hub/<realm>/abilities/<verb>@N?…` because the
+    // axon-runtime SDK's typed-substrate channel canonicaliser hasn't
+    // been migrated to v4.1.5 yet (see publish.rs §legacy-hub-uri).
+    // Recognise it here so direct-publish callers (`agent add`) can
+    // dispatch through the local daemon → hub path even when the
+    // advertise wire URI is still in legacy shape.
+    //
+    // Shape: `easynet:///r/prv/hub/<realm>/abilities/<verb>@<ver>?<query>`
+    // — extract `<verb>` (everything between `/abilities/` and the
+    // first of `@` / `?` / EOI).
+    let tail = resource_uri.strip_prefix("easynet:///r/prv/hub/")?;
+    let after_realm = tail.split_once("/abilities/").map(|(_, rest)| rest)?;
+    let verb_end = after_realm
+        .find(|c: char| c == '@' || c == '?')
+        .unwrap_or(after_realm.len());
+    let verb = &after_realm[..verb_end];
+    if verb.is_empty() {
         return None;
     }
-    if parsed.agent_id.is_empty() || parsed.ability_id.is_empty() {
-        return None;
-    }
-    Some(format!("{}.{}", parsed.agent_id, parsed.ability_id))
+    Some(verb.to_string())
 }
 
 fn direct_hub_trust_match(endpoint_url: &str) -> Option<Option<std::path::PathBuf>> {
@@ -2156,6 +2178,35 @@ mod tests {
             Some("federation.advertise_agent")
         );
         assert_eq!(ability_name_from_resource_uri("not-a-resource-uri"), None);
+    }
+
+    #[test]
+    fn ability_name_from_resource_uri_handles_legacy_prv_hub_shape() {
+        // Pre-v4.1.5 fallback. `runtime::publish` still emits the
+        // legacy `easynet:///r/prv/hub/<realm>/abilities/<verb>@N?...`
+        // shape for direct-publish advertise calls; the parser must
+        // recognise it so `agent add` can dispatch the resulting
+        // ability dial through the local daemon → hub path.
+        assert_eq!(
+            ability_name_from_resource_uri(
+                "easynet:///r/prv/hub/acme/abilities/federation.advertise_agent@1?tenant_id=acme"
+            )
+            .as_deref(),
+            Some("federation.advertise_agent")
+        );
+        // Without query string + version segment.
+        assert_eq!(
+            ability_name_from_resource_uri(
+                "easynet:///r/prv/hub/acme/abilities/federation.advertise_abilities"
+            )
+            .as_deref(),
+            Some("federation.advertise_abilities")
+        );
+        // `prv/hub/.../abilities/` followed by empty verb → None.
+        assert_eq!(
+            ability_name_from_resource_uri("easynet:///r/prv/hub/acme/abilities/@1"),
+            None
+        );
     }
 
     #[test]

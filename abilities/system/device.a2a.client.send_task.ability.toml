@@ -1,0 +1,23 @@
+schema_version = "1"
+name = "device.a2a.client.send_task"
+description = "Outbound A2A: dispatch an RPC Invoke against a remote node's ability. Resolves to `<agent_name>.<skill_name>` on the named node and routes through the GatewayApi. Returns {ok:true,result} on success; remote failures and dispatcher errors surface as {ok:false,error} so callers can branch without a try/catch."
+
+[input_schema]
+type = "object"
+required = ["target_node_uri", "agent_name", "skill_name"]
+additionalProperties = false
+
+[input_schema.properties.agent_name]
+type = "string"
+minLength = 1
+
+[input_schema.properties.args]
+description = "Free-form per-skill args; shape per the remote skill's input_schema."
+
+[input_schema.properties.skill_name]
+type = "string"
+minLength = 1
+
+[input_schema.properties.target_node_uri]
+type = "string"
+minLength = 1

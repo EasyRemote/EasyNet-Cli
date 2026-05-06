@@ -68,8 +68,17 @@ use crate::services::realm_trust_anchor::{
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
 
 /// Ability name the daemon registers under and the backend invokes
-/// against. Stable wire surface — DEC-010 calls this out by name;
-/// renaming requires a wire-protocol bump.
+/// against. Stable wire surface — DEC-010 calls this out by name.
+///
+/// **Wire-pinned** — held on the legacy
+/// `<self>.register_device_pubkey` literal until the production
+/// hub / backend (EasyNet/backend +  EasyNet-Axon) ship matching
+/// dual-name acceptance. EasyNet/backend's
+/// `abilityRegisterDevicePubkey` const tracks this string verbatim.
+/// M4 of the system-namespace migration is staged for RFC-001
+/// v4.1.6's wire-break carrier; see
+/// `docs/open-questions/deprecate-self-alias-in-ability-names.md`
+/// Stage 2 for the cross-repo coordination plan.
 pub const ABILITY_SELF_REGISTER_DEVICE_PUBKEY: &str = "<self>.register_device_pubkey";
 
 /// JSON-shaped argument tuple. `role` is a free string here (rather

@@ -73,9 +73,16 @@ use crate::pb::axon::v1::{
 };
 
 /// Daemon-side ability name this initiator targets. The daemon's
-/// `InvokeBidi` dispatcher routes on `EnvelopeOpen.target.ability_name`
-/// and the `<self>.invoke_remote` arm is the hub-side handler PR-3
-/// commit 3/3 lands.
+/// `InvokeBidi` dispatcher routes on
+/// `EnvelopeOpen.target.ability_name`.
+///
+/// **Wire-pinned** — held on the legacy `<self>.invoke_remote`
+/// literal until the production hub (EasyNet-Axon) ships matching
+/// dual-name acceptance. EasyNet/backend's `AbilityInvokeRemote`
+/// const tracks this string verbatim. M4 of the system-namespace
+/// migration is staged for RFC-001 v4.1.6's wire-break carrier;
+/// see `docs/open-questions/deprecate-self-alias-in-ability-names.md`
+/// Stage 2 for the cross-repo coordination plan.
 pub const ABILITY_INVOKE_REMOTE: &str = "<self>.invoke_remote";
 
 /// Stream id used by every BinaryChunk on the invoke_remote bidi.

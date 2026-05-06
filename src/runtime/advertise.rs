@@ -500,10 +500,39 @@ pub fn heartbeat<I: AbilityInvoker>(
     realm: &str,
 ) -> Result<(), String> {
     let resource_uri = heartbeat_resource_uri(realm, tenant_id);
-    // federation.heartbeat takes no arguments; the hub keys the
-    // refresh on the envelope's caller URI alone.
-    let payload = serde_json::json!({});
-    let _ = invoker.invoke_ability(tenant_id, &resource_uri, payload)?;
+    // AXON-RFC-001 v4.1.7 hub-broadcast contract: pass the
+    // device's last-seen hub-abilities revision so the hub can
+    // answer with an incremental diff. The store starts at
+    // revision 0 (empty cache); the hub treats `since=0` as
+    // "fully out of date" and replies with the full snapshot in
+    // the diff's `added` field. v4.1.6 hubs ignore the field and
+    // omit `hub_abilities_diff` from the receipt; the parse path
+    // below treats absent diff as "no change".
+    let store = crate::services::hub_published_ability_store::global();
+    let since = store.revision();
+    let payload = serde_json::json!({
+        "since_abilities_revision": since,
+    });
+    let response = invoker.invoke_ability(tenant_id, &resource_uri, payload)?;
+    // Best-effort diff application: a malformed body or a hub
+    // that doesn't speak the contract leaves the store unchanged
+    // (same as before this PR landed).
+    let body = unwrap_result_json(response);
+    if let Ok(receipt) = serde_json::from_value::<
+        crate::runtime::federation_client::HeartbeatReceipt,
+    >(body)
+    {
+        let diff = receipt.hub_abilities_diff;
+        let added_n = diff.added.len();
+        let removed_n = diff.removed.len();
+        if added_n != 0 || removed_n != 0 {
+            store.apply_diff(diff);
+            eprintln!(
+                "[heartbeat] hub-broadcast diff: +{added_n} -{removed_n} (rev now {})",
+                store.revision()
+            );
+        }
+    }
     Ok(())
 }
 

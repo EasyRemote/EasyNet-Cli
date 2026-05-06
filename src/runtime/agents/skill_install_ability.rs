@@ -62,9 +62,10 @@ use serde_json::{json, Value};
 use crate::facade::cli::skill::{install_skill, remove_skill, upgrade_skill};
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
-pub const ABILITY_INSTALL: &str = "fleet.skill_install";
-pub const ABILITY_REMOVE: &str = "fleet.skill_remove";
-pub const ABILITY_UPGRADE: &str = "fleet.skill_upgrade";
+use crate::runtime::ability_dispatch::OwnerKind;
+pub const ABILITY_INSTALL: &str = "device.fleet.skill_install";
+pub const ABILITY_REMOVE: &str = "device.fleet.skill_remove";
+pub const ABILITY_UPGRADE: &str = "device.fleet.skill_upgrade";
 
 /// Register all three skill-management abilities on the registry.
 /// Stateless: no service handle because the helpers read the agent
@@ -72,9 +73,21 @@ pub const ABILITY_UPGRADE: &str = "fleet.skill_upgrade";
 /// behaviour — newly-registered agents are picked up without a
 /// daemon restart).
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    reg.register_rpc(ABILITY_INSTALL, Arc::new(install_handler));
-    reg.register_rpc(ABILITY_REMOVE, Arc::new(remove_handler));
-    reg.register_rpc(ABILITY_UPGRADE, Arc::new(upgrade_handler));
+    reg.register_rpc_with_owner(
+        "device.fleet.skill_install",
+        OwnerKind::Device,
+        Arc::new(install_handler),
+    );
+    reg.register_rpc_with_owner(
+        "device.fleet.skill_remove",
+        OwnerKind::Device,
+        Arc::new(remove_handler),
+    );
+    reg.register_rpc_with_owner(
+        "device.fleet.skill_upgrade",
+        OwnerKind::Device,
+        Arc::new(upgrade_handler),
+    );
 }
 
 /// `fleet.skill_install` handler.

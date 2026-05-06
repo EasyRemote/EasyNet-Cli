@@ -23,32 +23,37 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::{LocalAbilityRegistry, StreamSource};
+use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::domain::{AgentId, LoopId};
 use crate::runtime::execution::loop_instance::LoopService;
 
-pub const ABILITY_CREATE: &str = "loop.create";
-pub const ABILITY_STATUS: &str = "loop.status";
-pub const ABILITY_SUBSCRIBE: &str = "loop.subscribe";
-pub const ABILITY_CANCEL: &str = "loop.cancel";
+pub const ABILITY_CREATE: &str = "device.loop.create";
+pub const ABILITY_STATUS: &str = "device.loop.status";
+pub const ABILITY_SUBSCRIBE: &str = "device.loop.subscribe";
+pub const ABILITY_CANCEL: &str = "device.loop.cancel";
 
 pub fn register(reg: &mut LocalAbilityRegistry, svc: Arc<LoopService>) {
     let a = Arc::clone(&svc);
-    reg.register_rpc(
-        ABILITY_CREATE,
+    reg.register_rpc_with_owner(
+        "device.loop.create",
+        OwnerKind::Device,
         Arc::new(move |args| create_handler(&a, args)),
     );
     let b = Arc::clone(&svc);
-    reg.register_rpc(
-        ABILITY_STATUS,
+    reg.register_rpc_with_owner(
+        "device.loop.status",
+        OwnerKind::Device,
         Arc::new(move |args| status_handler(&b, args)),
     );
     let c = Arc::clone(&svc);
-    reg.register_stream(
-        ABILITY_SUBSCRIBE,
+    reg.register_stream_with_owner(
+        "device.loop.subscribe",
+        OwnerKind::Device,
         Arc::new(move |args| subscribe_handler(&c, args)),
     );
-    reg.register_rpc(
-        ABILITY_CANCEL,
+    reg.register_rpc_with_owner(
+        "device.loop.cancel",
+        OwnerKind::Device,
         Arc::new(move |args| cancel_handler(&svc, args)),
     );
 }

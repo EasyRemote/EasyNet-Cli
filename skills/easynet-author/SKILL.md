@@ -1,6 +1,6 @@
 ---
 name: easynet-author
-description: Create reusable EasyNet abilities, skills, and EAL workflows — author by hand or via mission.think auto-curation. Use when the user asks to package a workflow, save a lesson, write an ability/skill/EAL mission — OR when YOU notice you've solved the same problem twice, learned a non-obvious rule, written a multi-step recipe by hand, or hit a tool gap that should be permanent rather than re-discovered next time.
+description: Create reusable EasyNet abilities, skills, and EAL workflows — author by hand or via device.mission.think auto-curation. Use when the user asks to package a workflow, save a lesson, write an ability/skill/EAL mission — OR when YOU notice you've solved the same problem twice, learned a non-obvious rule, written a multi-step recipe by hand, or hit a tool gap that should be permanent rather than re-discovered next time.
 allowed-tools: [Read, Write, Edit, Bash, mcp__easynet]
 ---
 
@@ -23,7 +23,7 @@ Take a one-shot insight and turn it into something reusable: a published ability
 - You just chained ≥3 ability calls (discover, fetch, parse, output) by hand. The chain is a Path A candidate (EAL exec ability).
 - You solved the same kind of problem in this conversation that you solved earlier in another. Either path A (deterministic) or path C (let judge decide).
 - The user gave you a non-obvious correction that overrules a default ("don't summarize at the end", "always lift env-reads to boot"). That's path B (skill).
-- You hit a niche knowledge piece — a CLI flag order, a workspace convention, a fact-from-experience that wasn't in CLAUDE.md and isn't derivable from `git log`. Path C — let `mission.think`'s judge decide niche-ness.
+- You hit a niche knowledge piece — a CLI flag order, a workspace convention, a fact-from-experience that wasn't in CLAUDE.md and isn't derivable from `git log`. Path C — let `device.mission.think`'s judge decide niche-ness.
 - A long task wraps up and a "this would help future-me" feeling lingers. Path C.
 - **Anti-trigger** (do NOT activate): the lesson is a single trivial fix already in the diff, the lesson is in CLAUDE.md, the lesson is "remember the user's name" (use memory, not skill).
 
@@ -45,7 +45,7 @@ A reusable lesson exists. What is it?
 │   → Path B: hand-author a skill (Anthropic SKILL.md)
 │
 ├── Not sure — emerged from a real task and you can't tell ability vs skill
-│   → Path C: mission.think auto-curate
+│   → Path C: device.mission.think auto-curate
 │
 └── Multi-step recipe that calls several existing abilities
     → Path A with [exec] kind = "eal"
@@ -100,8 +100,8 @@ This catches: bad `schema_version`, missing required keys, unknown `[exec].kind`
 cp my-ability.toml ~/.easynet/workspaces/claude/abilities/weather.ability.toml
 easynet agent refresh
 
-# Option 2: invoke ability.publish (works in-process, programmatic)
-easynet ability invoke ability.publish --args '{
+# Option 2: invoke device.ability.publish (works in-process, programmatic)
+easynet ability invoke device.ability.publish --args '{
   "owner_agent_id": "claude",
   "manifest_toml": "<full TOML body>"
 }'
@@ -160,7 +160,7 @@ One paragraph purpose.
 **Publish**:
 
 ```bash
-easynet ability invoke skill.publish --args '{
+easynet ability invoke device.skill.publish --args '{
   "owner_agent_id": "claude",
   "skill_name":     "<slug matching front-matter name>",
   "skill_md":       "<full SKILL.md body>"
@@ -177,9 +177,9 @@ easynet agent send claude "<prompt that should trigger the new skill>"
 # That confirms Claude Code's loader matched the description and activated.
 ```
 
-### 4. Path C — mission.think auto-curate
+### 4. Path C — device.mission.think auto-curate
 
-When you can't decide ability vs skill, or the lesson emerged from doing a task and you want a structured judge to decide, run `mission.think`. It spins three sessions: worker (does the task), judge (classifies any sinkable lesson), curator (writes ability.toml or SKILL.md if judge greenlights).
+When you can't decide ability vs skill, or the lesson emerged from doing a task and you want a structured judge to decide, run `device.mission.think`. It spins three sessions: worker (does the task), judge (classifies any sinkable lesson), curator (writes device.ability.toml or SKILL.md if judge greenlights).
 
 **Always start with `--dry-run`** — see what the curator would publish before letting it touch the workspace.
 
@@ -209,7 +209,7 @@ Output envelope to read:
     "ok":            true,
     "dry_run":       true,
     "target":        "skill",
-    "authored_body": "<the full SKILL.md or ability.toml that WOULD have been published>"
+    "authored_body": "<the full SKILL.md or device.ability.toml that WOULD have been published>"
   }
 }
 ```
@@ -219,7 +219,7 @@ If the verdict + body look right, drop `--dry-run` and rerun to actually publish
 **Limitations** (real, observed):
 
 - The third in-process chat call (curator) can hit a chat-handler stderr panic on some daemon states. Failure-soft path catches it; you'll see `termination_reason: "worker_error"` or `"judge_error"`. Workaround: restart the daemon (`easynet runtime stop && easynet runtime start`) and retry.
-- `mission.think` is heavy (3 LLM calls per cycle). For trivial lessons, hand-authoring (path A or B) is faster.
+- `device.mission.think` is heavy (3 LLM calls per cycle). For trivial lessons, hand-authoring (path A or B) is faster.
 
 ## Examples
 
@@ -253,7 +253,7 @@ User (third time correcting): no, when reviewing code, ALWAYS lead with what's r
 1. Self-trigger fires: "user gave the same correction multiple times → save it as a skill".
 2. Decide: LLM judgement, no fixed I/O → Path B.
 3. Author SKILL.md following template.
-4. `easynet ability invoke skill.publish` with the body.
+4. `easynet ability invoke device.skill.publish` with the body.
 5. Verify by next code-review prompt — Claude Code should activate the skill and lead with strengths.
 
 ### Example: Path C — emerged from a long task (self-prompted)
@@ -278,7 +278,7 @@ genuinely useful next time.
 - **Reserved verbs**: `chat` cannot be published or unpublished — it's the agent's baseline. The validator rejects this.
 - **EAL exec abilities** must reference real verbs in the catalog. The validator runs the EAL parser and rejects member-calls (`<agent>.<verb>`) where `<agent>.<verb>` isn't in the owner's published catalog.
 - **Skill activation is by description**. A SKILL.md missing `## When This Skill Activates` or with a `description` lacking "Use when …" will land on disk but never be picked up. `validate_authored_skill` enforces this.
-- **Don't publish trivial fixes**. The exclusion list (in `mission.think`'s judge prompt and in this skill's anti-triggers) covers: derivable from code, in git log, debug recipe for a single bug, ephemeral task state, already in CLAUDE.md.
+- **Don't publish trivial fixes**. The exclusion list (in `device.mission.think`'s judge prompt and in this skill's anti-triggers) covers: derivable from code, in git log, debug recipe for a single bug, ephemeral task state, already in CLAUDE.md.
 - **Hot reload**: published abilities are picked up by the in-daemon dispatcher's fallback resolver immediately; `easynet agent refresh` propagates them to axon-runtime's catalog. Skills are picked up by Claude Code on the next chat call (no daemon restart required) because the loader scans the workspace on each subprocess spawn.
 
 ## References

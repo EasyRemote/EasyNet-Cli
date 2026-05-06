@@ -1049,6 +1049,7 @@ mod tests {
             Arc::new(LoopService::new()),
             &Default::default(),
             Arc::new(Vec::new()),
+            crate::runtime::agents::PagesIdentity::default(),
         );
         let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
             Arc::new(NoopGateway::new());
@@ -1071,7 +1072,7 @@ mod tests {
         });
         let frame = dispatch_frame(
             42,
-            "fs.read",
+            "device.fs.read",
             serde_json::to_vec(&args).expect("encode args"),
         );
 

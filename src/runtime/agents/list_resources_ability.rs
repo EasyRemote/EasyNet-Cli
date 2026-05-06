@@ -47,13 +47,18 @@ use serde_json::{json, Value};
 use crate::persistence::resources::{self, filter_by_kinds, ResourceEntry, ResourceType};
 use crate::runtime::ability_descriptor::AbilityClass;
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::agents::ability_toml::Rfc006Metadata;
 
-pub const ABILITY_META_LIST_RESOURCES: &str = "meta.list_resources";
+pub const ABILITY_META_LIST_RESOURCES: &str = "device.meta.list_resources";
 
 /// Register `meta.list_resources` on the registry.
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    reg.register_rpc(ABILITY_META_LIST_RESOURCES, Arc::new(handler));
+    reg.register_rpc_with_owner(
+        ABILITY_META_LIST_RESOURCES,
+        OwnerKind::Device,
+        Arc::new(handler),
+    );
 }
 
 /// Handler: read the local resources table, optionally filter by

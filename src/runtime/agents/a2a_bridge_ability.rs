@@ -55,8 +55,9 @@ use serde_json::{json, Value};
 use crate::registry::agents::AgentRegistry;
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
-pub const ABILITY_LIST_SKILLS: &str = "a2a.bridge.list_skills";
-pub const ABILITY_SEND_TASK: &str = "a2a.bridge.send_task";
+use crate::runtime::ability_dispatch::OwnerKind;
+pub const ABILITY_LIST_SKILLS: &str = "device.a2a.bridge.list_skills";
+pub const ABILITY_SEND_TASK: &str = "device.a2a.bridge.send_task";
 
 /// Register both bridge abilities on the registry.
 ///
@@ -80,12 +81,14 @@ pub fn register<F>(
 {
     let provider: Arc<dyn Fn() -> AgentRegistry + Send + Sync> = Arc::new(registry_provider);
     let provider_for_list = Arc::clone(&provider);
-    reg.register_rpc(
-        ABILITY_LIST_SKILLS,
+    reg.register_rpc_with_owner(
+        "device.a2a.bridge.list_skills",
+        OwnerKind::Device,
         Arc::new(move |_args: Value| list_skills_handler(&provider_for_list)),
     );
-    reg.register_rpc(
-        ABILITY_SEND_TASK,
+    reg.register_rpc_with_owner(
+        "device.a2a.bridge.send_task",
+        OwnerKind::Device,
         Arc::new(move |args: Value| send_task_handler(&provider, &local_registry_handle, args)),
     );
 }
@@ -240,7 +243,11 @@ mod tests {
         let mut reg = LocalAbilityRegistry::new();
         for a in echo_agents {
             let name = format!("{a}.echo");
-            reg.register_rpc(name, Arc::new(|args: Value| Ok(json!({"echoed": args}))));
+            reg.register_rpc_with_owner(
+                name,
+                OwnerKind::Device,
+                Arc::new(|args: Value| Ok(json!({"echoed": args}))),
+            );
         }
         let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
         register(&mut reg, provider, Arc::clone(&handle));
@@ -383,8 +390,9 @@ mod tests {
     fn send_task_handler_error_is_surfaced_as_ok_false() {
         let mut reg = LocalAbilityRegistry::new();
         let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
-        reg.register_rpc(
+        reg.register_rpc_with_owner(
             "claude.fails",
+            OwnerKind::Device,
             Arc::new(|_args: Value| anyhow::bail!("planned failure for the test")),
         );
         register(&mut reg, || registry_with("claude"), Arc::clone(&handle));

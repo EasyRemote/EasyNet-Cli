@@ -80,24 +80,33 @@ use serde_json::{json, Value};
 use crate::core::ability_spec::AbilityManifest;
 use crate::registry::agents;
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::directory::ABILITY_MANIFEST_SUFFIX;
 
 /// Wire name of the publish meta-ability. Pinned because the
 /// curator session in `mission.think` calls it by string; a rename
 /// breaks every published mission.
-pub const ABILITY_PUBLISH: &str = "ability.publish";
+pub const ABILITY_PUBLISH: &str = "device.ability.publish";
 
 /// Wire name of the unpublish meta-ability. Same pinning rationale
 /// as `ABILITY_PUBLISH`.
-pub const ABILITY_UNPUBLISH: &str = "ability.unpublish";
+pub const ABILITY_UNPUBLISH: &str = "device.ability.unpublish";
 
 /// Register both verbs on the registry. Stateless: the handlers
 /// reach disk directly and read the agent registry on every call,
 /// because publish is rare and the registry lookup is cheap (no
 /// hot-path concern). No captured state to keep coherent.
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    reg.register_rpc(ABILITY_PUBLISH, Arc::new(publish_handler));
-    reg.register_rpc(ABILITY_UNPUBLISH, Arc::new(unpublish_handler));
+    reg.register_rpc_with_owner(
+        "device.ability.publish",
+        OwnerKind::Device,
+        Arc::new(publish_handler),
+    );
+    reg.register_rpc_with_owner(
+        "device.ability.unpublish",
+        OwnerKind::Device,
+        Arc::new(unpublish_handler),
+    );
 }
 
 /// `ability.publish` handler.

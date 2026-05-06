@@ -153,7 +153,7 @@ pub fn handle_sign(handle: &KeyringHandle, args: Value) -> Result<Value> {
     Ok(json!({ "signature_b64": b64_encode(&sig) }))
 }
 
-/// **PR-N4 commit 2/N**. `<self>.keyring.federate_user_identity_token`
+/// **PR-N4 commit 2/N**. `device.keyring.federate_user_identity_token`
 /// ability handler. Realm A's daemon raises a `UserBindingToken`
 /// destined for `target_realm` (= the realm B the user wants to be
 /// recognised on). The token's `source_realm` + `source_user_uri`
@@ -191,7 +191,7 @@ pub fn handle_federate_user_identity_token(handle: &KeyringHandle, args: Value) 
     let source_user_uri = handle.device_subject().ok_or_else(|| {
         anyhow!(
             "daemon has no bound device-subject; \
-             call <self>.keyring.bind_subject before raising user binding tokens"
+             call device.keyring.bind_subject before raising user binding tokens"
         )
     })?;
     let source_realm = parse_realm_from_uri(&source_user_uri).ok_or_else(|| {
@@ -217,7 +217,7 @@ pub fn handle_federate_user_identity_token(handle: &KeyringHandle, args: Value) 
         .ok_or_else(|| {
             anyhow!(
                 "no active agent_signing entry in keyring; \
-             call <self>.keyring.create with purpose=agent_signing first"
+             call device.keyring.create with purpose=agent_signing first"
             )
         })?;
     let pubkey_raw = b64_decode(&signing_entry.public_key_b64)?;
@@ -270,7 +270,7 @@ fn parse_realm_from_uri(uri: &str) -> Option<&str> {
     Some(realm)
 }
 
-/// **PR-N4 commit 3/N**. `<self>.keyring.consume_federate_user_token`
+/// **PR-N4 commit 3/N**. `device.keyring.consume_federate_user_token`
 /// ability handler. Realm B's user (already authenticated on
 /// realm B with `local_user_id`) consumes a `UserBindingToken`
 /// issued by realm A. On success, a `FederatedUserBinding` row
@@ -517,7 +517,7 @@ pub fn register_for_owner(reg: &mut LocalAbilityRegistry, owner: &str, handle: A
 }
 
 /// **PR-N4 commit 3/N**. Register the consumer-side
-/// `<self>.keyring.consume_federate_user_token` ability under
+/// `device.keyring.consume_federate_user_token` ability under
 /// `owner`. Kept as a separate registration function rather
 /// than folding into `register_for_owner` because the bindings
 /// store has a different lifecycle than the keyring handle —

@@ -59,6 +59,7 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::OwnerKind;
 use crate::support::shellguard::destructive;
 use crate::support::shellguard::runner::{
     self, RunError, RunRequest, Sandbox, OUTPUT_DEFAULT_CAP, OUTPUT_HARD_CAP, TIMEOUT_DEFAULT_MS,
@@ -67,7 +68,7 @@ use crate::support::shellguard::runner::{
 
 /// Wire name. Pinned by AXIOM Tier 2.5; a rename is a
 /// protocol break.
-pub const ABILITY_NAME: &str = "process.exec";
+pub const ABILITY_NAME: &str = "device.process.exec";
 
 /// AXIOM Tier 2.5 profile version. Echoed in every receipt
 /// so a verifier can match against the right schema.
@@ -75,7 +76,7 @@ pub const PROFILE_VERSION: &str = "baseline-locomotion-v1";
 
 /// Register the handler. Stateless; no per-call setup.
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    reg.register_rpc(ABILITY_NAME, Arc::new(handler));
+    reg.register_rpc_with_owner("device.process.exec", OwnerKind::Device, Arc::new(handler));
 }
 
 fn handler(args: Value) -> Result<Value> {

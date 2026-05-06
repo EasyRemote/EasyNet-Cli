@@ -1,0 +1,17 @@
+schema_version = "1"
+name = "device.voice.leave_call"
+description = "Drop a participant from a call. The call itself stays active until `voice.end_call` is invoked or every participant has left."
+
+[input_schema]
+type = "object"
+required = ["call_id", "participant_id"]
+additionalProperties = false
+
+[input_schema.properties.call_id]
+type = "string"
+
+[input_schema.properties.participant_id]
+type = "string"
+
+[input_schema.properties.reason]
+type = "string"

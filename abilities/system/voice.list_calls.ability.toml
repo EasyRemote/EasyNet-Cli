@@ -1,7 +1,0 @@
-schema_version = "1"
-name = "voice.list_calls"
-description = "List the call signaling sessions currently known to this daemon. Returns each call's state plus the current participant snapshot."
-
-[input_schema]
-type = "object"
-additionalProperties = false

@@ -3,8 +3,9 @@
 //
 // File: src/facade/cli/llm_api.rs
 // Description: tiny OpenAI-shape chat client. Sends a request
-//              through `01HUB.openai.chat_completions` (RFC-006-C
-//              v0.1) and prints the assistant reply.
+//              through `device.openai.chat_completions` (RFC-006-C
+//              v0.1, device-local OpenAI shim) and prints the
+//              assistant reply.
 //
 //              Goal: silan can do `easynet llm-api "tell me a
 //              joke"` from any terminal and the call goes through
@@ -66,8 +67,9 @@ fn pick_model(arg: Option<String>) -> anyhow::Result<String> {
     if let Some(m) = arg {
         return Ok(m);
     }
-    // Ask the hub adapter what's available; pick first.
-    let result = invoke_local_ability("01HUB.openai.list_models", json!({}))
+    // Ask the device-local OpenAI shim what chat-base abilities
+    // this host advertises; pick first.
+    let result = invoke_local_ability("device.openai.list_models", json!({}))
         .map_err(|e| anyhow::anyhow!("could not list models: {e}"))?;
     let data = result
         .get("data")
@@ -110,7 +112,7 @@ pub fn run(args: LlmApiArgs) -> anyhow::Result<()> {
 
     eprintln!("[llm-api] model={model}");
 
-    let result = invoke_local_ability("01HUB.openai.chat_completions", adapter_args)
+    let result = invoke_local_ability("device.openai.chat_completions", adapter_args)
         .map_err(|e| anyhow::anyhow!("chat_completions failed: {e}"))?;
 
     if args.json {

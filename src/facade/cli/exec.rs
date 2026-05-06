@@ -62,7 +62,7 @@ pub fn run(args: ExecArgs) -> anyhow::Result<()> {
         "timeout_ms": timeout_ms,
     });
     let result = if is_local_exec_target(&args.node) {
-        invoke_local_ability("process.exec", payload).context("invoke process.exec")?
+        invoke_local_ability("device.process.exec", payload).context("invoke process.exec")?
     } else {
         invoke_remote_process_exec(&args.node, payload)?
     };

@@ -1,7 +1,0 @@
-schema_version = "1"
-name = "a2a.bridge.list_skills"
-description = "List the host's local A2A agent cards in the v2 envelope shape (`{agents: [...]}`). Identical projection to what this node ships as the `a2a.agents_json` realm label, so external A2A consumers and in-process callers see one catalogue."
-
-[input_schema]
-type = "object"
-additionalProperties = false

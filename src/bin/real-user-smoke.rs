@@ -226,6 +226,7 @@ fn main() -> anyhow::Result<()> {
             Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new()),
             Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
             Some(Arc::new(Vec::new())),
+            easynet_cli::runtime::agents::PagesIdentity::from_env(),
         );
         let advertised = reg.list_abilities();
         let chat_ability = advertised.iter().find(|n| n.ends_with(".chat"));
@@ -309,6 +310,7 @@ fn main() -> anyhow::Result<()> {
                 schedule_svc,
                 Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
                 Some(default_loaders),
+                easynet_cli::runtime::agents::PagesIdentity::from_env(),
             ),
             Arc::new(NoopGateway::new()),
         );
@@ -365,6 +367,7 @@ fn main() -> anyhow::Result<()> {
                 Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new()),
                 Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
                 Some(Arc::new(Vec::new())),
+                easynet_cli::runtime::agents::PagesIdentity::from_env(),
             ),
             Arc::new(NoopGateway::new()),
         );
@@ -408,6 +411,7 @@ fn main() -> anyhow::Result<()> {
                     Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new()),
                     Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
                     Some(Arc::new(Vec::new())),
+                    easynet_cli::runtime::agents::PagesIdentity::from_env(),
                 ),
                 Arc::new(NoopGateway::new()),
             );
@@ -489,6 +493,7 @@ fn main() -> anyhow::Result<()> {
                 Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new()),
                 Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
                 Some(Arc::new(Vec::new())),
+                easynet_cli::runtime::agents::PagesIdentity::from_env(),
             ),
             Arc::new(NoopGateway::new()),
         );
@@ -585,6 +590,7 @@ fn main() -> anyhow::Result<()> {
         Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new()),
         Arc::new(easynet_cli::runtime::execution::loop_instance::LoopService::new()),
         Some(Arc::new(Vec::new())),
+        easynet_cli::runtime::agents::PagesIdentity::from_env(),
     );
     let registered_names: std::collections::BTreeSet<String> =
         reg.list_abilities().into_iter().collect();

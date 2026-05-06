@@ -34,7 +34,7 @@ The project_id ends up as the leftmost subdomain (`<project>.<user>.pages.<realm
 
 ### 2. Lay out the project folder
 
-Pick `~/.easynet/web-apps/<project_id>/` as the canonical location (creates per-user, agent-independent). Only ONE rule on the layout: `easynet.app.toml` is reserved for EasyNet to read; the rest is yours.
+Pick `~/.easynet/web-apps/<project_id>/` as the canonical location (creates per-user, agent-independent). Only ONE rule on the layout: `device.easynet.app.toml` is reserved for EasyNet to read; the rest is yours.
 
 ```
 ~/.easynet/web-apps/<project_id>/

@@ -281,7 +281,7 @@ mod tests {
         let resp = client
             .round_trip(IncomingFrame::Invoke {
                 request_id: "ffi-1".into(),
-                ability: "observe.health".into(),
+                ability: "device.observe.health".into(),
                 args: serde_json::json!({}),
                 subject: None,
             })

@@ -1,0 +1,7 @@
+schema_version = "1"
+name = "device.meta.describe"
+description = "Return this Agent's identity + ability summary. Lightweight companion to meta.list_abilities — answers \"who are you and roughly what do you do\" in one call so a peer doesn't have to fetch the full descriptor catalogue for a cache check."
+
+[input_schema]
+type = "object"
+additionalProperties = false

@@ -1,0 +1,14 @@
+schema_version = "1"
+name = "device.fleet.deploy_ability"
+description = "Publish an ability bundle to a node. Local target validates the manifest and acknowledges the registration intent. Remote targets defer to the federation Invoke replacement."
+
+[input_schema]
+type = "object"
+required = ["path"]
+additionalProperties = false
+
+[input_schema.properties.node_id]
+type = "string"
+
+[input_schema.properties.path]
+type = "string"

@@ -48,12 +48,17 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::agents::federation_probe;
 
-pub const ABILITY_NETWORK_HEALTH: &str = "observe.network_health";
+pub const ABILITY_NETWORK_HEALTH: &str = "device.observe.network_health";
 
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    reg.register_rpc(ABILITY_NETWORK_HEALTH, Arc::new(|_args: Value| handler()));
+    reg.register_rpc_with_owner(
+        "device.observe.network_health",
+        OwnerKind::Device,
+        Arc::new(|_args: Value| handler()),
+    );
 }
 
 fn handler() -> anyhow::Result<Value> {

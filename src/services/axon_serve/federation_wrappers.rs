@@ -751,7 +751,7 @@ pub fn handle_discover(
 ///
 /// This realises PR-N4 spec §commit 4/N's INV-5 privacy default:
 /// a calling user only sees cross-realm devices that have been
-/// explicitly opted into by a `<self>.keyring.consume_federate_
+/// explicitly opted into by a `device.keyring.consume_federate_
 /// user_token` round on this hub.
 #[must_use]
 pub fn handle_discover_with_user_filter(

@@ -123,7 +123,7 @@ fn check_pairing() -> Check {
 fn check_runtime() -> Check {
     match config::load() {
         Ok(state) => match crate::support::local_invoke::invoke_local_ability(
-            "observe.health",
+            "device.observe.health",
             serde_json::json!({"source": "doctor"}),
         ) {
             Ok(_) => Check {

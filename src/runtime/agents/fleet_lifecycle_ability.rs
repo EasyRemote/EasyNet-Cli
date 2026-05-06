@@ -58,16 +58,19 @@ use serde_json::{json, Value};
 use crate::registry::agents::{self, AgentEntry, AgentType};
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
-pub const ABILITY_START_AGENT: &str = "fleet.start_agent";
-pub const ABILITY_STOP_AGENT: &str = "fleet.stop_agent";
+use crate::runtime::ability_dispatch::OwnerKind;
+pub const ABILITY_START_AGENT: &str = "device.fleet.start_agent";
+pub const ABILITY_STOP_AGENT: &str = "device.fleet.stop_agent";
 
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    reg.register_rpc(
-        ABILITY_START_AGENT,
+    reg.register_rpc_with_owner(
+        "device.fleet.start_agent",
+        OwnerKind::Device,
         Arc::new(|args: Value| start_agent_handler(args)),
     );
-    reg.register_rpc(
-        ABILITY_STOP_AGENT,
+    reg.register_rpc_with_owner(
+        "device.fleet.stop_agent",
+        OwnerKind::Device,
         Arc::new(|args: Value| stop_agent_handler(args)),
     );
 }

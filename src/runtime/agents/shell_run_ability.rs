@@ -74,6 +74,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::OwnerKind;
 use crate::support::shellguard::ast::{parse_for_security, ParseForSecurityResult, SimpleCommand};
 use crate::support::shellguard::destructive;
 use crate::support::shellguard::pathconstraints::{self, Constraints, PathVerdict};
@@ -88,7 +89,7 @@ use crate::support::shellguard::runner::{
 use crate::support::shellguard::security::{self, SecurityVerdict};
 
 /// Wire name. Pinned by AXIOM Tier 2.5; rename = protocol break.
-pub const ABILITY_NAME: &str = "shell.run";
+pub const ABILITY_NAME: &str = "device.shell.run";
 
 /// AXIOM Tier 2.5 profile version. Echoed in every receipt.
 pub const PROFILE_VERSION: &str = "baseline-locomotion-v1";
@@ -100,7 +101,7 @@ pub const PROFILE_VERSION: &str = "baseline-locomotion-v1";
 const BASH_PATHS: &[&str] = &["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"];
 
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    reg.register_rpc(ABILITY_NAME, Arc::new(handler));
+    reg.register_rpc_with_owner("device.shell.run", OwnerKind::Device, Arc::new(handler));
 }
 
 fn handler(args: Value) -> Result<Value> {

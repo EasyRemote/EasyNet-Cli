@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn device_ability_emits_selfsigned_header() {
         let file = file_with("easynet:///r/acme/agent/01DEV");
-        let h = header_for_ability("observe.health", &file, None)
+        let h = header_for_ability("device.observe.health", &file, None)
             .expect("device ability must produce a header");
         assert_eq!(h.callee_agent_uri, "easynet:///r/acme/agent/01DEV");
         assert_eq!(h.signer_agent_uri, "easynet:///r/acme/agent/01DEV");
@@ -154,7 +154,7 @@ mod tests {
             "default",
             "easynet:///r/acme/agent/01CON",
         );
-        let h = header_for_ability("consent.subscribe", &file, None)
+        let h = header_for_ability("device.consent.subscribe", &file, None)
             .expect("consent ability must produce a header");
         assert_eq!(h.callee_agent_uri, "easynet:///r/acme/agent/01CON");
         assert_eq!(h.signer_agent_uri, "easynet:///r/acme/agent/01DEV");
@@ -177,7 +177,7 @@ mod tests {
         // header pointing at a URA the hub doesn't know about.
         let file = file_with("easynet:///r/acme/agent/01DEV");
         assert!(
-            header_for_ability("consent.request", &file, None).is_none(),
+            header_for_ability("device.consent.request", &file, None).is_none(),
             "missing hosted URA must surface as None, not a fabricated header"
         );
     }
@@ -213,7 +213,7 @@ mod tests {
     fn mcp_bridge_ability_emits_hosted_by_header() {
         let mut file = file_with("easynet:///r/acme/agent/01DEV");
         upsert_hosted_agent(&mut file, "mcp", "default", "easynet:///r/acme/agent/01MCP");
-        let h = header_for_ability("mcp.bridge.list_tools", &file, None)
+        let h = header_for_ability("device.mcp.bridge.list_tools", &file, None)
             .expect("mcp.bridge ability must produce a header");
         assert_eq!(h.callee_agent_uri, "easynet:///r/acme/agent/01MCP");
         assert_eq!(h.signer_agent_uri, "easynet:///r/acme/agent/01DEV");
@@ -224,8 +224,8 @@ mod tests {
         // Pre-join state: the dispatcher should not emit headers
         // because the host URA itself is unknown.
         let file = file_with("");
-        assert!(header_for_ability("observe.health", &file, None).is_none());
-        assert!(header_for_ability("consent.subscribe", &file, None).is_none());
+        assert!(header_for_ability("device.observe.health", &file, None).is_none());
+        assert!(header_for_ability("device.consent.subscribe", &file, None).is_none());
     }
 
     #[test]
@@ -261,7 +261,7 @@ mod tests {
     #[test]
     fn header_passes_validate() {
         let file = file_with("easynet:///r/acme/agent/01DEV");
-        let h = header_for_ability("observe.health", &file, None).unwrap();
+        let h = header_for_ability("device.observe.health", &file, None).unwrap();
         assert!(
             h.validate().is_ok(),
             "every emitted header must round-trip validate"

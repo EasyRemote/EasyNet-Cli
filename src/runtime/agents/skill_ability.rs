@@ -58,7 +58,7 @@ use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
 /// The wire-level ability name. Pinned because backend + frontend
 /// query it by string; a rename would break both repos at once.
-pub const ABILITY_LIST: &str = "fleet.list_abilities";
+pub const ABILITY_LIST: &str = "device.fleet.list_abilities";
 
 /// Register every skill verb on the registry. v1 only ships `list`;
 /// the other verbs (`install`, `remove`, `upgrade`) plug in here
@@ -69,7 +69,12 @@ pub const ABILITY_LIST: &str = "fleet.list_abilities";
 /// per-agent global pools. Symmetric with `ping::register` — no
 /// captured state, no per-request bookkeeping.
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    reg.register_rpc(ABILITY_LIST, Arc::new(list_handler));
+    use crate::runtime::ability_dispatch::OwnerKind;
+    reg.register_rpc_with_owner(
+        "device.fleet.list_abilities",
+        OwnerKind::Device,
+        Arc::new(list_handler),
+    );
 }
 
 /// Crate-internal entry for the `fleet.list_abilities` walk. Used

@@ -9,7 +9,7 @@
 //              `UserBindingToken` is the Ed25519-signed proof of
 //              "user U on realm A intends to be recognised as
 //              their realm B identity". Realm A's backend signs;
-//              realm B's `<self>.keyring.consume_federate_user_token`
+//              realm B's `device.keyring.consume_federate_user_token`
 //              ability verifies via PR-N2's FederatedKeyResolver
 //              and writes a binding entry.
 //
@@ -293,7 +293,7 @@ fn write_lp_bytes(out: &mut Vec<u8>, b: &[u8]) {
 /// Mutates the token's `signature` field in-place. The signing
 /// key MUST be the source realm's backend daemon identity per
 /// INV-1; this function does not enforce that — callers
-/// (the `<self>.keyring.federate_user_identity_token` ability
+/// (the `device.keyring.federate_user_identity_token` ability
 /// handler) verify before calling.
 pub fn sign_user_binding_token(
     token: &mut UserBindingToken,

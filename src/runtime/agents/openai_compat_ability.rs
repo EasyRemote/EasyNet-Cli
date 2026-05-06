@@ -409,12 +409,27 @@ pub fn handle_list_models(_args: Value) -> anyhow::Result<Value> {
 }
 
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    reg.register_rpc(
-        "01HUB.openai.chat_completions",
+    use crate::runtime::ability_dispatch::OwnerKind;
+    // RFC-006-C v0.1 — DEVICE-local OpenAI protocol shim. The
+    // device daemon serves OpenAI's `/v1/chat/completions` and
+    // `/v1/models` HTTP surface against locally-hosted chat-base
+    // abilities (`<agent>.chat`). Owner is `Device` because the
+    // handler runs on the host and only sees host-local chat-base
+    // abilities — there is no hub round-trip in the call path.
+    //
+    // What `hub.openai.*` means is up to whichever hub chose to
+    // advertise it (federation.resolve include_abilities=true
+    // surfaces it to clients on demand). Device-side never
+    // pre-registers a `hub.*` name on behalf of the hub: that
+    // would let the device daemon lie about what the hub offers.
+    reg.register_rpc_with_owner(
+        "device.openai.chat_completions",
+        OwnerKind::Device,
         Arc::new(handle_chat_completions) as LocalRpcHandler,
     );
-    reg.register_rpc(
-        "01HUB.openai.list_models",
+    reg.register_rpc_with_owner(
+        "device.openai.list_models",
+        OwnerKind::Device,
         Arc::new(handle_list_models) as LocalRpcHandler,
     );
 }

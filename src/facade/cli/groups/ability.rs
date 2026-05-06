@@ -145,7 +145,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     // settled on so a single `--node` flag means the same thing
     // across the whole CLI.
     let catalogue = match args.node.as_deref().map(str::trim) {
-        None | Some("local") => invoke_local_ability("easynet.discover", serde_json::json!({}))
+        None | Some("local") => invoke_local_ability("device.easynet.discover", serde_json::json!({}))
             .context("invoke easynet.discover")?,
         Some("") => {
             anyhow::bail!(
@@ -270,7 +270,7 @@ fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
     if let Some(iid) = args.install_id.as_deref().filter(|s| !s.trim().is_empty()) {
         body["install_id"] = serde_json::json!(iid);
     }
-    let result = invoke_local_ability("fleet.uninstall_ability", body)
+    let result = invoke_local_ability("device.fleet.uninstall_ability", body)
         .context("invoke fleet.uninstall_ability")?;
     output::success(&format!("uninstalled {}", args.name));
     if !result.is_null() {

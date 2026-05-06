@@ -656,7 +656,7 @@ mod tests {
         // it as no-op padding) so we use a guaranteed-invalid char.
         let proxy = fresh_proxy();
         let resp = build_response_line(
-            r#"{"tool_name":"observe.health","arguments_b64":"!!!"}"#,
+            r#"{"tool_name":"device.observe.health","arguments_b64":"!!!"}"#,
             &proxy,
         );
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
@@ -680,7 +680,7 @@ mod tests {
         // treated as {} not as a bad-request.
         let proxy = fresh_proxy();
         let resp = build_response_line(
-            r#"{"tool_name":"observe.health","arguments_b64":""}"#,
+            r#"{"tool_name":"device.observe.health","arguments_b64":""}"#,
             &proxy,
         );
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
@@ -708,7 +708,7 @@ mod tests {
         // verify the result_b64 decodes to JSON and isn't empty.
         let proxy = fresh_proxy();
         let resp = build_response_line(
-            r#"{"tool_name":"observe.health","arguments_b64":""}"#,
+            r#"{"tool_name":"device.observe.health","arguments_b64":""}"#,
             &proxy,
         );
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
@@ -727,7 +727,7 @@ mod tests {
         let proxy = fresh_proxy();
         let args = serde_json::json!({"client_marker":"e2e-step3"}).to_string();
         let args_b64 = base64::engine::general_purpose::STANDARD.encode(args.as_bytes());
-        let req = format!(r#"{{"tool_name":"observe.health","arguments_b64":"{args_b64}"}}"#);
+        let req = format!(r#"{{"tool_name":"device.observe.health","arguments_b64":"{args_b64}"}}"#);
         let resp = build_response_line(&req, &proxy);
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
         assert_eq!(v["ok"], true);
@@ -762,7 +762,7 @@ mod tests {
 
         // Client side: open, send request, read response, close.
         let mut client = UnixStream::connect(&socket_path).await.unwrap();
-        let req = "{\"tool_name\":\"observe.health\",\"arguments_b64\":\"\"}\n".as_bytes();
+        let req = "{\"tool_name\":\"device.observe.health\",\"arguments_b64\":\"\"}\n".as_bytes();
         client.write_all(req).await.unwrap();
         client.flush().await.unwrap();
         let (read_half, _) = client.into_split();
@@ -807,7 +807,7 @@ mod tests {
         let mut client = UnixStream::connect(&socket_path).await.unwrap();
         let req_value = json!({
             "mode": "stream",
-            "tool_name": "fleet.attach_session",
+            "tool_name": "device.fleet.attach_session",
             "function_name": "",
             "arguments_b64": base64::engine::general_purpose::STANDARD
                 .encode(b"{\"session_id\":\"nonexistent\"}"),
@@ -887,12 +887,12 @@ mod tests {
     #[test]
     fn mode_omitted_defaults_to_rpc() {
         let req: DispatchRequest =
-            serde_json::from_str(r#"{"tool_name":"observe.health","arguments_b64":""}"#).unwrap();
+            serde_json::from_str(r#"{"tool_name":"device.observe.health","arguments_b64":""}"#).unwrap();
         assert_eq!(req.mode, "rpc");
 
         // Sanity: explicit "rpc" parses too.
         let req2: DispatchRequest = serde_json::from_str(
-            r#"{"mode":"rpc","tool_name":"observe.health","arguments_b64":""}"#,
+            r#"{"mode":"rpc","tool_name":"device.observe.health","arguments_b64":""}"#,
         )
         .unwrap();
         assert_eq!(req2.mode, "rpc");

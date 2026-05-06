@@ -1,0 +1,17 @@
+schema_version = "1"
+name = "device.voice.report_metrics"
+description = "Report QoS metrics from a participant (jitter, packet loss, bitrate). The metrics value is appended to the call's event log and stored as the participant's `last_metrics` snapshot."
+
+[input_schema]
+type = "object"
+required = ["call_id", "participant_id"]
+additionalProperties = false
+
+[input_schema.properties.call_id]
+type = "string"
+
+[input_schema.properties.metrics]
+type = "object"
+
+[input_schema.properties.participant_id]
+type = "string"

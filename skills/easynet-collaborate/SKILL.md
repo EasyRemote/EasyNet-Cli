@@ -46,8 +46,8 @@ Filter rules you apply locally:
 
 - Keep entries whose name matches `<other-agent>.<verb>` for cross-agent calls.
 - Drop your own `<self>.chat` and your other `<self>.<verb>` — those are how callers reach you, not how you reach others.
-- Keep `host.*` / `fs.*` / `shell.*` / `http.*` / `process.exec` if you need a host primitive.
-- Skip daemon-internal namespaces unless you specifically need them: `runtime.*`, `federation.*`, `fleet.pty_session_*`, `a2a.bridge.*`, `mcp.bridge.*`.
+- Keep `host.*` / `fs.*` / `shell.*` / `http.*` / `device.process.exec` if you need a host primitive.
+- Skip daemon-internal namespaces unless you specifically need them: `runtime.*`, `federation.*`, `device.fleet.pty_session_*`, `device.a2a.bridge.*`, `device.mcp.bridge.*`.
 
 ### 2. Invoke
 
@@ -62,10 +62,10 @@ mcp__easynet → <self>.invoke {
 }
 ```
 
-**Multi-step composition** — use `easynet.run` (EAL program):
+**Multi-step composition** — use `device.easynet.run` (EAL program):
 
 ```
-mcp__easynet → easynet.run {
+mcp__easynet → device.easynet.run {
   "source": "mission \"weather-and-quip\" {\n  let w = claude.weather(location: \"Beijing\")\n  let q = codex.quip(topic: \"weather\")\n  print(w)\n  print(q)\n}",
   "label":  "weather-quip"
 }
@@ -81,11 +81,11 @@ Surface the ability's result, not raw JSON. If the call fails, tell the user bri
 
 | Preferred | Legacy alias (still works, don't write new code with) |
 |---|---|
-| `<self>.discover` | `meta.list_abilities` |
-| `<self>.invoke` | `mcp.bridge.call_tool` |
-| `easynet.run` | `mission.run` |
-| `easynet.track <run_id>` | (poll long-running missions) |
-| `easynet.cancel <run_id>` | (cancel in-flight) |
+| `<self>.discover` | `device.meta.list_abilities` |
+| `<self>.invoke` | `device.mcp.bridge.call_tool` |
+| `device.easynet.run` | `device.mission.run` |
+| `device.easynet.track <run_id>` | (poll long-running missions) |
+| `device.easynet.cancel <run_id>` | (cancel in-flight) |
 
 ## Examples
 
@@ -160,5 +160,5 @@ Do NOT use this path when EasyNet daemon is up. The whole point of EasyNet is th
 ## Notes
 
 - The discover registry doesn't change mid-turn unless someone runs `easynet agent refresh`. Cache results within a single reply.
-- For long-running missions (>30 s), use `easynet.run` with a label, then `easynet.track <run_id>` for status. The mission keeps running even if your turn returns first.
+- For long-running missions (>30 s), use `device.easynet.run` with a label, then `device.easynet.track <run_id>` for status. The mission keeps running even if your turn returns first.
 - "I want to BUILD a new ability instead of using one" is the `easynet-author` skill's domain, not this one.

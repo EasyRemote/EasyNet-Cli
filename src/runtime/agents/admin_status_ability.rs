@@ -45,7 +45,8 @@ use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
-pub const ABILITY_ADMIN_STATUS: &str = "admin.status";
+use crate::runtime::ability_dispatch::OwnerKind;
+pub const ABILITY_ADMIN_STATUS: &str = "device.admin.status";
 
 /// Register `admin.status` on the registry.
 ///
@@ -57,8 +58,9 @@ where
     F: Fn() -> usize + Send + Sync + 'static,
 {
     let provider: Arc<dyn Fn() -> usize + Send + Sync> = Arc::new(ability_count_provider);
-    reg.register_rpc(
-        ABILITY_ADMIN_STATUS,
+    reg.register_rpc_with_owner(
+        "device.admin.status",
+        OwnerKind::Device,
         Arc::new(move |_args: Value| handler(&provider)),
     );
 }

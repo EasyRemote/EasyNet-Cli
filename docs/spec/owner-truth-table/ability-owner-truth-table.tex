@@ -1,0 +1,716 @@
+% =====================================================================
+% EasyNet Ability Owner — Truth Table & Default Catalogue
+% =====================================================================
+%
+% Companion to:
+%   docs/rfc/AXON-RFC-001-plan-v4.1.5.md  (URA + AXIOM seven-tuple)
+%
+% Purpose: define, exhaustively, how every default-registered ability
+% maps to the AXIOM Invocation envelope, so future contributors can
+% verify owner stamping, render-layer projection, and federation
+% advertise behaviour without re-deriving the analysis from scratch.
+%
+% Author: 凉冰 (architect)
+% Date:   2026-05-05
+%
+% Compile: xelatex (twice for hyperref bookmarks).
+
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+% xelatex picks up the system PingFang / Songti fonts for CJK fallback.
+% Wrapping the few CJK glyphs (the architect's name 凉冰) in xeCJK
+% lets them render without forcing the whole document onto a Chinese
+% font.
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setCJKmainfont[BoldFont={PingFang SC Semibold}]{PingFang SC}
+
+\usepackage[a4paper,margin=2.2cm,top=2.4cm,bottom=2.4cm]{geometry}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{ltablex}
+\keepXColumns
+\usepackage{enumitem}
+\usepackage{fancyvrb}
+\usepackage{titlesec}
+\usepackage{caption}
+\usepackage{hyperref}
+
+% ---------- Hyperref styling ------------------------------------------
+\hypersetup{%
+  colorlinks   = true,
+  linkcolor    = black,
+  citecolor    = black,
+  urlcolor     = black!70,
+  pdftitle     = {EasyNet Ability Owner Truth Table},
+  pdfauthor    = {Liangbing (architect)},
+  pdfsubject   = {AXIOM seven-tuple owner mapping for the default ability catalogue},
+}
+
+% ---------- Section headings -------------------------------------------
+\titleformat{\section}{\large\bfseries}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\bfseries}{\thesubsection}{0.6em}{}
+\setlength{\parskip}{0.45em}
+\setlength{\parindent}{0pt}
+
+% ---------- Code style -------------------------------------------------
+\renewcommand{\ttdefault}{lmtt}
+\newcommand{\code}[1]{\texttt{\small #1}}
+
+% ---------- Break-friendly typewriter -----------------------------------
+% Long URA / fully-qualified-name strings cannot break inside a normal
+% \texttt cell. The `url` package parses verbatim and inserts soft
+% breaks at the listed separators. \codew is a tt-styled \url variant;
+% the visual matches \code when no break fires.
+\usepackage{url}
+\makeatletter
+\g@addto@macro{\UrlBreaks}{\do\.\do\:\do\/\do\_\do\-\do\<\do\>}
+\makeatother
+\DeclareUrlCommand\codew{\urlstyle{tt}\renewcommand{\UrlFont}{\ttfamily\small}}
+
+% ---------- Custom column types ---------------------------------------
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}
+
+% ---------- Table macros ----------------------------------------------
+\definecolor{rowdim}{gray}{0.94}
+\renewcommand{\arraystretch}{1.18}
+
+% =====================================================================
+\begin{document}
+
+\begin{center}
+  {\LARGE\bfseries EasyNet Ability Owner --- Truth Table}\\[0.4em]
+  {\large\textit{AXIOM Invocation envelope projection for the default catalogue}}\\[0.3em]
+  \rule{0.55\textwidth}{0.4pt}\\[0.4em]
+  {\small Author: \emph{凉冰} (architect) \quad Date: 2026-05-05 \quad Status: \textsc{Specification}}\\[0.2em]
+\end{center}
+
+\vspace{0.5em}
+
+\section*{Why this document exists}
+
+This is a flat-fact reference: a single page-pair that answers, for every
+default-registered ability, three questions:
+
+\begin{enumerate}[leftmargin=1.6em,itemsep=0.1em,topsep=0.1em]
+  \item \emph{What URA names its owner} (the \code{owner\_agent\_uri}
+        field on its descriptor).
+  \item \emph{Where it lands in the AXIOM Invocation envelope}
+        (\code{caller} / \code{callee} / \code{subject} slots).
+  \item \emph{Why EasyNet ships it by default} (the protocol assumption
+        that breaks if you delete it).
+\end{enumerate}
+
+The CLI render layer, \code{meta.list\_abilities} synth path, and
+federation advertise pipeline all derive owner mapping independently.
+The truth table is the contract those derivations must agree with.
+
+% =====================================================================
+\section{URA grammar (AXON-RFC-001 v4.1.5 §A.URA)}
+
+Every value referenced in this document conforms to the v4.1.5 URA
+grammar. The grammar is closed: the parser
+(\codew{src/uri.rs::parse\_ura}) rejects any string outside the six
+shapes below. Other "URA-shaped" tokens that have appeared in practice
+(\codew{<self>}, \codew{<unjoined>}, \code{agent://self}) are
+\emph{not} URAs and must not propagate past the registration boundary.
+
+\subsection*{Ontology}
+
+\begin{tabularx}{\linewidth}{l X}
+  \toprule
+  \textbf{Relation} & \textbf{Meaning} \\
+  \midrule
+  realm \emph{owns} hub        & A realm is identified by its hub URA; one hub per realm. \\
+  user \emph{owns} agent       & Ownership stays with the user across device migrations. \\
+  device \emph{hosts} agent    & Device is the runtime placement, not the identity. \\
+  agent \emph{exposes} ability & Verbs are mounted under their owning agent. \\
+  resource \emph{is} user-owned concrete substrate & Files, processes, ptys, sockets — typed by namespace. \\
+  \bottomrule
+\end{tabularx}
+
+\subsection*{The six URA shapes}
+
+\begin{tabularx}{\linewidth}{l l X}
+  \toprule
+  \textbf{Kind} & \textbf{Wire shape} & \textbf{Tail invariants} \\
+  \midrule
+  \code{user}     & \codew{easynet:///r/<realm>/user/<user-uuid>}                           & user-uuid is bare (no \code{.}, no \code{/}) \\
+  \code{device}   & \codew{easynet:///r/<realm>/device/<device-uuid>}                       & device-uuid is bare \\
+  \code{agent}    & \codew{easynet:///r/<realm>/agent/<user-uuid>.<agent-id>}               & exactly one \code{.} in tail; both segments non-empty; agent-id has no \code{.} \\
+  \code{ability}  & \codew{easynet:///r/<realm>/ability/<user-uuid>.<agent-id>.<ability-id>} & exactly two leading \code{.}s; ability-id may itself contain \code{.}s (e.g.\ \code{fs.read}) \\
+  \code{hub}      & \codew{easynet:///r/<realm>/hub}                                        & realm-singleton; no tail; no sub-id (the legacy \code{/hub/01HUB} tail is retired) \\
+  \code{resource} & \codew{easynet:///r/<realm>/resource/<user-uuid>/<ns>/<path>}           & \code{<ns>}~$\in$~\{\code{fs}, \code{process}, \code{pty}, \code{shell}, \code{http}\}; v4.1.5 also accepts \codew{resource/<user>.<owner-tail>/<path>} for content-addressed owners \\
+  \bottomrule
+\end{tabularx}
+
+\subsection*{Three properties used throughout this document}
+
+\begin{description}[leftmargin=1.4em,style=nextline]
+  \item[\textbf{P1} --- URAs are self-describing] Any URA, in
+  isolation, names exactly one actor in the seven-tuple ontology.
+  Nothing about who \emph{calls} the URA changes what it names. A
+  string that requires caller context to resolve (\codew{<self>}, the
+  literal placeholder \code{self}, an \code{agent://self} URN) is
+  therefore not a URA, and must not appear in any persisted descriptor,
+  advertise payload, or receipt field.
+
+  \item[\textbf{P2} --- Owner is named at registration, not derived
+  from the name] The descriptor's \code{owner\_agent\_uri} is the
+  wire form of "who advertises this ability". It is fixed at
+  \code{register\_rpc} time, by the registration site, against an
+  explicit owner URA. It is \emph{not} inferred from
+  \code{name.starts\_with(\dots)} prefix sniffing. Every consumer
+  reads the stored value verbatim.
+
+  \item[\textbf{P3} --- \code{callee} URA carries the actor, not the
+  verb] The \code{ability} URA kind exists only at the publish layer
+  (descriptor, advertise). It never appears in an Invocation
+  envelope's \code{callee} slot. Per AXON-RFC-001 v4.1.5 §9
+  (AXIOM seven-tuple), \code{callee}~$\in$~\code{\{hub, device, agent\}}. The
+  verb itself is in \code{function\_name}, which is a string, not a
+  URA.
+\end{description}
+
+% =====================================================================
+\section{The AXIOM Invocation envelope}
+
+Per AXON-RFC-001 v4.1.5 §9 the Invocation envelope carries seven
+URA-typed bindings; only the four that govern owner mapping are
+reproduced here.
+
+\begin{tabularx}{\linewidth}{l l X}
+  \toprule
+  \textbf{Field} & \textbf{Allowed URA kind} & \textbf{Semantics} \\
+  \midrule
+  \code{caller}   & \code{hub} / \code{device} / \code{agent} & Who initiates the call. Required by Invariant~1. \\
+  \code{callee}   & \code{hub} / \code{device} / \code{agent} & Which actor runs the handler. \emph{Never} \code{ability} or \code{user}. \\
+  \code{subject}  & any URA kind, may equal \code{callee} & Resource the call acts on. \code{None} is allowed only for meta-style abilities (\textsc{INV-META-SUBJECT-EXEMPT}); resource handlers must reject \code{None}. \\
+  \code{function\_name} & string, not a URA & The ability name (\codew{device.fs.read}, \codew{<owner>.chat}, \codew{hub.openai.chat_completions}, \dots). \\
+  \bottomrule
+\end{tabularx}
+
+% =====================================================================
+\section{Truth table: name shape \texorpdfstring{$\to$}{->} owner kind}
+
+Every default-registered ability falls into one of the following
+name shapes. For each shape the table fixes the canonical
+\code{owner\_agent\_uri}, the resulting \code{envelope.callee}, and
+the default \code{envelope.subject} convention. The \emph{Where}
+column points to the registration call site, which is the
+authoritative source for the owner per~P2.
+
+\renewcommand{\arraystretch}{1.32}
+\setlength{\tabcolsep}{4pt}
+\sloppy
+\emergencystretch=3em
+\begin{longtable}{@{}p{0.35cm} L{4.0cm} L{3.9cm} L{3.6cm} L{3.4cm}@{}}
+  \toprule
+  \textbf{\#} & \textbf{Name shape} &
+  \textbf{Canonical owner URA} &
+  \textbf{Default \code{subject}} &
+  \textbf{Where} \\
+  \midrule
+  \endhead
+
+  1 & \codew{device.fs.*}, \codew{device.http.*}, \codew{device.shell.*}, \codew{device.process.*} &
+      \code{device/<id>} &
+      resource URA, or \code{=callee} for meta verbs &
+      AXIOM Tier~2.5 baseline-locomotion-v1 profile \\
+
+  2 & \codew{device.camera.*}, \codew{device.mic.*}, \codew{device.screen.*}, \codew{device.speaker.*} &
+      \code{device/<id>} &
+      \emph{required} resource URA; handler rejects \code{None} &
+      \codew{profiles::device} (media) \\
+
+  3 & \codew{device.fleet.*}, \codew{device.observe.*}, \codew{device.admin.*}, \codew{device.discuss.*}, \codew{device.loop.*}, \codew{device.schedule.*}, \codew{device.mission.*}, \codew{device.easynet.*}, \codew{device.meta.*}, \codew{device.ability.*}, \codew{device.policy.*}, \codew{device.consent.*}, \codew{device.skill.*}, \codew{device.mcp.*}, \codew{device.a2a.*}, \codew{device.voice.*} &
+      \code{device/<id>} &
+      \code{=callee} (meta) &
+      \codew{profiles::device}; runtime \codew{register_rpc} \\
+
+  4 & \codew{<agent>.discover}, \codew{<agent>.invoke}, \codew{<agent>.api_key.*}\newline
+      (one row per mounted sub-agent; \codew{<agent>}~$\in$~\{\code{claude}, \code{codex}, \code{web-builder}, \dots\}) &
+      \code{agent/<u>.<agent>} &
+      \code{=callee} (meta) &
+      \codew{discover_ability::register_for_agent}\newline
+      \codew{invoke_ability::register_for_agent}\newline
+      \codew{api_key_ability::register} \\
+
+  5 & \codew{device.keyring.*}, \codew{device.session}, \codew{device.register_device_pubkey} &
+      \code{device/<id>} &
+      \code{=callee} (RFC-002 §3.3) &
+      \codew{keyring::abilities::register_for_owner}\newline
+      \codew{axon_serve::admission_facade} \\
+
+  6 & \codew{<agent>.chat} &
+      \code{agent/<u>.<agent>} &
+      \code{=callee} (chat is meta) &
+      \codew{chat_ability::register} \\
+
+  7 & \codew{<agent>.<custom-verb>}\newline
+      (e.g.\ \codew{web-builder.todo_add_task}) &
+      \code{agent/<u>.<agent>} &
+      task or resource URA &
+      per-agent profile \code{register} \\
+
+  8 & \code{consent.*}, \code{policy.*} (handler form), \code{mcp.bridge.*}, \code{mcp.client.*}, \code{a2a.bridge.*}, \code{a2a.client.*}, \code{voice.*} (handler form), \code{skill.*} &
+      \code{agent/<u>.<helper-id>} for hosted helper agents (e.g.\ \codew{consent-default-0}); \code{device/<id>} for daemon-side adapters &
+      varies; resource URAs for outbound adapters &
+      \codew{profiles::consent}; \codew{profiles::policy}; \codew{profiles::mcp}; \code{voice} module \\
+
+  9 & \codew{hub.openai.*}, \codew{hub.<namespace>.*} &
+      \code{hub} (\codew{easynet:///r/<r>/hub}, realm-singleton) &
+      \code{=callee} or per-verb (e.g.\ \codew{chat_completions} carries no subject) &
+      \codew{openai_compat_ability::register} \\
+
+  10 & \code{<user>.pages.*}, \codew{<user>.<project>.page.fetch}, \code{<user>.files.*} &
+      \code{agent/<u>.<owner-tail>} or \code{user/<u>} depending on profile &
+      resource URA (\codew{resource/<u>.<owner-tail>/...}) &
+      \codew{pages::register}; \codew{files::register} \\
+
+  11 & \codew{<user>.api_key.*}\newline
+       (\code{<user>} is the canonical user-id from credentials, not a placeholder) &
+      \code{user/<user>} &
+      \code{=callee} (meta) &
+      \codew{api_key_ability::register} \\
+
+  \bottomrule
+\end{longtable}
+
+\subsection*{Notes on the table}
+
+\begin{description}[leftmargin=1.4em,style=nextline]
+  \item[Row 4 is per-sub-agent] The catalogue contains one
+  \codew{discover}/\codew{invoke}/\codew{api_key.*} row \emph{per
+  mounted sub-agent}. With sub-agents \code{claude} and \code{codex}
+  on the same device, the catalogue carries
+  \code{claude.discover}+\code{codex.discover}+\dots, each with its
+  own owner URA. There is no shared "self" entry.
+
+  \item[Row 5 is exactly one row] Daemon-bundle abilities
+  (\code{device.keyring.*}, \code{device.session},
+  \code{device.register\_device\_pubkey}) are mounted once per daemon,
+  with \code{owner\_agent\_uri = device URA}. They are not per-agent.
+
+  \item[Row 8 has two sub-cases] An adapter such as \code{consent.decide}
+  can be hosted either as a sub-agent (\codew{consent-default-0}, owner
+  = \code{agent/<u>.consent-default-0}) or as a daemon-side bridge
+  (\code{mcp.bridge.list\_tools}, owner = \code{device/<id>}). The
+  catalogue records the sub-case at registration time --- see~P2.
+
+  \item[Row 9 owner is the realm hub] \codew{hub.*} handlers physically
+  run on the device daemon (the hub forwards via federation), but the
+  ability is conceptually a hub-tier projection. The descriptor must
+  say so. Synth derives the owner URA via
+  \codew{hub_uri(credentials.tenant_id)} --- not from the device URA.
+
+  \item[Row 11 \code{<user>} is canonical] The \code{<user>} slot is
+  the canonical user-id from \code{credentials.username}; placeholder
+  defaults are not part of the spec.
+\end{description}
+
+% =====================================================================
+\section{CLI render projection}
+
+The \code{easynet ability list} table projects the
+\code{owner\_agent\_uri} into the columns
+\textsc{device}~/~\textsc{agent}~/~\textsc{user}. Each column reflects
+a slot of the owner URA's kind; columns the owner does not name stay
+as a literal dash. Mixing kinds in one row (the
+\code{device=99e59cc... agent=hub} bug from this PR's audit) is a
+renderer-level violation of P3 and must be rejected by tests.
+
+\begin{tabularx}{\linewidth}{l l l l X}
+  \toprule
+  \textbf{Owner URA kind} & \textsc{device} & \textsc{agent} & \textsc{user} & \textbf{Notes} \\
+  \midrule
+  \code{device/<id>}            & \code{<id>} & \code{-}    & \code{-}    & rows~1, 2, 3, 5 \\
+  \code{agent/<u>.<a>}          & \code{-}    & \code{<a>}  & \code{<u>}  & rows~4, 6, 7, 8a, 10a \\
+  \code{hub}                    & \code{-}    & \code{hub}  & \code{-}    & row~9 \\
+  \code{user/<u>}               & \code{-}    & \code{-}    & \code{<u>}  & row~11 (canonical) \\
+  parse failure / unknown       & \code{-}    & \code{!err} & \code{-}    & catalogue corruption signal; do \emph{not} silently dash \\
+  \bottomrule
+\end{tabularx}
+
+% =====================================================================
+\section{Default catalogue --- abilities and why each exists}
+
+The 121 abilities below are what \code{easynet ability list} returns
+on a freshly-paired daemon (realm \codew{device.easynet.run}, user \code{test},
+device \code{99e59ccd-...debf73d}, with one hosted sub-agent under the
+\code{web-builder} profile). For each ability we state \emph{why
+EasyNet must ship it by default} --- the protocol assumption that
+breaks if you delete the row.
+
+% ---------- Hub (2) ----------
+\subsection{Hub-owned (owner = \code{hub})}
+
+\paragraph{\texttt{\small hub.openai.chat\_completions}, \texttt{\small hub.openai.list\_models}.}
+RFC-006-C v0.1 OpenAI compatibility surface. Without these, an OpenAI
+SDK pointed at an EasyNet daemon cannot do non-streaming chat or model
+enumeration --- the entire "drop-in OpenAI replacement" story fails at
+the wire. The verbs are hub-rooted (not device-rooted) because the
+realm hub is the federation-visible endpoint that external SDKs dial;
+the device daemon executes as the hub's local-execution proxy. The
+legacy on-wire form is \codew{01HUB.openai.*}; the rename to
+\codew{hub.*} ships with RFC-001 v4.1.6.
+
+% ---------- Device baseline (Tier 2.5) ----------
+\subsection{Device-owned --- AXIOM Tier 2.5 baseline-locomotion-v1 (under \texttt{\small device.*})}
+
+These four namespaces are the AXIOM \emph{baseline locomotion} profile.
+Every Tier-2.5-conformant device ships them; the 8-stage destructive-
+intent / argv-parsing / receipt-redaction pipeline they share is the
+\emph{reason} EasyNet can claim "an LLM can move on this substrate
+without bypassing audit". Removing any of them collapses the audit
+contract.
+
+\begin{description}[leftmargin=1.4em,style=nextline,itemsep=0.15em]
+  \item[\codew{device.fs.edit}, \codew{device.fs.list}, \codew{device.fs.read}, \codew{device.fs.write}]
+  Filesystem locomotion. \codew{device.fs.edit} is the surgical
+  string-replace primitive that lets agents diff-apply rather than
+  full-rewrite (audit-trail compactness).
+  \item[\codew{device.http.request}] One outbound HTTP request per
+  invocation. The receipt captures status, headers, body bytes for
+  the audit pipeline; without this primitive every web-fetching
+  agent has to escape into shell and the audit trail is forfeit.
+  \item[\codew{device.shell.run}] Bash command string with the full
+  AXIOM Tier-2.5 8-stage security pipeline. The destructive-intent
+  classifier and shell tokeniser live here.
+  \item[\codew{device.process.exec}] OS-level argv (no shell interpretation)
+  --- the surface for tools that need predictable argument passing
+  without the shell metacharacter risk surface. Pairs with
+  \codew{device.shell.run} as the safe-default counterpart.
+\end{description}
+
+\subsection{Device-owned --- media resources (under \texttt{\small device.*}, subject required)}
+
+The four media namespaces project hardware resources into the
+ability surface. They are the \emph{only} way an agent on this device
+can see/hear/speak; no fallback path exists. Subject (a resource URA
+naming the camera/mic/screen/speaker handle) is mandatory --- handlers
+return \code{resource\_not\_found} on \code{None} per
+\textsc{INV-SUBJECT-ENVELOPE}.
+
+\begin{description}[leftmargin=1.4em,style=nextline,itemsep=0.15em]
+  \item[\codew{device.camera.snapshot}, \codew{device.camera.subscribe}] Single
+  still vs.\ pushed video stream from a camera resource.
+  \item[\codew{device.mic.subscribe}] Pushed audio stream from a microphone
+  resource.
+  \item[\codew{device.screen.snapshot}, \codew{device.screen.subscribe}] Single
+  still vs.\ pushed video stream of a display target.
+  \item[\codew{device.speaker.publish}] Outbound audio frames to a speaker
+  resource. Companion to \codew{device.voice.subscribe} (TTS).
+\end{description}
+
+\subsection{Device-owned --- fleet operational surface (under \texttt{\small device.fleet.*})}
+
+The fleet namespace exposes \emph{cross-device operator verbs through
+the same Invoke surface as everything else}. Without them, operators
+have to ssh into each device --- which forfeits AXIOM auditability.
+Per RFC §18 the device profile owns these.
+
+\begin{description}[leftmargin=1.4em,style=nextline,itemsep=0.15em]
+  \item[Node lifecycle:]
+  \codew{device.fleet.list_nodes}, \codew{device.fleet.describe_node},
+  \codew{device.fleet.register_self}, \codew{device.fleet.deregister_self},
+  \codew{device.fleet.remove_node}.
+  Operator-facing fleet topology view.
+
+  \item[Ability deployment:]
+  \codew{device.fleet.deploy_ability}, \codew{device.fleet.uninstall_ability},
+  \codew{device.fleet.list_abilities}.
+  Cross-device ability publish + uninstall via the Invoke surface
+  (mirrors \code{easynet ability deploy}).
+
+  \item[Agent lifecycle:]
+  \codew{device.fleet.start_agent}, \codew{device.fleet.stop_agent},
+  \codew{device.fleet.list_agents}.
+  Sub-agent registry mutations through Invoke (mirrors
+  \code{easynet agent add} / \code{remove}).
+
+  \item[Skill management:]
+  \codew{device.fleet.skill_install}, \codew{device.fleet.skill_remove},
+  \codew{device.fleet.skill_upgrade}.
+  Marketplace skill ops on a target device's
+  \code{<agent-root>/skills/} dir.
+
+  \item[Sessions (interactive PTY):]
+  \codew{device.fleet.session_create}, \codew{device.fleet.session_attach},
+  \codew{device.fleet.session_input}, \codew{device.fleet.session_read},
+  \codew{device.fleet.session_resize}, \codew{device.fleet.session_close},
+  \codew{device.fleet.list_sessions}, \codew{device.fleet.attach_session}.
+  PTY-aware interactive shell over Invoke; pairs with
+  \codew{device.fleet.exec_remote} (one-shot) for non-interactive cases.
+  The \codew{pty_session_*} variants are explicit aliases retained
+  for legacy callers.
+
+  \item[Direct ops:]
+  \codew{device.fleet.exec_remote}, \codew{device.fleet.file_transfer}.
+  One-shot remote command + bidirectional file copy. Without these
+  the operator has no way to land a file or check a status without
+  out-of-band access.
+\end{description}
+
+\subsection{Device-owned --- observability, admin, discovery aliases (under \texttt{\small device.*})}
+
+\begin{description}[leftmargin=1.4em,style=nextline,itemsep=0.15em]
+  \item[\codew{device.admin.status}] Operator-facing component snapshot
+  (build version, membership state, ability-registry size). Pairs
+  with the two \code{observe.*} verbs as the daemon's three-tier
+  health surface.
+  \item[\codew{device.describe}] Device-profile self-description.
+  Cross-device addressing helper (lets a peer ask "are you who I
+  think you are" without pulling the full ability catalogue).
+  \item[\codew{device.observe.health}] Round-trip smoke ability. Returns
+  the caller's args plus a daemon timestamp. The minimal proof of
+  liveness; every CI sanity check uses this.
+  \item[\codew{device.observe.network_health}] Live network posture: local
+  reachability, realm-directory reachability, peer-hub status. The
+  diagnostic that distinguishes "daemon down" from "daemon up but
+  hub unreachable".
+  \item[\codew{device.easynet.discover}, \codew{device.easynet.run},
+  \codew{device.easynet.cancel}, \codew{device.easynet.track}]
+  User-facing aliases that LLM prompts read more naturally than
+  the literal \code{meta.list\_abilities} / \codew{device.mission.run} /
+  \codew{device.loop.cancel} / \codew{device.loop.status}. Both names route to the
+  same handler so the catalogue and dispatch table stay in lockstep.
+\end{description}
+
+\subsection{Device-owned --- mission, scheduling, loops, discuss (under \texttt{\small device.*})}
+
+\begin{description}[leftmargin=1.4em,style=nextline,itemsep=0.15em]
+  \item[\codew{device.mission.run}, \codew{device.mission.think},
+  \codew{device.mission.discuss_round}]
+  EAL mission execution exposed as Invoke. Without these an LLM
+  inside an agent has no first-class way to compose multi-step /
+  multi-agent workflows --- it would have to shell out to the
+  \code{easynet mission run} CLI, which forfeits in-process state.
+  \codew{device.mission.discuss_round} drives one round of multi-agent
+  conversation; the underlying state shares the
+  \code{discuss.*} room model.
+
+  \item[\codew{device.schedule.add}, \codew{device.schedule.list},
+  \codew{device.schedule.enable}, \codew{device.schedule.remove}]
+  Cron-style schedule registry over Invoke. The daemon's tick
+  runner reads from the same store. Without scheduling-as-an-ability
+  every recurring task would need an external cron and would skip
+  the AXIOM receipt trail.
+
+  \item[\codew{device.loop.create}, \codew{device.loop.status},
+  \codew{device.loop.subscribe}, \codew{device.loop.cancel}]
+  Worker+verify loop primitive. The \code{Live} stream variant
+  surfaces per-iteration frames; this is what powers
+  ``run-until-passes-verifier'' compositions without polling.
+
+  \item[\codew{device.discuss.create}, \codew{device.discuss.post},
+  \codew{device.discuss.list_turns}, \codew{device.discuss.subscribe}]
+  Multi-agent discussion room. The append-only turn log + the
+  \code{SnapshotThenLive} stream pattern are how a UI joining
+  mid-conversation gets past turns + new ones in one call.
+  \codew{device.mission.discuss_round} writes into this same store.
+\end{description}
+
+\subsection{Device-owned --- edge adapters and policy (under \texttt{\small device.*})}
+
+\begin{description}[leftmargin=1.4em,style=nextline,itemsep=0.15em]
+  \item[\codew{device.a2a.bridge.list_skills}, \codew{device.a2a.bridge.send_task}]
+  Inbound A2A: surface this device's local A2A agent cards to
+  external A2A clients. Without the bridge, the realm's A2A
+  catalogue is invisible to A2A-native clients.
+
+  \item[\codew{device.a2a.client.send_task}] Outbound A2A: dispatch an
+  RPC against a remote A2A agent. The other half of the
+  agent-to-agent protocol bridge.
+
+  \item[\codew{device.mcp.bridge.list_tools}, \codew{device.mcp.bridge.call_tool}]
+  Inbound MCP: project the local ability registry as MCP tools
+  for an MCP-native client at the edge. Per ``MCP at the edge,
+  not node-to-node'' (RFC §A3) this lives on the device, not
+  inside the federation.
+
+  \item[\codew{device.mcp.client.call}, \codew{device.mcp.client.list}]
+  Outbound MCP: dial a remote MCP server, list and call its
+  tools. Pairs with the bridge.
+
+  \item[\codew{device.policy.evaluate}, \codew{device.policy.simulate}]
+  RFC §A6 admission policy. The kernel admission gate calls
+  \codew{device.policy.evaluate} as an in-process sub-invocation
+  carrying the original envelope; \codew{device.policy.simulate} is
+  the operator-facing dry-run. Without these the daemon has no
+  policy hooks at all and every Invoke is admitted unchecked.
+\end{description}
+
+\subsection{Device-owned --- ability publishing primitives (under \texttt{\small device.ability.*})}
+
+\begin{description}[leftmargin=1.4em,style=nextline,itemsep=0.15em]
+  \item[\codew{device.ability.publish}, \codew{device.ability.unpublish}]
+  Publish-layer verbs that push a descriptor through the
+  federation advertise pipeline. Without them the only way to
+  add a new ability is to redeploy the daemon, which forfeits
+  the live-update story.
+\end{description}
+
+\subsection{Device-owned --- daemon device-bundle (row 5)}
+
+These are RFC-002 §3.3 abilities the daemon hosts directly, with
+no sub-agent wrapper. The catalogue carries exactly one row each.
+
+\begin{description}[leftmargin=1.4em,style=nextline,itemsep=0.15em]
+  \item[\codew{device.keyring.create}, \codew{device.keyring.list},
+        \codew{device.keyring.get_public}, \codew{device.keyring.sign},
+        \codew{device.keyring.rotate}, \codew{device.keyring.revoke},
+        \codew{device.keyring.expire_set},
+        \codew{device.keyring.bind_subject},
+        \codew{device.keyring.peer_add},
+        \codew{device.keyring.peer_list},
+        \codew{device.keyring.federate_user_identity_token}]
+  RFC-002 keyring: the device-scoped private-key store + signing
+  primitive + cross-realm federated identity token issuance. Without
+  it, no AXIOM Invoke can be signed and federation breaks at the
+  signing-authority check.
+
+  \item[\codew{device.session}] The long-lived bidi RPC session
+  the device dials to its realm hub on boot. All
+  hub$\to$device forward-Invokes ride this session. Without it the
+  hub has no way to push work down to the device.
+
+  \item[\codew{device.register_device_pubkey}]
+  Pairing-flow primitive: writes the device's Ed25519 public key
+  into the hub's realm trust anchor. Without it, the hub's
+  admission gate would reject every signed Invoke from the
+  device.
+\end{description}
+
+% ---------- Sub-agent rows: per-agent (row 4 + 6 + 7) -------------------
+\subsection{Agent-owned (per-sub-agent rows: rows 4, 6, 7)}
+
+For every sub-agent registered on the device the catalogue carries
+its discover / invoke / chat / api-key triple plus any custom verbs.
+On this fixture device the sub-agents are \code{codex} and
+\code{web-builder}; with both mounted the rows look like:
+
+\begin{description}[leftmargin=1.4em,style=nextline,itemsep=0.15em]
+  \item[\codew{<agent>.chat}] The agent's main entry. Owner =
+  \code{agent/<u>.<agent>}. This is what an LLM-routed user
+  request hits. Without per-agent chat the only entry would be
+  the generic OpenAI adapter (row~9), which is hub-routed --- you
+  could not address a specific sub-agent.
+
+  \item[\codew{<agent>.discover}] Per-agent ability catalogue
+  filtered to this agent's visibility scope. The LLM uses it to
+  enumerate "what verbs may I call as this agent" without
+  ever having to read the device-wide catalogue.
+
+  \item[\codew{<agent>.invoke}] Generic Invoke entry-point for
+  the agent: ``call any ability you discovered as me''. Without
+  it, every per-verb invocation would need its own handler and
+  the discover-then-invoke pattern would not compose.
+
+  \item[\codew{<agent>.api_key.create}, \codew{<agent>.api_key.list},
+        \codew{<agent>.api_key.revoke}]
+  Agent-scoped API key management for the OpenAI-compat surface.
+  Each agent owns its own key set. Today's catalogue still shows
+  these under the daemon's pages-user identity (\code{self.}); the
+  terminal form is per-agent.
+
+  \item[\codew{web-builder.todo_add_task},
+        \codew{web-builder.todo_delete_task},
+        \codew{web-builder.todo_list_tasks}]
+  Custom verbs declared in the \code{web-builder} agent's
+  workspace TOMLs. These are the canonical example of row~7
+  --- per-agent custom abilities exposed through the same
+  registry as the built-ins.
+\end{description}
+
+% ---------- Sub-agent voice / meta / skill (16 rows) -------------------
+\subsection{Agent-owned (LLM sub-agent surfaces): voice, meta, skill}
+
+These verbs live under \code{web-builder}'s sub-agent in this
+fixture --- they are re-exported per agent, not device-wide.
+
+\begin{description}[leftmargin=1.4em,style=nextline,itemsep=0.15em]
+  \item[\codew{device.meta.describe}, \codew{device.meta.list_abilities},
+        \codew{device.meta.list_resources}]
+  Self-introspection over the seven-tuple. \code{describe} is the
+  cheap identity+summary surface (federation peer hits this for
+  cache checks); \code{list\_abilities} returns the full
+  descriptor catalogue; \code{list\_resources} enumerates physical
+  /~logical resources (mics, cameras, files) the agent can name as
+  subjects. Without these the LLM cannot know its own capabilities.
+
+  \item[\codew{device.skill.list}, \codew{device.skill.publish}, \codew{device.skill.unpublish}]
+  Skill (curator-authored ability bundle) lifecycle. Publishing a
+  skill mounts a new ability under the agent's namespace at runtime;
+  this is how the \code{alive-video}, \code{macos}, etc. skills land
+  on a device without redeploying.
+
+  \item[\codew{device.voice.create_call}, \codew{device.voice.join_call},
+        \codew{device.voice.leave_call}, \codew{device.voice.end_call},
+        \codew{device.voice.list_calls}, \codew{device.voice.show_call},
+        \codew{device.voice.watch_call}, \codew{device.voice.report_metrics}]
+  Voice/video call signaling. SDP, ICE, participant book-keeping.
+  Without the signaling surface there is no protocol path for an
+  agent to start or join a call --- WebRTC needs an out-of-band
+  rendezvous and these abilities provide it through Invoke.
+
+  \item[\codew{device.voice.subscribe}, \codew{device.voice.transcribe}]
+  Media planes: \code{subscribe} pushes TTS audio frames out;
+  \code{transcribe} accepts streamed audio in and returns text.
+  Together they make the agent voice-bidirectional.
+\end{description}
+
+% ---------- consent helper (3 rows) -----------------------------------
+\subsection{Agent-owned --- consent default helper (row 8 sub-case~a)}
+
+Owner URA: \codew{easynet:///r/easynet.run/agent/test.consent-default-0}.
+
+\begin{description}[leftmargin=1.4em,style=nextline,itemsep=0.15em]
+  \item[\codew{device.consent.subscribe}] Subscribe to the
+  approval-broker pending queue. \code{SnapshotThenLive} stream;
+  a UI joining mid-flight gets currently-pending requests + new
+  ones.
+  \item[\codew{device.consent.list_pending}] One-shot snapshot of the
+  same queue (the unary sibling).
+  \item[\codew{device.consent.decide}] Resolve a pending permission
+  request by id; decision $\in$~\{\code{allow}, \code{deny},
+  \code{deny\_with\_reason}\}.
+\end{description}
+
+\paragraph{Why these need a hosted helper agent (not just a daemon adapter).}
+Consent decisions carry user-attributable signatures: the \code{deny}
+on a destructive Invoke is itself an Invoke, signed by the user (via
+the consent helper agent). A daemon-side adapter cannot sign as the
+user --- only an agent the user owns can. Hence the helper-agent
+ownership form (row~8 sub-case~a).
+
+% =====================================================================
+\section*{References}
+
+\begin{itemize}[leftmargin=1.6em,itemsep=0.1em]
+  \item \codew{docs/rfc/AXON-RFC-001-plan-v4.1.5.md} --- URA grammar §A.URA, AXIOM seven-tuple §9, ability registry §18.
+  \item \codew{docs/rfc/AXON-RFC-002-session-provider.md} --- §3.3 device-bundle keyring (row~5).
+  \item \codew{docs/rfc/AXON-RFC-006-stateful-easynet.pdf} --- §C OpenAI compatibility surface (row~9).
+  \item \codew{src/uri.rs} --- canonical URA builders + parser; the §1 grammar is reflected here verbatim.
+  \item \codew{src/runtime/ability_descriptor.rs} --- \code{AbilityDescriptor.owner\_agent\_uri}; v4.1.5 §9 \code{callee} constraint comment.
+  \item \codew{src/runtime/agents/meta_ability.rs} --- \code{list\_abilities\_handler} synth path.
+  \item \codew{src/facade/cli/abilities.rs} --- \code{easynet ability list} render layer.
+\end{itemize}
+
+\vspace{1em}
+\hrule
+\vspace{0.4em}
+\begin{flushright}\small
+  \emph{End of specification.}\\
+  Updates require an RFC bump.
+\end{flushright}
+
+\end{document}

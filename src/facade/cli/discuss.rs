@@ -103,7 +103,7 @@ pub fn run(args: DiscussArgs) -> anyhow::Result<()> {
                 bail!("--agents was provided but parsed empty; pass `claude,codex,...`");
             }
             let create_resp = invoke_local_ability(
-                "discuss.create",
+                "device.discuss.create",
                 json!({
                     "participants": participants,
                     "topic":        args.topic,
@@ -137,7 +137,7 @@ pub fn run(args: DiscussArgs) -> anyhow::Result<()> {
     // utterance the agents see; on a continuation it's the next
     // human turn after the prior sub-turn ended.
     let _ = invoke_local_ability(
-        "discuss.post",
+        "device.discuss.post",
         json!({
             "room_id": room_id,
             "speaker": "human",
@@ -197,7 +197,7 @@ pub fn run(args: DiscussArgs) -> anyhow::Result<()> {
     if !role_map.is_empty() {
         round_args["roles"] = Value::Object(role_map);
     }
-    let result = invoke_local_ability("mission.discuss_round", round_args)
+    let result = invoke_local_ability("device.mission.discuss_round", round_args)
         .context("invoke mission.discuss_round")?;
 
     // Print every agent turn from the embedded snapshot. We skip
@@ -300,7 +300,7 @@ fn read_room_participants(room_id: &str) -> anyhow::Result<Vec<String>> {
 /// — no direct DiscussService access from CLI code.
 fn read_turns_from(room_id: &str, since_seq: i64) -> anyhow::Result<Vec<Value>> {
     let resp = invoke_local_ability(
-        "discuss.list_turns",
+        "device.discuss.list_turns",
         json!({
             "room_id":   room_id,
             "since_seq": since_seq,

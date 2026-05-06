@@ -496,7 +496,22 @@ fn spawn_session_supervisor(
     // — `LocalAbilityRegistry` is constructed once per daemon
     // process (build_registry_with_services) and never mutated
     // post-boot.
-    let ability_catalog = dispatcher.local_registry().list_abilities();
+    // M2 of the system-namespace migration: at M1 every system
+    // ability is registered under both legacy (`fs.read`,
+    // `01HUB.openai.*`, …) and canonical (`device.fs.read`,
+    // `hub.openai.*`, …) names, both pointing at the same handler.
+    // The advertise prelude must emit canonical only — so the hub's
+    // AbilityCatalogStore + Frontend Abilities page show the
+    // partitioned shape, and the session-prelude's agent-roster
+    // scanner doesn't produce duplicate `<owner>` entries from the
+    // legacy half. Filter via `published_ability_names()` which has
+    // the catalogue exposure rule (M2 commit: legacy filtered out).
+    let ability_catalog: Vec<String> = dispatcher
+        .local_registry()
+        .list_abilities()
+        .into_iter()
+        .filter(|name| crate::runtime::agents::is_canonical_or_unmapped(name))
+        .collect();
     let signing_state = if identity.signing_seed.is_some() {
         "signed frame0"
     } else {

@@ -290,19 +290,33 @@ pub fn write_local_default_token(token: &str) -> anyhow::Result<()> {
 }
 
 pub fn register(reg: &mut LocalAbilityRegistry, user: &str) {
+    use crate::runtime::ability_dispatch::OwnerKind;
+    let owner = OwnerKind::User(user.to_string());
     let user_owned = user.to_string();
     let u1 = user_owned.clone();
     let create_handler: LocalRpcHandler =
         Arc::new(move |args| handle_create(&u1, args));
-    reg.register_rpc(format!("{user}.api_key.create"), create_handler);
+    reg.register_rpc_with_owner(
+        format!("{user}.api_key.create"),
+        owner.clone(),
+        create_handler,
+    );
 
     let u2 = user_owned.clone();
     let list_handler: LocalRpcHandler =
         Arc::new(move |args| handle_list(&u2, args));
-    reg.register_rpc(format!("{user}.api_key.list"), list_handler);
+    reg.register_rpc_with_owner(
+        format!("{user}.api_key.list"),
+        owner.clone(),
+        list_handler,
+    );
 
     let u3 = user_owned.clone();
     let revoke_handler: LocalRpcHandler =
         Arc::new(move |args| handle_revoke(&u3, args));
-    reg.register_rpc(format!("{user}.api_key.revoke"), revoke_handler);
+    reg.register_rpc_with_owner(
+        format!("{user}.api_key.revoke"),
+        owner,
+        revoke_handler,
+    );
 }

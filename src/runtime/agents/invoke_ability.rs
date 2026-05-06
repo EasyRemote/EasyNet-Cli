@@ -95,11 +95,13 @@ pub fn register_for_agent<F>(
 ) where
     F: Fn() -> AgentRegistry + Send + Sync + 'static,
 {
+    use crate::runtime::ability_dispatch::OwnerKind;
     let provider: Arc<dyn Fn() -> AgentRegistry + Send + Sync> = Arc::new(agent_registry_provider);
     let qualified = format!("{agent_name}.{ABILITY_VERB}");
-    let caller = agent_name;
-    reg.register_rpc(
+    let caller = agent_name.clone();
+    reg.register_rpc_with_owner(
         &qualified,
+        OwnerKind::Agent(agent_name),
         Arc::new(move |args: Value| dispatch(&caller, &provider, &dispatch_registry_handle, args)),
     );
 }

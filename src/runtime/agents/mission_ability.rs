@@ -43,27 +43,28 @@ use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
-pub const ABILITY_RUN: &str = "mission.run";
+use crate::runtime::ability_dispatch::OwnerKind;
+pub const ABILITY_RUN: &str = "device.mission.run";
 /// User-facing alias under the `easynet.*` namespace. The two names
 /// route to the same handler; the `delegate` SKILL.md teaches the
 /// alias because it reads more cleanly from the LLM's seat ("EasyNet
 /// runs a thing"). `mission.run` stays advertised as a
 /// backward-compat alias for any client/skill that already wired the
 /// legacy name.
-pub const ABILITY_RUN_ALIAS: &str = "easynet.run";
+pub const ABILITY_RUN_ALIAS: &str = "device.easynet.run";
 /// `easynet.track(run_id)` — read the persisted state of a prior
 /// `easynet.run` invocation. Returns the same shape `easynet.run`
 /// surfaces (run_id, run_dir, outputs, meta, ok), reconstructed
 /// off the on-disk run dir. Use case: an LLM kicks off a long
 /// mission (multi-agent fan-out), polls track until status leaves
 /// `running`, then composes a final answer.
-pub const ABILITY_TRACK: &str = "easynet.track";
+pub const ABILITY_TRACK: &str = "device.easynet.track";
 /// `easynet.cancel(run_id)` — flip an in-flight mission to
 /// `cancelled`. No-op (with informative result) on a run that is
 /// already terminal. Best-effort: removes the pid file and rewrites
 /// meta.json; long-running step processes are not killed today,
 /// they just stop being expected.
-pub const ABILITY_CANCEL: &str = "easynet.cancel";
+pub const ABILITY_CANCEL: &str = "device.easynet.cancel";
 
 /// Register every mission ability on the registry. Called once at
 /// boot from `runtime::agents::build_registry_with_services`. The
@@ -74,14 +75,16 @@ pub const ABILITY_CANCEL: &str = "easynet.cancel";
 pub fn register(reg: &mut LocalAbilityRegistry) {
     let run: crate::runtime::ability_dispatch::LocalRpcHandler =
         Arc::new(move |args: Value| run_handler(args));
-    reg.register_rpc(ABILITY_RUN, Arc::clone(&run));
-    reg.register_rpc(ABILITY_RUN_ALIAS, run);
-    reg.register_rpc(
-        ABILITY_TRACK,
+    reg.register_rpc_with_owner("device.mission.run", OwnerKind::Device, Arc::clone(&run));
+    reg.register_rpc_with_owner("device.easynet.run", OwnerKind::Device, run);
+    reg.register_rpc_with_owner(
+        "device.easynet.track",
+        OwnerKind::Device,
         Arc::new(move |args: Value| track_handler(args)),
     );
-    reg.register_rpc(
-        ABILITY_CANCEL,
+    reg.register_rpc_with_owner(
+        "device.easynet.cancel",
+        OwnerKind::Device,
         Arc::new(move |args: Value| cancel_handler(args)),
     );
 }

@@ -1707,6 +1707,8 @@ mod tests {
         let (req, _) = signed_request_with_nonce(
             caller_uri,
             caller_uri,
+            // Wire-pinned legacy until EasyNet-Axon ships
+            // device.session acceptance (RFC-001 v4.1.6).
             "<self>.session",
             b"",
             &signing_key,

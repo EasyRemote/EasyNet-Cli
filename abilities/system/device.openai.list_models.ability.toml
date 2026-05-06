@@ -1,0 +1,10 @@
+schema_version = "1"
+name = "device.openai.list_models"
+description = "OpenAI-compatible /v1/models served by the device daemon. Returns every host-local chat-base ability (`<agent>.chat`) the calling identity has dispatch grants on, projected as OpenAI `Model` objects."
+
+[input_schema]
+type = "object"
+
+[input_schema.properties.auth_token]
+type = "string"
+description = "Bearer token bound to a `<user>.api_key` entry on this host."

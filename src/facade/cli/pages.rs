@@ -107,12 +107,34 @@ pub fn run(args: PagesArgs) -> anyhow::Result<()> {
     }
 }
 
-fn current_user() -> String {
-    std::env::var("EASYNET_PAGES_USER").unwrap_or_else(|_| "self".to_string())
+fn current_user() -> anyhow::Result<String> {
+    // Production: read username from `EASYNET_PAGES_USER` env or
+    // `credentials.json`. M5 of the system-namespace migration
+    // banned the `<self>` placeholder — an unpaired daemon has no
+    // user-rooted ability surface, so the CLI MUST surface the
+    // missing-identity error rather than silently dialling
+    // `self.pages.*` (which the registry no longer answers).
+    if let Some(v) = std::env::var("EASYNET_PAGES_USER")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        return Ok(v);
+    }
+    if let Some(v) = crate::persistence::config::load_credentials()
+        .ok()
+        .and_then(|c| c.username)
+        .filter(|s| !s.is_empty())
+    {
+        return Ok(v);
+    }
+    anyhow::bail!(
+        "no user identity bound to this daemon — run `easynet device pair` first \
+         (or set EASYNET_PAGES_USER for dev rigs)"
+    )
 }
 
 fn run_create(a: CreateArgs) -> anyhow::Result<()> {
-    let user = current_user();
+    let user = current_user()?;
     let ability = format!("{user}.pages.publish");
     let args_v = json!({
         "folder":     a.folder,
@@ -140,7 +162,7 @@ fn run_create(a: CreateArgs) -> anyhow::Result<()> {
 }
 
 fn run_list(a: ListArgs) -> anyhow::Result<()> {
-    let user = current_user();
+    let user = current_user()?;
     let ability = format!("{user}.pages.list");
     let result = invoke_local_ability(&ability, json!({}))
         .map_err(|e| anyhow::anyhow!("pages list failed: {e}"))?;
@@ -168,7 +190,7 @@ fn run_list(a: ListArgs) -> anyhow::Result<()> {
 }
 
 fn run_show(a: ShowArgs) -> anyhow::Result<()> {
-    let user = current_user();
+    let user = current_user()?;
     let ability = format!("{user}.pages.get");
     let args_v = json!({ "project_id": a.project_id });
     let result = invoke_local_ability(&ability, args_v)
@@ -200,7 +222,7 @@ fn run_delete(a: DeleteArgs) -> anyhow::Result<()> {
             "delete is destructive — pass `--force` to confirm; this MVP does not prompt interactively"
         );
     }
-    let user = current_user();
+    let user = current_user()?;
     let ability = format!("{user}.pages.unpublish");
     let args_v = json!({ "project_id": a.project_id });
     let result = invoke_local_ability(&ability, args_v)
@@ -215,7 +237,7 @@ fn run_delete(a: DeleteArgs) -> anyhow::Result<()> {
 }
 
 fn run_url(a: UrlArgs) -> anyhow::Result<()> {
-    let user = current_user();
+    let user = current_user()?;
     let ability = format!("{user}.pages.get");
     let args_v = json!({ "project_id": a.project_id });
     let result = invoke_local_ability(&ability, args_v)

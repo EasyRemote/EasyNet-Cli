@@ -50,7 +50,7 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
     if state.credential_verified == Some(false) {
         output::info("Credential: NOT VERIFIED (Hub was unreachable at startup)");
     }
-    match invoke_local_ability("observe.health", json!({"source": "runtime.status"})) {
+    match invoke_local_ability("device.observe.health", json!({"source": "runtime.status"})) {
         Ok(_) => {}
         Err(e) => {
             output::warn(&format!(
@@ -78,7 +78,7 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
     // returns the full local catalogue). Cheaper than the legacy
     // O(N) per-node fan-out and matches what `easynet ability list`
     // reports.
-    match invoke_local_ability("easynet.discover", serde_json::json!({})) {
+    match invoke_local_ability("device.easynet.discover", serde_json::json!({})) {
         Ok(v) => {
             let count = v
                 .get("abilities")

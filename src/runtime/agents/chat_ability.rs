@@ -181,14 +181,17 @@ pub fn register_for_agent(
     entry: AgentEntry,
     loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
 ) {
+    use crate::runtime::ability_dispatch::OwnerKind;
     let ability = format!("{agent_name}.{ABILITY_VERB}");
+    let owner = OwnerKind::Agent(agent_name.clone());
 
     // RPC: the legacy synchronous one-shot path.
     let rpc_agent = agent_name.clone();
     let rpc_entry = entry.clone();
     let rpc_loaders = Arc::clone(&loaders);
-    reg.register_rpc(
+    reg.register_rpc_with_owner(
         &ability,
+        owner.clone(),
         Arc::new(move |args: Value| handler(&rpc_agent, &rpc_entry, &rpc_loaders, args)),
     );
 
@@ -223,7 +226,7 @@ pub fn register_for_agent(
             Arc::clone(&loaders),
             bare_ability,
         );
-        reg.register_rpc(&ability_name, h);
+        reg.register_rpc_with_owner(&ability_name, owner.clone(), h);
     }
 
     // Stream: emit framed events. v1 ships a Snapshot variant
@@ -231,8 +234,9 @@ pub fn register_for_agent(
     // is synchronous; once the driver gains an async token stream
     // the handler upgrades to `Live(broadcast::Receiver)` without
     // changing the wire frame shape.
-    reg.register_stream(
+    reg.register_stream_with_owner(
         &ability,
+        owner,
         Arc::new(move |args: Value| stream_handler(&agent_name, &entry, &loaders, args)),
     );
 }

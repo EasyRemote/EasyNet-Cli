@@ -51,10 +51,12 @@
 
 use anyhow::{bail, Context};
 use clap::Args;
+use console::{measure_text_width, style};
 use serde_json::Value;
 
 use crate::support::local_invoke::invoke_local_ability;
 use crate::support::output::{self, OutputFormat};
+use crate::uri::{parse_ura, URAKind};
 
 #[derive(Debug, Args)]
 pub struct AbilitiesArgs {
@@ -113,42 +115,275 @@ pub fn run(args: AbilitiesArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Table view: name, owner, kind, description (truncated). Owner
-    // is the bare agent name when the qualified form is
-    // `<agent>.<verb>`, "system" otherwise. Kind is `shell` /
-    // `agent_chat` / `system` so an operator can see at a glance
-    // whether an ability runs deterministically or via the LLM.
-    let mut table = output::table(&["Ability", "Owner", "Kind", "Description"]);
-    for entry in &filtered {
-        let name = entry.get("name").and_then(Value::as_str).unwrap_or("-");
-        let (owner, _verb) = split_qualified(name);
-        let kind = entry
-            .get("fulfilled_by")
-            .and_then(Value::as_str)
-            .unwrap_or_else(|| {
-                if owner == "system" {
-                    "system"
-                } else {
-                    "agent_chat"
-                }
-            });
-        let description = entry
-            .get("description")
-            .and_then(Value::as_str)
-            .map(|s| {
-                let one_line = s.lines().next().unwrap_or(s);
-                if one_line.len() > 78 {
-                    format!("{}…", &one_line[..77])
-                } else {
-                    one_line.to_string()
-                }
-            })
-            .unwrap_or_default();
-        table.add_row(vec![name, owner, kind, &description]);
+    // Grouped table: one section per owner kind (Hub / Agent /
+    // Device / User), each headed by the canonical owner URA.
+    // The triple (DEVICE, AGENT, USER) is encoded by the section,
+    // so per-row we only need ABILITY + KIND + DESCRIPTION. This
+    // matches the URA ontology — abilities partition cleanly by
+    // owner kind, never mix — and reads as a tree: the operator
+    // sees the realm hub's published surface, then per-agent
+    // surfaces, then the device-local registry.
+    render_grouped(&filtered);
+    Ok(())
+}
+
+/// Build owned (Device, Agent, User, Kind) cells for one ability
+/// entry. The three identity columns are projections of the
+/// owner URA — only the slots that the owner kind actually
+/// names get populated; the rest stay `-`.
+///
+/// URA kind → which columns are meaningful (per AXON-RFC-001
+/// v4.1.5 §A.URA):
+///
+///   `device/<id>`      → DEVICE only.
+///   `agent/<u>.<a>`    → AGENT + USER. The agent's host device
+///                        is a *separate* edge (`local-agents.json`
+///                        records it), not part of the agent URA,
+///                        so DEVICE stays `-`.
+///   `hub`              → AGENT only ("hub", realm-singleton).
+///                        Hub is not on any device.
+///   any other / parse-fail → all dashes.
+///
+/// Past iterations of this function filled DEVICE with the
+/// scope-device id (the daemon being queried) for hub / agent
+/// rows. That mixed two different facts — "who owns this verb"
+/// vs "which daemon's catalogue am I reading" — and produced
+/// self-contradictory rows like
+/// `01HUB.openai.chat_completions  device=99e59cc…  agent=hub`
+/// (says it's both on the device and on the hub). The owner URA
+/// is the only authority for the identity columns; the calling
+/// daemon's id, when relevant, belongs in a separate context
+/// line, not in the per-row identity columns.
+fn extract_columns(entry: &Value) -> (String, String, String, String) {
+    let owner_uri = entry
+        .get("owner_agent_uri")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let parsed = parse_ura(owner_uri).ok();
+
+    // KIND is read straight from the owner URA kind — that's the
+    // authoritative classifier. The legacy `fulfilled_by`
+    // descriptor field still wins when present (handlers that
+    // explicitly tag themselves, e.g. `mcp_proxy`); when absent
+    // we fall back to the owner-kind label rather than guessing
+    // from the ability name. The pre-migration default was
+    // `agent_chat`, which mis-labelled every device-owned and
+    // user-owned verb.
+    let kind = entry
+        .get("fulfilled_by")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| match parsed.as_ref().map(|p| p.kind) {
+            Some(URAKind::Device) => "system".to_string(),
+            Some(URAKind::Hub) => "hub".to_string(),
+            Some(URAKind::Agent) => "agent".to_string(),
+            Some(URAKind::User) => "user".to_string(),
+            _ => "-".to_string(),
+        });
+
+    let dash = || "-".to_string();
+    let (device, agent, user) = match parsed {
+        Some(p) => match p.kind {
+            URAKind::Device => (p.device_id, dash(), dash()),
+            URAKind::Agent => (dash(), p.agent_id, p.user_id),
+            URAKind::User => (dash(), dash(), p.user_id),
+            URAKind::Hub => (dash(), "hub".to_string(), dash()),
+            _ => (dash(), dash(), dash()),
+        },
+        // Unparseable owner URI. We do not invent owner kinds from
+        // the ability-name namespace — the daemon's synth path
+        // (`meta_ability::list_abilities_handler`) is responsible
+        // for emitting a parseable URA, and a row that surfaces
+        // here represents real catalogue corruption (e.g. a hosted
+        // agent persisted with a non-canonical URA shape). Render
+        // dashes so the row is visible, but do not paper over the
+        // underlying defect with namespace-derived stand-ins.
+        None => (dash(), dash(), dash()),
+    };
+
+    (device, agent, user, kind)
+}
+
+/// Owner-kind classification used to group abilities under a
+/// labelled section. Order matches render order — Hub first
+/// (realm-published surface), then per-agent + per-user
+/// surfaces, then the device-local registry, with `Other`
+/// reserved for parse failures so a corrupt URA still surfaces
+/// rather than vanishing.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum GroupKey {
+    Hub(String),
+    Agent { user: String, agent: String, uri: String },
+    User { user: String, uri: String },
+    Device(String),
+    Other,
+}
+
+impl GroupKey {
+    fn header(&self) -> String {
+        match self {
+            GroupKey::Hub(uri) => format!("HUB ({uri})"),
+            GroupKey::Agent { user, agent, uri } => {
+                format!("AGENT {user}.{agent} ({uri})")
+            }
+            GroupKey::User { user, uri } => format!("USER {user} ({uri})"),
+            GroupKey::Device(uri) => format!("DEVICE / SYSTEM ({uri})"),
+            GroupKey::Other => "OTHER".to_string(),
+        }
     }
 
-    println!("{table}");
-    Ok(())
+    /// Section ordering. Lower = printed first.
+    fn section_order(&self) -> u8 {
+        match self {
+            GroupKey::Hub(_) => 0,
+            GroupKey::Agent { .. } => 1,
+            GroupKey::User { .. } => 2,
+            GroupKey::Device(_) => 3,
+            GroupKey::Other => 4,
+        }
+    }
+}
+
+fn group_for(entry: &Value) -> GroupKey {
+    let owner_uri = entry
+        .get("owner_agent_uri")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    match parse_ura(owner_uri) {
+        Ok(p) => match p.kind {
+            URAKind::Hub => GroupKey::Hub(owner_uri.to_string()),
+            URAKind::Agent => GroupKey::Agent {
+                user: p.user_id,
+                agent: p.agent_id,
+                uri: owner_uri.to_string(),
+            },
+            URAKind::User => GroupKey::User {
+                user: p.user_id,
+                uri: owner_uri.to_string(),
+            },
+            URAKind::Device => GroupKey::Device(owner_uri.to_string()),
+            _ => GroupKey::Other,
+        },
+        Err(_) => GroupKey::Other,
+    }
+}
+
+fn render_grouped(filtered: &[Value]) {
+    use std::collections::BTreeMap;
+
+    // Bucket entries by owner-kind group. BTreeMap keeps the
+    // sections in a stable order (by section_order then by URA),
+    // so two runs against the same daemon emit byte-identical
+    // output — handy for diff-based catalogue review.
+    let mut groups: BTreeMap<(u8, GroupKey), Vec<&Value>> = BTreeMap::new();
+    for entry in filtered {
+        let g = group_for(entry);
+        groups
+            .entry((g.section_order(), g))
+            .or_default()
+            .push(entry);
+    }
+
+    let term_width = console::Term::stderr().size().1 as usize;
+    let headers = ["ABILITY", "KIND", "DESCRIPTION"];
+
+    eprintln!();
+    for ((_, key), entries) in &groups {
+        // Section header: bold colored title with the canonical
+        // owner URA so the operator can copy/paste it into a
+        // cross-device invoke or share it with a peer.
+        let title = key.header();
+        let header_style = match key {
+            GroupKey::Hub(_) => style(&title).magenta().bold(),
+            GroupKey::Agent { .. } => style(&title).green().bold(),
+            GroupKey::User { .. } => style(&title).yellow().bold(),
+            GroupKey::Device(_) => style(&title).blue().bold(),
+            GroupKey::Other => style(&title).red().bold(),
+        };
+        eprintln!("  {header_style}");
+
+        // Per-section column widths: ability + kind only;
+        // description reflows against the terminal so long
+        // single-line descriptions don't wrap mid-row.
+        let mut rows: Vec<[String; 3]> = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let name = entry
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("-")
+                .to_string();
+            let (_d, _a, _u, kind) = extract_columns(entry);
+            let description = entry
+                .get("description")
+                .and_then(Value::as_str)
+                .map(|s| s.lines().next().unwrap_or(s).to_string())
+                .unwrap_or_default();
+            rows.push([name, kind, description]);
+        }
+        let widths = column_widths(&headers, &rows);
+        let total_fixed: usize = widths[..2].iter().sum::<usize>() + 2 * 2; // 2-space gutters
+        let desc_budget = term_width
+            .saturating_sub(4 + total_fixed) // leading 4-space indent for grouped rows
+            .max(20);
+
+        // Group-local header row + rule. Indented one extra step
+        // beyond the section title so the visual hierarchy reads
+        // clearly even on a narrow terminal.
+        eprintln!(
+            "    {}  {}  {}",
+            style(pad(headers[0], widths[0])).dim(),
+            style(pad(headers[1], widths[1])).dim(),
+            style(headers[2]).dim(),
+        );
+        let rule_width: usize = (widths[..2].iter().sum::<usize>() + 2 * 2 + desc_budget)
+            .min(term_width.saturating_sub(4).max(40));
+        eprintln!("    {}", style("─".repeat(rule_width)).dim());
+
+        for row in &rows {
+            let desc = truncate_display(&row[2], desc_budget);
+            eprintln!(
+                "    {}  {}  {}",
+                style(pad(&row[0], widths[0])).cyan(),
+                style(pad(&row[1], widths[1])).dim(),
+                desc,
+            );
+        }
+        eprintln!();
+    }
+}
+
+fn column_widths(headers: &[&str; 3], rows: &[[String; 3]]) -> [usize; 3] {
+    let mut w = [0usize; 3];
+    for (i, h) in headers.iter().enumerate() {
+        w[i] = measure_text_width(h);
+    }
+    for row in rows {
+        for (i, cell) in row.iter().enumerate() {
+            w[i] = w[i].max(measure_text_width(cell));
+        }
+    }
+    w
+}
+
+fn pad(text: &str, width: usize) -> String {
+    let w = measure_text_width(text);
+    if w >= width {
+        text.to_string()
+    } else {
+        format!("{text}{}", " ".repeat(width - w))
+    }
+}
+
+fn truncate_display(text: &str, max: usize) -> String {
+    if measure_text_width(text) <= max {
+        return text.to_string();
+    }
+    // Truncate by char count, leaving room for the ellipsis. Falls
+    // back to byte-safe slicing via `chars().take`.
+    let limit = max.saturating_sub(1).max(1);
+    let mut out: String = text.chars().take(limit).collect();
+    out.push('…');
+    out
 }
 
 /// Invoke `easynet.discover` on the local daemon and return the
@@ -156,7 +391,7 @@ pub fn run(args: AbilitiesArgs) -> anyhow::Result<()> {
 /// helper so daemon-down / IPC-failure / daemon-error rendering
 /// stay byte-identical to every other CLI surface.
 fn fetch_local_catalogue() -> anyhow::Result<Vec<Value>> {
-    let value = invoke_local_ability("easynet.discover", serde_json::json!({}))?;
+    let value = invoke_local_ability("device.easynet.discover", serde_json::json!({}))?;
     extract_abilities(&value)
 }
 
@@ -178,7 +413,7 @@ fn invoke_remote_easynet_discover(node: &str) -> anyhow::Result<Value> {
     let target_uri = crate::support::remote_device::resolve_target_device_uri(node)?;
     let caller_uri = crate::support::remote_device::caller_device_uri_from_credentials();
     crate::support::federation_invoke::invoke_via_federation_forward(
-        "easynet.discover",
+        "device.easynet.discover",
         serde_json::json!({}),
         &target_uri,
         caller_uri.as_deref(),
@@ -461,5 +696,58 @@ mod tests {
         })
         .expect_err("empty --node must be rejected");
         assert!(format!("{err}").contains("empty"));
+    }
+
+    #[test]
+    fn group_for_buckets_each_owner_kind_into_its_section() {
+        // Pin the partition: hub URA → Hub, agent URA → Agent,
+        // user URA → User, device URA → Device. A future render
+        // change that loses or merges a bucket trips this test.
+        let hub = json!({
+            "name": "hub.openai.chat_completions",
+            "owner_agent_uri": "easynet:///r/easynet.run/hub",
+        });
+        let agent = json!({
+            "name": "alice.codex.chat",
+            "owner_agent_uri": "easynet:///r/easynet.run/agent/alice.codex",
+        });
+        let user = json!({
+            "name": "alice.api_key.create",
+            "owner_agent_uri": "easynet:///r/easynet.run/user/alice",
+        });
+        let device = json!({
+            "name": "device.fs.read",
+            "owner_agent_uri":
+                "easynet:///r/easynet.run/device/00000000-0000-0000-0000-000000000001",
+        });
+        assert!(matches!(group_for(&hub), GroupKey::Hub(_)));
+        assert!(matches!(group_for(&agent), GroupKey::Agent { .. }));
+        assert!(matches!(group_for(&user), GroupKey::User { .. }));
+        assert!(matches!(group_for(&device), GroupKey::Device(_)));
+    }
+
+    #[test]
+    fn group_for_emits_other_for_unparseable_owner_uri() {
+        let bad = json!({
+            "name": "stray.thing",
+            "owner_agent_uri": "not-a-ura",
+        });
+        assert!(matches!(group_for(&bad), GroupKey::Other));
+    }
+
+    #[test]
+    fn group_section_order_matches_render_priority() {
+        // Hub → Agent → User → Device → Other. Lower number prints
+        // first.
+        assert!(GroupKey::Hub("x".into()).section_order()
+            < GroupKey::Agent { user: "u".into(), agent: "a".into(), uri: "x".into() }
+                .section_order());
+        assert!(GroupKey::Agent { user: "u".into(), agent: "a".into(), uri: "x".into() }
+            .section_order()
+            < GroupKey::User { user: "u".into(), uri: "x".into() }.section_order());
+        assert!(GroupKey::User { user: "u".into(), uri: "x".into() }.section_order()
+            < GroupKey::Device("x".into()).section_order());
+        assert!(GroupKey::Device("x".into()).section_order()
+            < GroupKey::Other.section_order());
     }
 }

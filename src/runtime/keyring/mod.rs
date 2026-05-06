@@ -31,15 +31,15 @@ pub mod store;
 /// FederatedKeyResolver to let user U on realm A be recognised
 /// as their realm B identity for federated `<self>.discover`.
 /// Wire shape + canonical bytes contract + verify helper; the
-/// `<self>.keyring.federate_user_identity_token` and
-/// `<self>.keyring.consume_federate_user_token` ability handlers
+/// `device.keyring.federate_user_identity_token` and
+/// `device.keyring.consume_federate_user_token` ability handlers
 /// land in commits 2/N + 3/N.
 pub mod user_binding_chain;
 
 /// On-disk + in-memory store for cross-realm user identity
 /// bindings (RFC-N PR-N4 commit 3/N). Consumer-side counterpart
 /// to `user_binding_chain.rs`: realm B's
-/// `<self>.keyring.consume_federate_user_token` writes here
+/// `device.keyring.consume_federate_user_token` writes here
 /// after the four-check verify chain passes; later
 /// `<self>.discover` Tier-3 reads the bindings to filter
 /// cross-realm devices by user identity.

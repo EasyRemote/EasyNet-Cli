@@ -201,6 +201,7 @@ impl AbilityProxy {
             Arc::new(crate::runtime::execution::loop_instance::LoopService::new()),
             &agents,
             Arc::new(Vec::new()),
+            crate::runtime::agents::PagesIdentity::default(),
         );
         let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
             Arc::new(crate::runtime::gateway::NoopGateway::new());
@@ -1180,7 +1181,7 @@ mod tests {
         let p = proxy_with_live_registry();
         let frames = p.handle(IncomingFrame::Invoke {
             request_id: "req-1".into(),
-            ability: "observe.health".into(),
+            ability: "device.observe.health".into(),
             args: json!({}),
             subject: None,
         });
@@ -1254,7 +1255,7 @@ mod tests {
         let p = proxy_with_live_registry();
         let frames = p.handle(IncomingFrame::Subscribe {
             subscription_id: "sub-1".into(),
-            ability: "fleet.attach_session".into(),
+            ability: "device.fleet.attach_session".into(),
             args: json!({"session_id": "no-such-session"}),
         });
         // Last frame must be Terminal regardless of how many Frame
@@ -1301,7 +1302,7 @@ mod tests {
         let p = proxy_with_local_agents(file);
         let frames = p.handle(IncomingFrame::Invoke {
             request_id: "req-receipt-1".into(),
-            ability: "observe.health".into(),
+            ability: "device.observe.health".into(),
             args: json!({}),
             subject: None,
         });
@@ -1349,7 +1350,7 @@ mod tests {
         // directly via dispatch_receipt unit tests above.
         let frames = p.handle(IncomingFrame::Invoke {
             request_id: "req-receipt-2".into(),
-            ability: "consent.decide".into(),
+            ability: "device.consent.decide".into(),
             // Send a malformed payload: handler will likely return
             // an Error envelope (ABILITY_FAILED) which carries no
             // receipt_header. We assert on whichever Result frame we
@@ -1865,7 +1866,7 @@ mod tests {
         let p = proxy_with_local_agents(Default::default());
         let frames = p.handle(IncomingFrame::Invoke {
             request_id: "req-no-header".into(),
-            ability: "observe.health".into(),
+            ability: "device.observe.health".into(),
             args: json!({}),
             subject: None,
         });

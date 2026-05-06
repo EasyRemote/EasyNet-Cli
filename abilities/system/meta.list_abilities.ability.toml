@@ -1,7 +1,0 @@
-schema_version = "1"
-name = "meta.list_abilities"
-description = "Return the full local AbilityDescriptor catalogue. Canonical Invoke surface for ability discovery; the MCP-shaped projection lives at mcp.bridge.list_tools for external MCP clients."
-
-[input_schema]
-type = "object"
-additionalProperties = false
