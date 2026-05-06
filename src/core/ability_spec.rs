@@ -105,10 +105,7 @@ impl AbilityKind {
     /// is retained as a back-compat sniff for legacy manifests
     /// the reader may still encounter on disk.
     pub fn from_qualified_name(name: &str) -> Self {
-        if name.starts_with("device.")
-            || name.starts_with("hub.")
-            || name.starts_with("system.")
-        {
+        if name.starts_with("device.") || name.starts_with("hub.") || name.starts_with("system.") {
             Self::System
         } else {
             Self::Agent

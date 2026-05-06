@@ -35,15 +35,6 @@
 
 pub mod a2a_bridge_ability;
 pub mod a2a_client_ability;
-/// RFC-006-C v0.1 — `<user>.api_key.{create,list,revoke}` ability
-/// family for OpenAI-compatibility bearer tokens. Independent of
-/// the RFC-002 keyring vault (different threat model: bearer
-/// capability vs cryptographic identity).
-pub mod api_key_ability;
-/// RFC-006-C v0.1 — `01HUB.openai.{chat_completions,list_models}`
-/// adapter abilities. The OpenAI streaming protocol becomes a
-/// transport view over chat-base ability dispatch sequences.
-pub mod openai_compat_ability;
 /// ability.publish + ability.unpublish — root meta-abilities that
 /// let a curator session (spawned by mission.think) materialise a
 /// new ability into a registered agent's abilities/ directory, or
@@ -65,6 +56,11 @@ pub mod ability_toml;
 /// counterpart to process.exec / shell.run). See
 /// `runtime/execution/pty/` for the underlying PtyService.
 pub mod admin_status_ability;
+/// RFC-006-C v0.1 — `<user>.api_key.{create,list,revoke}` ability
+/// family for OpenAI-compatibility bearer tokens. Independent of
+/// the RFC-002 keyring vault (different threat model: bearer
+/// capability vs cryptographic identity).
+pub mod api_key_ability;
 pub mod chat_ability;
 pub mod context_loaders;
 /// `device.describe` — unified-path replacement for the
@@ -94,6 +90,12 @@ pub(crate) mod federation_probe;
 /// InvokeBidi session per transfer. Atomic write (staging +
 /// rename), SHA-256 over content, 1 GiB byte cap.
 pub mod file_transfer_ability;
+/// RFC-006-B v0.6 — Pages reference system. The first reference
+/// realisation of the Resource Execution Model: publishing a
+/// folder of static bytes as a website. Owns the
+/// `<user>.pages.{publish,unpublish,list,get}` and
+/// `<user>.<project_id>.page.fetch` ability families.
+pub mod files;
 pub mod fleet_lifecycle_ability;
 pub mod fleet_list_agents_ability;
 pub mod fleet_ops_ability;
@@ -144,18 +146,16 @@ pub mod media_abilities;
 pub mod meta_ability;
 pub mod mission_ability;
 pub mod network_health_ability;
+/// RFC-006-C v0.1 — `01HUB.openai.{chat_completions,list_models}`
+/// adapter abilities. The OpenAI streaming protocol becomes a
+/// transport view over chat-base ability dispatch sequences.
+pub mod openai_compat_ability;
 /// mission.discuss / mission.think — round-robin and think-act-
 /// observe orchestration abilities. The `easynet mission discuss`
 /// and `easynet mission think` CLI subcommands invoke these,
 /// keeping a single ability-only path for both EAL programs and
 /// the operator CLI.
 pub mod orchestration_ability;
-/// RFC-006-B v0.6 — Pages reference system. The first reference
-/// realisation of the Resource Execution Model: publishing a
-/// folder of static bytes as a website. Owns the
-/// `<user>.pages.{publish,unpublish,list,get}` and
-/// `<user>.<project_id>.page.fetch` ability families.
-pub mod files;
 pub mod pages;
 pub mod permission_ability;
 pub mod ping;
@@ -289,7 +289,9 @@ impl PagesIdentity {
             });
         Self {
             user,
-            realm: std::env::var("EASYNET_PAGES_REALM").ok().filter(|v| !v.is_empty()),
+            realm: std::env::var("EASYNET_PAGES_REALM")
+                .ok()
+                .filter(|v| !v.is_empty()),
             listener_port: std::env::var("EASYNET_PAGES_PORT")
                 .ok()
                 .and_then(|s| s.parse::<u16>().ok()),
@@ -508,7 +510,11 @@ pub fn build_registry_with_services(
             let pages_realm = realm.clone();
             pages::register(
                 &mut reg,
-                pages::PagesConfig { user: user.clone(), realm, listener_port },
+                pages::PagesConfig {
+                    user: user.clone(),
+                    realm,
+                    listener_port,
+                },
                 Arc::clone(&local_registry_handle),
             );
             // Files reference system: content-addressed blob store
@@ -517,7 +523,10 @@ pub fn build_registry_with_services(
             // one user owns both surface families.
             files::register(
                 &mut reg,
-                files::FilesConfig { user: user.clone(), realm: pages_realm },
+                files::FilesConfig {
+                    user: user.clone(),
+                    realm: pages_realm,
+                },
             );
             // RFC-006-C v0.1 — API key abilities. Register under the
             // same `user` identity pages used so a single user owns
@@ -812,7 +821,14 @@ pub fn build_registry_for_daemon(
     let loaders = loaders
         .unwrap_or_else(|| Arc::new(context_loaders::default_loaders(Arc::clone(&schedule))));
     build_registry_with_services(
-        sessions, perms, discuss, schedule, loop_svc, &agents, loaders, pages_identity,
+        sessions,
+        perms,
+        discuss,
+        schedule,
+        loop_svc,
+        &agents,
+        loaders,
+        pages_identity,
     )
 }
 
@@ -970,16 +986,9 @@ pub fn description_for(name: &str) -> &'static str {
         "device.fleet.list_agents" => fleet_list_agents_ability::list_agents_description(),
         "device.meta.describe" => meta_ability::describe_description(),
         "device.meta.list_abilities" => meta_ability::list_abilities_description(),
-        // `easynet.discover` is the canonical user-facing alias for
-        // meta.list_abilities. The handler is the same; the
-        // description points at the alias deliberately so a peer
-        // browsing the catalogue with `meta.list_abilities` and one
-        // browsing with `easynet.discover` see the same prose.
-        "device.easynet.discover" => meta_ability::list_abilities_description(),
-        "device.easynet.run" => mission_ability::run_description(),
         "device.mission.run" => mission_ability::run_description(),
-        "device.easynet.track" => mission_ability::track_description(),
-        "device.easynet.cancel" => mission_ability::cancel_description(),
+        "device.mission.track" => mission_ability::track_description(),
+        "device.mission.cancel" => mission_ability::cancel_description(),
         // AXIOM §"Tier 2.5" Baseline Locomotion — filesystem half.
         "device.fs.read" => fs_ability::description_read(),
         "device.fs.write" => fs_ability::description_write(),
@@ -994,10 +1003,18 @@ pub fn description_for(name: &str) -> &'static str {
         "device.fleet.session_close" | "device.fleet.pty_session_close" => {
             pty_lifecycle_ability::description_close()
         }
-        "device.fleet.session_attach" | "device.fleet.pty_session_attach" => pty_attach_ability::description(),
-        "device.fleet.session_input" | "device.fleet.pty_session_input" => pty_io_ability::input_description(),
-        "device.fleet.session_read" | "device.fleet.pty_session_read" => pty_io_ability::read_description(),
-        "device.fleet.session_resize" | "device.fleet.pty_session_resize" => pty_io_ability::resize_description(),
+        "device.fleet.session_attach" | "device.fleet.pty_session_attach" => {
+            pty_attach_ability::description()
+        }
+        "device.fleet.session_input" | "device.fleet.pty_session_input" => {
+            pty_io_ability::input_description()
+        }
+        "device.fleet.session_read" | "device.fleet.pty_session_read" => {
+            pty_io_ability::read_description()
+        }
+        "device.fleet.session_resize" | "device.fleet.pty_session_resize" => {
+            pty_io_ability::resize_description()
+        }
         "device.fleet.file_transfer" => file_transfer_ability::description(),
         "device.fleet.start_agent" => fleet_lifecycle_ability::start_agent_description(),
         "device.fleet.stop_agent" => fleet_lifecycle_ability::stop_agent_description(),
@@ -1126,11 +1143,9 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "device.fleet.list_agents" => fleet_list_agents_ability::list_agents_input_schema(),
         "device.meta.describe" => meta_ability::describe_input_schema(),
         "device.meta.list_abilities" => meta_ability::list_abilities_input_schema(),
-        "device.easynet.discover" => meta_ability::list_abilities_input_schema(),
-        "device.easynet.run" => mission_ability::run_input_schema(),
         "device.mission.run" => mission_ability::run_input_schema(),
-        "device.easynet.track" => mission_ability::track_input_schema(),
-        "device.easynet.cancel" => mission_ability::cancel_input_schema(),
+        "device.mission.track" => mission_ability::track_input_schema(),
+        "device.mission.cancel" => mission_ability::cancel_input_schema(),
         // AXIOM §"Tier 2.5" Baseline Locomotion — filesystem half.
         "device.fs.read" => fs_ability::input_schema_read(),
         "device.fs.write" => fs_ability::input_schema_write(),
@@ -1145,9 +1160,15 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "device.fleet.session_close" | "device.fleet.pty_session_close" => {
             pty_lifecycle_ability::input_schema_close()
         }
-        "device.fleet.session_attach" | "device.fleet.pty_session_attach" => pty_attach_ability::input_schema(),
-        "device.fleet.session_input" | "device.fleet.pty_session_input" => pty_io_ability::input_input_schema(),
-        "device.fleet.session_read" | "device.fleet.pty_session_read" => pty_io_ability::read_input_schema(),
+        "device.fleet.session_attach" | "device.fleet.pty_session_attach" => {
+            pty_attach_ability::input_schema()
+        }
+        "device.fleet.session_input" | "device.fleet.pty_session_input" => {
+            pty_io_ability::input_input_schema()
+        }
+        "device.fleet.session_read" | "device.fleet.pty_session_read" => {
+            pty_io_ability::read_input_schema()
+        }
         "device.fleet.session_resize" | "device.fleet.pty_session_resize" => {
             pty_io_ability::resize_input_schema()
         }
@@ -1299,14 +1320,11 @@ mod tests {
             // ── Introspection ───────────────────────────────────
             "device.meta.describe"
             | "device.meta.list_abilities"
-            // `easynet.discover` is a user-facing alias for
-            // meta.list_abilities; same handler, same layer.
-            | "device.easynet.discover"
-            // `easynet.track` reads the persisted run dir of a
-            // prior easynet.run. Pure read of derived state →
+            // `mission.track` reads the persisted run dir of a
+            // prior mission.run. Pure read of derived state →
             // Introspection, same logic that puts schedule.list
             // / loop.status here.
-            | "device.easynet.track"
+            | "device.mission.track"
             | "device.mcp.bridge.list_tools"
             // mcp.client.list — aggregate read of every configured
             // upstream MCP server's tools/list. No mutation;
@@ -1436,9 +1454,8 @@ mod tests {
             // run state of an in-flight mission. Same Operational
             // class as loop.{create,cancel} for the same reason —
             // the ability IS the work.
-            | "device.easynet.run"
             | "device.mission.run"
-            | "device.easynet.cancel"
+            | "device.mission.cancel"
             // ability.publish / ability.unpublish / skill.publish /
             // skill.unpublish — curator-driven sinks for judge-validated
             // experience. State-mutating (writes/removes manifests under
@@ -2038,10 +2055,9 @@ mod tests {
     #[test]
     fn published_catalogue_uses_only_canonical_prefixes() {
         const FORBIDDEN_LEGACY_HEADS: &[&str] = &[
-            "fs", "http", "shell", "process", "fleet", "observe", "admin",
-            "easynet", "meta", "mission", "schedule", "loop", "discuss", "mcp",
-            "a2a", "policy", "ability", "camera", "mic", "screen", "speaker",
-            "voice", "skill", "consent", "01HUB",
+            "fs", "http", "shell", "process", "fleet", "observe", "admin", "easynet", "meta",
+            "mission", "schedule", "loop", "discuss", "mcp", "a2a", "policy", "ability", "camera",
+            "mic", "screen", "speaker", "voice", "skill", "consent", "01HUB",
         ];
         let names = published_ability_names();
         let mut violations: Vec<String> = Vec::new();
@@ -2070,8 +2086,7 @@ mod tests {
     #[test]
     fn published_catalogue_never_contains_self_alias() {
         let names = published_ability_names();
-        let leaks: Vec<&String> =
-            names.iter().filter(|n| n.starts_with("<self>")).collect();
+        let leaks: Vec<&String> = names.iter().filter(|n| n.starts_with("<self>")).collect();
         assert!(
             leaks.is_empty(),
             "post-M5 catalogue must not expose <self>.* names; got {leaks:?}"

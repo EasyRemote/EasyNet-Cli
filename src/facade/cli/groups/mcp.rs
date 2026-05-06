@@ -31,9 +31,11 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use clap::{Args, Subcommand};
+use serde_json::json;
 
 use crate::facade::cli::{mcp_install, mcp_server, skill_install};
 use crate::persistence::config;
+use crate::support::local_invoke::invoke_local_ability;
 use crate::support::output;
 
 #[derive(Debug, Args)]
@@ -68,17 +70,39 @@ pub fn run(args: McpArgs) -> anyhow::Result<()> {
 }
 
 fn run_status() -> anyhow::Result<()> {
-    match config::load() {
-        Ok(state) => {
-            output::success("runtime reachable");
-            output::detail("endpoint", &state.endpoint);
-            output::detail("tenant", state.tenant.as_deref().unwrap_or("default"));
-            output::info("`easynet mcp serve` will route MCP calls through this runtime.");
+    let state = config::load().ok();
+    match invoke_local_ability("device.observe.health", json!({"source": "mcp.status"})) {
+        Ok(_) => {
+            output::success("local daemon MCP surface reachable");
+            if let Some(state) = state {
+                output::detail("mode", "daemon-only");
+                output::detail("grpc_socket", &state.endpoint);
+                output::detail("tenant", state.tenant.as_deref().unwrap_or("default"));
+            }
+            output::info("`easynet mcp serve` will route MCP calls through this daemon.");
         }
-        Err(_) => {
-            output::warn("runtime not running — `easynet mcp serve` would fail");
-            output::info("Start it with `easynet runtime start`.");
-        }
+        Err(e) => match state {
+            Some(state) if state.uses_bridge() => {
+                output::warn(
+                    "runtime metadata exists, but no local daemon MCP surface is available",
+                );
+                output::detail("bridge_endpoint", &state.endpoint);
+                output::detail("tenant", state.tenant.as_deref().unwrap_or("default"));
+                output::info(
+                    "`easynet mcp serve` needs easynet-daemon. Hub/bridge-only mode does not provide it.",
+                );
+            }
+            Some(state) => {
+                output::warn("runtime metadata exists, but the local daemon is not responding");
+                output::detail("grpc_socket", &state.endpoint);
+                output::detail("tenant", state.tenant.as_deref().unwrap_or("default"));
+                output::info(&format!("health probe failed: {e}"));
+            }
+            None => {
+                output::warn("runtime not running — `easynet mcp serve` would fail");
+                output::info("Start it with `easynet runtime start`.");
+            }
+        },
     }
     Ok(())
 }

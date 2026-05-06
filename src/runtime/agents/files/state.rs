@@ -22,14 +22,12 @@ pub fn root_from_env() -> std::io::Result<PathBuf> {
     let p = match std::env::var("EASYNET_FILES_ROOT") {
         Ok(v) if !v.is_empty() => PathBuf::from(v),
         _ => {
-            let home = std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "HOME unset and EASYNET_FILES_ROOT not provided",
-                    )
-                })?;
+            let home = std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "HOME unset and EASYNET_FILES_ROOT not provided",
+                )
+            })?;
             home.join(DEFAULT_REL)
         }
     };

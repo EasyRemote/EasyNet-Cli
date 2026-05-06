@@ -281,7 +281,8 @@ fn run_end(args: EndArgs) -> anyhow::Result<()> {
 }
 
 fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
-    let result = invoke_call_signaling("device.voice.watch_call", json!({"call_id": args.call_id}))?;
+    let result =
+        invoke_call_signaling("device.voice.watch_call", json!({"call_id": args.call_id}))?;
     let events = result.get("events").and_then(Value::as_array);
     let mut count = 0;
     if let Some(events) = events {

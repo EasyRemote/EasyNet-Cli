@@ -22,9 +22,8 @@ use anyhow::Context;
 use clap::Args;
 use easynet_axon::server::ServerConfig;
 
-use super::heartbeat::{self, HeartbeatOutcome};
 use crate::persistence::config;
-use crate::support::{self, net, output, shutdown::ShutdownSignal};
+use crate::support::{net, output, shutdown::ShutdownSignal};
 
 /// Register a Ctrl-C handler that triggers `shutdown`. Safe to call multiple
 /// times — only the first call installs the handler; subsequent calls are
@@ -131,10 +130,6 @@ pub fn run(args: StartArgs) -> anyhow::Result<()> {
 fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     // Load and verify credentials (from `easynet join`).
     let (creds, credential_verified) = load_and_verify_credentials()?;
-    let settings = config::load_device_settings();
-
-    // Configure env vars consumed by the Axon SDK. Must happen before any thread spawn.
-    apply_env_patch(&env_patch_for_device(&creds, &settings));
 
     // Credentials take precedence over CLI args for hub/tenant.
     let hub = creds.hub_endpoint.clone();
@@ -145,22 +140,20 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
             args.hub, hub
         ));
     }
-    let hostname = gethostname::gethostname().to_string_lossy().into_owned();
     let label = args.label.clone().unwrap_or_else(|| creds.node_id.clone());
+    let _ = (args.token.as_deref(), args.insecure);
 
-    let srv = start_runtime_for_device(
-        &hub,
-        &tenant,
-        &label,
-        &creds.node_id,
-        args.token.as_deref(),
-        args.insecure,
-    )?;
-    let endpoint = srv.url().to_string();
-    let pid = net::discover_pid_from_endpoint(&endpoint);
+    crate::persistence::daemon_config::ensure_minimal_device_config(&creds)
+        .context("ensure daemon-config.toml for device mode")?;
+
+    let _daemon_handle = spawn_easynet_daemon(&creds.node_id);
+    let sockets = wait_for_local_daemon_ready(std::time::Duration::from_secs(5))?;
+    let pid = discover_existing_daemon_pid();
+    let endpoint = sockets.grpc_socket.display().to_string();
 
     let state = config::RuntimeState {
         endpoint: endpoint.clone(),
+        runtime_kind: config::RuntimeKind::DaemonOnly,
         pid,
         hub: Some(hub.clone()),
         tenant: Some(tenant.clone()),
@@ -170,8 +163,13 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     };
     config::save(&state)?;
 
-    output::success(&format!("Axon runtime started on {endpoint}"));
-    output::success(&format!("Joined {hub} as {label}"));
+    output::success("EasyNet daemon started");
+    output::detail("grpc_socket", &endpoint);
+    output::detail(
+        "control_socket",
+        &sockets.control_socket.display().to_string(),
+    );
+    output::detail("hub", &hub);
     output::detail("tenant", &tenant);
     if let Some(pid) = pid {
         output::detail("pid", &pid.to_string());
@@ -180,87 +178,11 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
         output::warn("credential not verified (Hub unreachable during startup)");
     }
 
-    // Try connecting the bridge for node registration.
-    let bridge = match support::connect_bridge_to(&endpoint) {
-        Ok(b) => b,
-        Err(e) => {
-            output::warn(&format!("bridge connect failed: {e}"));
-            output::info("Node registration skipped — runtime is still running.");
-            output::info(
-                "Hint: set EASYNET_DENDRITE_BRIDGE_LIB to the dendrite bridge library path.",
-            );
-            return run_foreground_or_detach(srv, args.foreground);
-        }
-    };
-
-    // Build a2a.* labels so this node is discoverable as an A2A agent
-    // across the Axon federation. The full encoding contract lives in
-    // `registry::a2a_labels::build` — note it returns `Option<HashMap>` so
-    // "no agents registered" maps cleanly to "omit labels on the wire"
-    // (vs `Some({})` which would publish an empty map). If the agents
-    // file is missing or malformed, we also omit labels rather than
-    // registering with partial data.
-    let labels = match crate::registry::agents::load_agents() {
-        Ok(registry) => crate::registry::a2a_labels::build(&registry, &hostname),
-        Err(e) => {
-            output::warn(&format!(
-                "failed to load ~/.easynet/agents.json ({e}); registering without a2a.* labels"
-            ));
-            None
-        }
-    };
-
-    // RFC-001 P1.5 collapsed the legacy RegisterNode RPC. The
-    // federation-side bookkeeping (directory advertisement,
-    // visibility on peers) is now done entirely through
-    // `federation.advertise_agent` / `federation.advertise_abilities`
-    // ability invocations, which `republish_via_federation_best_effort`
-    // (called below) issues. We default the heartbeat interval since
-    // the deprecated RPC was the only place the runtime ever told us
-    // a per-node value; future `federation.heartbeat` may surface one
-    // and we'll thread it then.
-    let _ = labels; // a2a labels travel through federation.advertise_abilities now
-    let heartbeat_ms = heartbeat::DEFAULT_HEARTBEAT_MS;
-
-    // Re-publish every registered agent's manifests to the freshly
-    // started axon-runtime. The runtime-local tool registry is
-    // in-memory by design (see EasyNet-Axon
-    // core/runtime-rs/src/state/runtime_tool.rs); a runtime restart
-    // drops every register-tool entry. Without this re-publish step
-    // the EasyNet frontend's Abilities catalog goes empty on every
-    // `easynet runtime stop && start` even though the agent registry
-    // (~/.easynet/agents.json) and the on-disk manifests are
-    // unchanged.
-    //
-    // Best-effort: per-agent failures are logged but never abort
-    // runtime startup. The runtime is up and serving — federation
-    // discovery just degrades to "this node has no abilities yet"
-    // until a successful re-publish lands. A subsequent
-    // `easynet agent add` against a healthy runtime fixes it.
-    // Spawn the IPC daemon (`easynet-daemon`) before re-publishing.
-    // The daemon owns:
-    //   * `~/.easynet/control.sock` — length-delimited JSON IPC for
-    //     CLI/library callers and the local stdio MCP server.
-    //   * `~/.easynet/runtime-dispatch.sock` — newline-delimited UDS
-    //     responder axon-runtime opens when forwarding Invokes for
-    //     daemon-owned abilities (`runtime_local_tools` route, Step 3
-    //     of the cross-repo plan).
-    //
-    // `republish_via_federation_best_effort` immediately below calls
-    // `runtime.register_local_tool` for every daemon-owned ability —
-    // those registrations name the dispatch socket above. If the
-    // daemon is not running, the registrations succeed at the runtime
-    // (it just stores the endpoint) but every actual Invoke falls
-    // through to `connect refused` until the daemon catches up. Spawning
-    // here closes that gap so the path is hot the moment the runtime
-    // starts accepting calls.
-    let _daemon_handle = spawn_easynet_daemon(&creds.node_id);
-    republish_via_federation_best_effort(&bridge, &creds);
-
     if args.foreground {
-        run_foreground_with_heartbeat(srv, &bridge, &creds, &endpoint, heartbeat_ms, args.no_mcp)
+        run_foreground_with_daemon(&creds, args.no_mcp)
     } else {
-        run_background_with_heartbeat(srv, &endpoint, heartbeat_ms)
+        output::info("Daemon running in background. Use `easynet stop` to stop.");
+        Ok(())
     }
 }
 
@@ -302,6 +224,12 @@ fn probe_daemon_alive() -> bool {
     probe_uds_alive(&crate::services::control::transport::default_socket_path())
 }
 
+#[derive(Debug, Clone)]
+struct DaemonSockets {
+    control_socket: std::path::PathBuf,
+    grpc_socket: std::path::PathBuf,
+}
+
 #[cfg(unix)]
 fn probe_uds_alive(sock: &std::path::Path) -> bool {
     if !sock.exists() {
@@ -313,6 +241,48 @@ fn probe_uds_alive(sock: &std::path::Path) -> bool {
 #[cfg(not(unix))]
 fn probe_uds_alive(_sock: &std::path::Path) -> bool {
     false
+}
+
+fn wait_for_local_daemon_ready(timeout: std::time::Duration) -> anyhow::Result<DaemonSockets> {
+    let sockets = DaemonSockets {
+        control_socket: crate::services::control::transport::default_socket_path(),
+        grpc_socket: crate::persistence::daemon_config::resolved_local_uds_path(),
+    };
+    let start = std::time::Instant::now();
+    while start.elapsed() < timeout {
+        if probe_uds_alive(&sockets.control_socket) && probe_uds_alive(&sockets.grpc_socket) {
+            return Ok(sockets);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    anyhow::bail!(
+        "timed out waiting for easynet-daemon to accept on {} and {}",
+        sockets.control_socket.display(),
+        sockets.grpc_socket.display()
+    );
+}
+
+fn discover_existing_daemon_pid() -> Option<u32> {
+    let pid_path = crate::persistence::config::easynet_daemon_pid_path();
+    if let Some(pid) = std::fs::read_to_string(&pid_path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .filter(|pid| net::is_pid_alive(*pid))
+    {
+        return Some(pid);
+    }
+
+    let output = std::process::Command::new("pgrep")
+        .args(["-f", "easynet-daemon"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .find(|pid| *pid != std::process::id() && net::is_pid_alive(*pid))
 }
 
 fn spawn_easynet_daemon(node_id: &str) -> Option<std::process::Child> {
@@ -407,6 +377,39 @@ fn spawn_easynet_daemon(node_id: &str) -> Option<std::process::Child> {
             None
         }
     }
+}
+
+fn start_stdio_mcp_server(creds: &config::Credentials) {
+    let config = crate::runtime::agents::profiles::mcp::StdioServerConfig {
+        server_name: "easynet-device".into(),
+        tenant_id: creds.tenant_id.clone(),
+        agent_name: None,
+    };
+    let configured = crate::runtime::agents::profiles::mcp::build_stdio_server(&config);
+    let descriptor_count = configured.descriptor_count();
+    std::thread::spawn(move || {
+        let server = easynet_axon::mcp::StdioMcpServer::new(configured.provider)
+            .with_server_name(configured.server_name)
+            .with_server_version(env!("CARGO_PKG_VERSION"));
+        if let Err(e) = server.run(std::io::stdin().lock(), &mut std::io::stdout()) {
+            eprintln!("mcp server exited: {e}");
+        }
+    });
+    output::success(&format!(
+        "MCP server started on stdio ({descriptor_count} tools advertised)"
+    ));
+}
+
+fn run_foreground_with_daemon(creds: &config::Credentials, no_mcp: bool) -> anyhow::Result<()> {
+    if !no_mcp {
+        start_stdio_mcp_server(creds);
+    }
+
+    let shutdown = ShutdownSignal::new();
+    install_ctrlc_handler(&shutdown);
+    output::info("Running in foreground (Ctrl-C to stop)...");
+    shutdown.wait();
+    super::stop::run(super::stop::StopArgs {})
 }
 
 /// Best-effort by contract — daemon startup completes regardless
@@ -675,173 +678,6 @@ where
     }
 }
 
-/// Build and start the Axon runtime for device mode.
-fn start_runtime_for_device(
-    hub: &str,
-    tenant: &str,
-    label: &str,
-    runtime_id: &str,
-    join_token: Option<&str>,
-    insecure: bool,
-) -> anyhow::Result<easynet_axon::server::ServerHandle> {
-    // Local runtime does not need mTLS — no TLS cert provisioning flow exists yet.
-    // The `insecure` CLI flag controls Hub gRPC transport, not local runtime mTLS.
-    let _ = insecure;
-    let mut cfg = ServerConfig::default()
-        .hub(hub)
-        .hub_tenant(tenant)
-        .hub_label(label)
-        .hub_runtime_id(runtime_id);
-    if let Some(t) = join_token {
-        cfg = cfg.hub_join_token(t);
-    }
-    cfg.start().context("start runtime")
-}
-
-/// Run in foreground with heartbeat + optional MCP server.
-fn run_foreground_with_heartbeat(
-    srv: easynet_axon::server::ServerHandle,
-    bridge: &easynet_axon::dendrite_bridge::DendriteBridge,
-    creds: &config::Credentials,
-    endpoint: &str,
-    heartbeat_ms: u64,
-    no_mcp: bool,
-) -> anyhow::Result<()> {
-    if !no_mcp {
-        // RFC-001 §A3 quarantine (P4.8d + P4.9): every MCP tool call
-        // routes through the in-process AbilityProxy. Construction
-        // lives in `runtime::agents::profiles::mcp::build_stdio_server`,
-        // shared with `easynet mcp_server`.
-        let _ = endpoint;
-        let config = crate::runtime::agents::profiles::mcp::StdioServerConfig {
-            server_name: "easynet-device".into(),
-            tenant_id: creds.tenant_id.clone(),
-            // `easynet start --mcp` is the device-level MCP path.
-            // No specific agent identity here, so per-agent
-            // abilities are not folded in. The dedicated workspace
-            // MCP path (`easynet mcp serve --agent <name>`) is
-            // where the per-agent catalog gets exposed.
-            agent_name: None,
-        };
-        let configured = crate::runtime::agents::profiles::mcp::build_stdio_server(&config);
-        let descriptor_count = configured.descriptor_count();
-        std::thread::spawn(move || {
-            let server = easynet_axon::mcp::StdioMcpServer::new(configured.provider)
-                .with_server_name(configured.server_name)
-                .with_server_version(env!("CARGO_PKG_VERSION"));
-            if let Err(e) = server.run(std::io::stdin().lock(), &mut std::io::stdout()) {
-                eprintln!("mcp server exited: {e}");
-            }
-        });
-        output::success(&format!(
-            "MCP server started on stdio ({descriptor_count} tools advertised)"
-        ));
-    }
-
-    let shutdown = ShutdownSignal::new();
-    install_ctrlc_handler(&shutdown);
-
-    // Foreground mode uses the bridge the parent process already opened
-    // and registered against — no reconnect layer here. If the transport
-    // drops under foreground `easynet start`, the operator is watching and
-    // can restart. The daemon path takes the reconnecting transport; see
-    // `heartbeat::run_daemon`.
-    let mut transport = heartbeat::DirectBridge::new(bridge);
-    let outcome = heartbeat::heartbeat_loop(
-        &mut transport,
-        &creds.tenant_id,
-        &creds.node_id,
-        heartbeat_ms,
-        &shutdown,
-    );
-
-    // Federation shutdown: remove this daemon's directory entry via
-    // `federation.revoke`. Replaces the deprecated
-    // `bridge.deregister_node` gRPC RPC (removed by AXON-RFC-001
-    // P1.5). Best-effort — a hub-side failure leaves a phantom
-    // entry until the next stale-node sweep, which is the same
-    // semantics the legacy RPC had.
-    {
-        let plan_realm = &creds.tenant_id; // realm == tenant in v1 (see build_bootstrap_plan_from)
-        let device_uri = crate::uri::device_uri(&creds.tenant_id, &creds.node_id);
-        let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
-            bridge,
-            device_uri.clone(),
-        );
-        if let Err(e) = crate::runtime::advertise::revoke_agent(
-            &invoker,
-            &creds.tenant_id,
-            plan_realm,
-            &device_uri,
-            outcome.reason(),
-        ) {
-            output::warn(&format!(
-                "federation.revoke failed for {} ({}): {e}",
-                creds.node_id,
-                outcome.reason(),
-            ));
-        }
-    }
-    drop(srv);
-    config::remove()?;
-    match outcome {
-        HeartbeatOutcome::FailuresExhausted => {
-            output::success("Axon runtime stopped (heartbeat lost after consecutive failures)");
-        }
-        HeartbeatOutcome::HubRejected => {
-            output::success("Axon runtime stopped (Hub rejected this member)");
-        }
-        HeartbeatOutcome::NodeRejected => {
-            // Device was administratively removed — clean up local credentials
-            // so the user cannot reconnect with a revoked identity.
-            config::delete_credentials().ok();
-            output::success("Axon runtime stopped (device removed by admin)");
-            output::step("Local credentials have been removed.");
-            output::step(
-                "To reconnect, create a new pairing token and run `easynet join <token>`.",
-            );
-        }
-        HeartbeatOutcome::Shutdown => {
-            output::success("Axon runtime stopped");
-        }
-    }
-    Ok(())
-}
-
-/// Detach runtime to background and spawn heartbeat daemon.
-fn run_background_with_heartbeat(
-    srv: easynet_axon::server::ServerHandle,
-    endpoint: &str,
-    heartbeat_ms: u64,
-) -> anyhow::Result<()> {
-    heartbeat::spawn_daemon(endpoint, heartbeat_ms)?;
-    // Intentionally leak the handle so the runtime keeps running after this process exits.
-    let _ = ManuallyDrop::new(srv);
-    output::info("Runtime running in background. Use `easynet stop` to stop.");
-    Ok(())
-}
-
-/// Either block in foreground until Ctrl-C, or detach to background.
-/// Used when bridge connect fails but runtime is still running.
-fn run_foreground_or_detach(
-    srv: easynet_axon::server::ServerHandle,
-    foreground: bool,
-) -> anyhow::Result<()> {
-    if foreground {
-        let shutdown = ShutdownSignal::new();
-        install_ctrlc_handler(&shutdown);
-        output::info("Running in foreground (Ctrl-C to stop)...");
-        shutdown.wait();
-        drop(srv);
-        config::remove()?;
-        output::success("Axon runtime stopped");
-    } else {
-        let _ = ManuallyDrop::new(srv);
-        output::info("Runtime running in background. Use `easynet stop` to stop.");
-    }
-    Ok(())
-}
-
 // ── Hub mode ────────────────────────────────────────────────────────────────
 
 fn run_as_hub(args: &StartArgs) -> anyhow::Result<()> {
@@ -864,6 +700,7 @@ fn run_as_hub(args: &StartArgs) -> anyhow::Result<()> {
 
     let state = config::RuntimeState {
         endpoint: endpoint.clone(),
+        runtime_kind: config::RuntimeKind::AxonBridge,
         pid,
         hub: None,
         tenant: Some(tenant),
@@ -975,34 +812,6 @@ fn assert_single_threaded() {
                 "apply_env_patch called with {count} threads running — must be single-threaded"
             );
         }
-    }
-}
-
-fn env_patch_for_device(
-    creds: &config::Credentials,
-    settings: &config::DeviceSettings,
-) -> EnvPatch {
-    let mut sets = Vec::new();
-    if creds.deploy_signature.is_empty() {
-        // Allow ephemeral/placeholder deploy signatures in dev mode when no real
-        // signature is available. Must be set here (single-threaded init) because
-        // env mutation from handler threads is UB.
-        sets.push(("AXON_ALLOW_PLACEHOLDER_DEPLOY_SIGNATURE", "1".into()));
-    } else {
-        sets.push((
-            "AXON_DEPLOY_SIGNATURE_BASE64",
-            creds.deploy_signature.clone(),
-        ));
-    }
-    let exec_enabled = std::env::var("EASYNET_SESSION_BRIDGE_EXEC_ENABLED")
-        .map(|v| v == "1")
-        .unwrap_or(settings.session_bridge_exec_enabled);
-    if exec_enabled {
-        sets.push(("EASYNET_SESSION_BRIDGE_EXEC_ENABLED", "1".into()));
-    }
-    EnvPatch {
-        sets,
-        removes: vec!["EASYNET_AXON_ENDPOINT"],
     }
 }
 

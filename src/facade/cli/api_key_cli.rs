@@ -107,10 +107,7 @@ fn run_create(a: CreateArgs) -> anyhow::Result<()> {
         .get("token")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("daemon returned no token"))?;
-    let key_uri = result
-        .get("key_uri")
-        .and_then(Value::as_str)
-        .unwrap_or("?");
+    let key_uri = result.get("key_uri").and_then(Value::as_str).unwrap_or("?");
 
     if !a.no_cache {
         api_key_ability::write_local_default_token(token)?;
@@ -147,7 +144,10 @@ fn run_list(a: ListArgs) -> anyhow::Result<()> {
         println!("No API keys.");
         return Ok(());
     }
-    println!("{:<14} {:<10} {:<22} {}", "ID_PREFIX", "STATUS", "LABEL", "CREATED");
+    println!(
+        "{:<14} {:<10} {:<22} {}",
+        "ID_PREFIX", "STATUS", "LABEL", "CREATED"
+    );
     for k in keys {
         let id_prefix = k.get("id_prefix").and_then(Value::as_str).unwrap_or("?");
         let revoked = k.get("revoked").and_then(Value::as_bool).unwrap_or(false);

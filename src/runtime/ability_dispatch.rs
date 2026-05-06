@@ -524,7 +524,6 @@ impl LocalAbilityRegistry {
         self.owner.get(ability)
     }
 
-
     /// Lookup helper — exposed because PR-ATTACH onwards will need
     /// a way to introspect "what abilities does this daemon
     /// publish?" without reflecting through the dispatcher.
@@ -1306,16 +1305,8 @@ mod tests {
         // No name-string sniffing — the registry is the source of
         // truth for owner kind. M0 of the system-namespace migration.
         let mut reg = LocalAbilityRegistry::new();
-        reg.register_rpc_with_owner(
-            "device.fs.read",
-            OwnerKind::Device,
-            ok_handler(),
-        );
-        reg.register_rpc_with_owner(
-            "hub.openai.chat_completions",
-            OwnerKind::Hub,
-            ok_handler(),
-        );
+        reg.register_rpc_with_owner("device.fs.read", OwnerKind::Device, ok_handler());
+        reg.register_rpc_with_owner("hub.openai.chat_completions", OwnerKind::Hub, ok_handler());
         reg.register_rpc_with_owner(
             "consent.decide",
             OwnerKind::Agent("consent".to_string()),
@@ -1383,8 +1374,7 @@ mod tests {
                 from_client: rx_from_client,
             })
         });
-        let rpc_env: LocalRpcHandlerWithEnvelope =
-            Arc::new(|_ctx, _args| Ok(json!({})));
+        let rpc_env: LocalRpcHandlerWithEnvelope = Arc::new(|_ctx, _args| Ok(json!({})));
         let stream_env: LocalStreamHandlerWithEnvelope =
             Arc::new(|_ctx, _args| Ok(StreamSource::Snapshot(vec![])));
         let bidi_env: LocalBidiHandlerWithEnvelope = Arc::new(|_ctx, _args| {
@@ -1402,17 +1392,9 @@ mod tests {
             OwnerKind::Agent("codex".to_string()),
             stream_handler,
         );
-        reg.register_bidi_with_owner(
-            "a.bidi",
-            OwnerKind::User("u-1".to_string()),
-            bidi_handler,
-        );
+        reg.register_bidi_with_owner("a.bidi", OwnerKind::User("u-1".to_string()), bidi_handler);
         reg.register_rpc_with_envelope_and_owner("a.rpc.env", OwnerKind::Device, rpc_env);
-        reg.register_stream_with_envelope_and_owner(
-            "a.stream.env",
-            OwnerKind::Hub,
-            stream_env,
-        );
+        reg.register_stream_with_envelope_and_owner("a.stream.env", OwnerKind::Hub, stream_env);
         reg.register_bidi_with_envelope_and_owner(
             "a.bidi.env",
             OwnerKind::Agent("web-builder".to_string()),
@@ -1594,27 +1576,15 @@ mod tests {
             OwnerKind::Device,
             Arc::new(|_| Ok(json!({}))),
         );
-        reg.register_stream_with_owner(
-            "device.x.stream",
-            OwnerKind::Device,
-            stream_handler,
-        );
+        reg.register_stream_with_owner("device.x.stream", OwnerKind::Device, stream_handler);
         reg.register_bidi_with_owner("device.x.bidi", OwnerKind::Device, bidi_handler);
-        reg.register_rpc_with_envelope_and_owner(
-            "device.x.rpc.env",
-            OwnerKind::Device,
-            rpc_env,
-        );
+        reg.register_rpc_with_envelope_and_owner("device.x.rpc.env", OwnerKind::Device, rpc_env);
         reg.register_stream_with_envelope_and_owner(
             "device.x.stream.env",
             OwnerKind::Device,
             stream_env,
         );
-        reg.register_bidi_with_envelope_and_owner(
-            "device.x.bidi.env",
-            OwnerKind::Device,
-            bidi_env,
-        );
+        reg.register_bidi_with_envelope_and_owner("device.x.bidi.env", OwnerKind::Device, bidi_env);
 
         for n in [
             "device.x.rpc",
@@ -1631,7 +1601,14 @@ mod tests {
             );
         }
         // Pin: legacy unprefixed forms are NOT registered post-M3.
-        for legacy in ["x.rpc", "x.stream", "x.bidi", "x.rpc.env", "x.stream.env", "x.bidi.env"] {
+        for legacy in [
+            "x.rpc",
+            "x.stream",
+            "x.bidi",
+            "x.rpc.env",
+            "x.stream.env",
+            "x.bidi.env",
+        ] {
             assert_eq!(
                 reg.lookup_owner(legacy),
                 None,

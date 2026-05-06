@@ -91,7 +91,8 @@ pub fn run(args: ThinkArgs) -> anyhow::Result<()> {
     eprintln!("  Cycles:  up to {}", args.max_cycles);
     eprintln!();
 
-    let resp = invoke_local_ability("device.mission.think", payload).context("invoke mission.think")?;
+    let resp =
+        invoke_local_ability("device.mission.think", payload).context("invoke mission.think")?;
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&resp)?);

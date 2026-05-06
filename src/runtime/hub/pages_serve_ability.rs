@@ -50,11 +50,7 @@ pub struct ServedBytes {
 /// Phase 2 promotes this to a real `forward_invoke` so the same
 /// translation works from the Go backend hub against a remote
 /// daemon's project.
-pub fn serve_bytes(
-    user: &str,
-    project_id: &str,
-    path: &str,
-) -> ServedBytes {
+pub fn serve_bytes(user: &str, project_id: &str, path: &str) -> ServedBytes {
     let args = json!({ "path": path });
     match fetch::handle_fetch(user, project_id, args) {
         Ok(value) => bytes_from_value(value),
@@ -88,10 +84,7 @@ pub fn serve_bytes(
 
 fn bytes_from_value(value: Value) -> ServedBytes {
     use base64::Engine;
-    let b64 = value
-        .get("bytes_b64")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let b64 = value.get("bytes_b64").and_then(Value::as_str).unwrap_or("");
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(b64)
         .unwrap_or_default();

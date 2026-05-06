@@ -62,10 +62,10 @@ mcp__easynet → <self>.invoke {
 }
 ```
 
-**Multi-step composition** — use `device.easynet.run` (EAL program):
+**Multi-step composition** — use `device.mission.run` (EAL program):
 
 ```
-mcp__easynet → device.easynet.run {
+mcp__easynet → device.mission.run {
   "source": "mission \"weather-and-quip\" {\n  let w = claude.weather(location: \"Beijing\")\n  let q = codex.quip(topic: \"weather\")\n  print(w)\n  print(q)\n}",
   "label":  "weather-quip"
 }
@@ -79,13 +79,13 @@ Surface the ability's result, not raw JSON. If the call fails, tell the user bri
 
 ## Tool reference
 
-| Preferred | Legacy alias (still works, don't write new code with) |
+| Canonical | Note |
 |---|---|
-| `<self>.discover` | `device.meta.list_abilities` |
-| `<self>.invoke` | `device.mcp.bridge.call_tool` |
-| `device.easynet.run` | `device.mission.run` |
-| `device.easynet.track <run_id>` | (poll long-running missions) |
-| `device.easynet.cancel <run_id>` | (cancel in-flight) |
+| `<self>.discover` | per-agent introspection alias for `device.meta.list_abilities` |
+| `<self>.invoke` | per-agent dispatch alias for `device.mcp.bridge.call_tool` |
+| `device.mission.run` | run an EAL program (compose multiple agent calls) |
+| `device.mission.track <run_id>` | poll the persisted state of a long-running mission |
+| `device.mission.cancel <run_id>` | flip an in-flight mission to cancelled |
 
 ## Examples
 
@@ -160,5 +160,5 @@ Do NOT use this path when EasyNet daemon is up. The whole point of EasyNet is th
 ## Notes
 
 - The discover registry doesn't change mid-turn unless someone runs `easynet agent refresh`. Cache results within a single reply.
-- For long-running missions (>30 s), use `device.easynet.run` with a label, then `device.easynet.track <run_id>` for status. The mission keeps running even if your turn returns first.
+- For long-running missions (>30 s), use `device.mission.run` with a label, then `device.mission.track <run_id>` for status. The mission keeps running even if your turn returns first.
 - "I want to BUILD a new ability instead of using one" is the `easynet-author` skill's domain, not this one.

@@ -240,9 +240,7 @@ mod tests {
 
         let got = handle_get(root.path(), json!({ "sha256": sha })).unwrap();
         assert_eq!(got["sha256"].as_str().unwrap(), sha);
-        let decoded = STANDARD
-            .decode(got["bytes_b64"].as_str().unwrap())
-            .unwrap();
+        let decoded = STANDARD.decode(got["bytes_b64"].as_str().unwrap()).unwrap();
         assert_eq!(decoded, body);
     }
 
@@ -263,9 +261,7 @@ mod tests {
         let uri = put["uri"].as_str().unwrap();
 
         let got = handle_get(root.path(), json!({ "uri": uri })).unwrap();
-        let decoded = STANDARD
-            .decode(got["bytes_b64"].as_str().unwrap())
-            .unwrap();
+        let decoded = STANDARD.decode(got["bytes_b64"].as_str().unwrap()).unwrap();
         assert_eq!(decoded, body);
     }
 
@@ -307,8 +303,7 @@ mod tests {
             json!({"filename": "b", "bytes_b64": STANDARD.encode(b"b")}),
         )
         .unwrap();
-        let listed =
-            handle_list("alice", "test.local", root.path(), json!({})).unwrap();
+        let listed = handle_list("alice", "test.local", root.path(), json!({})).unwrap();
         let items = listed["items"].as_array().unwrap();
         assert_eq!(items.len(), 2);
     }

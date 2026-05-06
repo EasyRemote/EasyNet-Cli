@@ -231,7 +231,7 @@ authoritative source for the owner per~P2.
       \emph{required} resource URA; handler rejects \code{None} &
       \codew{profiles::device} (media) \\
 
-  3 & \codew{device.fleet.*}, \codew{device.observe.*}, \codew{device.admin.*}, \codew{device.discuss.*}, \codew{device.loop.*}, \codew{device.schedule.*}, \codew{device.mission.*}, \codew{device.easynet.*}, \codew{device.meta.*}, \codew{device.ability.*}, \codew{device.policy.*}, \codew{device.consent.*}, \codew{device.skill.*}, \codew{device.mcp.*}, \codew{device.a2a.*}, \codew{device.voice.*} &
+  3 & \codew{device.fleet.*}, \codew{device.observe.*}, \codew{device.admin.*}, \codew{device.discuss.*}, \codew{device.loop.*}, \codew{device.schedule.*}, \codew{device.mission.*}, \codew{device.meta.*}, \codew{device.ability.*}, \codew{device.policy.*}, \codew{device.consent.*}, \codew{device.skill.*}, \codew{device.mcp.*}, \codew{device.a2a.*}, \codew{device.voice.*} &
       \code{device/<id>} &
       \code{=callee} (meta) &
       \codew{profiles::device}; runtime \codew{register_rpc} \\
@@ -344,7 +344,7 @@ renderer-level violation of P3 and must be rejected by tests.
 \section{Default catalogue --- abilities and why each exists}
 
 The 121 abilities below are what \code{easynet ability list} returns
-on a freshly-paired daemon (realm \codew{device.easynet.run}, user \code{test},
+on a freshly-paired daemon (realm \codew{easynet.run}, user \code{test},
 device \code{99e59ccd-...debf73d}, with one hosted sub-agent under the
 \code{web-builder} profile). For each ability we state \emph{why
 EasyNet must ship it by default} --- the protocol assumption that
@@ -477,12 +477,16 @@ Per RFC §18 the device profile owns these.
   reachability, realm-directory reachability, peer-hub status. The
   diagnostic that distinguishes "daemon down" from "daemon up but
   hub unreachable".
-  \item[\codew{device.easynet.discover}, \codew{device.easynet.run},
-  \codew{device.easynet.cancel}, \codew{device.easynet.track}]
-  User-facing aliases that LLM prompts read more naturally than
-  the literal \code{meta.list\_abilities} / \codew{device.mission.run} /
-  \codew{device.loop.cancel} / \codew{device.loop.status}. Both names route to the
-  same handler so the catalogue and dispatch table stay in lockstep.
+  \item[\codew{device.mission.track}, \codew{device.mission.cancel}]
+  Mission lifecycle introspection + termination. \code{track}
+  reads the persisted run dir of a prior \codew{device.mission.run}
+  invocation; \code{cancel} flips an in-flight mission to
+  \texttt{cancelled}. RFC-001 v4.1.7 M2 retired the parallel
+  \codew{device.easynet.*} alias surface that previously mirrored
+  \code{run}/\code{track}/\code{cancel} (and \code{discover} as an
+  alias for \codew{device.meta.list\_abilities}); per Q2 of the
+  migration plan aliases are protocol entropy and the LLM corpus
+  reads the canonical names.
 \end{description}
 
 \subsection{Device-owned --- mission, scheduling, loops, discuss (under \texttt{\small device.*})}

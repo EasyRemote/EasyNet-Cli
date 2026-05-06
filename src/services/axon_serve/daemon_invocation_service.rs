@@ -652,9 +652,7 @@ impl DaemonInvocationService {
                     .local_registry()
                     .list_abilities()
                     .iter()
-                    .any(|name| {
-                        name.starts_with(&agent_dot) || name.contains(&agent_dot_owned)
-                    })
+                    .any(|name| name.starts_with(&agent_dot) || name.contains(&agent_dot_owned))
                 {
                     return true;
                 }
@@ -683,7 +681,10 @@ impl DaemonInvocationService {
     fn lookup_target_with_agent_fallback(
         &self,
         target_uri: &str,
-    ) -> Option<(crate::services::presence_registry::PresenceSessionId, DispatchSender)> {
+    ) -> Option<(
+        crate::services::presence_registry::PresenceSessionId,
+        DispatchSender,
+    )> {
         if let Some(slot) = self.presence.lookup_tracked(target_uri) {
             return Some(slot);
         }
@@ -695,7 +696,11 @@ impl DaemonInvocationService {
         ) {
             return None;
         }
-        let host_uri = self.advertised_agents.get(target_uri)?.host_uri()?.to_string();
+        let host_uri = self
+            .advertised_agents
+            .get(target_uri)?
+            .host_uri()?
+            .to_string();
         self.presence.lookup_tracked(&host_uri)
     }
 }
@@ -2234,9 +2239,13 @@ impl DaemonInvocationService {
                  to enable remote file_transfer bridging",
             )
         })?;
-        let (session_id, sender) = self.lookup_target_with_agent_fallback(target_uri).ok_or_else(|| {
-            Status::failed_precondition(federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON)
-        })?;
+        let (session_id, sender) = self
+            .lookup_target_with_agent_fallback(target_uri)
+            .ok_or_else(|| {
+                Status::failed_precondition(
+                    federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+                )
+            })?;
 
         let mut handle = pending.register_pending();
         let call_id = handle.call_id();

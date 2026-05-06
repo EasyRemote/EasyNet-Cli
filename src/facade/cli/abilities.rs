@@ -213,8 +213,15 @@ fn extract_columns(entry: &Value) -> (String, String, String, String) {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum GroupKey {
     Hub(String),
-    Agent { user: String, agent: String, uri: String },
-    User { user: String, uri: String },
+    Agent {
+        user: String,
+        agent: String,
+        uri: String,
+    },
+    User {
+        user: String,
+        uri: String,
+    },
     Device(String),
     Other,
 }
@@ -391,7 +398,7 @@ fn truncate_display(text: &str, max: usize) -> String {
 /// helper so daemon-down / IPC-failure / daemon-error rendering
 /// stay byte-identical to every other CLI surface.
 fn fetch_local_catalogue() -> anyhow::Result<Vec<Value>> {
-    let value = invoke_local_ability("device.easynet.discover", serde_json::json!({}))?;
+    let value = invoke_local_ability("device.meta.list_abilities", serde_json::json!({}))?;
     extract_abilities(&value)
 }
 
@@ -413,7 +420,7 @@ fn invoke_remote_easynet_discover(node: &str) -> anyhow::Result<Value> {
     let target_uri = crate::support::remote_device::resolve_target_device_uri(node)?;
     let caller_uri = crate::support::remote_device::caller_device_uri_from_credentials();
     crate::support::federation_invoke::invoke_via_federation_forward(
-        "device.easynet.discover",
+        "device.meta.list_abilities",
         serde_json::json!({}),
         &target_uri,
         caller_uri.as_deref(),
@@ -739,15 +746,36 @@ mod tests {
     fn group_section_order_matches_render_priority() {
         // Hub → Agent → User → Device → Other. Lower number prints
         // first.
-        assert!(GroupKey::Hub("x".into()).section_order()
-            < GroupKey::Agent { user: "u".into(), agent: "a".into(), uri: "x".into() }
-                .section_order());
-        assert!(GroupKey::Agent { user: "u".into(), agent: "a".into(), uri: "x".into() }
+        assert!(
+            GroupKey::Hub("x".into()).section_order()
+                < GroupKey::Agent {
+                    user: "u".into(),
+                    agent: "a".into(),
+                    uri: "x".into()
+                }
+                .section_order()
+        );
+        assert!(
+            GroupKey::Agent {
+                user: "u".into(),
+                agent: "a".into(),
+                uri: "x".into()
+            }
             .section_order()
-            < GroupKey::User { user: "u".into(), uri: "x".into() }.section_order());
-        assert!(GroupKey::User { user: "u".into(), uri: "x".into() }.section_order()
-            < GroupKey::Device("x".into()).section_order());
-        assert!(GroupKey::Device("x".into()).section_order()
-            < GroupKey::Other.section_order());
+                < GroupKey::User {
+                    user: "u".into(),
+                    uri: "x".into()
+                }
+                .section_order()
+        );
+        assert!(
+            GroupKey::User {
+                user: "u".into(),
+                uri: "x".into()
+            }
+            .section_order()
+                < GroupKey::Device("x".into()).section_order()
+        );
+        assert!(GroupKey::Device("x".into()).section_order() < GroupKey::Other.section_order());
     }
 }

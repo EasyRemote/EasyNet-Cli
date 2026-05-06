@@ -651,8 +651,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         }
 
         let mut entries: Vec<AdvertiseEntry> = Vec::new();
-        let mut seen: std::collections::BTreeSet<String> =
-            std::collections::BTreeSet::new();
+        let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
         // Source 1: local-agents.json hosted_agents.
         let local_agents_file = crate::persistence::local_agents::load().unwrap_or_default();
@@ -691,9 +690,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         // `target_offline`.
         if !realm.is_empty() && !user_segment.is_empty() && user_segment != "self" {
             for synthetic in ["pages", "files"] {
-                let uri = format!(
-                    "easynet:///r/{realm}/agent/{user_segment}.{synthetic}"
-                );
+                let uri = format!("easynet:///r/{realm}/agent/{user_segment}.{synthetic}");
                 if seen.insert(uri.clone()) {
                     entries.push(AdvertiseEntry {
                         agent_uri: uri,
@@ -762,12 +759,11 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
                     .filter(|p| p.kind == crate::uri::URAKind::Agent)
                     .map(|p| p.agent_id)
                     .unwrap_or_default();
-                let host_for_advertise =
-                    if USER_SCOPED_AGENT_IDS.contains(&agent_id.as_str()) {
-                        None
-                    } else {
-                        caller_node_id.as_deref()
-                    };
+                let host_for_advertise = if USER_SCOPED_AGENT_IDS.contains(&agent_id.as_str()) {
+                    None
+                } else {
+                    caller_node_id.as_deref()
+                };
                 if let Err(err) = send_advertise_agent_prelude(
                     &mut client,
                     &caller_uri,
@@ -1128,9 +1124,7 @@ async fn send_advertise_agent_prelude(
         }
     }
     let arguments = serde_json::to_vec(&body).map_err(|e| {
-        tonic::Status::internal(format!(
-            "federation.advertise_agent prelude serialize: {e}"
-        ))
+        tonic::Status::internal(format!("federation.advertise_agent prelude serialize: {e}"))
     })?;
 
     let request = InvokeRequest {

@@ -120,8 +120,7 @@ fn now_secs() -> u64 {
 }
 
 fn realm() -> String {
-    std::env::var("EASYNET_PAGES_REALM")
-        .unwrap_or_else(|_| crate::uri::REALM_EASYNET.to_string())
+    std::env::var("EASYNET_PAGES_REALM").unwrap_or_else(|_| crate::uri::REALM_EASYNET.to_string())
 }
 
 /// Mint a fresh API key. Returns the bearer token ONCE — the
@@ -259,7 +258,9 @@ pub fn resolve_token(token: &str) -> anyhow::Result<(String, String)> {
 /// once at mint time, mode 0600. Lose the file → mint a new key.
 pub fn read_local_default_token() -> Option<String> {
     let home = std::env::var("HOME").ok()?;
-    let path = PathBuf::from(home).join(".easynet").join("api_keys.local.toml");
+    let path = PathBuf::from(home)
+        .join(".easynet")
+        .join("api_keys.local.toml");
     let text = fs::read_to_string(path).ok()?;
     #[derive(Deserialize)]
     struct LocalTokens {
@@ -294,8 +295,7 @@ pub fn register(reg: &mut LocalAbilityRegistry, user: &str) {
     let owner = OwnerKind::User(user.to_string());
     let user_owned = user.to_string();
     let u1 = user_owned.clone();
-    let create_handler: LocalRpcHandler =
-        Arc::new(move |args| handle_create(&u1, args));
+    let create_handler: LocalRpcHandler = Arc::new(move |args| handle_create(&u1, args));
     reg.register_rpc_with_owner(
         format!("{user}.api_key.create"),
         owner.clone(),
@@ -303,20 +303,10 @@ pub fn register(reg: &mut LocalAbilityRegistry, user: &str) {
     );
 
     let u2 = user_owned.clone();
-    let list_handler: LocalRpcHandler =
-        Arc::new(move |args| handle_list(&u2, args));
-    reg.register_rpc_with_owner(
-        format!("{user}.api_key.list"),
-        owner.clone(),
-        list_handler,
-    );
+    let list_handler: LocalRpcHandler = Arc::new(move |args| handle_list(&u2, args));
+    reg.register_rpc_with_owner(format!("{user}.api_key.list"), owner.clone(), list_handler);
 
     let u3 = user_owned.clone();
-    let revoke_handler: LocalRpcHandler =
-        Arc::new(move |args| handle_revoke(&u3, args));
-    reg.register_rpc_with_owner(
-        format!("{user}.api_key.revoke"),
-        owner,
-        revoke_handler,
-    );
+    let revoke_handler: LocalRpcHandler = Arc::new(move |args| handle_revoke(&u3, args));
+    reg.register_rpc_with_owner(format!("{user}.api_key.revoke"), owner, revoke_handler);
 }

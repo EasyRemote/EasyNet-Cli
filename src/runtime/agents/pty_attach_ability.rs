@@ -80,8 +80,8 @@ use std::sync::Arc;
 use base64::Engine;
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::{BidiSource, LocalAbilityRegistry, BIDI_CHANNEL_BOUND};
 use crate::runtime::ability_dispatch::OwnerKind;
+use crate::runtime::ability_dispatch::{BidiSource, LocalAbilityRegistry, BIDI_CHANNEL_BOUND};
 use crate::runtime::execution::pty::{PtyService, PtySessionId};
 
 pub const ABILITY_PTY_SESSION_ATTACH: &str = "device.fleet.pty_session_attach";
@@ -143,11 +143,7 @@ pub fn register(reg: &mut LocalAbilityRegistry, pty: Arc<PtyService>) {
         OwnerKind::Device,
         Arc::clone(&handler),
     );
-    reg.register_bidi_with_owner(
-        "device.fleet.session_attach",
-        OwnerKind::Device,
-        handler,
-    );
+    reg.register_bidi_with_owner("device.fleet.session_attach", OwnerKind::Device, handler);
 }
 
 fn attach_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<BidiSource> {

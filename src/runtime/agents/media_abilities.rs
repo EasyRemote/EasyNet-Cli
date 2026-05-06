@@ -69,8 +69,8 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::runtime::ability_descriptor::AbilityClass;
-use crate::runtime::ability_dispatch::{BidiSource, LocalAbilityRegistry, StreamSource};
 use crate::runtime::ability_dispatch::OwnerKind;
+use crate::runtime::ability_dispatch::{BidiSource, LocalAbilityRegistry, StreamSource};
 use crate::runtime::agents::ability_toml::Rfc006Metadata;
 
 // ── Ability names (exported so registration + descriptor sites

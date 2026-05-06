@@ -145,8 +145,10 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     // settled on so a single `--node` flag means the same thing
     // across the whole CLI.
     let catalogue = match args.node.as_deref().map(str::trim) {
-        None | Some("local") => invoke_local_ability("device.easynet.discover", serde_json::json!({}))
-            .context("invoke easynet.discover")?,
+        None | Some("local") => {
+            invoke_local_ability("device.meta.list_abilities", serde_json::json!({}))
+                .context("invoke easynet.discover")?
+        }
         Some("") => {
             anyhow::bail!(
                 "--node was given but empty; omit the flag to show abilities on the \

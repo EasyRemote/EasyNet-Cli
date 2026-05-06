@@ -99,7 +99,10 @@ impl HubPublishedAbilityStore {
     /// verbatim as `since_abilities_revision` on the next
     /// heartbeat.
     pub fn revision(&self) -> u64 {
-        self.inner.read().unwrap_or_else(|e| e.into_inner()).revision
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .revision
     }
 
     /// Snapshot of every hub-owned ability descriptor currently

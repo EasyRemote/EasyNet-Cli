@@ -135,8 +135,10 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_else(|| {
-            match crate::support::local_invoke::invoke_local_ability("device.easynet.discover", json!({}))
-            {
+            match crate::support::local_invoke::invoke_local_ability(
+                "device.meta.list_abilities",
+                json!({}),
+            ) {
                 Ok(catalogue) => catalogue
                     .get("abilities")
                     .and_then(|v| v.as_array())

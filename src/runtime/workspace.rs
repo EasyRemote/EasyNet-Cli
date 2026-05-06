@@ -417,7 +417,10 @@ const COLLABORATE_SKILL_MD: &str = include_str!("../../skills/easynet-collaborat
 fn write_pages_author_seed(ws: &Path, runtime: RuntimeKind) -> anyhow::Result<()> {
     let skill_dir = pages_author_seed_dir(ws, runtime);
     fs::create_dir_all(&skill_dir)?;
-    config::atomic_write(&skill_dir.join("SKILL.md"), PAGES_AUTHOR_SKILL_MD.as_bytes())?;
+    config::atomic_write(
+        &skill_dir.join("SKILL.md"),
+        PAGES_AUTHOR_SKILL_MD.as_bytes(),
+    )?;
     Ok(())
 }
 
@@ -436,8 +439,7 @@ fn pages_author_seed_dir(ws: &Path, runtime: RuntimeKind) -> PathBuf {
 /// `skills/easynet-pages-author/SKILL.md`. Editing the markdown
 /// recompiles the daemon binary at next build but does not require
 /// a manual sync step.
-const PAGES_AUTHOR_SKILL_MD: &str =
-    include_str!("../../skills/easynet-pages-author/SKILL.md");
+const PAGES_AUTHOR_SKILL_MD: &str = include_str!("../../skills/easynet-pages-author/SKILL.md");
 
 /// Seed `easynet-ability-author` — pairs with pages-author so a
 /// single agent learns both ends of the full-stack loop.
@@ -459,8 +461,7 @@ fn ability_author_seed_dir(ws: &Path, runtime: RuntimeKind) -> PathBuf {
     parent.join("easynet-ability-author")
 }
 
-const ABILITY_AUTHOR_SKILL_MD: &str =
-    include_str!("../../skills/easynet-ability-author/SKILL.md");
+const ABILITY_AUTHOR_SKILL_MD: &str = include_str!("../../skills/easynet-ability-author/SKILL.md");
 
 // ── Shared ───────────────────────────────────────────────────────────────────
 

@@ -72,18 +72,18 @@ fn open_inner(
     use rustix::fs::{openat2, Mode, OFlags, ResolveFlags};
 
     // Pin the resolution to the dirfd's subtree at the kernel level.
-    let resolve = ResolveFlags::BENEATH
-        | ResolveFlags::NO_SYMLINKS
-        | ResolveFlags::NO_MAGICLINKS;
+    let resolve = ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS;
     let oflags = OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW;
 
-    let fd = openat2(folder_fd, normalized, oflags, Mode::empty(), resolve)
-        .map_err(|errno| match errno {
-            rustix::io::Errno::XDEV => anyhow::anyhow!("path escapes published root"),
-            rustix::io::Errno::LOOP => anyhow::anyhow!("path traverses a symlink"),
-            rustix::io::Errno::NOENT => anyhow::anyhow!("file not found: {normalized}"),
-            other => anyhow::anyhow!("openat2 failed: {other}"),
-        })?;
+    let fd =
+        openat2(folder_fd, normalized, oflags, Mode::empty(), resolve).map_err(
+            |errno| match errno {
+                rustix::io::Errno::XDEV => anyhow::anyhow!("path escapes published root"),
+                rustix::io::Errno::LOOP => anyhow::anyhow!("path traverses a symlink"),
+                rustix::io::Errno::NOENT => anyhow::anyhow!("file not found: {normalized}"),
+                other => anyhow::anyhow!("openat2 failed: {other}"),
+            },
+        )?;
 
     Ok(File::from(fd))
 }
@@ -106,8 +106,8 @@ fn open_inner(
     use std::os::fd::FromRawFd;
 
     let candidate = canonical_root.join(normalized);
-    let resolved = std::fs::canonicalize(&candidate)
-        .map_err(|e| anyhow::anyhow!("file not found: {e}"))?;
+    let resolved =
+        std::fs::canonicalize(&candidate).map_err(|e| anyhow::anyhow!("file not found: {e}"))?;
     if !resolved.starts_with(canonical_root) {
         anyhow::bail!("path escapes published root");
     }
@@ -142,7 +142,8 @@ fn open_inner(
 /// a FIFO / socket / device / directory) and within `size_cap`.
 pub fn validate_regular(file: &File, size_cap: u64) -> anyhow::Result<u64> {
     use std::os::unix::fs::MetadataExt;
-    let meta = file.metadata()
+    let meta = file
+        .metadata()
         .map_err(|e| anyhow::anyhow!("stat failed: {e}"))?;
     if !meta.is_file() {
         anyhow::bail!("not a regular file");

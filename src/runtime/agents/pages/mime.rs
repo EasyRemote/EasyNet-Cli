@@ -24,7 +24,10 @@ pub struct Mime {
 
 impl Mime {
     const fn ok(ct: &'static str) -> Self {
-        Self { content_type: ct, force_attachment: false }
+        Self {
+            content_type: ct,
+            force_attachment: false,
+        }
     }
     const fn download() -> Self {
         Self {
@@ -39,11 +42,7 @@ impl Mime {
 /// is the safe default: the browser will save the bytes rather
 /// than execute them.
 pub fn mime_from_path(path: &str) -> Mime {
-    let ext = path
-        .rsplit('.')
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
 
     match ext.as_str() {
         "html" | "htm" => Mime::ok("text/html; charset=utf-8"),
@@ -89,10 +88,7 @@ mod tests {
 
     #[test]
     fn case_insensitive() {
-        assert_eq!(
-            mime_from_path("/PHOTO.JPG").content_type,
-            "image/jpeg",
-        );
+        assert_eq!(mime_from_path("/PHOTO.JPG").content_type, "image/jpeg",);
     }
 
     #[test]

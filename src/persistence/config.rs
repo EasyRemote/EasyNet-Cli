@@ -175,9 +175,28 @@ pub const DEFAULT_HUB_HOST: &str = "easynet.run";
 pub const DEFAULT_TENANT: &str = "easynet-platform";
 pub const DEFAULT_BIND: &str = "0.0.0.0:50051";
 
+/// Which process shape the persisted runtime state refers to.
+///
+/// Old `runtime.json` files (pre-daemon-only device mode) carried only
+/// an `endpoint` string and therefore deserialize as the historical
+/// default: an Axon bridge endpoint.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeKind {
+    /// Historical local `axon-runtime` process reachable via the
+    /// dendrite bridge (`state.endpoint` is a bridge endpoint).
+    #[default]
+    AxonBridge,
+    /// Daemon-only device mode. `state.endpoint` names the daemon's
+    /// local gRPC UDS socket and MUST NOT be treated as a bridge.
+    DaemonOnly,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeState {
     pub endpoint: String,
+    #[serde(default)]
+    pub runtime_kind: RuntimeKind,
     pub pid: Option<u32>,
     pub hub: Option<String>,
     pub tenant: Option<String>,
@@ -303,6 +322,10 @@ impl RuntimeState {
         self.tenant.as_deref().unwrap_or(DEFAULT_TENANT)
     }
 
+    pub fn uses_bridge(&self) -> bool {
+        matches!(self.runtime_kind, RuntimeKind::AxonBridge)
+    }
+
     /// Open a [`DendriteBridge`] to this runtime's endpoint, using the
     /// shared connect-timeout budget.
     ///
@@ -322,6 +345,10 @@ impl RuntimeState {
     ///
     /// [`DendriteBridge`]: easynet_axon::dendrite_bridge::DendriteBridge
     pub fn connect_bridge(&self) -> anyhow::Result<easynet_axon::dendrite_bridge::DendriteBridge> {
+        anyhow::ensure!(
+            self.uses_bridge(),
+            "local runtime is running in daemon-only mode; no axon bridge endpoint is available"
+        );
         crate::support::connect_bridge_to(&self.endpoint)
     }
 }
@@ -765,6 +792,42 @@ mod tests {
             hub_pubkey_b64: None,
         };
         assert_eq!(creds.api_base(), "https://my-hub.example.org");
+    }
+
+    #[test]
+    fn runtime_state_defaults_to_axon_bridge_when_kind_missing() {
+        let state: RuntimeState = serde_json::from_str(
+            r#"{
+                "endpoint": "axon://127.0.0.1:50051",
+                "pid": 7,
+                "tenant": "tenant-a"
+            }"#,
+        )
+        .expect("deserialize legacy runtime state");
+        assert_eq!(state.runtime_kind, RuntimeKind::AxonBridge);
+        assert!(state.uses_bridge());
+    }
+
+    #[test]
+    fn daemon_only_runtime_state_rejects_bridge_connect() {
+        let state = RuntimeState {
+            endpoint: "/tmp/easynet.sock".into(),
+            runtime_kind: RuntimeKind::DaemonOnly,
+            pid: Some(9),
+            hub: None,
+            tenant: Some("tenant-a".into()),
+            label: None,
+            started_at: None,
+            credential_verified: None,
+        };
+        let err = match state.connect_bridge() {
+            Ok(_) => panic!("daemon-only state must not bridge-connect"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("daemon-only mode"),
+            "unexpected error: {err}"
+        );
     }
 
     // ── agents_root() migration read ─────────────────────────────────────

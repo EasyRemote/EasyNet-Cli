@@ -200,16 +200,15 @@ fn real_meta_list_abilities_returns_at_least_observe_health() {
 }
 
 #[test]
-fn real_easynet_discover_aliases_meta_list_abilities() {
-    // `easynet.discover` is the user-facing alias for
-    // `meta.list_abilities` — same handler, same payload shape.
-    // Pin both calls returning a body with at least one array
-    // containing `observe.health` so a regression that wired the
-    // alias to a different handler trips loud.
+fn real_meta_list_abilities_returns_observe_health() {
+    // `device.meta.list_abilities` is the canonical introspection
+    // ability. Pin the body's shape: at least one array containing
+    // `observe.health` — a regression that broke the descriptor
+    // merge or registered the wrong handler trips here.
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.easynet.discover", json!({})))
-        .expect("device.easynet.discover");
+        .execute_rpc(target("device.meta.list_abilities", json!({})))
+        .expect("device.meta.list_abilities");
     let body = resp.as_object().expect("object");
     let mut found = false;
     for (_k, v) in body {
@@ -231,21 +230,38 @@ fn real_easynet_discover_aliases_meta_list_abilities() {
     }
     assert!(
         found,
-        "easynet.discover must include observe.health: got {resp}"
+        "device.meta.list_abilities must include observe.health: got {resp}"
     );
 }
 
 #[test]
-fn real_easynet_run_validates_args_before_touching_the_runtime() {
-    // `easynet.run` requires a non-empty `source`. The argument
-    // validation runs BEFORE the handler reaches into
-    // `run_mission_inproc` (which needs a live runtime + bridge
-    // pool for device dispatch). This test exercises the wiring
-    // up to the validation gate without requiring a daemon to be
-    // running — empty source must produce a precise error
-    // message so an LLM-driven caller sees what to fix.
+fn real_easynet_discover_alias_was_removed() {
+    // RFC-001 v4.1.7 M2 deleted the `device.easynet.*` user-facing
+    // aliases per Q2 of the migration plan ("aliases are protocol
+    // entropy generators"). Pin the absence so a regression that
+    // re-introduces the alias name fails here BEFORE the LLM
+    // corpus drifts back to two-canonical-names land.
     let (reg, _g) = registry_with_temp_home();
-    let result = dispatcher_for(reg).execute_rpc(target("device.easynet.run", json!({ "source": "" })));
+    let result = dispatcher_for(reg).execute_rpc(target("device.easynet.discover", json!({})));
+    assert!(
+        result.is_err(),
+        "device.easynet.discover MUST be unregistered post-M2; \
+         got {result:?}"
+    );
+}
+
+#[test]
+fn real_mission_run_validates_args_before_touching_the_runtime() {
+    // `mission.run` requires a non-empty `source`. Validation runs
+    // BEFORE the handler reaches into `run_mission_inproc` (which
+    // needs a live runtime + bridge pool for device dispatch),
+    // so this test exercises the wiring up to the validation gate
+    // without requiring a daemon to be running — empty source must
+    // produce a precise error message so an LLM-driven caller
+    // sees what to fix.
+    let (reg, _g) = registry_with_temp_home();
+    let result =
+        dispatcher_for(reg).execute_rpc(target("device.mission.run", json!({ "source": "" })));
     let err = result.expect_err("empty source must fail validation");
     let msg = format!("{err}");
     assert!(
@@ -256,58 +272,39 @@ fn real_easynet_run_validates_args_before_touching_the_runtime() {
 }
 
 #[test]
-fn real_mission_run_alias_validates_args_the_same_way_as_easynet_run() {
-    // The legacy `mission.run` name MUST route to the same
-    // handler as the canonical `easynet.run` — proven here by a
-    // matching validation error on the same malformed input. A
-    // regression that wired the alias to a different handler (or
-    // forgot to register it at all) would either return a
-    // different error message or report `not_found`.
-    let (reg, _g) = registry_with_temp_home();
-    let result = dispatcher_for(reg).execute_rpc(target("device.mission.run", json!({ "source": "" })));
-    let err = result.expect_err("empty source must fail validation");
-    let msg = format!("{err}");
-    assert!(
-        msg.contains("source") && msg.contains("non-empty"),
-        "empty source via mission.run must yield the same precise \
-         validation error as easynet.run; got: {msg}"
-    );
-}
-
-#[test]
-fn real_easynet_track_returns_an_error_for_an_unknown_run_id() {
-    // `easynet.track` reads the persisted state of a prior
-    // `easynet.run` by id. With a fresh HOME there are no run
+fn real_mission_track_returns_an_error_for_an_unknown_run_id() {
+    // `mission.track` reads the persisted state of a prior
+    // `mission.run` by id. With a fresh HOME there are no run
     // dirs, so any id lookup MUST surface an error rather than
     // silently fabricating an empty envelope. A regression that
     // returns Ok({}) for a missing run would mask "the mission
     // is gone" as "the mission has nothing to report".
     let (reg, _g) = registry_with_temp_home();
     let result = dispatcher_for(reg).execute_rpc(target(
-        "device.easynet.track",
+        "device.mission.track",
         json!({ "run_id": "no-such-run-id" }),
     ));
     assert!(
         result.is_err(),
-        "easynet.track must error on an unknown run_id; got {result:?}"
+        "mission.track must error on an unknown run_id; got {result:?}"
     );
 }
 
 #[test]
-fn real_easynet_cancel_returns_an_error_for_an_unknown_run_id() {
-    // Same contract as easynet.track — an unknown run id must
+fn real_mission_cancel_returns_an_error_for_an_unknown_run_id() {
+    // Same contract as mission.track — an unknown run id must
     // surface as an error, not a silent no-op. A regression that
     // returned `cancelled = false` here would let a caller think
     // they had reached a (terminal) run when in fact no run by
     // that id ever existed.
     let (reg, _g) = registry_with_temp_home();
     let result = dispatcher_for(reg).execute_rpc(target(
-        "device.easynet.cancel",
+        "device.mission.cancel",
         json!({ "run_id": "no-such-run-id" }),
     ));
     assert!(
         result.is_err(),
-        "easynet.cancel must error on an unknown run_id; got {result:?}"
+        "mission.cancel must error on an unknown run_id; got {result:?}"
     );
 }
 
@@ -337,7 +334,10 @@ fn real_fleet_list_nodes_returns_local_view_envelope() {
 fn real_fleet_describe_node_local_returns_self_envelope() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.fleet.describe_node", json!({ "node_id": "local" })))
+        .execute_rpc(target(
+            "device.fleet.describe_node",
+            json!({ "node_id": "local" }),
+        ))
         .expect("fleet.describe_node local");
     assert_eq!(resp.get("is_self"), Some(&json!(true)));
 }
@@ -346,7 +346,10 @@ fn real_fleet_describe_node_local_returns_self_envelope() {
 fn real_fleet_remove_node_refuses_to_remove_self() {
     let (reg, _g) = registry_with_temp_home();
     let err = dispatcher_for(reg)
-        .execute_rpc(target("device.fleet.remove_node", json!({ "node_id": "local" })))
+        .execute_rpc(target(
+            "device.fleet.remove_node",
+            json!({ "node_id": "local" }),
+        ))
         .expect_err("fleet.remove_node must refuse to remove self");
     assert!(format!("{err}").contains("device reset"));
 }
@@ -486,8 +489,11 @@ fn real_voice_leave_call_removes_participant() {
     let (reg, _g) = registry_with_temp_home();
     let cid = unique_call_id("leave");
     let d = dispatcher_for(reg);
-    d.execute_rpc(target("device.voice.create_call", json!({"call_id": cid.clone()})))
-        .expect("create");
+    d.execute_rpc(target(
+        "device.voice.create_call",
+        json!({"call_id": cid.clone()}),
+    ))
+    .expect("create");
     d.execute_rpc(target(
         "device.voice.join_call",
         json!({"call_id": cid.clone(), "participant_id": "alice"}),
@@ -511,10 +517,16 @@ fn real_voice_end_call_is_idempotent() {
     let (reg, _g) = registry_with_temp_home();
     let cid = unique_call_id("end");
     let d = dispatcher_for(reg);
-    d.execute_rpc(target("device.voice.create_call", json!({"call_id": cid.clone()})))
-        .expect("create");
-    d.execute_rpc(target("device.voice.end_call", json!({"call_id": cid.clone()})))
-        .expect("first end");
+    d.execute_rpc(target(
+        "device.voice.create_call",
+        json!({"call_id": cid.clone()}),
+    ))
+    .expect("create");
+    d.execute_rpc(target(
+        "device.voice.end_call",
+        json!({"call_id": cid.clone()}),
+    ))
+    .expect("first end");
     let r2 = d
         .execute_rpc(target("device.voice.end_call", json!({"call_id": cid})))
         .expect("second end");
@@ -526,8 +538,11 @@ fn real_voice_watch_call_returns_event_snapshot() {
     let (reg, _g) = registry_with_temp_home();
     let cid = unique_call_id("watch");
     let d = dispatcher_for(reg);
-    d.execute_rpc(target("device.voice.create_call", json!({"call_id": cid.clone()})))
-        .expect("create");
+    d.execute_rpc(target(
+        "device.voice.create_call",
+        json!({"call_id": cid.clone()}),
+    ))
+    .expect("create");
     d.execute_rpc(target(
         "device.voice.join_call",
         json!({"call_id": cid.clone(), "participant_id": "alice"}),
@@ -547,8 +562,11 @@ fn real_voice_report_metrics_appends_event() {
     let (reg, _g) = registry_with_temp_home();
     let cid = unique_call_id("metrics");
     let d = dispatcher_for(reg);
-    d.execute_rpc(target("device.voice.create_call", json!({"call_id": cid.clone()})))
-        .expect("create");
+    d.execute_rpc(target(
+        "device.voice.create_call",
+        json!({"call_id": cid.clone()}),
+    ))
+    .expect("create");
     d.execute_rpc(target(
         "device.voice.join_call",
         json!({"call_id": cid.clone(), "participant_id": "alice"}),
@@ -598,8 +616,10 @@ fn real_discuss_list_turns_returns_empty_for_fresh_room() {
 #[test]
 fn real_mission_discuss_round_rejects_missing_room_id() {
     let (reg, _g) = registry_with_temp_home();
-    let result =
-        dispatcher_for(reg).execute_rpc(target("device.mission.discuss_round", json!({"agents": ["a"]})));
+    let result = dispatcher_for(reg).execute_rpc(target(
+        "device.mission.discuss_round",
+        json!({"agents": ["a"]}),
+    ));
     let err = result.expect_err("missing room_id must fail");
     assert!(format!("{err}").contains("room_id"));
 }
@@ -1820,7 +1840,10 @@ fn real_fleet_attach_session_returns_a_stream_source_for_unknown_id() {
     let mut reg = LocalAbilityRegistry::new();
     super::session_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
-    let mut t = target("device.fleet.attach_session", json!({"session_id": "no-such"}));
+    let mut t = target(
+        "device.fleet.attach_session",
+        json!({"session_id": "no-such"}),
+    );
     t.call_mode = CallMode::Stream;
     let r = d.execute_stream(t);
     match r {
@@ -2338,7 +2361,10 @@ fn real_device_openai_list_models_returns_v1_models_envelope() {
     // must be intact.
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let resp = invoke("device.openai.list_models", json!({}));
-    assert_eq!(resp["object"], "list", "list_models must use v1 list envelope");
+    assert_eq!(
+        resp["object"], "list",
+        "list_models must use v1 list envelope"
+    );
     assert!(
         resp.get("data").and_then(Value::as_array).is_some(),
         "list_models must carry a `data` array; got {resp}"
@@ -2421,10 +2447,9 @@ fn real_test_api_key_create_then_list_then_revoke_round_trip() {
     // answers; the assertion below pins only that the handler is
     // dispatchable (returns Ok or a typed error, not a "not
     // registered" panic from the dispatcher).
-    let revoke = d
-        .execute_rpc(target(
-            "test.api_key.revoke",
-            json!({"fingerprint": id, "id": id, "id_prefix": id, "token_id": id}),
-        ));
+    let revoke = d.execute_rpc(target(
+        "test.api_key.revoke",
+        json!({"fingerprint": id, "id": id, "id_prefix": id, "token_id": id}),
+    ));
     let _ = revoke; // dispatchability is the contract; outcome shape varies.
 }

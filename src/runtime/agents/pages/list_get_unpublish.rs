@@ -51,7 +51,12 @@ pub fn handle_list(user: &str, listener_port: u16, _args: Value) -> anyhow::Resu
 }
 
 /// `<user>.pages.get` — return one project's detail.
-pub fn handle_get(user: &str, listener_port: u16, realm: &str, args: Value) -> anyhow::Result<Value> {
+pub fn handle_get(
+    user: &str,
+    listener_port: u16,
+    realm: &str,
+    args: Value,
+) -> anyhow::Result<Value> {
     let project_id = args
         .get("project_id")
         .and_then(Value::as_str)
@@ -59,9 +64,7 @@ pub fn handle_get(user: &str, listener_port: u16, realm: &str, args: Value) -> a
     let key = (user.to_string(), project_id.to_string());
     let h = PUBLISHED_PROJECTS
         .get(&key)
-        .ok_or_else(|| anyhow::anyhow!(
-            "project not found: user={user} project_id={project_id}"
-        ))?
+        .ok_or_else(|| anyhow::anyhow!("project not found: user={user} project_id={project_id}"))?
         .clone();
 
     let started_at_ms = h
@@ -69,12 +72,8 @@ pub fn handle_get(user: &str, listener_port: u16, realm: &str, args: Value) -> a
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-    let url_root = format!(
-        "http://{project_id}.{user}.pages.localhost:{listener_port}/"
-    );
-    let project_uri = format!(
-        "easynet:///r/{realm}/resource/{user}.{project_id}/",
-    );
+    let url_root = format!("http://{project_id}.{user}.pages.localhost:{listener_port}/");
+    let project_uri = format!("easynet:///r/{realm}/resource/{user}.{project_id}/",);
 
     Ok(json!({
         "user":           user,
@@ -99,9 +98,7 @@ pub fn handle_unpublish(user: &str, args: Value) -> anyhow::Result<Value> {
         .ok_or_else(|| anyhow::anyhow!("missing required arg: project_id"))?;
     let key = (user.to_string(), project_id.to_string());
     if PUBLISHED_PROJECTS.remove(&key).is_none() {
-        anyhow::bail!(
-            "project not found: user={user} project_id={project_id}"
-        );
+        anyhow::bail!("project not found: user={user} project_id={project_id}");
     }
     Ok(json!({
         "user":       user,

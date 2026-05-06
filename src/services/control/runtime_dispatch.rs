@@ -727,7 +727,8 @@ mod tests {
         let proxy = fresh_proxy();
         let args = serde_json::json!({"client_marker":"e2e-step3"}).to_string();
         let args_b64 = base64::engine::general_purpose::STANDARD.encode(args.as_bytes());
-        let req = format!(r#"{{"tool_name":"device.observe.health","arguments_b64":"{args_b64}"}}"#);
+        let req =
+            format!(r#"{{"tool_name":"device.observe.health","arguments_b64":"{args_b64}"}}"#);
         let resp = build_response_line(&req, &proxy);
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
         assert_eq!(v["ok"], true);
@@ -887,7 +888,8 @@ mod tests {
     #[test]
     fn mode_omitted_defaults_to_rpc() {
         let req: DispatchRequest =
-            serde_json::from_str(r#"{"tool_name":"device.observe.health","arguments_b64":""}"#).unwrap();
+            serde_json::from_str(r#"{"tool_name":"device.observe.health","arguments_b64":""}"#)
+                .unwrap();
         assert_eq!(req.mode, "rpc");
 
         // Sanity: explicit "rpc" parses too.

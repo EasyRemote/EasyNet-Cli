@@ -800,9 +800,7 @@ mod tests {
             ),
         ];
         for (uri, want_user, want_agent) in cases {
-            let p = parse_ura(uri).unwrap_or_else(|e| {
-                panic!("parse {uri}: {e:?}")
-            });
+            let p = parse_ura(uri).unwrap_or_else(|e| panic!("parse {uri}: {e:?}"));
             assert_eq!(p.kind, URAKind::Agent, "{uri}");
             assert_eq!(&p.user_id, want_user, "{uri}");
             assert_eq!(&p.agent_id, want_agent, "{uri}");

@@ -168,8 +168,8 @@ pub fn handle_chat_completions(args: Value) -> anyhow::Result<Value> {
     // in-process callers like easynet llm-api CLI invoking via
     // local IPC); only the HTTP boundary requires the token.
     let user_uri = if let Some(tok) = auth_token.as_deref() {
-        let (uri, _id_prefix) = api_key_ability::resolve_token(tok)
-            .map_err(|e| anyhow::anyhow!("auth failed: {e}"))?;
+        let (uri, _id_prefix) =
+            api_key_ability::resolve_token(tok).map_err(|e| anyhow::anyhow!("auth failed: {e}"))?;
         Some(uri)
     } else {
         None
@@ -227,9 +227,8 @@ pub fn handle_chat_completions(args: Value) -> anyhow::Result<Value> {
         ability_args["system"] = json!(s);
     }
 
-    let dispatch_result = handler(ability_args).map_err(|e| {
-        anyhow::anyhow!("chat-base ability `{target_ability}` failed: {e}")
-    })?;
+    let dispatch_result = handler(ability_args)
+        .map_err(|e| anyhow::anyhow!("chat-base ability `{target_ability}` failed: {e}"))?;
 
     // Extract reply text from agent response. Different chat
     // abilities return slightly different shapes; v0.1 supports:
@@ -392,10 +391,7 @@ pub fn handle_list_models(_args: Value) -> anyhow::Result<Value> {
             continue;
         }
         // model id is the ability's owner prefix
-        let model_id = name
-            .strip_suffix(".chat")
-            .unwrap_or(&name)
-            .to_string();
+        let model_id = name.strip_suffix(".chat").unwrap_or(&name).to_string();
         models.push(json!({
             "id":       model_id,
             "object":   "model",
@@ -459,8 +455,12 @@ pub fn register(reg: &mut LocalAbilityRegistry) {
 
 fn deref_easynet_uris_in_messages(messages: &mut Vec<Value>) {
     for msg in messages.iter_mut() {
-        let Some(content) = msg.get_mut("content") else { continue };
-        let Some(arr) = content.as_array_mut() else { continue };
+        let Some(content) = msg.get_mut("content") else {
+            continue;
+        };
+        let Some(arr) = content.as_array_mut() else {
+            continue;
+        };
         for block in arr.iter_mut() {
             // Image blocks: `image_url.url` or `input_image.image_url.url`.
             for nested_key in &["image_url", "input_image"] {
@@ -501,8 +501,8 @@ fn deref_to_data_url(uri: &str) -> anyhow::Result<String> {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
 
-    let parsed = crate::uri::parse_ura(uri)
-        .map_err(|e| anyhow::anyhow!("deref `{uri}`: parse: {e}"))?;
+    let parsed =
+        crate::uri::parse_ura(uri).map_err(|e| anyhow::anyhow!("deref `{uri}`: parse: {e}"))?;
     if !matches!(parsed.kind, crate::uri::URAKind::Resource) {
         anyhow::bail!("deref `{uri}`: not a resource URA");
     }
@@ -543,8 +543,8 @@ fn deref_to_data_url(uri: &str) -> anyhow::Result<String> {
         .cloned()
         .or_else(|| registry.resolve_rpc(&ability))
         .ok_or_else(|| anyhow::anyhow!("deref `{uri}`: ability `{ability}` not registered"))?;
-    let resp = handler(args)
-        .map_err(|e| anyhow::anyhow!("deref `{uri}`: {ability} failed: {e}"))?;
+    let resp =
+        handler(args).map_err(|e| anyhow::anyhow!("deref `{uri}`: {ability} failed: {e}"))?;
     let bytes_b64 = resp
         .get("bytes_b64")
         .and_then(Value::as_str)

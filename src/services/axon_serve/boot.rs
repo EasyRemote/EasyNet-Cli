@@ -867,6 +867,12 @@ fn maybe_bootstrap_runtime_self_identity(identity: &DaemonIdentity) {
         Ok(state) => state,
         Err(_) => return,
     };
+    if matches!(
+        state.runtime_kind,
+        crate::persistence::config::RuntimeKind::DaemonOnly
+    ) {
+        return;
+    }
     let bridge = match state.connect_bridge() {
         Ok(bridge) => bridge,
         Err(err) => {

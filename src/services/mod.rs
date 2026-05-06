@@ -148,6 +148,7 @@ pub mod self_identity;
 /// receipt write failure does not fail admission (PR-10 spec
 /// INV-5). Persistence is a future RFC concern; v1 is in-memory
 /// FIFO at `DEFAULT_RECEIPT_CAPACITY`.
+#[cfg(feature = "axon-pb")]
 pub mod receipt_store;
 
 /// Cross-hub federation transport (RFC-N PR-N1 onwards). The
@@ -169,5 +170,9 @@ pub mod federation_client;
 /// `DirectoryEvent` (the event-stream tagged enum) lands in
 /// N3-2; the `RemoteDirectoryClient` per-peer FSM and
 /// `SharedFederatedDirectoryView` cell land in N3-3. Pure data
-/// + serde — no feature gate.
+/// + serde, but the current file also hosts the streaming
+/// supervisor path that depends on proto-generated request types.
+/// Keep it behind `axon-pb` until the pure-data portion is split
+/// out.
+#[cfg(feature = "axon-pb")]
 pub mod federation_directory;

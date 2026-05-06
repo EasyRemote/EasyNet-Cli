@@ -43,8 +43,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
     // honour `EASYNET_PAGES_BIND` (e.g. `0.0.0.0`) — INV-1
     // (Adapter Purity) is unaffected; the bind address is purely
     // a transport concern.
-    let bind_host = std::env::var("EASYNET_PAGES_BIND")
-        .unwrap_or_else(|_| "127.0.0.1".to_string());
+    let bind_host = std::env::var("EASYNET_PAGES_BIND").unwrap_or_else(|_| "127.0.0.1".to_string());
     let addr: SocketAddr = format!("{bind_host}:{port}")
         .parse()
         .map_err(|e| anyhow::anyhow!("invalid bind addr {bind_host}:{port}: {e}"))?;
@@ -199,17 +198,16 @@ async fn handle(req: Request<Body>) -> Response<Body> {
     let user_owned = user.clone();
     let project_owned = project_id.clone();
     let path_owned = request_path.clone();
-    let served = tokio::task::spawn_blocking(move || {
-        serve_bytes(&user_owned, &project_owned, &path_owned)
-    })
-    .await
-    .unwrap_or_else(|_| ServedBytes {
-        status: 500,
-        bytes: Vec::new(),
-        content_type: "text/plain; charset=utf-8".to_string(),
-        force_attachment: false,
-        sha256: String::new(),
-    });
+    let served =
+        tokio::task::spawn_blocking(move || serve_bytes(&user_owned, &project_owned, &path_owned))
+            .await
+            .unwrap_or_else(|_| ServedBytes {
+                status: 500,
+                bytes: Vec::new(),
+                content_type: "text/plain; charset=utf-8".to_string(),
+                force_attachment: false,
+                sha256: String::new(),
+            });
 
     if served.status != 200 {
         let msg = match served.status {
@@ -218,7 +216,10 @@ async fn handle(req: Request<Body>) -> Response<Body> {
             503 => "project not published\n",
             _ => "error\n",
         };
-        return text_response(StatusCode::from_u16(served.status).unwrap_or(StatusCode::NOT_FOUND), msg);
+        return text_response(
+            StatusCode::from_u16(served.status).unwrap_or(StatusCode::NOT_FOUND),
+            msg,
+        );
     }
 
     let mut builder = Response::builder().status(StatusCode::OK);
@@ -306,7 +307,8 @@ fn api_response(value: serde_json::Value) -> Response<Body> {
         None => Vec::new(),
     };
 
-    let mut builder = Response::builder().status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK));
+    let mut builder =
+        Response::builder().status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK));
     let headers = builder.headers_mut().expect("builder always has headers");
     headers.insert(
         header::CONTENT_TYPE,
@@ -314,14 +316,8 @@ fn api_response(value: serde_json::Value) -> Response<Body> {
             .unwrap_or_else(|_| HeaderValue::from_static("application/json; charset=utf-8")),
     );
     headers.insert(header::CONTENT_LENGTH, HeaderValue::from(body.len()));
-    headers.insert(
-        "Access-Control-Allow-Origin",
-        HeaderValue::from_static("*"),
-    );
-    headers.insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store"),
-    );
+    headers.insert("Access-Control-Allow-Origin", HeaderValue::from_static("*"));
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     builder.body(Body::from(body)).expect("api response build")
 }
 
@@ -330,9 +326,7 @@ fn api_response(value: serde_json::Value) -> Response<Body> {
 /// `GET /v1/models` — list chat-base abilities as OpenAI models.
 async fn handle_v1_models() -> Response<Body> {
     let result = tokio::task::spawn_blocking(|| {
-        crate::runtime::agents::openai_compat_ability::handle_list_models(
-            serde_json::json!({}),
-        )
+        crate::runtime::agents::openai_compat_ability::handle_list_models(serde_json::json!({}))
     })
     .await;
 
@@ -360,16 +354,15 @@ async fn handle_v1_chat_completions(req: Request<Body>) -> Response<Body> {
         Ok(b) => b,
         Err(_) => return text_response(StatusCode::BAD_REQUEST, "body too large\n"),
     };
-    let request_body: serde_json::Value =
-        match serde_json::from_slice(&body_bytes) {
-            Ok(v) => v,
-            Err(e) => {
-                return text_response(
-                    StatusCode::BAD_REQUEST,
-                    &format!("invalid JSON body: {e}\n"),
-                );
-            }
-        };
+    let request_body: serde_json::Value = match serde_json::from_slice(&body_bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            return text_response(
+                StatusCode::BAD_REQUEST,
+                &format!("invalid JSON body: {e}\n"),
+            );
+        }
+    };
 
     let stream = request_body
         .get("stream")
@@ -454,7 +447,10 @@ fn sse_response(chunks: Vec<serde_json::Value>, done: String) -> Response<Body> 
 
     Response::builder()
         .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"))
+        .header(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/event-stream"),
+        )
         .header(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))
         .header("Access-Control-Allow-Origin", HeaderValue::from_static("*"))
         .header("X-Accel-Buffering", HeaderValue::from_static("no"))
@@ -464,10 +460,7 @@ fn sse_response(chunks: Vec<serde_json::Value>, done: String) -> Response<Body> 
 
 /// JSON response with CORS open. Used by /v1/models and /v1/chat/completions
 /// (non-streaming).
-fn json_response_with_cors(
-    status: StatusCode,
-    value: serde_json::Value,
-) -> Response<Body> {
+fn json_response_with_cors(status: StatusCode, value: serde_json::Value) -> Response<Body> {
     let body = serde_json::to_vec(&value).unwrap_or_default();
     let mut builder = Response::builder().status(status);
     let headers = builder.headers_mut().expect("builder always has headers");
@@ -478,7 +471,9 @@ fn json_response_with_cors(
     headers.insert(header::CONTENT_LENGTH, HeaderValue::from(body.len()));
     headers.insert("Access-Control-Allow-Origin", HeaderValue::from_static("*"));
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    builder.body(Body::from(body)).expect("json/cors response build")
+    builder
+        .body(Body::from(body))
+        .expect("json/cors response build")
 }
 
 #[cfg(test)]

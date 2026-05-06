@@ -199,15 +199,48 @@ fn run_show(a: ShowArgs) -> anyhow::Result<()> {
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
     }
-    println!("Project: {}", result.get("project_id").and_then(Value::as_str).unwrap_or("?"));
-    println!("  user:         {}", result.get("user").and_then(Value::as_str).unwrap_or("?"));
-    println!("  project_uri:  {}", result.get("project_uri").and_then(Value::as_str).unwrap_or("?"));
-    println!("  folder:       {}", result.get("folder").and_then(Value::as_str).unwrap_or("?"));
-    println!("  visibility:   {}", result.get("visibility").and_then(Value::as_str).unwrap_or("?"));
-    println!("  url_root:     {}", result.get("url_root").and_then(Value::as_str).unwrap_or("?"));
+    println!(
+        "Project: {}",
+        result
+            .get("project_id")
+            .and_then(Value::as_str)
+            .unwrap_or("?")
+    );
+    println!(
+        "  user:         {}",
+        result.get("user").and_then(Value::as_str).unwrap_or("?")
+    );
+    println!(
+        "  project_uri:  {}",
+        result
+            .get("project_uri")
+            .and_then(Value::as_str)
+            .unwrap_or("?")
+    );
+    println!(
+        "  folder:       {}",
+        result.get("folder").and_then(Value::as_str).unwrap_or("?")
+    );
+    println!(
+        "  visibility:   {}",
+        result
+            .get("visibility")
+            .and_then(Value::as_str)
+            .unwrap_or("?")
+    );
+    println!(
+        "  url_root:     {}",
+        result
+            .get("url_root")
+            .and_then(Value::as_str)
+            .unwrap_or("?")
+    );
     println!(
         "  size_cap:     {} bytes",
-        result.get("file_size_cap").and_then(Value::as_u64).unwrap_or(0)
+        result
+            .get("file_size_cap")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
     );
     Ok(())
 }
@@ -227,7 +260,10 @@ fn run_delete(a: DeleteArgs) -> anyhow::Result<()> {
     let args_v = json!({ "project_id": a.project_id });
     let result = invoke_local_ability(&ability, args_v)
         .map_err(|e| anyhow::anyhow!("pages delete failed: {e}"))?;
-    let removed = result.get("removed").and_then(Value::as_bool).unwrap_or(false);
+    let removed = result
+        .get("removed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     if removed {
         println!("Unpublished {}.", a.project_id);
         Ok(())

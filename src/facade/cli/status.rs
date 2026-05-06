@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 
 use crate::persistence::config;
 use crate::support::local_invoke::invoke_local_ability;
+use crate::support::net;
 use crate::support::output;
 
 #[derive(Debug, Args)]
@@ -44,12 +45,45 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
     };
 
     output::detail("Hub", state.hub.as_deref().unwrap_or("-"));
-    output::detail("Endpoint", &state.endpoint);
     output::detail("Tenant", state.tenant.as_deref().unwrap_or("default"));
     output::detail("Label", state.label.as_deref().unwrap_or("-"));
+    match state.runtime_kind {
+        config::RuntimeKind::DaemonOnly => {
+            output::detail("Mode", "daemon-only");
+            output::detail("gRPC socket", &state.endpoint);
+            output::detail(
+                "Control socket",
+                &crate::services::control::transport::default_socket_path()
+                    .display()
+                    .to_string(),
+            );
+        }
+        config::RuntimeKind::AxonBridge => {
+            output::detail("Mode", "bridge/hub");
+            output::detail("Bridge endpoint", &state.endpoint);
+            if let Some(pid) = state.pid {
+                output::detail("PID", &pid.to_string());
+            }
+        }
+    }
     if state.credential_verified == Some(false) {
         output::info("Credential: NOT VERIFIED (Hub was unreachable at startup)");
     }
+    if state.uses_bridge() {
+        let alive = state.pid.is_some_and(net::is_pid_alive)
+            || net::discover_pid_from_endpoint(&state.endpoint).is_some();
+        if alive {
+            output::info(
+                "Bridge-mode runtime is up. Local daemon-only fleet and ability probes are skipped in this mode.",
+            );
+        } else {
+            output::warn(
+                "Runtime metadata exists, but the recorded bridge process is not responding.",
+            );
+        }
+        return Ok(());
+    }
+
     match invoke_local_ability("device.observe.health", json!({"source": "runtime.status"})) {
         Ok(_) => {}
         Err(e) => {
@@ -78,7 +112,7 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
     // returns the full local catalogue). Cheaper than the legacy
     // O(N) per-node fan-out and matches what `easynet ability list`
     // reports.
-    match invoke_local_ability("device.easynet.discover", serde_json::json!({})) {
+    match invoke_local_ability("device.meta.list_abilities", serde_json::json!({})) {
         Ok(v) => {
             let count = v
                 .get("abilities")

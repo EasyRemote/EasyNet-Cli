@@ -1,5 +1,5 @@
 schema_version = "1"
-name = "device.easynet.cancel"
+name = "device.mission.cancel"
 description = "Mark an in-flight mission run as cancelled. Best-effort: rewrites the run's meta.json to status=cancelled and removes the pid file; long-running step subprocesses are NOT killed today, they just stop being awaited. Returns `cancelled = false` (with informative meta) if the run was already terminal."
 
 [input_schema]

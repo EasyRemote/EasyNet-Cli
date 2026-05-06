@@ -51,11 +51,6 @@ use crate::runtime::ability_dispatch::{LocalAbilityRegistry, OwnerKind};
 
 pub const ABILITY_DESCRIBE: &str = "device.meta.describe";
 pub const ABILITY_LIST_ABILITIES: &str = "device.meta.list_abilities";
-/// User-facing alias for `device.meta.list_abilities`. The bare
-/// `easynet.*` legacy form (RFC pre-M2) was retired by the
-/// system-namespace migration; M2 partitioned every system verb
-/// under `device.*` / `hub.*` for structural clarity.
-pub const ABILITY_DISCOVER: &str = "device.easynet.discover";
 
 /// Register both meta abilities on the registry.
 ///
@@ -110,12 +105,7 @@ pub fn register<F>(
                 pages_user_for_list.as_deref(),
             )
         });
-    reg.register_rpc_with_owner(
-        ABILITY_LIST_ABILITIES,
-        OwnerKind::Device,
-        Arc::clone(&list_handler),
-    );
-    reg.register_rpc_with_owner(ABILITY_DISCOVER, OwnerKind::Device, list_handler);
+    reg.register_rpc_with_owner(ABILITY_LIST_ABILITIES, OwnerKind::Device, list_handler);
 }
 
 fn describe_handler(
@@ -309,9 +299,7 @@ fn list_abilities_handler(
             // metadata is intentional — synth drops entries it
             // cannot stamp authoritatively.
             let owner_string = match registry.lookup_owner(&name) {
-                Some(crate::runtime::ability_dispatch::OwnerKind::Hub) => {
-                    hub_owner_uri.clone()
-                }
+                Some(crate::runtime::ability_dispatch::OwnerKind::Hub) => hub_owner_uri.clone(),
                 Some(crate::runtime::ability_dispatch::OwnerKind::Device) => {
                     device_owner_uri.clone()
                 }
@@ -336,7 +324,9 @@ fn list_abilities_handler(
                     device_owner_uri.clone()
                 }
             };
-            let Some(owner) = owner_string.as_deref() else { continue };
+            let Some(owner) = owner_string.as_deref() else {
+                continue;
+            };
             // Synthesised descriptor: enough for the LLM to know
             // "this name exists, you can invoke it via mcp.bridge.call_tool
             // / easynet.run". A future PR can plumb a per-ability
@@ -454,7 +444,11 @@ mod tests {
         register(&mut reg, Vec::new, empty_registry_handle(), None);
         assert!(reg.get_rpc(ABILITY_DESCRIBE).is_some());
         assert!(reg.get_rpc(ABILITY_LIST_ABILITIES).is_some());
-        assert!(reg.get_rpc(ABILITY_DISCOVER).is_some());
+        // The legacy `device.easynet.discover` alias was removed
+        // in RFC-001 v4.1.7 M2. The canonical name is the only
+        // surface; assert the legacy literal is NOT registered so
+        // future regressions that re-introduce the alias trip here.
+        assert!(reg.get_rpc("device.easynet.discover").is_none());
     }
 
     #[test]
@@ -462,13 +456,9 @@ mod tests {
         let mut reg = LocalAbilityRegistry::new();
         register(
             &mut reg,
-            || {
-                vec![
-                    d("device.observe.health"),
-                    d("device.fleet.list_agents"),
-                ]
-            },
-            empty_registry_handle(), None,
+            || vec![d("device.observe.health"), d("device.fleet.list_agents")],
+            empty_registry_handle(),
+            None,
         );
         let handler = reg.get_rpc(ABILITY_LIST_ABILITIES).unwrap();
         let resp = handler(json!({})).unwrap();
@@ -497,7 +487,8 @@ mod tests {
         register(
             &mut reg,
             || vec![d("device.observe.health")],
-            empty_registry_handle(), None,
+            empty_registry_handle(),
+            None,
         );
         // Seed the process-wide store. Tests in this binary share
         // the singleton; we tolerate residue from earlier tests by
@@ -554,7 +545,8 @@ mod tests {
                     d("device.consent.subscribe"),
                 ]
             },
-            empty_registry_handle(), None,
+            empty_registry_handle(),
+            None,
         );
         let handler = reg.get_rpc(ABILITY_DESCRIBE).unwrap();
         let resp = handler(json!({})).unwrap();

@@ -22,6 +22,29 @@ use crate::support::{net, output};
 pub struct StopArgs {}
 
 pub fn run(_args: StopArgs) -> anyhow::Result<()> {
+    let state = match config::load() {
+        Ok(state) => state,
+        Err(_) => {
+            let hb_killed = stop_heartbeat_daemon();
+            let daemon_killed = stop_easynet_daemon();
+            if hb_killed {
+                output::success("Heartbeat daemon stopped (no runtime state found)");
+            } else if daemon_killed {
+                output::success("EasyNet daemon stopped (no runtime state found)");
+            } else {
+                output::info("No running runtime found.");
+            }
+            return Ok(());
+        }
+    };
+
+    if matches!(
+        state.runtime_kind,
+        crate::persistence::config::RuntimeKind::DaemonOnly
+    ) {
+        return stop_daemon_only_runtime(&state);
+    }
+
     // 1. Always try to stop heartbeat daemon first (even without runtime.json).
     let hb_killed = stop_heartbeat_daemon();
     // Then easynet-daemon (the IPC daemon child spawned by start.rs).
@@ -29,17 +52,9 @@ pub fn run(_args: StopArgs) -> anyhow::Result<()> {
     // outbound federation call; killing the daemon underneath it
     // would leave the call half-completed. Heartbeat-then-daemon
     // matches start order's reverse.
-    stop_easynet_daemon();
+    let _ = stop_easynet_daemon();
 
-    let Ok(state) = config::load() else {
-        if hb_killed {
-            output::success("Heartbeat daemon stopped (no runtime state found)");
-        } else {
-            output::info("No running runtime found.");
-        }
-        return Ok(());
-    };
-
+    let state = state;
     output::info(&format!("Stopping runtime at {}...", state.endpoint));
 
     // 2. If no heartbeat daemon, deregister directly. Log accurately —
@@ -75,6 +90,45 @@ pub fn run(_args: StopArgs) -> anyhow::Result<()> {
     config::remove()?;
     output::success("Axon runtime stopped");
     Ok(())
+}
+
+fn stop_daemon_only_runtime(state: &config::RuntimeState) -> anyhow::Result<()> {
+    output::info(&format!("Stopping daemon at {}...", state.endpoint));
+    best_effort_revoke_via_daemon();
+    let killed = stop_easynet_daemon();
+    config::remove()?;
+    if killed {
+        output::success("EasyNet daemon stopped");
+    } else {
+        output::warn("daemon state cleared, but no easynet-daemon process was found");
+    }
+    Ok(())
+}
+
+fn best_effort_revoke_via_daemon() {
+    #[cfg(feature = "axon-pb")]
+    {
+        let creds = match config::load_credentials() {
+            Ok(creds) => creds,
+            Err(_) => return,
+        };
+        let caller_uri = crate::uri::device_uri(&creds.tenant_id, &creds.node_id);
+        let revoke = crate::support::federation_invoke::invoke_federation_revoke(
+            &caller_uri,
+            "device shutdown",
+            Some(&caller_uri),
+        );
+        if let Err(e) = revoke {
+            output::warn(&format!(
+                "daemon federation.revoke failed before shutdown: {e}"
+            ));
+        }
+    }
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        // Production builds always enable axon-pb; in minimal builds
+        // there is no gRPC daemon surface to revoke through.
+    }
 }
 
 /// Kill the heartbeat daemon process. Returns true if a daemon was found and successfully stopped.
@@ -135,15 +189,17 @@ fn stop_pid(pid: u32) {
 /// runtime-dispatch socket bind failed silently, and chat
 /// dispatches got "daemon closed the connection" after exactly
 /// one successful call.
-fn stop_easynet_daemon() {
+pub(crate) fn stop_easynet_daemon() -> bool {
     let pid_path = config::easynet_daemon_pid_path();
     let pid: Option<u32> = std::fs::read_to_string(&pid_path)
         .ok()
         .and_then(|s| s.trim().parse().ok());
+    let mut stopped_any = false;
     if let Some(pid) = pid {
         if net::is_pid_alive(pid) && net::is_easynet_process(pid) {
             if net::kill_and_wait(pid, std::time::Duration::from_secs(3)) {
                 output::info(&format!("EasyNet daemon stopped (pid {pid})"));
+                stopped_any = true;
             } else {
                 output::warn(&format!("EasyNet daemon (pid {pid}) did not exit in time"));
             }
@@ -153,12 +209,12 @@ fn stop_easynet_daemon() {
     // Belt-and-suspenders: sweep any stragglers via pgrep so a
     // crash-mid-stop or pidfile-write-race can't leave a ghost
     // daemon owning the runtime-dispatch socket.
-    sweep_stray_easynet_daemons();
+    sweep_stray_easynet_daemons() || stopped_any
 }
 
 /// Pgrep-style sweep that signals every alive easynet-daemon
 /// process. Best-effort.
-fn sweep_stray_easynet_daemons() {
+fn sweep_stray_easynet_daemons() -> bool {
     let output_res = std::process::Command::new("pgrep")
         .args(["-f", "easynet-daemon"])
         .output();
@@ -168,14 +224,17 @@ fn sweep_stray_easynet_daemons() {
             .filter_map(|l| l.trim().parse::<u32>().ok())
             .filter(|pid| *pid != std::process::id())
             .collect(),
-        _ => return,
+        _ => return false,
     };
+    let mut stopped_any = false;
     for pid in pids {
         if !net::is_pid_alive(pid) || !net::is_easynet_process(pid) {
             continue;
         }
         if net::kill_and_wait(pid, std::time::Duration::from_secs(3)) {
             output::info(&format!("EasyNet daemon swept (pid {pid})"));
+            stopped_any = true;
         }
     }
+    stopped_any
 }

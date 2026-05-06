@@ -41,13 +41,15 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-pub mod state;
 pub mod handlers;
+pub mod state;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::runtime::ability_dispatch::{LocalAbilityRegistry, LocalFallbackResolver, LocalRpcHandler};
+use crate::runtime::ability_dispatch::{
+    LocalAbilityRegistry, LocalFallbackResolver, LocalRpcHandler,
+};
 
 /// Installation parameters for the Files reference system. Mirror
 /// of `PagesConfig`; the daemon's user identity is the only field

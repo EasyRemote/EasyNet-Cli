@@ -1,5 +1,5 @@
 schema_version = "1"
-name = "device.easynet.track"
+name = "device.mission.track"
 description = "Read the persisted state of a prior `easynet.run` invocation by run id. Returns the same shape `easynet.run` surfaces (run_id, run_dir, outputs, meta, ok) reconstructed from the on-disk run dir. Use it to poll a long-running mission without holding the original RPC open."
 
 [input_schema]

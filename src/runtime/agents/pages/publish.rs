@@ -28,9 +28,7 @@ use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
 use super::fetch::register_fetch_ability;
 use super::sandbox::open_directory;
-use super::state::{
-    ProjectHandle, Visibility, DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS,
-};
+use super::state::{ProjectHandle, Visibility, DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS};
 
 /// Handler invoked when a user calls `<self>.pages.publish`. The
 /// handler is registered once at daemon boot under the user-prefixed
@@ -86,8 +84,8 @@ pub fn handle_publish(
     if !folder.is_dir() {
         anyhow::bail!("folder is not a directory: {folder_str}");
     }
-    let canonical_root = std::fs::canonicalize(&folder)
-        .map_err(|e| anyhow::anyhow!("canonicalize failed: {e}"))?;
+    let canonical_root =
+        std::fs::canonicalize(&folder).map_err(|e| anyhow::anyhow!("canonicalize failed: {e}"))?;
 
     let key = (user.to_string(), project_id.to_string());
     if PUBLISHED_PROJECTS.contains_key(&key) {
@@ -117,12 +115,8 @@ pub fn handle_publish(
     // other.
     register_fetch_ability(&registry, user, project_id);
 
-    let project_uri = format!(
-        "easynet:///r/{realm}/resource/{user}.{project_id}/",
-    );
-    let url_root = format!(
-        "http://{project_id}.{user}.pages.localhost:{listener_port}/",
-    );
+    let project_uri = format!("easynet:///r/{realm}/resource/{user}.{project_id}/",);
+    let url_root = format!("http://{project_id}.{user}.pages.localhost:{listener_port}/",);
 
     Ok(json!({
         "project_uri": project_uri,
@@ -143,7 +137,10 @@ fn validate_project_id(project_id: &str) -> anyhow::Result<()> {
     if project_id.len() > 64 {
         anyhow::bail!("project_id too long: {} > 64", project_id.len());
     }
-    if !project_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    if !project_id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
         anyhow::bail!(
             "project_id contains invalid character; allowed: a-zA-Z0-9_- (got {project_id:?})"
         );

@@ -343,11 +343,7 @@ pub fn register(reg: &mut LocalAbilityRegistry, pty: Arc<PtyService>, io: PtyIoS
             OwnerKind::Device,
             Arc::clone(&handler),
         );
-        reg.register_rpc_with_owner(
-            "device.fleet.session_input",
-            OwnerKind::Device,
-            handler,
-        );
+        reg.register_rpc_with_owner("device.fleet.session_input", OwnerKind::Device, handler);
     }
     {
         let pty = Arc::clone(&pty);
@@ -358,11 +354,7 @@ pub fn register(reg: &mut LocalAbilityRegistry, pty: Arc<PtyService>, io: PtyIoS
             OwnerKind::Device,
             Arc::clone(&handler),
         );
-        reg.register_rpc_with_owner(
-            "device.fleet.session_read",
-            OwnerKind::Device,
-            handler,
-        );
+        reg.register_rpc_with_owner("device.fleet.session_read", OwnerKind::Device, handler);
     }
     {
         let pty = Arc::clone(&pty);
@@ -372,11 +364,7 @@ pub fn register(reg: &mut LocalAbilityRegistry, pty: Arc<PtyService>, io: PtyIoS
             OwnerKind::Device,
             Arc::clone(&handler),
         );
-        reg.register_rpc_with_owner(
-            "device.fleet.session_resize",
-            OwnerKind::Device,
-            handler,
-        );
+        reg.register_rpc_with_owner("device.fleet.session_resize", OwnerKind::Device, handler);
     }
 }
 

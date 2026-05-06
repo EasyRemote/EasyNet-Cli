@@ -58,9 +58,8 @@ use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 /// to dispatch requests directly through the in-process registry
 /// instead of round-tripping through the daemon's own IPC socket
 /// (which would self-deadlock).
-static DISPATCH_HANDLE: Lazy<
-    std::sync::OnceLock<Arc<OnceLock<Arc<LocalAbilityRegistry>>>>,
-> = Lazy::new(std::sync::OnceLock::new);
+static DISPATCH_HANDLE: Lazy<std::sync::OnceLock<Arc<OnceLock<Arc<LocalAbilityRegistry>>>>> =
+    Lazy::new(std::sync::OnceLock::new);
 
 pub(crate) fn set_dispatch_handle(handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>>) {
     let _ = DISPATCH_HANDLE.set(handle);
@@ -98,7 +97,10 @@ fn load_manifest(user: &str, project_id: &str, verb: &str) -> anyhow::Result<Api
     if verb.is_empty() {
         anyhow::bail!("verb is empty");
     }
-    if !verb.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.') {
+    if !verb
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+    {
         anyhow::bail!("verb contains invalid character: {verb:?}");
     }
 
@@ -116,8 +118,8 @@ fn load_manifest(user: &str, project_id: &str, verb: &str) -> anyhow::Result<Api
     let mut buf = String::new();
     file.read_to_string(&mut buf)
         .map_err(|e| anyhow::anyhow!("read api manifest: {e}"))?;
-    let parsed: ApiManifest = toml::from_str(&buf)
-        .map_err(|e| anyhow::anyhow!("malformed api manifest {rel}: {e}"))?;
+    let parsed: ApiManifest =
+        toml::from_str(&buf).map_err(|e| anyhow::anyhow!("malformed api manifest {rel}: {e}"))?;
     Ok(parsed)
 }
 
@@ -166,10 +168,7 @@ pub fn handle_api(user: &str, project_id: &str, verb: &str, args: Value) -> anyh
     let manifest = load_manifest(user, project_id, verb)?;
     match manifest.kind.as_str() {
         "static_json" => {
-            let resp = manifest
-                .response
-                .map(toml_to_json)
-                .unwrap_or(Value::Null);
+            let resp = manifest.response.map(toml_to_json).unwrap_or(Value::Null);
             Ok(json!({
                 "status":       200,
                 "body":         resp,
@@ -241,9 +240,8 @@ pub fn handle_api(user: &str, project_id: &str, verb: &str, args: Value) -> anyh
                      `easynet ability deploy`?"
                 )
             })?;
-            let result = handler(invoke_args).map_err(|e| {
-                anyhow::anyhow!("ability `{target}` failed: {e}")
-            })?;
+            let result = handler(invoke_args)
+                .map_err(|e| anyhow::anyhow!("ability `{target}` failed: {e}"))?;
             Ok(json!({
                 "status":       200,
                 "body":         result,

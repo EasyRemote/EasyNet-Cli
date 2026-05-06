@@ -72,8 +72,8 @@ fn creds(tenant: &str, node: &str) -> Credentials {
         tenant_id: tenant.into(),
         deploy_signature: String::new(),
         hub_api_base: None,
-        realm: None,
         username: None,
+        hub_pubkey_b64: None,
     }
 }
 

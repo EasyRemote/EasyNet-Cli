@@ -59,16 +59,12 @@ pub fn handle_fetch(user: &str, project_id: &str, args: Value) -> anyhow::Result
     let key = (user.to_string(), project_id.to_string());
     let handle = PUBLISHED_PROJECTS
         .get(&key)
-        .ok_or_else(|| anyhow::anyhow!(
-            "project not published: user={user} project_id={project_id}"
-        ))?
+        .ok_or_else(|| {
+            anyhow::anyhow!("project not published: user={user} project_id={project_id}")
+        })?
         .clone();
 
-    let mut file = open_beneath(
-        handle.folder_fd.as_fd(),
-        &handle.canonical_root,
-        path,
-    )?;
+    let mut file = open_beneath(handle.folder_fd.as_fd(), &handle.canonical_root, path)?;
     let size = validate_regular(&file, handle.file_size_cap)?;
 
     let mut bytes = Vec::with_capacity(size as usize);

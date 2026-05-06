@@ -29,11 +29,11 @@
 
 pub mod api;
 pub mod fetch;
+pub mod list_get_unpublish;
 pub mod mime;
 pub mod publish;
 pub mod sandbox;
 pub mod state;
-pub mod list_get_unpublish;
 
 use std::sync::Arc;
 
@@ -78,100 +78,101 @@ pub fn register(
     // the field for the day a non-fallback registration path lands.
     let publish_registry: Arc<LocalAbilityRegistry> = Arc::new(LocalAbilityRegistry::new());
 
-    let resolver: crate::runtime::ability_dispatch::LocalFallbackResolver = Arc::new(move |name: &str| -> Option<LocalRpcHandler> {
-        let cfg = resolver_config.clone();
-        let publish_reg = publish_registry.clone();
+    let resolver: crate::runtime::ability_dispatch::LocalFallbackResolver =
+        Arc::new(move |name: &str| -> Option<LocalRpcHandler> {
+            let cfg = resolver_config.clone();
+            let publish_reg = publish_registry.clone();
 
-        // Pattern 1: <user>.pages.<verb>  where verb is fixed.
-        if let Some(rest) = name.strip_prefix(&format!("{}.pages.", cfg.user)) {
-            match rest {
-                "publish" => {
-                    let cfg2 = cfg.clone();
-                    let reg2 = publish_reg.clone();
-                    return Some(Arc::new(move |args: Value| {
-                        publish::handle_publish(
-                            &cfg2.user,
-                            cfg2.listener_port,
-                            &cfg2.realm,
-                            reg2.clone(),
-                            args,
-                        )
-                    }));
-                }
-                "unpublish" => {
-                    let user = cfg.user.clone();
-                    return Some(Arc::new(move |args: Value| {
-                        list_get_unpublish::handle_unpublish(&user, args)
-                    }));
-                }
-                "list" => {
-                    let user = cfg.user.clone();
-                    let port = cfg.listener_port;
-                    return Some(Arc::new(move |args: Value| {
-                        list_get_unpublish::handle_list(&user, port, args)
-                    }));
-                }
-                "get" => {
-                    let user = cfg.user.clone();
-                    let port = cfg.listener_port;
-                    let realm = cfg.realm.clone();
-                    return Some(Arc::new(move |args: Value| {
-                        list_get_unpublish::handle_get(&user, port, &realm, args)
-                    }));
-                }
-                _ => return None,
-            }
-        }
-
-        // Pattern 2: <user>.<project>.page.fetch
-        if let Some(rest) = name.strip_prefix(&format!("{}.", cfg.user)) {
-            if let Some(project_id) = rest.strip_suffix(".page.fetch") {
-                // project_id may not contain '.' (RFC-006-B §publish.validate_project_id);
-                // refuse if it does to avoid ambiguous parses against
-                // sub-namespaced ability names.
-                if !project_id.contains('.') && !project_id.is_empty() {
-                    let user = cfg.user.clone();
-                    let pid = project_id.to_string();
-                    return Some(Arc::new(move |args: Value| {
-                        fetch::handle_fetch(&user, &pid, args)
-                    }));
+            // Pattern 1: <user>.pages.<verb>  where verb is fixed.
+            if let Some(rest) = name.strip_prefix(&format!("{}.pages.", cfg.user)) {
+                match rest {
+                    "publish" => {
+                        let cfg2 = cfg.clone();
+                        let reg2 = publish_reg.clone();
+                        return Some(Arc::new(move |args: Value| {
+                            publish::handle_publish(
+                                &cfg2.user,
+                                cfg2.listener_port,
+                                &cfg2.realm,
+                                reg2.clone(),
+                                args,
+                            )
+                        }));
+                    }
+                    "unpublish" => {
+                        let user = cfg.user.clone();
+                        return Some(Arc::new(move |args: Value| {
+                            list_get_unpublish::handle_unpublish(&user, args)
+                        }));
+                    }
+                    "list" => {
+                        let user = cfg.user.clone();
+                        let port = cfg.listener_port;
+                        return Some(Arc::new(move |args: Value| {
+                            list_get_unpublish::handle_list(&user, port, args)
+                        }));
+                    }
+                    "get" => {
+                        let user = cfg.user.clone();
+                        let port = cfg.listener_port;
+                        let realm = cfg.realm.clone();
+                        return Some(Arc::new(move |args: Value| {
+                            list_get_unpublish::handle_get(&user, port, &realm, args)
+                        }));
+                    }
+                    _ => return None,
                 }
             }
-        }
 
-        // Pattern 3: <user>.<project>.api.<verb>
-        // Dynamic-backend surface — the project author drops a TOML
-        // manifest at <project>/api/<verb>.toml; the daemon evaluates
-        // it per request. RFC-006-B v0.6 §10 "API surface" (post-MVP).
-        // Subject is the project resource, ability tail is
-        // `.api.<verb>`. Non-deterministic by declaration (INV-3 does
-        // not bind here).
-        if let Some(rest) = name.strip_prefix(&format!("{}.", cfg.user)) {
-            // Walk: rest = "<project>.api.<verb>" — must contain
-            // ".api." with a project_id (no '.') in front and a
-            // verb (no '.', single-segment) after.
-            if let Some((project_id, verb)) = rest.split_once(".api.") {
-                if !project_id.is_empty()
-                    && !project_id.contains('.')
-                    && !verb.is_empty()
-                    && !verb.contains('.')
-                {
-                    let user = cfg.user.clone();
-                    let pid = project_id.to_string();
-                    let v = verb.to_string();
-                    return Some(Arc::new(move |args: Value| {
-                        api::handle_api(&user, &pid, &v, args)
-                    }));
+            // Pattern 2: <user>.<project>.page.fetch
+            if let Some(rest) = name.strip_prefix(&format!("{}.", cfg.user)) {
+                if let Some(project_id) = rest.strip_suffix(".page.fetch") {
+                    // project_id may not contain '.' (RFC-006-B §publish.validate_project_id);
+                    // refuse if it does to avoid ambiguous parses against
+                    // sub-namespaced ability names.
+                    if !project_id.contains('.') && !project_id.is_empty() {
+                        let user = cfg.user.clone();
+                        let pid = project_id.to_string();
+                        return Some(Arc::new(move |args: Value| {
+                            fetch::handle_fetch(&user, &pid, args)
+                        }));
+                    }
                 }
             }
-        }
 
-        // Pattern 4: hub-rooted serve ability. The hub-as-agent's
-        // `01HUB.pages.serve` ability is registered by the hub
-        // module separately; the resolver does not synthesise it
-        // here. (See src/runtime/hub/pages_serve_ability.rs.)
-        None
-    });
+            // Pattern 3: <user>.<project>.api.<verb>
+            // Dynamic-backend surface — the project author drops a TOML
+            // manifest at <project>/api/<verb>.toml; the daemon evaluates
+            // it per request. RFC-006-B v0.6 §10 "API surface" (post-MVP).
+            // Subject is the project resource, ability tail is
+            // `.api.<verb>`. Non-deterministic by declaration (INV-3 does
+            // not bind here).
+            if let Some(rest) = name.strip_prefix(&format!("{}.", cfg.user)) {
+                // Walk: rest = "<project>.api.<verb>" — must contain
+                // ".api." with a project_id (no '.') in front and a
+                // verb (no '.', single-segment) after.
+                if let Some((project_id, verb)) = rest.split_once(".api.") {
+                    if !project_id.is_empty()
+                        && !project_id.contains('.')
+                        && !verb.is_empty()
+                        && !verb.contains('.')
+                    {
+                        let user = cfg.user.clone();
+                        let pid = project_id.to_string();
+                        let v = verb.to_string();
+                        return Some(Arc::new(move |args: Value| {
+                            api::handle_api(&user, &pid, &v, args)
+                        }));
+                    }
+                }
+            }
+
+            // Pattern 4: hub-rooted serve ability. The hub-as-agent's
+            // `01HUB.pages.serve` ability is registered by the hub
+            // module separately; the resolver does not synthesise it
+            // here. (See src/runtime/hub/pages_serve_ability.rs.)
+            None
+        });
 
     reg.chain_rpc_fallback(resolver);
 }

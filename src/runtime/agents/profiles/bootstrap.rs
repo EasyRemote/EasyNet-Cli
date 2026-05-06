@@ -99,39 +99,56 @@ pub trait UriMinter {
     fn mint_id(&self, profile: &str, name: &str) -> String;
 }
 
-/// Production URI minter — encodes the operator-meaningful
-/// `<profile>-<name>` pair into the agent URA's agent-id slug so
-/// the friendly name lives **inside** the canonical URA, not as
-/// out-of-band metadata. Format:
+/// Production URI minter — encodes the operator-meaningful name
+/// into the agent URA's agent-id slug so the friendly identity
+/// lives **inside** the canonical URA, not as out-of-band metadata.
 ///
-///   `<profile-prefix>-<sanitised-name>`
+/// Two minting rules, switched on profile class:
 ///
-/// Example outputs:
+///   * **LLM profile** (`profile == "llm"`): the operator already
+///     gave a meaningful name through `easynet agent add <name>`
+///     (`probe-agent`, `codex`, `web-builder`, …). The minted
+///     agent-id is the raw `name` — no `llm-` prefix. This keeps
+///     the dispatch registry's `<agent>.chat` entries (registered
+///     by `runtime::agents::mod::build_registry_with_services`
+///     under `agents.json::keys`, i.e. the raw name) aligned with
+///     what `local-agents.json` advertises to the hub. Without
+///     this alignment, `/v1/chat/completions` resolves
+///     `model: "probe-agent"` to `agent/<user>.probe-agent` while
+///     the hub PresenceRegistry only knows
+///     `agent/<user>.llm-probe-agent`, and routing fails with
+///     "not in PresenceRegistry; either offline or never connected
+///     to this hub" (RFC-006-C v0.1 §INV-2).
 ///
-///   consent / default        → `consent-default`
-///   llm     / deep-agent-1   → `llm-deep-agent-1`
-///   mcp     / fs-bridge      → `mcp-fs-bridge`
-///   policy  / default        → `policy-default`
+///   * **System-managed profiles** (`consent`, `policy`, `mcp`):
+///     the name is auto-generated and generic (`default`,
+///     `fs-bridge`). The bare name would collide across profile
+///     classes (a hypothetical `consent/default` and
+///     `policy/default` would map to `agent/<user>.default`),
+///     which violates URA uniqueness. Keep the `<profile>-<name>`
+///     prefix so each profile carves its own agent-id space:
 ///
-/// Why encode the name (vs. the prior `a-<uuid>` style):
+///       consent / default      → `consent-default`
+///       policy  / default      → `policy-default`
+///       mcp     / fs-bridge    → `mcp-fs-bridge`
 ///
-/// The Frontend Agents page reads agent URAs and renders
-/// `<agent_id>` as the display label when no `display_name`
-/// metadata is present. With a uuid-hash agent_id the user sees
+/// Why encode the name (vs. the prior `a-<uuid>` style): the
+/// Frontend Agents page reads agent URAs and renders `<agent_id>`
+/// as the display label when no `display_name` metadata is
+/// present. With a uuid-hash agent_id the user sees
 /// `a-8c4523c3f3c94ed6931670c98a4e457e` — meaningless. With the
-/// encoded name they see `llm-deep-agent-1` and immediately
-/// know which agent they're looking at. The agent URA is the
-/// canonical identity and always carries the full information
-/// the resolver needs; piggybacking the friendly name on it
-/// (rather than threading a parallel `display_name` field
-/// through advertise → resolve → backend → frontend) is the
-/// honest fix.
+/// encoded name they see `probe-agent` (LLM) or `consent-default`
+/// (system) and immediately know which agent they're looking at.
+/// The agent URA is the canonical identity and always carries
+/// the full information the resolver needs; piggybacking the
+/// friendly name on it (rather than threading a parallel
+/// `display_name` field through advertise → resolve → backend →
+/// frontend) is the honest fix.
 ///
-/// Why `-` (not `.`) as separator: URA v4.1.5 §A.URA-3 forbids
-/// dots inside `agent_id` — that namespace belongs to ability
-/// URIs (`agent/<user>.<agent>.<verb>` where each `<…>` is a
-/// single dot-free segment). The `<profile>-<name>` form keeps
-/// the agent_id grammar happy.
+/// Why `-` (not `.`) as separator on the system path: URA v4.1.5
+/// §A.URA-3 forbids dots inside `agent_id` — that namespace
+/// belongs to ability URIs (`agent/<user>.<agent>.<verb>` where
+/// each `<…>` is a single dot-free segment).
 ///
 /// Stability: the encoded name MUST stay stable across daemon
 /// restarts (re-pairing must produce the same URA so backend
@@ -147,12 +164,11 @@ pub struct UuidMinter;
 
 impl UriMinter for UuidMinter {
     fn mint_id(&self, profile: &str, name: &str) -> String {
-        // Profile prefix bounds the namespace per profile-class
-        // so a hypothetical `consent/foo` and `llm/foo` never
-        // alias to the same URA. Profile names are short
-        // (`consent` / `policy` / `mcp` / `llm`) and known-safe
-        // for URA segments.
-        format!("{profile}-{name}")
+        if profile == "llm" {
+            name.to_string()
+        } else {
+            format!("{profile}-{name}")
+        }
     }
 }
 
@@ -498,6 +514,29 @@ mod tests {
     }
 
     #[test]
+    fn uuid_minter_keeps_llm_names_bare_and_prefixes_system_profiles() {
+        // The dispatch registry registers `<agent>.chat` /
+        // `<agent>.invoke` / `<agent>.discover` under the raw
+        // `agents.json::keys` (i.e. the operator's
+        // `easynet agent add <name>` argument). The friendly URA
+        // minted into `local-agents.json` MUST agree with that
+        // raw name for the LLM profile, otherwise
+        // `/v1/chat/completions model=<name>` resolves to
+        // `agent/<user>.<name>` while the hub PresenceRegistry
+        // only knows `agent/<user>.llm-<name>`, and routing
+        // breaks with "not in PresenceRegistry".
+        let m = UuidMinter;
+        assert_eq!(m.mint_id("llm", "probe-agent"), "probe-agent");
+        assert_eq!(m.mint_id("llm", "codex"), "codex");
+        // System-managed profiles auto-generate generic names
+        // (`default`, `fs-bridge`); the prefix carves a per-class
+        // namespace so they never collide.
+        assert_eq!(m.mint_id("consent", "default"), "consent-default");
+        assert_eq!(m.mint_id("policy", "default"), "policy-default");
+        assert_eq!(m.mint_id("mcp", "fs-bridge"), "mcp-fs-bridge");
+    }
+
+    #[test]
     fn agent_type_for_returns_display_string() {
         let plan = plan_with(false, false, false, &[("claude", "claude-code")]);
         assert_eq!(
@@ -755,11 +794,7 @@ mod tests {
     #[test]
     fn needs_repair_flags_realm_or_user_drift() {
         // Same shape, wrong realm → repair.
-        assert!(needs_repair(
-            "easynet:///r/old/agent/u1.a-1",
-            "acme",
-            "u1"
-        ));
+        assert!(needs_repair("easynet:///r/old/agent/u1.a-1", "acme", "u1"));
         // Same shape, wrong user → repair.
         assert!(needs_repair(
             "easynet:///r/acme/agent/old-user.a-1",

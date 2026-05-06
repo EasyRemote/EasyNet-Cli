@@ -124,11 +124,7 @@ pub fn register(
         OwnerKind::Device,
         Arc::clone(&create_h),
     );
-    reg.register_rpc_with_owner(
-        "device.fleet.session_create",
-        OwnerKind::Device,
-        create_h,
-    );
+    reg.register_rpc_with_owner("device.fleet.session_create", OwnerKind::Device, create_h);
 
     let pty_for_close = pty;
     let close_h: LocalRpcHandler =
@@ -138,11 +134,7 @@ pub fn register(
         OwnerKind::Device,
         Arc::clone(&close_h),
     );
-    reg.register_rpc_with_owner(
-        "device.fleet.session_close",
-        OwnerKind::Device,
-        close_h,
-    );
+    reg.register_rpc_with_owner("device.fleet.session_close", OwnerKind::Device, close_h);
 }
 
 /// `fleet.pty_session_create` handler.

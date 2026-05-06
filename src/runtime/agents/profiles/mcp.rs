@@ -625,7 +625,10 @@ mod tests {
     #[test]
     fn descriptor_count_matches_input() {
         let invoker = RecordingInvoker::new(Ok(serde_json::json!({})));
-        let p = InvokeMcpProvider::new(invoker, vec![d("device.observe.health"), d("device.fleet.list_agents")]);
+        let p = InvokeMcpProvider::new(
+            invoker,
+            vec![d("device.observe.health"), d("device.fleet.list_agents")],
+        );
         assert_eq!(p.descriptor_count(), 2);
     }
 

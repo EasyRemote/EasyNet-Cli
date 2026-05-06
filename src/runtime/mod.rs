@@ -121,9 +121,9 @@ pub mod keyring;
 /// outcome. Daemon boot calls one function; the status probe
 /// surfaces the result for operators.
 pub mod federation_init;
-pub mod resolver;
 /// RFC-006-B v0.6 — Hub module. v0 carries the in-daemon Pages
 /// listener (HTTP boundary for the Pages reference system).
 /// Production traffic enters via the Go backend; this listener
 /// is the dev-mode existence proof.
 pub mod hub;
+pub mod resolver;

@@ -518,9 +518,8 @@ pub fn heartbeat<I: AbilityInvoker>(
     // that doesn't speak the contract leaves the store unchanged
     // (same as before this PR landed).
     let body = unwrap_result_json(response);
-    if let Ok(receipt) = serde_json::from_value::<
-        crate::runtime::federation_client::HeartbeatReceipt,
-    >(body)
+    if let Ok(receipt) =
+        serde_json::from_value::<crate::runtime::federation_client::HeartbeatReceipt>(body)
     {
         let diff = receipt.hub_abilities_diff;
         let added_n = diff.added.len();

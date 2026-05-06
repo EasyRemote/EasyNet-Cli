@@ -120,8 +120,12 @@ pub(crate) mod heartbeat;
 /// is the correct default — only the daemon's main needs the entry
 /// point outside the crate.
 pub use heartbeat::run_daemon;
+/// RFC-006-C v0.1 — `easynet api-key` for OpenAI-compat bearer
+/// tokens, and `easynet llm-api` for chat-completion calls.
+pub(crate) mod api_key_cli;
 pub(crate) mod invoke;
 pub(crate) mod join;
+pub(crate) mod llm_api;
 pub(crate) mod mcp_install;
 pub(crate) mod mcp_server;
 pub(crate) mod mission_runs;
@@ -129,10 +133,6 @@ pub(crate) mod mission_runs;
 /// `<user>.pages.{publish,unpublish,list,get}` and the
 /// `<user>.<project_id>.page.fetch` family.
 pub(crate) mod pages;
-/// RFC-006-C v0.1 — `easynet api-key` for OpenAI-compat bearer
-/// tokens, and `easynet llm-api` for chat-completion calls.
-pub(crate) mod api_key_cli;
-pub(crate) mod llm_api;
 pub(crate) mod reset;
 pub(crate) mod skill;
 pub(crate) mod skill_install;

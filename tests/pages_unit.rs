@@ -31,13 +31,13 @@ use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
+use easynet_cli::runtime::ability_dispatch::LocalAbilityRegistry;
 use easynet_cli::runtime::agents::pages::fetch::handle_fetch;
 use easynet_cli::runtime::agents::pages::list_get_unpublish::{
     handle_get, handle_list, handle_unpublish,
 };
 use easynet_cli::runtime::agents::pages::publish::handle_publish;
 use easynet_cli::runtime::agents::pages::state::PUBLISHED_PROJECTS;
-use easynet_cli::runtime::ability_dispatch::LocalAbilityRegistry;
 use std::sync::Arc;
 
 /// Per-test fixture: makes a temp folder with a unique project
@@ -145,10 +145,11 @@ fn u1_publish_two_file_folder() {
 fn u2_fetch_html() {
     let f = Fixture::new("u2");
     f.publish();
-    let bytes = fetch_bytes(&f.user, &f.project_id, "/hello-world.html")
-        .expect("fetch html");
+    let bytes = fetch_bytes(&f.user, &f.project_id, "/hello-world.html").expect("fetch html");
     assert!(
-        std::str::from_utf8(&bytes).unwrap().contains("Hello, EasyNet"),
+        std::str::from_utf8(&bytes)
+            .unwrap()
+            .contains("Hello, EasyNet"),
         "fetched bytes must equal the file on disk"
     );
 }
@@ -335,9 +336,13 @@ fn u12_concurrent_fetches() {
             let user = user.clone();
             let pid = pid.clone();
             thread::spawn(move || {
-                let path = if i % 2 == 0 { "/hello-world.html" } else { "/style.css" };
-                let v = handle_fetch(&user, &pid, json!({ "path": path }))
-                    .expect("concurrent fetch");
+                let path = if i % 2 == 0 {
+                    "/hello-world.html"
+                } else {
+                    "/style.css"
+                };
+                let v =
+                    handle_fetch(&user, &pid, json!({ "path": path })).expect("concurrent fetch");
                 assert!(v.get("bytes_b64").is_some());
             })
         })
@@ -362,7 +367,10 @@ fn u13_file_size_cap_enforced() {
         // Mutate cap. PUBLISHED_PROJECTS values are Arc<ProjectHandle>
         // so we cannot edit in place; instead we re-insert with a
         // ProjectHandle whose cap is small.
-        let entry = PUBLISHED_PROJECTS.get(&key).expect("just published").clone();
+        let entry = PUBLISHED_PROJECTS
+            .get(&key)
+            .expect("just published")
+            .clone();
         // try_unwrap may fail if multiple Arcs exist (the DashMap entry
         // itself holds one). In that case, soft-pass: we still proved
         // the cap mechanism is in the read path on the green case.

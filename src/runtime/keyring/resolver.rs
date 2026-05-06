@@ -242,7 +242,8 @@ mod tests {
         let r = LocalKeyringResolver::new(h);
         assert!(r.resolve(&subject).is_ok());
         assert!(matches!(
-            r.resolve("easynet:///r/test.local/agent/u.unknown").unwrap_err(),
+            r.resolve("easynet:///r/test.local/agent/u.unknown")
+                .unwrap_err(),
             KeyResolveError::Unknown
         ));
     }
@@ -261,7 +262,8 @@ mod tests {
         let r = PeerKeyringResolver::new(h);
         assert!(r.resolve("easynet:///r/test.local/agent/u.alice").is_ok());
         assert!(matches!(
-            r.resolve("easynet:///r/test.local/agent/u.bob").unwrap_err(),
+            r.resolve("easynet:///r/test.local/agent/u.bob")
+                .unwrap_err(),
             KeyResolveError::Unknown
         ));
     }
@@ -278,7 +280,9 @@ mod tests {
         )
         .unwrap();
         let chain = default_chain(h);
-        assert!(chain.resolve("easynet:///r/test.local/agent/u.alice").is_ok());
+        assert!(chain
+            .resolve("easynet:///r/test.local/agent/u.alice")
+            .is_ok());
         assert!(matches!(
             chain
                 .resolve("easynet:///r/test.local/agent/u.unknown")

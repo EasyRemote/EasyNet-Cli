@@ -36,8 +36,8 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 
 use crate::persistence::resources::{self, lookup_by_uri, ResourceEntry, ResourceType};
-use crate::runtime::ability_dispatch::{EnvelopeContext, LocalAbilityRegistry};
 use crate::runtime::ability_dispatch::OwnerKind;
+use crate::runtime::ability_dispatch::{EnvelopeContext, LocalAbilityRegistry};
 use crate::runtime::agents::media_abilities::{ABILITY_SCREEN_SNAPSHOT, REASON_SUBJECT_IN_ARGS};
 
 /// 256 KiB inline cap — same shape as camera.snapshot. A 1080p

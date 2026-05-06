@@ -398,7 +398,10 @@ mod tests {
     fn rotation_retires_old_creates_new_with_incremented_epoch() {
         let (h, _dir) = open_test_handle();
         let e = h
-            .create_entry("agent_signing", Some("easynet:///r/test.local/agent/test.x".into()))
+            .create_entry(
+                "agent_signing",
+                Some("easynet:///r/test.local/agent/test.x".into()),
+            )
             .unwrap();
         let (new_id, retired_id, epoch) = h.rotate(&e.key_id).unwrap();
         assert_eq!(retired_id, e.key_id);
@@ -446,11 +449,21 @@ mod tests {
         let pk = e.public_key_b64.clone();
         let fp = b64_encode(&entry_fingerprint(&e).unwrap());
         // Correct fingerprint: ok.
-        h.peer_add("easynet:///r/test.local/agent/u.alice", &pk, Some(&fp), None)
-            .unwrap();
+        h.peer_add(
+            "easynet:///r/test.local/agent/u.alice",
+            &pk,
+            Some(&fp),
+            None,
+        )
+        .unwrap();
         // Re-add same peer: returns false (updated, not inserted).
         let added = h
-            .peer_add("easynet:///r/test.local/agent/u.alice", &pk, Some(&fp), None)
+            .peer_add(
+                "easynet:///r/test.local/agent/u.alice",
+                &pk,
+                Some(&fp),
+                None,
+            )
             .unwrap();
         assert!(!added);
         // Wrong fingerprint: rejected.
@@ -465,8 +478,13 @@ mod tests {
         let (h, _dir) = open_test_handle();
         let e = h.create_entry("agent_signing", None).unwrap();
         let pk = e.public_key_b64.clone();
-        h.peer_add("easynet:///r/test.local/agent/u.bob", &pk, None, Some("hub-uri"))
-            .unwrap();
+        h.peer_add(
+            "easynet:///r/test.local/agent/u.bob",
+            &pk,
+            None,
+            Some("hub-uri"),
+        )
+        .unwrap();
         let p = h
             .find_peer_by_uri("easynet:///r/test.local/agent/u.bob")
             .unwrap();
