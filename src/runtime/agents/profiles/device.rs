@@ -58,11 +58,27 @@ pub const DEVICE_PROFILE_ABILITY_PREFIXES: &[&str] = &[
     // Putting them under device matches their actual deployment
     // model: every host that participates in A2A has them.
     "a2a.",
-    // RFC-005 v3.2 A1–A5, A8 — physical-channel media abilities
-    // owned by device-profile (the host holds the hardware).
-    // voice.* / device.voice.transcribe are llm-profile-owned and live
-    // in `profiles/llm.rs`; the prefix list here intentionally
-    // omits "voice." for that reason.
+    // RFC-005 v3.2 A1–A8 — physical-channel media abilities
+    // owned by the device profile (the host holds the hardware).
+    // The bare `"device."` prefix already captures
+    // `device.voice.*`; the explicit `mic.` / `camera.` /
+    // `screen.` / `speaker.` legacy prefixes stay as a
+    // defense-in-depth fallback for any stale catalogue entry
+    // emitted under the pre-M2 bare-namespace shape.
+    //
+    // Pre-fix the LLM profile claimed `device.voice.*` on the
+    // theory that voice signaling was an LLM-owned surface. The
+    // handlers actually run on the device daemon
+    // (`OwnerKind::Device` in the registry); claiming them in
+    // the LLM profile caused the catalogue's
+    // `descriptors_for(agent_uri)` to stamp every voice verb
+    // with the agent URA, so `easynet ability list` grouped
+    // them under AGENT and the KIND column read `agent`.
+    // Ownership here reflects "where does the handler run" per
+    // the truth-table spec, not "which surface category the
+    // verb semantically belongs to" — the call signaling state,
+    // SDP / ICE candidates, and audio capture all live on the
+    // host, so device-owned is the honest classification.
     "mic.",
     "camera.",
     "screen.",
@@ -168,6 +184,14 @@ mod tests {
         assert!(owns("device.a2a.client.send_task"));
         // Joint-plan device.* unified-path namespace.
         assert!(owns("device.describe"));
+        // RFC-005 v3.2 voice signaling — moved here from the
+        // LLM profile because the handlers run on the device
+        // daemon (`OwnerKind::Device`). Catalogue entries get
+        // stamped with the device URA and the Frontend Agents
+        // page renders them under the DEVICE / SYSTEM section.
+        assert!(owns("device.voice.create_call"));
+        assert!(owns("device.voice.subscribe"));
+        assert!(owns("device.voice.transcribe"));
     }
 
     #[test]
