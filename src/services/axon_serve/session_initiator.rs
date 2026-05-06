@@ -612,46 +612,98 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         // redundant and dropping it removes the maintenance
         // hazard of "remember to update the list when adding a
         // new system namespace".
-        const SYSTEM_NAMESPACES: &[&str] = &[
-            "device",
-            "hub",
-            // Wire-pinned legacy alias retained one stage longer
-            // for the M4 wire-rename. Drop when EasyNet-Axon
-            // ships canonical name acceptance.
-            "<self>",
-        ];
+        // Collect every hosted agent URA the daemon should
+        // advertise. Two sources, in priority order:
+        //
+        //   1. `local-agents.json` (authoritative). Each row
+        //      already carries the canonical agent_uri minted at
+        //      `easynet agent add` time (post-RFC-001 v4.1.7 the
+        //      mint is `<profile>-<name>` so the URA tail is
+        //      operator-meaningful: `consent-default-0`,
+        //      `llm-claude-1`, …). We advertise the URA verbatim;
+        //      no string reconstruction.
+        //
+        //   2. Synthetic `pages` / `files` user-scoped agents
+        //      (RFC-006-B + RFC-006-C). These are not stored in
+        //      local-agents.json — the page/file servers register
+        //      under `<user>.{pages,files}.*` ability names at
+        //      runtime. We mint the URA in-line and advertise.
+        //
+        // Pre-fix the scanner derived owners from
+        // `ability_catalog`'s first dotted segment. Post-M3 every
+        // system ability is rooted under `device.*` / `hub.*`,
+        // so the catalogue scan only finds owner names that
+        // happen to match `<user>.<agent>.chat`-style chat
+        // verbs (codex, web-builder, …). Friendly-minted hosted
+        // agents like `consent-default-0` registered abilities
+        // under `device.consent.*` and the scanner's SYSTEM
+        // skip-list filtered them out — so the Frontend
+        // DeviceDetailPage saw "0 agents" even when six were
+        // hosted. Reading local-agents.json directly fixes this
+        // by going to the source of truth.
+        #[derive(Debug, Clone)]
+        struct AdvertiseEntry {
+            agent_uri: String,
+            /// The agent_uri's tail (`<user>.<agent_id>` after
+            /// `agent/`), used purely for log lines + the
+            /// pages/files user-scoped marker check.
+            short_label: String,
+        }
 
-        let mut owners: std::collections::BTreeSet<String> =
+        let mut entries: Vec<AdvertiseEntry> = Vec::new();
+        let mut seen: std::collections::BTreeSet<String> =
             std::collections::BTreeSet::new();
-        for name in ability_catalog {
-            if let Some((owner, _rest)) = name.split_once('.') {
-                if owner.is_empty() || SYSTEM_NAMESPACES.contains(&owner) {
-                    continue;
+
+        // Source 1: local-agents.json hosted_agents.
+        let local_agents_file = crate::persistence::local_agents::load().unwrap_or_default();
+        for hosted in &local_agents_file.hosted_agents {
+            if hosted.agent_uri.is_empty() {
+                continue;
+            }
+            // Reject pre-join placeholder URAs (`<unjoined>`).
+            // Bootstrap repairs these on the next pass once the
+            // realm + user_id land in credentials; advertising
+            // them now would just push junk into the directory.
+            if hosted.agent_uri.contains("<unjoined>") {
+                continue;
+            }
+            if !seen.insert(hosted.agent_uri.clone()) {
+                continue;
+            }
+            // Derive short_label from the URA tail for log lines.
+            let short_label = crate::uri::parse_ura(&hosted.agent_uri)
+                .ok()
+                .filter(|p| p.kind == crate::uri::URAKind::Agent)
+                .map(|p| format!("{}.{}", p.user_id, p.agent_id))
+                .unwrap_or_else(|| hosted.agent_uri.clone());
+            entries.push(AdvertiseEntry {
+                agent_uri: hosted.agent_uri.clone(),
+                short_label,
+            });
+        }
+
+        // Source 2: synthetic pages + files. These don't appear
+        // in local-agents.json (no `agent add` step mints them)
+        // but the page-server / file-server handlers register
+        // ability families under `<user>.{pages,files}.*` at
+        // boot, so the AdvertisedAgentStore needs entries for
+        // them or RFC-006-B `agent/<user>.pages` URLs route to
+        // `target_offline`.
+        if !realm.is_empty() && !user_segment.is_empty() && user_segment != "self" {
+            for synthetic in ["pages", "files"] {
+                let uri = format!(
+                    "easynet:///r/{realm}/agent/{user_segment}.{synthetic}"
+                );
+                if seen.insert(uri.clone()) {
+                    entries.push(AdvertiseEntry {
+                        agent_uri: uri,
+                        short_label: format!("{user_segment}.{synthetic}"),
+                    });
                 }
-                if owner == user_segment {
-                    // `<user>.pages.<verb>` — owner segment IS the
-                    // user-segment, agent name lives one level
-                    // deeper. We pick that up below by walking the
-                    // second segment.
-                    continue;
-                }
-                owners.insert(owner.to_string());
             }
         }
-        // Synthesise pages-and-files agents unconditionally — both
-        // ability families (`<user>.pages.<verb>` + dynamic
-        // `<user>.<project>.page.fetch`; `<user>.files.<verb>`)
-        // register via the late-binding resolver fallback, so
-        // they aren't in `ability_catalog` at session-prelude
-        // time. The backend's pages_public + files handlers
-        // address `agent/<user>.{pages,files}` for every fetch /
-        // upload, so the AdvertisedAgentStore must carry the
-        // host_uri for both.
-        if !user_segment.is_empty() && user_segment != "self" {
-            owners.insert("pages".to_string());
-            owners.insert("files".to_string());
-        }
-        if !realm.is_empty() && !user_segment.is_empty() && !owners.is_empty() {
+
+        if !realm.is_empty() && !user_segment.is_empty() && !entries.is_empty() {
             // Extract this device's node_id from the caller URA
             // (`easynet:///r/<realm>/device/<node_id>`) so we can
             // tell the hub which physical host serves each
@@ -669,9 +721,9 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
             eprintln!(
                 "[session] sending federation.advertise_agent prelude for {} agent(s) \
                  under user `{}`: {:?}",
-                owners.len(),
+                entries.len(),
                 user_segment,
-                owners.iter().collect::<Vec<_>>()
+                entries.iter().map(|e| &e.short_label).collect::<Vec<_>>()
             );
             // user-scoped synthetic agents: pages + files exist
             // per-user, not per-device. Every device the user owns
@@ -693,27 +745,41 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
             // because the hub keeps the agent_uri → host_uri
             // mapping in `AdvertisedAgentStore`, independent of
             // the directory's `host_node_id`.
-            const USER_SCOPED_AGENTS: &[&str] = &["pages", "files"];
-            for owner in &owners {
-                let agent_uri =
-                    format!("easynet:///r/{realm}/agent/{user_segment}.{owner}");
-                let host_for_advertise = if USER_SCOPED_AGENTS.contains(&owner.as_str()) {
-                    None
-                } else {
-                    caller_node_id.as_deref()
-                };
-                if let Err(err) =
-                    send_advertise_agent_prelude(
-                        &mut client,
-                        &caller_uri,
-                        &agent_uri,
-                        host_for_advertise,
-                    )
-                    .await
+            //
+            // Detection rule: the synthetic markers are agent_id
+            // == "pages" / "files" exactly (no profile prefix).
+            // Friendly-minted hosted agents have prefixed ids
+            // (`consent-default-0`, `llm-pages` would never collide
+            // with the synthetic `pages`).
+            const USER_SCOPED_AGENT_IDS: &[&str] = &["pages", "files"];
+            for entry in &entries {
+                // Decide whether this entry is the user-scoped
+                // pages/files synthetic. Read the agent_id off
+                // the URA so renames in the synthesis source
+                // don't drift away from this check.
+                let agent_id = crate::uri::parse_ura(&entry.agent_uri)
+                    .ok()
+                    .filter(|p| p.kind == crate::uri::URAKind::Agent)
+                    .map(|p| p.agent_id)
+                    .unwrap_or_default();
+                let host_for_advertise =
+                    if USER_SCOPED_AGENT_IDS.contains(&agent_id.as_str()) {
+                        None
+                    } else {
+                        caller_node_id.as_deref()
+                    };
+                if let Err(err) = send_advertise_agent_prelude(
+                    &mut client,
+                    &caller_uri,
+                    &entry.agent_uri,
+                    host_for_advertise,
+                )
+                .await
                 {
                     eprintln!(
-                        "[session] advertise_agent {agent_uri} prelude soft-failed \
+                        "[session] advertise_agent {} prelude soft-failed \
                          (code={:?}, msg={:?})",
+                        entry.agent_uri,
                         err.code(),
                         err.message(),
                     );
@@ -721,7 +787,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
             }
             eprintln!(
                 "[session] advertise_agent prelude done ({} agent(s))",
-                owners.len()
+                entries.len()
             );
         }
     }
