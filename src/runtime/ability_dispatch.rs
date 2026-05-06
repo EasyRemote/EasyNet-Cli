@@ -311,6 +311,19 @@ pub struct LocalAbilityRegistry {
     /// migrate to the `_with_owner` variants commit-by-commit; the
     /// shims are deleted at M0 commit 6.
     owner: BTreeMap<String, OwnerKind>,
+    /// Optional `AbilityManifest` per registered ability — the
+    /// authoritative description + JSON Schema for the verb. Set
+    /// only by the `_with_spec` register family; legacy
+    /// `_with_owner` / shim register sites leave the slot empty
+    /// and the descriptor synthesis falls back to a name-only
+    /// stub. The Frontend `InvokeAbilityDialog` renders a
+    /// SchemaForm when the catalogue surfaces an `input_schema`
+    /// and a free-text JSON box otherwise; the registry is the
+    /// single source of truth that determines which path the UI
+    /// gets, so plumbing manifests in here is the structural fix
+    /// for "no declared schema" appearing on abilities that DO
+    /// have a manifest in `core::ability_spec`.
+    manifests: BTreeMap<String, Arc<crate::core::ability_spec::AbilityManifest>>,
 }
 
 impl std::fmt::Debug for LocalAbilityRegistry {
@@ -328,6 +341,7 @@ impl std::fmt::Debug for LocalAbilityRegistry {
             .field("stream_with_env_count", &self.stream_with_env.len())
             .field("bidi_with_env_count", &self.bidi_with_env.len())
             .field("owner_count", &self.owner.len())
+            .field("manifest_count", &self.manifests.len())
             .field("has_rpc_fallback", &self.rpc_fallback.is_some())
             .finish()
     }
@@ -357,6 +371,63 @@ impl LocalAbilityRegistry {
         let name = ability.into();
         self.owner.insert(name.clone(), owner);
         self.rpc.insert(name, handler);
+    }
+
+    /// Register an RPC handler with explicit owner AND a manifest
+    /// carrying the verb's description / input_schema /
+    /// output_schema. The manifest flows to
+    /// `meta.list_abilities` and ultimately to the Frontend
+    /// `InvokeAbilityDialog`, which renders a SchemaForm when an
+    /// input schema is present and a free-text JSON box otherwise.
+    /// Use this variant for any ability that already has a static
+    /// manifest in `core::ability_spec` (the chat ability, the
+    /// pages family, …); the registry then becomes the single
+    /// source of truth for "does this verb have a schema" and
+    /// downstream consumers stop having to know which manifest
+    /// constructor to call by hand.
+    pub fn register_rpc_with_spec(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalRpcHandler,
+    ) {
+        let name = ability.into();
+        self.owner.insert(name.clone(), owner);
+        self.manifests.insert(name.clone(), Arc::new(manifest));
+        self.rpc.insert(name, handler);
+    }
+
+    /// Companion to [`register_rpc_with_spec`] for stream
+    /// handlers. The manifest is shared between RPC + Stream
+    /// surfaces of the same ability — registering the manifest on
+    /// both call sites is allowed (last writer wins; in practice
+    /// both register the same `AbilityManifest` constant) so
+    /// callers can pick whichever register site they reach first
+    /// without having to coordinate ordering.
+    pub fn register_stream_with_spec(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalStreamHandler,
+    ) {
+        let name = ability.into();
+        self.owner.insert(name.clone(), owner);
+        self.manifests.insert(name.clone(), Arc::new(manifest));
+        self.stream.insert(name, handler);
+    }
+
+    /// Lookup the registered manifest, if any. Returns `None`
+    /// when the ability was registered through a non-`_with_spec`
+    /// path (the legacy register surface) — the descriptor synth
+    /// in `meta_ability::list_abilities_handler` falls back to a
+    /// name-only stub in that case, matching pre-2026-05 behaviour.
+    pub fn manifest_for(
+        &self,
+        ability: &str,
+    ) -> Option<&crate::core::ability_spec::AbilityManifest> {
+        self.manifests.get(ability).map(|m| m.as_ref())
     }
 
     /// Register an RPC handler under `ability`. Owner defaults to

@@ -185,13 +185,20 @@ pub fn register_for_agent(
     let ability = format!("{agent_name}.{ABILITY_VERB}");
     let owner = OwnerKind::Agent(agent_name.clone());
 
-    // RPC: the legacy synchronous one-shot path.
+    // RPC: the legacy synchronous one-shot path. Registered with
+    // the canonical chat manifest so the Frontend
+    // `InvokeAbilityDialog` renders a SchemaForm (prompt /
+    // context / session_id / skills / context_loaders / driver /
+    // stream / attachments) instead of a free-text JSON box.
+    // Without this, the dialog falls back to "no declared
+    // schema" and the user has to guess the args shape.
     let rpc_agent = agent_name.clone();
     let rpc_entry = entry.clone();
     let rpc_loaders = Arc::clone(&loaders);
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_spec(
         &ability,
         owner.clone(),
+        crate::core::ability_spec::default_chat_manifest(),
         Arc::new(move |args: Value| handler(&rpc_agent, &rpc_entry, &rpc_loaders, args)),
     );
 
@@ -234,9 +241,10 @@ pub fn register_for_agent(
     // is synchronous; once the driver gains an async token stream
     // the handler upgrades to `Live(broadcast::Receiver)` without
     // changing the wire frame shape.
-    reg.register_stream_with_owner(
+    reg.register_stream_with_spec(
         &ability,
         owner,
+        crate::core::ability_spec::default_chat_manifest(),
         Arc::new(move |args: Value| stream_handler(&agent_name, &entry, &loaders, args)),
     );
 }

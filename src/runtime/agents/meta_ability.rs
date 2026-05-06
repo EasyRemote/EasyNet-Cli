@@ -327,23 +327,39 @@ fn list_abilities_handler(
             let Some(owner) = owner_string.as_deref() else {
                 continue;
             };
-            // Synthesised descriptor: enough for the LLM to know
-            // "this name exists, you can invoke it via mcp.bridge.call_tool
-            // / easynet.run". A future PR can plumb a per-ability
-            // metadata table (description / input_schema) into the
-            // registry so the synthesis becomes lossless; today the
-            // static profile catalogue is where rich schemas live and
-            // first-class abilities should land there.
+            // Synthesised descriptor. When the registration site
+            // landed an `AbilityManifest` via `register_*_with_spec`
+            // (chat ability + the family that follows it), surface
+            // its description + input_schema + output_schema so the
+            // Frontend `InvokeAbilityDialog` renders a SchemaForm
+            // and `meta.list_abilities` consumers see the same
+            // schema as the static profile catalogue. When no
+            // manifest is present (the bulk of system abilities,
+            // pending the M0 follow-through that converts every
+            // register site to `_with_spec`), fall back to the
+            // name-only stub the synth has emitted since the
+            // 2026-05-05 owner-aware refactor.
             if let Ok(d) = AbilityDescriptor::new(name.clone(), owner, Visibility::Scoped) {
-                by_name.insert(
-                    name.clone(),
-                    d.with_description(
-                        "Registered local ability (no manifest schema; \
-                         pass JSON arguments by trial or consult the \
-                         workspace TOML if one exists)",
-                    )
-                    .with_source("registry"),
-                );
+                let descriptor = match registry.manifest_for(&name) {
+                    Some(manifest) => {
+                        let mut d = d
+                            .with_description(manifest.description())
+                            .with_input_schema(manifest.input_schema().clone())
+                            .with_source("registry");
+                        if let Some(out) = manifest.output_schema() {
+                            d = d.with_output_schema(out.clone());
+                        }
+                        d
+                    }
+                    None => d
+                        .with_description(
+                            "Registered local ability (no manifest schema; \
+                             pass JSON arguments by trial or consult the \
+                             workspace TOML if one exists)",
+                        )
+                        .with_source("registry"),
+                };
+                by_name.insert(name.clone(), descriptor);
             }
         }
     }
@@ -530,6 +546,88 @@ mod tests {
             .find(|a| a["name"] == "hub.test.scope")
             .expect("hub.test.scope must be in realm-scope output");
         assert_eq!(hub_entry["source"], "hub:broadcast");
+    }
+
+    #[test]
+    fn live_registry_synth_surfaces_input_schema_when_manifest_registered() {
+        // Pinning the new `register_*_with_spec` contract: when an
+        // ability lands in the live registry with an
+        // `AbilityManifest`, the synthesised descriptor on
+        // `meta.list_abilities` carries the manifest's
+        // description + input_schema verbatim. Without this, the
+        // Frontend `InvokeAbilityDialog` falls back to "no
+        // declared schema" for chat abilities and the user sees a
+        // free-text JSON box with no hint about the args shape.
+        use crate::runtime::ability_dispatch::OwnerKind;
+        use std::sync::OnceLock;
+
+        let mut reg = LocalAbilityRegistry::new();
+        let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
+
+        // Live registry entry registered WITH a manifest. We use
+        // a freshly-built `LocalAbilityRegistry` here (not the
+        // one `register` runs against) and then publish it
+        // through the OnceLock seam so the synth path picks it up.
+        let mut live_reg = LocalAbilityRegistry::new();
+        live_reg.register_rpc_with_spec(
+            "alice.chat",
+            OwnerKind::Agent("alice".to_string()),
+            crate::core::ability_spec::default_chat_manifest(),
+            Arc::new(|_args| Ok(json!({}))),
+        );
+        // A second entry registered the legacy way (no manifest)
+        // exercises the fallback arm so we know synth still emits
+        // the name-only stub when the manifest is absent.
+        live_reg.register_rpc_with_owner(
+            "alice.legacy",
+            OwnerKind::Agent("alice".to_string()),
+            Arc::new(|_args| Ok(json!({}))),
+        );
+        handle.set(Arc::new(live_reg)).expect("set OnceLock");
+
+        register(
+            &mut reg,
+            Vec::new,
+            handle,
+            Some("alice".to_string()),
+        );
+        let handler = reg.get_rpc(ABILITY_LIST_ABILITIES).unwrap();
+        let resp = handler(json!({})).unwrap();
+        let abilities = resp["abilities"].as_array().unwrap();
+
+        let chat = abilities
+            .iter()
+            .find(|a| a["name"] == "alice.chat")
+            .expect("alice.chat must surface from the live registry");
+        // Description must be the manifest's description, not the
+        // generic "no manifest schema" stub.
+        let desc = chat["description"].as_str().unwrap_or_default();
+        assert!(
+            !desc.contains("no manifest schema"),
+            "description must come from the manifest, got: {desc:?}"
+        );
+        // Input schema must be a proper JSON Schema object with at
+        // least the `prompt` property the chat manifest declares.
+        let input_schema = &chat["schema_summary"]["input"];
+        assert_eq!(input_schema["type"], "object", "input must be a JSON object schema");
+        assert!(
+            input_schema["properties"]["prompt"].is_object(),
+            "chat manifest declares `prompt` as a property; synth must surface it. \
+             Got: {input_schema}"
+        );
+
+        let legacy = abilities
+            .iter()
+            .find(|a| a["name"] == "alice.legacy")
+            .expect("alice.legacy must surface from the live registry");
+        // Legacy register path leaves the input schema empty —
+        // synth falls back to the name-only stub.
+        let legacy_desc = legacy["description"].as_str().unwrap_or_default();
+        assert!(
+            legacy_desc.contains("no manifest schema"),
+            "abilities registered without a manifest keep the fallback description, \
+             got: {legacy_desc:?}"
+        );
     }
 
     #[test]
