@@ -546,6 +546,28 @@ fn handler(
     loaders: &[Arc<dyn ContextLoader>],
     args: Value,
 ) -> anyhow::Result<Value> {
+    invoke_direct_with_progress(agent_name, entry, loaders, args, None)
+}
+
+/// Execute one `<agent>.chat` turn directly in the current process and
+/// return the typed RPC payload the daemon handler normally returns.
+///
+/// Why this helper exists:
+///   * The daemon's registered RPC handler uses this logic.
+///   * The EAL interpreter's `agent.chat(...)` fast path also needs the
+///     same behaviour, but it must stay in the caller's process so the
+///     driver's live stderr timeline is visible to `easynet agent send`.
+///
+/// `progress_tx` is optional. When present, the underlying driver emits
+/// per-chunk progress into it while still returning the same final JSON
+/// envelope as the RPC handler.
+pub(crate) fn invoke_direct_with_progress(
+    agent_name: &str,
+    entry: &AgentEntry,
+    loaders: &[Arc<dyn ContextLoader>],
+    args: Value,
+    progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
+) -> anyhow::Result<Value> {
     let started = Instant::now();
     let parsed = ChatArgs::parse(&args)?;
 
@@ -680,8 +702,17 @@ fn handler(
         }
     }
     let driver_overrides = Some(&driver_with_resume);
-    let response_result = if tokio::runtime::Handle::try_current().is_ok() {
-        tokio::task::block_in_place(|| {
+    let dispatch_call = || {
+        if let Some(progress_tx) = progress_tx.clone() {
+            crate::runtime::dispatch::send_external_with_overrides_and_progress(
+                agent_name,
+                entry,
+                &parsed.prompt,
+                composed_context.as_deref(),
+                driver_overrides,
+                Some(progress_tx),
+            )
+        } else {
             crate::runtime::dispatch::send_external_with_overrides(
                 agent_name,
                 entry,
@@ -689,15 +720,12 @@ fn handler(
                 composed_context.as_deref(),
                 driver_overrides,
             )
-        })
+        }
+    };
+    let response_result = if tokio::runtime::Handle::try_current().is_ok() {
+        tokio::task::block_in_place(dispatch_call)
     } else {
-        crate::runtime::dispatch::send_external_with_overrides(
-            agent_name,
-            entry,
-            &parsed.prompt,
-            composed_context.as_deref(),
-            driver_overrides,
-        )
+        dispatch_call()
     };
 
     let resp = response_result?;

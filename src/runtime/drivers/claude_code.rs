@@ -400,20 +400,12 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
         },
     )?;
 
+    let text = lock_or_recover(&final_text).clone();
+
     if result.exit_code != 0 {
-        let err_msg = if result.stderr.is_empty() {
-            format!("{binary} exited with code {}", result.exit_code)
-        } else {
-            format!(
-                "{binary} error (exit {}): {}",
-                result.exit_code,
-                result.stderr.trim()
-            )
-        };
-        anyhow::bail!(err_msg);
+        anyhow::bail!(format_child_exit_error(&binary, &result, &text));
     }
 
-    let text = lock_or_recover(&final_text).clone();
     let mut final_stats = lock_or_recover(&stats).clone();
     if final_stats.duration_ms == 0 {
         final_stats.duration_ms = run_start.elapsed().as_millis() as u64;
@@ -426,6 +418,38 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
     } else {
         Ok((text, final_stats))
     }
+}
+
+fn format_child_exit_error(
+    binary: &str,
+    result: &process_runner::ChildResult,
+    parsed_text: &str,
+) -> String {
+    let stderr = result.stderr.trim();
+    if !stderr.is_empty() {
+        return format!("{binary} error (exit {}): {}", result.exit_code, stderr);
+    }
+
+    let parsed = parsed_text.trim();
+    if !parsed.is_empty() {
+        return format!("{binary} error (exit {}): {}", result.exit_code, parsed);
+    }
+
+    let stdout_tail = result
+        .stdout
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    if !stdout_tail.is_empty() {
+        return format!(
+            "{binary} error (exit {}): {}",
+            result.exit_code, stdout_tail
+        );
+    }
+
+    format!("{binary} exited with code {}", result.exit_code)
 }
 
 /// Parse one stream-json line and print a trace event to stderr.
@@ -695,5 +719,54 @@ fn run_stats_to_usage(s: &RunStats) -> AgentUsage {
         cache_creation_tokens: s.cache_creation_tokens,
         num_turns: s.num_turns,
         total_cost_usd: s.total_cost_usd,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_child_exit_error;
+    use crate::runtime::process_runner::ChildResult;
+    use std::time::Duration;
+
+    fn child(stdout: &str, stderr: &str, exit_code: i32) -> ChildResult {
+        ChildResult {
+            stdout: stdout.to_string(),
+            stderr: stderr.to_string(),
+            exit_code,
+            duration: Duration::from_millis(1),
+            truncated: false,
+        }
+    }
+
+    #[test]
+    fn child_exit_error_prefers_stderr() {
+        let msg = format_child_exit_error(
+            "claude",
+            &child("", "permission denied", 1),
+            "ignored parsed text",
+        );
+        assert_eq!(msg, "claude error (exit 1): permission denied");
+    }
+
+    #[test]
+    fn child_exit_error_uses_parsed_result_when_stderr_is_empty() {
+        let msg = format_child_exit_error(
+            "claude",
+            &child("{\"type\":\"result\"}\n", "", 1),
+            "You're out of extra usage",
+        );
+        assert_eq!(msg, "claude error (exit 1): You're out of extra usage");
+    }
+
+    #[test]
+    fn child_exit_error_falls_back_to_stdout_tail() {
+        let msg = format_child_exit_error("claude", &child("\nline 1\nline 2\n", "", 1), "");
+        assert_eq!(msg, "claude error (exit 1): line 2");
+    }
+
+    #[test]
+    fn child_exit_error_falls_back_to_exit_code() {
+        let msg = format_child_exit_error("claude", &child("", "", 1), "");
+        assert_eq!(msg, "claude exited with code 1");
     }
 }

@@ -669,6 +669,24 @@ fn dispatch_to_agent(
         }
     }
 
+    // `<agent>.chat` is special: when an EAL mission desugars
+    // `easynet agent send` it wants the driver's live stderr
+    // timeline in the *current* CLI process. Routing chat through
+    // the daemon's unary Invoke RPC would hide that live output in
+    // the daemon process and reduce the caller to a final snapshot.
+    // Keep chat local by reusing the daemon handler's own parsing /
+    // context / resume logic directly in-process.
+    if bare_ability == crate::runtime::agents::chat_ability::ABILITY_VERB {
+        return crate::runtime::agents::chat_ability::invoke_direct_with_progress(
+            &agent_id.name,
+            entry,
+            &[],
+            arguments.clone(),
+            None,
+        )
+        .map_err(|e| EalError::Unavailable(format!("agent chat: {e}")));
+    }
+
     // Second fast path: try the local daemon's ability registry over
     // the control socket. The daemon registers per-agent self-bundle
     // verbs (`<agent>.discover`, `<agent>.invoke`, …) plus any
@@ -2244,6 +2262,7 @@ fn now_unix_ms() -> u64 {
 mod tests {
     use super::*;
     use crate::eal::{parser, planner};
+    use crate::registry::agents::{AgentEntry, AgentRegistry, AgentType};
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
@@ -2283,6 +2302,13 @@ mod tests {
             self.fail_functions = Arc::new(names.iter().map(|s| (*s).to_string()).collect());
             self
         }
+    }
+
+    fn dummy_agent_entry() -> AgentEntry {
+        let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        entry.command = "easynet-test-nonexistent-agent-binary".to_string();
+        entry.timeout_secs = 1;
+        entry
     }
 
     impl StepDispatcher for MockDispatcher {
@@ -2555,6 +2581,41 @@ mod tests {
         assert!(json.contains("\"result_sha256\""));
         // Roundtrip
         let _: ExecutionTrace = serde_json::from_str(&json).unwrap();
+    }
+
+    #[test]
+    fn dispatch_to_agent_chat_stays_local_when_daemon_is_absent() {
+        // Regression pin for `easynet agent send`: chat must not go
+        // through the daemon's unary control-socket invoke, because
+        // that hides the driver's live stderr timeline inside the
+        // daemon process. The local path fails here on the bogus
+        // binary name, not on missing control.json.
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let mut registry = AgentRegistry::default();
+        registry
+            .agents
+            .insert("alice".to_string(), dummy_agent_entry());
+
+        let agent_id = crate::core::agent_id::AgentId::parse("alice").expect("valid agent id");
+        let ability = AbilityName::parse(crate::runtime::agents::chat_ability::ABILITY_VERB)
+            .expect("valid chat ability");
+        let err = dispatch_to_agent(
+            &registry,
+            &agent_id,
+            &ability,
+            &serde_json::json!({"prompt": "hi"}),
+        )
+        .expect_err("bogus binary must fail on local chat dispatch");
+        let msg = format!("{err}");
+
+        assert!(
+            msg.contains("easynet-test-nonexistent-agent-binary"),
+            "expected local driver spawn failure, got: {msg}"
+        );
+        assert!(
+            !msg.contains("control.json") && !msg.contains("daemon:"),
+            "chat dispatch must not depend on daemon unary invoke, got: {msg}"
+        );
     }
 
     // ── Test 5: Retry with exponential backoff ──

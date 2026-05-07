@@ -22,8 +22,10 @@
 //!   - `owns(ability_name)`            : prefix check
 //!   - `descriptors_for(owner_uri)`    : §1.6 descriptors emitter
 //!   - `InvokeMcpProvider`             : the McpToolProvider impl that
-//!     translates every `tools/list` and `tools/call` into in-process
-//!     Invoke against the AbilityProxy. Replaces the legacy
+//!     translates every `tools/list` and `tools/call` into a local
+//!     Invoke surface. Production stdio servers call back into the
+//!     live daemon; tests may still inject an in-process proxy.
+//!     Replaces the legacy
 //!     `facade::mcp::HubMcpProvider` that owned a duplicate tool
 //!     catalog and called deleted bridge methods directly.
 //!   - `tool_specs_from_descriptors(...)` : projects AbilityDescriptors
@@ -176,6 +178,22 @@ impl LocalInvoker for ProxyLocalInvoker {
     }
 }
 
+/// Production adapter for `easynet mcp serve`: route every tool call
+/// through the live local daemon over control.sock instead of through
+/// an isolated in-process kernel snapshot.
+pub struct DaemonLocalInvoker;
+
+impl LocalInvoker for DaemonLocalInvoker {
+    fn invoke_sync(
+        &self,
+        ability: &str,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        crate::support::local_invoke::invoke_local_ability(ability, args)
+            .map_err(|err| err.to_string())
+    }
+}
+
 /// Production InvokeMcpProvider — what `easynet mcp_server` and
 /// `easynet start --mcp` will use after P4.8d's quarantine. Every
 /// `tools/list` returns the host's AbilityDescriptors projected to
@@ -243,7 +261,7 @@ pub struct StdioServerConfig {
 /// `build_stdio_server` so callers can decide whether to run
 /// foreground (mcp_server) or in a spawned thread (start --mcp).
 pub struct ConfiguredStdioServer {
-    pub provider: InvokeMcpProvider<ProxyLocalInvoker>,
+    pub provider: InvokeMcpProvider<DaemonLocalInvoker>,
     pub server_name: String,
 }
 
@@ -256,22 +274,13 @@ impl ConfiguredStdioServer {
 }
 
 /// One-stop builder: assemble a Kernel + AbilityProxy, derive the
-/// host's AbilityDescriptors from local-agents.json, and produce
-/// a configured InvokeMcpProvider ready for the stdio runner.
+/// host's AbilityDescriptors from local-agents.json, and produce a
+/// configured InvokeMcpProvider ready for the stdio runner.
 ///
 /// Both `easynet mcp_server` and `easynet start --mcp` call this
 /// — they differ only in argument parsing and how they launch the
 /// stdio server (foreground vs. spawned thread).
 pub fn build_stdio_server(config: &StdioServerConfig) -> ConfiguredStdioServer {
-    use crate::services::control::ability_proxy::AbilityProxy;
-    use std::sync::Arc;
-
-    let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
-        Arc::new(crate::runtime::gateway::NoopGateway::new());
-    let kernel: Arc<dyn crate::runtime::kernel_api::KernelApi> =
-        Arc::new(crate::runtime::kernel::Kernel::new(gateway));
-    let proxy = Arc::new(AbilityProxy::new(kernel));
-
     let mut descriptors = crate::runtime::agents::profiles::load_host_descriptors();
 
     // Workspace MCP: when --agent <name> is set, append that
@@ -288,7 +297,7 @@ pub fn build_stdio_server(config: &StdioServerConfig) -> ConfiguredStdioServer {
         descriptors.extend(per_agent_workspace_descriptors(agent_name));
     }
 
-    let invoker = ProxyLocalInvoker::new(proxy);
+    let invoker = DaemonLocalInvoker;
     let provider = InvokeMcpProvider::new(invoker, descriptors);
     let _ = config.tenant_id; // tenant is informational for now
     ConfiguredStdioServer {
@@ -699,6 +708,18 @@ mod tests {
         assert!(
             err.contains("not_found"),
             "expected NOT_FOUND code in error string; got {err}"
+        );
+    }
+
+    #[test]
+    fn daemon_local_invoker_surfaces_daemon_not_running() {
+        let _h = crate::facade::cli::test_support::HomeGuard::new();
+        let err = DaemonLocalInvoker
+            .invoke_sync("device.observe.health", serde_json::json!({}))
+            .expect_err("daemon-backed invoker must fail when no daemon is running");
+        assert!(
+            err.contains("daemon not running"),
+            "expected actionable daemon-down error; got {err}"
         );
     }
 
