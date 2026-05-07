@@ -33,6 +33,8 @@ use axum::Router;
 
 use super::pages_serve_ability::{serve_bytes, ServedBytes};
 
+const PAGES_HEALTH_PATH: &str = "/_easynet/pages/health";
+
 /// Bind the listener and return a future the daemon can `tokio::spawn`.
 /// Returns immediately; the listener runs until the process exits.
 pub async fn run(port: u16) -> anyhow::Result<()> {
@@ -86,6 +88,13 @@ async fn handle(req: Request<Body>) -> Response<Body> {
     let path = req.uri().path().to_string();
     if path.is_empty() {
         return text_response(StatusCode::NOT_FOUND, "missing path\n");
+    }
+
+    if path == PAGES_HEALTH_PATH {
+        if !matches!(method, axum::http::Method::GET | axum::http::Method::HEAD) {
+            return text_response(StatusCode::METHOD_NOT_ALLOWED, "method not allowed\n");
+        }
+        return pages_health_response(matches!(method, axum::http::Method::HEAD));
     }
 
     // ─── /v1/* — RFC-006-C OpenAI-compatibility endpoints ────────
@@ -321,6 +330,29 @@ fn api_response(value: serde_json::Value) -> Response<Body> {
     builder.body(Body::from(body)).expect("api response build")
 }
 
+fn pages_health_response(head_only: bool) -> Response<Body> {
+    let payload = serde_json::json!({
+        "status": "ok",
+        "pid": std::process::id(),
+        "node_id": std::env::var("EASYNET_NODE_ID").ok(),
+    });
+    let body = if head_only {
+        Vec::new()
+    } else {
+        serde_json::to_vec(&payload).unwrap_or_default()
+    };
+
+    let mut builder = Response::builder().status(StatusCode::OK);
+    let headers = builder.headers_mut().expect("builder always has headers");
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    headers.insert(header::CONTENT_LENGTH, HeaderValue::from(body.len()));
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    builder.body(Body::from(body)).expect("pages health build")
+}
+
 // ─── RFC-006-C OpenAI-compat handlers ──────────────────────────
 
 /// `GET /v1/models` — list chat-base abilities as OpenAI models.
@@ -478,7 +510,9 @@ fn json_response_with_cors(status: StatusCode, value: serde_json::Value) -> Resp
 
 #[cfg(test)]
 mod tests {
-    use super::parse_pages_host;
+    use super::{pages_health_response, parse_pages_host};
+    use axum::body::to_bytes;
+    use axum::http::StatusCode;
 
     #[test]
     fn parses_localhost() {
@@ -502,5 +536,18 @@ mod tests {
     #[test]
     fn rejects_no_pages_segment() {
         assert!(parse_pages_host("papers.alice.elsewhere.com").is_none());
+    }
+
+    #[tokio::test]
+    async fn health_response_reports_current_process_pid() {
+        let resp = pages_health_response(false);
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), 1024).await.expect("body bytes");
+        let payload: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(payload.get("status").and_then(|v| v.as_str()), Some("ok"));
+        assert_eq!(
+            payload.get("pid").and_then(|v| v.as_u64()),
+            Some(std::process::id() as u64)
+        );
     }
 }

@@ -25,6 +25,9 @@ use easynet_axon::server::ServerConfig;
 use crate::persistence::config;
 use crate::support::{net, output, shutdown::ShutdownSignal};
 
+const DEFAULT_PAGES_LISTENER_PORT: u16 = 8787;
+const PAGES_HEALTH_PATH: &str = "/_easynet/pages/health";
+
 /// Register a Ctrl-C handler that triggers `shutdown`. Safe to call multiple
 /// times — only the first call installs the handler; subsequent calls are
 /// no-ops.
@@ -142,12 +145,20 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     }
     let label = args.label.clone().unwrap_or_else(|| creds.node_id.clone());
     let _ = (args.token.as_deref(), args.insecure);
+    let pages_listener_port = resolve_pages_listener_port()?;
 
     crate::persistence::daemon_config::ensure_minimal_device_config(&creds)
         .context("ensure daemon-config.toml for device mode")?;
 
-    let _daemon_handle = spawn_easynet_daemon(&creds.node_id);
-    let sockets = wait_for_local_daemon_ready(std::time::Duration::from_secs(5))?;
+    let daemon_handle = spawn_easynet_daemon(&creds.node_id, pages_listener_port);
+    let expected_pages_pid = daemon_handle.as_ref().map(std::process::Child::id);
+    let sockets = wait_for_local_daemon_ready(
+        std::time::Duration::from_secs(5),
+        Some(PagesListenerExpectation {
+            port: pages_listener_port,
+            expected_pid: expected_pages_pid,
+        }),
+    )?;
     let pid = discover_existing_daemon_pid();
     let endpoint = sockets.grpc_socket.display().to_string();
 
@@ -171,6 +182,17 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     );
     output::detail("hub", &hub);
     output::detail("tenant", &tenant);
+    output::detail(
+        "pages_url_root",
+        &format!(
+            "http://<project>.{user}.pages.localhost:{pages_listener_port}/",
+            user = creds
+                .username
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("<user>")
+        ),
+    );
     if let Some(pid) = pid {
         output::detail("pid", &pid.to_string());
     }
@@ -230,6 +252,12 @@ struct DaemonSockets {
     grpc_socket: std::path::PathBuf,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PagesListenerExpectation {
+    port: u16,
+    expected_pid: Option<u32>,
+}
+
 #[cfg(unix)]
 fn probe_uds_alive(sock: &std::path::Path) -> bool {
     if !sock.exists() {
@@ -243,23 +271,39 @@ fn probe_uds_alive(_sock: &std::path::Path) -> bool {
     false
 }
 
-fn wait_for_local_daemon_ready(timeout: std::time::Duration) -> anyhow::Result<DaemonSockets> {
+fn wait_for_local_daemon_ready(
+    timeout: std::time::Duration,
+    pages_listener: Option<PagesListenerExpectation>,
+) -> anyhow::Result<DaemonSockets> {
     let sockets = DaemonSockets {
         control_socket: crate::services::control::transport::default_socket_path(),
         grpc_socket: crate::persistence::daemon_config::resolved_local_uds_path(),
     };
     let start = std::time::Instant::now();
     while start.elapsed() < timeout {
-        if probe_uds_alive(&sockets.control_socket) && probe_uds_alive(&sockets.grpc_socket) {
+        let sockets_ready =
+            probe_uds_alive(&sockets.control_socket) && probe_uds_alive(&sockets.grpc_socket);
+        let pages_ready = pages_listener.is_none_or(|expectation| {
+            pages_listener_matches(expectation.port, expectation.expected_pid)
+        });
+        if sockets_ready && pages_ready {
             return Ok(sockets);
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    anyhow::bail!(
+    let mut detail = format!(
         "timed out waiting for easynet-daemon to accept on {} and {}",
         sockets.control_socket.display(),
         sockets.grpc_socket.display()
     );
+    if let Some(expectation) = pages_listener {
+        detail.push_str(&format!(
+            " and own pages listener http://127.0.0.1:{}/{}",
+            expectation.port,
+            PAGES_HEALTH_PATH.trim_start_matches('/')
+        ));
+    }
+    anyhow::bail!("{detail}");
 }
 
 fn discover_existing_daemon_pid() -> Option<u32> {
@@ -285,7 +329,7 @@ fn discover_existing_daemon_pid() -> Option<u32> {
         .find(|pid| *pid != std::process::id() && net::is_pid_alive(*pid))
 }
 
-fn spawn_easynet_daemon(node_id: &str) -> Option<std::process::Child> {
+fn spawn_easynet_daemon(node_id: &str, pages_listener_port: u16) -> Option<std::process::Child> {
     // Liveness probe: if a daemon is already accepting on the
     // canonical control.sock, do not spawn a second one. A second
     // spawn races against the first for the runtime-dispatch
@@ -319,6 +363,7 @@ fn spawn_easynet_daemon(node_id: &str) -> Option<std::process::Child> {
 
     let mut cmd = std::process::Command::new(&bin_path);
     cmd.env("EASYNET_NODE_ID", node_id);
+    cmd.env("EASYNET_PAGES_PORT", pages_listener_port.to_string());
     // Daemon's IPC + dispatch logs go to a known file so operators
     // can tail without guessing where stderr landed.
     let log_dir = std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
@@ -377,6 +422,55 @@ fn spawn_easynet_daemon(node_id: &str) -> Option<std::process::Child> {
             None
         }
     }
+}
+
+fn resolve_pages_listener_port() -> anyhow::Result<u16> {
+    match std::env::var("EASYNET_PAGES_PORT") {
+        Ok(raw) => {
+            let port = raw
+                .parse::<u16>()
+                .map_err(|e| anyhow::anyhow!("EASYNET_PAGES_PORT must be a valid u16: {e}"))?;
+            if port == 0 {
+                anyhow::bail!("EASYNET_PAGES_PORT must be greater than 0");
+            }
+            Ok(port)
+        }
+        Err(std::env::VarError::NotPresent) => Ok(DEFAULT_PAGES_LISTENER_PORT),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            anyhow::bail!("EASYNET_PAGES_PORT is not valid UTF-8")
+        }
+    }
+}
+
+fn pages_listener_matches(port: u16, expected_pid: Option<u32>) -> bool {
+    let Ok(pid) = fetch_pages_listener_pid(port) else {
+        return false;
+    };
+    expected_pid.is_none_or(|expected| expected == pid)
+}
+
+fn fetch_pages_listener_pid(port: u16) -> anyhow::Result<u32> {
+    let url = format!("http://127.0.0.1:{port}{PAGES_HEALTH_PATH}");
+    let resp: serde_json::Value = match ureq::get(&url).call() {
+        Ok(r) => r.into_json().context("parse pages health response")?,
+        Err(ureq::Error::Status(code, resp)) => {
+            let body = resp.into_string().unwrap_or_default();
+            anyhow::bail!("pages listener health returned HTTP {code}: {body}");
+        }
+        Err(ureq::Error::Transport(e)) => {
+            anyhow::bail!("transport to {url}: {e}");
+        }
+    };
+    let pid = pages_listener_pid_from_payload(&resp)
+        .ok_or_else(|| anyhow::anyhow!("pages listener health missing pid"))?;
+    Ok(pid)
+}
+
+fn pages_listener_pid_from_payload(value: &serde_json::Value) -> Option<u32> {
+    value
+        .get("pid")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|v| u32::try_from(v).ok())
 }
 
 fn start_stdio_mcp_server(creds: &config::Credentials) {
@@ -1089,5 +1183,39 @@ mod tests {
         let sock = dir.path().join("control.sock");
         let _listener = std::os::unix::net::UnixListener::bind(&sock).expect("bind probe");
         assert!(probe_uds_alive(&sock));
+    }
+
+    #[test]
+    fn resolve_pages_listener_port_defaults_to_8787() {
+        let _g = HomeGuard::new();
+        std::env::remove_var("EASYNET_PAGES_PORT");
+        assert_eq!(
+            resolve_pages_listener_port().expect("default pages port"),
+            DEFAULT_PAGES_LISTENER_PORT
+        );
+    }
+
+    #[test]
+    fn resolve_pages_listener_port_honors_env_override() {
+        let _g = HomeGuard::new();
+        std::env::set_var("EASYNET_PAGES_PORT", "9898");
+        assert_eq!(resolve_pages_listener_port().expect("env override"), 9898);
+    }
+
+    #[test]
+    fn resolve_pages_listener_port_rejects_invalid_values() {
+        let _g = HomeGuard::new();
+        std::env::set_var("EASYNET_PAGES_PORT", "abc");
+        let err = resolve_pages_listener_port().expect_err("invalid env must fail");
+        assert!(err.to_string().contains("valid u16"));
+    }
+
+    #[test]
+    fn pages_listener_pid_from_payload_extracts_u32() {
+        let payload = serde_json::json!({ "status": "ok", "pid": 4242u64 });
+        assert_eq!(pages_listener_pid_from_payload(&payload), Some(4242));
+
+        let missing = serde_json::json!({ "status": "ok" });
+        assert_eq!(pages_listener_pid_from_payload(&missing), None);
     }
 }

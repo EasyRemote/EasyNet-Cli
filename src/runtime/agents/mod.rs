@@ -536,6 +536,7 @@ pub fn build_registry_with_services(
         // RFC-006-C v0.1 — device-local OpenAI shim. Device-owned,
         // no `<user>` slot — registers regardless of pairing state.
         openai_compat_ability::set_dispatch_handle(Arc::clone(&local_registry_handle));
+        openai_compat_ability::set_identity(pages_identity.clone());
         openai_compat_ability::register(&mut reg);
     }
     skill_ability::register(&mut reg);

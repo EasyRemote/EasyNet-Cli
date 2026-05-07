@@ -88,8 +88,8 @@ use crate::services::axon_serve::federation_wrappers::{
     self, ABILITY_FEDERATION_ADVERTISE_ABILITIES, ABILITY_FEDERATION_ADVERTISE_AGENT,
     ABILITY_FEDERATION_DISCOVER, ABILITY_FEDERATION_FORWARD_INVOKE, ABILITY_FEDERATION_HEARTBEAT,
     ABILITY_FEDERATION_JOIN, ABILITY_FEDERATION_LIST_USER_DEVICES,
-    ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES, ABILITY_FEDERATION_RESOLVE,
-    ABILITY_FEDERATION_RESOLVE_KEY, ABILITY_FEDERATION_REVOKE,
+    ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES, ABILITY_FEDERATION_PROXY_RESOLVE,
+    ABILITY_FEDERATION_RESOLVE, ABILITY_FEDERATION_RESOLVE_KEY, ABILITY_FEDERATION_REVOKE,
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
     ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
 };
@@ -756,6 +756,10 @@ impl Invocation for DaemonInvocationService {
                 )
                 .await
             }
+            ABILITY_FEDERATION_PROXY_RESOLVE => {
+                self.dispatch_federation_proxy_resolve(inner.envelope.as_ref(), &inner.arguments)
+                    .await
+            }
             ABILITY_FEDERATION_REVOKE => self.dispatch_federation_revoke(&inner.arguments),
             ABILITY_FEDERATION_FORWARD_INVOKE => {
                 self.dispatch_federation_forward_invoke(inner.envelope.as_ref(), &inner.arguments)
@@ -1195,26 +1199,18 @@ impl DaemonInvocationService {
         wrap_json_response(&response)
     }
 
-    /// Daemon-local caller-side path for user-scoped peer device
-    /// enumeration. The backend passes the exact peer hub URLs from
-    /// `user_peer_hubs`; the daemon fans out to each via its
-    /// existing cross-hub transport, stamps the merge-boundary
-    /// metadata (`origin_realm`, `hub_endpoint`), and returns a
-    /// typed `DirectoryEntry` list. This keeps peer dial / trust /
-    /// signing inside the daemon and prevents the Go backend from
-    /// growing its own cross-hub stack.
-    async fn dispatch_federation_proxy_list_user_devices(
+    fn require_backend_or_loopback_proxy_caller(
         &self,
         caller_envelope: Option<&Envelope>,
-        arguments: &[u8],
-    ) -> Result<Response<InvokeResponse>, Status> {
+        ability_name: &str,
+    ) -> Result<(), Status> {
         let caller_uri = caller_envelope
             .and_then(|env| env.caller.as_ref())
             .map(|c| c.uri.as_str())
             .ok_or_else(|| {
-                Status::invalid_argument(
-                    "federation.proxy_list_user_devices: missing caller envelope.caller.uri",
-                )
+                Status::invalid_argument(format!(
+                    "{ability_name}: missing caller envelope.caller.uri"
+                ))
             })?;
 
         let trust_anchor = self.admission.trust_anchor_snapshot();
@@ -1230,11 +1226,30 @@ impl DaemonInvocationService {
             .is_some_and(|self_uri| self_uri == caller_uri);
         if !(is_backend_role || is_loopback) {
             return Err(Status::permission_denied(format!(
-                "federation.proxy_list_user_devices: caller `{caller_uri}` is not the local \
-                 backend; only the backend and daemon loopback may proxy peer user-device \
-                 enumeration"
+                "{ability_name}: caller `{caller_uri}` is not the local backend; \
+                 only the backend and daemon loopback may proxy peer calls"
             )));
         }
+        Ok(())
+    }
+
+    /// Daemon-local caller-side path for user-scoped peer device
+    /// enumeration. The backend passes the exact peer hub URLs from
+    /// `user_peer_hubs`; the daemon fans out to each via its
+    /// existing cross-hub transport, stamps the merge-boundary
+    /// metadata (`origin_realm`, `hub_endpoint`), and returns a
+    /// typed `DirectoryEntry` list. This keeps peer dial / trust /
+    /// signing inside the daemon and prevents the Go backend from
+    /// growing its own cross-hub stack.
+    async fn dispatch_federation_proxy_list_user_devices(
+        &self,
+        caller_envelope: Option<&Envelope>,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        self.require_backend_or_loopback_proxy_caller(
+            caller_envelope,
+            "federation.proxy_list_user_devices",
+        )?;
 
         let request: federation_wrappers::ProxyListUserDevicesRequest = parse_json_args(arguments)?;
         let tenant_id = request.tenant_id.trim();
@@ -1273,6 +1288,7 @@ impl DaemonInvocationService {
             ))
         })?;
 
+        let trust_anchor = self.admission.trust_anchor_snapshot();
         let local_realm = self.session_realm.as_deref();
         let mut fanout = FuturesUnordered::new();
         for peer_hub_url in peer_hub_urls {
@@ -1350,6 +1366,119 @@ impl DaemonInvocationService {
         });
 
         wrap_json_response(&federation_wrappers::ProxyListUserDevicesResponse { devices })
+    }
+
+    async fn dispatch_federation_proxy_resolve(
+        &self,
+        caller_envelope: Option<&Envelope>,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        self.require_backend_or_loopback_proxy_caller(caller_envelope, "federation.proxy_resolve")?;
+
+        let request: federation_wrappers::ProxyResolveRequest = parse_json_args(arguments)?;
+        let Some(client) = self.federation_client.as_ref() else {
+            return wrap_json_response(&federation_wrappers::ResolveResponse {
+                agents: Vec::new(),
+            });
+        };
+
+        let peer_hub_urls: Vec<String> = request
+            .peer_hub_urls
+            .into_iter()
+            .map(|url| url.trim().to_string())
+            .filter(|url| !url.is_empty())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if peer_hub_urls.is_empty() {
+            return wrap_json_response(&federation_wrappers::ResolveResponse {
+                agents: Vec::new(),
+            });
+        }
+
+        let inner_arguments = serde_json::to_vec(&federation_wrappers::ResolveRequest {
+            uri_prefix: request.uri_prefix,
+            include_abilities: request.include_abilities,
+            filter: None,
+        })
+        .map_err(|err| {
+            Status::internal(format!(
+                "federation.proxy_resolve: encode peer request: {err}"
+            ))
+        })?;
+
+        let trust_anchor = self.admission.trust_anchor_snapshot();
+        let local_realm = self.session_realm.as_deref();
+        let mut fanout = FuturesUnordered::new();
+        for peer_hub_url in peer_hub_urls {
+            let Some(peer_entry) = trust_anchor.lookup_peer_hub(&peer_hub_url).cloned() else {
+                eprintln!("[axon-serve] proxy_resolve skipping untrusted peer hub {peer_hub_url}");
+                continue;
+            };
+            let client = Arc::clone(client);
+            let mut peer_request = InvokeRequest {
+                envelope: Some(build_peer_envelope(
+                    caller_envelope,
+                    &peer_entry.agent_uri,
+                    local_realm,
+                )),
+                function_name: ABILITY_FEDERATION_RESOLVE.to_string(),
+                arguments: inner_arguments.clone(),
+                ..InvokeRequest::default()
+            };
+            if let Some(envelope) = peer_request.envelope.as_mut() {
+                sign_peer_request_envelope(
+                    envelope,
+                    &peer_request.function_name,
+                    &peer_request.arguments,
+                    local_realm,
+                    self.hub_signing_seed.as_ref(),
+                )?;
+            }
+            fanout.push(async move {
+                match client.forward_invoke(&peer_hub_url, peer_request).await {
+                    Ok(response) => {
+                        let body: federation_wrappers::ResolveResponse =
+                            serde_json::from_slice(&response.result).map_err(|err| {
+                                format!("decode peer {peer_hub_url} resolve response: {err}")
+                            })?;
+                        Ok(body.agents)
+                    }
+                    Err(err) => Err(format!(
+                        "dial peer {peer_hub_url} for resolve failed: {err}"
+                    )),
+                }
+            });
+        }
+
+        let mut merged =
+            std::collections::BTreeMap::<String, federation_wrappers::ResolveAgentSummary>::new();
+        while let Some(result) = fanout.next().await {
+            match result {
+                Ok(agents) => {
+                    for agent in agents {
+                        merged
+                            .entry(agent.uri.clone())
+                            .and_modify(|existing| {
+                                if existing.host_node_id.is_none() && agent.host_node_id.is_some() {
+                                    existing.host_node_id = agent.host_node_id.clone();
+                                }
+                                if existing.abilities.is_empty() && !agent.abilities.is_empty() {
+                                    existing.abilities = agent.abilities.clone();
+                                }
+                            })
+                            .or_insert(agent);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("[axon-serve] {err}");
+                }
+            }
+        }
+
+        wrap_json_response(&federation_wrappers::ResolveResponse {
+            agents: merged.into_values().collect(),
+        })
     }
 
     fn dispatch_federation_revoke(
@@ -5401,8 +5530,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invoke_dispatches_federation_proxy_list_user_devices_fans_out_and_stamps_peer_metadata()
-    {
+    async fn invoke_dispatches_federation_proxy_list_user_devices_fans_out_and_stamps_peer_metadata(
+    ) {
         use crate::services::realm_trust_anchor::{
             RealmTrustAnchor, TrustedAgent, TrustedAgentRole,
         };
@@ -5461,7 +5590,10 @@ mod tests {
         let calls = recorder.calls();
         assert_eq!(calls.len(), 1, "exactly one peer request captured");
         assert_eq!(calls[0].0, peer_hub_url);
-        assert_eq!(calls[0].1.function_name, ABILITY_FEDERATION_LIST_USER_DEVICES);
+        assert_eq!(
+            calls[0].1.function_name,
+            ABILITY_FEDERATION_LIST_USER_DEVICES
+        );
         let peer_args: federation_wrappers::ListUserDevicesRequest =
             serde_json::from_slice(&calls[0].1.arguments).expect("peer args decode");
         assert_eq!(peer_args.tenant_id, "user-tenant");
@@ -5496,7 +5628,8 @@ mod tests {
         let svc = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
             .with_session_realm("local-realm");
 
-        let args = br#"{"tenant_id":"user-tenant","peer_hub_urls":["https://peer-hub.example:50443"]}"#;
+        let args =
+            br#"{"tenant_id":"user-tenant","peer_hub_urls":["https://peer-hub.example:50443"]}"#;
         let mut envelope = Envelope {
             caller: Some(AgentIdentity {
                 uri: caller_uri.clone(),
@@ -5537,6 +5670,77 @@ mod tests {
             "rejection message must surface the caller URI; got: {}",
             err.message()
         );
+    }
+
+    #[tokio::test]
+    async fn invoke_dispatches_federation_proxy_resolve_to_configured_peer() {
+        use crate::services::realm_trust_anchor::{
+            RealmTrustAnchor, TrustedAgent, TrustedAgentRole,
+        };
+
+        let peer_hub_url = "https://peer-hub.example:50443";
+        let peer_hub_uri = crate::uri::hub_uri("peer-realm");
+        let anchor = Arc::new(
+            RealmTrustAnchor::from_entries(vec![TrustedAgent {
+                agent_uri: peer_hub_uri,
+                public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+                role: TrustedAgentRole::Hub,
+                added_at_unix_ms: 1_700_000_000_000,
+                origin_tenant_id: Some("peer-realm".to_string()),
+                hub_uri: Some(peer_hub_url.to_string()),
+                tls_ca_pem_path: None,
+            }])
+            .expect("peer hub trust anchor"),
+        );
+        let admission = AdmissionFacade::new(anchor, Some(TEST_DAEMON_URI.to_string()));
+        let canned = InvokeResponse {
+            result: br#"{
+                "agents":[{
+                    "uri":"easynet:///r/local-realm/agent/alice.remote",
+                    "status":"active",
+                    "host_node_id":"dev-peer"
+                }]
+            }"#
+            .to_vec(),
+            result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            state: InvocationState::Completed as i32,
+            ..InvokeResponse::default()
+        };
+        let recorder = Arc::new(RecordingFederationClient::new(canned));
+        let svc = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
+            .with_hub_signing_seed([0x11; 32])
+            .with_session_realm("local-realm")
+            .with_federation_client(recorder.clone() as Arc<dyn FederationClient>);
+
+        let resp = svc
+            .invoke(invoke_request(
+                ABILITY_FEDERATION_PROXY_RESOLVE,
+                r#"{
+                    "peer_hub_urls":["https://peer-hub.example:50443"],
+                    "uri_prefix":"easynet:///r/local-realm/agent/alice.",
+                    "include_abilities":true
+                }"#,
+            ))
+            .await
+            .expect("proxy resolve succeeds");
+        let body: federation_wrappers::ResolveResponse = parse_response_body(resp);
+        assert_eq!(body.agents.len(), 1);
+        assert_eq!(
+            body.agents[0].uri,
+            "easynet:///r/local-realm/agent/alice.remote"
+        );
+
+        let calls = recorder.calls();
+        assert_eq!(calls.len(), 1, "exactly one peer request captured");
+        assert_eq!(calls[0].0, peer_hub_url);
+        assert_eq!(calls[0].1.function_name, ABILITY_FEDERATION_RESOLVE);
+        let peer_args: federation_wrappers::ResolveRequest =
+            serde_json::from_slice(&calls[0].1.arguments).expect("peer args decode");
+        assert_eq!(
+            peer_args.uri_prefix.as_deref(),
+            Some("easynet:///r/local-realm/agent/alice.")
+        );
+        assert!(peer_args.include_abilities);
     }
 
     #[tokio::test]

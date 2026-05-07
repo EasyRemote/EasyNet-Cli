@@ -162,6 +162,13 @@ pub const ABILITY_FEDERATION_LIST_USER_DEVICES: &str = "federation.list_user_dev
 /// backend never grows a second transport stack.
 pub const ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES: &str = "federation.proxy_list_user_devices";
 
+/// `federation.proxy_resolve` — daemon-local proxy wrapper that
+/// fans `federation.resolve` out across the specific peer hubs
+/// the backend selected. Used for user-owned agent listings and
+/// peer-device / peer-agent ability catalog reads without
+/// teaching the Go backend how to dial peers itself.
+pub const ABILITY_FEDERATION_PROXY_RESOLVE: &str = "federation.proxy_resolve";
+
 /// `federation.advertise_abilities` — backend self-registration
 /// path. Backend on boot publishes its own ability descriptors
 /// (`aggregate.list_skills_across_fleet` etc.) so they show up in
@@ -196,6 +203,7 @@ pub const FEDERATION_ABILITIES: &[&str] = &[
     ABILITY_FEDERATION_DISCOVER,
     ABILITY_FEDERATION_LIST_USER_DEVICES,
     ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
+    ABILITY_FEDERATION_PROXY_RESOLVE,
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
     ABILITY_FEDERATION_REVOKE,
@@ -468,7 +476,7 @@ pub fn handle_heartbeat(
 // ─── federation.resolve ────────────────────────────────────────────
 
 /// Request payload for `federation.resolve`.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ResolveRequest {
     /// Optional URI prefix to filter the registry on. When absent,
     /// returns every online agent.
@@ -487,7 +495,7 @@ pub struct ResolveRequest {
     pub filter: Option<ResolveFilterRequest>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ResolveFilterRequest {
     #[serde(default)]
     pub agent_uri_prefix: Option<String>,
@@ -828,6 +836,17 @@ pub struct ProxyListUserDevicesRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProxyListUserDevicesResponse {
     pub devices: Vec<crate::services::federation_directory::DirectoryEntry>,
+}
+
+/// Request payload for `federation.proxy_resolve`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ProxyResolveRequest {
+    #[serde(default)]
+    pub peer_hub_urls: Vec<String>,
+    #[serde(default)]
+    pub uri_prefix: Option<String>,
+    #[serde(default)]
+    pub include_abilities: bool,
 }
 
 /// Handle a `federation.list_user_devices` invocation. Reads
@@ -1180,6 +1199,7 @@ mod tests {
             ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
             "federation.proxy_list_user_devices"
         );
+        assert_eq!(ABILITY_FEDERATION_PROXY_RESOLVE, "federation.proxy_resolve");
         assert_eq!(
             ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
             "federation.subscribe_directory_v2"
@@ -1192,10 +1212,10 @@ mod tests {
             ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
             "runtime.bootstrap_self_identity"
         );
-        // 13 federation.* abilities now wired (added advertise_abilities
+        // 14 federation.* abilities now wired (added advertise_abilities
         // for backend self-publish; bootstrap_self_identity is namespaced
         // under `runtime.*` so it lives outside this set).
-        assert_eq!(FEDERATION_ABILITIES.len(), 13);
+        assert_eq!(FEDERATION_ABILITIES.len(), 14);
     }
 
     #[test]

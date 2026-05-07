@@ -34,9 +34,25 @@ use crate::runtime::agents::api_key_ability;
 /// chat_completions reaches through it to invoke target chat-base
 /// abilities without IPC self-loop.
 static DISPATCH_HANDLE: OnceLock<Arc<OnceLock<Arc<LocalAbilityRegistry>>>> = OnceLock::new();
+static OPENAI_IDENTITY: OnceLock<OpenAICompatIdentity> = OnceLock::new();
+
+#[derive(Debug, Clone)]
+struct OpenAICompatIdentity {
+    user: Option<String>,
+    realm: String,
+}
 
 pub(crate) fn set_dispatch_handle(handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>>) {
     let _ = DISPATCH_HANDLE.set(handle);
+}
+
+pub(crate) fn set_identity(identity: crate::runtime::agents::PagesIdentity) {
+    let _ = OPENAI_IDENTITY.set(OpenAICompatIdentity {
+        user: identity.user,
+        realm: identity
+            .realm
+            .unwrap_or_else(|| crate::uri::REALM_EASYNET.to_string()),
+    });
 }
 
 fn now_secs() -> u64 {
@@ -121,16 +137,29 @@ fn flatten_messages(messages: &[Value]) -> (String, Option<String>) {
     (prompt, system)
 }
 
-/// Resolve a model name to a chat-base ability name on the local
-/// registry. Strategy:
-///   1. if `model` already ends in `.chat`, use verbatim
-///   2. otherwise append `.chat` (e.g. "web-builder" → "web-builder.chat")
-fn resolve_model_to_ability(model: &str) -> String {
-    if model.ends_with(".chat") {
-        model.to_string()
-    } else {
-        format!("{model}.chat")
+/// Resolve an OpenAI model id to a local chat-base ability name.
+///
+/// Preferred shape: canonical ability URA
+///   `easynet:///r/<realm>/ability/<user>.<agent>.<agent>.chat`
+///
+/// Backward-compat shape:
+///   `<agent>` or `<agent>.chat`
+fn resolve_model_to_ability(model: &str) -> anyhow::Result<String> {
+    if model.starts_with("easynet:///") {
+        let parsed = crate::uri::parse_ura(model)
+            .map_err(|e| anyhow::anyhow!("model must be a valid ability URA: {e}"))?;
+        if parsed.kind != crate::uri::URAKind::Ability {
+            anyhow::bail!("model must be an ability URA");
+        }
+        if parsed.ability_id != format!("{}.chat", parsed.agent_id) {
+            anyhow::bail!("model must point to the canonical <agent>.chat ability URA");
+        }
+        return Ok(parsed.ability_id);
     }
+    if model.ends_with(".chat") {
+        return Ok(model.to_string());
+    }
+    Ok(format!("{model}.chat"))
 }
 
 /// `01HUB.openai.chat_completions`
@@ -197,7 +226,7 @@ pub fn handle_chat_completions(args: Value) -> anyhow::Result<Value> {
     // place that turns them into bytes.
     deref_easynet_uris_in_messages(&mut messages);
 
-    let target_ability = resolve_model_to_ability(&model_str);
+    let target_ability = resolve_model_to_ability(&model_str)?;
     if !is_chat_base(&target_ability) {
         anyhow::bail!("model '{model_str}' resolves to '{target_ability}' which is not chat-base");
     }
@@ -390,8 +419,7 @@ pub fn handle_list_models(_args: Value) -> anyhow::Result<Value> {
         if !is_chat_base(&name) {
             continue;
         }
-        // model id is the ability's owner prefix
-        let model_id = name.strip_suffix(".chat").unwrap_or(&name).to_string();
+        let model_id = project_model_id(registry.as_ref(), &name);
         models.push(json!({
             "id":       model_id,
             "object":   "model",
@@ -428,6 +456,29 @@ pub fn register(reg: &mut LocalAbilityRegistry) {
         OwnerKind::Device,
         Arc::new(handle_list_models) as LocalRpcHandler,
     );
+}
+
+fn project_model_id(registry: &LocalAbilityRegistry, ability_name: &str) -> String {
+    project_model_id_with_identity(registry, ability_name, OPENAI_IDENTITY.get())
+}
+
+fn project_model_id_with_identity(
+    registry: &LocalAbilityRegistry,
+    ability_name: &str,
+    identity: Option<&OpenAICompatIdentity>,
+) -> String {
+    let Some(identity) = identity else {
+        return ability_name.to_string();
+    };
+    let Some(crate::runtime::ability_dispatch::OwnerKind::Agent(agent_id)) =
+        registry.lookup_owner(ability_name)
+    else {
+        return ability_name.to_string();
+    };
+    let Some(user) = identity.user.as_deref() else {
+        return ability_name.to_string();
+    };
+    crate::uri::ability_uri(&identity.realm, user, agent_id, ability_name)
 }
 
 // ─── EasyNet URA dereference for multimodal message content ──────
@@ -560,4 +611,38 @@ fn deref_to_data_url(uri: &str) -> anyhow::Result<String> {
         .map_err(|e| anyhow::anyhow!("deref `{uri}`: b64 decode: {e}"))?;
     let canon = STANDARD.encode(raw);
     Ok(format!("data:{mime};base64,{canon}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::ability_dispatch::OwnerKind;
+
+    fn ok_handler() -> LocalRpcHandler {
+        Arc::new(|_| Ok(json!({"reply":"ok"})))
+    }
+
+    #[test]
+    fn resolve_model_to_ability_accepts_canonical_chat_ability_ura() {
+        let got = resolve_model_to_ability(
+            "easynet:///r/easynet.run/ability/alice.codex.codex.chat",
+        )
+        .expect("canonical URA must resolve");
+        assert_eq!(got, "codex.chat");
+    }
+
+    #[test]
+    fn project_model_id_prefers_canonical_ability_ura_for_agent_owned_chat() {
+        let mut reg = LocalAbilityRegistry::new();
+        reg.register_rpc_with_owner("codex.chat", OwnerKind::Agent("codex".into()), ok_handler());
+        let identity = OpenAICompatIdentity {
+            user: Some("alice".into()),
+            realm: "easynet.run".into(),
+        };
+        let got = project_model_id_with_identity(&reg, "codex.chat", Some(&identity));
+        assert_eq!(
+            got,
+            "easynet:///r/easynet.run/ability/alice.codex.codex.chat"
+        );
+    }
 }
