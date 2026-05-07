@@ -19,7 +19,9 @@
 
 use serde_json::{json, Value};
 
-use super::state::PUBLISHED_PROJECTS;
+use anyhow::Context;
+
+use super::state::{persist_registry_for_user, PUBLISHED_PROJECTS};
 
 /// `<user>.pages.list` — return every project the daemon
 /// currently hosts under this user.
@@ -89,16 +91,22 @@ pub fn handle_get(
 
 /// `<user>.pages.unpublish` — remove the project. Drops the
 /// `ProjectHandle` (releasing the folder fd) and removes the
-/// entry from `PUBLISHED_PROJECTS`. Subsequent fetch calls fail
-/// at the resolver because the entry is gone.
+/// entry from `PUBLISHED_PROJECTS`, then rewrites the user's
+/// restart snapshot. Subsequent fetch calls fail at the resolver
+/// because the entry is gone.
 pub fn handle_unpublish(user: &str, args: Value) -> anyhow::Result<Value> {
     let project_id = args
         .get("project_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("missing required arg: project_id"))?;
     let key = (user.to_string(), project_id.to_string());
-    if PUBLISHED_PROJECTS.remove(&key).is_none() {
+    let removed = PUBLISHED_PROJECTS.remove(&key);
+    let Some((_removed_key, removed_handle)) = removed else {
         anyhow::bail!("project not found: user={user} project_id={project_id}");
+    };
+    if let Err(err) = persist_registry_for_user(user) {
+        PUBLISHED_PROJECTS.insert(key, removed_handle);
+        return Err(err).context("persist pages publish registry");
     }
     Ok(json!({
         "user":       user,

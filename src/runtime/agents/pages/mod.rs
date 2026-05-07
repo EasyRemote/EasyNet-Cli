@@ -175,4 +175,19 @@ pub fn register(
         });
 
     reg.chain_rpc_fallback(resolver);
+    match state::restore_published_projects(&config.user) {
+        Ok(summary) if summary.skipped > 0 => {
+            eprintln!(
+                "warning: restored {} pages project(s) for user {}; skipped {} stale snapshot entrie(s)",
+                summary.restored, config.user, summary.skipped
+            );
+        }
+        Ok(_) => {}
+        Err(err) => {
+            eprintln!(
+                "warning: failed to restore pages projects for user {}: {err}",
+                config.user
+            );
+        }
+    }
 }

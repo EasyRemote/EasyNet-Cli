@@ -28,6 +28,7 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use serde_json::{json, Value};
 
@@ -43,7 +44,48 @@ use std::sync::Arc;
 /// Per-test fixture: makes a temp folder with a unique project
 /// id so concurrent test runs do not collide in the global
 /// `PUBLISHED_PROJECTS` map.
+struct TestHomeGuard {
+    _lock: MutexGuard<'static, ()>,
+    temp_dir: PathBuf,
+    prev_home: Option<String>,
+}
+
+impl TestHomeGuard {
+    fn new() -> Self {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let lock = LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let temp_dir = std::env::temp_dir().join(format!(
+            "easynet-pages-test-home-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = fs::create_dir_all(&temp_dir);
+        let prev_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &temp_dir);
+        Self {
+            _lock: lock,
+            temp_dir,
+            prev_home,
+        }
+    }
+}
+
+impl Drop for TestHomeGuard {
+    fn drop(&mut self) {
+        match self.prev_home.take() {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = fs::remove_dir_all(&self.temp_dir);
+    }
+}
+
 struct Fixture {
+    _home: TestHomeGuard,
     user: String,
     project_id: String,
     folder: PathBuf,
@@ -54,6 +96,7 @@ struct Fixture {
 
 impl Fixture {
     fn new(name_seed: &str) -> Self {
+        let home = TestHomeGuard::new();
         // unique project_id per call to dodge the duplicate-publish
         // rejection (U8 explicitly tests dup, others rely on
         // uniqueness for isolation)
@@ -75,6 +118,7 @@ impl Fixture {
         fs::write(folder.join("style.css"), "h1 { color: red; }").expect("write css");
 
         Self {
+            _home: home,
             user: format!("alice-{pid}"),
             project_id: pid,
             folder,

@@ -22,13 +22,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use anyhow::Context;
 use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
 use super::fetch::register_fetch_ability;
 use super::sandbox::open_directory;
-use super::state::{ProjectHandle, Visibility, DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS};
+use super::state::{
+    persist_registry_for_user, ProjectHandle, Visibility, DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS,
+};
 
 /// Handler invoked when a user calls `<self>.pages.publish`. The
 /// handler is registered once at daemon boot under the user-prefixed
@@ -108,6 +111,10 @@ pub fn handle_publish(
     });
 
     PUBLISHED_PROJECTS.insert(key.clone(), handle.clone());
+    if let Err(err) = persist_registry_for_user(user) {
+        PUBLISHED_PROJECTS.remove(&key);
+        return Err(err).context("persist pages publish registry");
+    }
 
     // Register the per-project fetch ability into the live registry.
     // The registration function is owned by `fetch.rs` so the
