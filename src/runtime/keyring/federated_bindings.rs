@@ -206,7 +206,7 @@ mod tests {
     fn binding_fixture() -> FederatedUserBinding {
         FederatedUserBinding {
             source_realm: "realm-a".to_string(),
-            source_user_uri: "easynet:///r/realm-a/agent/user-c".to_string(),
+            source_user_uri: "easynet:///r/realm-a/user/user-c".to_string(),
             source_user_pubkey_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             local_user_id: "user-c-on-realm-b".to_string(),
             bound_at_unix_ms: 1_714_500_000_000,
@@ -286,7 +286,7 @@ mod tests {
         store
             .record_binding(
                 FederatedUserBinding {
-                    source_user_uri: "easynet:///r/realm-a/agent/another".to_string(),
+                    source_user_uri: "easynet:///r/realm-a/user/another".to_string(),
                     ..binding_fixture()
                 },
                 "n2".to_string(),

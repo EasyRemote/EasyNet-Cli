@@ -648,28 +648,21 @@ fn hub_invoke_endpoint(raw: &str) -> Result<String, String> {
 
 #[cfg(any(test, feature = "axon-pb"))]
 fn ability_name_from_resource_uri(resource_uri: &str) -> Option<String> {
-    // v4.1.5: ability URIs are
-    // `easynet:///r/<realm>/ability/<owner>.<agent>.<verb>`. Hub-rooted
-    // abilities use owner=01HUB convention. The "ability name" surfaced
-    // here for routing decisions is `<agent>.<verb>` (everything after
-    // the owner segment), e.g. "federation.advertise_agent" for
-    // "01HUB.federation.advertise_agent".
-    if let Ok(parsed) = crate::uri::parse_ura(resource_uri) {
-        if parsed.kind == crate::uri::URAKind::Ability
-            && !parsed.agent_id.is_empty()
-            && !parsed.ability_id.is_empty()
-        {
-            return Some(format!("{}.{}", parsed.agent_id, parsed.ability_id));
-        }
+    // Canonical v4.1.4 ability URAs encode the member-call target as
+    // `<owner>.<agent>.<verb>`. Routing wants just `<agent>.<verb>`,
+    // e.g. `federation.advertise_agent` for
+    // `easynet:///r/acme/ability/hub.federation.advertise_agent`.
+    if let Some(name) = crate::uri::qualified_ability_name(resource_uri) {
+        return Some(name);
     }
-    // Pre-v4.1.5 fallback: `runtime::publish` still emits the legacy
-    // hub-rooted advertise-call URI shape
-    // `easynet:///r/prv/hub/<realm>/abilities/<verb>@N?…` because the
-    // axon-runtime SDK's typed-substrate channel canonicaliser hasn't
-    // been migrated to v4.1.5 yet (see publish.rs §legacy-hub-uri).
+    // Bridge-transport fallback: `BridgeAbilityInvoker` still translates
+    // canonical hub-owned ability URAs to the legacy
+    // `easynet:///r/prv/hub/<realm>/abilities/<verb>@N?…` grammar when
+    // calling EasyNet-Axon, because the transport canonicaliser has not
+    // yet shipped the v4.1.4 parser.
     // Recognise it here so direct-publish callers (`agent add`) can
     // dispatch through the local daemon → hub path even when the
-    // advertise wire URI is still in legacy shape.
+    // actual transport URI is still in legacy shape.
     //
     // Shape: `easynet:///r/prv/hub/<realm>/abilities/<verb>@<ver>?<query>`
     // — extract `<verb>` (everything between `/abilities/` and the
@@ -2172,12 +2165,12 @@ mod tests {
     }
 
     #[test]
-    fn ability_name_from_resource_uri_extracts_v4_1_5_ability_id() {
-        // v4.1.5 hub-rooted ability: owner=01HUB, agent=federation,
-        // verb=advertise_agent → ability_id = "federation.advertise_agent".
+    fn ability_name_from_resource_uri_extracts_canonical_hub_ability_id() {
+        // Canonical hub-owned ability: reserved owner `hub`, agent
+        // namespace `federation`, verb `advertise_agent`.
         assert_eq!(
             ability_name_from_resource_uri(
-                "easynet:///r/acme/ability/01HUB.federation.advertise_agent"
+                "easynet:///r/acme/ability/hub.federation.advertise_agent"
             )
             .as_deref(),
             Some("federation.advertise_agent")

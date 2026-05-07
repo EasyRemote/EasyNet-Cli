@@ -330,9 +330,9 @@ async fn cross_hub_two_daemon_real_tls_round_trip() {
     let port_b = pick_free_port();
     let realm_a = "realm-a";
     let realm_b = "realm-b";
-    let agent_a_uri = format!("easynet:///r/{realm_a}/agent/daemon-a");
-    let agent_b_uri = format!("easynet:///r/{realm_b}/agent/daemon-b");
-    let target_b_uri = format!("easynet:///r/{realm_b}/agent/target-device-b");
+    let agent_a_uri = format!("easynet:///r/{realm_a}/hub");
+    let agent_b_uri = format!("easynet:///r/{realm_b}/hub");
+    let target_b_uri = format!("easynet:///r/{realm_b}/device/target-device-b");
     let hub_a_uri = format!("https://127.0.0.1:{port_a}");
     let hub_b_uri = format!("https://127.0.0.1:{port_b}");
 

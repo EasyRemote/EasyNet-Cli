@@ -1421,7 +1421,7 @@ mod tests {
         let mut realm_a = DirectoryView::new("realm-a".to_string());
         realm_a.apply_frame(&DirectoryEvent::Snapshot {
             entries: vec![DirectoryEntry {
-                agent_uri: "easynet:///r/realm-a/agent/user-c".to_string(),
+                agent_uri: "easynet:///r/realm-a/user/user-c".to_string(),
                 node_id: "user-c".to_string(),
                 display_name: None,
                 status: "active".to_string(),
@@ -1433,7 +1433,7 @@ mod tests {
         let mut realm_c = DirectoryView::new("realm-c".to_string());
         realm_c.apply_frame(&DirectoryEvent::Snapshot {
             entries: vec![DirectoryEntry {
-                agent_uri: "easynet:///r/realm-c/agent/unbound".to_string(),
+                agent_uri: "easynet:///r/realm-c/user/unbound".to_string(),
                 node_id: "unbound".to_string(),
                 display_name: None,
                 status: "active".to_string(),
@@ -1464,7 +1464,7 @@ mod tests {
             .record_binding(
                 FederatedUserBinding {
                     source_realm: "realm-a".to_string(),
-                    source_user_uri: "easynet:///r/realm-a/agent/user-c".to_string(),
+                    source_user_uri: "easynet:///r/realm-a/user/user-c".to_string(),
                     source_user_pubkey_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
                         .to_string(),
                     local_user_id: "user-on-b".to_string(),
@@ -1487,7 +1487,7 @@ mod tests {
         assert_eq!(resp.entries.len(), 1);
         assert_eq!(
             resp.entries[0].agent_uri,
-            "easynet:///r/realm-a/agent/user-c"
+            "easynet:///r/realm-a/user/user-c"
         );
     }
 
@@ -1516,7 +1516,7 @@ mod tests {
         assert_eq!(resp.entries.len(), 1);
         assert_eq!(
             resp.entries[0].agent_uri,
-            "easynet:///r/realm-a/agent/user-c"
+            "easynet:///r/realm-a/user/user-c"
         );
     }
 
@@ -1559,7 +1559,7 @@ mod tests {
         // view but is unbound for the calling user. Filter out.
         let resp = handle_discover_with_user_filter(
             &DiscoverRequest {
-                agent_uri: Some("easynet:///r/realm-c/agent/unbound".to_string()),
+                agent_uri: Some("easynet:///r/realm-c/user/unbound".to_string()),
                 ..Default::default()
             },
             &view,

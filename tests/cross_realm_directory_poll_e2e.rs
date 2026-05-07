@@ -93,7 +93,7 @@ async fn poll_once_against_real_daemon_populates_cell_with_peer_directory() {
     // polling some other peer hub). Daemon B then polls A's
     // `federation.discover`, gets that entry, and stamps A's
     // realm onto it via the §2.4 chokepoint.
-    let daemon_a_loopback = "easynet:///r/realm-a/agent/daemon-a";
+    let daemon_a_loopback = "easynet:///r/realm-a/hub";
     let daemon_a_admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
         Some(daemon_a_loopback.to_string()),
@@ -104,7 +104,7 @@ async fn poll_once_against_real_daemon_populates_cell_with_peer_directory() {
     let mut realm_c_view = DirectoryView::new("realm-c".to_string());
     realm_c_view.apply_frame(&DirectoryEvent::Snapshot {
         entries: vec![DirectoryEntry {
-            agent_uri: "easynet:///r/realm-c/agent/device-X".to_string(),
+            agent_uri: "easynet:///r/realm-c/device/device-X".to_string(),
             node_id: "device-X".to_string(),
             display_name: Some("third-party-device".to_string()),
             status: "active".to_string(),
@@ -124,7 +124,7 @@ async fn poll_once_against_real_daemon_populates_cell_with_peer_directory() {
     );
 
     // ── Daemon B: realm-b, empty directory + the forwarder ──
-    let daemon_b_loopback = "easynet:///r/realm-b/agent/daemon-b";
+    let daemon_b_loopback = "easynet:///r/realm-b/hub";
     let federation_client: Arc<dyn FederationClient> = Arc::new(InProcessForwarder {
         peer: Arc::clone(&daemon_a),
         peer_loopback_uri: daemon_a_loopback.to_string(),
@@ -167,7 +167,7 @@ async fn poll_once_against_real_daemon_populates_cell_with_peer_directory() {
     let snap = daemon_b_directory.snapshot();
     let realm_a_view = snap.get("realm-a").expect("realm-a in B's cell");
     let entry = realm_a_view
-        .lookup("easynet:///r/realm-c/agent/device-X")
+        .lookup("easynet:///r/realm-c/device/device-X")
         .expect("device-X projected through");
     assert_eq!(
         entry.origin_realm.as_deref(),
@@ -181,7 +181,7 @@ async fn discover_dispatch_returns_what_poll_populated() {
     // End-to-end happy path: daemon B polls daemon A, populates
     // its directory, then a CLI call to B's federation.discover
     // surfaces the entries.
-    let daemon_a_loopback = "easynet:///r/realm-a/agent/daemon-a";
+    let daemon_a_loopback = "easynet:///r/realm-a/hub";
     let daemon_a_admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
         Some(daemon_a_loopback.to_string()),
@@ -190,7 +190,7 @@ async fn discover_dispatch_returns_what_poll_populated() {
     let mut realm_c = DirectoryView::new("realm-c".to_string());
     realm_c.apply_frame(&DirectoryEvent::Upsert {
         entry: DirectoryEntry {
-            agent_uri: "easynet:///r/realm-c/agent/device-Y".to_string(),
+            agent_uri: "easynet:///r/realm-c/device/device-Y".to_string(),
             node_id: "device-Y".to_string(),
             display_name: None,
             status: "active".to_string(),
@@ -209,7 +209,7 @@ async fn discover_dispatch_returns_what_poll_populated() {
             .with_federated_directory_cell(daemon_a_directory),
     );
 
-    let daemon_b_loopback = "easynet:///r/realm-b/agent/daemon-b";
+    let daemon_b_loopback = "easynet:///r/realm-b/hub";
     let federation_client: Arc<dyn FederationClient> = Arc::new(InProcessForwarder {
         peer: Arc::clone(&daemon_a),
         peer_loopback_uri: daemon_a_loopback.to_string(),
@@ -268,7 +268,7 @@ async fn discover_dispatch_returns_what_poll_populated() {
     let device_y = body
         .entries
         .iter()
-        .find(|e| e.agent_uri == "easynet:///r/realm-c/agent/device-Y")
+        .find(|e| e.agent_uri == "easynet:///r/realm-c/device/device-Y")
         .expect("device-Y in B's discover response");
     assert_eq!(
         device_y.origin_realm.as_deref(),

@@ -1308,7 +1308,7 @@ mod tests {
         // the wire. Legacy emit drops the schema-B fields
         // entirely; new emit includes them.
         r#"{
-            "agent_uri": "easynet:///r/realm-a/agent/device-A",
+            "agent_uri": "easynet:///r/realm-a/device/device-A",
             "node_id": "node-1",
             "display_name": "silan-laptop",
             "status": "active"
@@ -1317,7 +1317,7 @@ mod tests {
 
     fn full_entry_json() -> &'static str {
         r#"{
-            "agent_uri": "easynet:///r/realm-a/agent/device-A",
+            "agent_uri": "easynet:///r/realm-a/device/device-A",
             "node_id": "node-1",
             "display_name": "silan-laptop",
             "status": "active",
@@ -1333,7 +1333,7 @@ mod tests {
         // round-trips without errors and the new optional
         // fields surface as None / None / None.
         let entry: DirectoryEntry = serde_json::from_str(legacy_entry_json()).expect("deserialise");
-        assert_eq!(entry.agent_uri, "easynet:///r/realm-a/agent/device-A");
+        assert_eq!(entry.agent_uri, "easynet:///r/realm-a/device/device-A");
         assert_eq!(entry.node_id, "node-1");
         assert_eq!(entry.display_name.as_deref(), Some("silan-laptop"));
         assert_eq!(entry.status, "active");
@@ -1358,7 +1358,7 @@ mod tests {
         // string match to stay byte-format-tolerant.
         let bytes = serde_json::to_vec(&entry).expect("serialise");
         let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("re-parse");
-        assert_eq!(parsed["agent_uri"], "easynet:///r/realm-a/agent/device-A");
+        assert_eq!(parsed["agent_uri"], "easynet:///r/realm-a/device/device-A");
         assert_eq!(parsed["origin_realm"], "realm-a");
         assert_eq!(parsed["hub_endpoint"], "https://hub-a.example:50443");
         assert_eq!(parsed["last_seen_unix_ms"], 1_714_492_800_000_i64);
@@ -1372,7 +1372,7 @@ mod tests {
         // identically interpretable as "field absent" by the
         // schema-B convention.
         let local = DirectoryEntry {
-            agent_uri: "easynet:///r/realm-a/agent/local-1".to_string(),
+            agent_uri: "easynet:///r/realm-a/device/local-1".to_string(),
             node_id: "local-1".to_string(),
             display_name: None,
             status: "active".to_string(),
@@ -1391,7 +1391,7 @@ mod tests {
 
     fn sample_entry() -> DirectoryEntry {
         DirectoryEntry {
-            agent_uri: "easynet:///r/realm-a/agent/device-A".to_string(),
+            agent_uri: "easynet:///r/realm-a/device/device-A".to_string(),
             node_id: "node-1".to_string(),
             display_name: Some("silan-laptop".to_string()),
             status: "active".to_string(),
@@ -1422,7 +1422,7 @@ mod tests {
         assert_eq!(upsert["type"], "upsert");
 
         let remove_bytes = serde_json::to_vec(&DirectoryEvent::Remove {
-            agent_uri: "easynet:///r/realm-a/agent/dropped".to_string(),
+            agent_uri: "easynet:///r/realm-a/device/dropped".to_string(),
             reason: "shutdown".to_string(),
         })
         .unwrap();
@@ -1514,7 +1514,7 @@ mod tests {
                 entry: sample_entry(),
             },
             DirectoryEvent::Remove {
-                agent_uri: "easynet:///r/realm-a/agent/x".to_string(),
+                agent_uri: "easynet:///r/realm-a/device/x".to_string(),
                 reason: "drop".to_string(),
             },
             DirectoryEvent::Heartbeat {
@@ -1607,7 +1607,7 @@ mod tests {
         // trips for testing receivers that compare entries to
         // detect changes between subscribe-stream snapshots.
         let original = DirectoryEntry {
-            agent_uri: "easynet:///r/realm-b/agent/peer-device".to_string(),
+            agent_uri: "easynet:///r/realm-b/device/peer-device".to_string(),
             node_id: "peer-1".to_string(),
             display_name: Some("silan-phone".to_string()),
             status: "stale".to_string(),
@@ -1644,12 +1644,12 @@ mod tests {
         let mut view = DirectoryView::new("realm-b".to_string());
         view.apply_frame(&DirectoryEvent::Snapshot {
             entries: vec![entry_with_claimed_origin(
-                "easynet:///r/realm-b/agent/peer-device",
+                "easynet:///r/realm-b/device/peer-device",
                 Some("trusted-bank"),
             )],
         });
         let stamped = view
-            .lookup("easynet:///r/realm-b/agent/peer-device")
+            .lookup("easynet:///r/realm-b/device/peer-device")
             .expect("entry stored");
         assert_eq!(
             stamped.origin_realm.as_deref(),
@@ -1663,12 +1663,12 @@ mod tests {
         let mut view = DirectoryView::new("realm-b".to_string());
         view.apply_frame(&DirectoryEvent::Upsert {
             entry: entry_with_claimed_origin(
-                "easynet:///r/realm-b/agent/peer-device",
+                "easynet:///r/realm-b/device/peer-device",
                 Some("realm-c"),
             ),
         });
         let stamped = view
-            .lookup("easynet:///r/realm-b/agent/peer-device")
+            .lookup("easynet:///r/realm-b/device/peer-device")
             .expect("entry stored");
         assert_eq!(stamped.origin_realm.as_deref(), Some("realm-b"));
     }
@@ -1681,10 +1681,10 @@ mod tests {
         // a None for a cross-realm entry.
         let mut view = DirectoryView::new("realm-b".to_string());
         view.apply_frame(&DirectoryEvent::Upsert {
-            entry: entry_with_claimed_origin("easynet:///r/realm-b/agent/peer-device", None),
+            entry: entry_with_claimed_origin("easynet:///r/realm-b/device/peer-device", None),
         });
         let stamped = view
-            .lookup("easynet:///r/realm-b/agent/peer-device")
+            .lookup("easynet:///r/realm-b/device/peer-device")
             .expect("entry stored");
         assert_eq!(stamped.origin_realm.as_deref(), Some("realm-b"));
     }
@@ -1694,19 +1694,19 @@ mod tests {
         let mut view = DirectoryView::new("realm-b".to_string());
         view.apply_frame(&DirectoryEvent::Snapshot {
             entries: vec![entry_with_claimed_origin(
-                "easynet:///r/realm-b/agent/peer-device",
+                "easynet:///r/realm-b/device/peer-device",
                 None,
             )],
         });
         assert!(view
-            .lookup("easynet:///r/realm-b/agent/peer-device")
+            .lookup("easynet:///r/realm-b/device/peer-device")
             .is_some());
         view.apply_frame(&DirectoryEvent::Remove {
-            agent_uri: "easynet:///r/realm-b/agent/peer-device".to_string(),
+            agent_uri: "easynet:///r/realm-b/device/peer-device".to_string(),
             reason: "shutdown".to_string(),
         });
         assert!(view
-            .lookup("easynet:///r/realm-b/agent/peer-device")
+            .lookup("easynet:///r/realm-b/device/peer-device")
             .is_none());
     }
 
@@ -1717,23 +1717,23 @@ mod tests {
         // new snapshot disappear.
         let mut view = DirectoryView::new("realm-b".to_string());
         view.apply_frame(&DirectoryEvent::Upsert {
-            entry: entry_with_claimed_origin("easynet:///r/realm-b/agent/old", None),
+            entry: entry_with_claimed_origin("easynet:///r/realm-b/device/old", None),
         });
         view.apply_frame(&DirectoryEvent::Snapshot {
             entries: vec![entry_with_claimed_origin(
-                "easynet:///r/realm-b/agent/new",
+                "easynet:///r/realm-b/device/new",
                 None,
             )],
         });
-        assert!(view.lookup("easynet:///r/realm-b/agent/old").is_none());
-        assert!(view.lookup("easynet:///r/realm-b/agent/new").is_some());
+        assert!(view.lookup("easynet:///r/realm-b/device/old").is_none());
+        assert!(view.lookup("easynet:///r/realm-b/device/new").is_some());
     }
 
     #[test]
     fn apply_heartbeat_is_noop_for_view() {
         let mut view = DirectoryView::new("realm-b".to_string());
         view.apply_frame(&DirectoryEvent::Upsert {
-            entry: entry_with_claimed_origin("easynet:///r/realm-b/agent/peer", None),
+            entry: entry_with_claimed_origin("easynet:///r/realm-b/device/peer", None),
         });
         let before = view.entries.clone();
         view.apply_frame(&DirectoryEvent::Heartbeat {
@@ -1774,7 +1774,7 @@ mod tests {
         client
             .apply_event(&DirectoryEvent::Snapshot {
                 entries: vec![entry_with_claimed_origin(
-                    "easynet:///r/realm-b/agent/peer",
+                    "easynet:///r/realm-b/device/peer",
                     Some("trusted-bank"), // spoofed; rewrite chokepoint catches
                 )],
             })
@@ -1782,7 +1782,7 @@ mod tests {
         assert!(matches!(client.fsm_state(), &SubscriberState::Pumping));
         let stamped = client
             .view_snapshot()
-            .lookup("easynet:///r/realm-b/agent/peer")
+            .lookup("easynet:///r/realm-b/device/peer")
             .expect("entry stored");
         assert_eq!(
             stamped.origin_realm.as_deref(),
@@ -1804,7 +1804,7 @@ mod tests {
         // the mandatory Snapshot.
         let err = client
             .apply_event(&DirectoryEvent::Upsert {
-                entry: entry_with_claimed_origin("easynet:///r/realm-b/agent/sneaky", None),
+                entry: entry_with_claimed_origin("easynet:///r/realm-b/device/sneaky", None),
             })
             .expect_err("upsert before snapshot must reject");
         assert!(matches!(err, FsmError::ProtocolViolation(_)));
@@ -1953,7 +1953,7 @@ mod tests {
                 run_per_peer_supervisor_with_idle_timeout(
                     "realm-b".to_string(),
                     "https://hub-b.example:50443".to_string(),
-                    "easynet:///r/realm-a/agent/hub".to_string(),
+                    "easynet:///r/realm-a/hub".to_string(),
                     client_for_task,
                     cell_for_task,
                     cancel_rx,
@@ -2000,7 +2000,7 @@ mod tests {
                 run_per_peer_supervisor_with_idle_timeout(
                     "realm-b".to_string(),
                     "https://hub-b.example:50443".to_string(),
-                    "easynet:///r/realm-a/agent/hub".to_string(),
+                    "easynet:///r/realm-a/hub".to_string(),
                     client_for_task,
                     cell_for_task,
                     cancel_rx,
@@ -2185,7 +2185,7 @@ mod tests {
             let client = Arc::new(OneShotStreamingClient {
                 events: Mutex::new(Some(vec![DirectoryEvent::Snapshot {
                     entries: vec![entry_with_claimed_origin(
-                        "easynet:///r/realm-b/agent/peer",
+                        "easynet:///r/realm-b/device/peer",
                         Some("trusted-bank"), // chokepoint stamps realm-b
                     )],
                 }])),
@@ -2199,7 +2199,7 @@ mod tests {
                 run_per_peer_supervisor(
                     "realm-b".to_string(),
                     "https://hub-b.example:50443".to_string(),
-                    "easynet:///r/realm-a/agent/hub".to_string(),
+                    "easynet:///r/realm-a/hub".to_string(),
                     client_for_task,
                     cell_for_task,
                     cancel_rx,
@@ -2212,7 +2212,7 @@ mod tests {
             for _ in 0..40 {
                 if *client.served.lock().unwrap() {
                     if let Some(view) = cell.snapshot().get("realm-b") {
-                        if view.lookup("easynet:///r/realm-b/agent/peer").is_some() {
+                        if view.lookup("easynet:///r/realm-b/device/peer").is_some() {
                             break;
                         }
                     }
@@ -2229,7 +2229,7 @@ mod tests {
             let entry = snap
                 .get("realm-b")
                 .expect("realm-b view")
-                .lookup("easynet:///r/realm-b/agent/peer")
+                .lookup("easynet:///r/realm-b/device/peer")
                 .expect("entry");
             assert_eq!(
                 entry.origin_realm.as_deref(),
@@ -2320,7 +2320,7 @@ mod tests {
                 run_per_peer_supervisor(
                     "realm-b".to_string(),
                     "https://hub-b.example:50443".to_string(),
-                    "easynet:///r/realm-a/agent/hub".to_string(),
+                    "easynet:///r/realm-a/hub".to_string(),
                     client,
                     cell_for_task,
                     cancel_rx,
@@ -2367,9 +2367,9 @@ mod tests {
         let mut view = DirectoryView::new("realm-b".to_string());
         view.apply_frame(&DirectoryEvent::Snapshot {
             entries: vec![
-                entry_with_claimed_origin("easynet:///r/realm-b/agent/a", None),
-                entry_with_claimed_origin("easynet:///r/realm-b/agent/b", None),
-                entry_with_claimed_origin("easynet:///r/realm-b/agent/c", None),
+                entry_with_claimed_origin("easynet:///r/realm-b/device/a", None),
+                entry_with_claimed_origin("easynet:///r/realm-b/device/b", None),
+                entry_with_claimed_origin("easynet:///r/realm-b/device/c", None),
             ],
         });
         for entry in view.entries.values() {
@@ -2395,7 +2395,7 @@ mod tests {
         client
             .apply_event(&DirectoryEvent::Snapshot {
                 entries: vec![entry_with_claimed_origin(
-                    "easynet:///r/realm-b/agent/peer",
+                    "easynet:///r/realm-b/device/peer",
                     None,
                 )],
             })
@@ -2406,7 +2406,7 @@ mod tests {
         assert_eq!(
             snap1
                 .get("realm-b")
-                .and_then(|v| v.lookup("easynet:///r/realm-b/agent/peer"))
+                .and_then(|v| v.lookup("easynet:///r/realm-b/device/peer"))
                 .map(|e| e.status.as_str()),
             Some("active"),
         );
@@ -2418,7 +2418,7 @@ mod tests {
         assert_eq!(
             snap2
                 .get("realm-b")
-                .and_then(|v| v.lookup("easynet:///r/realm-b/agent/peer"))
+                .and_then(|v| v.lookup("easynet:///r/realm-b/device/peer"))
                 .map(|e| e.status.as_str()),
             Some("stale"),
             "post-disconnect publish must flip status to stale",
@@ -2439,7 +2439,7 @@ mod tests {
         client
             .apply_event(&DirectoryEvent::Snapshot {
                 entries: vec![entry_with_claimed_origin(
-                    "easynet:///r/realm-b/agent/peer",
+                    "easynet:///r/realm-b/device/peer",
                     None,
                 )],
             })
@@ -2452,14 +2452,14 @@ mod tests {
         let status_a = snap_a
             .get("realm-b")
             .unwrap()
-            .lookup("easynet:///r/realm-b/agent/peer")
+            .lookup("easynet:///r/realm-b/device/peer")
             .unwrap()
             .status
             .clone();
         let status_b = snap_b
             .get("realm-b")
             .unwrap()
-            .lookup("easynet:///r/realm-b/agent/peer")
+            .lookup("easynet:///r/realm-b/device/peer")
             .unwrap()
             .status
             .clone();
@@ -2473,7 +2473,7 @@ mod tests {
         // Pre-populate realm-c (a different peer).
         let mut realm_c_view = DirectoryView::new("realm-c".to_string());
         realm_c_view.apply_frame(&DirectoryEvent::Upsert {
-            entry: entry_with_claimed_origin("easynet:///r/realm-c/agent/keep", None),
+            entry: entry_with_claimed_origin("easynet:///r/realm-c/device/keep", None),
         });
         let mut prior = BTreeMap::new();
         prior.insert("realm-c".to_string(), Arc::new(realm_c_view));
@@ -2490,7 +2490,7 @@ mod tests {
         let snap = cell.snapshot();
         assert!(
             snap.get("realm-c")
-                .and_then(|v| v.lookup("easynet:///r/realm-c/agent/keep"))
+                .and_then(|v| v.lookup("easynet:///r/realm-c/device/keep"))
                 .is_some(),
             "publishing realm-b's view must not clobber realm-c"
         );
@@ -2512,15 +2512,15 @@ mod tests {
         let events = vec![
             DirectoryEvent::Snapshot {
                 entries: vec![entry_with_claimed_origin(
-                    "easynet:///r/realm-b/agent/initial",
+                    "easynet:///r/realm-b/device/initial",
                     Some("trusted-bank"), // chokepoint stamps realm-b
                 )],
             },
             DirectoryEvent::Upsert {
-                entry: entry_with_claimed_origin("easynet:///r/realm-b/agent/added", None),
+                entry: entry_with_claimed_origin("easynet:///r/realm-b/device/added", None),
             },
             DirectoryEvent::Remove {
-                agent_uri: "easynet:///r/realm-b/agent/initial".to_string(),
+                agent_uri: "easynet:///r/realm-b/device/initial".to_string(),
                 reason: "stream_closed".to_string(),
             },
         ];
@@ -2540,9 +2540,9 @@ mod tests {
         // path).
         let snap = cell.snapshot();
         let view = snap.get("realm-b").expect("realm-b view present");
-        assert!(view.lookup("easynet:///r/realm-b/agent/initial").is_none());
+        assert!(view.lookup("easynet:///r/realm-b/device/initial").is_none());
         let added = view
-            .lookup("easynet:///r/realm-b/agent/added")
+            .lookup("easynet:///r/realm-b/device/added")
             .expect("added still present");
         assert_eq!(added.origin_realm.as_deref(), Some("realm-b"));
     }
@@ -2588,7 +2588,7 @@ mod tests {
 
         let stream = futures::stream::iter(vec![DirectoryEvent::Snapshot {
             entries: vec![entry_with_claimed_origin(
-                "easynet:///r/realm-b/agent/x",
+                "easynet:///r/realm-b/device/x",
                 None,
             )],
         }]);
@@ -2605,7 +2605,7 @@ mod tests {
         let snap = cell.snapshot();
         assert!(snap
             .get("realm-b")
-            .and_then(|v| v.lookup("easynet:///r/realm-b/agent/x"))
+            .and_then(|v| v.lookup("easynet:///r/realm-b/device/x"))
             .is_some());
     }
 
@@ -2667,7 +2667,7 @@ mod tests {
         let cell = SharedFederatedDirectoryView::default();
 
         let stream = futures::stream::iter(vec![DirectoryEvent::Upsert {
-            entry: entry_with_claimed_origin("easynet:///r/realm-b/agent/sneaky", None),
+            entry: entry_with_claimed_origin("easynet:///r/realm-b/device/sneaky", None),
         }]);
         let outcome =
             consume_directory_event_stream_with_idle_timeout(&mut client, &cell, stream, 5_000)
@@ -2689,7 +2689,7 @@ mod tests {
         let cell = SharedFederatedDirectoryView::default();
 
         let events = vec![DirectoryEvent::Upsert {
-            entry: entry_with_claimed_origin("easynet:///r/realm-b/agent/sneaky", None),
+            entry: entry_with_claimed_origin("easynet:///r/realm-b/device/sneaky", None),
         }];
         let stream = futures::stream::iter(events);
 
@@ -2716,14 +2716,14 @@ mod tests {
         let mut realm_b = DirectoryView::new("realm-b".to_string());
         realm_b.apply_frame(&DirectoryEvent::Snapshot {
             entries: vec![entry_with_claimed_origin(
-                "easynet:///r/realm-b/agent/device-X",
+                "easynet:///r/realm-b/device/device-X",
                 None,
             )],
         });
         let mut realm_c = DirectoryView::new("realm-c".to_string());
         realm_c.apply_frame(&DirectoryEvent::Snapshot {
             entries: vec![entry_with_claimed_origin(
-                "easynet:///r/realm-c/agent/device-Y",
+                "easynet:///r/realm-c/device/device-Y",
                 None,
             )],
         });
@@ -2737,15 +2737,15 @@ mod tests {
     fn lookup_in_federated_view_returns_hit_with_origin_realm_stamped() {
         let cell = populated_cell_with_two_peers();
         let entry =
-            lookup_in_federated_view(&cell, "easynet:///r/realm-b/agent/device-X").expect("hit");
-        assert_eq!(entry.agent_uri, "easynet:///r/realm-b/agent/device-X");
+            lookup_in_federated_view(&cell, "easynet:///r/realm-b/device/device-X").expect("hit");
+        assert_eq!(entry.agent_uri, "easynet:///r/realm-b/device/device-X");
         assert_eq!(entry.origin_realm.as_deref(), Some("realm-b"));
     }
 
     #[test]
     fn lookup_in_federated_view_returns_none_when_not_found() {
         let cell = populated_cell_with_two_peers();
-        assert!(lookup_in_federated_view(&cell, "easynet:///r/realm-x/agent/missing").is_none());
+        assert!(lookup_in_federated_view(&cell, "easynet:///r/realm-x/device/missing").is_none());
     }
 
     #[test]
@@ -2757,18 +2757,18 @@ mod tests {
         // free, but pin the contract with a test.
         let mut realm_b = DirectoryView::new("realm-b".to_string());
         realm_b.apply_frame(&DirectoryEvent::Upsert {
-            entry: entry_with_claimed_origin("easynet:///r/shared/agent/dup", None),
+            entry: entry_with_claimed_origin("easynet:///r/shared/device/dup", None),
         });
         let mut realm_c = DirectoryView::new("realm-c".to_string());
         realm_c.apply_frame(&DirectoryEvent::Upsert {
-            entry: entry_with_claimed_origin("easynet:///r/shared/agent/dup", None),
+            entry: entry_with_claimed_origin("easynet:///r/shared/device/dup", None),
         });
         let mut peers = BTreeMap::new();
         peers.insert("realm-c".to_string(), Arc::new(realm_c));
         peers.insert("realm-b".to_string(), Arc::new(realm_b));
         let cell = SharedFederatedDirectoryView::new(peers);
 
-        let entry = lookup_in_federated_view(&cell, "easynet:///r/shared/agent/dup").expect("hit");
+        let entry = lookup_in_federated_view(&cell, "easynet:///r/shared/device/dup").expect("hit");
         // realm-b < realm-c, so realm-b wins.
         assert_eq!(entry.origin_realm.as_deref(), Some("realm-b"));
     }
@@ -2781,9 +2781,9 @@ mod tests {
         // realm-b is iterated before realm-c by BTreeMap key
         // order; within each realm there's only one entry so
         // the inner order is moot.
-        assert_eq!(entries[0].agent_uri, "easynet:///r/realm-b/agent/device-X");
+        assert_eq!(entries[0].agent_uri, "easynet:///r/realm-b/device/device-X");
         assert_eq!(entries[0].origin_realm.as_deref(), Some("realm-b"));
-        assert_eq!(entries[1].agent_uri, "easynet:///r/realm-c/agent/device-Y");
+        assert_eq!(entries[1].agent_uri, "easynet:///r/realm-c/device/device-Y");
         assert_eq!(entries[1].origin_realm.as_deref(), Some("realm-c"));
     }
 
@@ -2943,7 +2943,7 @@ mod tests {
                     [(
                         "https://hub-b.example:50443".to_string(),
                         build_canned_response(vec![entry_with_claimed_origin(
-                            "easynet:///r/realm-b/agent/peer-device",
+                            "easynet:///r/realm-b/device/peer-device",
                             // peer claims wrong origin_realm; rewrite gate must fix it
                             Some("trusted-bank"),
                         )]),
@@ -2962,7 +2962,7 @@ mod tests {
             let outcome = poll_once(
                 &client,
                 &peers,
-                Some("easynet:///r/realm-a/agent/daemon-a"),
+                Some("easynet:///r/realm-a/hub"),
                 &cell,
             )
             .await;
@@ -2973,7 +2973,7 @@ mod tests {
             let snap = cell.snapshot();
             let realm_b_view = snap.get("realm-b").expect("realm-b in cell");
             let entry = realm_b_view
-                .lookup("easynet:///r/realm-b/agent/peer-device")
+                .lookup("easynet:///r/realm-b/device/peer-device")
                 .expect("entry in view");
             // §2.4 chokepoint: receiving hub stamps peer's
             // authenticated realm regardless of peer's claim.
@@ -2993,7 +2993,7 @@ mod tests {
             let mut prior_view = DirectoryView::new("realm-b".to_string());
             prior_view.apply_frame(&DirectoryEvent::Snapshot {
                 entries: vec![entry_with_claimed_origin(
-                    "easynet:///r/realm-b/agent/persisted",
+                    "easynet:///r/realm-b/device/persisted",
                     None,
                 )],
             });
@@ -3017,7 +3017,7 @@ mod tests {
             assert!(
                 snap.get("realm-b")
                     .expect("realm-b view preserved")
-                    .lookup("easynet:///r/realm-b/agent/persisted")
+                    .lookup("easynet:///r/realm-b/device/persisted")
                     .is_some(),
                 "dial failure MUST NOT clear the previously-cached view"
             );
@@ -3042,7 +3042,7 @@ mod tests {
             let mut realm_b_view = DirectoryView::new("realm-b".to_string());
             realm_b_view.apply_frame(&DirectoryEvent::Snapshot {
                 entries: vec![entry_with_claimed_origin(
-                    "easynet:///r/realm-b/agent/streamed",
+                    "easynet:///r/realm-b/device/streamed",
                     None,
                 )],
             });
@@ -3079,7 +3079,7 @@ mod tests {
             let snap = cell.snapshot();
             assert!(
                 snap.get("realm-b")
-                    .and_then(|v| v.lookup("easynet:///r/realm-b/agent/streamed"))
+                    .and_then(|v| v.lookup("easynet:///r/realm-b/device/streamed"))
                     .is_some(),
                 "streamed peer's entry MUST NOT be cleared by a concurrent poll"
             );
@@ -3104,7 +3104,7 @@ mod tests {
             // no replaces — the existing view stays.
             let mut prior = DirectoryView::new("realm-b".to_string());
             prior.apply_frame(&DirectoryEvent::Upsert {
-                entry: entry_with_claimed_origin("easynet:///r/realm-b/agent/x", None),
+                entry: entry_with_claimed_origin("easynet:///r/realm-b/device/x", None),
             });
             let mut prior_map = std::collections::BTreeMap::new();
             prior_map.insert("realm-b".to_string(), Arc::new(prior));
@@ -3126,7 +3126,7 @@ mod tests {
             let snap = cell.snapshot();
             assert!(
                 snap.get("realm-b")
-                    .is_some_and(|v| v.lookup("easynet:///r/realm-b/agent/x").is_some()),
+                    .is_some_and(|v| v.lookup("easynet:///r/realm-b/device/x").is_some()),
                 "empty peers map must not clear existing views"
             );
         }
@@ -3142,7 +3142,7 @@ mod tests {
         let mut next = BTreeMap::new();
         let mut peer_view = DirectoryView::new("realm-b".to_string());
         peer_view.apply_frame(&DirectoryEvent::Upsert {
-            entry: entry_with_claimed_origin("easynet:///r/realm-b/agent/peer", None),
+            entry: entry_with_claimed_origin("easynet:///r/realm-b/device/peer", None),
         });
         next.insert("realm-b".to_string(), Arc::new(peer_view));
         cell.replace(next);
@@ -3156,7 +3156,7 @@ mod tests {
         assert!(snap2
             .get("realm-b")
             .expect("realm-b present")
-            .lookup("easynet:///r/realm-b/agent/peer")
+            .lookup("easynet:///r/realm-b/device/peer")
             .is_some());
     }
 }

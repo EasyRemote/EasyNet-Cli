@@ -303,11 +303,12 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
 ///
 /// Inputs:
 ///   * `invoker` — same `BridgeAbilityInvoker` used by advertise;
-///     wraps the dendrite-bridge `ability_call_raw` path. The
-///     resource URI deliberately stays on the bridge-compatible
-///     legacy hub ability shape
-///     `easynet:///r/prv/hub/<realm>/abilities/runtime.register_local_tool@1?tenant_id=<tenant>`.
-///     The `runtime.*` namespace is intercepted before membership +
+///     wraps the dendrite-bridge `ability_call_raw` path. Business
+///     code now emits the canonical hub-owned ability URA
+///     `easynet:///r/<realm>/ability/hub.runtime.register_local_tool`;
+///     `BridgeAbilityInvoker` translates it to the legacy transport
+///     grammar until EasyNet-Axon ships the new parser. The
+///     `runtime.*` namespace is intercepted before membership +
 ///     admission checks (rpc_handlers.rs::is_runtime_admin_ability),
 ///     so the hub-shaped subject is purely a bridge admission key,
 ///     not an actual hub-routing decision.
@@ -342,9 +343,9 @@ pub fn register_local_tools_via_runtime<I: AbilityInvoker>(
     // Invoke and gets NoBinding.
     let names = collect_daemon_owned_ability_names();
 
-    // Runtime admin calls share the same bridge compatibility
-    // constraint as federation.*: the current Dendrite bridge still
-    // canonicalises `/r/prv/hub/<realm>/abilities/<name>@1` URIs.
+    // Runtime admin calls share the same canonical hub-owned ability
+    // model as federation.*; the bridge adapter handles the transport
+    // downgrade to legacy `/r/prv/hub/.../abilities/...@1` when needed.
     let resource_uri = runtime_admin_resource_uri(realm, tenant_id, "runtime.register_local_tool");
     for name in names {
         let args = build_register_args(tenant_id, node_id, &name, dispatch_endpoint);
@@ -494,7 +495,10 @@ pub(crate) fn derive_owner_public_key_b64(tenant_id: &str, node_id: &str) -> Str
 
 /// Hub-profile counterpart of `derive_owner_public_key_b64`. Returns
 /// the public key the bridge will sign under for hub-shaped resource
-/// URIs (`r/prv/hub/<realm>/abilities/<verb>@1?tenant_id=...`). The SDK's
+/// invocations. Business code addresses those calls as canonical
+/// `easynet:///r/<realm>/ability/hub.<ns>.<verb>` URAs; the bridge
+/// adapter still downgrades them to `r/prv/hub/<realm>/abilities/
+/// <verb>@1?tenant_id=...` on the wire. The SDK's
 /// `default_auth_for_subject` derives a DIFFERENT key for the hub
 /// subject than for the agent subject, so the daemon needs to
 /// register both — see `bootstrap_self_identity_via_runtime`.
@@ -653,7 +657,8 @@ fn first_uri(outcomes: &[BootstrapOutcome], profile: &str, name: &str) -> Option
 }
 
 fn runtime_admin_resource_uri(realm: &str, tenant_id: &str, ability_name: &str) -> String {
-    format!("easynet:///r/prv/hub/{realm}/abilities/{ability_name}@1?tenant_id={tenant_id}")
+    let _ = tenant_id;
+    crate::uri::hub_ability_uri(realm, ability_name)
 }
 
 #[cfg(test)]
@@ -742,7 +747,7 @@ mod tests {
     fn republish_emits_device_advertise_then_each_hosted_then_descriptors() {
         let _h = HomeGuard::new();
         let invoker = CountingInvoker::new(good_reply());
-        let plan = plan_for("acme", "easynet:///r/acme/agent/01DEV");
+        let plan = plan_for("acme", "easynet:///r/acme/device/01DEV");
         let outcomes = republish_with_minter(&invoker, "tenant", &plan, &CountingMinter::new());
 
         // We expect: 1 device-advertise + N hosted-advertises + M
@@ -837,7 +842,7 @@ mod tests {
     #[test]
     fn republish_surfaces_per_call_failure_without_aborting() {
         let _h = HomeGuard::new();
-        let plan = plan_for("acme", "easynet:///r/acme/agent/01DEV");
+        let plan = plan_for("acme", "easynet:///r/acme/device/01DEV");
         let outcomes =
             republish_with_minter(&FailingInvoker, "tenant", &plan, &CountingMinter::new());
         // Every advertise call must turn into one Err PublishOutcome.
@@ -1013,7 +1018,7 @@ mod tests {
             &invoker,
             "tenant",
             "acme",
-            "easynet:///r/acme/agent/01OLD",
+            "easynet:///r/acme/device/01OLD",
             "operator removed",
         );
         assert!(outcome.result.is_ok());
@@ -1021,9 +1026,9 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(
             calls[0].0,
-            "easynet:///r/prv/hub/acme/abilities/federation.revoke@1?tenant_id=tenant"
+            "easynet:///r/acme/ability/hub.federation.revoke"
         );
-        assert_eq!(calls[0].1["agent_uri"], "easynet:///r/acme/agent/01OLD");
+        assert_eq!(calls[0].1["agent_uri"], "easynet:///r/acme/device/01OLD");
         assert_eq!(calls[0].1["reason"], "operator removed");
     }
 
@@ -1031,7 +1036,7 @@ mod tests {
     fn republish_persists_local_agents_file_with_minted_uris() {
         let _h = HomeGuard::new();
         let invoker = CountingInvoker::new(good_reply());
-        let plan = plan_for("acme", "easynet:///r/acme/agent/01DEV");
+        let plan = plan_for("acme", "easynet:///r/acme/device/01DEV");
         let _ = republish_with_minter(&invoker, "tenant", &plan, &CountingMinter::new());
         let calls = invoker.calls();
         // Find the consent-hosted advertise and assert the URA shape.
@@ -1051,7 +1056,7 @@ mod tests {
         let file_back = local_agents::load().expect("load after save must succeed");
         assert_eq!(
             file_back.host_device_agent_uri,
-            "easynet:///r/acme/agent/01DEV"
+            "easynet:///r/acme/device/01DEV"
         );
         let consent_row = file_back
             .hosted_agents
@@ -1070,7 +1075,7 @@ mod tests {
     #[test]
     fn second_republish_reuses_persisted_uris_no_duplicate_advertise() {
         let _h = HomeGuard::new();
-        let plan = plan_for("acme", "easynet:///r/acme/agent/01DEV");
+        let plan = plan_for("acme", "easynet:///r/acme/device/01DEV");
         let invoker_a = CountingInvoker::new(good_reply());
         let _ = republish_with_minter(&invoker_a, "tenant", &plan, &CountingMinter::new());
         let first_calls = invoker_a.calls();
@@ -1115,12 +1120,9 @@ mod tests {
     }
 
     #[test]
-    fn register_local_tools_uses_bridge_compatible_runtime_admin_uri() {
-        // The bridge still canonicalises the legacy hub ability
-        // grammar, while the runtime still intercepts `runtime.*`
-        // before membership gates. Pin the exact compatibility
-        // shape so publish doesn't silently regress back to a URI
-        // the bridge rejects before the call reaches the daemon.
+    fn register_local_tools_uses_canonical_runtime_admin_uri() {
+        // Fake invokers observe the canonical business-layer URI;
+        // `BridgeAbilityInvoker` owns the transport downgrade.
         let _h = HomeGuard::new();
         let invoker = CountingInvoker::new(serde_json::json!({"ack": true}));
         let outcomes = register_local_tools_via_runtime(
@@ -1137,17 +1139,15 @@ mod tests {
             !outcomes.is_empty(),
             "register must walk at least one ability"
         );
-        // Every call must hit the bridge-compatible runtime admin
-        // resource URI; ability_name on the wire derives from the
-        // URI tail, so a wrong shape silently prevents dispatch
-        // registration from ever reaching the daemon.
+        // Every call must hit the canonical hub-owned runtime ability
+        // URI; the bridge adapter translates it at the transport edge.
         let calls = invoker.calls();
         assert_eq!(calls.len(), outcomes.len(), "1 call per ability");
         for (uri, payload) in &calls {
             assert_eq!(
                 uri,
-                "easynet:///r/prv/hub/acme/abilities/runtime.register_local_tool@1?tenant_id=tenant",
-                "register URI must stay bridge-compatible"
+                "easynet:///r/acme/ability/hub.runtime.register_local_tool",
+                "register URI must stay canonical at the business layer"
             );
             assert_eq!(payload["tenant_id"], "tenant");
             assert_eq!(payload["node_id"], "node-01DEV");

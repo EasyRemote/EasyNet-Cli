@@ -53,22 +53,17 @@ pub struct AdvertiseOutcome {
     pub result: Result<AdvertiseAgentReceipt, String>,
 }
 
-/// Internal bridge compatibility URI builder for hub-served
-/// `federation.*` abilities.
+/// Internal bridge-transport URI builder for hub-served
+/// abilities.
 ///
-/// Why this still uses the legacy `/r/prv/hub/<realm>/abilities/...`
-/// shape:
-///   1. `DendriteBridge::ability_call_raw` still canonicalises and
-///      derives subject ids from the pre-v4.1.5 EasyNet ability URI
-///      grammar.
-///   2. The daemon dispatch surface only keys on the extracted
-///      ability name (`federation.<verb>`), so the on-the-wire hub
-///      function remains correct once the bridge accepts the call.
-///   3. Regressing this to the newer `r/<realm>/ability/...` form
-///      makes `federation.advertise_agent` never reach the hub,
-///      leaving `AdvertisedAgentStore` empty and every
-///      agent-URI-based public route falling through to
-///      `target_offline`.
+/// Business-layer helpers now expose canonical v4.1.4 hub-owned
+/// ability URAs (`easynet:///r/<realm>/ability/hub.<ns>.<verb>`).
+/// The bridge transport still needs the legacy `/r/prv/hub/<realm>/
+/// abilities/<name>@1?tenant_id=<tenant>` grammar because
+/// EasyNet-Axon's `canonicalize_easynet_resource_uri` has not yet
+/// shipped the new parser. Translation happens inside
+/// `BridgeAbilityInvoker`; keeping it here prevents the rest of the
+/// CLI from depending on legacy resource syntax.
 const LEGACY_HUB_ABILITY_URI_FMT: &str =
     "easynet:///r/prv/hub/{realm}/abilities/{ability}@1?tenant_id={tenant}";
 
@@ -87,36 +82,56 @@ fn legacy_hub_ability_resource_uri(realm: &str, tenant_id: &str, ability_name: &
         .replace("{tenant}", tenant_id)
 }
 
-/// Build the bridge-compatible resource URI for
+fn hub_ability_resource_uri(realm: &str, ability_name: &str) -> String {
+    crate::uri::hub_ability_uri(realm, ability_name)
+}
+
+fn bridge_compat_resource_uri(resource_uri: &str, tenant_id: &str) -> String {
+    let Ok(parsed) = crate::uri::parse_ura(resource_uri) else {
+        return resource_uri.to_string();
+    };
+    if parsed.kind != crate::uri::URAKind::Ability || parsed.user_id != "hub" {
+        return resource_uri.to_string();
+    }
+    let ability_name = format!("{}.{}", parsed.agent_id, parsed.ability_id);
+    legacy_hub_ability_resource_uri(&parsed.realm, tenant_id, &ability_name)
+}
+
+/// Build the canonical hub-owned ability URI for
 /// `federation.advertise_agent`.
 pub fn advertise_agent_resource_uri(realm: &str, _tenant_id: &str) -> String {
-    legacy_hub_ability_resource_uri(realm, _tenant_id, FED_ADVERTISE_AGENT_ABILITY_NAME)
+    let _ = _tenant_id;
+    hub_ability_resource_uri(realm, FED_ADVERTISE_AGENT_ABILITY_NAME)
 }
 
 pub fn advertise_abilities_resource_uri(realm: &str, _tenant_id: &str) -> String {
-    legacy_hub_ability_resource_uri(realm, _tenant_id, FED_ADVERTISE_ABILITIES_ABILITY_NAME)
+    let _ = _tenant_id;
+    hub_ability_resource_uri(realm, FED_ADVERTISE_ABILITIES_ABILITY_NAME)
 }
 
-/// Build the bridge-compatible resource URI for
+/// Build the canonical hub-owned ability URI for
 /// `federation.resolve`. Inbound counterpart to `advertise_*`:
 /// peers query this to discover what every other agent in the realm
 /// has published.
 pub fn resolve_resource_uri(realm: &str, _tenant_id: &str) -> String {
-    legacy_hub_ability_resource_uri(realm, _tenant_id, FED_RESOLVE_ABILITY_NAME)
+    let _ = _tenant_id;
+    hub_ability_resource_uri(realm, FED_RESOLVE_ABILITY_NAME)
 }
 
-/// Build the bridge-compatible resource URI for
+/// Build the canonical hub-owned ability URI for
 /// `federation.revoke`. Used by the CLI shutdown path to remove the
 /// daemon's own directory entry.
 pub fn revoke_resource_uri(realm: &str, _tenant_id: &str) -> String {
-    legacy_hub_ability_resource_uri(realm, _tenant_id, FED_REVOKE_ABILITY_NAME)
+    let _ = _tenant_id;
+    hub_ability_resource_uri(realm, FED_REVOKE_ABILITY_NAME)
 }
 
-/// Build the bridge-compatible resource URI for
+/// Build the canonical hub-owned ability URI for
 /// `federation.heartbeat`. Periodic invocation keeps the daemon's
 /// directory entry alive.
 pub fn heartbeat_resource_uri(realm: &str, _tenant_id: &str) -> String {
-    legacy_hub_ability_resource_uri(realm, _tenant_id, FED_HEARTBEAT_ABILITY_NAME)
+    let _ = _tenant_id;
+    hub_ability_resource_uri(realm, FED_HEARTBEAT_ABILITY_NAME)
 }
 
 /// Wire shape for `federation.advertise_abilities` arguments. Not in
@@ -224,6 +239,7 @@ impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
         // and topology had the key. Two-layer subject mismatch:
         // first the URI-vs-subject check at canonicalize fails,
         // never even reaching the topology key lookup.
+        let bridge_resource_uri = bridge_compat_resource_uri(resource_uri, tenant_id);
         let subject_id = subject_id_from_resource_uri(resource_uri);
         // The metadata bag carries TWO load-bearing entries:
         //
@@ -248,7 +264,10 @@ impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
         //    synthesises `agents/easynet:prv:hub:<realm>` which the
         //    runtime's caller-URI check rejects.
         let mut map = std::collections::HashMap::new();
-        map.insert("easynet.resource_uri".to_string(), resource_uri.to_string());
+        map.insert(
+            "easynet.resource_uri".to_string(),
+            bridge_resource_uri.clone(),
+        );
         if subject_id
             .as_deref()
             .map(|s| s.contains(":hub:"))
@@ -264,7 +283,7 @@ impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
         self.bridge
             .ability_call_raw(
                 tenant_id,
-                resource_uri,
+                &bridge_resource_uri,
                 payload_json,
                 subject_id.as_deref(),
                 metadata.as_ref(),
@@ -284,6 +303,15 @@ impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
 /// pure (no I/O, no state) so a test that pins each shape is
 /// sufficient.
 pub(crate) fn subject_id_from_resource_uri(resource_uri: &str) -> Option<String> {
+    if let Ok(parsed) = crate::uri::parse_ura(resource_uri) {
+        match parsed.kind {
+            crate::uri::URAKind::Hub => return Some(format!("easynet:prv:hub:{}", parsed.realm)),
+            crate::uri::URAKind::Ability if parsed.user_id == "hub" => {
+                return Some(format!("easynet:prv:hub:{}", parsed.realm));
+            }
+            _ => {}
+        }
+    }
     // Strip the scheme and `//` authority. RFC-001 canonical shape
     // is `easynet:///r/<vis>/<subject_type>/<subject_value>/abilities/<name>@<ver>`.
     // We deliberately match by structural prefix rather than trying
@@ -544,7 +572,7 @@ pub fn resolve_key<I: AbilityInvoker>(
     agent_uri: &str,
 ) -> Result<crate::runtime::federation_client::ResolveKeyReceipt, String> {
     let resource_uri =
-        legacy_hub_ability_resource_uri(realm, tenant_id, FED_RESOLVE_KEY_ABILITY_NAME);
+        hub_ability_resource_uri(realm, FED_RESOLVE_KEY_ABILITY_NAME);
     let payload = serde_json::json!({ "agent_uri": agent_uri });
     let response = invoker.invoke_ability(tenant_id, &resource_uri, payload)?;
     let receipt_body = unwrap_result_json(response);
@@ -565,7 +593,7 @@ pub fn forward_invoke<I: AbilityInvoker>(
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
     let resource_uri =
-        legacy_hub_ability_resource_uri(realm, tenant_id, FED_FORWARD_INVOKE_ABILITY_NAME);
+        hub_ability_resource_uri(realm, FED_FORWARD_INVOKE_ABILITY_NAME);
     let arguments_bytes =
         serde_json::to_vec(arguments).map_err(|e| format!("encode forward args: {e}"))?;
     let arguments_b64 = STANDARD.encode(&arguments_bytes);
@@ -705,28 +733,36 @@ mod tests {
 
     #[test]
     fn resource_uri_substitutes_realm_correctly() {
-        // Internal bridge compatibility still uses the legacy
-        // `/r/prv/hub/<realm>/abilities/<name>@1?tenant_id=<t>`
-        // shape even though user-facing URAs have already moved to
-        // the v4.1.4 role taxonomy.
+        // Public helpers now return canonical hub-owned ability URAs.
         assert_eq!(
             advertise_agent_resource_uri("acme", "tenant-1"),
-            "easynet:///r/prv/hub/acme/abilities/federation.advertise_agent@1?tenant_id=tenant-1"
+            "easynet:///r/acme/ability/hub.federation.advertise_agent"
         );
         assert_eq!(
             advertise_abilities_resource_uri("contoso", "tenant-2"),
-            "easynet:///r/prv/hub/contoso/abilities/federation.advertise_abilities@1?tenant_id=tenant-2"
+            "easynet:///r/contoso/ability/hub.federation.advertise_abilities"
         );
     }
 
     #[test]
-    fn subject_id_parser_understands_legacy_hub_ability_uri() {
+    fn subject_id_parser_understands_canonical_hub_ability_uri() {
         assert_eq!(
             subject_id_from_resource_uri(
-                "easynet:///r/prv/hub/acme/abilities/federation.advertise_agent@1?tenant_id=tenant-1"
+                "easynet:///r/acme/ability/hub.federation.advertise_agent"
             )
             .as_deref(),
             Some("easynet:prv:hub:acme")
+        );
+    }
+
+    #[test]
+    fn bridge_compat_resource_uri_translates_hub_owned_ability() {
+        assert_eq!(
+            bridge_compat_resource_uri(
+                "easynet:///r/acme/ability/hub.runtime.register_local_tool",
+                "tenant-1"
+            ),
+            "easynet:///r/prv/hub/acme/abilities/runtime.register_local_tool@1?tenant_id=tenant-1"
         );
     }
 
@@ -740,7 +776,7 @@ mod tests {
             &invoker,
             "tenant",
             "acme",
-            "easynet:///r/acme/agent/01DEV",
+            "easynet:///r/acme/device/01DEV",
             "deadbeef",
         );
         let receipt = outcome.result.expect("must succeed");
@@ -748,7 +784,7 @@ mod tests {
         assert!(!receipt.replaced_prior);
 
         let payload = invoker.last_payload.borrow().clone().unwrap();
-        assert_eq!(payload["agent_uri"], "easynet:///r/acme/agent/01DEV");
+        assert_eq!(payload["agent_uri"], "easynet:///r/acme/device/01DEV");
         assert_eq!(payload["public_key_hex"], "deadbeef");
         assert_eq!(payload["signing_authority"]["kind"], "self_signed");
     }
@@ -763,8 +799,8 @@ mod tests {
             &invoker,
             "tenant",
             "acme",
-            "easynet:///r/acme/agent/01LLM",
-            "easynet:///r/acme/agent/01DEV",
+            "easynet:///r/acme/agent/u1.01LLM",
+            "easynet:///r/acme/device/01DEV",
         );
         let receipt = outcome.result.expect("must succeed");
         assert!(receipt.replaced_prior);
@@ -773,7 +809,7 @@ mod tests {
         assert_eq!(payload["signing_authority"]["kind"], "hosted_by");
         assert_eq!(
             payload["signing_authority"]["host_uri"],
-            "easynet:///r/acme/agent/01DEV"
+            "easynet:///r/acme/device/01DEV"
         );
         assert_eq!(payload["public_key_hex"], "");
     }
@@ -784,12 +820,12 @@ mod tests {
             &AlwaysFails,
             "tenant",
             "acme",
-            "easynet:///r/acme/agent/01DEV",
+            "easynet:///r/acme/device/01DEV",
             "00",
         );
         let err = outcome.result.expect_err("must surface invoker error");
         assert!(err.contains("transport timeout"));
-        assert_eq!(outcome.agent_uri, "easynet:///r/acme/agent/01DEV");
+        assert_eq!(outcome.agent_uri, "easynet:///r/acme/device/01DEV");
     }
 
     #[test]
@@ -801,7 +837,7 @@ mod tests {
             &invoker,
             "tenant",
             "acme",
-            "easynet:///r/acme/agent/01DEV",
+            "easynet:///r/acme/device/01DEV",
             "00",
         );
         let err = outcome.result.expect_err("malformed receipt must surface");
@@ -814,14 +850,14 @@ mod tests {
         let descriptors = vec![
             AbilityDescriptor::new(
                 "observe.health",
-                "easynet:///r/acme/agent/01DEV",
+                "easynet:///r/acme/device/01DEV",
                 Visibility::Public,
             )
             .unwrap()
             .with_source("kernel:built-in"),
             AbilityDescriptor::new(
                 "fleet.list_agents",
-                "easynet:///r/acme/agent/01DEV",
+                "easynet:///r/acme/device/01DEV",
                 Visibility::Scoped,
             )
             .unwrap(),
@@ -830,13 +866,13 @@ mod tests {
             &invoker,
             "tenant",
             "acme",
-            "easynet:///r/acme/agent/01DEV",
+            "easynet:///r/acme/device/01DEV",
             &descriptors,
         )
         .expect("must succeed");
 
         let payload = invoker.last_payload.borrow().clone().unwrap();
-        assert_eq!(payload["agent_uri"], "easynet:///r/acme/agent/01DEV");
+        assert_eq!(payload["agent_uri"], "easynet:///r/acme/device/01DEV");
         let abilities = payload["abilities"]
             .as_array()
             .expect("abilities must be array");
@@ -848,20 +884,12 @@ mod tests {
 
     #[test]
     fn advertise_abilities_targets_correct_resource_uri() {
-        // `advertise_abilities_resource_uri` substitutes both
-        // `{realm}` and `{tenant}` placeholders. The parallel test
-        // above (`advertise_agent_targets_correct_resource_uri`)
-        // already pins the substituted form for the agent variant.
-        // This test was previously asserting the raw template
-        // (`tenant_id={tenant}`) and silently regressed when the
-        // substitution landed; pinning the post-substitution shape
-        // catches a future regression that "forgets" to replace
-        // one of the placeholders.
+        // Fake invokers observe the canonical business-layer URI.
         let invoker = RecordingInvoker::new(serde_json::json!({"ack": true}));
         let _ = advertise_abilities(&invoker, "tenant", "acme", "u", &[]).unwrap();
         assert_eq!(
             invoker.last_resource_uri.borrow().as_deref().unwrap(),
-            "easynet:///r/prv/hub/acme/abilities/federation.advertise_abilities@1?tenant_id=tenant"
+            "easynet:///r/acme/ability/hub.federation.advertise_abilities"
         );
     }
 }

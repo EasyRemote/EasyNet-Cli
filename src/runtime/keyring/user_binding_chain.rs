@@ -66,7 +66,7 @@ pub struct UserBindingToken {
     /// realm string per the canonical URI scheme.
     pub source_realm: String,
     /// User URI on the source realm, in the canonical form
-    /// `easynet:///r/<source_realm>/agent/<user-id>`.
+    /// `easynet:///r/<source_realm>/user/<user-id>`.
     pub source_user_uri: String,
     /// Source user's Ed25519 verifying-key bytes. Carried inline
     /// so the consuming realm doesn't need to round-trip
@@ -345,7 +345,7 @@ mod tests {
     fn fixture_token(signing: &SigningKey) -> UserBindingToken {
         let mut token = UserBindingToken::new_unsigned(
             "realm-a",
-            "easynet:///r/realm-a/agent/user-c",
+            "easynet:///r/realm-a/user/user-c",
             signing.verifying_key().to_bytes(),
             "realm-b",
             1_714_500_000_000,
@@ -387,7 +387,7 @@ mod tests {
         let signing = SigningKey::from_bytes(&[0x33; 32]);
         let mut token_a = UserBindingToken::new_unsigned(
             "realm-a",
-            "easynet:///r/realm-a/agent/user",
+            "easynet:///r/realm-a/user/user",
             signing.verifying_key().to_bytes(),
             "realm-b",
             1_714_500_000_000,
@@ -461,7 +461,7 @@ mod tests {
         let attacker_signing = SigningKey::from_bytes(&[0xBB; 32]);
         let mut token = UserBindingToken::new_unsigned(
             "realm-a",
-            "easynet:///r/realm-a/agent/u",
+            "easynet:///r/realm-a/user/u",
             // Embed the LEGITIMATE pubkey so verify pulls the
             // right key — but sign with the attacker's key.
             real_signing.verifying_key().to_bytes(),

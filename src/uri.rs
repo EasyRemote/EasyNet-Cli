@@ -226,6 +226,20 @@ pub fn ability_uri(realm: &str, user_id: &str, agent_id: &str, ability_id: &str)
     format!("{URI_SCHEME}{realm}/ability/{user_id}.{agent_id}.{ability_id}")
 }
 
+/// Hub-owned system ability. Canonical v4.1.4 keeps hub itself as a
+/// realm-singleton (`/hub`), while hub-served abilities occupy the
+/// ability namespace under the reserved owner token `hub`:
+/// `easynet:///r/<realm>/ability/hub.<namespace>.<verb>`.
+///
+/// `full_ability_name` must be a namespaced member-call name such as
+/// `federation.resolve` or `runtime.register_local_tool`.
+pub fn hub_ability_uri(realm: &str, full_ability_name: &str) -> String {
+    let (namespace, tail) = full_ability_name
+        .split_once('.')
+        .expect("hub-owned ability names must include a namespace prefix");
+    ability_uri(realm, "hub", namespace, tail)
+}
+
 /// Hub is a realm-singleton: no sub-id, no tail. v4.1.4 retires the
 /// `01HUB` / `01BAK` agent-id distinction.
 pub fn hub_uri(realm: &str) -> String {
@@ -452,6 +466,17 @@ pub fn display_id(uri: &str) -> String {
     }
 }
 
+/// Extract the fully-qualified member-call name (`<agent>.<ability>`)
+/// from a canonical ability URA. Returns `None` for non-ability URAs
+/// or malformed input.
+pub fn qualified_ability_name(uri: &str) -> Option<String> {
+    let parsed = parse_ura(uri).ok()?;
+    if parsed.kind != URAKind::Ability || parsed.agent_id.is_empty() || parsed.ability_id.is_empty() {
+        return None;
+    }
+    Some(format!("{}.{}", parsed.agent_id, parsed.ability_id))
+}
+
 /// Normalise a URI used as a `PresenceRegistry` lookup key.
 ///
 /// PresenceRegistry keys on the caller-claimed URI exact-match
@@ -588,6 +613,14 @@ mod tests {
     }
 
     #[test]
+    fn hub_ability_uri_uses_reserved_hub_owner() {
+        assert_eq!(
+            hub_ability_uri("localhost", "federation.resolve"),
+            "easynet:///r/localhost/ability/hub.federation.resolve"
+        );
+    }
+
+    #[test]
     fn resource_uri_user_anchored_with_namespace() {
         let uuid = "5ff5ac67-ac43-400a-9f36-4899eddf68ff";
         assert_eq!(
@@ -708,6 +741,16 @@ mod tests {
             )),
             "u1/fs/etc/hosts"
         );
+    }
+
+    #[test]
+    fn qualified_ability_name_extracts_member_call_name() {
+        assert_eq!(
+            qualified_ability_name("easynet:///r/localhost/ability/hub.runtime.register_local_tool")
+                .as_deref(),
+            Some("runtime.register_local_tool")
+        );
+        assert_eq!(qualified_ability_name("easynet:///r/localhost/hub"), None);
     }
 
     #[test]
