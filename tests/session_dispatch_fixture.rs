@@ -1,3 +1,5 @@
+#![cfg(feature = "axon-pb")]
+
 // PR-N6 C2: byte-deterministic fixture round-trip for SessionDispatch.
 //
 // Pins the JSON encoding of every SessionDispatch variant — including
