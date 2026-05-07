@@ -44,6 +44,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+#[cfg(test)]
 use std::collections::HashMap;
 
 use serde_json::json;
@@ -128,7 +129,8 @@ pub fn build_agents_envelope(registry: &AgentRegistry) -> serde_json::Value {
 /// no agents, so the caller can feed the result straight into
 /// `RegisterNodeOptions::labels` without a redundant `is_empty()` guard.
 /// See the module-level docstring for why the empty case is `None`.
-pub fn build(registry: &AgentRegistry, hostname: &str) -> Option<HashMap<String, String>> {
+#[cfg(test)]
+fn build(registry: &AgentRegistry, hostname: &str) -> Option<HashMap<String, String>> {
     if registry.agents.is_empty() {
         return None;
     }
@@ -190,9 +192,9 @@ pub fn build(registry: &AgentRegistry, hostname: &str) -> Option<HashMap<String,
     // `meta.list_abilities`). The discovery view that consumed this
     // label folds into the standard ability listing.
     //
-    // Removed in P2.4. The full body of `system_skills_json()` and
-    // its supporting `description_for` table are kept compiled but
-    // unused for now — they get GC'd in a follow-up cleanup.
+    // Removed in P2.4. The retired helper stays test-only so the
+    // historical envelope shape can still be pinned without
+    // dragging dead runtime code through non-test builds.
 
     labels.insert(
         "a2a.description".into(),
@@ -209,80 +211,6 @@ pub fn build(registry: &AgentRegistry, hostname: &str) -> Option<HashMap<String,
     );
 
     Some(labels)
-}
-
-/// Build the JSON for `a2a.system_skills_json`. Returns an empty
-/// string when no system abilities are registered, signalling the
-/// caller to omit the label entirely.
-///
-/// Shape: `{"system_skills": [{"name", "description", "input_schema"}, ...]}`
-/// — mirrors the per-skill structure inside `a2a.agents_json`'s
-/// agent entries so downstream tooling can reuse the same parser.
-///
-/// Iteration order follows
-/// `runtime::agents::published_ability_names()` which is built from
-/// a `BTreeMap` and therefore deterministic. A regression that
-/// switched the underlying registry to a `HashMap` would silently
-/// break golden-fixture byte-stability.
-fn system_skills_json() -> String {
-    let names = crate::runtime::agents::published_ability_names();
-    if names.is_empty() {
-        return String::new();
-    }
-    // Each system skill emits a thin discovery payload identical in
-    // shape to `AgentAbilitySpec::to_discovery_json` —
-    // `{name, description, has_input_schema}` only.
-    //
-    // Why thin (and not full input_schema): the Hub caps each
-    // `a2a.*` label value at 4 KiB. A node publishes ~15 system
-    // abilities (ping, session.*, permission.*, discuss.*,
-    // schedule.*, loop.*) plus `<agent>.chat` for every registered
-    // agent — embedding the full JSON Schema for each one blows
-    // past 4 KB on the second agent. Discovery callers only need
-    // "this skill exists, here's a one-liner"; the full schema is
-    // available on demand via:
-    //   * MCP `ListTools` over the local IPC socket
-    //   * a future `system.<feature>.describe` ability
-    //   * the on-disk manifest at
-    //     `<agent-root>/abilities/<verb>.ability.toml`
-    //
-    // The description fallback (the `_ => "(system ability)"` arm)
-    // exists so an unknown name lands with a non-empty description
-    // rather than the empty string the v1 fallback produced — the
-    // cost is < 30 bytes per unknown skill, well within budget.
-    let skills: Vec<serde_json::Value> = names
-        .iter()
-        .map(|name| {
-            let description = description_for(name);
-            json!({
-                "name": name,
-                "description": description,
-                "has_input_schema": true,
-            })
-        })
-        .collect();
-    let envelope = json!({ "system_skills": skills });
-    match serde_json::to_string(&envelope) {
-        Ok(s) => s,
-        Err(_) => {
-            debug_assert!(false, "system_skills serialize cannot fail by shape");
-            String::new()
-        }
-    }
-}
-
-/// Look up the human-readable description for a published system
-/// ability name.
-///
-/// Authoritative source lives in `runtime::agents::description_for` —
-/// kept there so the federation label and the runtime-local register
-/// publisher (`runtime::publish::republish_abilities_via_advertise`)
-/// pull from one table. This function exists as a thin local alias so
-/// the call sites in this module read naturally; do NOT inline a
-/// second match here, that's exactly the drift the centralisation
-/// removed.
-fn description_for(name: &str) -> &'static str {
-    crate::runtime::agents::description_for(name)
 }
 
 #[cfg(test)]

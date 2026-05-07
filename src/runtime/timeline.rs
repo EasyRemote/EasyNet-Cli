@@ -148,6 +148,7 @@ impl TimelineWriter {
     /// for diagnostic tools (`agent doctor`, `mission runs show`)
     /// that want to name the file without importing PersistentLog
     /// directly.
+    #[cfg(test)]
     pub fn log_path(&self) -> PathBuf {
         self.log.events_path(&self.invocation_id)
     }
@@ -165,6 +166,7 @@ impl TimelineWriter {
     /// replay the on-disk prefix before attaching the live
     /// subscriber, so the two pieces compose into a full
     /// "replay + tail" stream.
+    #[cfg(test)]
     pub fn subscribe(&self) -> broadcast::Receiver<TimelineEvent> {
         self.broadcast_tx.subscribe()
     }
@@ -234,6 +236,7 @@ impl TimelineWriter {
 
     /// Number of currently-active broadcast subscribers. Diagnostic;
     /// not part of the P1–P6 contract.
+    #[cfg(test)]
     pub fn subscriber_count(&self) -> usize {
         self.broadcast_tx.receiver_count()
     }

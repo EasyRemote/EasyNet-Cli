@@ -626,7 +626,6 @@ pub fn send_to_agent_with_depth_and_progress(
             max_output_bytes: max_output,
             env,
             cwd: cwd_for_adapter,
-            run_dir: run_dir.clone(),
             // Commit 2: the driver emits mid-stream progress
             // events through the Timeline instead of (previously)
             // through run_dir/trace.jsonl. The writer_arc is the
@@ -1358,7 +1357,6 @@ mod tests {
             max_output_bytes: 1024,
             env: std::collections::BTreeMap::new(),
             cwd: std::path::PathBuf::from("."),
-            run_dir: None,
             timeline: None,
             progress_tx: None,
             command: String::new(),
@@ -1390,7 +1388,6 @@ mod tests {
             max_output_bytes: 64,
             env: std::collections::BTreeMap::new(),
             cwd: std::path::PathBuf::from("."),
-            run_dir: None,
             timeline: None,
             progress_tx: None,
             command: String::new(),
@@ -1429,7 +1426,6 @@ mod tests {
             max_output_bytes: 64,
             env: std::collections::BTreeMap::new(),
             cwd: std::path::PathBuf::from("."),
-            run_dir: None,
             timeline: None,
             progress_tx: None,
             command: String::new(),

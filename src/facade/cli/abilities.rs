@@ -49,7 +49,9 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use anyhow::{bail, Context};
+use anyhow::bail;
+#[cfg(feature = "axon-pb")]
+use anyhow::Context;
 use clap::Args;
 use console::{measure_text_width, style};
 use serde_json::Value;
@@ -557,6 +559,7 @@ fn glob_match_inner(pat: &[u8], text: &[u8]) -> bool {
     glob_match_inner(&pat[1..], &text[1..])
 }
 
+#[cfg(test)]
 fn split_qualified(name: &str) -> (&str, &str) {
     match name.split_once('.') {
         Some((head, rest)) => (head, rest),

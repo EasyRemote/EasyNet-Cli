@@ -58,7 +58,7 @@ struct PairingPreflight {
     #[serde(default)]
     hub_public_key_b64: String,
     #[serde(default)]
-    hub_agent_uri: String,
+    _hub_agent_uri: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -624,7 +624,7 @@ mod tests {
             tenant_id: "tenant-a".into(),
             node_id: "en-test-node".into(),
             hub_public_key_b64: String::new(),
-            hub_agent_uri: String::new(),
+            _hub_agent_uri: String::new(),
         };
         let payload = build_validate_pairing_payload(&preflight).expect("build payload");
         assert_eq!(payload.node_id, "en-test-node");
@@ -652,7 +652,7 @@ mod tests {
             tenant_id: "tenant-a".into(),
             node_id: "en-test-node".into(),
             hub_public_key_b64: String::new(),
-            hub_agent_uri: String::new(),
+            _hub_agent_uri: String::new(),
         };
         let err = validate_pairing_token("token_1234", &base, &preflight)
             .expect_err("transport failure should error");

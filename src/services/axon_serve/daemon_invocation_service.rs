@@ -1973,54 +1973,6 @@ impl DaemonInvocationService {
         wrap_json_response(&response)
     }
 
-    fn try_push_forward_invoke_frame(
-        &self,
-        request: &federation_wrappers::ForwardInvokeRequest,
-    ) -> Result<(), Status> {
-        let Some((session_id, sender)) =
-            self.lookup_target_with_agent_fallback(&request.target_uri)
-        else {
-            return Err(Status::failed_precondition(
-                federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
-            ));
-        };
-
-        let inner_bytes = decode_inner_envelope(&request.inner_envelope_b64)?;
-        let frame = build_forward_invoke_dispatch_frame(inner_bytes);
-
-        match sender.try_send(Ok(frame)) {
-            Ok(()) => Ok(()),
-            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                // Bounded backpressure (Invariant 4 in
-                // `services::presence_registry`). Slow consumer
-                // → evict + surface `target_offline` per DEC-N4
-                // §2.1; the matching presence event ensures
-                // future calls observe a clean miss.
-                self.presence.remove_if_session(
-                    &request.target_uri,
-                    session_id,
-                    crate::services::presence_registry::OfflineReason::SendFailed,
-                );
-                Err(Status::failed_precondition(
-                    federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
-                ))
-            }
-            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                // Receiver dropped without explicit removal —
-                // channel is dead. Symmetric removal +
-                // `target_offline` surface for this call.
-                self.presence.remove_if_session(
-                    &request.target_uri,
-                    session_id,
-                    crate::services::presence_registry::OfflineReason::StreamClosed,
-                );
-                Err(Status::failed_precondition(
-                    federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
-                ))
-            }
-        }
-    }
-
     /// **PR-1 commit 7/9 (LB-56)**. Synchronous self-targeted
     /// `federation.forward_invoke` dispatch.
     ///
@@ -4621,34 +4573,6 @@ fn build_forward_receipt(
         caller_binding,
         callee_binding,
         ..InvocationReceipt::default()
-    }
-}
-
-/// Wrap the inner envelope bytes into a `DispatchFrame` heading
-/// down a target's `<self>.session` reverse channel.
-///
-/// DEC-N4 §2.1 round-trip note: `ForwardInvokeRequest` carries
-/// `causal_context_bytes` and `forward_deadline_ms` as outer wire
-/// fields; they remain on the request struct so the dispatcher's
-/// audit-chain hook (PR-N5 §1) and deadline derivation (DEC-N5
-/// §3) can read them directly. The dispatch frame itself stays
-/// proto-stable for C1a (just the inner-envelope BinaryChunk) —
-/// C1c's schema regen elevates these to first-class frame fields.
-fn build_forward_invoke_dispatch_frame(
-    inner_bytes: Vec<u8>,
-) -> crate::services::presence_registry::DispatchFrame {
-    use crate::pb::axon::v1::invoke_bidi_down::Payload;
-    use crate::pb::axon::v1::{BinaryChunk, InvokeBidiDown};
-
-    let chunk = BinaryChunk {
-        data: inner_bytes,
-        ..BinaryChunk::default()
-    };
-    crate::services::presence_registry::DispatchFrame {
-        frame: InvokeBidiDown {
-            payload: Some(Payload::BinaryChunk(chunk)),
-            ..InvokeBidiDown::default()
-        },
     }
 }
 

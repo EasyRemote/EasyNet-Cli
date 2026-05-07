@@ -31,7 +31,6 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::runtime::process_runner::{self, ChildOptions};
-use crate::runtime::run_store::RunDir;
 use crate::runtime::stream_ui::{self, Usage};
 
 /// Acquire a mutex guard, recovering from poisoning.
@@ -100,10 +99,6 @@ pub struct ClaudeOptions {
     pub max_output_bytes: usize,
     pub env: BTreeMap<String, String>,
     pub cwd: Option<PathBuf>,
-    /// Persistent run directory. Used for per-run artefacts
-    /// (`prompt.txt`, `response.md`, `meta.json`); the stream
-    /// event log moved to the Timeline in PR-7 Commit 2.
-    pub run_dir: Option<Arc<RunDir>>,
     /// PR-7 Commit 2: Timeline writer. When `Some`, each
     /// streamed stdout line is emitted as a `progress` event on
     /// the P1-P6 event log (and broadcast to any live
@@ -157,7 +152,6 @@ impl Default for ClaudeOptions {
             max_output_bytes: 1_048_576,
             env: BTreeMap::new(),
             cwd: None,
-            run_dir: None,
             timeline: None,
             progress_tx: None,
             command: String::new(),
@@ -667,7 +661,6 @@ impl AgentAdapter for ClaudeCodeAdapter {
                 max_output_bytes: opts.max_output_bytes,
                 env: opts.env,
                 cwd: Some(opts.cwd),
-                run_dir: opts.run_dir,
                 timeline: opts.timeline,
                 progress_tx: opts.progress_tx,
                 // Honor `InvokeOpts::command` — dispatch filled

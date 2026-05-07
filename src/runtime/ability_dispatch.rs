@@ -716,12 +716,11 @@ impl LocalAbilityRegistry {
 #[derive(Clone)]
 pub struct AbilityDispatcher {
     local: Arc<LocalAbilityRegistry>,
-    gateway: Arc<dyn GatewayApi>,
 }
 
 impl AbilityDispatcher {
-    pub fn new(local: Arc<LocalAbilityRegistry>, gateway: Arc<dyn GatewayApi>) -> Self {
-        Self { local, gateway }
+    pub fn new(local: Arc<LocalAbilityRegistry>, _gateway: Arc<dyn GatewayApi>) -> Self {
+        Self { local }
     }
 
     /// Borrow the unified local-ability registry. Used by `Kernel`

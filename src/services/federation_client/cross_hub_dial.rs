@@ -471,6 +471,7 @@ impl CrossHubDialer {
     /// `forward_invoke`. Returns `None` when the peer-scope tuple
     /// has never been dialed (no breaker entry tracked yet,
     /// semantically equivalent to `Closed { 0 }`).
+    #[cfg(test)]
     fn breaker_is_closed(&self, target_hub: &HubUri, scope: BreakerScope) -> bool {
         let key = (target_hub.clone(), scope);
         match self.breaker_state.get(&key).map(|e| e.value().clone()) {

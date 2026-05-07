@@ -543,6 +543,7 @@ fn publish_bootstrap_plan_outcomes_via_invoker<I: crate::runtime::advertise::Abi
     crate::runtime::publish::republish_abilities_via_advertise(invoker, tenant_id, plan)
 }
 
+#[cfg(feature = "axon-pb")]
 fn publish_bootstrap_plan_via_invoker_silent<I: crate::runtime::advertise::AbilityInvoker>(
     tenant_id: &str,
     plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
@@ -627,6 +628,7 @@ fn revoke_agent_via_invoker<I: crate::runtime::advertise::AbilityInvoker>(
     }
 }
 
+#[cfg(any(test, feature = "axon-pb"))]
 fn hub_invoke_endpoint(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -644,6 +646,7 @@ fn hub_invoke_endpoint(raw: &str) -> Result<String, String> {
     Ok(format!("http://{trimmed}"))
 }
 
+#[cfg(any(test, feature = "axon-pb"))]
 fn ability_name_from_resource_uri(resource_uri: &str) -> Option<String> {
     // v4.1.5: ability URIs are
     // `easynet:///r/<realm>/ability/<owner>.<agent>.<verb>`. Hub-rooted
@@ -683,6 +686,7 @@ fn ability_name_from_resource_uri(resource_uri: &str) -> Option<String> {
     Some(verb.to_string())
 }
 
+#[cfg(any(test, feature = "axon-pb"))]
 fn direct_hub_trust_match(endpoint_url: &str) -> Option<Option<std::path::PathBuf>> {
     for path in direct_hub_trust_path_candidates() {
         let anchor =
@@ -697,6 +701,7 @@ fn direct_hub_trust_match(endpoint_url: &str) -> Option<Option<std::path::PathBu
     None
 }
 
+#[cfg(any(test, feature = "axon-pb"))]
 fn direct_hub_trust_path_candidates() -> Vec<std::path::PathBuf> {
     let mut candidates = Vec::new();
     if let Some(override_path) = std::env::var_os("EASYNET_REALM_TRUST_PATH") {

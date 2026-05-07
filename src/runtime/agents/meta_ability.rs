@@ -585,12 +585,7 @@ mod tests {
         );
         handle.set(Arc::new(live_reg)).expect("set OnceLock");
 
-        register(
-            &mut reg,
-            Vec::new,
-            handle,
-            Some("alice".to_string()),
-        );
+        register(&mut reg, Vec::new, handle, Some("alice".to_string()));
         let handler = reg.get_rpc(ABILITY_LIST_ABILITIES).unwrap();
         let resp = handler(json!({})).unwrap();
         let abilities = resp["abilities"].as_array().unwrap();
@@ -609,7 +604,10 @@ mod tests {
         // Input schema must be a proper JSON Schema object with at
         // least the `prompt` property the chat manifest declares.
         let input_schema = &chat["schema_summary"]["input"];
-        assert_eq!(input_schema["type"], "object", "input must be a JSON object schema");
+        assert_eq!(
+            input_schema["type"], "object",
+            "input must be a JSON object schema"
+        );
         assert!(
             input_schema["properties"]["prompt"].is_object(),
             "chat manifest declares `prompt` as a property; synth must surface it. \

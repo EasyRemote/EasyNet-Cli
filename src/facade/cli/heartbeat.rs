@@ -64,15 +64,10 @@ impl HeartbeatOutcome {
 /// a heartbeat and get back either a Hub response (to inspect for rejection)
 /// or a transport error (to count against the failure budget).
 ///
-/// Two impls live below:
-///
-///   * `DirectBridge<'_>` — a thin wrapper around an already-open
-///     `&DendriteBridge`. Used by the foreground mode in `cli::start`, where
-///     the same bridge that registered the node is reused for heartbeats.
-///   * `ReconnectingHeartbeat<'_>` — wraps a `&ReconnectingBridge`, so every
-///     heartbeat rides the SDK's reconnect + re-register machinery. Used by
-///     the background daemon, which has to keep working across long-lived
-///     TCP dropouts and Hub restarts.
+/// The production impl below is `ReconnectingHeartbeat<'_>`, which wraps a
+/// `&ReconnectingBridge` so every heartbeat rides the SDK's reconnect +
+/// re-register machinery. The state machine stays generic so unit tests can
+/// inject a fake transport without a real bridge.
 ///
 /// The trait method takes `&mut self` (not `&self`) because the reconnecting
 /// impl may mutate its internal attempt counter on retry. The loop below
@@ -84,49 +79,6 @@ pub trait HeartbeatTransport {
     /// The loop passes the response to `check_rejection` — all fields the
     /// state machine inspects must survive this round-trip unchanged.
     fn beat(&mut self, tenant: &str, node_id: &str) -> AxonResult<serde_json::Value>;
-}
-
-/// Direct-bridge transport — no reconnect. Used in the foreground path where
-/// the parent process already holds a bridge and the operator can observe /
-/// restart on failure.
-pub struct DirectBridge<'a> {
-    bridge: &'a DendriteBridge,
-}
-
-impl<'a> DirectBridge<'a> {
-    pub fn new(bridge: &'a DendriteBridge) -> Self {
-        Self { bridge }
-    }
-}
-
-// Heartbeat is device-scoped — one `federation.heartbeat` per tick from
-// the device URA. The hub fans liveness out to every hosted Agent that
-// names this device as its host (`AgentsCatalog::refresh_heartbeat_for_device`),
-// so consent/policy/mcp/llm/... do NOT need to ping the hub independently.
-// Process death takes them all out at once; multiplying ticks per process
-// would just amplify hub traffic without adding signal.
-impl<'a> HeartbeatTransport for DirectBridge<'a> {
-    fn beat(&mut self, tenant: &str, node_id: &str) -> AxonResult<serde_json::Value> {
-        // Heartbeat tick: `federation.heartbeat` is the canonical
-        // membership-liveness ability (Hub-Profile, RFC-001 §A14).
-        // Replaces the legacy `bridge.NodeHeartbeat` gRPC RPC
-        // removed by AXON-RFC-001 P1.5. Pre-fix the transport
-        // re-used `runtime.bootstrap_self_identity` as a tickle —
-        // it accidentally refreshed the same `last_heartbeat_unix_ms`
-        // because both paths populate that field, but it was a
-        // semantic abuse; the dedicated heartbeat ability is the
-        // proper carrier and `federation.advertise_*` /
-        // `federation.resolve` use the same caller URI we set
-        // here.
-        let device_uri = crate::uri::device_uri(&tenant, &node_id);
-        let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
-            self.bridge,
-            device_uri,
-        );
-        crate::runtime::advertise::heartbeat(&invoker, tenant, tenant)
-            .map(|_| serde_json::json!({"ok": true}))
-            .map_err(|msg| easynet_axon::error::AxonError::Bridge(msg))
-    }
 }
 
 /// Reconnecting transport — every heartbeat rides the SDK's
@@ -297,121 +249,6 @@ fn next_heartbeat_state<E: std::fmt::Display>(
 /// SIGTERM. The daemon reads tenant/node_id from credentials.json at
 /// startup.
 ///
-/// Detachment model
-/// ----------------
-/// On Unix, the spawned child calls `setsid(2)` as its first action
-/// (via `CommandExt::pre_exec`). This does three load-bearing things:
-///
-/// - Creates a new session and process group, so the daemon no longer
-///   receives signals (SIGHUP, SIGINT) sent to the parent's terminal
-///   or process group. Without it, closing the launching terminal
-///   would kill the daemon.
-/// - Detaches from the controlling TTY, which means a subsequent
-///   `open("/dev/tty")` from the daemon is harmless instead of
-///   grabbing the parent's terminal.
-/// - Makes the daemon the leader of its own session, so its children
-///   (if any) stay together and can be signalled as a group.
-///
-/// We deliberately do NOT double-fork. The second fork protects
-/// against accidentally acquiring a controlling TTY if the daemon
-/// ever opens a tty device, which this daemon does not. Keeping the
-/// single fork keeps the code readable and the PID file stable (no
-/// need to communicate the grand-child's pid back).
-///
-/// On non-Unix targets `pre_exec` is unavailable; the child inherits
-/// the parent's session, which is an accepted limitation (Windows
-/// is not a supported daemon host for this binary).
-pub fn spawn_daemon(endpoint: &str, heartbeat_ms: u64) -> anyhow::Result<()> {
-    let exe = std::env::current_exe().context("resolve exe path")?;
-
-    let log_dir = config::state_dir().join("logs");
-    std::fs::create_dir_all(&log_dir)?;
-    let log_path = log_dir.join("heartbeat.log");
-    rotate_log_if_needed(&log_path);
-    let log_fh = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)?;
-    let log_err = log_fh.try_clone()?;
-
-    let mut cmd = std::process::Command::new(exe);
-    cmd.arg("_heartbeat-daemon")
-        .env(ENV_ENDPOINT, endpoint)
-        .env(ENV_INTERVAL_MS, heartbeat_ms.to_string())
-        .stdout(log_fh)
-        .stderr(log_err);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        // SAFETY: `setsid(2)` is async-signal-safe and documented as
-        // safe to call from a post-fork, pre-exec context. We do
-        // nothing else inside this closure, so we cannot accidentally
-        // touch any state that would be unsound to touch between
-        // fork and exec (locks, allocators, etc.).
-        unsafe {
-            cmd.pre_exec(|| {
-                // `libc::setsid` returns -1 on error but never when
-                // called on the fresh post-fork child (the only
-                // failure mode is "already a group leader", which
-                // cannot happen here). Still, surface the error
-                // through the returned io::Result rather than
-                // ignoring it — the child will fail its spawn with
-                // a clear io error instead of leaking into
-                // launched-but-undetached territory.
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-    }
-
-    let child = cmd.spawn().context("spawn heartbeat daemon")?;
-
-    let hb_pid_path = config::heartbeat_pid_path();
-    std::fs::write(&hb_pid_path, child.id().to_string())?;
-
-    output::detail(
-        "heartbeat daemon",
-        &format!("pid {} (log: {})", child.id(), log_path.display()),
-    );
-    Ok(())
-}
-
-/// Rotate the heartbeat log if it exceeds 2 MiB. Keeps one `.old`
-/// backup.
-///
-/// Atomicity model
-/// ---------------
-/// The rename is atomic per POSIX. The concern isn't "can two
-/// spawners simultaneously rename the same file" (the second rename
-/// will just fail harmlessly), but "can two spawners simultaneously
-/// *observe* oversized log and one of them truncates after the
-/// other rotated".
-///
-/// We defend against that by only attempting rotation here, where
-/// `spawn_daemon` is typically called from `runtime start` — a
-/// user-visible command run by one operator. If the rename fails
-/// (a racing spawner already moved the old file), we do NOT
-/// truncate: the other spawner has already rotated to a fresh
-/// file, and truncating our copy would throw away the log lines
-/// they wrote in between. The previous fallback `fs::write(path,
-/// b"")` traded data loss for code brevity, which is the wrong
-/// trade.
-fn rotate_log_if_needed(path: &std::path::Path) {
-    const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
-    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    if size <= MAX_LOG_BYTES {
-        return;
-    }
-    let old = path.with_extension("log.old");
-    // Best-effort: if rename fails, leave the log alone. A racing
-    // rotator has already moved the file; truncating would
-    // destroy legitimate data.
-    let _ = std::fs::rename(path, &old);
-}
-
 /// Build the `on_reconnect` hook used by the daemon's `ReconnectingBridge`.
 ///
 /// The Hub sweeps stale nodes after a heartbeat-timeout window. If the

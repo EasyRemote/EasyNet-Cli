@@ -42,6 +42,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+#[cfg(feature = "axon-pb")]
 use anyhow::Context;
 use clap::Args;
 use console::style;

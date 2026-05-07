@@ -571,15 +571,6 @@ fn stream_error_line(code: &str, message: String) -> String {
     s
 }
 
-// keep async wrapper public-ish for tests
-#[cfg(test)]
-pub(crate) async fn build_response_line_for_test(
-    request_line: &str,
-    proxy: &AbilityProxy,
-) -> String {
-    build_response_line(request_line, proxy)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

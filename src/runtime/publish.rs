@@ -487,14 +487,6 @@ pub fn bootstrap_self_identity_via_runtime<I: AbilityInvoker>(
 /// `easynet.public_key`. Both encodings decode to the same 32
 /// bytes; the admin RPC stays on standard base64 to avoid a needless
 /// translation step on the runtime side.
-/// Public alias for the heartbeat keepalive call site. Same
-/// derivation as `derive_owner_public_key_b64`; kept as a separate
-/// `pub(crate)` symbol so the heartbeat module can call it without
-/// promoting the underlying helper to the public surface.
-pub(crate) fn derive_owner_public_key_b64_for_keepalive(tenant_id: &str, node_id: &str) -> String {
-    derive_owner_public_key_b64(tenant_id, node_id)
-}
-
 pub(crate) fn derive_owner_public_key_b64(tenant_id: &str, node_id: &str) -> String {
     let subject_id = format!("easynet:prv:reg:agent.{node_id}");
     derive_subject_public_key_b64(tenant_id, &subject_id)
@@ -535,27 +527,6 @@ fn host_node_id_from_uri(uri: &str) -> Option<String> {
     None
 }
 
-/// URI v2 device-keypair wrapper. Returns `(seed, pk_b64)` for the
-/// device-profile agent under the given realm. Subject ID shape
-/// `easynet:prv:reg:device.<node_id>` (URI v2 device kind).
-///
-/// Phase 14 production deploy switches daemons to use this in place
-/// of `derive_agent_keypair` once the backend trust anchor has been
-/// regenerated under the device-URI shape.
-pub(crate) fn derive_device_keypair(realm: &str, node_id: &str) -> ([u8; 32], String) {
-    let subject_id = format!("easynet:prv:reg:device.{node_id}");
-    derive_subject_keypair(realm, &subject_id)
-}
-
-/// URI v1 (and current production) agent-keypair wrapper. Subject
-/// ID shape `easynet:prv:reg:agent.<node_id>`. Kept as the default
-/// path through Phase 14; the device-shaped wrapper above flips
-/// in only after the backend re-mints its trust anchor.
-pub(crate) fn derive_agent_keypair(realm: &str, node_id: &str) -> ([u8; 32], String) {
-    let subject_id = format!("easynet:prv:reg:agent.{node_id}");
-    derive_subject_keypair(realm, &subject_id)
-}
-
 /// Deterministic keypair derivation used by the SDK's
 /// `derive_subject_auth`. Returns `(seed_bytes, public_key_b64)` so
 /// the daemon can both publish the public key AND mirror the seed
@@ -579,48 +550,6 @@ pub(crate) fn derive_subject_keypair(tenant_id: &str, subject_id: &str) -> ([u8;
     let pk_b64 =
         base64::engine::general_purpose::STANDARD.encode(signing.verifying_key().to_bytes());
     (seed, pk_b64)
-}
-
-/// Mirror the deterministic agent + hub keys into the keyring so
-/// federation `KeyResolver` queries return the same bytes the SDK
-/// signs under. Idempotent: re-running with the same inputs is a
-/// no-op (existing matching entry is reused). The keyring stores
-/// the seed encrypted so `keyring.sign` works for these entries
-/// (necessary for forward_invoke to sign envelopes locally without
-/// going through the SDK).
-pub(crate) fn mirror_derived_keys_into_keyring(
-    keyring: &crate::runtime::keyring::KeyringHandle,
-    tenant_id: &str,
-    node_id: &str,
-    realm: &str,
-    device_uri: &str,
-) -> anyhow::Result<()> {
-    let agent_subject_id = format!("easynet:prv:reg:agent.{node_id}");
-    let (agent_seed, agent_pk_b64) = derive_subject_keypair(tenant_id, &agent_subject_id);
-    let agent_pk = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        agent_pk_b64.as_bytes(),
-    )?;
-    keyring.mirror_external_key(
-        "agent_signing",
-        device_uri.to_string(),
-        &agent_pk,
-        Some(&agent_seed),
-    )?;
-
-    let hub_subject_id = format!("easynet:prv:hub:{realm}");
-    let (hub_seed, hub_pk_b64) = derive_subject_keypair(tenant_id, &hub_subject_id);
-    if hub_pk_b64 != agent_pk_b64 {
-        let hub_pk = base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            hub_pk_b64.as_bytes(),
-        )?;
-        // v4.1.5 §A.URA-7: hub realm-singleton has no role tail.
-        // tenant binding rides envelope, not URI.
-        let hub_subject_uri = format!("easynet:///r/{realm}/hub");
-        keyring.mirror_external_key("hub_signing", hub_subject_uri, &hub_pk, Some(&hub_seed))?;
-    }
-    Ok(())
 }
 
 /// Build the JSON args for a single `runtime.register_local_tool`
