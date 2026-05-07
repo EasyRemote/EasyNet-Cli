@@ -1298,7 +1298,7 @@ mod tests {
     #[test]
     fn observe_health_attaches_selfsigned_header_when_host_uri_known() {
         let mut file = crate::persistence::local_agents::LocalAgentsFile::default();
-        file.host_device_agent_uri = "easynet:///r/acme/agent/01DEV".into();
+        file.host_device_agent_uri = "easynet:///r/acme/device/01DEV".into();
         let p = proxy_with_local_agents(file);
         let frames = p.handle(IncomingFrame::Invoke {
             request_id: "req-receipt-1".into(),
@@ -1311,8 +1311,8 @@ mod tests {
                 receipt_header: Some(h),
                 ..
             } => {
-                assert_eq!(h.callee_agent_uri, "easynet:///r/acme/agent/01DEV");
-                assert_eq!(h.signer_agent_uri, "easynet:///r/acme/agent/01DEV");
+                assert_eq!(h.callee_agent_uri, "easynet:///r/acme/device/01DEV");
+                assert_eq!(h.signer_agent_uri, "easynet:///r/acme/device/01DEV");
                 assert!(h.is_self_signed());
             }
             OutgoingFrame::Result {
@@ -1332,12 +1332,12 @@ mod tests {
         // would silently accept an attestation-less receipt.
         use crate::runtime::hosted_receipt::SigningModel;
         let mut file = crate::persistence::local_agents::LocalAgentsFile::default();
-        file.host_device_agent_uri = "easynet:///r/acme/agent/01DEV".into();
+        file.host_device_agent_uri = "easynet:///r/acme/device/01DEV".into();
         crate::persistence::local_agents::upsert_hosted_agent(
             &mut file,
             "consent",
             "default",
-            "easynet:///r/acme/agent/01CON",
+            "easynet:///r/acme/agent/u1.01CON",
         );
         let p = proxy_with_local_agents(file);
         // Use consent.decide because it is the RPC handler the
@@ -1377,11 +1377,11 @@ mod tests {
             other => panic!("expected Result or Error, got {other:?}"),
         };
         assert_eq!(
-            header.callee_agent_uri, "easynet:///r/acme/agent/01CON",
+            header.callee_agent_uri, "easynet:///r/acme/agent/u1.01CON",
             "callee must be the consent-profile URA from local-agents.json"
         );
         assert_eq!(
-            header.signer_agent_uri, "easynet:///r/acme/agent/01DEV",
+            header.signer_agent_uri, "easynet:///r/acme/device/01DEV",
             "signer must be the host device-profile URA"
         );
         match header.model {
@@ -1389,7 +1389,7 @@ mod tests {
                 host_uri,
                 host_attestation,
             } => {
-                assert_eq!(host_uri, "easynet:///r/acme/agent/01DEV");
+                assert_eq!(host_uri, "easynet:///r/acme/device/01DEV");
                 assert!(!host_attestation.is_empty());
             }
             SigningModel::Selfsigned => panic!(

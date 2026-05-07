@@ -75,13 +75,8 @@ const DEFAULT_DAEMON_GRPC_UDS_PATH: &str = "~/.easynet/daemon.sock";
 /// URI v4.1.4 (Phase 2F): `--node` carries a `device` URA, not an
 /// `agent` URA. Devices are physical hosts (the box running the
 /// daemon); agents are user-owned hosted profiles that live ON
-/// devices. The legacy `/agent/<node>` shape collapsed both into
-/// one segment; v4.1.4 splits them. We accept that legacy device-
-/// as-agent form during the migration window and canonicalise it
-/// into `/device/<node>` before the request hits presence lookup.
-/// Real agent URIs (`/agent/<user>.<agent>`) are rejected: cross-
-/// hub `federation.forward_invoke` targets devices, not hosted
-/// user agents.
+/// devices. Cross-hub `federation.forward_invoke` targets devices
+/// or the realm hub, never hosted user agents.
 pub fn parse_node_uri(node: &str) -> anyhow::Result<String> {
     let trimmed = node.trim();
     if !trimmed.starts_with("easynet:///r/") {
@@ -94,9 +89,9 @@ pub fn parse_node_uri(node: &str) -> anyhow::Result<String> {
     }
     // Past the `r/` prefix, require at least `<realm>/<role>/<node>`
     // so the daemon's parsers have non-empty tenant + node
-    // components to extract. Accept `device` directly; accept
-    // legacy `agent/<node>` only when the tail is the old bare
-    // node-id form, then rewrite it to the canonical device URI.
+    // components to extract. Accept only canonical `device`
+    // targets here; legacy `agent/<node>` device aliases are
+    // retired and must be repaired before they reach this helper.
     let after = trimmed
         .strip_prefix("easynet:///r/")
         .expect("prefix checked above");
@@ -134,7 +129,7 @@ pub fn parse_node_uri(node: &str) -> anyhow::Result<String> {
         || node_id.is_empty()
         || node_id.contains('/')
         || (role == "device" && node_id.contains('.'))
-        || !matches!(role, "device" | "agent")
+        || role != "device"
     {
         bail!(
             "--node `{trimmed}` does not parse as easynet:///r/<realm>/device/<node-uuid>. \
@@ -142,17 +137,7 @@ pub fn parse_node_uri(node: &str) -> anyhow::Result<String> {
              {URI_DISCOVERY_HINT}"
         );
     }
-    if role == "device" {
-        return Ok(trimmed.to_string());
-    }
-    if node_id.contains('.') {
-        bail!(
-            "--node `{trimmed}` names an agent profile, not a device. \
-             Cross-hub routing requires easynet:///r/<realm>/device/<node-uuid>. \
-             {URI_DISCOVERY_HINT}"
-        );
-    }
-    Ok(crate::uri::device_uri(realm, node_id))
+    Ok(trimmed.to_string())
 }
 
 /// Operator-actionable hint appended to every `--node` parse-
@@ -741,10 +726,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_node_uri_normalises_legacy_agent_device_shape() {
-        let parsed =
-            parse_node_uri("easynet:///r/realm-b/agent/n1").expect("legacy device accepted");
-        assert_eq!(parsed, "easynet:///r/realm-b/device/n1");
+    fn parse_node_uri_rejects_legacy_agent_device_shape() {
+        let err = parse_node_uri("easynet:///r/realm-b/agent/n1")
+            .expect_err("legacy device alias must be rejected");
+        assert!(format!("{err}").contains("does not parse"));
     }
 
     #[test]
@@ -795,8 +780,7 @@ mod tests {
     #[test]
     fn parse_node_uri_rejects_wrong_keyword() {
         // URI v4.1.4: the role segment after the realm MUST be
-        // either `device` (canonical) or `agent` (v1 compat
-        // window). A typo / unknown role is rejected so the
+        // `device`. A typo / unknown role is rejected so the
         // operator notices before the URI hits the daemon.
         let err =
             parse_node_uri("easynet:///r/realm-b/notarole/n1").expect_err("wrong keyword rejected");
@@ -833,10 +817,9 @@ mod tests {
             "scheme-arm error must cite easynet.discover ability; got: {msg_scheme}"
         );
 
-        // Structural-failure: empty realm tail. The role segment
-        // accepts both `device` (v4.1.4 canonical) and legacy bare
-        // `agent` tails, so use a clearly malformed input — empty
-        // realm — to exercise the structural-arm error path.
+        // Structural-failure: empty realm tail. Use a clearly
+        // malformed input to exercise the structural-arm error
+        // path without depending on any retired URI aliases.
         let err_struct = parse_node_uri("easynet:///r//device/n1").expect_err("rejected");
         let msg_struct = format!("{err_struct}");
         assert!(

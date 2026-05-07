@@ -498,7 +498,7 @@ mod tests {
     }
 
     fn d(name: &str) -> AbilityDescriptor {
-        AbilityDescriptor::new(name, "easynet:///r/acme/agent/01DEV", Visibility::Scoped)
+        AbilityDescriptor::new(name, "easynet:///r/acme/device/01DEV", Visibility::Scoped)
             .unwrap()
             .with_source("kernel:built-in")
             .with_input_schema(serde_json::json!({"type":"object"}))
@@ -763,7 +763,7 @@ mod tests {
         // Pre-populate local-agents.json with a host URI; build_stdio_server
         // must pick it up.
         let mut file = crate::persistence::local_agents::LocalAgentsFile::default();
-        file.host_device_agent_uri = "easynet:///r/acme/agent/01DEV".into();
+        file.host_device_agent_uri = "easynet:///r/acme/device/01DEV".into();
         crate::persistence::local_agents::save(&file).unwrap();
 
         let cfg = StdioServerConfig {
@@ -779,7 +779,7 @@ mod tests {
             .map(|d| d.owner_agent_uri.clone())
             .collect();
         assert!(
-            owners.contains("easynet:///r/acme/agent/01DEV"),
+            owners.contains("easynet:///r/acme/device/01DEV"),
             "post-join descriptors must anchor on the persisted URA; \
              got owners = {owners:?}"
         );
@@ -909,7 +909,7 @@ mod tests {
 
         let descs = vec![AbilityDescriptor::new(
             "device.observe.health",
-            "easynet:///r/acme/agent/01DEV",
+            "easynet:///r/acme/device/01DEV",
             Visibility::Public,
         )
         .unwrap()];

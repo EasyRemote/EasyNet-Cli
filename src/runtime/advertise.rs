@@ -53,20 +53,6 @@ pub struct AdvertiseOutcome {
     pub result: Result<AdvertiseAgentReceipt, String>,
 }
 
-/// Internal bridge-transport URI builder for hub-served
-/// abilities.
-///
-/// Business-layer helpers now expose canonical v4.1.4 hub-owned
-/// ability URAs (`easynet:///r/<realm>/ability/hub.<ns>.<verb>`).
-/// The bridge transport still needs the legacy `/r/prv/hub/<realm>/
-/// abilities/<name>@1?tenant_id=<tenant>` grammar because
-/// EasyNet-Axon's `canonicalize_easynet_resource_uri` has not yet
-/// shipped the new parser. Translation happens inside
-/// `BridgeAbilityInvoker`; keeping it here prevents the rest of the
-/// CLI from depending on legacy resource syntax.
-const LEGACY_HUB_ABILITY_URI_FMT: &str =
-    "easynet:///r/prv/hub/{realm}/abilities/{ability}@1?tenant_id={tenant}";
-
 const FED_ADVERTISE_AGENT_ABILITY_NAME: &str = "federation.advertise_agent";
 const FED_ADVERTISE_ABILITIES_ABILITY_NAME: &str = "federation.advertise_abilities";
 const FED_RESOLVE_ABILITY_NAME: &str = "federation.resolve";
@@ -75,26 +61,8 @@ const FED_HEARTBEAT_ABILITY_NAME: &str = "federation.heartbeat";
 const FED_RESOLVE_KEY_ABILITY_NAME: &str = "federation.resolve_key";
 const FED_FORWARD_INVOKE_ABILITY_NAME: &str = "federation.forward_invoke";
 
-fn legacy_hub_ability_resource_uri(realm: &str, tenant_id: &str, ability_name: &str) -> String {
-    LEGACY_HUB_ABILITY_URI_FMT
-        .replace("{realm}", realm)
-        .replace("{ability}", ability_name)
-        .replace("{tenant}", tenant_id)
-}
-
 fn hub_ability_resource_uri(realm: &str, ability_name: &str) -> String {
     crate::uri::hub_ability_uri(realm, ability_name)
-}
-
-fn bridge_compat_resource_uri(resource_uri: &str, tenant_id: &str) -> String {
-    let Ok(parsed) = crate::uri::parse_ura(resource_uri) else {
-        return resource_uri.to_string();
-    };
-    if parsed.kind != crate::uri::URAKind::Ability || parsed.user_id != "hub" {
-        return resource_uri.to_string();
-    }
-    let ability_name = format!("{}.{}", parsed.agent_id, parsed.ability_id);
-    legacy_hub_ability_resource_uri(&parsed.realm, tenant_id, &ability_name)
 }
 
 /// Build the canonical hub-owned ability URI for
@@ -221,25 +189,20 @@ impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
         // sees a subject that matches the URI's parsed
         // `<visibility>:<subject_type>:<subject_value>` decomposition.
         //
-        // Two shapes the daemon legitimately calls:
-        //   1. `r/<vis>/hub/<realm>/abilities/...` — hub-profile
-        //      (federation.advertise_*, federation.resolve, runtime.*).
-        //      Subject MUST be `easynet:<vis>:hub:<realm>`.
-        //   2. `r/<vis>/agent/<id>/abilities/...` — agent-profile.
-        //      Subject is `easynet:<vis>:reg:agent.<id>` and is the
-        //      SDK's default when subject_id = None — no override
-        //      needed.
+        // Two canonical shapes the daemon legitimately calls:
+        //   1. `easynet:///r/<realm>/hub` — hub profile. Subject MUST
+        //      be `easynet:prv:hub:<realm>`.
+        //   2. `easynet:///r/<realm>/ability/hub.<ns>.<verb>` —
+        //      hub-owned ability. Subject is still the hub profile,
+        //      so we override to the same `easynet:prv:hub:<realm>`.
         //
         // Pre-fix every call passed `subject_id = None`, which the
-        // SDK defaulted to the agent form regardless of URI shape.
-        // Hub-shaped URIs therefore got `agent.<node>` as subject
-        // and the runtime rejected with AXON_EASYNET_SUBJECT_MISMATCH
+        // SDK defaulted to the agent form. Hub-owned ability URIs
+        // therefore got `agent.<node>` as subject and the runtime
+        // rejected with AXON_EASYNET_SUBJECT_MISMATCH
         // ("subject_id does not match resource URI subject"), even
         // though the daemon's bootstrap_self_identity had succeeded
-        // and topology had the key. Two-layer subject mismatch:
-        // first the URI-vs-subject check at canonicalize fails,
-        // never even reaching the topology key lookup.
-        let bridge_resource_uri = bridge_compat_resource_uri(resource_uri, tenant_id);
+        // and topology had the key.
         let subject_id = subject_id_from_resource_uri(resource_uri);
         // The metadata bag carries TWO load-bearing entries:
         //
@@ -264,10 +227,7 @@ impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
         //    synthesises `agents/easynet:prv:hub:<realm>` which the
         //    runtime's caller-URI check rejects.
         let mut map = std::collections::HashMap::new();
-        map.insert(
-            "easynet.resource_uri".to_string(),
-            bridge_resource_uri.clone(),
-        );
+        map.insert("easynet.resource_uri".to_string(), resource_uri.to_string());
         if subject_id
             .as_deref()
             .map(|s| s.contains(":hub:"))
@@ -283,7 +243,7 @@ impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
         self.bridge
             .ability_call_raw(
                 tenant_id,
-                &bridge_resource_uri,
+                resource_uri,
                 payload_json,
                 subject_id.as_deref(),
                 metadata.as_ref(),
@@ -296,8 +256,9 @@ impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
 /// Derive the canonical `subject_id` an envelope should carry for a
 /// given EasyNet resource URI. Returns `None` for URIs the helper
 /// doesn't recognise (the SDK falls back to its default
-/// `easynet:<vis>:reg:agent.<owner>` form, which is correct for
-/// agent-profile URIs and what the SDK already does).
+/// `easynet:prv:reg:agent.<owner>` form, which is fine for non-hub
+/// callers). Legacy `.../abilities/...` resource shapes are retired
+/// and intentionally not recognised here.
 ///
 /// Visible to tests via the module re-export below; the function is
 /// pure (no I/O, no state) so a test that pins each shape is
@@ -312,36 +273,6 @@ pub(crate) fn subject_id_from_resource_uri(resource_uri: &str) -> Option<String>
             _ => {}
         }
     }
-    // Strip the scheme and `//` authority. RFC-001 canonical shape
-    // is `easynet:///r/<vis>/<subject_type>/<subject_value>/abilities/<name>@<ver>`.
-    // We deliberately match by structural prefix rather than trying
-    // to parse a full URL — the canonicalizer downstream owns
-    // structural validation.
-    let after_scheme = resource_uri.strip_prefix("easynet:///")?;
-    let mut parts = after_scheme.split('/');
-    if parts.next()? != "r" {
-        return None;
-    }
-    let visibility = parts.next()?;
-    let subject_type = parts.next()?;
-    let subject_value = parts.next()?;
-    if !matches!(visibility, "pub" | "org" | "prv") {
-        return None;
-    }
-    // Hub-profile: `r/<vis>/hub/<realm>/abilities/...` →
-    // `easynet:<vis>:hub:<realm>`.
-    if subject_type == "hub" {
-        return Some(format!("easynet:{visibility}:hub:{subject_value}"));
-    }
-    // Agent-profile: `r/<vis>/agent/<id>/abilities/...` →
-    // `easynet:<vis>:reg:agent.<id>`. We let the SDK fall back to
-    // its default by returning None — the same shape it already
-    // builds.
-    if subject_type == "agent" {
-        return None;
-    }
-    // Other subject_types (none today; reserved for future): fall
-    // through to SDK default rather than guessing.
     None
 }
 
@@ -571,8 +502,7 @@ pub fn resolve_key<I: AbilityInvoker>(
     realm: &str,
     agent_uri: &str,
 ) -> Result<crate::runtime::federation_client::ResolveKeyReceipt, String> {
-    let resource_uri =
-        hub_ability_resource_uri(realm, FED_RESOLVE_KEY_ABILITY_NAME);
+    let resource_uri = hub_ability_resource_uri(realm, FED_RESOLVE_KEY_ABILITY_NAME);
     let payload = serde_json::json!({ "agent_uri": agent_uri });
     let response = invoker.invoke_ability(tenant_id, &resource_uri, payload)?;
     let receipt_body = unwrap_result_json(response);
@@ -592,8 +522,7 @@ pub fn forward_invoke<I: AbilityInvoker>(
 ) -> Result<crate::runtime::federation_client::ForwardInvokeReceipt, String> {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
-    let resource_uri =
-        hub_ability_resource_uri(realm, FED_FORWARD_INVOKE_ABILITY_NAME);
+    let resource_uri = hub_ability_resource_uri(realm, FED_FORWARD_INVOKE_ABILITY_NAME);
     let arguments_bytes =
         serde_json::to_vec(arguments).map_err(|e| format!("encode forward args: {e}"))?;
     let arguments_b64 = STANDARD.encode(&arguments_bytes);
@@ -756,13 +685,10 @@ mod tests {
     }
 
     #[test]
-    fn bridge_compat_resource_uri_translates_hub_owned_ability() {
+    fn bridge_invoker_keeps_canonical_hub_owned_ability_uri() {
         assert_eq!(
-            bridge_compat_resource_uri(
-                "easynet:///r/acme/ability/hub.runtime.register_local_tool",
-                "tenant-1"
-            ),
-            "easynet:///r/prv/hub/acme/abilities/runtime.register_local_tool@1?tenant_id=tenant-1"
+            hub_ability_resource_uri("acme", "runtime.register_local_tool"),
+            "easynet:///r/acme/ability/hub.runtime.register_local_tool"
         );
     }
 

@@ -367,7 +367,7 @@ mod tests {
             file,
             ResourceUpsert {
                 realm: "acme",
-                owner_agent: "easynet:///r/acme/agent/01DEV",
+                owner_agent: "easynet:///r/acme/device/01DEV",
                 kind: ResourceType::Mic,
                 binding: ResourceBinding::LocalDevice,
                 hardware_id,
@@ -443,7 +443,7 @@ mod tests {
             &mut file,
             ResourceUpsert {
                 realm: "acme",
-                owner_agent: "easynet:///r/acme/agent/01DEV",
+                owner_agent: "easynet:///r/acme/device/01DEV",
                 kind: ResourceType::Camera, // wrong type
                 binding: ResourceBinding::LocalDevice,
                 hardware_id: "h-cam-not-mic",

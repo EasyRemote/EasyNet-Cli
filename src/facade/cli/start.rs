@@ -1023,7 +1023,7 @@ mod tests {
         // takes pre-extracted (tenant, node) pair so callers don't
         // re-load credentials. Behavior must match build_bootstrap_plan
         // for the same inputs. Plan wraps the raw node id into the
-        // canonical `easynet:///r/<realm>/agent/<node>` resource URA
+        // canonical `easynet:///r/<realm>/device/<node>` resource URA
         // for downstream Hub-tier signing — that wrapping is exactly
         // what the federation Invoke surface consumes, so the test
         // pins the wrapped form rather than the raw bare id.

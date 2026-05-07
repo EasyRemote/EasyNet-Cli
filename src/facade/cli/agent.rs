@@ -652,31 +652,7 @@ fn ability_name_from_resource_uri(resource_uri: &str) -> Option<String> {
     // `<owner>.<agent>.<verb>`. Routing wants just `<agent>.<verb>`,
     // e.g. `federation.advertise_agent` for
     // `easynet:///r/acme/ability/hub.federation.advertise_agent`.
-    if let Some(name) = crate::uri::qualified_ability_name(resource_uri) {
-        return Some(name);
-    }
-    // Bridge-transport fallback: `BridgeAbilityInvoker` still translates
-    // canonical hub-owned ability URAs to the legacy
-    // `easynet:///r/prv/hub/<realm>/abilities/<verb>@N?…` grammar when
-    // calling EasyNet-Axon, because the transport canonicaliser has not
-    // yet shipped the v4.1.4 parser.
-    // Recognise it here so direct-publish callers (`agent add`) can
-    // dispatch through the local daemon → hub path even when the
-    // actual transport URI is still in legacy shape.
-    //
-    // Shape: `easynet:///r/prv/hub/<realm>/abilities/<verb>@<ver>?<query>`
-    // — extract `<verb>` (everything between `/abilities/` and the
-    // first of `@` / `?` / EOI).
-    let tail = resource_uri.strip_prefix("easynet:///r/prv/hub/")?;
-    let after_realm = tail.split_once("/abilities/").map(|(_, rest)| rest)?;
-    let verb_end = after_realm
-        .find(|c: char| c == '@' || c == '?')
-        .unwrap_or(after_realm.len());
-    let verb = &after_realm[..verb_end];
-    if verb.is_empty() {
-        return None;
-    }
-    Some(verb.to_string())
+    crate::uri::qualified_ability_name(resource_uri)
 }
 
 #[cfg(any(test, feature = "axon-pb"))]
@@ -2179,30 +2155,11 @@ mod tests {
     }
 
     #[test]
-    fn ability_name_from_resource_uri_handles_legacy_prv_hub_shape() {
-        // Pre-v4.1.5 fallback. `runtime::publish` still emits the
-        // legacy `easynet:///r/prv/hub/<realm>/abilities/<verb>@N?...`
-        // shape for direct-publish advertise calls; the parser must
-        // recognise it so `agent add` can dispatch the resulting
-        // ability dial through the local daemon → hub path.
+    fn ability_name_from_resource_uri_rejects_retired_legacy_shape() {
         assert_eq!(
             ability_name_from_resource_uri(
                 "easynet:///r/prv/hub/acme/abilities/federation.advertise_agent@1?tenant_id=acme"
-            )
-            .as_deref(),
-            Some("federation.advertise_agent")
-        );
-        // Without query string + version segment.
-        assert_eq!(
-            ability_name_from_resource_uri(
-                "easynet:///r/prv/hub/acme/abilities/federation.advertise_abilities"
-            )
-            .as_deref(),
-            Some("federation.advertise_abilities")
-        );
-        // `prv/hub/.../abilities/` followed by empty verb → None.
-        assert_eq!(
-            ability_name_from_resource_uri("easynet:///r/prv/hub/acme/abilities/@1"),
+            ),
             None
         );
     }

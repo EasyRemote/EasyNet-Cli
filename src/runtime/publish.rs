@@ -304,10 +304,9 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
 /// Inputs:
 ///   * `invoker` — same `BridgeAbilityInvoker` used by advertise;
 ///     wraps the dendrite-bridge `ability_call_raw` path. Business
-///     code now emits the canonical hub-owned ability URA
-///     `easynet:///r/<realm>/ability/hub.runtime.register_local_tool`;
-///     `BridgeAbilityInvoker` translates it to the legacy transport
-///     grammar until EasyNet-Axon ships the new parser. The
+///     code emits the canonical hub-owned ability URA
+///     `easynet:///r/<realm>/ability/hub.runtime.register_local_tool`.
+///     The
 ///     `runtime.*` namespace is intercepted before membership +
 ///     admission checks (rpc_handlers.rs::is_runtime_admin_ability),
 ///     so the hub-shaped subject is purely a bridge admission key,
@@ -344,8 +343,7 @@ pub fn register_local_tools_via_runtime<I: AbilityInvoker>(
     let names = collect_daemon_owned_ability_names();
 
     // Runtime admin calls share the same canonical hub-owned ability
-    // model as federation.*; the bridge adapter handles the transport
-    // downgrade to legacy `/r/prv/hub/.../abilities/...@1` when needed.
+    // model as federation.*.
     let resource_uri = runtime_admin_resource_uri(realm, tenant_id, "runtime.register_local_tool");
     for name in names {
         let args = build_register_args(tenant_id, node_id, &name, dispatch_endpoint);
@@ -496,9 +494,7 @@ pub(crate) fn derive_owner_public_key_b64(tenant_id: &str, node_id: &str) -> Str
 /// Hub-profile counterpart of `derive_owner_public_key_b64`. Returns
 /// the public key the bridge will sign under for hub-shaped resource
 /// invocations. Business code addresses those calls as canonical
-/// `easynet:///r/<realm>/ability/hub.<ns>.<verb>` URAs; the bridge
-/// adapter still downgrades them to `r/prv/hub/<realm>/abilities/
-/// <verb>@1?tenant_id=...` on the wire. The SDK's
+/// `easynet:///r/<realm>/ability/hub.<ns>.<verb>` URAs. The SDK's
 /// `default_auth_for_subject` derives a DIFFERENT key for the hub
 /// subject than for the agent subject, so the daemon needs to
 /// register both — see `bootstrap_self_identity_via_runtime`.
@@ -1121,8 +1117,8 @@ mod tests {
 
     #[test]
     fn register_local_tools_uses_canonical_runtime_admin_uri() {
-        // Fake invokers observe the canonical business-layer URI;
-        // `BridgeAbilityInvoker` owns the transport downgrade.
+        // Fake invokers observe the exact URI the CLI now sends on
+        // the wire: canonical hub-owned runtime ability URA only.
         let _h = HomeGuard::new();
         let invoker = CountingInvoker::new(serde_json::json!({"ack": true}));
         let outcomes = register_local_tools_via_runtime(
@@ -1140,13 +1136,12 @@ mod tests {
             "register must walk at least one ability"
         );
         // Every call must hit the canonical hub-owned runtime ability
-        // URI; the bridge adapter translates it at the transport edge.
+        // URI.
         let calls = invoker.calls();
         assert_eq!(calls.len(), outcomes.len(), "1 call per ability");
         for (uri, payload) in &calls {
             assert_eq!(
-                uri,
-                "easynet:///r/acme/ability/hub.runtime.register_local_tool",
+                uri, "easynet:///r/acme/ability/hub.runtime.register_local_tool",
                 "register URI must stay canonical at the business layer"
             );
             assert_eq!(payload["tenant_id"], "tenant");

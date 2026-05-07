@@ -344,7 +344,9 @@ mod tests {
 
         // Cell observes the new entry.
         let snap = cell.snapshot();
-        let entry = snap.lookup("easynet:///r/r1/device/alpha").expect("present");
+        let entry = snap
+            .lookup("easynet:///r/r1/device/alpha")
+            .expect("present");
         assert_eq!(entry.public_key_b64, test_pub_b64);
         assert!(matches!(entry.role, TrustedAgentRole::Device));
 
@@ -486,11 +488,7 @@ mod tests {
         let cell = empty_cell();
 
         handle(
-            &args_bytes(
-                "easynet:///r/r1/hub",
-                &test_pub_b64(),
-                "backend",
-            ),
+            &args_bytes("easynet:///r/r1/hub", &test_pub_b64(), "backend"),
             "r1",
             &path,
             &cell,
@@ -516,10 +514,7 @@ mod tests {
             parse_realm_from_uri("easynet:///r/realm-x/device/n1"),
             Some("realm-x")
         );
-        assert_eq!(
-            parse_realm_from_uri("easynet:///r/abc/hub"),
-            Some("abc")
-        );
+        assert_eq!(parse_realm_from_uri("easynet:///r/abc/hub"), Some("abc"));
         assert_eq!(parse_realm_from_uri("easynet:///r//device/n1"), None);
         assert_eq!(parse_realm_from_uri("https://example.com"), None);
         assert_eq!(parse_realm_from_uri("easynet://r/x/device/n1"), None); // missing third slash

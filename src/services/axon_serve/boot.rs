@@ -1579,7 +1579,7 @@ mod tests {
             &path,
             r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/realm/agent/backend"
+agent_uri = "easynet:///r/realm/hub"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "backend"
 added_at_unix_ms = 1714492800000
@@ -1591,9 +1591,7 @@ added_at_unix_ms = 1714492800000
         let reloaded = reload_trust_anchor_cell_from(&path, &cell).expect("reload succeeds");
         assert_eq!(reloaded, 1);
         assert!(
-            cell.snapshot()
-                .lookup("easynet:///r/realm/agent/backend")
-                .is_some(),
+            cell.snapshot().lookup("easynet:///r/realm/hub").is_some(),
             "SIGHUP reload must publish the on-disk entry to future admissions"
         );
     }
@@ -1606,7 +1604,7 @@ added_at_unix_ms = 1714492800000
             &path,
             r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/realm/agent/initial"
+agent_uri = "easynet:///r/realm/hub"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "backend"
 added_at_unix_ms = 1714492800000
@@ -1624,9 +1622,7 @@ added_at_unix_ms = 1714492800000
             "error should name the reload path, got: {err}"
         );
         assert!(
-            cell.snapshot()
-                .lookup("easynet:///r/realm/agent/initial")
-                .is_some(),
+            cell.snapshot().lookup("easynet:///r/realm/hub").is_some(),
             "failed reload must keep the previously published trust anchor"
         );
     }

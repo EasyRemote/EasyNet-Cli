@@ -151,8 +151,7 @@ mod tests {
     #[test]
     fn snapshot_returns_current_anchor() {
         let initial = Arc::new(
-            RealmTrustAnchor::from_entries(vec![agent("easynet:///r/realm/hub")])
-                .expect("anchor"),
+            RealmTrustAnchor::from_entries(vec![agent("easynet:///r/realm/hub")]).expect("anchor"),
         );
         let cell = SharedTrustAnchor::new(initial);
         assert_eq!(cell.snapshot().len(), 1);
@@ -184,8 +183,7 @@ mod tests {
         // duration even if a concurrent register flow publishes
         // mid-RPC.
         let initial = Arc::new(
-            RealmTrustAnchor::from_entries(vec![agent("easynet:///r/realm/hub")])
-                .expect("anchor"),
+            RealmTrustAnchor::from_entries(vec![agent("easynet:///r/realm/hub")]).expect("anchor"),
         );
         let cell = SharedTrustAnchor::new(Arc::clone(&initial));
 
@@ -238,8 +236,7 @@ mod tests {
         let cell = SharedTrustAnchor::default();
         let cell2 = cell.clone();
         let next = Arc::new(
-            RealmTrustAnchor::from_entries(vec![agent("easynet:///r/realm/hub")])
-                .expect("anchor"),
+            RealmTrustAnchor::from_entries(vec![agent("easynet:///r/realm/hub")]).expect("anchor"),
         );
         cell.replace(next);
         assert_eq!(cell2.snapshot().len(), 1);

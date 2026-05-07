@@ -200,7 +200,10 @@ fn parse_legacy_bare_agent_uri(uri: &str) -> Option<(&str, &str)> {
     Some((realm, token))
 }
 
-fn canonical_uri_for_role(agent_uri: &str, role: TrustedAgentRole) -> Result<String, RealmTrustError> {
+fn canonical_uri_for_role(
+    agent_uri: &str,
+    role: TrustedAgentRole,
+) -> Result<String, RealmTrustError> {
     if let Ok(parsed) = crate::uri::parse_ura(agent_uri) {
         return match (role, parsed.kind) {
             (TrustedAgentRole::Device, crate::uri::URAKind::Device) => Ok(agent_uri.to_string()),
@@ -233,11 +236,14 @@ fn canonical_uri_for_role(agent_uri: &str, role: TrustedAgentRole) -> Result<Str
                 TrustedAgentRole::Device => "device".to_string(),
                 TrustedAgentRole::Hub => "hub".to_string(),
             },
-            detail: "URI is neither canonical nor the supported legacy bare-agent fallback".to_string(),
+            detail: "URI is neither canonical nor the supported legacy bare-agent fallback"
+                .to_string(),
         });
     };
     Ok(match role {
-        TrustedAgentRole::Device => crate::uri::device_uri(realm, crate::uri::strip_v1_agent_prefix(agent_uri).as_str()),
+        TrustedAgentRole::Device => {
+            crate::uri::device_uri(realm, crate::uri::strip_v1_agent_prefix(agent_uri).as_str())
+        }
         TrustedAgentRole::Backend | TrustedAgentRole::Hub => crate::uri::hub_uri(realm),
     })
 }
@@ -585,9 +591,7 @@ added_at_unix_ms = 1714492800000
         let anchor = RealmTrustAnchor::load_or_empty(file.path()).expect("Ok");
         assert_eq!(anchor.len(), 1);
 
-        let entry = anchor
-            .lookup("easynet:///r/realm/hub")
-            .expect("present");
+        let entry = anchor.lookup("easynet:///r/realm/hub").expect("present");
         assert_eq!(entry.role, TrustedAgentRole::Backend);
         assert_eq!(entry.added_at_unix_ms, 1_714_492_800_000);
     }
@@ -612,7 +616,9 @@ added_at_unix_ms = 1714492801234
         let anchor = RealmTrustAnchor::load_or_empty(file.path()).expect("Ok");
         assert_eq!(anchor.len(), 2);
         assert!(anchor.lookup("easynet:///r/realm/hub").is_some());
-        assert!(anchor.lookup("easynet:///r/realm/device/laptop-1").is_some());
+        assert!(anchor
+            .lookup("easynet:///r/realm/device/laptop-1")
+            .is_some());
         assert!(anchor.lookup("easynet:///r/realm/device/missing").is_none());
     }
 
@@ -731,9 +737,7 @@ added_at_unix_ms = 1714492800000
         let loaded = RealmTrustAnchor::try_load_strict(&path).expect("strict load Ok");
         assert_eq!(loaded.len(), 2);
         assert_eq!(
-            loaded
-                .lookup("easynet:///r/realm/hub")
-                .map(|e| e.role),
+            loaded.lookup("easynet:///r/realm/hub").map(|e| e.role),
             Some(TrustedAgentRole::Backend),
         );
         assert_eq!(
@@ -832,7 +836,7 @@ added_at_unix_ms = 1714492800000
         // default to `None`.
         let toml_content = r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/realm/agent/backend"
+agent_uri = "easynet:///r/realm/hub"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "backend"
 added_at_unix_ms = 1714492800000

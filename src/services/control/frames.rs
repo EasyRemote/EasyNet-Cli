@@ -346,7 +346,7 @@ mod tests {
     #[test]
     fn outgoing_result_frame_emits_receipt_header_field_when_present() {
         let header = crate::runtime::hosted_receipt::HostedAgentReceiptHeader::new_selfsigned(
-            "easynet:///r/acme/agent/01DEV",
+            "easynet:///r/acme/device/01DEV",
         )
         .unwrap();
         let f = OutgoingFrame::Result {

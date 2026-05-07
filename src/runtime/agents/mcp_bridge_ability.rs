@@ -265,7 +265,7 @@ mod tests {
     fn d(name: &str) -> AbilityDescriptor {
         AbilityDescriptor::new(
             name.to_string(),
-            "easynet:///r/test/agent/01DEV",
+            "easynet:///r/test/device/01DEV",
             Visibility::Public,
         )
         .expect("test descriptor")

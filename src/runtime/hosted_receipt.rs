@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn hosted_rejects_empty_callee_or_host_or_attestation() {
-        let host = "easynet:///r/acme/agent/01DEV";
+        let host = "easynet:///r/acme/device/01DEV";
         assert_eq!(
             HostedAgentReceiptHeader::new_hosted("", host, vec![1]).unwrap_err(),
             HostedReceiptError::EmptyCallee,
@@ -248,8 +248,8 @@ mod tests {
 
     #[test]
     fn hosted_records_distinct_callee_and_signer() {
-        let callee = "easynet:///r/acme/agent/01LLM";
-        let host = "easynet:///r/acme/agent/01DEV";
+        let callee = "easynet:///r/acme/agent/u1.01LLM";
+        let host = "easynet:///r/acme/device/01DEV";
         let attestation = vec![0xDE, 0xAD, 0xBE, 0xEF];
         let h = HostedAgentReceiptHeader::new_hosted(callee, host, attestation.clone()).unwrap();
         assert_eq!(h.callee_agent_uri, callee);
@@ -273,8 +273,8 @@ mod tests {
         // signer doesn't match callee — must reject before we trust
         // the body.
         let bad = HostedAgentReceiptHeader {
-            callee_agent_uri: "easynet:///r/acme/agent/01A".into(),
-            signer_agent_uri: "easynet:///r/acme/agent/01B".into(),
+            callee_agent_uri: "easynet:///r/acme/agent/u1.01A".into(),
+            signer_agent_uri: "easynet:///r/acme/agent/u1.01B".into(),
             model: SigningModel::Selfsigned,
         };
         assert_eq!(
@@ -286,10 +286,10 @@ mod tests {
     #[test]
     fn validate_catches_hosted_with_signer_not_equal_to_host_uri() {
         let bad = HostedAgentReceiptHeader {
-            callee_agent_uri: "easynet:///r/acme/agent/01LLM".into(),
-            signer_agent_uri: "easynet:///r/acme/agent/01OTHER".into(),
+            callee_agent_uri: "easynet:///r/acme/agent/u1.01LLM".into(),
+            signer_agent_uri: "easynet:///r/acme/agent/u1.01OTHER".into(),
             model: SigningModel::HostedBy {
-                host_uri: "easynet:///r/acme/agent/01DEV".into(),
+                host_uri: "easynet:///r/acme/device/01DEV".into(),
                 host_attestation: vec![1],
             },
         };

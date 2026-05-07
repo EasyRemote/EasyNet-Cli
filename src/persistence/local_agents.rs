@@ -180,25 +180,25 @@ mod tests {
     #[test]
     fn upsert_inserts_when_absent_and_returns_false() {
         let mut f = LocalAgentsFile {
-            host_device_agent_uri: "easynet:///r/acme/agent/01DEV".into(),
+            host_device_agent_uri: "easynet:///r/acme/device/01DEV".into(),
             hosted_agents: Vec::new(),
         };
         let replaced =
-            upsert_hosted_agent(&mut f, "llm", "claude", "easynet:///r/acme/agent/01LLM");
+            upsert_hosted_agent(&mut f, "llm", "claude", "easynet:///r/acme/agent/u1.01LLM");
         assert!(!replaced);
         assert_eq!(f.hosted_agents.len(), 1);
         assert_eq!(f.hosted_agents[0].profile, "llm");
         assert_eq!(f.hosted_agents[0].name, "claude");
         assert_eq!(
             f.hosted_agents[0].signing_authority,
-            "hosted_by:easynet:///r/acme/agent/01DEV"
+            "hosted_by:easynet:///r/acme/device/01DEV"
         );
     }
 
     #[test]
     fn upsert_replaces_when_present_and_returns_true() {
         let mut f = LocalAgentsFile {
-            host_device_agent_uri: "easynet:///r/acme/agent/01DEV".into(),
+            host_device_agent_uri: "easynet:///r/acme/device/01DEV".into(),
             hosted_agents: Vec::new(),
         };
         upsert_hosted_agent(&mut f, "llm", "claude", "uri-v1");
@@ -233,7 +233,7 @@ mod tests {
     #[test]
     fn round_trip_serde_preserves_all_fields() {
         let mut f = LocalAgentsFile {
-            host_device_agent_uri: "easynet:///r/acme/agent/01DEV".into(),
+            host_device_agent_uri: "easynet:///r/acme/device/01DEV".into(),
             hosted_agents: Vec::new(),
         };
         upsert_hosted_agent(&mut f, "llm", "claude", "uri-llm");
@@ -250,13 +250,13 @@ mod tests {
         // daemons must still parse the file (serde default behaviour
         // for our struct is to ignore unknown fields).
         let json = r#"{
-            "host_device_agent_uri": "easynet:///r/acme/agent/01DEV",
+            "host_device_agent_uri": "easynet:///r/acme/device/01DEV",
             "hosted_agents": [
                 {
                     "profile": "llm",
                     "name": "claude",
                     "agent_uri": "uri-1",
-                    "signing_authority": "hosted_by:easynet:///r/acme/agent/01DEV",
+                    "signing_authority": "hosted_by:easynet:///r/acme/device/01DEV",
                     "first_seen_at": "2026-04-27T00:00:00Z",
                     "future_field": "ignored"
                 }

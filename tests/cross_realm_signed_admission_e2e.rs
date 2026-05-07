@@ -234,7 +234,7 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
     let daemon_a_anchor = Arc::new(daemon_a_anchor_inner);
     let daemon_a_admission = AdmissionFacade::new(
         daemon_a_anchor,
-            Some("easynet:///r/realm-a/hub".to_string()),
+        Some("easynet:///r/realm-a/hub".to_string()),
     );
     let daemon_a = Arc::new(
         DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), daemon_a_admission)

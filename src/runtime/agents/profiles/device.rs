@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn descriptors_for_emit_only_owned_names() {
-        let owner = "easynet:///r/acme/agent/01DEV";
+        let owner = "easynet:///r/acme/device/01DEV";
         let descriptors = descriptors_for(owner);
         assert!(
             !descriptors.is_empty(),
@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn descriptors_for_marks_observe_as_public_and_others_scoped() {
         use crate::runtime::ability_descriptor::Visibility;
-        let descriptors = descriptors_for("easynet:///r/acme/agent/01DEV");
+        let descriptors = descriptors_for("easynet:///r/acme/device/01DEV");
         for d in descriptors {
             // Post-M2 of system-namespace migration: every device
             // verb is partitioned under `device.*`. observe.* is

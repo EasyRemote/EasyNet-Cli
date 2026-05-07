@@ -73,8 +73,7 @@ pub struct DirectoryEntry {
     /// `agent_uri` for wire compatibility with older readers, but
     /// the value carried here is the device-target a caller can
     /// route `federation.forward_invoke` against:
-    /// `easynet:///r/<realm>/device/<id>` in v4.1.4+, with legacy
-    /// bare `/agent/<node>` tails tolerated during migration.
+    /// `easynet:///r/<realm>/device/<id>` in v4.1.4+.
     pub agent_uri: String,
     /// Stable node id within the realm. Matches the device's
     /// `credentials.json::node_id`.
@@ -117,9 +116,8 @@ pub struct DirectoryEntry {
 /// territory.
 ///
 /// `node_id` is parsed from the URI tail. Canonical v4.1.4 device
-/// URIs use `/device/<node>`; legacy pre-Phase-2A device URIs used
-/// `/agent/<node>`. Non-canonical URIs (which should not appear in
-/// the registry, but defensive handling matters) get
+/// URIs use `/device/<node>`. Non-canonical URIs (which should not
+/// appear in the registry, but defensive handling matters) get
 /// `node_id = agent_uri.clone()` so downstream consumers always
 /// have a non-empty key.
 #[cfg(feature = "axon-pb")]
@@ -127,14 +125,7 @@ pub struct DirectoryEntry {
 pub fn presence_uri_to_directory_entry(agent_uri: &str, is_active: bool) -> DirectoryEntry {
     let node_id = match crate::uri::parse_ura(agent_uri) {
         Ok(parsed) if parsed.kind == crate::uri::URAKind::Device => parsed.device_id,
-        _ => {
-            let legacy = crate::uri::strip_v1_agent_prefix(agent_uri);
-            if legacy != agent_uri {
-                legacy
-            } else {
-                agent_uri.to_string()
-            }
-        }
+        _ => agent_uri.to_string(),
     };
     DirectoryEntry {
         agent_uri: agent_uri.to_string(),
@@ -2823,11 +2814,11 @@ mod tests {
         }
 
         #[test]
-        fn presence_uri_to_directory_entry_preserves_legacy_agent_device_tail() {
+        fn presence_uri_to_directory_entry_treats_legacy_agent_shape_as_non_canonical() {
             let entry =
                 presence_uri_to_directory_entry("easynet:///r/realm-a/agent/device-X", true);
             assert_eq!(entry.agent_uri, "easynet:///r/realm-a/agent/device-X");
-            assert_eq!(entry.node_id, "device-X");
+            assert_eq!(entry.node_id, "easynet:///r/realm-a/agent/device-X");
         }
 
         #[test]
@@ -2959,13 +2950,7 @@ mod tests {
             );
             let cell = SharedFederatedDirectoryView::default();
 
-            let outcome = poll_once(
-                &client,
-                &peers,
-                Some("easynet:///r/realm-a/hub"),
-                &cell,
-            )
-            .await;
+            let outcome = poll_once(&client, &peers, Some("easynet:///r/realm-a/hub"), &cell).await;
 
             assert_eq!(outcome.successful_peers, vec!["realm-b".to_string()]);
             assert!(outcome.failed_peers.is_empty());

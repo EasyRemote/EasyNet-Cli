@@ -360,23 +360,23 @@ mod tests {
     #[test]
     fn advertise_args_serializes_self_signed_kind() {
         let args = AdvertiseAgentArgs {
-            agent_uri: "easynet:///r/acme/agent/01DEV".into(),
+            agent_uri: "easynet:///r/acme/device/01DEV".into(),
             public_key_hex: "aa".into(),
             signing_authority: AdvertisedSigningAuthority::SelfSigned,
             host_node_id: None,
         };
         let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
         assert_eq!(v["signing_authority"]["kind"], "self_signed");
-        assert_eq!(v["agent_uri"], "easynet:///r/acme/agent/01DEV");
+        assert_eq!(v["agent_uri"], "easynet:///r/acme/device/01DEV");
     }
 
     #[test]
     fn advertise_args_serializes_hosted_kind_with_host_uri() {
         let args = AdvertiseAgentArgs {
-            agent_uri: "easynet:///r/acme/agent/01LLM".into(),
+            agent_uri: "easynet:///r/acme/agent/u1.01LLM".into(),
             public_key_hex: "".into(),
             signing_authority: AdvertisedSigningAuthority::HostedBy {
-                host_uri: "easynet:///r/acme/agent/01DEV".into(),
+                host_uri: "easynet:///r/acme/device/01DEV".into(),
             },
             host_node_id: None,
         };
@@ -384,19 +384,19 @@ mod tests {
         assert_eq!(v["signing_authority"]["kind"], "hosted_by");
         assert_eq!(
             v["signing_authority"]["host_uri"],
-            "easynet:///r/acme/agent/01DEV"
+            "easynet:///r/acme/device/01DEV"
         );
     }
 
     #[test]
     fn join_receipt_round_trips_through_serde() {
         let body = json!({
-            "canonical_agent_uri": "easynet:///r/acme/agent/01DEV",
+            "canonical_agent_uri": "easynet:///r/acme/device/01DEV",
             "realm": "acme",
             "join_receipt_hash": "abc123"
         });
         let parsed: JoinReceipt = parse_receipt_value(&body).unwrap();
-        assert_eq!(parsed.canonical_agent_uri, "easynet:///r/acme/agent/01DEV");
+        assert_eq!(parsed.canonical_agent_uri, "easynet:///r/acme/device/01DEV");
         assert_eq!(parsed.realm, "acme");
         assert_eq!(parsed.join_receipt_hash, "abc123");
     }

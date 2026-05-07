@@ -705,7 +705,7 @@ mod tests {
         // args_digest / canonical bytes / signed envelope.
         let parsed = InvokeArgs::parse(&json!({
             "ability": "weather",
-            "_caller_uri": "easynet:///r/silan.localhost/agent/backend",
+            "_caller_uri": "easynet:///r/silan.localhost/hub",
             "_request_id": "req-deadbeef00112233",
             "_idempotency_key": "idem-abc",
             "_timeout_ms": 5000,
@@ -715,7 +715,7 @@ mod tests {
         assert_eq!(parsed.metadata.request_id, "req-deadbeef00112233");
         assert_eq!(
             parsed.metadata.caller_uri,
-            "easynet:///r/silan.localhost/agent/backend",
+            "easynet:///r/silan.localhost/hub",
         );
         // Sidecars MUST NOT bleed into the inner ability args; the
         // signed args_digest covers `args` exclusively.
@@ -1009,7 +1009,7 @@ mod tests {
         let _g = fwd::test_lock();
         fwd::set_test_knower(|uri| uri.starts_with("easynet:///r/"));
         fwd::set_test_router(|target, ability, args| {
-            assert_eq!(target, "easynet:///r/exp-realm/agent/alice-node");
+            assert_eq!(target, "easynet:///r/exp-realm/device/alice-node");
             assert_eq!(ability, "ping");
             assert_eq!(args["from"], "silan");
             Ok(json!({"echo": "from-alice", "ability": ability}))
@@ -1017,17 +1017,17 @@ mod tests {
 
         let dispatch = fixture(&[], AgentRegistry::default());
         let resp = dispatch(json!({
-            "target": "easynet:///r/exp-realm/agent/alice-node",
+            "target": "easynet:///r/exp-realm/device/alice-node",
             "ability": "ping",
             "args": {"from": "silan"}
         }))
         .unwrap();
         // Forward path returns the inner result Value verbatim — the
         // dispatch layer wraps that with the standard envelope.
-        assert_eq!(resp["target"], "easynet:///r/exp-realm/agent/alice-node");
+        assert_eq!(resp["target"], "easynet:///r/exp-realm/device/alice-node");
         assert_eq!(
             resp["qualified_name"],
-            "easynet:///r/exp-realm/agent/alice-node.ping"
+            "easynet:///r/exp-realm/device/alice-node.ping"
         );
         assert_eq!(resp["result"]["echo"], "from-alice");
 
@@ -1042,7 +1042,7 @@ mod tests {
 
         let dispatch = fixture(&[], AgentRegistry::default());
         let err = dispatch(json!({
-            "target": "easynet:///r/exp-realm/agent/unknown",
+            "target": "easynet:///r/exp-realm/device/unknown",
             "ability": "ping",
         }))
         .unwrap_err();
@@ -1061,7 +1061,7 @@ mod tests {
 
         let dispatch = fixture(&[], AgentRegistry::default());
         let err = dispatch(json!({
-            "target": "easynet:///r/exp-realm/agent/down",
+            "target": "easynet:///r/exp-realm/device/down",
             "ability": "ping"
         }))
         .unwrap_err();

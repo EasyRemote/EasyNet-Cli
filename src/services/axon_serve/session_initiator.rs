@@ -1524,7 +1524,7 @@ mod tests {
 
     #[test]
     fn build_session_envelope_open_carries_caller_uri_and_ability_name() {
-        let frame = build_session_envelope_open("easynet:///r/realm/agent/n1");
+        let frame = build_session_envelope_open("easynet:///r/realm/device/n1");
         let UpPayload::EnvelopeOpen(eo) = frame.payload.expect("payload") else {
             panic!("frame 0 must be EnvelopeOpen");
         };
@@ -1541,13 +1541,13 @@ mod tests {
                 .and_then(|e| e.caller.as_ref())
                 .map(|a| a.uri.as_str())
                 .unwrap_or(""),
-            "easynet:///r/realm/agent/n1",
+            "easynet:///r/realm/device/n1",
         );
     }
 
     #[test]
     fn build_session_envelope_open_includes_one_stream_descriptor() {
-        let frame = build_session_envelope_open("easynet:///r/realm/agent/n1");
+        let frame = build_session_envelope_open("easynet:///r/realm/device/n1");
         let UpPayload::EnvelopeOpen(eo) = frame.payload.expect("payload") else {
             panic!("payload");
         };
@@ -1560,7 +1560,7 @@ mod tests {
     fn build_session_envelope_open_with_seed_adds_signature_and_nonce() {
         let seed = [0x42_u8; 32];
         let frame =
-            build_session_envelope_open_with_seed("easynet:///r/realm/agent/n1", Some(seed));
+            build_session_envelope_open_with_seed("easynet:///r/realm/device/n1", Some(seed));
         assert_eq!(frame.sequence, 0);
         assert_eq!(frame.mac.len(), 64);
 
@@ -1581,7 +1581,7 @@ mod tests {
                 .as_ref()
                 .map(|s| s.uri.as_str())
                 .unwrap_or(""),
-            "easynet:///r/realm/agent/n1",
+            "easynet:///r/realm/device/n1",
         );
     }
 
@@ -1626,7 +1626,7 @@ mod tests {
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let result = dial_and_run_session(
             "not a valid uri".to_string(),
-            "easynet:///r/realm/agent/n1".to_string(),
+            "easynet:///r/realm/device/n1".to_string(),
             None,
             None,
             dispatcher,
@@ -1652,7 +1652,7 @@ mod tests {
             Duration::from_secs(5),
             dial_and_run_session(
                 "http://127.0.0.1:1".to_string(),
-                "easynet:///r/realm/agent/n1".to_string(),
+                "easynet:///r/realm/device/n1".to_string(),
                 None,
                 None,
                 dispatcher,
@@ -1681,7 +1681,7 @@ mod tests {
         let bogus = std::path::PathBuf::from("/tmp/easynet-test-no-such-ca-file-xyz.pem");
         let result = dial_and_run_session(
             "https://127.0.0.1:1".to_string(),
-            "easynet:///r/realm/agent/n1".to_string(),
+            "easynet:///r/realm/device/n1".to_string(),
             None,
             Some(bogus.as_path()),
             dispatcher,
@@ -1704,7 +1704,7 @@ mod tests {
 
         let supervisor_handle = tokio::spawn(run_session_supervisor(
             "http://127.0.0.1:1".to_string(),
-            "easynet:///r/realm/agent/n1".to_string(),
+            "easynet:///r/realm/device/n1".to_string(),
             None,
             None,
             dispatcher,
@@ -1733,7 +1733,7 @@ mod tests {
 
         let result = dial_and_run_session_with_idle_timeout(
             format!("http://{addr}"),
-            "easynet:///r/realm/agent/n1".to_string(),
+            "easynet:///r/realm/device/n1".to_string(),
             None,
             None,
             dispatcher,
@@ -1759,7 +1759,7 @@ mod tests {
 
         let result = dial_and_run_session_with_idle_timeout(
             format!("http://{addr}"),
-            "easynet:///r/realm/agent/n1".to_string(),
+            "easynet:///r/realm/device/n1".to_string(),
             None,
             None,
             dispatcher,

@@ -441,7 +441,7 @@ mod tests {
     use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
 
     fn d(name: &str) -> AbilityDescriptor {
-        AbilityDescriptor::new(name, "easynet:///r/test/agent/01DEV", Visibility::Public)
+        AbilityDescriptor::new(name, "easynet:///r/test/device/01DEV", Visibility::Public)
             .expect("test descriptor")
     }
 

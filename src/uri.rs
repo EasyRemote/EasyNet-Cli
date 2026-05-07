@@ -471,7 +471,8 @@ pub fn display_id(uri: &str) -> String {
 /// or malformed input.
 pub fn qualified_ability_name(uri: &str) -> Option<String> {
     let parsed = parse_ura(uri).ok()?;
-    if parsed.kind != URAKind::Ability || parsed.agent_id.is_empty() || parsed.ability_id.is_empty() {
+    if parsed.kind != URAKind::Ability || parsed.agent_id.is_empty() || parsed.ability_id.is_empty()
+    {
         return None;
     }
     Some(format!("{}.{}", parsed.agent_id, parsed.ability_id))
@@ -746,8 +747,10 @@ mod tests {
     #[test]
     fn qualified_ability_name_extracts_member_call_name() {
         assert_eq!(
-            qualified_ability_name("easynet:///r/localhost/ability/hub.runtime.register_local_tool")
-                .as_deref(),
+            qualified_ability_name(
+                "easynet:///r/localhost/ability/hub.runtime.register_local_tool"
+            )
+            .as_deref(),
             Some("runtime.register_local_tool")
         );
         assert_eq!(qualified_ability_name("easynet:///r/localhost/hub"), None);

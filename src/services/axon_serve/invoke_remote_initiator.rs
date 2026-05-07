@@ -498,7 +498,7 @@ mod tests {
     #[test]
     fn frame_zero_carries_ability_name_and_one_stream_descriptor() {
         let request_json = serde_json::to_vec(&InvokeRemoteUp::Request {
-            subject_device: "easynet:///r/realm/agent/dev-B".into(),
+            subject_device: "easynet:///r/realm/device/dev-B".into(),
             ability: "echo".into(),
             args: b"hi".to_vec(),
         })
@@ -526,7 +526,7 @@ mod tests {
     #[test]
     fn invoke_remote_up_request_serde_round_trip() {
         let original = InvokeRemoteUp::Request {
-            subject_device: "easynet:///r/realm/agent/dev-X".into(),
+            subject_device: "easynet:///r/realm/device/dev-X".into(),
             ability: "fs.read".into(),
             args: vec![1, 2, 3, 255],
         };

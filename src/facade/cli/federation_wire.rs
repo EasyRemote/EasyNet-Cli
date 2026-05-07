@@ -1017,7 +1017,7 @@ added_at_unix_ms = 100
     fn upsert_self_trusted_agent_preserves_existing_unrelated_rows() {
         let raw = r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/tenant-a/agent/other-device"
+agent_uri = "easynet:///r/tenant-a/device/other-device"
 public_key_b64 = "OTHER-KEY"
 role = "device"
 added_at_unix_ms = 1

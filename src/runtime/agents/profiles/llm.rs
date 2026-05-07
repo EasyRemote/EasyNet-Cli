@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn descriptors_for_marks_skill_namespace_as_private() {
         use crate::runtime::ability_descriptor::Visibility;
-        let descriptors = descriptors_for("easynet:///r/acme/agent/01LLM");
+        let descriptors = descriptors_for("easynet:///r/acme/agent/u1.01LLM");
         for d in descriptors {
             if d.name.starts_with("skill.") {
                 assert_eq!(
@@ -171,7 +171,7 @@ mod tests {
     #[test]
     fn descriptors_for_with_metadata_stamps_agent_type_when_provided() {
         let descriptors =
-            descriptors_for_with_metadata("easynet:///r/acme/agent/01LLM", Some("claude-code"));
+            descriptors_for_with_metadata("easynet:///r/acme/agent/u1.01LLM", Some("claude-code"));
         for d in &descriptors {
             assert_eq!(
                 d.metadata.get("agent_type").map(String::as_str),
@@ -184,7 +184,7 @@ mod tests {
 
     #[test]
     fn descriptors_for_with_metadata_omits_agent_type_when_absent() {
-        let descriptors = descriptors_for_with_metadata("easynet:///r/acme/agent/01LLM", None);
+        let descriptors = descriptors_for_with_metadata("easynet:///r/acme/agent/u1.01LLM", None);
         for d in &descriptors {
             assert!(
                 !d.metadata.contains_key("agent_type"),
