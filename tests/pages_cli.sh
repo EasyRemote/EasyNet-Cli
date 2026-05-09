@@ -110,14 +110,22 @@ c5_show() {
   fi
 }
 
-# C6 — url prints exactly the URL + newline
+# C6 — url prints exactly the URL + newline.
+#
+# Shape: `https://<realm>/web/<user>/<project>/` — the production
+# Hub path-based form served by `backend/internal/handler/
+# pages_public/serve.go`. Earlier this assertion pinned the daemon-
+# local subdomain shape (`http://<project>.<user>.pages.localhost:
+# <port>/`); that was dev-only and never the URL operators
+# actually open in a browser. We now check for the `/web/<user>/
+# <project>/` segment and `https://` scheme.
 c6_url() {
   local out
   out=$("$EASYNET" pages url "$PROJECT" 2>&1)
-  if [[ "$out" == http://*"$PROJECT"*"$USER_ID"*"pages"* ]]; then
+  if [[ "$out" == https://*"/web/$USER_ID/$PROJECT/"* ]]; then
     ok "C6 url"
   else
-    ko C6 "url stdout wrong: $out"
+    ko C6 "url stdout wrong (expected https://<realm>/web/$USER_ID/$PROJECT/, got): $out"
   fi
 }
 

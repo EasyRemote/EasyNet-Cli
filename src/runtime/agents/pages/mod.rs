@@ -44,12 +44,49 @@ use crate::runtime::ability_dispatch::{LocalAbilityRegistry, LocalRpcHandler};
 /// Installation parameters for the Pages reference system. Carry
 /// the daemon's user identity (the `<user>` segment in every
 /// pages-rooted URI), the realm, and the in-daemon Hub listener
-/// port (only used to format the `url_root` returned from publish).
+/// port (only used to format the dev-only listener URL surfaced
+/// from `<user>.pages.get`).
 #[derive(Debug, Clone)]
 pub struct PagesConfig {
     pub user: String,
     pub realm: String,
     pub listener_port: u16,
+}
+
+/// Production public URL where the Hub serves a published project.
+///
+/// Shape: `https://<realm>/web/<user>/<project_id>/`.
+///
+/// Authority: this is what `backend/internal/handler/pages_public/
+/// serve.go` actually routes — every public fetch a browser does
+/// against `easynet.run` resolves through `/web/<u>/<p>/` to the
+/// owning daemon's `<user>.<project_id>.page.fetch` ability.
+///
+/// Earlier drafts of the publish handler returned a daemon-local
+/// subdomain shape (`http://<project>.<user>.pages.localhost:<port>/`).
+/// That was the URL of the daemon's *in-process* HTTP listener,
+/// useful for `curl` against a local dev daemon but **never
+/// reachable in production** — production has no
+/// `*.*.pages.easynet.run` wildcard cert, and the daemon listener
+/// is bound to 127.0.0.1 anyway. Surfacing it as the primary URL
+/// from `pages publish` / `pages list` / `pages url` led to
+/// operator confusion (silan's review: "对应hub的public的地址描述
+/// 不准确"), so we now return the hub form here and demote the
+/// daemon-local form to `pages_dev_listener_url_root`, surfaced
+/// only by `<user>.pages.get` for debugging.
+pub fn pages_public_url_root(realm: &str, user: &str, project_id: &str) -> String {
+    format!("https://{realm}/web/{user}/{project_id}/")
+}
+
+/// Dev-only URL of the daemon's in-process HTTP listener for this
+/// project. Only meaningful when `EASYNET_PAGES_PORT` is set and
+/// the daemon spawned its local listener; in production this URL
+/// resolves to nothing. Returned as a secondary field from
+/// `<user>.pages.get` so an operator running `easynet pages show
+/// <project>` can see both the production URL and the local
+/// listener URL during dev.
+pub fn pages_dev_listener_url_root(user: &str, project_id: &str, listener_port: u16) -> String {
+    format!("http://{project_id}.{user}.pages.localhost:{listener_port}/")
 }
 
 /// Wire the Pages reference system into the registry. Called
@@ -107,9 +144,9 @@ pub fn register(
                     }
                     "list" => {
                         let user = cfg.user.clone();
-                        let port = cfg.listener_port;
+                        let realm = cfg.realm.clone();
                         return Some(Arc::new(move |args: Value| {
-                            list_get_unpublish::handle_list(&user, port, args)
+                            list_get_unpublish::handle_list(&user, &realm, args)
                         }));
                     }
                     "get" => {

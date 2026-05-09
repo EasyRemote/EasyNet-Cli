@@ -32,11 +32,19 @@ pub struct PagesArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum PagesCommand {
+    // The actual public URL the Hub serves is path-based:
+    //   https://<realm>/web/<user>/<project_id>/...
+    // (see `backend/internal/handler/pages_public/serve.go`). The
+    // `<project>.<user>.pages.localhost:<port>` form an earlier
+    // draft of this comment mentioned is the *daemon's* in-process
+    // HTTP listener for local dev, not the production URL — routing
+    // there requires a wildcard DNS / TLS cert that production does
+    // not (and likely will not) ship. Keep `--help` aligned with
+    // what the operator can actually `curl`: the hub's `/web/` path.
     /// Publish a folder of static bytes as a website. Mints a
-    /// resource URA `easynet:///r/<realm>/resource/<user>.<project_id>/`
-    /// and registers the project's `<user>.<project_id>.page.fetch`
-    /// ability. The Hub serves traffic at
-    /// `<project_id>.<user>.pages.<host>:<port>/`.
+    /// resource URA easynet:///r/<realm>/resource/<user>.<project_id>/
+    /// and registers the project's <user>.<project_id>.page.fetch
+    /// ability. The Hub serves traffic at https://<realm>/web/<user>/<project_id>/.
     Create(CreateArgs),
 
     /// List currently-published projects on this daemon.
@@ -49,20 +57,19 @@ pub enum PagesCommand {
     /// the fetch ability; subsequent HTTP requests return 503.
     Delete(DeleteArgs),
 
-    /// Print the project's URL root only — scriptable
-    /// (`open $(easynet pages url papers)`).
+    /// Print the project's production URL root only — scriptable
+    /// for shell composition like: open $(easynet pages url papers).
     Url(UrlArgs),
 }
 
 #[derive(Debug, Args)]
 pub struct CreateArgs {
-    /// Project identifier (URA-safe segment, alnum + `_-`, max 64).
+    /// Project identifier (URA-safe segment, alnum + underscore + dash, max 64).
     pub project_id: String,
     /// Absolute path to the folder to publish.
     #[arg(long)]
     pub folder: String,
-    /// Visibility — `public` (default), `private`/`scoped` reserved
-    /// for post-MVP and rejected with a clear error.
+    /// Visibility — public (default); private/scoped reserved for post-MVP and rejected with a clear error.
     #[arg(long, default_value = "public")]
     pub visibility: String,
     /// Emit JSON instead of the human-readable summary.
@@ -128,7 +135,7 @@ fn current_user() -> anyhow::Result<String> {
         return Ok(v);
     }
     anyhow::bail!(
-        "no user identity bound to this daemon — run `easynet device pair` first \
+        "no user identity bound to this daemon — run 'easynet device pair' first \
          (or set EASYNET_PAGES_USER for dev rigs)"
     )
 }
@@ -235,6 +242,15 @@ fn run_show(a: ShowArgs) -> anyhow::Result<()> {
             .and_then(Value::as_str)
             .unwrap_or("?")
     );
+    // Dev-only daemon-local listener URL. Reachable from this host
+    // only when EASYNET_PAGES_PORT is set and the daemon spawned
+    // its in-process HTTP listener; intentionally omitted from
+    // `pages list` and `pages url` because operators consuming
+    // those surfaces want the production URL. `pages show` is the
+    // verbose surface — we surface both.
+    if let Some(dev) = result.get("dev_listener_url_root").and_then(Value::as_str) {
+        println!("  dev_listener: {dev}");
+    }
     println!(
         "  size_cap:     {} bytes",
         result
@@ -252,7 +268,7 @@ fn run_delete(a: DeleteArgs) -> anyhow::Result<()> {
         // matches the conservative default the test matrix expects
         // (Matrix B C7).
         anyhow::bail!(
-            "delete is destructive — pass `--force` to confirm; this MVP does not prompt interactively"
+            "delete is destructive — pass '--force' to confirm; this MVP does not prompt interactively"
         );
     }
     let user = current_user()?;

@@ -51,12 +51,24 @@ use super::state::{
 /// ```json
 /// {
 ///   "project_uri": "easynet:///r/<realm>/resource/<user>.<project_id>/",
-///   "url_root":    "http://<project_id>.<user>.pages.localhost:<port>/"
+///   "url_root":    "https://<realm>/web/<user>/<project_id>/"
 /// }
 /// ```
+///
+/// `url_root` is the production Hub URL — see
+/// `pages_public_url_root` in `pages/mod.rs`. The daemon's in-process
+/// HTTP listener URL (`http://<project>.<user>.pages.localhost:<port>/`)
+/// is dev-only and is only surfaced by `<user>.pages.get` for
+/// debugging.
 pub fn handle_publish(
     user: &str,
-    listener_port: u16,
+    // Kept in the signature for ABI stability with the resolver
+    // wiring in `pages/mod.rs`. The publish surface no longer
+    // depends on the daemon's in-process listener — `url_root` is
+    // built from `realm` via `pages_public_url_root`. The dev-only
+    // listener URL is reported from `<user>.pages.get` (which still
+    // takes the port) when an operator wants it for local curl.
+    _listener_port: u16,
     realm: &str,
     registry: Arc<LocalAbilityRegistry>,
     args: Value,
@@ -122,8 +134,8 @@ pub fn handle_publish(
     // other.
     register_fetch_ability(&registry, user, project_id);
 
-    let project_uri = format!("easynet:///r/{realm}/resource/{user}.{project_id}/",);
-    let url_root = format!("http://{project_id}.{user}.pages.localhost:{listener_port}/",);
+    let project_uri = format!("easynet:///r/{realm}/resource/{user}.{project_id}/");
+    let url_root = super::pages_public_url_root(realm, user, project_id);
 
     Ok(json!({
         "project_uri": project_uri,
