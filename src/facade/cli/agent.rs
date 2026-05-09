@@ -16,6 +16,7 @@
 
 use clap::{Args, Subcommand};
 use console::style;
+use serde_json::Value;
 
 use crate::core::agent_spec::{AgentSpec, RuntimeKind};
 use crate::facade::cli::mission_runs::{self, MissionRunOpts};
@@ -64,6 +65,45 @@ pub enum AgentAction {
     /// view to axon-runtime so cross-process Invokes route correctly).
     /// No daemon restart required.
     Refresh,
+    /// Inspect this agent's persisted chat history (the JSONL log
+    /// that --follow / --resume / --session-id on 'agent send' read).
+    /// Distinct from 'agent session' (singular), which manages the
+    /// per-caller memory dimension.
+    #[command(name = "chat-history")]
+    ChatHistory(ChatHistoryArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ChatHistoryArgs {
+    /// Agent name whose sessions to inspect.
+    pub name: String,
+    #[command(subcommand)]
+    pub action: ChatHistoryAction,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ChatHistoryAction {
+    /// List every recorded session for this agent, most-recent-first.
+    List(ChatHistoryListArgs),
+    /// Show one session's full transcript (every turn, in order).
+    Show(ChatHistoryShowArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ChatHistoryListArgs {
+    /// Emit JSON instead of the human-readable table.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ChatHistoryShowArgs {
+    /// Session id to show (from `agent sessions list <name>`).
+    pub session_id: String,
+    /// Emit raw JSONL (the on-disk file verbatim) instead of the
+    /// human-readable transcript.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Args)]
@@ -109,6 +149,7 @@ pub struct PruneArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(group = clap::ArgGroup::new("session_select").args(["follow", "session_id", "resume"]).multiple(false))]
 pub struct SendArgs {
     /// Registered agent name (from `easynet agent list`).
     pub name: String,
@@ -130,6 +171,22 @@ pub struct SendArgs {
     /// The prompt is saved alongside it as '<file>.prompt.txt'.
     #[arg(long, value_name = "FILE")]
     pub trace: Option<std::path::PathBuf>,
+    /// Continue the most-recent session for this agent. Reads the
+    /// session_id from the agent's session log index. Mutually
+    /// exclusive with --resume / --session-id; without any of the
+    /// three a fresh session is minted.
+    #[arg(long)]
+    pub follow: bool,
+    /// Pin the conversation to a specific session id (returned by
+    /// `easynet agent sessions list <name>` or by an earlier
+    /// `agent send` reply).
+    #[arg(long, value_name = "UUID")]
+    pub session_id: Option<String>,
+    /// Pick a prior session interactively from a numbered list. On
+    /// non-TTY input the call fails with a clear message asking the
+    /// caller to use --session-id instead.
+    #[arg(long)]
+    pub resume: bool,
 }
 
 #[derive(Debug, Args)]
@@ -188,6 +245,7 @@ pub fn run(args: AgentArgs) -> anyhow::Result<()> {
         AgentAction::Set(a) => run_set(a),
         AgentAction::Publish(a) => run_publish(a),
         AgentAction::Refresh => run_refresh(),
+        AgentAction::ChatHistory(a) => run_sessions(a),
     }
 }
 
@@ -1364,6 +1422,132 @@ fn run_set(args: SetArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Resolve the session_id the caller wants to attach this `agent
+/// send` to, based on the mutually-exclusive flag set
+/// (--follow / --session-id / --resume / none).
+///
+/// Return shapes:
+///   * Ok(Some(id)) — caller pinned a specific session; the chat
+///                    handler will resume it.
+///   * Ok(None)     — caller wants a fresh session; the chat
+///                    handler will mint a new id and we'll save
+///                    the first turn under it.
+///   * Err(...)     — flag combination invalid OR the requested
+///                    session is unreachable (no prior session for
+///                    --follow on a fresh agent, --resume on a
+///                    non-TTY shell, picker rejected by user).
+fn resolve_session_id(args: &SendArgs) -> anyhow::Result<Option<String>> {
+    use crate::persistence::chat_sessions;
+
+    // clap's ArgGroup already enforces "at most one of these" but
+    // we double-check defensively in case future refactors break
+    // the group decl. Cheaper than discovering the silent failure
+    // mode in production.
+    let n_flags = (args.follow as u8)
+        + args.session_id.as_ref().map_or(0, |_| 1)
+        + (args.resume as u8);
+    if n_flags > 1 {
+        anyhow::bail!(
+            "--follow, --session-id, and --resume are mutually exclusive; pass at most one"
+        );
+    }
+
+    if let Some(explicit) = args.session_id.as_deref() {
+        let trimmed = explicit.trim();
+        if trimmed.is_empty() {
+            anyhow::bail!("--session-id is empty (shell expansion accident?)");
+        }
+        return Ok(Some(trimmed.to_string()));
+    }
+
+    if args.follow {
+        match chat_sessions::latest_session(&args.name) {
+            Some(sid) => return Ok(Some(sid)),
+            None => anyhow::bail!(
+                "agent '{}' has no recorded sessions yet — \
+                 send a fresh prompt without --follow first",
+                args.name
+            ),
+        }
+    }
+
+    if args.resume {
+        let sessions = chat_sessions::list_sessions(&args.name);
+        if sessions.is_empty() {
+            anyhow::bail!(
+                "agent '{}' has no recorded sessions yet — \
+                 send a fresh prompt without --resume first",
+                args.name
+            );
+        }
+        if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            anyhow::bail!(
+                "--resume is interactive; stdin is not a terminal. \
+                 Use --session-id <UUID> instead, or pipe the picker \
+                 output through `easynet agent sessions list {}`",
+                args.name
+            );
+        }
+        return prompt_session_picker(&args.name, &sessions).map(Some);
+    }
+
+    Ok(None)
+}
+
+/// Render an interactive picker for `--resume` and return the
+/// chosen session_id. Stdin is already verified to be a TTY by
+/// the caller.
+fn prompt_session_picker(
+    agent: &str,
+    sessions: &[crate::persistence::chat_sessions::SessionDescriptor],
+) -> anyhow::Result<String> {
+    use std::io::Write as _;
+
+    eprintln!();
+    eprintln!(
+        "  {} {} {}",
+        style("Pick a prior session for").dim(),
+        style(agent).bold(),
+        style(format!("({} sessions)", sessions.len())).dim(),
+    );
+    eprintln!();
+    let cap = sessions.len().min(20);
+    for (i, s) in sessions.iter().take(cap).enumerate() {
+        eprintln!(
+            "  {:>2}. {}  {}  {}",
+            i + 1,
+            style(&s.session_id).cyan(),
+            style(format!("[{} turns]", s.turn_count)).dim(),
+            style(&s.prompt_preview).dim(),
+        );
+    }
+    if sessions.len() > cap {
+        eprintln!("  …  ({} more not shown)", sessions.len() - cap);
+    }
+    eprintln!();
+    eprint!(
+        "  {} ",
+        style("Choose 1-N (or 'q' to abort):").bold()
+    );
+    std::io::stderr().flush().ok();
+
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|e| anyhow::anyhow!("read picker input: {e}"))?;
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("q") {
+        anyhow::bail!("session picker aborted by user");
+    }
+    let n: usize = trimmed
+        .parse()
+        .map_err(|_| anyhow::anyhow!("expected a number 1-{}, got: {trimmed:?}", cap))?;
+    if n == 0 || n > cap {
+        anyhow::bail!("choice {n} out of range (1-{cap})");
+    }
+    Ok(sessions[n - 1].session_id.clone())
+}
+
 fn run_send(args: SendArgs) -> anyhow::Result<()> {
     // Validate the agent exists in the registry up-front so the user gets
     // a clear error before we go through the mission machinery.
@@ -1371,6 +1555,11 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
     let _entry = registry.agents.get(&args.name).ok_or_else(|| {
         anyhow::anyhow!("agent '{}' not found. Run 'easynet agent list'.", args.name)
     })?;
+
+    // Resolve the session_id BEFORE we kick off mission machinery.
+    // The chat ability mints a fresh id when none is supplied; a
+    // concrete id triggers the resume path on the daemon side.
+    let resolved_session_id = resolve_session_id(&args)?;
 
     // User-visible counterpart to the doc-comment ontology reference.
     // Tells the user exactly what path their command is taking, so they
@@ -1382,6 +1571,14 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
         style("[agent-send]").dim(),
         style("dispatching via mission runtime").dim(),
     );
+    if let Some(sid) = resolved_session_id.as_deref() {
+        eprintln!(
+            "  {} {} {}",
+            style("[agent-send]").dim(),
+            style("resume session").dim(),
+            style(sid).cyan(),
+        );
+    }
 
     // Compose the prompt: fold optional `--context` into the prompt body
     // BEFORE constructing the EAL source, so the prompt that ends up in
@@ -1401,11 +1598,19 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
     // pulled out of `MissionRunResult.bound_vars`. `eal_string_literal`
     // can fail if the user's prompt contains an embedded NUL byte — we
     // surface that as a CLI error rather than silently truncating.
-    let eal_source = format!(
-        "mission \"agent-send\" {{\n    let __reply = {agent}.chat(prompt: {prompt})\n}}\n",
-        agent = args.name,
-        prompt = eal_string_literal(&composed_prompt)?,
-    );
+    let eal_source = match resolved_session_id.as_deref() {
+        Some(sid) => format!(
+            "mission \"agent-send\" {{\n    let __reply = {agent}.chat(prompt: {prompt}, session_id: {sid})\n}}\n",
+            agent = args.name,
+            prompt = eal_string_literal(&composed_prompt)?,
+            sid = eal_string_literal(sid)?,
+        ),
+        None => format!(
+            "mission \"agent-send\" {{\n    let __reply = {agent}.chat(prompt: {prompt})\n}}\n",
+            agent = args.name,
+            prompt = eal_string_literal(&composed_prompt)?,
+        ),
+    };
 
     // Hand the source to THE single in-process mission entry point.
     // The runner sets `EASYNET_MISSION_ID` for the duration of execution
@@ -1424,19 +1629,49 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
     )?;
 
     // Pull the agent's reply out of the mission's bound vars. The
-    // dispatcher returns a JSON object with shape
-    // `{"ok": true, "agent": "...", "output": "...", ...}` (see
-    // `eal::interpreter::AgentAwareDispatcher::dispatch`); the
-    // user-visible reply is the `output` field.
-    let reply_text: String = match result.bound_vars.get("__reply") {
-        Some(serde_json::Value::Object(obj)) => obj
-            .get("output")
+    // dispatcher returns a JSON object. Two shapes can appear:
+    //   * `<agent>.chat` (the invoke_direct_with_progress path):
+    //     `{session_id, reply, tool_calls, usage, skills_loaded, ...}`
+    //   * non-chat verbs (the send_to_agent shell-out path):
+    //     `{ok, agent, output, model, duration_ms}`
+    // The user-visible reply lives in `reply` for chat and `output`
+    // for shell-out — try both.
+    let reply_obj = match result.bound_vars.get("__reply") {
+        Some(serde_json::Value::Object(obj)) => Some(obj.clone()),
+        _ => None,
+    };
+    let reply_text: String = match &reply_obj {
+        Some(obj) => obj
+            .get("reply")
             .and_then(|v| v.as_str())
+            .or_else(|| obj.get("output").and_then(|v| v.as_str()))
             .map(|s| s.to_string())
             .unwrap_or_else(|| serde_json::Value::Object(obj.clone()).to_string()),
-        Some(other) => other.to_string(),
-        None => String::new(),
+        None => match result.bound_vars.get("__reply") {
+            Some(other) => other.to_string(),
+            None => String::new(),
+        },
     };
+    // Server-minted session id (when caller passed none) or echoed-back
+    // (when the caller pinned one via --follow / --session-id). Used by
+    // the persistence write below AND echoed to the user so they can
+    // copy it for a later --session-id call.
+    let response_session_id: Option<String> = reply_obj
+        .as_ref()
+        .and_then(|obj| obj.get("session_id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let tool_calls: Vec<Value> = reply_obj
+        .as_ref()
+        .and_then(|obj| obj.get("tool_calls"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let usage_value: Value = reply_obj
+        .as_ref()
+        .and_then(|obj| obj.get("usage"))
+        .cloned()
+        .unwrap_or(Value::Null);
 
     eprintln!();
     eprintln!(
@@ -1481,7 +1716,30 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
         style("saved").dim(),
         style(result.run_dir.display().to_string()).cyan(),
     );
+    if let Some(sid) = response_session_id.as_deref() {
+        eprintln!(
+            "  {} {}  {}",
+            style("session").dim(),
+            style(sid).cyan(),
+            style("(use --follow to continue, --session-id <UUID> to pin)").dim(),
+        );
+    }
     eprintln!();
+
+    // Persist the turn to the agent's per-session JSONL log so
+    // future `--follow` / `--resume` / `agent sessions show` calls
+    // can find it. Best-effort by contract — a disk-full or
+    // permission failure must NOT abort the in-flight chat reply.
+    if let Some(sid) = response_session_id.as_deref() {
+        crate::persistence::chat_sessions::write_turn_best_effort(
+            &args.name,
+            sid,
+            &args.prompt,
+            &reply_text,
+            &tool_calls,
+            &usage_value,
+        );
+    }
 
     // Render the agent's final reply as markdown when stdout is a TTY;
     // otherwise print raw text so piping into other tools stays clean.
@@ -2071,6 +2329,136 @@ fn run_refresh() -> anyhow::Result<()> {
         "{ok}/{total} runtime.register_local_tool calls succeeded; \
          daemon-owned abilities are now invokable cross-process."
     ));
+    Ok(())
+}
+
+// ── Sessions inspection ────────────────────────────────────────────
+
+fn run_sessions(args: ChatHistoryArgs) -> anyhow::Result<()> {
+    // Validate the agent exists. Lets us emit "no such agent"
+    // rather than "no sessions" for a typo'd name.
+    let registry = agents::load_agents()?;
+    if !registry.agents.contains_key(&args.name) {
+        anyhow::bail!(
+            "agent '{}' not found. Run 'easynet agent list'.",
+            args.name
+        );
+    }
+    match args.action {
+        ChatHistoryAction::List(a) => run_sessions_list(&args.name, a),
+        ChatHistoryAction::Show(a) => run_sessions_show(&args.name, a),
+    }
+}
+
+fn run_sessions_list(agent: &str, args: ChatHistoryListArgs) -> anyhow::Result<()> {
+    use crate::persistence::chat_sessions;
+    let sessions = chat_sessions::list_sessions(agent);
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&sessions)?);
+        return Ok(());
+    }
+    if sessions.is_empty() {
+        println!(
+            "No sessions recorded for agent '{agent}'. \
+             Run 'easynet agent send {agent} \"...\"' to start one."
+        );
+        return Ok(());
+    }
+    let latest = chat_sessions::latest_session(agent).unwrap_or_default();
+    println!(
+        "{:<38} {:<22} {:>6}  {}",
+        "SESSION_ID", "LAST_TURN_AT", "TURNS", "PROMPT"
+    );
+    for s in &sessions {
+        let marker = if s.session_id == latest { "*" } else { " " };
+        println!(
+            "{}{:<37} {:<22} {:>6}  {}",
+            marker,
+            s.session_id,
+            s.last_turn_at,
+            s.turn_count,
+            s.prompt_preview,
+        );
+    }
+    println!();
+    println!(
+        "  '*' marks the most-recent session ('agent send {agent} --follow' resumes it)."
+    );
+    Ok(())
+}
+
+fn run_sessions_show(agent: &str, args: ChatHistoryShowArgs) -> anyhow::Result<()> {
+    use crate::persistence::chat_sessions;
+    let lines = chat_sessions::load_session(agent, &args.session_id)?;
+    if args.json {
+        for v in &lines {
+            println!("{}", serde_json::to_string(v)?);
+        }
+        return Ok(());
+    }
+    // Human-readable transcript: meta header, then one block per turn.
+    if lines.is_empty() {
+        println!("Session '{}' is empty.", args.session_id);
+        return Ok(());
+    }
+    let mut turn_no = 0usize;
+    for v in &lines {
+        match v.get("type").and_then(Value::as_str) {
+            Some("session_meta") => {
+                println!(
+                    "Session: {}",
+                    v.get("session_id").and_then(Value::as_str).unwrap_or("?")
+                );
+                println!(
+                    "  agent:       {}",
+                    v.get("agent").and_then(Value::as_str).unwrap_or("?")
+                );
+                println!(
+                    "  started_at:  {}",
+                    v.get("timestamp").and_then(Value::as_str).unwrap_or("?")
+                );
+                println!(
+                    "  cwd:         {}",
+                    v.get("cwd").and_then(Value::as_str).unwrap_or("?")
+                );
+                println!(
+                    "  cli_version: {}",
+                    v.get("cli_version").and_then(Value::as_str).unwrap_or("?")
+                );
+                println!();
+            }
+            Some("turn") => {
+                turn_no += 1;
+                println!(
+                    "── Turn {turn_no} ── {}",
+                    v.get("timestamp").and_then(Value::as_str).unwrap_or("?")
+                );
+                if let Some(p) = v.get("prompt").and_then(Value::as_str) {
+                    println!("  user:");
+                    for line in p.lines() {
+                        println!("    {line}");
+                    }
+                }
+                if let Some(r) = v.get("reply").and_then(Value::as_str) {
+                    println!("  agent:");
+                    for line in r.lines() {
+                        println!("    {line}");
+                    }
+                }
+                if let Some(usage) = v.get("usage") {
+                    if !usage.is_null() {
+                        println!("  usage: {}", usage);
+                    }
+                }
+                println!();
+            }
+            _ => {
+                // Unknown line type — surface verbatim so future
+                // log additions don't disappear from `show`.
+                println!("(unknown line type) {v}");
+            }
+        }
+    }
     Ok(())
 }
 

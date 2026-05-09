@@ -91,6 +91,12 @@ pub enum AgentAction {
     /// up new TOMLs automatically; this command propagates the same
     /// view to axon-runtime's `runtime_local_tools` registry.
     Refresh,
+    /// Inspect this agent's persisted chat history (the JSONL log
+    /// the --follow / --resume / --session-id flags on
+    /// `agent send` read). Distinct from `agent session` (singular),
+    /// which manages the per-caller memory dimension.
+    #[command(name = "chat-history")]
+    ChatHistory(agent_cmd::ChatHistoryArgs),
     /// DEPRECATED: use `easynet mission discuss`.
     Discuss(discuss_cmd::DiscussArgs),
 }
@@ -174,6 +180,9 @@ pub fn run(args: AgentArgs) -> anyhow::Result<()> {
             action: agent_cmd::AgentAction::Publish(a),
         }),
         AgentAction::Session(s) => run_session(s),
+        AgentAction::ChatHistory(a) => agent_cmd::run(agent_cmd::AgentArgs {
+            action: agent_cmd::AgentAction::ChatHistory(a),
+        }),
         AgentAction::Discuss(a) => {
             eprintln!(
                 "  {} {}",
