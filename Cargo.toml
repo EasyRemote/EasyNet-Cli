@@ -1,6 +1,6 @@
 [package]
 name = "easynet"
-version = "1.30.7"
+version = "1.32.8"
 edition = "2021"
 description = "EasyNet CLI + Hub MCP server + EAL (EasyNet Ability Language)."
 license = "Apache-2.0"
@@ -105,6 +105,11 @@ clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 comfy-table = "7"
 console = "0.15"
+# Arrow-key TUI picker for `easynet agent send --resume` and any
+# future "pick from a list" surface. Thin wrapper over `console`
+# (already a direct dep), so adding `dialoguer` reuses the same
+# terminal-style backend rather than pulling a second TUI stack.
+dialoguer = { version = "0.11", default-features = false }
 crossbeam-queue = "0.3"
 ctrlc = "3"
 # Concurrent shard-locked map. PresenceRegistry (RFC-003 PR-1 spec §3)

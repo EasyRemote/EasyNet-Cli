@@ -178,8 +178,8 @@ pub struct SendArgs {
     #[arg(long)]
     pub follow: bool,
     /// Pin the conversation to a specific session id (returned by
-    /// `easynet agent sessions list <name>` or by an earlier
-    /// `agent send` reply).
+    /// 'easynet agent chat-history list <name>' or by an earlier
+    /// 'agent send' reply).
     #[arg(long, value_name = "UUID")]
     pub session_id: Option<String>,
     /// Pick a prior session interactively from a numbered list. On
@@ -1483,8 +1483,8 @@ fn resolve_session_id(args: &SendArgs) -> anyhow::Result<Option<String>> {
         if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
             anyhow::bail!(
                 "--resume is interactive; stdin is not a terminal. \
-                 Use --session-id <UUID> instead, or pipe the picker \
-                 output through `easynet agent sessions list {}`",
+                 Use --session-id <UUID> instead — list candidates with \
+                 'easynet agent chat-history {} list'",
                 args.name
             );
         }
@@ -1494,58 +1494,106 @@ fn resolve_session_id(args: &SendArgs) -> anyhow::Result<Option<String>> {
     Ok(None)
 }
 
-/// Render an interactive picker for `--resume` and return the
-/// chosen session_id. Stdin is already verified to be a TTY by
-/// the caller.
+/// Arrow-key TUI picker for `--resume`. Backed by `dialoguer`'s
+/// `Select` (a thin wrapper over `console`, already a direct dep),
+/// so the picker reuses the same terminal backend as the rest of
+/// the CLI — no second TUI stack pulled in.
+///
+/// UX:
+///   * ↑/↓ to move, Enter to confirm, Esc / q / Ctrl-C to abort.
+///   * Cursor starts on the most-recent session (index 0; the
+///     same id `--follow` would resume), so the common case
+///     ("just continue the latest") is one Enter away.
+///   * Each row renders `<short-id>  N turns  <since>  <preview>`.
+///     Short id = first 8 chars of the UUID, enough to disambiguate
+///     human-scale session counts without making the row 80 cols
+///     wide.
+///   * Cap at 50 most-recent sessions on screen — the picker grows
+///     unwieldy past that and operators with hundreds of sessions
+///     should pin via `--session-id` (which they already have to
+///     copy from `agent chat-history list`).
+///
+/// Stdin is already verified to be a TTY by the caller. Aborts
+/// (Esc / q / Ctrl-C / no choice) surface as a typed Err so
+/// `agent send` doesn't silently hand back to the user with no
+/// message.
 fn prompt_session_picker(
     agent: &str,
     sessions: &[crate::persistence::chat_sessions::SessionDescriptor],
 ) -> anyhow::Result<String> {
-    use std::io::Write as _;
+    use dialoguer::theme::ColorfulTheme;
+    use dialoguer::Select;
 
-    eprintln!();
-    eprintln!(
-        "  {} {} {}",
-        style("Pick a prior session for").dim(),
-        style(agent).bold(),
-        style(format!("({} sessions)", sessions.len())).dim(),
-    );
-    eprintln!();
-    let cap = sessions.len().min(20);
-    for (i, s) in sessions.iter().take(cap).enumerate() {
-        eprintln!(
-            "  {:>2}. {}  {}  {}",
-            i + 1,
-            style(&s.session_id).cyan(),
-            style(format!("[{} turns]", s.turn_count)).dim(),
-            style(&s.prompt_preview).dim(),
-        );
-    }
-    if sessions.len() > cap {
-        eprintln!("  …  ({} more not shown)", sessions.len() - cap);
-    }
-    eprintln!();
-    eprint!(
-        "  {} ",
-        style("Choose 1-N (or 'q' to abort):").bold()
-    );
-    std::io::stderr().flush().ok();
+    const PICKER_CAP: usize = 50;
+    let visible = &sessions[..sessions.len().min(PICKER_CAP)];
 
-    let mut line = String::new();
-    std::io::stdin()
-        .read_line(&mut line)
-        .map_err(|e| anyhow::anyhow!("read picker input: {e}"))?;
-    let trimmed = line.trim();
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("q") {
-        anyhow::bail!("session picker aborted by user");
+    let labels: Vec<String> = visible
+        .iter()
+        .map(|s| {
+            let short_id: String = s.session_id.chars().take(8).collect();
+            let preview = if s.prompt_preview.is_empty() {
+                String::from("(no prompt yet)")
+            } else {
+                s.prompt_preview.clone()
+            };
+            format!(
+                "{}  {} turns  {}  {}",
+                short_id,
+                s.turn_count,
+                relative_age(&s.last_turn_at),
+                preview,
+            )
+        })
+        .collect();
+
+    let header = if sessions.len() > PICKER_CAP {
+        format!(
+            "Pick a prior session for {agent} (showing latest {PICKER_CAP} of {}; \
+             pin older ones via --session-id <UUID>)",
+            sessions.len()
+        )
+    } else {
+        format!(
+            "Pick a prior session for {agent} ({} session{})",
+            sessions.len(),
+            if sessions.len() == 1 { "" } else { "s" }
+        )
+    };
+
+    let chosen = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt(header)
+        .items(&labels)
+        .default(0)
+        .interact_opt()
+        .map_err(|e| anyhow::anyhow!("session picker io error: {e}"))?;
+
+    match chosen {
+        Some(i) => Ok(visible[i].session_id.clone()),
+        None => anyhow::bail!("session picker aborted by user"),
     }
-    let n: usize = trimmed
-        .parse()
-        .map_err(|_| anyhow::anyhow!("expected a number 1-{}, got: {trimmed:?}", cap))?;
-    if n == 0 || n > cap {
-        anyhow::bail!("choice {n} out of range (1-{cap})");
+}
+
+/// Format an RFC3339 timestamp as a short relative-age string
+/// ("5m ago", "3h ago", "2d ago"). Used by the resume picker so
+/// each row stays scannable. Falls back to the raw timestamp if
+/// it can't be parsed — bad clock data is a banner-class problem
+/// but we don't want it to break `--resume`.
+fn relative_age(ts: &str) -> String {
+    let parsed = match chrono::DateTime::parse_from_rfc3339(ts) {
+        Ok(dt) => dt,
+        Err(_) => return ts.to_string(),
+    };
+    let elapsed = chrono::Utc::now().signed_duration_since(parsed.with_timezone(&chrono::Utc));
+    let secs = elapsed.num_seconds().max(0);
+    if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h ago", secs / 3600)
+    } else {
+        format!("{}d ago", secs / 86_400)
     }
-    Ok(sessions[n - 1].session_id.clone())
 }
 
 fn run_send(args: SendArgs) -> anyhow::Result<()> {
