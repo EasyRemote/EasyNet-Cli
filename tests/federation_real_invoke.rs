@@ -72,8 +72,8 @@ fn creds(tenant: &str, node: &str) -> Credentials {
         tenant_id: tenant.into(),
         deploy_signature: String::new(),
         hub_api_base: None,
-        realm: None,
         username: None,
+        hub_pubkey_b64: None,
     }
 }
 
@@ -184,7 +184,7 @@ fn forward_invoke_carries_args_byte_identical_through_cli_pipeline() {
         json!({"echoed": reversed, "from": "pi"})
     });
 
-    let target_uri = "easynet:///r/silan.localhost/agent/pi-rasp";
+    let target_uri = "easynet:///r/silan.localhost/device/pi-rasp";
     let receipt = forward_invoke(
         &hub,
         "silan.localhost",
@@ -209,10 +209,9 @@ fn forward_invoke_carries_args_byte_identical_through_cli_pipeline() {
     assert_eq!(captures.len(), 1, "exactly one forward call");
     let (uri, payload) = &captures[0];
     assert!(
-        uri.contains("/abilities/federation.forward_invoke@1"),
+        uri == "easynet:///r/silan.localhost/ability/hub.federation.forward_invoke",
         "URI shape: {uri}"
     );
-    assert!(uri.contains("?tenant_id=silan.localhost"), "URI: {uri}");
     assert_eq!(payload["target_uri"], target_uri);
     assert_eq!(payload["ability_name"], "chat.echo");
     // `function_name` is `skip_serializing_if = String::is_empty` in
@@ -262,7 +261,7 @@ fn forward_invoke_propagates_typed_remote_error() {
         &FailingHub,
         "silan.localhost",
         "silan.localhost",
-        "easynet:///r/silan.localhost/agent/down",
+        "easynet:///r/silan.localhost/device/down",
         "chat.echo",
         &json!({"message": "anyone home?"}),
     )
@@ -322,7 +321,7 @@ fn keyring_peer_table_drives_knows_target() {
     let k = ephemeral_keyring();
 
     // Insert an entry for the daemon's own device subject.
-    let bound = "easynet:///r/silan.localhost/agent/this-device";
+    let bound = "easynet:///r/silan.localhost/device/this-device";
     let _entry = k
         .create_entry("agent_signing", Some(bound.into()))
         .expect("create entry");
@@ -332,7 +331,7 @@ fn keyring_peer_table_drives_knows_target() {
     );
 
     // Insert a peer.
-    let peer_uri = "easynet:///r/silan.localhost/agent/peer-laptop";
+    let peer_uri = "easynet:///r/silan.localhost/device/peer-laptop";
     let entry = k.create_entry("peer-fingerprint", None).unwrap();
     k.peer_add(peer_uri, &entry.public_key_b64, None, None)
         .expect("peer_add");
@@ -342,7 +341,7 @@ fn keyring_peer_table_drives_knows_target() {
     );
 
     // A genuinely unknown URI must miss both paths.
-    let unknown = "easynet:///r/silan.localhost/agent/never-seen";
+    let unknown = "easynet:///r/silan.localhost/device/never-seen";
     assert!(k.find_active_entry_by_subject(unknown).is_none());
     assert!(k.find_peer_by_uri(unknown).is_none());
 }

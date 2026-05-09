@@ -555,64 +555,6 @@ pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<
     }
 }
 
-// ── Legacy mission context (for `think` / `discuss` migration) ─────────────
-//
-// Legacy CLI commands like `think` and `discuss` predate the
-// `run_mission_inproc` single-entry invariant. Until they are migrated
-// to real missions, they create a placeholder mission run dir labelled
-// `legacy-<name>` and set `EASYNET_MISSION_ID` to its id for the
-// duration of the command. This satisfies both stages of the dispatch
-// invariant check (the env var is set, and the dir really exists on
-// disk) while still leaving an audit trail.
-//
-// Each legacy invocation creates a separate run dir under
-// `~/.easynet/missions/runs/<stamp>_legacy-<name>/` containing only a
-// minimal `meta.json` (no source.eal, no IR, no trace) — a dispatch
-// auditor can grep for `legacy-` to find them.
-//
-// TODO(legacy-migration): when the legacy commands are themselves
-// rewritten to use `run_mission_inproc`, delete this helper and remove
-// its callers in `cli::think` and `cli::discuss`.
-pub struct LegacyMissionContext {
-    _ctx: MissionContextGuard,
-    _run_dir: MissionRunDir,
-}
-
-impl LegacyMissionContext {
-    pub fn new(label: &str) -> anyhow::Result<Self> {
-        let run_dir = MissionRunDir::create(&format!("legacy-{label}"))?;
-        let meta = MissionRunMeta {
-            name: format!("legacy-{label}"),
-            source_file: None,
-            started_at: Local::now().to_rfc3339(),
-            duration_ms: 0,
-            status: "running".into(),
-            error: None,
-            steps_total: 0,
-            steps_completed: 0,
-            steps_failed: 0,
-            ability_graph_traces: None,
-        };
-        if let Err(e) = run_dir.write_meta(&meta) {
-            eprintln!(
-                "[easynet warn] legacy mission run {}: write meta.json failed ({e})",
-                run_dir.path.display()
-            );
-        }
-        let run_id = run_dir
-            .path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
-        let ctx = MissionContextGuard::enter(&run_id);
-        Ok(Self {
-            _ctx: ctx,
-            _run_dir: run_dir,
-        })
-    }
-}
-
 // ── Mission context guard ──────────────────────────────────────────────────
 //
 // Installs the active `DispatchContext` for the duration of a mission

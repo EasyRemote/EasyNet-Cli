@@ -76,7 +76,8 @@ use tokio::sync::mpsc;
 
 use crate::runtime::ability_dispatch::{BidiSource, LocalAbilityRegistry};
 
-pub const ABILITY_FILE_TRANSFER: &str = "fleet.file_transfer";
+use crate::runtime::ability_dispatch::OwnerKind;
+pub const ABILITY_FILE_TRANSFER: &str = "device.fleet.file_transfer";
 
 /// Maximum bytes per file_transfer call. 1 GiB matches order-of-
 /// magnitude what an HTTP upload through nginx would tolerate;
@@ -106,8 +107,9 @@ const UPLOAD_RECV_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// pty_attach_ability::register's signature so the daemon-boot
 /// path stays uniform.
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    reg.register_bidi(
-        ABILITY_FILE_TRANSFER,
+    reg.register_bidi_with_owner(
+        "device.fleet.file_transfer",
+        OwnerKind::Device,
         Arc::new(move |args: Value| open_handler(args)),
     );
 }

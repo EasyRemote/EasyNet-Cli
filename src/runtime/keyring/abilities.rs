@@ -35,6 +35,7 @@ use super::user_binding_chain::{
     USER_BINDING_FRESHNESS_MS, USER_BINDING_NONCE_LEN,
 };
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::uri::{parse_ura, URAKind};
 
 fn b64_encode(bytes: &[u8]) -> String {
     use base64::engine::general_purpose::STANDARD;
@@ -153,7 +154,7 @@ pub fn handle_sign(handle: &KeyringHandle, args: Value) -> Result<Value> {
     Ok(json!({ "signature_b64": b64_encode(&sig) }))
 }
 
-/// **PR-N4 commit 2/N**. `<self>.keyring.federate_user_identity_token`
+/// **PR-N4 commit 2/N**. `device.keyring.federate_user_identity_token`
 /// ability handler. Realm A's daemon raises a `UserBindingToken`
 /// destined for `target_realm` (= the realm B the user wants to be
 /// recognised on). The token's `source_realm` + `source_user_uri`
@@ -191,13 +192,13 @@ pub fn handle_federate_user_identity_token(handle: &KeyringHandle, args: Value) 
     let source_user_uri = handle.device_subject().ok_or_else(|| {
         anyhow!(
             "daemon has no bound device-subject; \
-             call <self>.keyring.bind_subject before raising user binding tokens"
+             call device.keyring.bind_subject before raising user binding tokens"
         )
     })?;
-    let source_realm = parse_realm_from_uri(&source_user_uri).ok_or_else(|| {
+    let source_realm = parse_realm_from_user_uri(&source_user_uri).ok_or_else(|| {
         anyhow!(
             "device-subject {source_user_uri:?} is not a canonical \
-             easynet:///r/<realm>/agent/<id> URI"
+             easynet:///r/<realm>/user/<id> URI"
         )
     })?;
     if source_realm == target_realm {
@@ -217,7 +218,7 @@ pub fn handle_federate_user_identity_token(handle: &KeyringHandle, args: Value) 
         .ok_or_else(|| {
             anyhow!(
                 "no active agent_signing entry in keyring; \
-             call <self>.keyring.create with purpose=agent_signing first"
+             call device.keyring.create with purpose=agent_signing first"
             )
         })?;
     let pubkey_raw = b64_decode(&signing_entry.public_key_b64)?;
@@ -256,21 +257,17 @@ pub fn handle_federate_user_identity_token(handle: &KeyringHandle, args: Value) 
     }))
 }
 
-/// Parse the realm slice from a canonical EasyNet URI
-/// (`easynet:///r/<realm>/agent/<id>`). Returns `None` for any
-/// malformed shape. Inlined here rather than imported from
+/// Parse the realm slice from a canonical EasyNet user URI
+/// (`easynet:///r/<realm>/user/<id>`). Returns `None` for any
+/// malformed or non-user shape. Inlined here rather than imported from
 /// `services::axon_serve` to keep the keyring layer free of an
 /// `axon-pb` feature dependency.
-fn parse_realm_from_uri(uri: &str) -> Option<&str> {
-    let rest = uri.strip_prefix("easynet:///r/")?;
-    let (realm, _tail) = rest.split_once("/agent/")?;
-    if realm.is_empty() {
-        return None;
-    }
-    Some(realm)
+fn parse_realm_from_user_uri(uri: &str) -> Option<String> {
+    let parsed = parse_ura(uri).ok()?;
+    (parsed.kind == URAKind::User).then_some(parsed.realm)
 }
 
-/// **PR-N4 commit 3/N**. `<self>.keyring.consume_federate_user_token`
+/// **PR-N4 commit 3/N**. `device.keyring.consume_federate_user_token`
 /// ability handler. Realm B's user (already authenticated on
 /// realm B with `local_user_id`) consumes a `UserBindingToken`
 /// issued by realm A. On success, a `FederatedUserBinding` row
@@ -517,7 +514,7 @@ pub fn register_for_owner(reg: &mut LocalAbilityRegistry, owner: &str, handle: A
 }
 
 /// **PR-N4 commit 3/N**. Register the consumer-side
-/// `<self>.keyring.consume_federate_user_token` ability under
+/// `device.keyring.consume_federate_user_token` ability under
 /// `owner`. Kept as a separate registration function rather
 /// than folding into `register_for_owner` because the bindings
 /// store has a different lifecycle than the keyring handle —
@@ -661,7 +658,7 @@ mod tests {
 
     fn handle_with_subject_and_signing_key() -> (Arc<KeyringHandle>, tempfile::TempDir) {
         let (h, d) = handle();
-        h.set_device_subject("easynet:///r/realm-a/agent/user-c".to_string())
+        h.set_device_subject("easynet:///r/realm-a/user/user-c".to_string())
             .unwrap();
         // Create the agent_signing entry the federate token
         // handler picks up.
@@ -685,7 +682,7 @@ mod tests {
         assert_eq!(token["source_realm"], json!("realm-a"));
         assert_eq!(
             token["source_user_uri"],
-            json!("easynet:///r/realm-a/agent/user-c")
+            json!("easynet:///r/realm-a/user/user-c")
         );
         assert_eq!(token["target_realm"], json!("realm-b"));
         assert_eq!(token["issued_at_ms"], json!(1_714_500_000_000_u64));
@@ -787,7 +784,7 @@ mod tests {
     fn federate_user_identity_token_requires_active_signing_entry() {
         // Subject set but no agent_signing entry. Reject.
         let (h, _d) = handle();
-        h.set_device_subject("easynet:///r/realm-a/agent/user-c".to_string())
+        h.set_device_subject("easynet:///r/realm-a/user/user-c".to_string())
             .unwrap();
         let err = handle_federate_user_identity_token(
             &h,
@@ -842,7 +839,7 @@ mod tests {
     /// the test driver can wire up the consumer side.
     fn issue_token_from_realm_a(target_realm: &str, issued_at_ms: u64) -> Value {
         let (h, _d) = handle();
-        h.set_device_subject("easynet:///r/realm-a/agent/user-c".to_string())
+        h.set_device_subject("easynet:///r/realm-a/user/user-c".to_string())
             .unwrap();
         handle_create(&h, json!({"purpose": "agent_signing"})).unwrap();
         let resp = handle_federate_user_identity_token(
@@ -875,7 +872,7 @@ mod tests {
         assert_eq!(resp["local_user_id"], json!("user-c-on-realm-b"));
         // Binding was actually written.
         let bound = bindings
-            .find_local_user("realm-a", "easynet:///r/realm-a/agent/user-c")
+            .find_local_user("realm-a", "easynet:///r/realm-a/user/user-c")
             .expect("binding present");
         assert_eq!(bound, "user-c-on-realm-b");
     }
@@ -1031,7 +1028,7 @@ mod tests {
         assert_eq!(resp["binding_recorded"], json!(true));
         // Realm B can now look up the cross-realm user.
         let local_id = bindings
-            .find_local_user("realm-a", "easynet:///r/realm-a/agent/user-c")
+            .find_local_user("realm-a", "easynet:///r/realm-a/user/user-c")
             .expect("binding present");
         assert_eq!(local_id, "user-c-realm-b-id");
     }

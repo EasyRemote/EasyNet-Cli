@@ -64,7 +64,7 @@ use easynet_cli::services::axon_serve::invoke_remote_initiator::{
 };
 use easynet_cli::services::axon_serve::local_ability_dispatcher::LocalAbilityDispatcher;
 use easynet_cli::services::axon_serve::session_initiator::{
-    SessionFrameDispatcher, ABILITY_SELF_SESSION, SESSION_STREAM_ID,
+    SessionFrameDispatcher, SessionUpSender, ABILITY_SELF_SESSION, SESSION_STREAM_ID,
 };
 use easynet_cli::services::pending_dispatch::PendingDispatchMap;
 use easynet_cli::services::presence_registry::{OfflineReason, PresenceEvent, PresenceRegistry};
@@ -78,8 +78,8 @@ use tokio_stream::wrappers::{ReceiverStream, UnixListenerStream};
 use tonic::transport::{Channel, Endpoint, Server, Uri};
 use tonic::Request;
 
-const DEVICE_A_URI: &str = "easynet:///r/test-realm/agent/device-a";
-const DEVICE_B_URI: &str = "easynet:///r/test-realm/agent/device-b";
+const DEVICE_A_URI: &str = "easynet:///r/test-realm/device/device-a";
+const DEVICE_B_URI: &str = "easynet:///r/test-realm/device/device-b";
 
 /// 5-second bound on every blocking await in the test. Real
 /// transport plane round-trips finish in milliseconds; any test
@@ -404,6 +404,18 @@ async fn open_device_session_with_drain(
     )
 }
 
+async fn recv_next_binary_chunk_frame(down: &mut mpsc::Receiver<InvokeBidiDown>) -> InvokeBidiDown {
+    loop {
+        let frame = tokio::time::timeout(STEP_TIMEOUT, down.recv())
+            .await
+            .expect("device receives session frame within bound")
+            .expect("session frame is Some");
+        if matches!(frame.payload, Some(DownPayload::BinaryChunk(_))) {
+            return frame;
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cross_device_invoke_remote_round_trip() {
     // Outer 60s timeout: any future spawn-without-cancel regression
@@ -679,13 +691,10 @@ async fn run_round_trip() {
     // sends back SessionDispatch::Result with REPLY_MARKER. The
     // up-sender is borrowed via Clone so DeviceSession still owns
     // the original and tears the bidi down on Drop.
-    let device_b_up_for_reply = device_b.up().clone();
+    let device_b_up_for_reply = SessionUpSender::new(device_b.up().clone());
     let reply_task_handle = tokio::spawn(async move {
         // Wait for the dispatch frame from the hub.
-        let frame = tokio::time::timeout(STEP_TIMEOUT, device_b_down.recv())
-            .await
-            .expect("device B receives dispatch within bound")
-            .expect("dispatch frame is Some");
+        let frame = recv_next_binary_chunk_frame(&mut device_b_down).await;
 
         let DownPayload::BinaryChunk(chunk) = frame.payload.expect("payload") else {
             panic!("device B expected BinaryChunk payload");
@@ -712,16 +721,11 @@ async fn run_round_trip() {
         };
         let payload = serde_json::to_vec(&result).expect("encode Result");
 
-        let reply_frame = InvokeBidiUp {
-            sequence: 1,
-            payload: Some(UpPayload::BinaryChunk(BinaryChunk {
+        device_b_up_for_reply
+            .send_binary_chunk(BinaryChunk {
                 data: payload,
                 ..BinaryChunk::default()
-            })),
-            ..InvokeBidiUp::default()
-        };
-        device_b_up_for_reply
-            .send(reply_frame)
+            })
             .await
             .expect("send reply up");
 
@@ -837,13 +841,10 @@ async fn run_round_trip_via_local_dispatcher() {
         open_device_session_with_drain(channel_b, DEVICE_B_URI).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let device_b_up_for_reply = device_b.up().clone();
+    let device_b_up_for_reply = SessionUpSender::new(device_b.up().clone());
     let local_dispatcher = LocalAbilityDispatcher::new(build_test_echo_dispatcher());
     let reply_task_handle = tokio::spawn(async move {
-        let frame = tokio::time::timeout(STEP_TIMEOUT, device_b_down.recv())
-            .await
-            .expect("device B receives dispatch within bound")
-            .expect("dispatch frame is Some");
+        let frame = recv_next_binary_chunk_frame(&mut device_b_down).await;
 
         local_dispatcher
             .handle_down(frame, &device_b_up_for_reply)

@@ -1,0 +1,16 @@
+schema_version = "1"
+name = "device.fleet.file_transfer"
+description = "Bidirectional file transfer between the operator and this device's filesystem. mode=\"upload\" streams client→file with atomic rename + SHA-256; mode=\"download\" streams file→client with on-the-fly hashing. Per-call byte cap 1 GiB; blocked device paths (e.g. /dev/zero) refused."
+
+[input_schema]
+type = "object"
+required = ["mode", "path"]
+additionalProperties = false
+
+[input_schema.properties.mode]
+type = "string"
+enum = ["upload", "download"]
+
+[input_schema.properties.path]
+type = "string"
+minLength = 1

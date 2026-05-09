@@ -80,10 +80,11 @@ use std::sync::Arc;
 use base64::Engine;
 use serde_json::{json, Value};
 
+use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::ability_dispatch::{BidiSource, LocalAbilityRegistry, BIDI_CHANNEL_BOUND};
 use crate::runtime::execution::pty::{PtyService, PtySessionId};
 
-pub const ABILITY_PTY_SESSION_ATTACH: &str = "fleet.pty_session_attach";
+pub const ABILITY_PTY_SESSION_ATTACH: &str = "device.fleet.pty_session_attach";
 
 /// Description published by the dispatcher's `description_for`
 /// arm. Sibling of fleet.pty_session_create / close — those are
@@ -137,8 +138,12 @@ pub fn register(reg: &mut LocalAbilityRegistry, pty: Arc<PtyService>) {
     let pty_for_attach = Arc::clone(&pty);
     let handler: LocalBidiHandler =
         Arc::new(move |args: Value| attach_handler(&pty_for_attach, args));
-    reg.register_bidi(ABILITY_PTY_SESSION_ATTACH, Arc::clone(&handler));
-    reg.register_bidi("fleet.session_attach", handler);
+    reg.register_bidi_with_owner(
+        "device.fleet.pty_session_attach",
+        OwnerKind::Device,
+        Arc::clone(&handler),
+    );
+    reg.register_bidi_with_owner("device.fleet.session_attach", OwnerKind::Device, handler);
 }
 
 fn attach_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<BidiSource> {
@@ -461,7 +466,7 @@ mod tests {
             "attach must register as a BIDI handler, not RPC/Stream"
         );
         assert!(
-            reg.get_bidi("fleet.session_attach").is_some(),
+            reg.get_bidi("device.fleet.session_attach").is_some(),
             "attach must also publish the canonical runtime alias used by backend WS terminal"
         );
     }

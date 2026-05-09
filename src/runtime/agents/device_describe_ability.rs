@@ -50,6 +50,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::agents::federation_probe;
 
 /// Wire name. Stable contract; rename = wire break.
@@ -57,18 +58,38 @@ pub const ABILITY_NAME: &str = "device.describe";
 
 /// Register the handler. Stateless; no per-call setup.
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    reg.register_rpc(ABILITY_NAME, Arc::new(handler));
+    reg.register_rpc_with_owner(ABILITY_NAME, OwnerKind::Device, Arc::new(handler));
 }
 
 fn handler(_args: Value) -> anyhow::Result<Value> {
     let local = federation_probe::local_identity();
     if local.paired {
-        if let Some(record) = federation_probe::resolve_device_record(&local.node_id)? {
-            let mut value = federation_probe::node_to_json(&record.node);
-            if let Value::Object(map) = &mut value {
-                map.insert("abilities".to_string(), Value::Array(record.abilities));
+        // Try the directory-resolve path first — paired devices
+        // get the rich hub-side view (last_seen, federated peers,
+        // attested abilities). Failure is non-fatal: a docker /
+        // CLI-only deployment may not embed an axon-runtime, in
+        // which case `resolve_device_record` returns an Err
+        // ("local runtime bridge is unavailable: no running
+        // runtime"). We log and fall through to the probe view —
+        // surfacing 200 with the local-only fields the operator
+        // expects from `device show` rather than aborting the
+        // call.
+        match federation_probe::resolve_device_record(&local.node_id) {
+            Ok(Some(record)) => {
+                let mut value = federation_probe::node_to_json(&record.node);
+                if let Value::Object(map) = &mut value {
+                    map.insert("abilities".to_string(), Value::Array(record.abilities));
+                }
+                return Ok(value);
             }
-            return Ok(value);
+            Ok(None) => {
+                // No directory record yet (fresh pair); fall through.
+            }
+            Err(e) => {
+                eprintln!(
+                    "[device.describe] directory resolve failed (falling back to probe view): {e}"
+                );
+            }
         }
     }
     // Unpaired or directory-resolve failed: fall back to the

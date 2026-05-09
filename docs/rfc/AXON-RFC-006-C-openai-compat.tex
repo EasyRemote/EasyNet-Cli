@@ -1,0 +1,1059 @@
+\documentclass[11pt,a4paper]{article}
+
+% ──────────────────────────────────────────────────────────────────────────
+% AXON-RFC-006 Appendix C — OpenAI Compatibility as Agent Dispatch View.
+%                            Capability-URI API keys.
+% Status: Draft v0.1.
+%
+%   RFC-006-C is the second reference realisation of the paradigm
+%   RFC-006-B v0.6 made explicit: external protocols are
+%   transport views over the invocation graph, not new
+%   ontologies.
+%
+%   RFC-006-B (Pages): HTTP file fetches → ability invocations.
+%   RFC-006-C (this):  OpenAI-compatible LLM endpoints → agent
+%                      dispatch streams. The chat-base output of
+%                      any dispatched agent (Claude Code, Codex,
+%                      future LLM drivers) is, after a small
+%                      stream filter, the wire shape of an OpenAI
+%                      `/v1/chat/completions` response. EasyNet
+%                      therefore exposes every `<agent>.chat`
+%                      ability as an OpenAI-compatible model
+%                      without writing a new chat surface — the
+%                      adapter is a view, not a wrap.
+%
+%   API keys are minted by keyring abilities and live as
+%   `resource/api_key.<id>` URAs. Persisting an API key is a
+%   capability-style affair: holding the token = capability;
+%   revoking the resource = capability gone. There is no OAuth
+%   layer, no token exchange, no scopes-as-bag-of-strings.
+%   Receipts attribute every OpenAI request to the api_key URA
+%   and chain forward through the agent's dispatch.
+%
+%   Three normative invariants centre v0.1:
+%     INV-1  Adapter Purity     — `01HUB.openai.chat_completions`
+%                                 is a pure transport view; no
+%                                 cached state; no canonical-
+%                                 receipt mutation outside the
+%                                 single auth-trail entry.
+%     INV-2  Capability-URI Key — API keys are minted by keyring
+%                                 abilities, addressed as
+%                                 `resource/api_key.<id>`,
+%                                 and self-authoritative
+%                                 (presence = grant; absence =
+%                                 deny).
+%     INV-3  Filter Determinism — the stream-json → SSE filter
+%                                 is deterministic over the agent
+%                                 dispatch sequence.
+%     INV-4  Auth Receipt Trail — every request mints a canonical
+%                                 receipt over the API-key
+%                                 resource; subsequent dispatch
+%                                 receipts cite it as
+%                                 `causal_context.Scalar`.
+%
+% Build:    xelatex AXON-RFC-006-C-openai-compat.tex
+% Companion (paradigm sibling):   AXON-RFC-006-B-easynet-webapp.tex (v0.6)
+% Companion (axiom):              AXON-RFC-006-stateful-easynet.tex
+% Companion (URA + ontology):     AXON-RFC-001-plan-v4.1.5.md
+% Companion (ontology theorem):   EasyNet-Axon/document/concepts/ONTOLOGY_AGENT_ABILITY.md
+% Companion (keyring):            EasyNet-Cli/docs/rfc/AXON-RFC-002-stage-1-3-edit-plan.md
+% ──────────────────────────────────────────────────────────────────────────
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{xltabular}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{tcolorbox}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{parskip}
+\usepackage{xspace}
+
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setCJKmainfont{PingFang SC}[
+    BoldFont={PingFang SC Semibold},
+    ItalicFont={PingFang SC Light}
+]
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small AXON-RFC-006 Appendix C v0.1}
+\fancyhead[R]{\small OpenAI compat as dispatch view}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\titleformat{\section}{\Large\bfseries\color{black!85}}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\large\bfseries\color{black!75}}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{black!70}}{\thesubsubsection}{0.5em}{}
+
+\definecolor{normativecolor}{RGB}{180,30,30}
+\definecolor{derivedcolor}{RGB}{30,90,180}
+\definecolor{deferredcolor}{RGB}{120,90,30}
+\definecolor{codebg}{RGB}{245,245,248}
+\definecolor{codeborder}{RGB}{210,210,220}
+
+\newcommand{\normsv}{\textcolor{normativecolor}{\textbf{[normative]}}\xspace}
+\newcommand{\derived}{\textcolor{derivedcolor}{\textbf{[derived]}}\xspace}
+\newcommand{\deferred}{\textcolor{deferredcolor}{\textbf{[deferred]}}\xspace}
+
+\lstdefinestyle{ealstyle}{
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small,
+    frame=single,
+    rulecolor=\color{codeborder},
+    breaklines=true,
+    showstringspaces=false,
+    keywordstyle=\color{blue!70!black}\bfseries,
+    commentstyle=\color{green!40!black}\itshape,
+    stringstyle=\color{red!60!black},
+    morekeywords={ability,resource,user,agent,hub,kind,realm,owner,uri,subject,caller,callee,receipt,call,let,mission,with,timeout,on,fn,struct,impl,pub,async,await,assume,axiom,invariant,capability},
+    columns=fullflexible,
+    keepspaces=true,
+    aboveskip=0.6em,
+    belowskip=0.6em,
+}
+\lstset{style=ealstyle}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+
+\newtcolorbox{invariant}[1][Invariant]{
+    colback=red!4!white,
+    colframe=red!50!black,
+    fonttitle=\bfseries,
+    title={Invariant --- #1},
+    sharp corners=south,
+    boxrule=0.6pt,
+}
+\newtcolorbox{notebox}[1][]{
+    colback=blue!4!white,
+    colframe=blue!50!black,
+    fonttitle=\bfseries,
+    title={Note},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+\newtcolorbox{warningbox}[1][]{
+    colback=orange!6!white,
+    colframe=orange!70!black,
+    fonttitle=\bfseries,
+    title={Boundary},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+\newtcolorbox{decisionbox}[1][]{
+    colback=purple!4!white,
+    colframe=purple!60!black,
+    fonttitle=\bfseries,
+    title={Open decision},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+\newtcolorbox{assumptionbox}[1]{
+    colback=green!4!white,
+    colframe=green!50!black,
+    fonttitle=\bfseries,
+    title={Assumption --- #1},
+    sharp corners=south,
+    boxrule=0.6pt,
+}
+
+\title{
+    \vspace{-2em}
+    \textbf{\Large AXON-RFC-006 Appendix C (v0.1):}\\[0.2em]
+    \textbf{\Large OpenAI Compatibility as Agent Dispatch View,}\\[0.1em]
+    \textbf{\Large Capability-URI API Keys}\\[0.4em]
+    \large LLM endpoints are not a new ontology.\\
+    \large Every \texttt{<agent>.chat} ability is an OpenAI-shape\\
+    \large \texttt{/v1/chat/completions} model after one stream filter.
+}
+\author{
+    Silan Hu \\ \small National University of Singapore
+}
+\date{Draft v0.1, \today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+RFC-006-B v0.6 established the discipline that external protocols
+enter EasyNet as transport views over the invocation graph rather
+than as new ontologies. Pages was the first reference instance:
+HTTP file fetches become deterministic projections of the
+\texttt{<user>.<project>.page.fetch} ability. This appendix
+specifies the second reference instance: an OpenAI-compatible
+\texttt{/v1/chat/completions} endpoint exposed by the Hub on top
+of any agent's chat-base ability output. The construction is not
+a wrap. The dispatched agent --- Claude Code, Codex, or any
+future driver --- already emits a streaming sequence of typed
+frames; those frames, after a small deterministic filter, are
+exactly the wire shape of an OpenAI streaming completion. The
+adapter is a view. Authentication is not OAuth: API keys are
+minted by keyring abilities and addressed as
+\texttt{resource/api\_key.<id>} URAs; presence of the token at
+the boundary is presence of a capability, and revocation is a
+single keyring call. Four normative invariants centre v0.1:
+Adapter Purity (the OpenAI surface mutates nothing it would not
+have mutated through the regular dispatch path), Capability-URI
+Key (API keys are URAs, not OAuth tokens), Filter Determinism
+(the stream-json $\to$ SSE projection is deterministic over the
+dispatch sequence), and Auth Receipt Trail (every request mints
+one canonical receipt against the API-key resource, all
+subsequent dispatch receipts cite it). The MVP is two endpoints
+on the Hub --- \texttt{/v1/chat/completions} and
+\texttt{/v1/models} --- backed by a fixed-shape stream filter
+implemented in the Hub agent's \texttt{openai.chat\_completions}
+ability. Cursor, Continue, openai-python, and any other
+OpenAI-shape client work against EasyNet without code changes.
+\end{abstract}
+
+\tableofcontents
+\vspace{1em}
+\hrule
+\vspace{1em}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Position in the RFC-006 series}
+\label{sec:position}
+
+\derived{} RFC-006-B v0.6 made one paradigm explicit:
+
+\begin{quote}
+External protocols are transport views over the invocation
+graph, not new ontologies.
+\end{quote}
+
+It then realised the paradigm against one external protocol ---
+HTTP file fetch --- and called the realisation \emph{Pages}.
+This appendix realises the same paradigm against a second
+external protocol --- the OpenAI \texttt{/v1/chat/completions}
+streaming wire format --- and calls the realisation
+\emph{OpenAI compat}. The structure of the appendix mirrors
+RFC-006-B section by section, so a reader can read the two
+side by side and verify that the same disciplines apply.
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\linewidth}{l X X}
+\toprule
+\textbf{Aspect} & \textbf{RFC-006-B (Pages)} & \textbf{RFC-006-C (this)} \\
+\midrule
+External protocol           & HTTP / GET / static files                          & OpenAI \texttt{/v1/chat/completions} (streaming) \\
+Underlying ability          & \texttt{<user>.<project>.page.fetch}              & \texttt{<agent>.chat} (or any chat-base ability) \\
+Hub adapter ability         & \texttt{01HUB.pages.serve}                         & \texttt{01HUB.openai.chat\_completions} \\
+URL form                    & \texttt{<project>.<user>.pages.<realm>/<path>}    & \texttt{<realm>/v1/chat/completions} \\
+Is the adapter pure?        & Yes (RFC-006-B INV-1)                              & Yes (this RFC INV-1) \\
+Identity addressing         & \texttt{resource/<user>.<project>/<path>}          & \texttt{resource/api\_key.<id>} \\
+Determinism guarantee       & Same id $\to$ same bytes (RFC-006-B INV-3)        & Same dispatch frames $\to$ same SSE (this RFC INV-3) \\
+What ships in the MVP       & two files (hello-world.html + style.css)           & one streaming completion against \texttt{web-builder.chat} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The two appendices share the same vocabulary, the same kind of
+invariant numbers, the same closing claim. RFC-006-D, RFC-006-E,
+RFC-006-F (file storage, conversation snapshots, mission outputs)
+will follow the same structure.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{The paradigm, restated}
+\label{sec:paradigm}
+
+\subsection{Statement}
+
+\normsv{}\textbf{An external streaming protocol is a transport
+view over an agent's dispatch sequence.} The wire shape an
+external client receives is a deterministic projection of the
+typed frames the agent emits during dispatch. The adapter that
+produces the projection runs as an ability rooted at the Hub,
+mints one envelope per request, and emits the projection as
+its body.
+
+The agent dispatch sequence is the source of truth. The OpenAI
+SSE stream is one of its views. Other views may co-exist (Anthropic
+\texttt{messages} streaming, Gemini \texttt{generateContent},
+future protocols) without changing the source-of-truth side.
+Each view is a pure filter: a different filter, a different
+projection, the same dispatch.
+
+\subsection{Why this is not a chat-API wrapper}
+
+\derived{} A naive design would introduce a parallel
+\texttt{chat\_completions} primitive in EasyNet --- a new
+state\_type, a new receipt class, a new ability namespace ---
+and forward to it. This is what \emph{wrapping} looks like, and
+it is structurally wrong here for the same reason RFC-006-B v0.6
+rejected ``new state\_type for web\_app'': it duplicates an
+ontology that already exists. EasyNet already has a notion of
+``the streaming output of an agent's work'' --- the dispatch
+sequence the chat ability is built on. The OpenAI surface
+projects that sequence; it does not host an alternative one.
+
+\subsection{Why a chat-base ability is already a streaming
+completion}
+
+\derived{} Every agent driver currently registered with EasyNet
+(Claude Code via stream-json, Codex via SSE) emits a typed-frame
+stream during dispatch. The frame types and an OpenAI streaming
+completion's chunk types map onto each other:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\linewidth}{L{0.30\linewidth} X}
+\toprule
+\textbf{Agent dispatch frame} & \textbf{OpenAI SSE chunk} \\
+\midrule
+\texttt{system}/\texttt{init} (driver handshake)        & dropped \\
+\texttt{assistant.message.text} (incremental tokens)    & \texttt{choices[].delta.content} \\
+\texttt{assistant.message.tool\_use}                    & \texttt{choices[].delta.tool\_calls[]} (when client requested tool surface; otherwise dropped or summarised) \\
+\texttt{user.tool\_result}                              & dropped (internal dispatch loop) \\
+\texttt{assistant.message.thinking}                     & optional; mapped to \texttt{choices[].delta.reasoning} when the client opts in \\
+\texttt{result} (terminal)                              & \texttt{choices[].finish\_reason} + \texttt{[DONE]} sentinel \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The mapping is deterministic, line-for-line, with no
+state-bearing transformations. INV-3 makes this normative.
+
+\subsection{The minimum reference instance: web-builder.chat}
+
+\derived{} The smallest instance with all four ingredients
+(an external protocol, a deterministic streaming filter, a
+capability-style auth, a complete receipt trail) is exposing the
+existing \texttt{web-builder.chat} ability as
+\texttt{model = "web-builder"} on a single \texttt{/v1/chat/completions}
+endpoint. Cursor / Continue / openai-python configured against
+the EasyNet Hub URL with an EasyNet-issued API key call
+\texttt{web-builder} the same way they would call
+\texttt{gpt-4o}. The first end-to-end demo is one Cursor request
+that lands inside web-builder's dispatch, picks up the agent's
+real reply, and returns it byte-equivalent to the wire shape
+Cursor expects.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Assumptions}
+\label{sec:assumptions}
+
+\normsv{} v0.1 is written under the following assumptions. Each
+is stated explicitly so downstream implementation work can be
+discharged independently while this appendix's semantic claims
+remain stable.
+
+\begin{assumptionbox}{A-1: Chat-base abilities exist}
+EasyNet has at least one ability of the form
+\texttt{<agent>.chat} whose dispatch produces a streaming
+sequence of typed frames (text, tool\_use, tool\_result,
+result). The current implementation registers
+\texttt{<agent>.chat} for each registered agent through
+\texttt{chat\_ability::register} (RFC-001 Phase 3 et al.). v0.1
+does not change that surface.
+\end{assumptionbox}
+
+\begin{assumptionbox}{A-2: Keyring abilities mint resource URAs}
+The keyring family (RFC-002 Phase 3, vault-style) supports
+ability invocations that mint long-lived capability tokens
+addressed as \texttt{resource/api\_key.<id>} URAs. Whether the
+mint primitive is named \texttt{<user>.keyring.mint\_api\_key},
+\texttt{<user>.api\_key.create}, or something else is
+implementation detail; what matters is that:
+
+\begin{itemize}[leftmargin=2em,itemsep=0.1em]
+    \item the minted URA is conformant to v4.1.5 (three URA segments,
+    \texttt{resource/api\_key.<id>});
+    \item presence of \texttt{<id>} at the HTTP boundary
+    cryptographically authenticates the bearer (RFC-002 §3 vault
+    rules apply);
+    \item revocation is a single ability call.
+\end{itemize}
+\end{assumptionbox}
+
+\begin{assumptionbox}{A-3: Receipts can be chained cross-class}
+The receipt store can record both canonical (state-changing)
+and operational (state-preserving) receipts and link them
+through \texttt{causal\_context.Scalar}. INV-4's receipt trail
+relies on this; it is the same machinery RFC-006-B v0.6 §5 uses
+for receipt-chain audit walking.
+\end{assumptionbox}
+
+\begin{assumptionbox}{A-4: The Hub agent owns its adapter abilities}
+\texttt{01HUB.openai.chat\_completions} is a hub-rooted ability
+in the same sense \texttt{01HUB.pages.serve} is. The
+\emph{ability ownership widens to (user, agent, hub, resource)}
+amendment from RFC-006-B Phase 0 covers this case verbatim.
+\end{assumptionbox}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{The four normative invariants}
+\label{sec:invariants}
+
+\subsection{INV-1 --- Adapter Purity}
+
+\begin{invariant}[INV-1: Adapter Purity (OpenAI)]
+\texttt{ability/01HUB.openai.chat\_completions}, the ability
+that bridges the OpenAI streaming protocol into the invocation
+graph, \textbf{MUST} be a pure transport adapter. Specifically:
+\begin{itemize}[leftmargin=2em,itemsep=0.1em]
+    \item It \textbf{MUST NOT} mutate any agent state.
+    \item It \textbf{MUST} emit \emph{exactly one} canonical
+    receipt per OpenAI request, against the API-key resource
+    (INV-4); no other canonical receipts originate from this
+    adapter.
+    \item It \textbf{MAY} emit operational receipts (per-frame
+    or aggregated; lossy observability).
+    \item It \textbf{MUST} delegate the dispatch entirely to
+    the underlying chat-base ability via the standard
+    \texttt{forward\_invoke} dispatch path. It \textbf{MUST NOT}
+    embed an alternative dispatcher.
+    \item It \textbf{MUST NOT} cache, summarise, or transform
+    the agent's reply beyond mechanical wire-shape framing
+    (chunking by SSE \texttt{data:} lines; closing with
+    \texttt{[DONE]}).
+\end{itemize}
+\end{invariant}
+
+\derived{} Adapter Purity rules out the entire failure mode in
+which the OpenAI surface accidentally becomes a parallel
+authoritative state plane: a Hub implementation that adds
+``output filtering'' or ``response rewriting'' beyond the
+wire-shape transformation has stopped being an adapter and is
+now an authority. INV-1 forbids it at the specification layer,
+not at the implementation layer.
+
+\subsection{INV-2 --- Capability-URI Key}
+
+\begin{invariant}[INV-2: API Key as Capability Resource]
+Every API key issued for OpenAI compatibility \textbf{MUST}
+correspond to a v4.1.5-conformant URA of the form
+\texttt{resource/api\_key.<id>}, where \texttt{<id>} is an
+unguessable token of at least 256 bits of entropy. The URA
+\textbf{MUST}:
+\begin{itemize}[leftmargin=2em,itemsep=0.1em]
+    \item be minted by a keyring ability (A-2);
+    \item resolve, via the keyring, to a \emph{single}
+    \texttt{user/<username>} URA --- the user the key
+    represents at admission time;
+    \item expose at least one revocation ability so the key
+    can be deactivated without restarting the daemon;
+    \item carry zero conversation state of its own (the key is
+    the capability; it does not hold messages, threads, or
+    cached context).
+\end{itemize}
+The HTTP \texttt{Authorization: Bearer <id>} header is the
+transport rendering of the URA. Presence of the header is
+\emph{the} authentication signal --- no OAuth, no token
+exchange, no scope object.
+\end{invariant}
+
+\begin{notebox}
+The minimal implementation gives each key a flat ``acts-as
+\texttt{user/<username>}'' grant. Future revisions may attach
+narrower scopes (e.g., ``can call only models matching
+\texttt{<owner>.\*.chat}'') by recording them on the key
+resource at mint time. Scope refinement is additive;
+v0.1 ships flat keys.
+\end{notebox}
+
+\subsection{INV-3 --- Filter Determinism}
+
+\begin{invariant}[INV-3: Stream Filter Determinism]
+The function from agent dispatch frame sequence to OpenAI SSE
+chunk sequence \textbf{MUST} be a pure deterministic projection.
+For a given dispatch sequence \(D\) and a given filter
+configuration \(F\):
+\[
+    \texttt{sse}(D, F) = \texttt{filter}(D, F)
+\]
+where \texttt{filter} contains no time, no random, no host-
+specific data, no agent identity beyond what is already in
+\(D\), and no model-output post-processing.
+
+It follows that:
+\begin{itemize}[leftmargin=2em,itemsep=0.1em]
+    \item Two Hub implementations on different hosts running
+    the same filter configuration against the same dispatch
+    sequence \textbf{MUST} produce byte-identical SSE streams
+    (modulo HTTP-layer fragmentation that does not change the
+    bytes after re-assembly).
+    \item A receipt-chain auditor walking from the canonical
+    auth receipt down through dispatch receipts \textbf{MUST}
+    be able to recompute the SSE bytes the client received,
+    given the dispatch frames the receipts cite.
+    \item The filter \textbf{MUST NOT} introduce dynamic content
+    (timestamps, IP-derived data, server-name banners). Any such
+    content belongs in the dispatch sequence itself, not in the
+    projection.
+\end{itemize}
+\end{invariant}
+
+\derived{} INV-3 is what makes OpenAI compat federate. Without
+it, two Hubs claiming the same API key resource may serve
+different bytes for the same request; with it, a CDN, a logging
+proxy, or an auditor can rely on the dispatch sequence as the
+canonical record and treat the SSE bytes as a function of it.
+
+\begin{notebox}
+INV-3 does not forbid all dynamic content in chat replies; it
+forbids dynamic content from \emph{the filter}. The agent's own
+dispatch may legitimately include timestamps the LLM produced
+(``it is now 2026-05-04''). What INV-3 forbids is the adapter
+adding such content unilaterally.
+\end{notebox}
+
+\subsection{INV-4 --- Auth Receipt Trail}
+
+\begin{invariant}[INV-4: Auth Receipt Trail]
+Every OpenAI request received at \texttt{/v1/chat/completions}
+\textbf{MUST}:
+\begin{enumerate}[leftmargin=2em,itemsep=0.1em]
+    \item Mint one canonical receipt with:
+    \begin{itemize}[leftmargin=1.5em,itemsep=0.05em]
+        \item \texttt{ability\_uri = ability/01HUB.openai.chat\_completions}
+        \item \texttt{caller\_uri = hub/01HUB}
+        \item \texttt{callee\_uri = hub/01HUB}
+        \item \texttt{subject\_uri = resource/api\_key.<id>}
+        \item \texttt{state\_transition.body\_hash = sha256(canonicalised
+        request body)}
+        \item \texttt{state\_transition.usage = \{ prompt\_tokens,
+        completion\_tokens, total\_tokens, model \}}
+    \end{itemize}
+
+    \item Forward dispatch through the resolved chat-base
+    ability with \texttt{causal\_context.Scalar = <id of
+    canonical receipt above>} so each dispatch-side receipt
+    is chain-walkable back to the auth receipt.
+
+    \item Honour an \texttt{api\_key} revocation that lands
+    after admission but before dispatch terminates by surfacing
+    a structured stream-end event (the OpenAI client receives a
+    \texttt{[DONE]} after a final \texttt{finish\_reason =
+    "cancelled"} chunk).
+\end{enumerate}
+\end{invariant}
+
+\derived{} INV-4 is the adapter's narrow but real
+authoritative-state contribution: ``a request was authorised
+under this key at this moment with this body hash and these
+usage numbers.'' Everything else stays in dispatch land.
+
+\subsection{Why these four, no fewer, no more}
+
+\derived{} Following the degeneracy method of AXIOM.tex
+§why-six and RFC-006-B v0.6 §invariants:
+
+\begin{itemize}[leftmargin=2em,itemsep=0.18em]
+    \item \textbf{Without INV-1}, the OpenAI surface is a second
+    authoritative state plane. An operator with access to the
+    Hub process can rewrite chat replies without going through
+    the dispatch path; the receipt chain is no longer the single
+    source of truth.
+    \item \textbf{Without INV-2}, API keys carry their own
+    semantics outside the URA system. Revocation, scoping,
+    auditing all become bespoke. Federation across realms
+    becomes impossible because a key issued by one realm has
+    no canonical name in another.
+    \item \textbf{Without INV-3}, the same model on two hosts
+    returns different bytes for the same request. CDN caching,
+    third-party audit, and replay verification all collapse.
+    \item \textbf{Without INV-4}, an OpenAI request enters
+    EasyNet without a primary ledger entry. The receipt chain
+    has gaps: ``the agent dispatched, but on whose authority?''
+\end{itemize}
+
+Each invariant blocks a class of failure that the others do not
+address; removing any one collapses the model.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{State transition model in detail}
+\label{sec:transitions}
+
+\subsection{Mint key: \texttt{<user>.keyring.mint\_api\_key}}
+
+\normsv{} The user-rooted keyring ability that mints an OpenAI
+API key for that user. Canonical, state-changing.
+
+\begin{lstlisting}
+caller   = caller_agent_uri
+callee   = caller_agent_uri                   (self-call)
+ability  = ability/<user>.keyring.mint_api_key
+subject  = user/<user>                         (the user the key acts as)
+args     = {
+    label:       "cursor on alice's mac",     (optional human label)
+    expires_at:  null | "<rfc3339>"           (null = no auto-expiry)
+}
+\end{lstlisting}
+
+\textbf{Pre-state}: zero or more \texttt{api\_key} resources owned by the user.
+
+\textbf{Post-state}: one new \texttt{resource/api\_key.<id>} resource exists, owned by the user, status = \texttt{active}.
+
+\textbf{Receipt class}: canonical. The receipt's
+\texttt{state\_transition.post\_state} carries the minted URA;
+\texttt{state\_transition.token\_hash} carries
+\(\text{sha256}(\text{token\_bytes})\) so the chain proves a
+specific bearer existed without storing the secret.
+
+\subsection{Authorise: \texttt{01HUB.openai.chat\_completions}}
+
+\normsv{} The Hub-rooted adapter ability invoked by the HTTP
+boundary on every request. Canonical (one auth receipt per
+call) but adapter-pure (no other state mutation).
+
+\begin{lstlisting}
+caller   = hub/01HUB                           (Hub-as-caller)
+callee   = hub/01HUB                           (self-call)
+ability  = ability/01HUB.openai.chat_completions
+subject  = resource/api_key.<id>               (parsed from Authorization)
+args     = {
+    request: {
+        model:    "<ability URA tail>",        (e.g. "web-builder")
+        messages: [...],
+        stream:   true,
+        ...
+    }
+}
+\end{lstlisting}
+
+\textbf{Pre-state}: \texttt{resource/api\_key.<id>} exists with status = \texttt{active}.
+
+\textbf{Post-state}: same. No state mutation in the adapter.
+
+\textbf{Receipt class}: canonical (per INV-4). The receipt
+records body hash and usage; subsequent dispatch receipts cite
+this receipt as \texttt{causal\_context.Scalar}.
+
+\subsection{Dispatch: \texttt{<agent>.chat}}
+
+\normsv{} The chat-base ability the OpenAI request resolved to.
+Operational, state-preserving (the agent's reply is a function
+of input + agent state at this instant; no canonical state is
+mutated by reading the reply).
+
+\begin{lstlisting}
+caller   = hub/01HUB
+callee   = agent/<resolved-from-model-name>
+ability  = ability/<agent>.chat
+subject  = user/<resolved-from-api-key>
+args     = { prompt: <last user message>, context: <other messages> }
+nonce    = <derived from the canonical auth receipt id>
+causal_context = Scalar(<canonical auth receipt id>)
+\end{lstlisting}
+
+The dispatch's own typed-frame stream is what the filter projects to OpenAI SSE.
+
+\textbf{Receipt class}: operational; one per call, with frame-level operational sub-receipts as the dispatch produces tool calls / sub-invocations.
+
+\subsection{Revoke: \texttt{<user>.keyring.revoke}}
+
+\normsv{} Revocation primitive. Canonical, state-changing.
+
+\begin{lstlisting}
+caller   = caller_agent_uri
+callee   = caller_agent_uri
+ability  = ability/<user>.keyring.revoke
+subject  = resource/api_key.<id>
+args     = { reason: "user-initiated" | "compromised" | ... }
+\end{lstlisting}
+
+\textbf{Pre-state}: \texttt{api\_key} resource exists with status = \texttt{active}.
+
+\textbf{Post-state}: same resource exists with status = \texttt{revoked}, \texttt{revoked\_at} populated. Subsequent OpenAI requests with that bearer are rejected at the auth step (HTTP 401) with one canonical \emph{rejection} receipt for audit.
+
+\section{Receipt semantics}
+\label{sec:receipts}
+
+\normsv{} v0.1 keeps the two-tier classification of RFC-006-B
+v0.6 and adds the precise inter-receipt linkage INV-4 mandates:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.18}
+\begin{tabularx}{\linewidth}{l X X}
+\toprule
+\textbf{Tier} & \textbf{For transitions that are} & \textbf{Used by} \\
+\midrule
+Canonical
+ & \texttt{mint\_api\_key}, \texttt{revoke}, \texttt{openai.chat\_completions} (auth entry per request)
+ & receipt-chain audit; \texttt{prev\_receipt\_hash} chain; persistent \\
+Operational
+ & \texttt{<agent>.chat} dispatch; per-frame observability
+ & lossy ring buffer; aggregable rates surfaced through \texttt{observe.health} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Cross-tier linkage}
+
+A canonical OpenAI auth receipt and the operational dispatch
+receipts it triggered are linked by:
+
+\begin{itemize}[leftmargin=2em,itemsep=0.12em]
+    \item dispatch receipt's \texttt{causal\_context.Scalar} = canonical auth receipt's invocation\_id;
+    \item canonical auth receipt's \texttt{state\_transition.dispatch\_root\_invocation\_id} = the root operational invocation id (not the receipt id; the invocation id pins the chain head).
+\end{itemize}
+
+A receipt walker traversing from any operational dispatch
+receipt can therefore reach the canonical auth receipt in one
+hop (\texttt{causal\_context}) and recover the API-key URA, the
+body hash, and the usage numbers.
+
+\subsection{What receipts witness, in this reference instance}
+
+\normsv{}
+
+\begin{itemize}[leftmargin=2em,itemsep=0.18em]
+    \item \textbf{mint\_api\_key receipt} witnesses ``user \(U\) created
+    API key resource \(R\) at time \(t\), token hash \(H\),
+    label \(L\), expiry \(E\)''.
+    \item \textbf{auth receipt (per request)} witnesses ``a
+    request bearing key \(R\) for model \(M\) with body hash
+    \(H_b\) and usage \(\{i, o, t\}\) entered the system at
+    \(t'\), forwarded into dispatch root invocation
+    \(I_{root}\)''.
+    \item \textbf{dispatch receipts (per call)} witness the
+    agent's tool calls + sub-invocations; each cites the auth
+    receipt; together they reconstruct what \texttt{<agent>.chat}
+    actually did under this key.
+    \item \textbf{revoke receipt} witnesses ``key \(R\) revoked
+    at \(t''\), reason \(\rho\)''.
+\end{itemize}
+
+A consumer can therefore answer ``how many requests did key
+\(R\) make and what did they cost?'' from canonical receipts
+alone, and ``what tools did the agent invoke under each request?''
+by walking down into operational receipts.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{URL = invocation, in this reference instance}
+\label{sec:url}
+
+\subsection{Endpoint surface}
+
+\normsv{} The Hub binds three endpoints under the realm's HTTPS
+listener:
+
+\begin{lstlisting}
+GET   /v1/models
+POST  /v1/chat/completions
+POST  /v1/embeddings                    (deferred; see §10)
+\end{lstlisting}
+
+Only \texttt{/v1/chat/completions} is in scope for v0.1 normative
+behaviour. \texttt{/v1/models} is included because the
+OpenAI-shape clients enumerate it for model discovery; v0.1
+returns the realm's chat-base ability registry projected as a
+list of model names. \texttt{/v1/embeddings} is reserved for a
+future v0.2 once an embedding-base ability primitive lands.
+
+\subsection{The transformation}
+
+\normsv{} An HTTP request:
+
+\begin{lstlisting}
+POST /v1/chat/completions HTTP/1.1
+Authorization: Bearer easynet-sk-<id>
+Content-Type: application/json
+{
+  "model":    "web-builder",
+  "messages": [{"role":"user","content":"hi"}],
+  "stream":   true
+}
+\end{lstlisting}
+
+is translated by \texttt{ability/01HUB.openai.chat\_completions} into:
+
+\begin{lstlisting}
+caller    = hub/01HUB
+callee    = hub/01HUB                       (auth ability)
+ability   = ability/01HUB.openai.chat_completions
+subject   = resource/api_key.<id>           (parsed from Bearer)
+args      = { model: "web-builder", messages: [...], ... }
+\end{lstlisting}
+
+which then forwards (per INV-1) into:
+
+\begin{lstlisting}
+caller    = hub/01HUB
+callee    = agent/web-builder
+ability   = ability/web-builder.chat
+subject   = user/<resolved-from-api-key>
+args      = { prompt: "hi", context: ... }
+causal_context = Scalar(<canonical auth receipt id>)
+\end{lstlisting}
+
+The dispatch's frames are filtered (per INV-3) into SSE chunks
+streamed back as the HTTP response body.
+
+\subsection{Why this is not a routing rule}
+
+\derived{} Per INV-1, the Hub's adapter does not own the
+dispatch; it forwards. Per INV-3, the bytes the adapter writes
+to the SSE stream are a deterministic projection of the
+dispatch frames. Together, INV-1 + INV-3 mean the OpenAI URL
+form is a projection of the URA form: every OpenAI request has
+a URA, every OpenAI response equals the URA's invocation result
+projected through \texttt{filter}, and the correspondence is
+verifiable through the receipt chain.
+
+This is the load-bearing claim of the paradigm extension. The
+OpenAI API is no longer ``a competing protocol'' or ``an
+external dependency''; it is a viewing surface onto the
+invocation graph, the same way HTTP file fetch is.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Reference implementation (informative)}
+\label{sec:ref-impl}
+
+\textit{This section is non-normative. It witnesses that the
+v0.1 specification is realisable on current EasyNet-Cli
+infrastructure. Conforming implementations are not required to
+follow these specific choices.}
+
+\subsection{New abilities (Hub + keyring)}
+
+Three abilities to register:
+
+\begin{lstlisting}
+src/runtime/agents/openai_compat/
+  mod.rs              ← register `01HUB.openai.chat_completions` +
+                        `01HUB.openai.list_models`
+  filter.rs           ← stream-json -> OpenAI SSE projection
+                        (deterministic; pure fn)
+  auth.rs             ← parse Authorization header; resolve
+                        API-key URA via keyring; emit canonical
+                        auth receipt
+  models.rs           ← /v1/models — project the local ability
+                        registry's chat-base entries
+
+src/runtime/keyring/
+  api_key_ability.rs  ← <user>.keyring.mint_api_key /
+                        <user>.keyring.revoke /
+                        <user>.keyring.list_api_keys
+  api_key_storage.rs  ← persist to ~/.easynet/keyring/api_keys.toml
+                        (reuse RFC-002 vault primitives)
+
+src/runtime/hub/
+  openai_listener.rs  ← extend the Hub axum router with
+                        /v1/{chat/completions,models}; route to the
+                        Hub abilities above
+\end{lstlisting}
+
+\subsection{The filter, sketched}
+
+\normsv{} The filter consumes stream-json events and emits OpenAI
+SSE chunks. Pseudocode:
+
+\begin{lstlisting}
+async fn filter(stream: StreamJsonRx, sink: SseSink) {
+    let mut completion_id = format!("chatcmpl-{}", random_token());
+    let model = current_model_name();
+    let created = current_request_time_pin();   // pinned at request
+                                                // start; constant
+                                                // for the whole stream
+                                                // so INV-3 holds.
+
+    sink.send_first_chunk(completion_id, model, created, "assistant");
+
+    while let Some(frame) = stream.recv().await {
+        match frame {
+            FrameType::AssistantText(text) => {
+                sink.send_delta_chunk(completion_id, model, created, text);
+            }
+            FrameType::AssistantToolUse(tool) if client_supports_tools => {
+                sink.send_tool_call_chunk(completion_id, model, created, tool);
+            }
+            FrameType::AssistantThinking(t) if client_opted_in_reasoning => {
+                sink.send_reasoning_chunk(completion_id, model, created, t);
+            }
+            FrameType::Result { stop_reason } => {
+                sink.send_finish_chunk(completion_id, model, created, stop_reason);
+                sink.send_done_sentinel();
+                return;
+            }
+            _ => { /* drop: handshake, tool_result, etc. */ }
+        }
+    }
+}
+\end{lstlisting}
+
+\subsection{The MVP demo}
+
+\normsv{} The minimum existence proof is one Cursor request that
+hits the Hub, authenticates against an EasyNet-issued API key,
+forwards to \texttt{web-builder.chat}, and returns the agent's
+real reply with byte-equivalent OpenAI wire framing. This
+discharges all four invariants simultaneously: Adapter Purity
+(the Hub did not invent the reply), Capability-URI Key (the
+Bearer matched a \texttt{resource/api\_key.<id>} URA),
+Filter Determinism (a second Cursor request with identical body
+returned identical SSE), Auth Receipt Trail (the receipt store
+shows one canonical auth receipt per request, dispatch
+receipts citing it).
+
+\subsection{Test stratification}
+
+\normsv{} Three matrices, each layered three deep, mirroring
+RFC-006-B v0.6 §6:
+
+\begin{itemize}[leftmargin=2em,itemsep=0.15em]
+    \item \textbf{Matrix A (unit/integ, in-process)}: filter
+    determinism (same input frames $\to$ same SSE bytes), key
+    minting + revocation transitions, malformed-Authorization
+    rejection paths.
+    \item \textbf{Matrix B (CLI surface, out-of-process)}:
+    \texttt{easynet api-key \{create,list,revoke\}} subcommands.
+    \item \textbf{Matrix C (Docker e2e, real container, real
+    OpenAI client)}: cursor + openai-python smoke runs against
+    a containerised Hub; SSE round-trip; tool-use rendering;
+    revocation mid-stream.
+\end{itemize}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Beyond MVP --- post-v0.1 work, in shape only}
+\label{sec:post-mvp}
+
+\deferred{}
+
+\begin{itemize}[leftmargin=2em,itemsep=0.15em]
+    \item \textbf{Embeddings} (\texttt{POST /v1/embeddings}).
+    Requires an embedding-base ability primitive
+    (\texttt{<agent>.embed} or similar). Same paradigm: the
+    response is a deterministic projection of the agent's
+    embedding output, the API key auth is identical.
+    \item \textbf{Anthropic-shape adapter}
+    (\texttt{POST /v1/messages}). A second filter, same
+    dispatch source. Models the same paradigm against a
+    second external protocol.
+    \item \textbf{Gemini-shape adapter}
+    (\texttt{POST /v1beta/models/<model>:streamGenerateContent}).
+    A third filter.
+    \item \textbf{Scoped API keys}: keys whose admission scope
+    is narrower than ``acts as user $U$''. E.g., key may invoke
+    only models in a specific ability namespace, or only at
+    rates below a threshold. Scope is stored on the key
+    resource at mint time; admission consults it.
+    \item \textbf{Usage / billing receipts}: enrich the auth
+    receipt's \texttt{state\_transition.usage} with cost
+    attribution per ability invocation, so an audit can
+    answer ``what did this user cost the cluster across all
+    chat-base abilities last month?''.
+    \item \textbf{Tool-call surface}: explicit OpenAI-shape
+    tool registration so a client can pass \texttt{tools=[...]}
+    and have the agent's tool\_use frames map onto the client's
+    tool descriptors. v0.1 either drops tool\_use frames or
+    summarises them as text; the proper mapping is a v0.2 item.
+    \item \textbf{Conversation continuation across requests}.
+    The OpenAI protocol is stateless (every request carries the
+    full \texttt{messages} history); EasyNet's chat ability is
+    too. A client that wants ``server-side history'' must
+    introduce a separate resource (e.g.
+    \texttt{resource/conversation.<id>}) and reference it
+    explicitly --- RFC-006-D's territory.
+\end{itemize}
+
+Each is purely additive. None changes the four invariants of
+v0.1; they instantiate the paradigm in new ways or layer
+additional resources on top.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Open decisions}
+\label{sec:open}
+
+\begin{decisionbox}
+\textbf{API-key bearer prefix.} v0.1 specifies
+\texttt{Bearer easynet-sk-<id>} as the user-visible token shape,
+with \texttt{<id>} a 256-bit unguessable hex/base32 token. The
+\texttt{easynet-sk-} prefix is convention only --- it lets a
+secret-scanner (e.g., GitHub's leaked-credential detector)
+recognise EasyNet keys distinctly from OpenAI's
+\texttt{sk-proj-} or Anthropic's \texttt{sk-ant-}. The exact
+prefix string is non-normative.
+\end{decisionbox}
+
+\begin{decisionbox}
+\textbf{Model name resolution.} v0.1 resolves
+\texttt{model = "web-builder"} to ability
+\texttt{web-builder.chat} by suffix-appending \texttt{.chat}.
+A future revision may permit explicit URAs (\texttt{model =
+"easynet:///r/easynet.run/ability/web-builder.chat"}) for
+disambiguation across realms, or short aliases stored on the
+hub. Both fit the paradigm; v0.1 picks the simplest form.
+\end{decisionbox}
+
+\begin{decisionbox}
+\textbf{Tool-use rendering.} Mapping agent tool\_use frames to
+OpenAI \texttt{tool\_calls} requires a tool descriptor schema
+the client agreed to up-front (via the \texttt{tools=[]}
+request field). v0.1's normative position is: \emph{drop}
+tool\_use frames from the SSE projection unless the request
+explicitly listed compatible tools, and \emph{always} record
+them in the operational receipt chain. v0.2 specifies the
+descriptor handshake.
+\end{decisionbox}
+
+\begin{decisionbox}
+\textbf{Revocation propagation latency.} INV-2 requires
+revocation to take effect ``without restarting the daemon'';
+INV-4 requires mid-stream revocation to surface as a
+\texttt{[DONE]} after \texttt{finish\_reason = "cancelled"}.
+The implementation needs a watch on the keyring's revocation
+stream; the latency budget is post-MVP (v0.2).
+\end{decisionbox}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Coverage check}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.18}
+\begin{tabularx}{\linewidth}{l X l}
+\toprule
+\textbf{Rule} & \textbf{Discharged by} & \textbf{Where} \\
+\midrule
+URA v4.1.5 §A.URA-7 (3-segment URA)        & \texttt{resource/api\_key.<id>} parses to three URA segments  & \S\ref{sec:invariants} \\
+URA v4.1.5 §9 (callee \(\in\) hub/device/agent) & callee on auth = \texttt{hub/01HUB}; callee on dispatch = \texttt{agent/<resolved>}     & \S\ref{sec:url} \\
+ONTOLOGY §3.2.1 (ability owner \(\in\) user/agent/hub/resource) & \texttt{01HUB.openai.chat\_completions} (hub-rooted), \texttt{<user>.keyring.mint\_api\_key} (user-rooted)         & \S\ref{sec:transitions} \\
+AXIOM (every invocation produces a receipt) & two-tier classification + cross-tier linkage                       & \S\ref{sec:receipts} \\
+RFC-006-B v0.6 INV-1 (Adapter Purity)       & inherited verbatim as RFC-006-C INV-1                               & \S\ref{sec:invariants} \\
+RFC-006-B v0.6 INV-3 (Deterministic Projection) & inherited verbatim as RFC-006-C INV-3                            & \S\ref{sec:invariants} \\
+RFC-002 keyring vault (capability identity) & API keys minted by keyring abilities; addressed as resource URAs    & \S\ref{sec:invariants} \\
+forward\_invoke endgame contract            & adapter forwards via standard \texttt{forward\_invoke}              & \S\ref{sec:url} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\paragraph{Closing.} Every chat-base ability is, after a
+deterministic stream filter, an OpenAI streaming completion.
+Every API key is, by construction, a v4.1.5-conformant
+\texttt{resource/api\_key.<id>} URA capability. The OpenAI
+endpoint is one ability call from a Hub-rooted adapter into a
+chat-base agent ability, and the wire bytes the client receives
+are a verifiable projection of the dispatch frames the agent
+emits. EasyNet does not host LLM endpoints; it lets cursor /
+continue / openai-python view the invocation graph through the
+glass cursor / continue / openai-python already speak.
+
+\vfill
+\hrule
+\vspace{0.4em}
+\noindent\small
+\textit{The OpenAI protocol is not a competitor and not a
+dependency. It is a viewing surface --- one of many --- onto
+agents whose work, with or without the surface, is recorded
+in EasyNet's invocation graph.}
+
+\end{document}

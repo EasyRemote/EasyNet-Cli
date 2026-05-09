@@ -1,6 +1,6 @@
 [package]
 name = "easynet"
-version = "1.25.14"
+version = "1.30.7"
 edition = "2021"
 description = "EasyNet CLI + Hub MCP server + EAL (EasyNet Ability Language)."
 license = "Apache-2.0"
@@ -245,6 +245,32 @@ thiserror = "1"
 # permission rules) sits in plain Rust on top.
 tree-sitter = "0.25"
 tree-sitter-bash = "0.25"
+
+# RFC-006-B v0.6 / Pages reference system — HTTP listener.
+#  - axum: in-daemon HTTP listener for `*.*.pages.localhost:<port>` (MVP). The
+#    Hub-as-agent's `01HUB.pages.serve` ability translates HTTP into
+#    `forward_invoke`s onto `<user>.<project>.page.fetch`. Production traffic
+#    enters via the Go backend; this listener is dev-only and can be flag-gated.
+#  - hyper "server" feature: needed by axum to bind a real TCP socket; pinned
+#    explicitly so the daemon's HTTP surface tracks a known hyper version
+#    rather than whichever transitive resolution wins.
+axum = "0.7"
+hyper = { version = "1", features = ["server", "http1"] }
+
+# RFC-006-B v0.6 / Pages reference system — sandbox + state map.
+#  - rustix with `fs` feature: kernel-enforced read sandbox for
+#    `<user>.<project>.page.fetch`. Linux uses `openat2(2)` with
+#    `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS` so path
+#    resolution cannot leave the published folder no matter what `..` or
+#    symlink games an attacker plays. macOS falls back to realpath+prefix
+#    plus O_NOFOLLOW (acknowledged weaker; production targets Linux). v0.6
+#    INV-3 (Deterministic Projection) hinges on this sandbox.
+rustix = { version = "0.38", features = ["fs"] }
+# once_cell::sync::Lazy backs the process-wide PUBLISHED_PROJECTS DashMap
+# in the pages reference system. Already transitively present via tonic;
+# pinned here so the daemon's surface use is documented (mirrors the
+# tokio-stream / tower precedent above).
+once_cell = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

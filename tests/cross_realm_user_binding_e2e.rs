@@ -53,7 +53,7 @@ fn boot_realm_a_daemon() -> (Arc<KeyringHandle>, String, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("realm_a_keyring.json");
     let h = Arc::new(KeyringHandle::open_or_create(path, "passphrase-a").unwrap());
-    let user_uri = "easynet:///r/realm-a/agent/user-c".to_string();
+    let user_uri = "easynet:///r/realm-a/user/user-c".to_string();
     h.set_device_subject(user_uri.clone()).unwrap();
     handle_create(&h, json!({"purpose": "agent_signing"})).unwrap();
     (h, user_uri, dir)
@@ -109,12 +109,12 @@ fn full_round_trip_realm_a_issues_realm_b_consumes_resolver_finds() {
     );
 
     // Cross-check: a different user URI in realm A is NOT bound.
-    let unbound_outcome = resolver.resolve_user("easynet:///r/realm-a/agent/user-other");
+    let unbound_outcome = resolver.resolve_user("easynet:///r/realm-a/user/user-other");
     assert_eq!(unbound_outcome, FederatedUserOutcome::NotBound);
 
     // Realm B's own URI is `Local` (no federated lookup
     // needed — INV-3).
-    let local_outcome = resolver.resolve_user("easynet:///r/realm-b/agent/user-on-b");
+    let local_outcome = resolver.resolve_user("easynet:///r/realm-b/user/user-on-b");
     assert_eq!(local_outcome, FederatedUserOutcome::Local);
 }
 

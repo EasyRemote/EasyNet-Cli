@@ -17,7 +17,7 @@
 // -----------------------
 //   1. Validate args locally (path exists, node id non-empty).
 //   2. Map args → JSON request body.
-//   3. invoke_local_ability("fleet.deploy_ability", body).
+//   3. invoke_local_ability("device.fleet.deploy_ability", body).
 //   4. Print the daemon's response.
 //
 // All policy (manifest validation, signature handling, ordering of
@@ -40,10 +40,10 @@ use crate::support::output;
 pub struct DeployArgs {
     /// Path to the ability directory (must contain `ability.json`).
     pub path: String,
-    /// Target device node id. Use `local` to deploy onto this
+    /// Target device node id. Use 'local' to deploy onto this
     /// device's own ability registry; any other node id requires
     /// the federation Invoke transport (the handler returns a
-    /// typed `federation_not_wired` error in that case until it
+    /// typed 'federation_not_wired' error in that case until it
     /// ships).
     #[arg(long = "node", short = 'n', value_name = "NODE_ID")]
     pub node: String,
@@ -63,7 +63,7 @@ pub fn run(args: DeployArgs) -> anyhow::Result<()> {
         style(&args.node).cyan()
     );
     let result = invoke_local_ability(
-        "fleet.deploy_ability",
+        "device.fleet.deploy_ability",
         json!({
             "path": args.path,
             "node_id": args.node,

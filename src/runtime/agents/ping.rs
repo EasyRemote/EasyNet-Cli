@@ -33,14 +33,19 @@ use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
+use crate::runtime::ability_dispatch::OwnerKind;
 /// Wire name of the ability. Pinned so a future rename trips a
 /// fixture-byte-stability test in `registry::a2a_labels`.
-pub const ABILITY_NAME: &str = "observe.health";
+pub const ABILITY_NAME: &str = "device.observe.health";
 
 /// Register the `observe.health` handler on the supplied registry.
 /// Called from `runtime::agents::build_registry`.
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    reg.register_rpc(ABILITY_NAME, Arc::new(handler));
+    reg.register_rpc_with_owner(
+        "device.observe.health",
+        OwnerKind::Device,
+        Arc::new(handler),
+    );
 }
 
 /// Echo handler. Returns `{ "echo": <args>, "replied_at_unix_ms": <ts> }`.

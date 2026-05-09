@@ -1,0 +1,11 @@
+schema_version = "1"
+name = "device.schedule.remove"
+description = "Delete a schedule by id. Errors when the id is unknown."
+
+[input_schema]
+type = "object"
+required = ["schedule_id"]
+additionalProperties = false
+
+[input_schema.properties.schedule_id]
+type = "string"

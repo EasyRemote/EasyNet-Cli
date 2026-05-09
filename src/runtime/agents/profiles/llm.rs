@@ -9,8 +9,8 @@
 //! ------------------------
 //!   conversation.send / conversation.stream  (default visibility SCOPED [P8])
 //!   session.create / session.list / session.resume / session.close
-//!   meta.describe / meta.list_abilities / meta.acquire / meta.forget
-//!     / meta.publish / meta.compose / meta.cancel
+//!   device.meta.describe / device.meta.list_abilities / device.meta.acquire / device.meta.forget
+//!     / device.meta.publish / device.meta.compose / device.meta.cancel
 //!   skill.<name>  (per-skill PRIVATE abilities; one per directory in
 //!                  ~/.claude/skills/, ~/.agents/skills/, etc.)
 //!
@@ -19,18 +19,34 @@
 //! is the conversation.send implementation.
 
 pub const LLM_PROFILE_ABILITY_PREFIXES: &[&str] = &[
+    // M2/M3 of system-namespace migration: catalogue uses
+    // canonical `device.*` partition. Per Q3 of the truth-table
+    // spec, `meta.*` is device-profile-owned (device-introspection
+    // is a host concern; per-agent introspection uses the
+    // `{ scope: "<self>" }` parameter). LLM profile's surface is
+    // `conversation.*` / `session.*` / `<agent>.skill.*`. Legacy
+    // bare-namespace prefixes are kept as a defense-in-depth
+    // fallback for stale call sites that emit a legacy-named
+    // ability into a profile-side selector.
+    //
+    // `device.voice.*` was previously listed here on the
+    // assumption that voice signaling is an LLM-owned ability
+    // family (RFC-005 v3.2 A6/A7). The handlers actually run
+    // on the device daemon (`OwnerKind::Device` in the
+    // registry); claiming them in this profile caused the
+    // catalogue's `descriptors_for(agent_uri)` to stamp every
+    // voice verb with the agent URA, so `easynet ability list`
+    // grouped them under AGENT instead of DEVICE / SYSTEM and
+    // the KIND column read `agent`. Per the truth-table spec
+    // ownership reflects "where does the handler run", not
+    // "which surface category it semantically belongs to" —
+    // voice is host-owned (microphone / camera / speaker
+    // hardware lives on the device). Moved to the device
+    // profile via DEVICE_PROFILE_ABILITY_PREFIXES.
     "conversation.",
     "session.",
-    "meta.",
+    "device.skill.",
     "skill.",
-    // RFC-005 v3.2 A6, A7 — llm-owned media abilities. voice.*
-    // covers `voice.subscribe` (TTS persona stream) and
-    // `voice.transcribe` (ASR; audio-in / text-out bidi). The
-    // device-profile prefix list intentionally omits "voice." so
-    // these abilities advertise under the llm agent's URA, which
-    // is the natural ownership boundary (the persona / model
-    // belongs to the LLM sub-agent, not the host).
-    "voice.",
 ];
 
 pub fn owns(ability_name: &str) -> bool {
@@ -47,7 +63,7 @@ pub fn owns(ability_name: &str) -> bool {
 ///   * session.*       → SCOPED
 ///   * meta.*          → SCOPED  (callable PUBLIC, results filtered)
 ///
-/// `meta.describe` is technically PUBLIC per §18, but we mark it
+/// `device.meta.describe` is technically PUBLIC per §18, but we mark it
 /// SCOPED here for safety; the higher-level dispatcher upgrades to
 /// PUBLIC when it lands. P4.7 narrows the SCOPED axes.
 pub fn descriptors_for(
@@ -65,7 +81,7 @@ pub fn descriptors_for(
 /// as an internal type — refactoring 28+ files to delete it is
 /// out of scope here — but its display string is surfaced through
 /// the descriptor's open-ended `metadata` bag so downstream
-/// consumers (Frontend Agents page, `meta.describe`) can render
+/// consumers (Frontend Agents page, `device.meta.describe`) can render
 /// it without a protocol-level discriminator.
 ///
 /// Callers that don't know the agent type pass `None`; only the
@@ -88,6 +104,7 @@ pub fn descriptors_for_with_metadata(
             let mut desc = AbilityDescriptor::new(m.name.clone(), owner_agent_uri, visibility)
                 .expect("registry-derived names satisfy descriptor invariants")
                 .with_input_schema(m.input_schema.clone())
+                .with_hints(m.hints.clone())
                 .with_source("kernel:built-in")
                 .with_description(m.description);
             if let Some(t) = agent_type_display {
@@ -104,27 +121,35 @@ mod tests {
 
     #[test]
     fn owns_recognizes_llm_namespaces() {
+        // Q3 of truth-table spec: meta.* is device-profile-owned,
+        // NOT llm-profile. The LLM surface is conversation.*,
+        // session.*, device.skill.*. meta.* and device.voice.*
+        // fall through to the device profile (the voice signaling
+        // handlers run on the host daemon).
         assert!(owns("conversation.send"));
         assert!(owns("conversation.stream"));
         assert!(owns("session.create"));
         assert!(owns("session.resume"));
-        assert!(owns("meta.describe"));
-        assert!(owns("meta.list_abilities"));
-        assert!(owns("skill.alive-video"));
-        assert!(owns("skill.design"));
+        assert!(owns("device.skill.alive-video"));
+        assert!(owns("device.skill.design"));
+        // device.voice.* is NOT llm-owned post-truth-table fix —
+        // the handlers run on the device daemon.
+        assert!(!owns("device.voice.subscribe"));
+        // meta.* is NOT llm-owned post-M2.
+        assert!(!owns("device.meta.describe"));
     }
 
     #[test]
     fn owns_rejects_other_profiles() {
-        assert!(!owns("fleet.list_abilities"));
-        assert!(!owns("consent.subscribe"));
-        assert!(!owns("policy.evaluate"));
+        assert!(!owns("device.fleet.list_abilities"));
+        assert!(!owns("device.consent.subscribe"));
+        assert!(!owns("device.policy.evaluate"));
     }
 
     #[test]
     fn descriptors_for_marks_skill_namespace_as_private() {
         use crate::runtime::ability_descriptor::Visibility;
-        let descriptors = descriptors_for("easynet:///r/acme/agent/01LLM");
+        let descriptors = descriptors_for("easynet:///r/acme/agent/u1.01LLM");
         for d in descriptors {
             if d.name.starts_with("skill.") {
                 assert_eq!(
@@ -147,7 +172,7 @@ mod tests {
     #[test]
     fn descriptors_for_with_metadata_stamps_agent_type_when_provided() {
         let descriptors =
-            descriptors_for_with_metadata("easynet:///r/acme/agent/01LLM", Some("claude-code"));
+            descriptors_for_with_metadata("easynet:///r/acme/agent/u1.01LLM", Some("claude-code"));
         for d in &descriptors {
             assert_eq!(
                 d.metadata.get("agent_type").map(String::as_str),
@@ -160,7 +185,7 @@ mod tests {
 
     #[test]
     fn descriptors_for_with_metadata_omits_agent_type_when_absent() {
-        let descriptors = descriptors_for_with_metadata("easynet:///r/acme/agent/01LLM", None);
+        let descriptors = descriptors_for_with_metadata("easynet:///r/acme/agent/u1.01LLM", None);
         for d in &descriptors {
             assert!(
                 !d.metadata.contains_key("agent_type"),

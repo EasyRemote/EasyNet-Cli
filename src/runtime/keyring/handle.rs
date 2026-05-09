@@ -398,7 +398,10 @@ mod tests {
     fn rotation_retires_old_creates_new_with_incremented_epoch() {
         let (h, _dir) = open_test_handle();
         let e = h
-            .create_entry("agent_signing", Some("easynet:///r/prv/reg/agent.x".into()))
+            .create_entry(
+                "agent_signing",
+                Some("easynet:///r/test.local/agent/test.x".into()),
+            )
             .unwrap();
         let (new_id, retired_id, epoch) = h.rotate(&e.key_id).unwrap();
         assert_eq!(retired_id, e.key_id);
@@ -414,7 +417,7 @@ mod tests {
         assert_eq!(new.rotated_from.as_deref(), Some(retired_id.as_str()));
         assert_eq!(
             new.bound_subject.as_deref(),
-            Some("easynet:///r/prv/reg/agent.x")
+            Some("easynet:///r/test.local/agent/test.x")
         );
     }
 
@@ -446,17 +449,27 @@ mod tests {
         let pk = e.public_key_b64.clone();
         let fp = b64_encode(&entry_fingerprint(&e).unwrap());
         // Correct fingerprint: ok.
-        h.peer_add("easynet:///r/org/reg/agent.alice", &pk, Some(&fp), None)
-            .unwrap();
+        h.peer_add(
+            "easynet:///r/test.local/agent/u.alice",
+            &pk,
+            Some(&fp),
+            None,
+        )
+        .unwrap();
         // Re-add same peer: returns false (updated, not inserted).
         let added = h
-            .peer_add("easynet:///r/org/reg/agent.alice", &pk, Some(&fp), None)
+            .peer_add(
+                "easynet:///r/test.local/agent/u.alice",
+                &pk,
+                Some(&fp),
+                None,
+            )
             .unwrap();
         assert!(!added);
         // Wrong fingerprint: rejected.
         let bad = b64_encode(&[0u8; 32]);
         assert!(h
-            .peer_add("easynet:///r/org/reg/agent.bob", &pk, Some(&bad), None)
+            .peer_add("easynet:///r/test.local/agent/u.bob", &pk, Some(&bad), None)
             .is_err());
     }
 
@@ -465,10 +478,15 @@ mod tests {
         let (h, _dir) = open_test_handle();
         let e = h.create_entry("agent_signing", None).unwrap();
         let pk = e.public_key_b64.clone();
-        h.peer_add("easynet:///r/org/reg/agent.bob", &pk, None, Some("hub-uri"))
-            .unwrap();
+        h.peer_add(
+            "easynet:///r/test.local/agent/u.bob",
+            &pk,
+            None,
+            Some("hub-uri"),
+        )
+        .unwrap();
         let p = h
-            .find_peer_by_uri("easynet:///r/org/reg/agent.bob")
+            .find_peer_by_uri("easynet:///r/test.local/agent/u.bob")
             .unwrap();
         assert_eq!(p.via_hub.as_deref(), Some("hub-uri"));
         assert_eq!(p.public_key_b64, pk);
@@ -499,14 +517,14 @@ mod tests {
             let h = KeyringHandle::open_or_create(path.clone(), "p").unwrap();
             let e = h.create_entry("agent_signing", None).unwrap();
             key_id = e.key_id.clone();
-            h.bind_subject(&key_id, "easynet:///r/prv/reg/agent.test")
+            h.bind_subject(&key_id, "easynet:///r/test.local/agent/test.t")
                 .unwrap();
         }
         let h = KeyringHandle::open_or_create(path, "p").unwrap();
         let e = h.find_entry_by_id(&key_id).unwrap();
         assert_eq!(
             e.bound_subject.as_deref(),
-            Some("easynet:///r/prv/reg/agent.test")
+            Some("easynet:///r/test.local/agent/test.t")
         );
     }
 

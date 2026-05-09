@@ -205,7 +205,7 @@ fn unknown_remote_target_falls_through_to_typed_error() {
         AgentEntry::new(AgentType::ClaudeCode, None),
     );
 
-    fwd::set_test_knower(|target| target == "easynet:///r/silan.localhost/agent/known-only");
+    fwd::set_test_knower(|target| target == "easynet:///r/silan.localhost/device/known-only");
     fwd::set_test_router(|_t, _a, _x| {
         // Should not be called: knower rejects the target first.
         panic!("router called for unknown target");
@@ -213,7 +213,7 @@ fn unknown_remote_target_falls_through_to_typed_error() {
 
     let agent1_invoke = build_registry_with_invoke("agent1", device1_agents);
     let err = agent1_invoke(json!({
-        "target":  "easynet:///r/silan.localhost/agent/never-registered",
+        "target":  "easynet:///r/silan.localhost/device/never-registered",
         "ability": "chat",
         "args":    {"message": "hi"},
     }))

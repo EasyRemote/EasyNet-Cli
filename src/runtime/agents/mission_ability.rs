@@ -43,45 +43,47 @@ use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
-pub const ABILITY_RUN: &str = "mission.run";
-/// User-facing alias under the `easynet.*` namespace. The two names
-/// route to the same handler; the `delegate` SKILL.md teaches the
-/// alias because it reads more cleanly from the LLM's seat ("EasyNet
-/// runs a thing"). `mission.run` stays advertised as a
-/// backward-compat alias for any client/skill that already wired the
-/// legacy name.
-pub const ABILITY_RUN_ALIAS: &str = "easynet.run";
-/// `easynet.track(run_id)` — read the persisted state of a prior
-/// `easynet.run` invocation. Returns the same shape `easynet.run`
+use crate::runtime::ability_dispatch::OwnerKind;
+pub const ABILITY_RUN: &str = "device.mission.run";
+/// `mission.track(run_id)` — read the persisted state of a prior
+/// `mission.run` invocation. Returns the same shape `mission.run`
 /// surfaces (run_id, run_dir, outputs, meta, ok), reconstructed
 /// off the on-disk run dir. Use case: an LLM kicks off a long
 /// mission (multi-agent fan-out), polls track until status leaves
 /// `running`, then composes a final answer.
-pub const ABILITY_TRACK: &str = "easynet.track";
-/// `easynet.cancel(run_id)` — flip an in-flight mission to
+pub const ABILITY_TRACK: &str = "device.mission.track";
+/// `mission.cancel(run_id)` — flip an in-flight mission to
 /// `cancelled`. No-op (with informative result) on a run that is
 /// already terminal. Best-effort: removes the pid file and rewrites
 /// meta.json; long-running step processes are not killed today,
 /// they just stop being expected.
-pub const ABILITY_CANCEL: &str = "easynet.cancel";
+pub const ABILITY_CANCEL: &str = "device.mission.cancel";
 
 /// Register every mission ability on the registry. Called once at
-/// boot from `runtime::agents::build_registry_with_services`. The
-/// run handler is mirrored under both `mission.run` (legacy) and
-/// `easynet.run` (canonical alias); track + cancel ship under the
-/// `easynet.*` namespace only because they are net-new in this
-/// surface and have no legacy name to honour.
+/// boot from `runtime::agents::build_registry_with_services`.
+///
+/// The earlier RFC-001 v4.1.6 cut also kept a `device.easynet.*`
+/// alias for `run`/`track`/`cancel` ("user-facing alias"). The
+/// follow-up M2 carrier (RFC-001 v4.1.7) deletes that alias —
+/// per Q2 of the migration plan, `easynet.*` is "protocol entropy
+/// generator" and the LLM corpus reads `mission.run` directly.
+/// Single canonical name, no twin: the LLM never had a way to
+/// know which to pick, the receipts diverged, and the duplicate
+/// names doubled the meta-discovery surface for no win.
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    let run: crate::runtime::ability_dispatch::LocalRpcHandler =
-        Arc::new(move |args: Value| run_handler(args));
-    reg.register_rpc(ABILITY_RUN, Arc::clone(&run));
-    reg.register_rpc(ABILITY_RUN_ALIAS, run);
-    reg.register_rpc(
-        ABILITY_TRACK,
+    reg.register_rpc_with_owner(
+        "device.mission.run",
+        OwnerKind::Device,
+        Arc::new(move |args: Value| run_handler(args)),
+    );
+    reg.register_rpc_with_owner(
+        "device.mission.track",
+        OwnerKind::Device,
         Arc::new(move |args: Value| track_handler(args)),
     );
-    reg.register_rpc(
-        ABILITY_CANCEL,
+    reg.register_rpc_with_owner(
+        "device.mission.cancel",
+        OwnerKind::Device,
         Arc::new(move |args: Value| cancel_handler(args)),
     );
 }

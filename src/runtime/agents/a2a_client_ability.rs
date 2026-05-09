@@ -57,15 +57,17 @@ use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
-pub const ABILITY_SEND_TASK: &str = "a2a.client.send_task";
+use crate::runtime::ability_dispatch::OwnerKind;
+pub const ABILITY_SEND_TASK: &str = "device.a2a.client.send_task";
 
 /// Register `a2a.client.send_task` on the registry. Stateless;
 /// every call dials the local daemon's `federation.forward_invoke`
 /// surface fresh — same wire path the rest of the CLI's
 /// cross-device dispatch takes after the joint-plan unification.
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    reg.register_rpc(
-        ABILITY_SEND_TASK,
+    reg.register_rpc_with_owner(
+        "device.a2a.client.send_task",
+        OwnerKind::Device,
         Arc::new(move |args: Value| send_task_handler(args)),
     );
 }

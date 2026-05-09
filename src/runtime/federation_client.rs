@@ -107,11 +107,93 @@ pub struct JoinArgs {
 /// Receipt body returned by a successful `federation.join`. The
 /// `join_receipt_hash` is the device's §A8 [P3] membership-lineage
 /// root and MUST be persisted into `~/.easynet/credentials.json`.
+///
+/// AXON-RFC-001 v4.1.7 hub-broadcast contract adds three fields:
+/// `hub_published_abilities` (the snapshot of hub-owned abilities
+/// the hub advertises to every member), `hub_abilities_revision`
+/// (the monotonic counter the device passes back as
+/// `since_abilities_revision` on subsequent heartbeats), and
+/// `advertise_contract` (the prefix bounds the device must respect
+/// on outbound `federation.advertise_*` calls). All three default
+/// when absent so a v4.1.6 device reading a v4.1.7 hub (or vice
+/// versa) interops without breaking — empty snapshot, revision 0,
+/// default contract.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct JoinReceipt {
     pub canonical_agent_uri: String,
     pub realm: String,
     pub join_receipt_hash: String,
+    #[serde(default)]
+    pub hub_published_abilities: Vec<HubAbilityEntry>,
+    #[serde(default)]
+    pub hub_abilities_revision: u64,
+    #[serde(default)]
+    pub advertise_contract: AdvertiseContract,
+}
+
+/// One hub-owned ability descriptor as broadcast by the hub. The
+/// `descriptor` field is opaque (`Value`) — the hub-side schema
+/// can evolve without forcing a Cli release.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct HubAbilityEntry {
+    pub name: String,
+    pub descriptor: Value,
+}
+
+/// Bound on what a device may advertise at this hub. The hub
+/// pre-declares which name prefixes it accepts on
+/// `federation.advertise_*` calls; the device's session prelude
+/// filters its outbound advertise set against this list. v0
+/// default: `["device."]` + `allows_hosted_agents = true`. Old
+/// hubs that don't send the field land on this default — same
+/// behavior they had before the contract existed.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct AdvertiseContract {
+    #[serde(default)]
+    pub allowed_owner_prefixes: Vec<String>,
+    #[serde(default = "default_allows_hosted_agents")]
+    pub allows_hosted_agents: bool,
+}
+
+impl Default for AdvertiseContract {
+    fn default() -> Self {
+        Self {
+            allowed_owner_prefixes: vec!["device.".to_string()],
+            allows_hosted_agents: true,
+        }
+    }
+}
+
+fn default_allows_hosted_agents() -> bool {
+    true
+}
+
+/// Heartbeat outbound args. v4.1.7 carries the device's last-seen
+/// hub-abilities revision so the hub can answer with an
+/// incremental diff. v4.1.6 hubs ignore the field; v4.1.7 hubs
+/// treat absent/zero as "fully out of date" and return the full
+/// snapshot in the diff's `added`.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct HeartbeatArgs {
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub since_abilities_revision: u64,
+}
+
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
+}
+
+/// Hub-broadcast contract diff returned in `HeartbeatReceipt`.
+/// Empty `added` + empty `removed` at `revision >= since` means
+/// the device is current.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct HubAbilitiesDiff {
+    #[serde(default)]
+    pub revision: u64,
+    #[serde(default)]
+    pub added: Vec<HubAbilityEntry>,
+    #[serde(default)]
+    pub removed: Vec<String>,
 }
 
 /// Arguments for `federation.advertise_agent`. The hosting
@@ -157,6 +239,13 @@ pub struct AdvertiseAgentReceipt {
 pub struct HeartbeatReceipt {
     pub membership_status: String,
     pub realm_directory_size: u64,
+    /// AXON-RFC-001 v4.1.7 hub-broadcast contract: incremental
+    /// update of hub-published abilities since the caller's
+    /// `since_abilities_revision`. Defaults to an empty diff at
+    /// revision 0 so v4.1.6 hubs that omit the field produce a
+    /// no-op on the client (no perceived churn).
+    #[serde(default)]
+    pub hub_abilities_diff: HubAbilitiesDiff,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -271,23 +360,23 @@ mod tests {
     #[test]
     fn advertise_args_serializes_self_signed_kind() {
         let args = AdvertiseAgentArgs {
-            agent_uri: "easynet:///r/acme/agent/01DEV".into(),
+            agent_uri: "easynet:///r/acme/device/01DEV".into(),
             public_key_hex: "aa".into(),
             signing_authority: AdvertisedSigningAuthority::SelfSigned,
             host_node_id: None,
         };
         let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
         assert_eq!(v["signing_authority"]["kind"], "self_signed");
-        assert_eq!(v["agent_uri"], "easynet:///r/acme/agent/01DEV");
+        assert_eq!(v["agent_uri"], "easynet:///r/acme/device/01DEV");
     }
 
     #[test]
     fn advertise_args_serializes_hosted_kind_with_host_uri() {
         let args = AdvertiseAgentArgs {
-            agent_uri: "easynet:///r/acme/agent/01LLM".into(),
+            agent_uri: "easynet:///r/acme/agent/u1.01LLM".into(),
             public_key_hex: "".into(),
             signing_authority: AdvertisedSigningAuthority::HostedBy {
-                host_uri: "easynet:///r/acme/agent/01DEV".into(),
+                host_uri: "easynet:///r/acme/device/01DEV".into(),
             },
             host_node_id: None,
         };
@@ -295,19 +384,19 @@ mod tests {
         assert_eq!(v["signing_authority"]["kind"], "hosted_by");
         assert_eq!(
             v["signing_authority"]["host_uri"],
-            "easynet:///r/acme/agent/01DEV"
+            "easynet:///r/acme/device/01DEV"
         );
     }
 
     #[test]
     fn join_receipt_round_trips_through_serde() {
         let body = json!({
-            "canonical_agent_uri": "easynet:///r/acme/agent/01DEV",
+            "canonical_agent_uri": "easynet:///r/acme/device/01DEV",
             "realm": "acme",
             "join_receipt_hash": "abc123"
         });
         let parsed: JoinReceipt = parse_receipt_value(&body).unwrap();
-        assert_eq!(parsed.canonical_agent_uri, "easynet:///r/acme/agent/01DEV");
+        assert_eq!(parsed.canonical_agent_uri, "easynet:///r/acme/device/01DEV");
         assert_eq!(parsed.realm, "acme");
         assert_eq!(parsed.join_receipt_hash, "abc123");
     }

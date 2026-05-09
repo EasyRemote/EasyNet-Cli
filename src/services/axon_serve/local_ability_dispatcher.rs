@@ -107,18 +107,10 @@ impl LocalAbilityDispatcher {
         self
     }
 
-    fn execute_local_rpc(
-        &self,
-        ability: &str,
-        normalized_args: serde_json::Value,
-    ) -> Result<SessionDispatch, SessionDispatchError> {
-        Self::execute_local_rpc_blocking(&self.dispatcher, ability, normalized_args)
-    }
-
     /// Static variant that takes the dispatcher Arc by reference so
     /// it can be moved into `tokio::task::spawn_blocking`. Both this
-    /// and `execute_local_rpc` produce identical bytes; this one
-    /// exists so `handle_down` can keep blocking ability handlers
+    /// call path produces the local-RPC bytes `handle_down` needs while
+    /// keeping blocking ability handlers
     /// (e.g. `process.exec`, `shell.run`) on the blocking pool
     /// thread, where `Handle::current().block_on(...)` is safe.
     fn execute_local_rpc_blocking(
@@ -1049,6 +1041,7 @@ mod tests {
             Arc::new(LoopService::new()),
             &Default::default(),
             Arc::new(Vec::new()),
+            crate::runtime::agents::PagesIdentity::default(),
         );
         let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
             Arc::new(NoopGateway::new());
@@ -1071,7 +1064,7 @@ mod tests {
         });
         let frame = dispatch_frame(
             42,
-            "fs.read",
+            "device.fs.read",
             serde_json::to_vec(&args).expect("encode args"),
         );
 

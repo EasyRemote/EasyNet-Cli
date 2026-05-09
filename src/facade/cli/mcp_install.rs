@@ -40,53 +40,53 @@ pub struct McpInstallArgs {
     #[arg(value_enum)]
     pub client: McpInstallClient,
 
-    /// MCP server key under `mcpServers` (e.g. "easynet", "easynet-device-a")
+    /// MCP server key under 'mcpServers' (e.g. "easynet", "easynet-device-a")
     #[arg(long, default_value = "easynet")]
     pub name: String,
 
-    /// Tenant ID passed to `easynet mcp serve`
+    /// Tenant ID passed to 'easynet mcp serve'
     ///
-    /// If omitted, we try reading from `~/.easynet/runtime.json`, else default to "default".
+    /// If omitted, we try reading from '~/.easynet/runtime.json', else default to "default".
     #[arg(long)]
     pub tenant: Option<String>,
 
-    /// Runtime endpoint passed to `easynet mcp serve`
+    /// Runtime endpoint passed to 'easynet mcp serve'
     ///
-    /// If omitted, `easynet mcp serve` auto-detects from `~/.easynet/runtime.json`.
+    /// If omitted, 'easynet mcp serve' auto-detects from '~/.easynet/runtime.json'.
     #[arg(long)]
     pub endpoint: Option<String>,
 
     /// Pin node-scoped tools to this node_id. The MCP server will
-    /// substitute `node_id` into every invocation that omits it, so the
+    /// substitute 'node_id' into every invocation that omits it, so the
     /// hosting agent (Claude Code / Codex) talks to exactly one device
     /// for the lifetime of the session.
     ///
-    /// By default the binding is a *hard lock*: an explicit `node_id`
-    /// that disagrees with `--bound-node` is rejected. Pass
-    /// `--allow-node-override` to demote the binding to a *default*
+    /// By default the binding is a *hard lock*: an explicit 'node_id'
+    /// that disagrees with '--bound-node' is rejected. Pass
+    /// '--allow-node-override' to demote the binding to a *default*
     /// that callers may override on a per-call basis.
     #[arg(long, value_name = "NODE_ID")]
     pub bound_node: Option<String>,
 
-    /// Demote `--bound-node` from a hard lock to a per-call default:
-    /// calls that carry an explicit `node_id` are routed to that node
-    /// instead of being rejected. Has no effect without `--bound-node`.
+    /// Demote '--bound-node' from a hard lock to a per-call default:
+    /// calls that carry an explicit 'node_id' are routed to that node
+    /// instead of being rejected. Has no effect without '--bound-node'.
     #[arg(long)]
     pub allow_node_override: bool,
 
-    /// Label the MCP server with an agent id (purely informational; passed to `easynet mcp serve --agent`).
+    /// Label the MCP server with an agent id (purely informational; passed to 'easynet mcp serve --agent').
     #[arg(long)]
     pub agent: Option<String>,
 
     /// Override config file path.
     ///
-    /// - claude: defaults to `~/.claude/settings.json`
-    /// - codex: defaults to `~/.codex/config.toml`
+    /// - claude: defaults to '~/.claude/settings.json'
+    /// - codex: defaults to '~/.codex/config.toml'
     #[arg(long)]
     pub config_path: Option<String>,
 
-    /// Explicit path to `libaxon_dendrite_bridge` to inject into MCP server env as
-    /// `EASYNET_DENDRITE_BRIDGE_LIB`.
+    /// Explicit path to 'libaxon_dendrite_bridge' to inject into MCP server env as
+    /// 'EASYNET_DENDRITE_BRIDGE_LIB'.
     ///
     /// Recommended when running from GUI apps (Claude Code / Codex App) that do not inherit
     /// your shell environment.

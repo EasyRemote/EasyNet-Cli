@@ -69,39 +69,39 @@ pub struct InvokeArgs {
     pub ability: String,
     /// ⚠ Pinning to a remote node id is not wired in this build.
     /// The federation Invoke surface that would back it ships in a
-    /// follow-up to AXON-RFC-001 P1.5. Passing `--node` today
+    /// follow-up to AXON-RFC-001 P1.5. Passing '--node' today
     /// returns a precise error rather than silently auto-routing
     /// locally.
     #[arg(long, short = 'n', value_name = "NODE_ID")]
     pub node: Option<String>,
-    /// JSON object passed to the ability as its arguments (e.g.
-    /// `--args '{"location": "Beijing"}'`). Defaults to `{}` when
+    /// JSON object passed to the ability as its arguments — for
+    /// example: --args {"location":"Beijing"}. Defaults to {} when
     /// omitted.
     #[arg(long, value_name = "JSON")]
     pub args: Option<String>,
-    /// Per-call deadline in seconds. `0` inherits the runtime default.
-    /// Default: 60 s, governed by `support::timeouts::INVOKE_DEFAULT_SECS`.
+    /// Per-call deadline in seconds. '0' inherits the runtime default.
+    /// Default: 60 s, governed by 'support::timeouts::INVOKE_DEFAULT_SECS'.
     #[arg(long, value_name = "SECS", default_value_t = timeouts::INVOKE_DEFAULT_SECS)]
     pub timeout: u64,
     /// Print the raw ability envelope instead of just the inner
     /// payload. The default (no flag) follows the same pattern as
-    /// `jq -r .result`: when the response is the standard
-    /// `{result, fulfilled_by, ...}` envelope (chat handler, shell
-    /// exec, registry dispatch), unwrap to `result`; otherwise print
-    /// the value as-is. Pass `--raw` when a script needs the full
+    /// 'jq -r .result': when the response is the standard
+    /// '{result, fulfilled_by, ...}' envelope (chat handler, shell
+    /// exec, registry dispatch), unwrap to 'result'; otherwise print
+    /// the value as-is. Pass '--raw' when a script needs the full
     /// envelope (timing, exit_code, fulfilled_by) for diagnostics.
     #[arg(long)]
     pub raw: bool,
     /// AXIOM envelope subject — the resource the ability acts on,
     /// expressed as a canonical resource URI
-    /// (`easynet:///r/<realm>/resource/<id>`). Required by abilities
+    /// ('easynet:///r/<realm>/resource/<id>'). Required by abilities
     /// whose contract pins behaviour on a specific resource (e.g.
-    /// `camera.snapshot`, which uses the subject to look up the
-    /// camera's `hardware_id` and `resources.json` entry); ignored
-    /// by abilities that don't consume `EnvelopeContext.subject`.
+    /// 'camera.snapshot', which uses the subject to look up the
+    /// camera's 'hardware_id' and 'resources.json' entry); ignored
+    /// by abilities that don't consume 'EnvelopeContext.subject'.
     /// Per INV-SUBJECT-ENVELOPE the subject MUST come from the
-    /// envelope, not from `--args` — passing it via `--args
-    /// '{"subject": "..."}'` is rejected by the handler.
+    /// envelope, not from --args — passing it via --args
+    /// {"subject": "..."} is rejected by the handler.
     #[arg(long, value_name = "URI")]
     pub subject: Option<String>,
 }

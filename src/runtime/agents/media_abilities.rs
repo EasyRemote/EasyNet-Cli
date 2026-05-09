@@ -69,24 +69,25 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::runtime::ability_descriptor::AbilityClass;
+use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::ability_dispatch::{BidiSource, LocalAbilityRegistry, StreamSource};
 use crate::runtime::agents::ability_toml::Rfc006Metadata;
 
 // ── Ability names (exported so registration + descriptor sites
 //    pull from one place) ──────────────────────────────────────
 
-pub const ABILITY_MIC_SUBSCRIBE: &str = "mic.subscribe";
-pub const ABILITY_CAMERA_SUBSCRIBE: &str = "camera.subscribe";
-pub const ABILITY_CAMERA_SNAPSHOT: &str = "camera.snapshot";
-pub const ABILITY_SCREEN_SUBSCRIBE: &str = "screen.subscribe";
-pub const ABILITY_SCREEN_SNAPSHOT: &str = "screen.snapshot";
-pub const ABILITY_SPEAKER_PUBLISH: &str = "speaker.publish";
-pub const ABILITY_VOICE_SUBSCRIBE: &str = "voice.subscribe";
+pub const ABILITY_MIC_SUBSCRIBE: &str = "device.mic.subscribe";
+pub const ABILITY_CAMERA_SUBSCRIBE: &str = "device.camera.subscribe";
+pub const ABILITY_CAMERA_SNAPSHOT: &str = "device.camera.snapshot";
+pub const ABILITY_SCREEN_SUBSCRIBE: &str = "device.screen.subscribe";
+pub const ABILITY_SCREEN_SNAPSHOT: &str = "device.screen.snapshot";
+pub const ABILITY_SPEAKER_PUBLISH: &str = "device.speaker.publish";
+pub const ABILITY_VOICE_SUBSCRIBE: &str = "device.voice.subscribe";
 /// Wire name `voice.transcribe` (not bare `transcribe`) because
 /// `AbilityDescriptor::new` requires `<namespace>.<verb>` and the
 /// transcribe resource is the inverse of voice synthesis (audio →
 /// text vs text → audio); both live on the llm-profile.
-pub const ABILITY_VOICE_TRANSCRIBE: &str = "voice.transcribe";
+pub const ABILITY_VOICE_TRANSCRIBE: &str = "device.voice.transcribe";
 
 /// String literal used inside `reject_subject_in_args` errors and
 /// matched by the dispatcher's terminal-receipt path. Pinned as a
@@ -252,6 +253,10 @@ pub fn rfc006(name: &str) -> Option<Rfc006Metadata> {
 /// Internal table lookup. Centralises the linear scan so each
 /// projection above stays one line. Linear scan over 8 entries
 /// is faster than any hash-map setup cost; reorder freely.
+///
+/// Post-M5 of the system-namespace migration: `row.name` values
+/// are canonical (`device.mic.subscribe` etc.) and the lookup
+/// matches the catalogue exactly — no prefix gymnastics.
 fn row(name: &str) -> Option<&'static AbilityRow> {
     ABILITIES.iter().find(|row| row.name == name)
 }
@@ -267,15 +272,33 @@ fn row(name: &str) -> Option<&'static AbilityRow> {
 /// name = row.name;` is needed.
 pub fn register(reg: &mut LocalAbilityRegistry) {
     for row in ABILITIES {
+        // Post-M3 of the system-namespace migration: `row.name` is
+        // already canonical (`device.<segment>.<verb>`). Earlier
+        // revisions stored the legacy form in the table and
+        // prepended `device.` at registration; the M5 cleanup
+        // promoted the table itself, so the registration site
+        // passes `row.name` verbatim.
         match row.shape {
             DispatchShape::Rpc => {
-                reg.register_rpc(row.name, Arc::new(|args| query_stub(row.name, args)));
+                reg.register_rpc_with_owner(
+                    row.name,
+                    OwnerKind::Device,
+                    Arc::new(|args| query_stub(row.name, args)),
+                );
             }
             DispatchShape::Stream => {
-                reg.register_stream(row.name, Arc::new(|args| stream_stub(row.name, args)));
+                reg.register_stream_with_owner(
+                    row.name,
+                    OwnerKind::Device,
+                    Arc::new(|args| stream_stub(row.name, args)),
+                );
             }
             DispatchShape::Bidi => {
-                reg.register_bidi(row.name, Arc::new(|args| bidi_stub(row.name, args)));
+                reg.register_bidi_with_owner(
+                    row.name,
+                    OwnerKind::Device,
+                    Arc::new(|args| bidi_stub(row.name, args)),
+                );
             }
         }
     }

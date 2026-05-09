@@ -18,6 +18,7 @@ use ed25519_dalek::VerifyingKey;
 use std::sync::Arc;
 
 use super::handle::KeyringHandle;
+use crate::uri::{parse_ura, URAKind};
 
 #[derive(Debug, thiserror::Error)]
 pub enum KeyResolveError {
@@ -192,33 +193,29 @@ impl FederatedUserResolver {
 
     /// Resolve a URI to a federated-binding outcome.
     #[must_use]
-    pub fn resolve_user(&self, agent_uri: &str) -> FederatedUserOutcome {
-        let Some(realm) = parse_realm_from_uri(agent_uri) else {
+    pub fn resolve_user(&self, user_uri: &str) -> FederatedUserOutcome {
+        let Some(realm) = parse_realm_from_user_uri(user_uri) else {
             return FederatedUserOutcome::Malformed;
         };
         if realm == self.local_realm {
             return FederatedUserOutcome::Local;
         }
-        match self.bindings.find_local_user(realm, agent_uri) {
+        match self.bindings.find_local_user(&realm, user_uri) {
             Some(local) => FederatedUserOutcome::BoundLocalUser(local),
             None => FederatedUserOutcome::NotBound,
         }
     }
 }
 
-/// Parse the realm slice from a canonical EasyNet URI
-/// (`easynet:///r/<realm>/agent/<id>`). Mirrors
-/// `runtime::keyring::abilities::parse_realm_from_uri` —
+/// Parse the realm slice from a canonical EasyNet user URI
+/// (`easynet:///r/<realm>/user/<id>`). Mirrors
+/// `runtime::keyring::abilities::parse_realm_from_user_uri` —
 /// duplicated rather than re-exported to keep the resolver
 /// layer free of any cross-module imports beyond
 /// `super::federated_bindings`.
-fn parse_realm_from_uri(uri: &str) -> Option<&str> {
-    let rest = uri.strip_prefix("easynet:///r/")?;
-    let (realm, _tail) = rest.split_once("/agent/")?;
-    if realm.is_empty() {
-        return None;
-    }
-    Some(realm)
+fn parse_realm_from_user_uri(uri: &str) -> Option<String> {
+    let parsed = parse_ura(uri).ok()?;
+    (parsed.kind == URAKind::User).then_some(parsed.realm)
 }
 
 #[cfg(test)]
@@ -236,13 +233,14 @@ mod tests {
     #[test]
     fn local_resolver_finds_bound_entry() {
         let (h, _dir) = handle();
-        let subject = "easynet:///r/prv/reg/agent.foo".to_string();
+        let subject = "easynet:///r/test.local/agent/u.foo".to_string();
         h.create_entry("agent_signing", Some(subject.clone()))
             .unwrap();
         let r = LocalKeyringResolver::new(h);
         assert!(r.resolve(&subject).is_ok());
         assert!(matches!(
-            r.resolve("easynet:///r/prv/reg/agent.unknown").unwrap_err(),
+            r.resolve("easynet:///r/test.local/agent/u.unknown")
+                .unwrap_err(),
             KeyResolveError::Unknown
         ));
     }
@@ -252,16 +250,17 @@ mod tests {
         let (h, _dir) = handle();
         let entry = h.create_entry("agent_signing", None).unwrap();
         h.peer_add(
-            "easynet:///r/org/reg/agent.alice",
+            "easynet:///r/test.local/agent/u.alice",
             &entry.public_key_b64,
             None,
             None,
         )
         .unwrap();
         let r = PeerKeyringResolver::new(h);
-        assert!(r.resolve("easynet:///r/org/reg/agent.alice").is_ok());
+        assert!(r.resolve("easynet:///r/test.local/agent/u.alice").is_ok());
         assert!(matches!(
-            r.resolve("easynet:///r/org/reg/agent.bob").unwrap_err(),
+            r.resolve("easynet:///r/test.local/agent/u.bob")
+                .unwrap_err(),
             KeyResolveError::Unknown
         ));
     }
@@ -271,17 +270,19 @@ mod tests {
         let (h, _dir) = handle();
         let entry = h.create_entry("agent_signing", None).unwrap();
         h.peer_add(
-            "easynet:///r/org/reg/agent.alice",
+            "easynet:///r/test.local/agent/u.alice",
             &entry.public_key_b64,
             None,
             None,
         )
         .unwrap();
         let chain = default_chain(h);
-        assert!(chain.resolve("easynet:///r/org/reg/agent.alice").is_ok());
+        assert!(chain
+            .resolve("easynet:///r/test.local/agent/u.alice")
+            .is_ok());
         assert!(matches!(
             chain
-                .resolve("easynet:///r/prv/reg/agent.unknown")
+                .resolve("easynet:///r/test.local/agent/u.unknown")
                 .unwrap_err(),
             KeyResolveError::Unknown
         ));
@@ -295,7 +296,7 @@ mod tests {
     fn federated_user_resolver_local_realm_returns_local() {
         let bindings = Arc::new(FederatedBindingsStore::in_memory());
         let resolver = FederatedUserResolver::new("realm-b", bindings);
-        let outcome = resolver.resolve_user("easynet:///r/realm-b/agent/user-on-b");
+        let outcome = resolver.resolve_user("easynet:///r/realm-b/user/user-on-b");
         assert_eq!(outcome, FederatedUserOutcome::Local);
     }
 
@@ -306,7 +307,7 @@ mod tests {
             .record_binding(
                 FederatedUserBinding {
                     source_realm: "realm-a".to_string(),
-                    source_user_uri: "easynet:///r/realm-a/agent/user-c".to_string(),
+                    source_user_uri: "easynet:///r/realm-a/user/user-c".to_string(),
                     source_user_pubkey_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
                         .to_string(),
                     local_user_id: "user-c-on-realm-b".to_string(),
@@ -316,7 +317,7 @@ mod tests {
             )
             .unwrap();
         let resolver = FederatedUserResolver::new("realm-b", bindings);
-        let outcome = resolver.resolve_user("easynet:///r/realm-a/agent/user-c");
+        let outcome = resolver.resolve_user("easynet:///r/realm-a/user/user-c");
         assert_eq!(
             outcome,
             FederatedUserOutcome::BoundLocalUser("user-c-on-realm-b".to_string())
@@ -327,7 +328,7 @@ mod tests {
     fn federated_user_resolver_cross_realm_without_binding_returns_not_bound() {
         let bindings = Arc::new(FederatedBindingsStore::in_memory());
         let resolver = FederatedUserResolver::new("realm-b", bindings);
-        let outcome = resolver.resolve_user("easynet:///r/realm-c/agent/no-binding");
+        let outcome = resolver.resolve_user("easynet:///r/realm-c/user/no-binding");
         assert_eq!(outcome, FederatedUserOutcome::NotBound);
     }
 
@@ -349,7 +350,7 @@ mod tests {
             .record_binding(
                 FederatedUserBinding {
                     source_realm: "realm-a".to_string(),
-                    source_user_uri: "easynet:///r/realm-a/agent/user-c".to_string(),
+                    source_user_uri: "easynet:///r/realm-a/user/user-c".to_string(),
                     source_user_pubkey_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
                         .to_string(),
                     local_user_id: "user-c-on-realm-b".to_string(),
@@ -359,7 +360,7 @@ mod tests {
             )
             .unwrap();
         let resolver = FederatedUserResolver::new("realm-b", bindings);
-        let outcome = resolver.resolve_user("easynet:///r/realm-a/agent/user-OTHER");
+        let outcome = resolver.resolve_user("easynet:///r/realm-a/user/user-OTHER");
         assert_eq!(
             outcome,
             FederatedUserOutcome::NotBound,

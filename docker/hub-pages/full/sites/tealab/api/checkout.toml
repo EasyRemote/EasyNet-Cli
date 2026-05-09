@@ -1,0 +1,7 @@
+kind = "echo"
+
+[extra]
+order_id = "ord-tealab-demo-001"
+status   = "confirmed"
+eta      = "2026-05-11"
+message  = "Thanks for ordering from TeaLab. We'll ship within 48 hours."

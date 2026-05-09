@@ -44,6 +44,15 @@ pub struct HomeGuard {
     temp_dir: PathBuf,
     prev_home: Option<String>,
     prev_axon_log_dir: Option<String>,
+    /// Snapshot of `EASYNET_PAGES_USER` at guard construction.
+    /// HomeGuard pins this var to `"self"` for the test duration so
+    /// every HOME-touching test sees the same `<user>.api_key.*` /
+    /// `<user>.pages.*` / `<user>.files.*` registration set —
+    /// regardless of what an earlier test on the same thread (or
+    /// a parallel test that didn't take the home_lock) set it to.
+    /// Restored on drop. The home_lock above guarantees one
+    /// HomeGuard at a time, so the swap window is exclusive.
+    prev_pages_user: Option<String>,
 }
 
 impl HomeGuard {
@@ -82,11 +91,27 @@ impl HomeGuard {
         let prev_axon_log_dir = std::env::var("AXON_INVOCATION_LOG_DIR").ok();
         std::env::set_var("AXON_INVOCATION_LOG_DIR", &axon_log_dir);
 
+        // Clear EASYNET_PAGES_USER so every HomeGuard test sees
+        // an unpaired daemon (no user-rooted ability family
+        // registered). Tests that exercise the user-rooted family
+        // build the registry inline with an explicit username,
+        // bypassing the env var path entirely.
+        //
+        // Why clear (not pin to a value): pinning would still
+        // register `<that-value>.api_key.*` etc., which (a) leaks
+        // into every published-ability test's expected catalogue
+        // and (b) reintroduces the `<self>` placeholder M5 banned.
+        // An empty / absent var is the production "unpaired"
+        // shape and the registry agrees by skipping registration.
+        let prev_pages_user = std::env::var("EASYNET_PAGES_USER").ok();
+        std::env::remove_var("EASYNET_PAGES_USER");
+
         Self {
             _lock: lock,
             temp_dir,
             prev_home,
             prev_axon_log_dir,
+            prev_pages_user,
         }
     }
 }
@@ -106,6 +131,10 @@ impl Drop for HomeGuard {
         match self.prev_axon_log_dir.take() {
             Some(d) => std::env::set_var("AXON_INVOCATION_LOG_DIR", d),
             None => std::env::remove_var("AXON_INVOCATION_LOG_DIR"),
+        }
+        match self.prev_pages_user.take() {
+            Some(u) => std::env::set_var("EASYNET_PAGES_USER", u),
+            None => std::env::remove_var("EASYNET_PAGES_USER"),
         }
         let _ = std::fs::remove_dir_all(&self.temp_dir);
     }

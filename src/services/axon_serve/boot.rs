@@ -496,7 +496,22 @@ fn spawn_session_supervisor(
     // — `LocalAbilityRegistry` is constructed once per daemon
     // process (build_registry_with_services) and never mutated
     // post-boot.
-    let ability_catalog = dispatcher.local_registry().list_abilities();
+    // M2 of the system-namespace migration: at M1 every system
+    // ability is registered under both legacy (`fs.read`,
+    // `01HUB.openai.*`, …) and canonical (`device.fs.read`,
+    // `hub.openai.*`, …) names, both pointing at the same handler.
+    // The advertise prelude must emit canonical only — so the hub's
+    // AbilityCatalogStore + Frontend Abilities page show the
+    // partitioned shape, and the session-prelude's agent-roster
+    // scanner doesn't produce duplicate `<owner>` entries from the
+    // legacy half. Filter via `published_ability_names()` which has
+    // the catalogue exposure rule (M2 commit: legacy filtered out).
+    let ability_catalog: Vec<String> = dispatcher
+        .local_registry()
+        .list_abilities()
+        .into_iter()
+        .filter(|name| crate::runtime::agents::is_canonical_or_unmapped(name))
+        .collect();
     let signing_state = if identity.signing_seed.is_some() {
         "signed frame0"
     } else {
@@ -852,6 +867,12 @@ fn maybe_bootstrap_runtime_self_identity(identity: &DaemonIdentity) {
         Ok(state) => state,
         Err(_) => return,
     };
+    if matches!(
+        state.runtime_kind,
+        crate::persistence::config::RuntimeKind::DaemonOnly
+    ) {
+        return;
+    }
     let bridge = match state.connect_bridge() {
         Ok(bridge) => bridge,
         Err(err) => {
@@ -958,18 +979,18 @@ fn canonical_caller_uri_from_stored_identity(stored: &StoredDeviceIdentity) -> O
         .map(str::to_string)
 }
 
-// URI v4.1.4: strict parsing via crate::uri::parse_ura, replacing
-// the v1-era wide is_role_segment / hand-rolled segment walks. The
-// daemon's stored caller URI in v4.1.4 is always
-// `easynet:///r/<realm>/device/<device-uuid>` (device-mode CLI's
-// self-identity URA), so we only need to match that one shape.
+// URI v4.1.5: strict parsing via crate::uri::parse_ura per memory
+// `feedback_no_legacy_ura.md`. The daemon's stored caller URI in
+// v4.1.5 is always `easynet:///r/<realm>/device/<device-uuid>`
+// (device-mode CLI's self-identity URA), so we only need to match
+// that one shape.
 //
-// Legacy `easynet:///r/<realm>/reg/agent.<id>?tenant_id=<t>` shapes
-// (URI v1 fallback) and `agent/<id>` shapes (URI v2 transitional)
-// are rejected — pre-v4.1.4 credential files cannot bootstrap
-// signing seeds; users must `easynet device join` again to mint a
-// v4.1.4 credential. Returning `None` triggers the parent code's
-// "skip signing seed" branch (CLI starts unsigned, harmless in dev).
+// Legacy `r/{prv,org}/reg/agent.<id>?tenant_id=<t>` (URI v1) and
+// `agent/<bare-id>` (URI v2 transitional) shapes are rejected —
+// pre-v4.1.5 credential files cannot bootstrap signing seeds; users
+// must `easynet device join` again to mint a v4.1.5 credential.
+// Returning `None` triggers the parent code's "skip signing seed"
+// branch (CLI starts unsigned, harmless in dev).
 
 fn realm_from_agent_uri(uri: &str) -> Option<String> {
     let parsed = crate::uri::parse_ura(uri).ok()?;
@@ -1558,7 +1579,7 @@ mod tests {
             &path,
             r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/realm/agent/backend"
+agent_uri = "easynet:///r/realm/hub"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "backend"
 added_at_unix_ms = 1714492800000
@@ -1570,9 +1591,7 @@ added_at_unix_ms = 1714492800000
         let reloaded = reload_trust_anchor_cell_from(&path, &cell).expect("reload succeeds");
         assert_eq!(reloaded, 1);
         assert!(
-            cell.snapshot()
-                .lookup("easynet:///r/realm/agent/backend")
-                .is_some(),
+            cell.snapshot().lookup("easynet:///r/realm/hub").is_some(),
             "SIGHUP reload must publish the on-disk entry to future admissions"
         );
     }
@@ -1585,7 +1604,7 @@ added_at_unix_ms = 1714492800000
             &path,
             r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/realm/agent/initial"
+agent_uri = "easynet:///r/realm/hub"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "backend"
 added_at_unix_ms = 1714492800000
@@ -1603,9 +1622,7 @@ added_at_unix_ms = 1714492800000
             "error should name the reload path, got: {err}"
         );
         assert!(
-            cell.snapshot()
-                .lookup("easynet:///r/realm/agent/initial")
-                .is_some(),
+            cell.snapshot().lookup("easynet:///r/realm/hub").is_some(),
             "failed reload must keep the previously published trust anchor"
         );
     }

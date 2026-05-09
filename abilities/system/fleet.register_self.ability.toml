@@ -1,7 +1,0 @@
-schema_version = "1"
-name = "fleet.register_self"
-description = "Acknowledge this device's pairing state. v1 returns the credentials snapshot without performing the legacy `bridge.register_node` call (P1.5 victim); the federation Invoke replacement will populate the handler in place."
-
-[input_schema]
-type = "object"
-additionalProperties = false

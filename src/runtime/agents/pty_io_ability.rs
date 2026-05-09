@@ -72,11 +72,12 @@ use base64::Engine;
 use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::execution::pty::{PtyService, PtySessionId};
 
-pub const ABILITY_PTY_SESSION_INPUT: &str = "fleet.pty_session_input";
-pub const ABILITY_PTY_SESSION_READ: &str = "fleet.pty_session_read";
-pub const ABILITY_PTY_SESSION_RESIZE: &str = "fleet.pty_session_resize";
+pub const ABILITY_PTY_SESSION_INPUT: &str = "device.fleet.pty_session_input";
+pub const ABILITY_PTY_SESSION_READ: &str = "device.fleet.pty_session_read";
+pub const ABILITY_PTY_SESSION_RESIZE: &str = "device.fleet.pty_session_resize";
 
 /// Default per-call read budget when the caller doesn't supply one.
 /// 5s matches backend PTYDriver's poll cadence (~200 ms idle reads
@@ -337,21 +338,33 @@ pub fn register(reg: &mut LocalAbilityRegistry, pty: Arc<PtyService>, io: PtyIoS
         let pty = Arc::clone(&pty);
         let io = io.clone();
         let handler: LocalRpcHandler = Arc::new(move |args: Value| input_handler(&pty, &io, args));
-        reg.register_rpc(ABILITY_PTY_SESSION_INPUT, Arc::clone(&handler));
-        reg.register_rpc("fleet.session_input", handler);
+        reg.register_rpc_with_owner(
+            "device.fleet.pty_session_input",
+            OwnerKind::Device,
+            Arc::clone(&handler),
+        );
+        reg.register_rpc_with_owner("device.fleet.session_input", OwnerKind::Device, handler);
     }
     {
         let pty = Arc::clone(&pty);
         let io = io.clone();
         let handler: LocalRpcHandler = Arc::new(move |args: Value| read_handler(&pty, &io, args));
-        reg.register_rpc(ABILITY_PTY_SESSION_READ, Arc::clone(&handler));
-        reg.register_rpc("fleet.session_read", handler);
+        reg.register_rpc_with_owner(
+            "device.fleet.pty_session_read",
+            OwnerKind::Device,
+            Arc::clone(&handler),
+        );
+        reg.register_rpc_with_owner("device.fleet.session_read", OwnerKind::Device, handler);
     }
     {
         let pty = Arc::clone(&pty);
         let handler: LocalRpcHandler = Arc::new(move |args: Value| resize_handler(&pty, args));
-        reg.register_rpc(ABILITY_PTY_SESSION_RESIZE, Arc::clone(&handler));
-        reg.register_rpc("fleet.session_resize", handler);
+        reg.register_rpc_with_owner(
+            "device.fleet.pty_session_resize",
+            OwnerKind::Device,
+            Arc::clone(&handler),
+        );
+        reg.register_rpc_with_owner("device.fleet.session_resize", OwnerKind::Device, handler);
     }
 }
 

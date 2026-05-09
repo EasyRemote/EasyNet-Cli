@@ -39,7 +39,8 @@ use serde_json::{json, Value};
 use crate::registry::agents::AgentRegistry;
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
-pub const ABILITY_LIST_AGENTS: &str = "fleet.list_agents";
+use crate::runtime::ability_dispatch::OwnerKind;
+pub const ABILITY_LIST_AGENTS: &str = "device.fleet.list_agents";
 
 /// Register `fleet.list_agents` on the registry.
 ///
@@ -50,8 +51,9 @@ where
     F: Fn() -> AgentRegistry + Send + Sync + 'static,
 {
     let provider: Arc<dyn Fn() -> AgentRegistry + Send + Sync> = Arc::new(registry_provider);
-    reg.register_rpc(
-        ABILITY_LIST_AGENTS,
+    reg.register_rpc_with_owner(
+        "device.fleet.list_agents",
+        OwnerKind::Device,
         Arc::new(move |_args: Value| list_agents_handler(&provider)),
     );
 }

@@ -499,7 +499,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn local_hit_short_circuits_before_federated_dial() {
         let (_signing, pk_b64) = ed25519_pubkey_b64();
-        let local_uri = "easynet:///r/realm-a/agent/local-device";
+        let local_uri = "easynet:///r/realm-a/device/local-device";
         let anchor = Arc::new(
             RealmTrustAnchor::from_entries(vec![local_entry(local_uri, &pk_b64)]).unwrap(),
         );
@@ -522,7 +522,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cross_realm_with_federated_peers_entry_resolves_via_dial() {
         let (_signing, pk_b64) = ed25519_pubkey_b64();
-        let cross_uri = "easynet:///r/realm-b/agent/peer-device";
+        let cross_uri = "easynet:///r/realm-b/device/peer-device";
 
         // Local trust anchor has NO entry for cross_uri.
         let anchor = Arc::new(RealmTrustAnchor::default());
@@ -553,7 +553,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cross_realm_without_federation_marker_returns_unknown() {
-        let cross_uri = "easynet:///r/realm-b/agent/peer-device";
+        let cross_uri = "easynet:///r/realm-b/device/peer-device";
         let anchor = Arc::new(RealmTrustAnchor::default());
 
         // No federated_peers entry, no origin_tenant_id-marked
@@ -576,7 +576,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cross_realm_dial_failure_surfaces_as_unknown() {
-        let cross_uri = "easynet:///r/realm-b/agent/peer-device";
+        let cross_uri = "easynet:///r/realm-b/device/peer-device";
         let anchor = Arc::new(RealmTrustAnchor::default());
         let mut peers = BTreeMap::new();
         peers.insert("realm-b".to_string(), "https://hub-b:50443".to_string());
@@ -600,7 +600,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn same_realm_local_miss_does_not_dial_federated() {
-        let same_realm_uri = "easynet:///r/realm-a/agent/missing-device";
+        let same_realm_uri = "easynet:///r/realm-a/device/missing-device";
         let anchor = Arc::new(RealmTrustAnchor::default());
 
         // Federated peer wired, but the missing URI is in the
@@ -680,7 +680,7 @@ mod tests {
         // TTL window: second hits cache, peer hub is dialed
         // exactly once.
         let (_signing, pk_b64) = ed25519_pubkey_b64();
-        let cross_uri = "easynet:///r/realm-b/agent/peer-device";
+        let cross_uri = "easynet:///r/realm-b/device/peer-device";
         let anchor = Arc::new(RealmTrustAnchor::default());
         let mut peers = BTreeMap::new();
         peers.insert("realm-b".to_string(), "https://hub-b:50443".to_string());
@@ -710,7 +710,7 @@ mod tests {
         // Short TTL forces expiry; the second resolve sees an
         // expired entry, evicts it, and dials again.
         let (_signing, pk_b64) = ed25519_pubkey_b64();
-        let cross_uri = "easynet:///r/realm-b/agent/peer-device";
+        let cross_uri = "easynet:///r/realm-b/device/peer-device";
         let anchor = Arc::new(RealmTrustAnchor::default());
         let mut peers = BTreeMap::new();
         peers.insert("realm-b".to_string(), "https://hub-b:50443".to_string());
@@ -741,7 +741,7 @@ mod tests {
         // by populating the cache, then calling flush_cache,
         // and asserting the next resolve hits the dial again.
         let (_signing, pk_b64) = ed25519_pubkey_b64();
-        let cross_uri = "easynet:///r/realm-b/agent/peer-device";
+        let cross_uri = "easynet:///r/realm-b/device/peer-device";
         let anchor = Arc::new(RealmTrustAnchor::default());
         let mut peers = BTreeMap::new();
         peers.insert("realm-b".to_string(), "https://hub-b:50443".to_string());
@@ -773,7 +773,7 @@ mod tests {
         // a negative entry — a recoverable peer-hub outage
         // would otherwise keep resolving as `unknown_agent_uri`
         // for the entire TTL even after the peer comes back.
-        let cross_uri = "easynet:///r/realm-b/agent/peer-device";
+        let cross_uri = "easynet:///r/realm-b/device/peer-device";
         let anchor = Arc::new(RealmTrustAnchor::default());
         let mut peers = BTreeMap::new();
         peers.insert("realm-b".to_string(), "https://hub-b:50443".to_string());

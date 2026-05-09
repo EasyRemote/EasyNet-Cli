@@ -97,8 +97,15 @@ impl AbilityKind {
     /// Infer kind from a fully-qualified ability name. Useful at
     /// dispatch-router boundaries that receive a string and need
     /// to know which sub-system owns the handler.
+    ///
+    /// Post-RFC-001 v4.1.7 system-namespace migration: the
+    /// classifier matches the canonical first-segment partition
+    /// (`device.*` / `hub.*` for system-tier abilities; everything
+    /// else is agent-owned). The pre-migration `system.*` prefix
+    /// is retained as a back-compat sniff for legacy manifests
+    /// the reader may still encounter on disk.
     pub fn from_qualified_name(name: &str) -> Self {
-        if name.starts_with("system.") {
+        if name.starts_with("device.") || name.starts_with("hub.") || name.starts_with("system.") {
             Self::System
         } else {
             Self::Agent

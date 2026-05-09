@@ -6,17 +6,18 @@
 //
 //   - admission mode: Local-fast vs Federated
 //   - hub endpoint(s) to dial for federation calls
-//   - URA scope to use for canonical URIs (`prv` vs `org`)
 //
 // Suffix rules:
-//   *.localhost     → Local mode, no hub, scope = prv
-//   *.easynet       → Federated, hub list from rendezvous config, scope = org
-//   *.<other-tld>   → Federated, hub from DNS TXT (or static config), scope = org
+//   *.localhost     → Local mode, no hub
+//   *.easynet       → Federated, hub list from rendezvous config
+//   *.<other-tld>   → Federated, hub from DNS TXT (or static config)
 //   anything else   → Local mode by default (preserves pre-RFC-002 behaviour)
 //
-// The resolver does NOT generate URAs — `start.rs::build_bootstrap_plan_from`
-// owns canonical URI shapes. The resolver only answers "what scope
-// should the URA use" so the caller picks the right URI form.
+// `UraScope` (Prv|Org) remains as informational metadata for callers
+// that want a hint at the federation posture, but does NOT influence
+// URI shape — v4.1.5 §A.URA-7 has one canonical form per role
+// (`easynet:///r/<realm>/<role>/<tail>`); the legacy
+// `r/{prv,org}/reg/agent.<id>?tenant_id=<t>` shapes are dead.
 //
 // Author: Silan.Hu
 // Email:  silan.hu@u.nus.edu
@@ -33,7 +34,8 @@ pub enum AdmissionMode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UraScope {
-    /// Tenant-private; bound-tenant mode includes `?tenant_id=` in URA.
+    /// Tenant-private federation posture (informational; v4.1.5 URAs
+    /// do not embed `?tenant_id=` — tenant rides envelope).
     Prv,
     /// Organisation-scoped public-ish; bound-tenant mode applies.
     Org,
@@ -184,17 +186,16 @@ pub fn resolve(tenant_id: &str, cfg: &ResolverConfig) -> TenantResolution {
     }
 }
 
-/// Build a URA-conformant device URI under the resolved scope.
-///   - prv  → easynet:///r/prv/reg/agent.<node>
-///   - org  → easynet:///r/org/reg/agent.<node>?tenant_id=<value>
+/// Build a v4.1.5 standard device URA. Shape is identical regardless
+/// of `resolution.scope` (prv/org) — v4.1.5 §A.URA-7 has only one
+/// device URI form: `easynet:///r/<realm>/device/<node-id>`. The
+/// realm is the tenant_id; tenant binding rides envelope, not URI,
+/// so the legacy `?tenant_id=<t>` query is gone. The `scope` field
+/// remains on `TenantResolution` as informational metadata for the
+/// federation layer's hub-discovery decision but does NOT appear in
+/// any URI.
 pub fn canonical_device_uri(node_id: &str, resolution: &TenantResolution) -> String {
-    match resolution.scope {
-        UraScope::Prv => format!("easynet:///r/prv/reg/agent.{node_id}"),
-        UraScope::Org => format!(
-            "easynet:///r/org/reg/agent.{}?tenant_id={}",
-            node_id, resolution.tenant_id
-        ),
-    }
+    format!("easynet:///r/{}/device/{}", resolution.tenant_id, node_id)
 }
 
 #[cfg(test)]
@@ -259,16 +260,19 @@ mod tests {
     }
 
     #[test]
-    fn canonical_device_uri_shapes_match_scope() {
+    fn canonical_device_uri_is_v4_1_5_regardless_of_scope() {
+        // v4.1.5 §A.URA-7: one device shape, no scope-dependent forms,
+        // no `?tenant_id=` query. The legacy
+        // `r/{prv,org}/reg/agent.<id>?tenant_id=<t>` shapes are dead.
         let local = resolve("silan.localhost", &cfg());
         let net = resolve("silan.easynet", &cfg());
         assert_eq!(
             canonical_device_uri("01HABC", &local),
-            "easynet:///r/prv/reg/agent.01HABC"
+            "easynet:///r/silan.localhost/device/01HABC"
         );
         assert_eq!(
             canonical_device_uri("01HABC", &net),
-            "easynet:///r/org/reg/agent.01HABC?tenant_id=silan.easynet"
+            "easynet:///r/silan.easynet/device/01HABC"
         );
     }
 }

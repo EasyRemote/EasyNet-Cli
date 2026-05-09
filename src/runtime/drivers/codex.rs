@@ -36,7 +36,6 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::runtime::process_runner::{self, ChildOptions};
-use crate::runtime::run_store::RunDir;
 use crate::runtime::stream_ui::{self, Usage};
 use crate::runtime::toml_escape::toml_basic_string;
 use crate::runtime::workspace;
@@ -86,10 +85,6 @@ pub struct CodexOptions {
     pub write_mode: bool,
     /// Workspace directory (with .codex/ config). If set, codex runs in this cwd.
     pub cwd: Option<PathBuf>,
-    /// Persistent run directory. Used for per-run artefacts
-    /// (`prompt.txt`, `response.md`, `meta.json`); the stream
-    /// event log moved to the Timeline in PR-7 Commit 2.
-    pub run_dir: Option<Arc<RunDir>>,
     /// PR-7 Commit 2: Timeline writer. Same semantics as
     /// `ClaudeOptions::timeline` — each streamed stdout line
     /// emits a `progress` event on the P1-P6 event log.
@@ -143,7 +138,6 @@ impl Default for CodexOptions {
             env: BTreeMap::new(),
             write_mode: false,
             cwd: None,
-            run_dir: None,
             timeline: None,
             progress_tx: None,
             command: String::new(),
@@ -819,7 +813,6 @@ impl AgentAdapter for CodexExecAdapter {
                 env: opts.env,
                 write_mode: false,
                 cwd: Some(opts.cwd),
-                run_dir: opts.run_dir,
                 timeline: opts.timeline,
                 progress_tx: opts.progress_tx,
                 // Honor the operator-supplied binary; empty
@@ -876,7 +869,6 @@ impl AgentAdapter for CodexAppServerAdapter {
                 env: opts.env,
                 write_mode: false,
                 cwd: Some(opts.cwd),
-                run_dir: opts.run_dir,
                 timeline: opts.timeline,
                 progress_tx: opts.progress_tx,
                 // Honor the operator-supplied binary; empty

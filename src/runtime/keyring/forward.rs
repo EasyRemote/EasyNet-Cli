@@ -59,8 +59,7 @@ pub fn forward_invoker() -> Option<Arc<dyn CliForwardInvoker>> {
 }
 
 /// Heuristic: detect URAs of the federation shape. Accepts both
-/// the URA-conformant `easynet:///r/{prv,org}/reg/agent.<id>` and
-/// the legacy `easynet:///r/<tenant>/agent/<id>` shape. Bare names
+/// any v4.1.5 `easynet:///r/<realm>/...` URA. Bare names
 /// (no scheme) are treated as local.
 pub fn is_federation_target(target: &str) -> bool {
     target.starts_with("easynet:///r/")
@@ -152,9 +151,12 @@ mod tests {
 
     #[test]
     fn detects_federation_uras() {
-        assert!(is_federation_target("easynet:///r/prv/reg/agent.foo"));
+        // v4.1.5 URAs — agent + device shapes. Tenant rides envelope.
         assert!(is_federation_target(
-            "easynet:///r/silan.localhost/agent/01HXYZ"
+            "easynet:///r/silan.localhost/agent/silan.claude"
+        ));
+        assert!(is_federation_target(
+            "easynet:///r/silan.localhost/device/01HXYZ"
         ));
         assert!(!is_federation_target("foo.bar"));
         assert!(!is_federation_target("local-only"));

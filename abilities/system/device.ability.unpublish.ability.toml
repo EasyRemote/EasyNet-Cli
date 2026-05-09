@@ -1,0 +1,15 @@
+schema_version = "1"
+name = "device.ability.unpublish"
+description = "Remove an ability from an agent's abilities/ directory. Hard delete; the daemon log records the deleted manifest's content hash so the body can be recovered from a backup if needed. Reserved verbs (e.g. `chat`) cannot be deleted via this surface."
+
+[input_schema]
+type = "object"
+required = ["owner_agent_id", "ability_name"]
+
+[input_schema.properties.ability_name]
+type = "string"
+description = "The verb / file stem of the ability to delete. Must NOT be a reserved verb (e.g. `chat`)."
+
+[input_schema.properties.owner_agent_id]
+type = "string"
+description = "The agent whose ability is being removed."

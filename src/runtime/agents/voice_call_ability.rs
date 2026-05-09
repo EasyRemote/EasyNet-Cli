@@ -39,14 +39,14 @@ use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
-pub const ABILITY_CREATE_CALL: &str = "voice.create_call";
-pub const ABILITY_SHOW_CALL: &str = "voice.show_call";
-pub const ABILITY_JOIN_CALL: &str = "voice.join_call";
-pub const ABILITY_LEAVE_CALL: &str = "voice.leave_call";
-pub const ABILITY_END_CALL: &str = "voice.end_call";
-pub const ABILITY_WATCH_CALL: &str = "voice.watch_call";
-pub const ABILITY_REPORT_METRICS: &str = "voice.report_metrics";
-pub const ABILITY_LIST_CALLS: &str = "voice.list_calls";
+pub const ABILITY_CREATE_CALL: &str = "device.voice.create_call";
+pub const ABILITY_SHOW_CALL: &str = "device.voice.show_call";
+pub const ABILITY_JOIN_CALL: &str = "device.voice.join_call";
+pub const ABILITY_LEAVE_CALL: &str = "device.voice.leave_call";
+pub const ABILITY_END_CALL: &str = "device.voice.end_call";
+pub const ABILITY_WATCH_CALL: &str = "device.voice.watch_call";
+pub const ABILITY_REPORT_METRICS: &str = "device.voice.report_metrics";
+pub const ABILITY_LIST_CALLS: &str = "device.voice.list_calls";
 
 #[derive(Debug, Clone)]
 struct CallState {
@@ -82,28 +82,56 @@ fn now_ms() -> u64 {
 }
 
 /// Register every voice.* call signaling handler.
+///
+/// **M0 owner-kind note**: today all 8 verbs mount under one
+/// daemon-level `register()`. The terminal-state spec
+/// (`docs/spec/owner-truth-table/`) classifies voice as
+/// agent-owned because the signaling state is per-agent. That
+/// rename ships at Stage 4 (RFC-001 v4.1.6) along with the
+/// system-namespace partitioning; the registration surface
+/// changes to per-agent at that point. Until then the daemon
+/// hosts the dispatch surface and `OwnerKind::Device` is the
+/// honest classification of where the handler runs today.
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    reg.register_rpc(
-        ABILITY_CREATE_CALL,
+    use crate::runtime::ability_dispatch::OwnerKind;
+    reg.register_rpc_with_owner(
+        "device.voice.create_call",
+        OwnerKind::Device,
         Arc::new(|args| create_call_handler(args)),
     );
-    reg.register_rpc(ABILITY_SHOW_CALL, Arc::new(|args| show_call_handler(args)));
-    reg.register_rpc(ABILITY_JOIN_CALL, Arc::new(|args| join_call_handler(args)));
-    reg.register_rpc(
-        ABILITY_LEAVE_CALL,
+    reg.register_rpc_with_owner(
+        "device.voice.show_call",
+        OwnerKind::Device,
+        Arc::new(|args| show_call_handler(args)),
+    );
+    reg.register_rpc_with_owner(
+        "device.voice.join_call",
+        OwnerKind::Device,
+        Arc::new(|args| join_call_handler(args)),
+    );
+    reg.register_rpc_with_owner(
+        "device.voice.leave_call",
+        OwnerKind::Device,
         Arc::new(|args| leave_call_handler(args)),
     );
-    reg.register_rpc(ABILITY_END_CALL, Arc::new(|args| end_call_handler(args)));
-    reg.register_rpc(
-        ABILITY_WATCH_CALL,
+    reg.register_rpc_with_owner(
+        "device.voice.end_call",
+        OwnerKind::Device,
+        Arc::new(|args| end_call_handler(args)),
+    );
+    reg.register_rpc_with_owner(
+        "device.voice.watch_call",
+        OwnerKind::Device,
         Arc::new(|args| watch_call_handler(args)),
     );
-    reg.register_rpc(
-        ABILITY_REPORT_METRICS,
+    reg.register_rpc_with_owner(
+        "device.voice.report_metrics",
+        OwnerKind::Device,
         Arc::new(|args| report_metrics_handler(args)),
     );
-    reg.register_rpc(
-        ABILITY_LIST_CALLS,
+    reg.register_rpc_with_owner(
+        "device.voice.list_calls",
+        OwnerKind::Device,
         Arc::new(|args| list_calls_handler(args)),
     );
 }

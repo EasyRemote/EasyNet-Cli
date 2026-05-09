@@ -174,7 +174,7 @@ fn print_plain(federated_peers: &BTreeMap<String, String>, trusted_hubs: &[Trust
     output::info("To invoke an ability against a peer device, pass --node:");
     output::info("  easynet ability invoke <ability> --node easynet:///r/<tenant>/device/<node>");
     output::info(
-        "where <tenant> appears in `federated_peers` above and <node> is the peer device's node_id.",
+        "where <tenant> appears in 'federated_peers' above and <node> is the peer device's node_id.",
     );
     output::info(
         "Cross-realm device enumeration (auto-discovering <node>) requires PR-N3 directory federation.",
@@ -353,19 +353,19 @@ realm = "r1"
     fn realm_trust_filters_to_hub_role_only() {
         let raw = r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/realm/agent/backend"
+agent_uri = "easynet:///r/realm/hub"
 public_key_b64 = "AAAA"
 role = "backend"
 added_at_unix_ms = 1700000000000
 
 [[trusted_agent]]
-agent_uri = "easynet:///r/realm/agent/laptop"
+agent_uri = "easynet:///r/realm/device/laptop"
 public_key_b64 = "BBBB"
 role = "device"
 added_at_unix_ms = 1700000000001
 
 [[trusted_agent]]
-agent_uri = "easynet:///r/peer-realm/agent/peer-hub"
+agent_uri = "easynet:///r/peer-realm/hub"
 public_key_b64 = "CCCC"
 role = "hub"
 added_at_unix_ms = 1700000000002
@@ -375,7 +375,7 @@ tls_ca_pem_path = "/etc/easynet/peer-ca.pem"
 "#;
         let hubs = parse_trusted_hubs_from(raw);
         assert_eq!(hubs.len(), 1);
-        assert_eq!(hubs[0].agent_uri, "easynet:///r/peer-realm/agent/peer-hub");
+        assert_eq!(hubs[0].agent_uri, "easynet:///r/peer-realm/hub");
         assert_eq!(hubs[0].origin_tenant_id.as_deref(), Some("peer-realm"));
         assert_eq!(
             hubs[0].hub_uri.as_deref(),
@@ -391,7 +391,7 @@ tls_ca_pem_path = "/etc/easynet/peer-ca.pem"
     fn realm_trust_with_no_hub_entries_yields_empty_list() {
         let raw = r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/realm/agent/backend"
+agent_uri = "easynet:///r/realm/hub"
 public_key_b64 = "AAAA"
 role = "backend"
 added_at_unix_ms = 1700000000000
@@ -409,7 +409,7 @@ added_at_unix_ms = 1700000000000
         // the missing fields (or remove the entry).
         let raw = r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/peer-realm/agent/peer-hub-legacy"
+agent_uri = "easynet:///r/peer-realm/hub"
 public_key_b64 = "CCCC"
 role = "hub"
 added_at_unix_ms = 1700000000002

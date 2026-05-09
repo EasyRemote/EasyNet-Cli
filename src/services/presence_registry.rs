@@ -403,13 +403,13 @@ mod tests {
     fn new_registry_is_empty_and_snapshot_is_sorted_empty() {
         let registry = PresenceRegistry::new();
         assert!(registry.snapshot().is_empty());
-        assert!(registry.lookup("easynet:///r/x/agent/y").is_none());
+        assert!(registry.lookup("easynet:///r/x/device/y").is_none());
     }
 
     #[test]
     fn insert_then_lookup_returns_sender() {
         let registry = PresenceRegistry::new();
-        let uri = "easynet:///r/realm/agent/node-1".to_string();
+        let uri = "easynet:///r/realm/device/node-1".to_string();
         let prior = registry.insert(uri.clone(), make_dispatch_sender());
         assert!(prior.is_none());
         assert!(registry.lookup(&uri).is_some());
@@ -419,15 +419,15 @@ mod tests {
     fn snapshot_is_sorted() {
         let registry = PresenceRegistry::new();
         registry.insert(
-            "easynet:///r/realm/agent/c".to_string(),
+            "easynet:///r/realm/device/c".to_string(),
             make_dispatch_sender(),
         );
         registry.insert(
-            "easynet:///r/realm/agent/a".to_string(),
+            "easynet:///r/realm/device/a".to_string(),
             make_dispatch_sender(),
         );
         registry.insert(
-            "easynet:///r/realm/agent/b".to_string(),
+            "easynet:///r/realm/device/b".to_string(),
             make_dispatch_sender(),
         );
 
@@ -435,9 +435,9 @@ mod tests {
         assert_eq!(
             snap,
             vec![
-                "easynet:///r/realm/agent/a".to_string(),
-                "easynet:///r/realm/agent/b".to_string(),
-                "easynet:///r/realm/agent/c".to_string(),
+                "easynet:///r/realm/device/a".to_string(),
+                "easynet:///r/realm/device/b".to_string(),
+                "easynet:///r/realm/device/c".to_string(),
             ]
         );
     }
@@ -447,13 +447,13 @@ mod tests {
         let registry = PresenceRegistry::new();
         let mut subscriber = registry.subscribe_events();
         registry.insert(
-            "easynet:///r/realm/agent/n1".to_string(),
+            "easynet:///r/realm/device/n1".to_string(),
             make_dispatch_sender(),
         );
 
         match subscriber.recv().await.expect("event") {
             PresenceEvent::Online { uri } => {
-                assert_eq!(uri, "easynet:///r/realm/agent/n1");
+                assert_eq!(uri, "easynet:///r/realm/device/n1");
             }
             other => panic!("expected Online, got {other:?}"),
         }
@@ -462,7 +462,7 @@ mod tests {
     #[tokio::test]
     async fn remove_emits_offline_with_reason() {
         let registry = PresenceRegistry::new();
-        let uri = "easynet:///r/realm/agent/n1".to_string();
+        let uri = "easynet:///r/realm/device/n1".to_string();
         registry.insert(uri.clone(), make_dispatch_sender());
 
         let mut subscriber = registry.subscribe_events();
@@ -483,7 +483,7 @@ mod tests {
     #[tokio::test]
     async fn displacement_emits_offline_then_online_in_order() {
         let registry = PresenceRegistry::new();
-        let uri = "easynet:///r/realm/agent/n1".to_string();
+        let uri = "easynet:///r/realm/device/n1".to_string();
 
         registry.insert(uri.clone(), make_dispatch_sender());
 
@@ -515,7 +515,7 @@ mod tests {
     #[tokio::test]
     async fn stale_sender_cannot_remove_newer_displaced_session() {
         let registry = PresenceRegistry::new();
-        let uri = "easynet:///r/realm/agent/n1".to_string();
+        let uri = "easynet:///r/realm/device/n1".to_string();
         let sender_a = make_dispatch_sender();
         let sender_b = make_dispatch_sender();
 
@@ -558,7 +558,7 @@ mod tests {
     fn remove_missing_uri_is_noop_and_returns_none() {
         let registry = PresenceRegistry::new();
         let prior = registry.remove(
-            "easynet:///r/realm/agent/missing",
+            "easynet:///r/realm/device/missing",
             OfflineReason::StreamClosed,
         );
         assert!(prior.is_none());
@@ -568,7 +568,7 @@ mod tests {
     #[test]
     fn force_revoke_emits_admin_revoked_offline() {
         let registry = PresenceRegistry::new();
-        let uri = "easynet:///r/realm/agent/n1".to_string();
+        let uri = "easynet:///r/realm/device/n1".to_string();
         registry.insert(uri.clone(), make_dispatch_sender());
 
         let prior = registry.force_revoke(&uri);

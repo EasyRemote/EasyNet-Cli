@@ -82,7 +82,7 @@ pub struct InstallArgs {
     /// Source URL: `github:<owner>/<repo>[@<ref>][:<subpath>]`.
     pub source: String,
 
-    /// Agent name that will own this skill (see `easynet agent list`).
+    /// Agent name that will own this skill (see 'easynet agent list').
     #[arg(long)]
     pub agent: String,
 
@@ -278,7 +278,7 @@ pub(crate) fn install_skill(
 
     let registry = agents::load_agents()?;
     let entry = registry.agents.get(agent).ok_or_else(|| {
-        anyhow::anyhow!("agent '{}' not registered; run `easynet agent list`", agent)
+        anyhow::anyhow!("agent '{}' not registered; run 'easynet agent list'", agent)
     })?;
     let agent_root = entry
         .root_path
@@ -306,7 +306,7 @@ pub(crate) fn install_skill(
     let target_dir = skills_dir.join(&fetch_result.name);
     if target_dir.exists() {
         anyhow::bail!(
-            "skill '{}' is already installed at {}; run `skill upgrade` or `skill remove` first",
+            "skill '{}' is already installed at {}; run 'skill upgrade' or 'skill remove' first",
             fetch_result.name,
             target_dir.display()
         );
@@ -1220,7 +1220,7 @@ mod tests {
         let wire = serde_json::to_string(&rec).unwrap();
         assert!(
             wire.contains("\"content_hash\":\"sha256:deadbeef\""),
-            "wire must emit `content_hash` (not the Rust field name): {wire}"
+            "wire must emit 'content_hash' (not the Rust field name): {wire}"
         );
         assert!(
             !wire.contains("skill_tree_hash"),

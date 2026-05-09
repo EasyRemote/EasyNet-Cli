@@ -1,0 +1,11 @@
+schema_version = "1"
+name = "device.voice.show_call"
+description = "Read one call's signaling state, including participants, SDP, ICE candidates, last metrics, and accumulated events."
+
+[input_schema]
+type = "object"
+required = ["call_id"]
+additionalProperties = false
+
+[input_schema.properties.call_id]
+type = "string"

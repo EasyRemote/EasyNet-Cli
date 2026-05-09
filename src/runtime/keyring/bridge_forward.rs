@@ -197,7 +197,7 @@ mod tests {
         let h = keyring();
         let entry = h.create_entry("agent_signing", None).unwrap();
         h.peer_add(
-            "easynet:///r/silan.localhost/agent/silan-laptop",
+            "easynet:///r/silan.localhost/device/silan-laptop",
             &entry.public_key_b64,
             None,
             None,
@@ -209,10 +209,10 @@ mod tests {
         // bridge handle. Instead exercise the keyring lookup
         // directly — that's the load-bearing invariant.
         assert!(h
-            .find_peer_by_uri("easynet:///r/silan.localhost/agent/silan-laptop")
+            .find_peer_by_uri("easynet:///r/silan.localhost/device/silan-laptop")
             .is_some());
         assert!(h
-            .find_peer_by_uri("easynet:///r/ghost.localhost/agent/nope")
+            .find_peer_by_uri("easynet:///r/ghost.localhost/device/nope")
             .is_none());
     }
 
@@ -222,11 +222,11 @@ mod tests {
         let _ = h
             .create_entry(
                 "agent_signing",
-                Some("easynet:///r/silan.localhost/agent/silan-laptop".into()),
+                Some("easynet:///r/silan.localhost/device/silan-laptop".into()),
             )
             .unwrap();
         assert!(h
-            .find_active_entry_by_subject("easynet:///r/silan.localhost/agent/silan-laptop")
+            .find_active_entry_by_subject("easynet:///r/silan.localhost/device/silan-laptop")
             .is_some());
     }
 }

@@ -374,13 +374,7 @@ pub(crate) fn node_to_json(node: &FleetNodeSnapshot) -> Value {
     })
 }
 
-/// Extract the node id from a device-profile URI.
-///
-/// Accepts the canonical v4.1.4 `device/<uuid>` shape first. During
-/// the rolling-upgrade window we also accept the legacy collapsed
-/// `agent/<node>` device form peer hubs may still emit, but we keep
-/// rejecting real agent URIs (`agent/<user>.<agent>`) and malformed
-/// multi-segment tails.
+/// Extract the node id from a canonical device-profile URI.
 pub(crate) fn node_id_from_agent_uri(uri: &str) -> Option<String> {
     if let Ok(parsed) = crate::uri::parse_ura(uri) {
         return if parsed.device_id.is_empty() {
@@ -389,12 +383,7 @@ pub(crate) fn node_id_from_agent_uri(uri: &str) -> Option<String> {
             Some(parsed.device_id)
         };
     }
-    let legacy = crate::uri::strip_v1_agent_prefix(uri);
-    if legacy == uri || legacy.is_empty() || legacy.contains('.') || legacy.contains('/') {
-        None
-    } else {
-        Some(legacy)
-    }
+    None
 }
 
 fn is_device_profile_agent(agent: &ResolvedAgent) -> bool {
@@ -517,11 +506,11 @@ mod tests {
     }
 
     #[test]
-    fn node_id_from_legacy_device_shape_is_accepted_but_real_agents_are_not() {
+    fn node_id_from_agent_uri_rejects_legacy_and_real_agent_shapes() {
         assert_eq!(
             node_id_from_agent_uri("easynet:///r/acme/agent/01DEV"),
-            Some("01DEV".to_string()),
-            "legacy collapsed device URI must still project during migration"
+            None,
+            "legacy collapsed device URI must no longer project as a device"
         );
         assert_eq!(
             node_id_from_agent_uri("easynet:///r/acme/agent/alice.claude"),
@@ -531,7 +520,7 @@ mod tests {
         assert_eq!(
             node_id_from_agent_uri("easynet:///r/prv/reg/agent.01DEV?tenant_id=acme"),
             None,
-            "v1 reg/agent.<id> shape must not parse as a v4.1.4 device"
+            "legacy reg/agent.<id>?tenant_id=<t> shape is invalid v4.1.5 URA"
         );
     }
 
@@ -547,7 +536,7 @@ mod tests {
             ],
         };
         let hosted = ResolvedAgent {
-            uri: "easynet:///r/acme/agent/01LLM".into(),
+            uri: "easynet:///r/acme/agent/u1.01LLM".into(),
             status: "active".into(),
             host_node_id: None,
             abilities: vec![json!({"name": "alice.chat"})],

@@ -36,6 +36,7 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 
 use crate::persistence::resources::{self, lookup_by_uri, ResourceEntry, ResourceType};
+use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::ability_dispatch::{EnvelopeContext, LocalAbilityRegistry};
 use crate::runtime::agents::media_abilities::{ABILITY_SCREEN_SNAPSHOT, REASON_SUBJECT_IN_ARGS};
 
@@ -187,8 +188,9 @@ pub fn register_with_backend(
     reg: &mut LocalAbilityRegistry,
     backend: Arc<dyn ScreenSnapshotBackend>,
 ) {
-    reg.register_rpc_with_envelope(
-        ABILITY_SCREEN_SNAPSHOT,
+    reg.register_rpc_with_envelope_and_owner(
+        "device.screen.snapshot",
+        OwnerKind::Device,
         Arc::new(move |env: EnvelopeContext, args: Value| handler(&backend, env, args)),
     );
 }
@@ -293,7 +295,7 @@ mod tests {
             file,
             ResourceUpsert {
                 realm: "acme",
-                owner_agent: "easynet:///r/acme/agent/01DEV",
+                owner_agent: "easynet:///r/acme/device/01DEV",
                 kind: ResourceType::Display,
                 binding: ResourceBinding::LocalDevice,
                 hardware_id,
@@ -383,7 +385,7 @@ mod tests {
             &mut file,
             ResourceUpsert {
                 realm: "acme",
-                owner_agent: "easynet:///r/acme/agent/01DEV",
+                owner_agent: "easynet:///r/acme/device/01DEV",
                 kind: ResourceType::Camera, // wrong type for screen.snapshot
                 binding: ResourceBinding::LocalDevice,
                 hardware_id: "h-cam-not-screen",

@@ -1,0 +1,41 @@
+kind = "static_json"
+
+[[response]]
+id          = "yunnan-gold-2025"
+name        = "Yunnan Gold"
+origin      = "Lincang, Yunnan"
+description = "Honey-sweet black tea with a malt finish. Picked spring 2025, single garden."
+price       = 22.00
+grams       = 50
+
+[[response]]
+id          = "uji-gyokuro"
+name        = "Uji Gyokuro"
+origin      = "Uji, Kyoto"
+description = "Shade-grown for 21 days. Vivid umami, sea-air minerality, bright green liquor."
+price       = 38.00
+grams       = 30
+
+[[response]]
+id          = "darjeeling-first-flush"
+name        = "Darjeeling First Flush"
+origin      = "Castleton Estate, West Bengal"
+description = "Muscatel notes, light body, the floral spring crop tea collectors chase each March."
+price       = 28.00
+grams       = 50
+
+[[response]]
+id          = "wuyi-rougui"
+name        = "Wuyi Rou Gui"
+origin      = "Wuyishan, Fujian"
+description = "Cliff oolong roasted over longan charcoal. Cinnamon, stone fruit, long mineral aftertaste."
+price       = 34.00
+grams       = 40
+
+[[response]]
+id          = "anhua-shou-puer"
+name        = "Anhua Shou Pu'er"
+origin      = "Anhua, Hunan"
+description = "Twelve-year wet-piled pu'er. Earthy, smooth, betel-nut sweetness — a quiet winter cup."
+price       = 26.00
+grams       = 100

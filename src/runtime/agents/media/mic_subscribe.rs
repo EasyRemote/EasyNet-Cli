@@ -46,6 +46,7 @@ use serde_json::{json, Value};
 use tokio::sync::broadcast;
 
 use crate::persistence::resources::{self, lookup_by_uri, ResourceEntry, ResourceType};
+use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::ability_dispatch::{EnvelopeContext, LocalAbilityRegistry, StreamSource};
 use crate::runtime::agents::media_abilities::{ABILITY_MIC_SUBSCRIBE, REASON_SUBJECT_IN_ARGS};
 
@@ -300,8 +301,9 @@ impl MicBackend for SyntheticMicBackend {
 // ── Registration ─────────────────────────────────────────────
 
 pub fn register_with_backend(reg: &mut LocalAbilityRegistry, backend: Arc<dyn MicBackend>) {
-    reg.register_stream_with_envelope(
-        ABILITY_MIC_SUBSCRIBE,
+    reg.register_stream_with_envelope_and_owner(
+        "device.mic.subscribe",
+        OwnerKind::Device,
         Arc::new(move |env: EnvelopeContext, args: Value| handler(&backend, env, args)),
     );
 }
@@ -365,7 +367,7 @@ mod tests {
             file,
             ResourceUpsert {
                 realm: "acme",
-                owner_agent: "easynet:///r/acme/agent/01DEV",
+                owner_agent: "easynet:///r/acme/device/01DEV",
                 kind: ResourceType::Mic,
                 binding: ResourceBinding::LocalDevice,
                 hardware_id,
@@ -441,7 +443,7 @@ mod tests {
             &mut file,
             ResourceUpsert {
                 realm: "acme",
-                owner_agent: "easynet:///r/acme/agent/01DEV",
+                owner_agent: "easynet:///r/acme/device/01DEV",
                 kind: ResourceType::Camera, // wrong type
                 binding: ResourceBinding::LocalDevice,
                 hardware_id: "h-cam-not-mic",

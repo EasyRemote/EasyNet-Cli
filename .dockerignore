@@ -1,0 +1,36 @@
+# Hub-in-Docker build context exclusions
+# =====================================
+#
+# `target/` is the cargo build artifact dir — 10+ GB on dev boxes.
+# Most subdirs (debug/, doc/, .rustc_info.json, ...) are dead
+# weight; only the cross-compiled aarch64 release binaries are
+# needed by the hub-pages Dockerfile.
+target/*
+!target/aarch64-unknown-linux-gnu
+target/aarch64-unknown-linux-gnu/*
+!target/aarch64-unknown-linux-gnu/release
+target/aarch64-unknown-linux-gnu/release/*
+!target/aarch64-unknown-linux-gnu/release/easynet
+!target/aarch64-unknown-linux-gnu/release/easynet-daemon
+# Git history is not needed for compilation.
+.git
+.github
+# IDE / OS noise.
+.DS_Store
+.idea
+.vscode
+*.swp
+# Other non-source dirs.
+node_modules
+__pycache__
+*.pyc
+# Test fixtures + tarballs accumulating.
+docker/e2e/pages/easynet-pages-e2e-*.tar
+# Existing generated PDFs (we have .tex sources).
+docs/rfc/*.pdf
+docs/rfc/*.aux
+docs/rfc/*.log
+docs/rfc/*.out
+docs/rfc/*.toc
+# Existing tex backup files (multiple Mb).
+docs/rfc/*.tex.bak

@@ -42,7 +42,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::dispatch::{AgentResponse, AgentUsage};
-use super::run_store::RunDir;
 use super::timeline::TimelineWriter;
 use crate::registry::agents::AgentEntry;
 
@@ -54,7 +53,6 @@ pub struct InvokeOpts {
     pub max_output_bytes: usize,
     pub env: BTreeMap<String, String>,
     pub cwd: PathBuf,
-    pub run_dir: Option<Arc<RunDir>>,
     /// PR-7 Commit 2: Timeline writer for this invocation. When
     /// `Some`, the driver's stdout-line callback emits a
     /// `progress` event per stream chunk, fsynced to disk and

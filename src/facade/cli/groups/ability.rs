@@ -90,14 +90,14 @@ pub struct ShowArgs {
     pub name: String,
     /// ⚠ Reserved for federation-tier resolution. Today this CLI
     /// pulls metadata from the local daemon's catalogue (post
-    /// AXON-RFC-001 P1.5 there is no remote `list_mcp_tools`
-    /// surface). Passing `--node` returns a precise error rather
+    /// AXON-RFC-001 P1.5 there is no remote 'list_mcp_tools'
+    /// surface). Passing '--node' returns a precise error rather
     /// than silently auto-resolving locally.
     #[arg(long, short = 'n', value_name = "NODE_ID")]
     pub node: Option<String>,
-    /// Output format. `table` emits the human-readable contract view;
-    /// `json` emits the raw underlying registry record. Aligned with
-    /// every other list/show command — see `support::output::OutputFormat`.
+    /// Output format. 'table' emits the human-readable contract view;
+    /// 'json' emits the raw underlying registry record. Aligned with
+    /// every other list/show command — see 'support::output::OutputFormat'.
     #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
     pub format: OutputFormat,
 }
@@ -110,8 +110,8 @@ pub struct UninstallArgs {
     /// `--install-id` so existing scripts keep parsing while the
     /// federation Invoke replacement is wired.
     pub name: String,
-    /// Reserved for federation-tier uninstall. See `--node` on
-    /// `ability show`.
+    /// Reserved for federation-tier uninstall. See '--node' on
+    /// 'ability show'.
     #[arg(long, short = 'n', value_name = "NODE_ID")]
     pub node: Option<String>,
     /// Install id from the deploy receipt. Reserved for the
@@ -145,8 +145,10 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     // settled on so a single `--node` flag means the same thing
     // across the whole CLI.
     let catalogue = match args.node.as_deref().map(str::trim) {
-        None | Some("local") => invoke_local_ability("easynet.discover", serde_json::json!({}))
-            .context("invoke easynet.discover")?,
+        None | Some("local") => {
+            invoke_local_ability("device.meta.list_abilities", serde_json::json!({}))
+                .context("invoke easynet.discover")?
+        }
         Some("") => {
             anyhow::bail!(
                 "--node was given but empty; omit the flag to show abilities on the \
@@ -270,7 +272,7 @@ fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
     if let Some(iid) = args.install_id.as_deref().filter(|s| !s.trim().is_empty()) {
         body["install_id"] = serde_json::json!(iid);
     }
-    let result = invoke_local_ability("fleet.uninstall_ability", body)
+    let result = invoke_local_ability("device.fleet.uninstall_ability", body)
         .context("invoke fleet.uninstall_ability")?;
     output::success(&format!("uninstalled {}", args.name));
     if !result.is_null() {

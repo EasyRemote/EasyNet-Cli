@@ -53,10 +53,11 @@ use serde_json::{json, Value};
 
 use crate::runtime::ability_descriptor::AbilityDescriptor;
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::agents::profiles::mcp::tool_specs_from_descriptors;
 
-pub const ABILITY_LIST_TOOLS: &str = "mcp.bridge.list_tools";
-pub const ABILITY_CALL_TOOL: &str = "mcp.bridge.call_tool";
+pub const ABILITY_LIST_TOOLS: &str = "device.mcp.bridge.list_tools";
+pub const ABILITY_CALL_TOOL: &str = "device.mcp.bridge.call_tool";
 
 /// Register both bridge abilities on the registry.
 ///
@@ -82,12 +83,14 @@ pub fn register<F>(
     let provider: Arc<dyn Fn() -> Vec<AbilityDescriptor> + Send + Sync> =
         Arc::new(descriptors_provider);
     let provider_for_list = Arc::clone(&provider);
-    reg.register_rpc(
-        ABILITY_LIST_TOOLS,
+    reg.register_rpc_with_owner(
+        "device.mcp.bridge.list_tools",
+        OwnerKind::Device,
         Arc::new(move |_args: Value| list_tools_handler(&provider_for_list)),
     );
-    reg.register_rpc(
-        ABILITY_CALL_TOOL,
+    reg.register_rpc_with_owner(
+        "device.mcp.bridge.call_tool",
+        OwnerKind::Device,
         Arc::new(move |args: Value| call_tool_handler(&provider, &registry_handle, args)),
     );
 }
@@ -262,7 +265,7 @@ mod tests {
     fn d(name: &str) -> AbilityDescriptor {
         AbilityDescriptor::new(
             name.to_string(),
-            "easynet:///r/test/agent/01DEV",
+            "easynet:///r/test/device/01DEV",
             Visibility::Public,
         )
         .expect("test descriptor")
@@ -279,8 +282,9 @@ mod tests {
         let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
         // Pre-register one trivial ability the bridge can dispatch
         // into, so call_tool tests have something real to invoke.
-        reg.register_rpc(
+        reg.register_rpc_with_owner(
             "test.echo",
+            OwnerKind::Device,
             Arc::new(|args: Value| Ok(json!({"echoed": args}))),
         );
         register(&mut reg, provider, Arc::clone(&handle));
@@ -434,8 +438,9 @@ mod tests {
         // the MCP client sees a structured response.
         let mut reg = LocalAbilityRegistry::new();
         let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
-        reg.register_rpc(
+        reg.register_rpc_with_owner(
             "always.fails",
+            OwnerKind::Device,
             Arc::new(|_args: Value| anyhow::bail!("planned failure for the test")),
         );
         register(&mut reg, || vec![d("always.fails")], Arc::clone(&handle));

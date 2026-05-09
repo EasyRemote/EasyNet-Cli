@@ -215,6 +215,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
     // A registry-load failure degrades to "no per-agent advertise
     // this cycle" rather than blocking the rest of publish — the
     // outcome row surfaces the reason.
+    let live_registry = crate::runtime::agents::build_registry();
     match crate::registry::agents::load_agents() {
         Ok(reg) => {
             for (name, entry) in &reg.agents {
@@ -238,6 +239,10 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
                             let mut d = d
                                 .with_description(spec.description())
                                 .with_input_schema(spec.parameters().clone())
+                                .with_hints(crate::runtime::agents::discovery_hints_for(
+                                    &live_registry,
+                                    spec.name(),
+                                ))
                                 .with_source(format!("agent:{name}"));
                             if let Some(host_node_id) = host_node_id.as_ref() {
                                 d = d.with_metadata_entry("host_node_id", host_node_id.clone());
@@ -303,14 +308,14 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
 ///
 /// Inputs:
 ///   * `invoker` — same `BridgeAbilityInvoker` used by advertise;
-///     wraps the dendrite-bridge `ability_call_raw` path. The
-///     resource URI follows the canonical 5-segment shape required
-///     by `AxonClient::canonicalize_easynet_resource_uri`:
-///     `easynet:///r/prv/hub/<realm>/abilities/runtime.register_local_tool@1`.
-///     The `runtime.*` namespace is intercepted before membership +
-///     admission checks (rpc_handlers.rs::is_runtime_admin_ability)
-///     so the hub-style subject is purely a URI shape, not an actual
-///     hub-routing decision.
+///     wraps the dendrite-bridge `ability_call_raw` path. Business
+///     code emits the canonical hub-owned ability URA
+///     `easynet:///r/<realm>/ability/hub.runtime.register_local_tool`.
+///     The
+///     `runtime.*` namespace is intercepted before membership +
+///     admission checks (rpc_handlers.rs::is_runtime_admin_ability),
+///     so the hub-shaped subject is purely a bridge admission key,
+///     not an actual hub-routing decision.
 ///   * `tenant_id` — runtime key namespace.
 ///   * `realm` — used to construct the URI's subject_value. Any non-
 ///     empty value works since runtime.* is intercepted by ability
@@ -342,12 +347,9 @@ pub fn register_local_tools_via_runtime<I: AbilityInvoker>(
     // Invoke and gets NoBinding.
     let names = collect_daemon_owned_ability_names();
 
-    // Non-pub URIs require `?tenant_id=<id>` per the SDK
-    // canonicalizer; without it we get "tenant_id query is required"
-    // before any admission/membership check runs.
-    let resource_uri = format!(
-        "easynet:///r/prv/hub/{realm}/abilities/runtime.register_local_tool@1?tenant_id={tenant_id}"
-    );
+    // Runtime admin calls share the same canonical hub-owned ability
+    // model as federation.*.
+    let resource_uri = runtime_admin_resource_uri(realm, tenant_id, "runtime.register_local_tool");
     for name in names {
         let args = build_register_args(tenant_id, node_id, &name, dispatch_endpoint);
         let result = invoker.invoke_ability(tenant_id, &resource_uri, args);
@@ -416,9 +418,8 @@ pub fn bootstrap_self_identity_via_runtime<I: AbilityInvoker>(
     // `runtime.bootstrap_self_identity` appends a NEW key under the
     // existing node when the (node_id, public_key) tuple is novel,
     // so the second call doesn't overwrite the first.
-    let resource_uri = format!(
-        "easynet:///r/prv/hub/{realm}/abilities/runtime.bootstrap_self_identity@1?tenant_id={tenant_id}"
-    );
+    let resource_uri =
+        runtime_admin_resource_uri(realm, tenant_id, "runtime.bootstrap_self_identity");
     let agent_key_b64 = derive_owner_public_key_b64(tenant_id, node_id);
     let agent_args = serde_json::json!({
         "tenant_id": tenant_id,
@@ -463,9 +464,12 @@ pub fn bootstrap_self_identity_via_runtime<I: AbilityInvoker>(
 }
 
 /// Compute the standard-base64 (with padding) ed25519 public key
-/// the local node will sign under for the *prv-visibility*
-/// `r/prv/reg/agent.<node>/abilities/...` URI shape — the canonical
-/// shape every daemon-owned ability invocation uses end-to-end.
+/// the local node will sign under. The HKDF subject_id namespace
+/// (`easynet:prv:reg:agent.<node>`) is a *derivation* convention —
+/// distinct from the v4.1.5 URA wire shape — and is preserved here
+/// to keep existing trust anchors valid. See
+/// `derive_subject_keypair` for why subject_id and URA cannot be
+/// merged without invalidating already-stored keys.
 ///
 /// Mirrors `AxonClient::default_auth_for_subject` in the SDK:
 ///
@@ -487,14 +491,6 @@ pub fn bootstrap_self_identity_via_runtime<I: AbilityInvoker>(
 /// `easynet.public_key`. Both encodings decode to the same 32
 /// bytes; the admin RPC stays on standard base64 to avoid a needless
 /// translation step on the runtime side.
-/// Public alias for the heartbeat keepalive call site. Same
-/// derivation as `derive_owner_public_key_b64`; kept as a separate
-/// `pub(crate)` symbol so the heartbeat module can call it without
-/// promoting the underlying helper to the public surface.
-pub(crate) fn derive_owner_public_key_b64_for_keepalive(tenant_id: &str, node_id: &str) -> String {
-    derive_owner_public_key_b64(tenant_id, node_id)
-}
-
 pub(crate) fn derive_owner_public_key_b64(tenant_id: &str, node_id: &str) -> String {
     let subject_id = format!("easynet:prv:reg:agent.{node_id}");
     derive_subject_public_key_b64(tenant_id, &subject_id)
@@ -502,7 +498,8 @@ pub(crate) fn derive_owner_public_key_b64(tenant_id: &str, node_id: &str) -> Str
 
 /// Hub-profile counterpart of `derive_owner_public_key_b64`. Returns
 /// the public key the bridge will sign under for hub-shaped resource
-/// URIs (`r/prv/hub/<realm>/abilities/...`). The SDK's
+/// invocations. Business code addresses those calls as canonical
+/// `easynet:///r/<realm>/ability/hub.<ns>.<verb>` URAs. The SDK's
 /// `default_auth_for_subject` derives a DIFFERENT key for the hub
 /// subject than for the agent subject, so the daemon needs to
 /// register both — see `bootstrap_self_identity_via_runtime`.
@@ -518,70 +515,21 @@ fn derive_subject_public_key_b64(tenant_id: &str, subject_id: &str) -> String {
 
 /// Extract the host device node id from a host-device URI.
 ///
-/// Canonical post-v4 fleets use `.../device/<node>`, but the docker
-/// deep-e2e matrix still exercises mixed-shape installs where the
-/// same host may surface as:
-///
-/// - `easynet:///r/<realm>/device/<node>`
-/// - `easynet:///r/<realm>/agent/<node>`
-/// - `easynet:///r/<scope>/reg/device.<node>?tenant_id=<tenant>`
-/// - `easynet:///r/<scope>/reg/agent.<node>?tenant_id=<tenant>`
-///
-/// Hosted-agent advertise must populate `host_node_id` for all of
-/// those inputs; otherwise the backend projects the hosted agent's
-/// own URI tail as `node_id`, which breaks `/api/v1/agents` and the
-/// cross-device deep-e2e assertions. Real agent URIs
-/// (`agent/<user>.<agent>`) remain rejected.
+/// v4.1.5 §A.URA-7: the only valid device URI shape is
+/// `easynet:///r/<realm>/device/<node-id>`. Legacy
+/// `r/{prv,org}/reg/{device,agent}.<id>?tenant_id=<t>` and
+/// `r/<realm>/agent/<bare-id>` (URI v2 transitional) shapes are
+/// rejected per memory `feedback_no_legacy_ura.md`.
 fn host_node_id_from_uri(uri: &str) -> Option<String> {
-    if let Ok(parsed) = crate::uri::parse_ura(uri) {
-        if parsed.kind == crate::uri::URAKind::Device && !parsed.device_id.is_empty() {
-            return Some(parsed.device_id);
-        }
+    // v4.1.5 §A.URA-7: device URIs are `easynet:///r/<realm>/device/<id>`.
+    // Legacy `reg/{device,agent}.<id>?tenant_id=<t>` shapes are rejected
+    // per memory `feedback_no_legacy_ura.md` (strict v4.1.5 only;
+    // route every URI parse through `parse_ura`).
+    let parsed = crate::uri::parse_ura(uri).ok()?;
+    if parsed.kind == crate::uri::URAKind::Device && !parsed.device_id.is_empty() {
+        return Some(parsed.device_id);
     }
-
-    let legacy_device = crate::uri::strip_v1_agent_prefix(uri);
-    if legacy_device != uri && is_plain_node_id(&legacy_device) {
-        return Some(legacy_device);
-    }
-
-    let rest = uri.strip_prefix("easynet:///r/")?;
-    let (_realm_or_scope, after_realm) = rest.split_once('/')?;
-    let reg_tail = after_realm.strip_prefix("reg/")?;
-    let reg_subject = reg_tail.split('?').next().unwrap_or(reg_tail);
-    for prefix in ["device.", "agent."] {
-        if let Some(node_id) = reg_subject.strip_prefix(prefix) {
-            if is_plain_node_id(node_id) {
-                return Some(node_id.to_string());
-            }
-        }
-    }
-
     None
-}
-
-fn is_plain_node_id(node_id: &str) -> bool {
-    !node_id.is_empty() && !node_id.contains('.') && !node_id.contains('/')
-}
-
-/// URI v2 device-keypair wrapper. Returns `(seed, pk_b64)` for the
-/// device-profile agent under the given realm. Subject ID shape
-/// `easynet:prv:reg:device.<node_id>` (URI v2 device kind).
-///
-/// Phase 14 production deploy switches daemons to use this in place
-/// of `derive_agent_keypair` once the backend trust anchor has been
-/// regenerated under the device-URI shape.
-pub(crate) fn derive_device_keypair(realm: &str, node_id: &str) -> ([u8; 32], String) {
-    let subject_id = format!("easynet:prv:reg:device.{node_id}");
-    derive_subject_keypair(realm, &subject_id)
-}
-
-/// URI v1 (and current production) agent-keypair wrapper. Subject
-/// ID shape `easynet:prv:reg:agent.<node_id>`. Kept as the default
-/// path through Phase 14; the device-shaped wrapper above flips
-/// in only after the backend re-mints its trust anchor.
-pub(crate) fn derive_agent_keypair(realm: &str, node_id: &str) -> ([u8; 32], String) {
-    let subject_id = format!("easynet:prv:reg:agent.{node_id}");
-    derive_subject_keypair(realm, &subject_id)
 }
 
 /// Deterministic keypair derivation used by the SDK's
@@ -607,46 +555,6 @@ pub(crate) fn derive_subject_keypair(tenant_id: &str, subject_id: &str) -> ([u8;
     let pk_b64 =
         base64::engine::general_purpose::STANDARD.encode(signing.verifying_key().to_bytes());
     (seed, pk_b64)
-}
-
-/// Mirror the deterministic agent + hub keys into the keyring so
-/// federation `KeyResolver` queries return the same bytes the SDK
-/// signs under. Idempotent: re-running with the same inputs is a
-/// no-op (existing matching entry is reused). The keyring stores
-/// the seed encrypted so `keyring.sign` works for these entries
-/// (necessary for forward_invoke to sign envelopes locally without
-/// going through the SDK).
-pub(crate) fn mirror_derived_keys_into_keyring(
-    keyring: &crate::runtime::keyring::KeyringHandle,
-    tenant_id: &str,
-    node_id: &str,
-    realm: &str,
-    device_uri: &str,
-) -> anyhow::Result<()> {
-    let agent_subject_id = format!("easynet:prv:reg:agent.{node_id}");
-    let (agent_seed, agent_pk_b64) = derive_subject_keypair(tenant_id, &agent_subject_id);
-    let agent_pk = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        agent_pk_b64.as_bytes(),
-    )?;
-    keyring.mirror_external_key(
-        "agent_signing",
-        device_uri.to_string(),
-        &agent_pk,
-        Some(&agent_seed),
-    )?;
-
-    let hub_subject_id = format!("easynet:prv:hub:{realm}");
-    let (hub_seed, hub_pk_b64) = derive_subject_keypair(tenant_id, &hub_subject_id);
-    if hub_pk_b64 != agent_pk_b64 {
-        let hub_pk = base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            hub_pk_b64.as_bytes(),
-        )?;
-        let hub_subject_uri = format!("easynet:///r/prv/hub/{realm}?tenant_id={tenant_id}");
-        keyring.mirror_external_key("hub_signing", hub_subject_uri, &hub_pk, Some(&hub_seed))?;
-    }
-    Ok(())
 }
 
 /// Build the JSON args for a single `runtime.register_local_tool`
@@ -716,8 +624,7 @@ pub fn unpublish_abilities_via_revoke<I: AbilityInvoker>(
     agent_uri: &str,
     reason: &str,
 ) -> PublishOutcome {
-    let resource_uri =
-        format!("easynet:///r/prv/hub/{realm}/abilities/federation.revoke@1?tenant_id={tenant_id}");
+    let resource_uri = crate::runtime::advertise::revoke_resource_uri(realm, tenant_id);
     let payload = serde_json::json!({
         "agent_uri": agent_uri,
         "reason": reason,
@@ -748,6 +655,11 @@ fn first_uri(outcomes: &[BootstrapOutcome], profile: &str, name: &str) -> Option
         .iter()
         .find(|o| o.profile == profile && o.name == name)
         .map(|o| o.agent_uri.clone())
+}
+
+fn runtime_admin_resource_uri(realm: &str, tenant_id: &str, ability_name: &str) -> String {
+    let _ = tenant_id;
+    crate::uri::hub_ability_uri(realm, ability_name)
 }
 
 #[cfg(test)]
@@ -836,7 +748,7 @@ mod tests {
     fn republish_emits_device_advertise_then_each_hosted_then_descriptors() {
         let _h = HomeGuard::new();
         let invoker = CountingInvoker::new(good_reply());
-        let plan = plan_for("acme", "easynet:///r/acme/agent/01DEV");
+        let plan = plan_for("acme", "easynet:///r/acme/device/01DEV");
         let outcomes = republish_with_minter(&invoker, "tenant", &plan, &CountingMinter::new());
 
         // We expect: 1 device-advertise + N hosted-advertises + M
@@ -846,11 +758,11 @@ mod tests {
         let resource_seq: Vec<&str> = calls.iter().map(|(u, _)| u.as_str()).collect();
         let device_count = resource_seq
             .iter()
-            .filter(|u| u.contains("federation.advertise_agent@1"))
+            .filter(|u| u.contains("federation.advertise_agent"))
             .count();
         let abilities_count = resource_seq
             .iter()
-            .filter(|u| u.contains("federation.advertise_abilities@1"))
+            .filter(|u| u.contains("federation.advertise_abilities"))
             .count();
         assert_eq!(
             device_count, 3,
@@ -870,26 +782,23 @@ mod tests {
     }
 
     #[test]
-    fn host_node_id_from_uri_accepts_current_and_legacy_device_shapes() {
-        // Canonical device URA.
+    fn host_node_id_from_uri_accepts_only_v415_device_shape() {
+        // v4.1.5 canonical device URA — the only accepted shape.
         assert_eq!(
             host_node_id_from_uri("easynet:///r/acme/device/01DEV"),
             Some("01DEV".into())
         );
 
-        // Legacy device-profile and reg-form shapes still occur in
-        // mixed-fleet deep-e2e and must resolve to the same host.
-        assert_eq!(
-            host_node_id_from_uri("easynet:///r/acme/agent/01DEV"),
-            Some("01DEV".into())
-        );
+        // Legacy `agent/<bare-uuid>` and `reg/{device,agent}.<id>?tenant_id=...`
+        // forms are rejected per memory `feedback_no_legacy_ura.md`.
+        assert_eq!(host_node_id_from_uri("easynet:///r/acme/agent/01DEV"), None);
         assert_eq!(
             host_node_id_from_uri("easynet:///r/prv/reg/device.01DEV?tenant_id=acme"),
-            Some("01DEV".into())
+            None
         );
         assert_eq!(
             host_node_id_from_uri("easynet:///r/prv/reg/agent.01DEV?tenant_id=acme"),
-            Some("01DEV".into())
+            None
         );
         assert_eq!(
             host_node_id_from_uri("easynet:///r/acme/agent/user.alice"),
@@ -934,7 +843,7 @@ mod tests {
     #[test]
     fn republish_surfaces_per_call_failure_without_aborting() {
         let _h = HomeGuard::new();
-        let plan = plan_for("acme", "easynet:///r/acme/agent/01DEV");
+        let plan = plan_for("acme", "easynet:///r/acme/device/01DEV");
         let outcomes =
             republish_with_minter(&FailingInvoker, "tenant", &plan, &CountingMinter::new());
         // Every advertise call must turn into one Err PublishOutcome.
@@ -1011,7 +920,7 @@ mod tests {
         let alice_advert = calls
             .iter()
             .find(|(u, p)| {
-                u.contains("federation.advertise_abilities@1")
+                u.contains("federation.advertise_abilities")
                     && p["agent_uri"].as_str() == Some(alice_uri.as_str())
             })
             .unwrap_or_else(|| {
@@ -1086,7 +995,7 @@ mod tests {
         let device_advert = calls
             .iter()
             .find(|(u, p)| {
-                u.contains("federation.advertise_abilities@1")
+                u.contains("federation.advertise_abilities")
                     && p["agent_uri"].as_str() == Some("easynet:///r/acme/device/01DEV")
             })
             .expect("device-owner advertise_abilities call must still exist");
@@ -1098,7 +1007,7 @@ mod tests {
             .filter_map(|a| a["name"].as_str())
             .collect();
         assert!(
-            names.iter().any(|n| *n == "fs.read"),
+            names.iter().any(|n| *n == "device.fs.read"),
             "device descriptors must survive per-agent stitch; got names = {names:?}"
         );
     }
@@ -1110,14 +1019,17 @@ mod tests {
             &invoker,
             "tenant",
             "acme",
-            "easynet:///r/acme/agent/01OLD",
+            "easynet:///r/acme/device/01OLD",
             "operator removed",
         );
         assert!(outcome.result.is_ok());
         let calls = invoker.calls();
         assert_eq!(calls.len(), 1);
-        assert!(calls[0].0.contains("federation.revoke@1"));
-        assert_eq!(calls[0].1["agent_uri"], "easynet:///r/acme/agent/01OLD");
+        assert_eq!(
+            calls[0].0,
+            "easynet:///r/acme/ability/hub.federation.revoke"
+        );
+        assert_eq!(calls[0].1["agent_uri"], "easynet:///r/acme/device/01OLD");
         assert_eq!(calls[0].1["reason"], "operator removed");
     }
 
@@ -1125,7 +1037,7 @@ mod tests {
     fn republish_persists_local_agents_file_with_minted_uris() {
         let _h = HomeGuard::new();
         let invoker = CountingInvoker::new(good_reply());
-        let plan = plan_for("acme", "easynet:///r/acme/agent/01DEV");
+        let plan = plan_for("acme", "easynet:///r/acme/device/01DEV");
         let _ = republish_with_minter(&invoker, "tenant", &plan, &CountingMinter::new());
         let calls = invoker.calls();
         // Find the consent-hosted advertise and assert the URA shape.
@@ -1145,7 +1057,7 @@ mod tests {
         let file_back = local_agents::load().expect("load after save must succeed");
         assert_eq!(
             file_back.host_device_agent_uri,
-            "easynet:///r/acme/agent/01DEV"
+            "easynet:///r/acme/device/01DEV"
         );
         let consent_row = file_back
             .hosted_agents
@@ -1164,7 +1076,7 @@ mod tests {
     #[test]
     fn second_republish_reuses_persisted_uris_no_duplicate_advertise() {
         let _h = HomeGuard::new();
-        let plan = plan_for("acme", "easynet:///r/acme/agent/01DEV");
+        let plan = plan_for("acme", "easynet:///r/acme/device/01DEV");
         let invoker_a = CountingInvoker::new(good_reply());
         let _ = republish_with_minter(&invoker_a, "tenant", &plan, &CountingMinter::new());
         let first_calls = invoker_a.calls();
@@ -1210,11 +1122,8 @@ mod tests {
 
     #[test]
     fn register_local_tools_uses_canonical_runtime_admin_uri() {
-        // The bridge requires a 5-segment /r URI, and the runtime
-        // intercepts `runtime.*` ability names before admission/
-        // membership gates. We pin both shape constraints here so
-        // future refactors of the URI builder don't quietly break
-        // the dispatch registration.
+        // Fake invokers observe the exact URI the CLI now sends on
+        // the wire: canonical hub-owned runtime ability URA only.
         let _h = HomeGuard::new();
         let invoker = CountingInvoker::new(serde_json::json!({"ack": true}));
         let outcomes = register_local_tools_via_runtime(
@@ -1231,16 +1140,14 @@ mod tests {
             !outcomes.is_empty(),
             "register must walk at least one ability"
         );
-        // Every call must hit the canonical hub-style runtime admin
-        // resource URI; ability_name on the wire derives from the
-        // URI tail, so a wrong shape silently misroutes.
+        // Every call must hit the canonical hub-owned runtime ability
+        // URI.
         let calls = invoker.calls();
         assert_eq!(calls.len(), outcomes.len(), "1 call per ability");
         for (uri, payload) in &calls {
             assert_eq!(
-                uri,
-                "easynet:///r/prv/hub/acme/abilities/runtime.register_local_tool@1?tenant_id=tenant",
-                "register URI must be the canonical 5-segment runtime admin URI"
+                uri, "easynet:///r/acme/ability/hub.runtime.register_local_tool",
+                "register URI must stay canonical at the business layer"
             );
             assert_eq!(payload["tenant_id"], "tenant");
             assert_eq!(payload["node_id"], "node-01DEV");

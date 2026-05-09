@@ -72,11 +72,12 @@ use sha2::{Digest, Sha256};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
+use crate::runtime::ability_dispatch::OwnerKind;
 // ── Wire-name constants (cross-language pins) ─────────────────────
 
-pub const ABILITY_FS_READ: &str = "fs.read";
-pub const ABILITY_FS_WRITE: &str = "fs.write";
-pub const ABILITY_FS_LIST: &str = "fs.list";
+pub const ABILITY_FS_READ: &str = "device.fs.read";
+pub const ABILITY_FS_WRITE: &str = "device.fs.write";
+pub const ABILITY_FS_LIST: &str = "device.fs.list";
 
 /// Profile membership marker. Receivers MAY surface this in
 /// `agent.describe` so callers can confirm the profile contract
@@ -144,9 +145,13 @@ const DEFAULT_LIST_MAX_ENTRIES: usize = 4096;
 /// daemon startup. The abilities are stateless so registration is
 /// just three handler closures with no per-call setup.
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    reg.register_rpc(ABILITY_FS_READ, Arc::new(handler_read));
-    reg.register_rpc(ABILITY_FS_WRITE, Arc::new(handler_write));
-    reg.register_rpc(ABILITY_FS_LIST, Arc::new(handler_list));
+    reg.register_rpc_with_owner("device.fs.read", OwnerKind::Device, Arc::new(handler_read));
+    reg.register_rpc_with_owner(
+        "device.fs.write",
+        OwnerKind::Device,
+        Arc::new(handler_write),
+    );
+    reg.register_rpc_with_owner("device.fs.list", OwnerKind::Device, Arc::new(handler_list));
 }
 
 // ── fs.read ──────────────────────────────────────────────────────

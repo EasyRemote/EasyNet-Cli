@@ -92,7 +92,7 @@ fn install_to(
         let skill_path = skills_src.join(name);
         anyhow::ensure!(
             skill_path.join("SKILL.md").exists(),
-            "bundled skill '{}' not found. Run `easynet skill-install --list` to see available skills.",
+            "bundled skill '{}' not found. Run 'easynet skill-install --list' to see available skills.",
             name
         );
         vec![name.clone()]

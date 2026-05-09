@@ -127,7 +127,7 @@ impl FederationClient for InProcessStreamingForwarder {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn streaming_chain_propagates_presence_event_to_peer_cell() {
     // ── Daemon A: realm-a, hosts the upstream PresenceRegistry ──
-    let daemon_a_loopback = "easynet:///r/realm-a/agent/daemon-a";
+    let daemon_a_loopback = "easynet:///r/realm-a/hub";
     let daemon_a_presence = Arc::new(PresenceRegistry::new());
     let daemon_a_admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
@@ -151,7 +151,7 @@ async fn streaming_chain_propagates_presence_event_to_peer_cell() {
         run_per_peer_supervisor(
             "realm-a".to_string(),
             "https://hub-a.example:50443".to_string(),
-            "easynet:///r/realm-b/agent/hub".to_string(),
+            "easynet:///r/realm-b/hub".to_string(),
             federation_client,
             cell_for_task,
             cancel_rx,
@@ -169,7 +169,7 @@ async fn streaming_chain_propagates_presence_event_to_peer_cell() {
     // the in-process forwarder delivers it to daemon B's
     // supervisor, the §2.4 chokepoint stamps origin_realm, the
     // cell publishes.
-    let target_uri = "easynet:///r/realm-a/agent/device-X";
+    let target_uri = "easynet:///r/realm-a/device/device-X";
     let (tx, _rx) = tokio::sync::mpsc::channel::<
         Result<easynet_cli::services::presence_registry::DispatchFrame, tonic::Status>,
     >(8);
@@ -211,7 +211,7 @@ async fn streaming_chain_propagates_presence_remove() {
     // Same harness; this time after the Online propagates, we
     // remove the entry on daemon A and assert the Remove frame
     // flows through to daemon B's cell.
-    let daemon_a_loopback = "easynet:///r/realm-a/agent/daemon-a";
+    let daemon_a_loopback = "easynet:///r/realm-a/hub";
     let daemon_a_presence = Arc::new(PresenceRegistry::new());
     let daemon_a_admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
@@ -234,7 +234,7 @@ async fn streaming_chain_propagates_presence_remove() {
         run_per_peer_supervisor(
             "realm-a".to_string(),
             "https://hub-a.example:50443".to_string(),
-            "easynet:///r/realm-b/agent/hub".to_string(),
+            "easynet:///r/realm-b/hub".to_string(),
             federation_client,
             cell_for_task,
             cancel_rx,
@@ -243,7 +243,7 @@ async fn streaming_chain_propagates_presence_remove() {
     });
 
     // Insert a device on A; wait for B's cell to reflect.
-    let target_uri = "easynet:///r/realm-a/agent/disappearing";
+    let target_uri = "easynet:///r/realm-a/device/disappearing";
     let (tx, _rx) = tokio::sync::mpsc::channel::<
         Result<easynet_cli::services::presence_registry::DispatchFrame, tonic::Status>,
     >(8);

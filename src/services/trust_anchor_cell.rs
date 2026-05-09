@@ -151,8 +151,7 @@ mod tests {
     #[test]
     fn snapshot_returns_current_anchor() {
         let initial = Arc::new(
-            RealmTrustAnchor::from_entries(vec![agent("easynet:///r/realm/agent/a")])
-                .expect("anchor"),
+            RealmTrustAnchor::from_entries(vec![agent("easynet:///r/realm/hub")]).expect("anchor"),
         );
         let cell = SharedTrustAnchor::new(initial);
         assert_eq!(cell.snapshot().len(), 1);
@@ -166,8 +165,8 @@ mod tests {
 
         let next = Arc::new(
             RealmTrustAnchor::from_entries(vec![
-                agent("easynet:///r/realm/agent/a"),
-                agent("easynet:///r/realm/agent/b"),
+                agent("easynet:///r/realm/hub"),
+                agent("easynet:///r/peer-realm/hub"),
             ])
             .expect("anchor"),
         );
@@ -184,31 +183,26 @@ mod tests {
         // duration even if a concurrent register flow publishes
         // mid-RPC.
         let initial = Arc::new(
-            RealmTrustAnchor::from_entries(vec![agent("easynet:///r/realm/agent/initial")])
-                .expect("anchor"),
+            RealmTrustAnchor::from_entries(vec![agent("easynet:///r/realm/hub")]).expect("anchor"),
         );
         let cell = SharedTrustAnchor::new(Arc::clone(&initial));
 
         let snapshot = cell.snapshot();
-        assert!(snapshot
-            .lookup("easynet:///r/realm/agent/initial")
-            .is_some());
+        assert!(snapshot.lookup("easynet:///r/realm/hub").is_some());
 
         let next = Arc::new(
-            RealmTrustAnchor::from_entries(vec![agent("easynet:///r/realm/agent/next")])
+            RealmTrustAnchor::from_entries(vec![agent("easynet:///r/next-realm/hub")])
                 .expect("anchor"),
         );
         cell.replace(next);
 
         // Old snapshot still reflects the original anchor.
-        assert!(snapshot
-            .lookup("easynet:///r/realm/agent/initial")
-            .is_some());
-        assert!(snapshot.lookup("easynet:///r/realm/agent/next").is_none());
+        assert!(snapshot.lookup("easynet:///r/realm/hub").is_some());
+        assert!(snapshot.lookup("easynet:///r/next-realm/hub").is_none());
         // Fresh snapshot reflects the replacement.
         let fresh = cell.snapshot();
-        assert!(fresh.lookup("easynet:///r/realm/agent/initial").is_none());
-        assert!(fresh.lookup("easynet:///r/realm/agent/next").is_some());
+        assert!(fresh.lookup("easynet:///r/realm/hub").is_none());
+        assert!(fresh.lookup("easynet:///r/next-realm/hub").is_some());
     }
 
     #[test]
@@ -242,8 +236,7 @@ mod tests {
         let cell = SharedTrustAnchor::default();
         let cell2 = cell.clone();
         let next = Arc::new(
-            RealmTrustAnchor::from_entries(vec![agent("easynet:///r/realm/agent/x")])
-                .expect("anchor"),
+            RealmTrustAnchor::from_entries(vec![agent("easynet:///r/realm/hub")]).expect("anchor"),
         );
         cell.replace(next);
         assert_eq!(cell2.snapshot().len(), 1);

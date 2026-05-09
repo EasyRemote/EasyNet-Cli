@@ -1,8 +1,8 @@
 //! mcp profile — RFC-001 §1 [P6].
 //!
 //! Per restatement-mapping decision P6: a single mcp-profile Agent
-//! owns BOTH inbound and outbound MCP — `mcp.bridge.*` (incoming MCP
-//! tools/list + tools/call) and `mcp.client.*` (outgoing MCP calls
+//! owns BOTH inbound and outbound MCP — `device.mcp.bridge.*` (incoming MCP
+//! tools/list + tools/call) and `device.mcp.client.*` (outgoing MCP calls
 //! to external servers). They share one Agent identity rather than
 //! splitting into two profiles.
 //!
@@ -12,18 +12,20 @@
 //!
 //! Owned ability namespaces
 //! ------------------------
-//!   mcp.bridge.list_tools  (inbound MCP server: tools/list)
-//!   mcp.bridge.call_tool   (inbound MCP server: tools/call)
-//!   mcp.client.list        (outbound: list configured external MCP servers)
-//!   mcp.client.call        (outbound: dispatch to external MCP server)
+//!   device.mcp.bridge.list_tools  (inbound MCP server: tools/list)
+//!   device.mcp.bridge.call_tool   (inbound MCP server: tools/call)
+//!   device.mcp.client.list        (outbound: list configured external MCP servers)
+//!   device.mcp.client.call        (outbound: dispatch to external MCP server)
 //!
 //! What this file provides today
 //! -----------------------------
 //!   - `owns(ability_name)`            : prefix check
 //!   - `descriptors_for(owner_uri)`    : §1.6 descriptors emitter
 //!   - `InvokeMcpProvider`             : the McpToolProvider impl that
-//!     translates every `tools/list` and `tools/call` into in-process
-//!     Invoke against the AbilityProxy. Replaces the legacy
+//!     translates every `tools/list` and `tools/call` into a local
+//!     Invoke surface. Production stdio servers call back into the
+//!     live daemon; tests may still inject an in-process proxy.
+//!     Replaces the legacy
 //!     `facade::mcp::HubMcpProvider` that owned a duplicate tool
 //!     catalog and called deleted bridge methods directly.
 //!   - `tool_specs_from_descriptors(...)` : projects AbilityDescriptors
@@ -39,7 +41,7 @@
 //! is the stdio MCP server scaffolding (provider trait wiring,
 //! bound-node patching), which P4.9 absorbs into this file.
 
-pub const MCP_PROFILE_ABILITY_PREFIXES: &[&str] = &["mcp.bridge.", "mcp.client."];
+pub const MCP_PROFILE_ABILITY_PREFIXES: &[&str] = &["device.mcp.bridge.", "device.mcp.client."];
 
 pub fn owns(ability_name: &str) -> bool {
     MCP_PROFILE_ABILITY_PREFIXES
@@ -47,7 +49,7 @@ pub fn owns(ability_name: &str) -> bool {
         .any(|p| ability_name.starts_with(p))
 }
 
-/// AbilityDescriptors for every mcp.bridge.* + mcp.client.* in the
+/// AbilityDescriptors for every device.mcp.bridge.* + device.mcp.client.* in the
 /// live registry, anchored to the mcp-profile's canonical URA. All
 /// SCOPED per §18 — local MCP clients only for bridge.*; the daemon
 /// itself + selected internal callers for client.*. P4.7 narrows.
@@ -62,6 +64,7 @@ pub fn descriptors_for(
             AbilityDescriptor::new(m.name.clone(), owner_agent_uri, Visibility::Scoped)
                 .expect("registry-derived names satisfy descriptor invariants")
                 .with_input_schema(m.input_schema.clone())
+                .with_hints(m.hints.clone())
                 .with_source("kernel:built-in")
                 .with_description(m.description)
         })
@@ -82,7 +85,7 @@ pub fn descriptors_for(
 ///                  the LLM had to infer purpose from the name
 ///                  alone. Surfaced in the audit conversation when
 ///                  the MCP probe showed every tool's description as
-///                  `"fs.read (source: kernel:built-in)"`.
+///                  `"device.fs.read (source: kernel:built-in)"`.
 ///   inputSchema  ← descriptor.schema_summary.input (JSON Schema)
 pub fn tool_spec_from_descriptor(
     descriptor: &crate::runtime::ability_descriptor::AbilityDescriptor,
@@ -176,6 +179,22 @@ impl LocalInvoker for ProxyLocalInvoker {
     }
 }
 
+/// Production adapter for `easynet mcp serve`: route every tool call
+/// through the live local daemon over control.sock instead of through
+/// an isolated in-process kernel snapshot.
+pub struct DaemonLocalInvoker;
+
+impl LocalInvoker for DaemonLocalInvoker {
+    fn invoke_sync(
+        &self,
+        ability: &str,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        crate::support::local_invoke::invoke_local_ability(ability, args)
+            .map_err(|err| err.to_string())
+    }
+}
+
 /// Production InvokeMcpProvider — what `easynet mcp_server` and
 /// `easynet start --mcp` will use after P4.8d's quarantine. Every
 /// `tools/list` returns the host's AbilityDescriptors projected to
@@ -243,7 +262,7 @@ pub struct StdioServerConfig {
 /// `build_stdio_server` so callers can decide whether to run
 /// foreground (mcp_server) or in a spawned thread (start --mcp).
 pub struct ConfiguredStdioServer {
-    pub provider: InvokeMcpProvider<ProxyLocalInvoker>,
+    pub provider: InvokeMcpProvider<DaemonLocalInvoker>,
     pub server_name: String,
 }
 
@@ -256,22 +275,13 @@ impl ConfiguredStdioServer {
 }
 
 /// One-stop builder: assemble a Kernel + AbilityProxy, derive the
-/// host's AbilityDescriptors from local-agents.json, and produce
-/// a configured InvokeMcpProvider ready for the stdio runner.
+/// host's AbilityDescriptors from local-agents.json, and produce a
+/// configured InvokeMcpProvider ready for the stdio runner.
 ///
 /// Both `easynet mcp_server` and `easynet start --mcp` call this
 /// — they differ only in argument parsing and how they launch the
 /// stdio server (foreground vs. spawned thread).
 pub fn build_stdio_server(config: &StdioServerConfig) -> ConfiguredStdioServer {
-    use crate::services::control::ability_proxy::AbilityProxy;
-    use std::sync::Arc;
-
-    let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
-        Arc::new(crate::runtime::gateway::NoopGateway::new());
-    let kernel: Arc<dyn crate::runtime::kernel_api::KernelApi> =
-        Arc::new(crate::runtime::kernel::Kernel::new(gateway));
-    let proxy = Arc::new(AbilityProxy::new(kernel));
-
     let mut descriptors = crate::runtime::agents::profiles::load_host_descriptors();
 
     // Workspace MCP: when --agent <name> is set, append that
@@ -288,7 +298,7 @@ pub fn build_stdio_server(config: &StdioServerConfig) -> ConfiguredStdioServer {
         descriptors.extend(per_agent_workspace_descriptors(agent_name));
     }
 
-    let invoker = ProxyLocalInvoker::new(proxy);
+    let invoker = DaemonLocalInvoker;
     let provider = InvokeMcpProvider::new(invoker, descriptors);
     let _ = config.tenant_id; // tenant is informational for now
     ConfiguredStdioServer {
@@ -475,21 +485,21 @@ mod tests {
 
     #[test]
     fn owns_recognizes_both_mcp_namespaces() {
-        assert!(owns("mcp.bridge.list_tools"));
-        assert!(owns("mcp.bridge.call_tool"));
-        assert!(owns("mcp.client.list"));
-        assert!(owns("mcp.client.call"));
+        assert!(owns("device.mcp.bridge.list_tools"));
+        assert!(owns("device.mcp.bridge.call_tool"));
+        assert!(owns("device.mcp.client.list"));
+        assert!(owns("device.mcp.client.call"));
     }
 
     #[test]
     fn owns_rejects_other_profiles_and_bare_mcp() {
-        assert!(!owns("mcp.evaluate")); // not in either bridge/client subset
-        assert!(!owns("fleet.list_abilities"));
-        assert!(!owns("consent.subscribe"));
+        assert!(!owns("device.mcp.evaluate")); // not in either bridge/client subset
+        assert!(!owns("device.fleet.list_abilities"));
+        assert!(!owns("device.consent.subscribe"));
     }
 
     fn d(name: &str) -> AbilityDescriptor {
-        AbilityDescriptor::new(name, "easynet:///r/acme/agent/01DEV", Visibility::Scoped)
+        AbilityDescriptor::new(name, "easynet:///r/acme/device/01DEV", Visibility::Scoped)
             .unwrap()
             .with_source("kernel:built-in")
             .with_input_schema(serde_json::json!({"type":"object"}))
@@ -498,8 +508,8 @@ mod tests {
 
     #[test]
     fn tool_spec_from_descriptor_emits_mcp_shape() {
-        let spec = tool_spec_from_descriptor(&d("fleet.list_agents"));
-        assert_eq!(spec["name"], "fleet.list_agents");
+        let spec = tool_spec_from_descriptor(&d("device.fleet.list_agents"));
+        assert_eq!(spec["name"], "device.fleet.list_agents");
         // The MCP description is the human blurb from the registry,
         // NOT the provenance string. Pre-fix this asserted the
         // opposite — bug pinned upside-down. Updated when the
@@ -569,19 +579,19 @@ mod tests {
 
     #[test]
     fn tool_specs_lists_every_descriptor_passed_at_construction() {
-        let descs = vec![d("observe.health"), d("fleet.list_agents")];
+        let descs = vec![d("device.observe.health"), d("device.fleet.list_agents")];
         let p = InvokeMcpProvider::new(RecordingInvoker::new(Ok(serde_json::json!({}))), descs);
         let specs = p.tool_specs();
         assert_eq!(specs.len(), 2);
         let names: Vec<&str> = specs.iter().map(|s| s["name"].as_str().unwrap()).collect();
-        assert!(names.contains(&"observe.health"));
-        assert!(names.contains(&"fleet.list_agents"));
+        assert!(names.contains(&"device.observe.health"));
+        assert!(names.contains(&"device.fleet.list_agents"));
     }
 
     #[test]
     fn unknown_tool_call_returns_error_result_without_invoking() {
         let invoker = RecordingInvoker::new(Ok(serde_json::json!({})));
-        let p = InvokeMcpProvider::new(invoker, vec![d("observe.health")]);
+        let p = InvokeMcpProvider::new(invoker, vec![d("device.observe.health")]);
         let result = p.handle_tool_call("totally.unknown", &serde_json::Map::new());
         assert!(
             result.is_error,
@@ -594,15 +604,15 @@ mod tests {
     #[test]
     fn known_tool_call_is_dispatched_via_invoker() {
         let invoker = RecordingInvoker::new(Ok(serde_json::json!({"status": "healthy"})));
-        let p = InvokeMcpProvider::new(invoker, vec![d("observe.health")]);
+        let p = InvokeMcpProvider::new(invoker, vec![d("device.observe.health")]);
         let mut args = serde_json::Map::new();
         args.insert("foo".into(), serde_json::Value::Bool(true));
-        let result = p.handle_tool_call("observe.health", &args);
+        let result = p.handle_tool_call("device.observe.health", &args);
         assert!(!result.is_error);
         assert_eq!(result.payload["status"], "healthy");
         assert_eq!(
             p.invoker.last_ability.borrow().as_deref(),
-            Some("observe.health")
+            Some("device.observe.health")
         );
         assert_eq!(
             p.invoker.last_args.borrow().as_ref().unwrap()["foo"],
@@ -613,8 +623,8 @@ mod tests {
     #[test]
     fn invoker_error_surfaces_as_error_payload() {
         let invoker = RecordingInvoker::new(Err("policy denied".into()));
-        let p = InvokeMcpProvider::new(invoker, vec![d("observe.health")]);
-        let result = p.handle_tool_call("observe.health", &serde_json::Map::new());
+        let p = InvokeMcpProvider::new(invoker, vec![d("device.observe.health")]);
+        let result = p.handle_tool_call("device.observe.health", &serde_json::Map::new());
         assert!(result.is_error);
         assert!(result.payload["error"]
             .as_str()
@@ -625,12 +635,15 @@ mod tests {
     #[test]
     fn descriptor_count_matches_input() {
         let invoker = RecordingInvoker::new(Ok(serde_json::json!({})));
-        let p = InvokeMcpProvider::new(invoker, vec![d("observe.health"), d("fleet.list_agents")]);
+        let p = InvokeMcpProvider::new(
+            invoker,
+            vec![d("device.observe.health"), d("device.fleet.list_agents")],
+        );
         assert_eq!(p.descriptor_count(), 2);
     }
 
     /// End-to-end: build a real ProxyLocalInvoker over the live
-    /// AbilityProxy and call `observe.health` through it. Pins the
+    /// AbilityProxy and call `device.observe.health` through it. Pins the
     /// quarantine contract — the MCP shim MUST go through the same
     /// AbilityProxy the IPC server uses, never around it.
     #[test]
@@ -656,14 +669,14 @@ mod tests {
         ));
         let invoker = ProxyLocalInvoker::new(proxy);
         let result = invoker
-            .invoke_sync("observe.health", serde_json::json!({}))
-            .expect("observe.health must dispatch successfully");
-        // observe.health returns a JSON object with at least
+            .invoke_sync("device.observe.health", serde_json::json!({}))
+            .expect("device.observe.health must dispatch successfully");
+        // device.observe.health returns a JSON object with at least
         // `status`. Exact shape is owned by ping.rs; we only assert
         // the dispatch happened (got a non-null Value).
         assert!(
             !result.is_null(),
-            "observe.health must return a value, not null"
+            "device.observe.health must return a value, not null"
         );
     }
 
@@ -696,6 +709,18 @@ mod tests {
         assert!(
             err.contains("not_found"),
             "expected NOT_FOUND code in error string; got {err}"
+        );
+    }
+
+    #[test]
+    fn daemon_local_invoker_surfaces_daemon_not_running() {
+        let _h = crate::facade::cli::test_support::HomeGuard::new();
+        let err = DaemonLocalInvoker
+            .invoke_sync("device.observe.health", serde_json::json!({}))
+            .expect_err("daemon-backed invoker must fail when no daemon is running");
+        assert!(
+            err.contains("daemon not running"),
+            "expected actionable daemon-down error; got {err}"
         );
     }
 
@@ -739,7 +764,7 @@ mod tests {
         // Pre-populate local-agents.json with a host URI; build_stdio_server
         // must pick it up.
         let mut file = crate::persistence::local_agents::LocalAgentsFile::default();
-        file.host_device_agent_uri = "easynet:///r/acme/agent/01DEV".into();
+        file.host_device_agent_uri = "easynet:///r/acme/device/01DEV".into();
         crate::persistence::local_agents::save(&file).unwrap();
 
         let cfg = StdioServerConfig {
@@ -755,7 +780,7 @@ mod tests {
             .map(|d| d.owner_agent_uri.clone())
             .collect();
         assert!(
-            owners.contains("easynet:///r/acme/agent/01DEV"),
+            owners.contains("easynet:///r/acme/device/01DEV"),
             "post-join descriptors must anchor on the persisted URA; \
              got owners = {owners:?}"
         );
@@ -884,8 +909,8 @@ mod tests {
         let invoker = ProxyLocalInvoker::new(proxy);
 
         let descs = vec![AbilityDescriptor::new(
-            "observe.health",
-            "easynet:///r/acme/agent/01DEV",
+            "device.observe.health",
+            "easynet:///r/acme/device/01DEV",
             Visibility::Public,
         )
         .unwrap()];
@@ -894,13 +919,13 @@ mod tests {
         // tools/list mirrors the descriptor.
         let specs = provider.tool_specs();
         assert_eq!(specs.len(), 1);
-        assert_eq!(specs[0]["name"], "observe.health");
+        assert_eq!(specs[0]["name"], "device.observe.health");
 
         // tools/call dispatches through the proxy.
-        let result = provider.handle_tool_call("observe.health", &serde_json::Map::new());
+        let result = provider.handle_tool_call("device.observe.health", &serde_json::Map::new());
         assert!(
             !result.is_error,
-            "observe.health must succeed end-to-end through MCP shim"
+            "device.observe.health must succeed end-to-end through MCP shim"
         );
     }
 }

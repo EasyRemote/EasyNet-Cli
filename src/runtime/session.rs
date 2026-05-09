@@ -37,11 +37,15 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+#[cfg(test)]
 use easynet_axon::invocation::persistence::PersistentLog;
+#[cfg(test)]
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::runtime::timeline::{TimelineEvent, TimelineWriter};
+#[cfg(test)]
+use crate::runtime::timeline::TimelineEvent;
+use crate::runtime::timeline::TimelineWriter;
 
 /// Allocate a fresh `invocation_id` for a CLI-local dispatch.
 /// UUID-v4 per AXIOM P1 (ids are opaque to ordering — sequence
@@ -85,6 +89,7 @@ impl Session {
     /// the id was already allocated upstream (e.g. stamped into
     /// `meta.json` before the session handle was constructed) and
     /// needs to be honoured rather than regenerated.
+    #[cfg(test)]
     pub fn with_id(invocation_id: impl Into<String>, log_dir: Option<PathBuf>) -> Self {
         Self {
             writer: Arc::new(TimelineWriter::new(invocation_id, log_dir)),
@@ -124,6 +129,7 @@ impl Session {
     /// `subscribe()` to tail new events. The boundary between the
     /// two is the sequence the client last saw on disk; events at
     /// that sequence or higher arrive on the subscription.
+    #[cfg(test)]
     pub fn subscribe(&self) -> broadcast::Receiver<TimelineEvent> {
         self.writer.subscribe()
     }
@@ -144,6 +150,7 @@ impl Session {
     /// `skipped` field when that visibility matters; this path
     /// returns only the parsed events because resume consumers
     /// care about events, not about operator mistakes.
+    #[cfg(test)]
     pub fn resume_replay(&self, from_offset: i64) -> Vec<TimelineEvent> {
         let log = PersistentLog::new(Some(
             self.writer

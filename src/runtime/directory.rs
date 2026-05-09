@@ -91,8 +91,13 @@ fn is_empty_dir(path: &Path) -> anyhow::Result<bool> {
 /// visible to the operator immediately.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Location {
-    Global { name: String },
-    Local { root: PathBuf },
+    #[cfg(test)]
+    Global {
+        name: String,
+    },
+    Local {
+        root: PathBuf,
+    },
 }
 
 impl Location {
@@ -103,6 +108,7 @@ impl Location {
     /// we return the caller's already-absolute path verbatim.
     pub fn resolve(&self) -> PathBuf {
         match self {
+            #[cfg(test)]
             Self::Global { name } => config::agents_root().join(name),
             Self::Local { root } => root.clone(),
         }
@@ -189,6 +195,7 @@ impl AgentDirectory {
         // bad request never touches the filesystem.
         spec.validate()?;
 
+        #[cfg(test)]
         if let Location::Local { root } = location {
             if !root.is_absolute() {
                 anyhow::bail!(
@@ -196,6 +203,15 @@ impl AgentDirectory {
                     root.display()
                 );
             }
+        }
+        #[cfg(not(test))]
+        let Location::Local { root } = location;
+        #[cfg(not(test))]
+        if !root.is_absolute() {
+            anyhow::bail!(
+                "Location::Local requires an absolute path, got {}",
+                root.display()
+            );
         }
 
         let root = location.resolve();
@@ -334,22 +350,27 @@ impl AgentDirectory {
         self.root.join("abilities")
     }
 
+    #[cfg(test)]
     pub fn skills_dir(&self) -> PathBuf {
         self.root.join("skills")
     }
 
+    #[cfg(test)]
     pub fn memory_dir(&self) -> PathBuf {
         self.root.join("memory")
     }
 
+    #[cfg(test)]
     pub fn runs_dir(&self) -> PathBuf {
         self.root.join("runs")
     }
 
+    #[cfg(test)]
     pub fn env_path(&self) -> PathBuf {
         self.root.join(".env")
     }
 
+    #[cfg(test)]
     pub fn mcp_servers_path(&self) -> PathBuf {
         self.root.join("mcp_servers.json")
     }

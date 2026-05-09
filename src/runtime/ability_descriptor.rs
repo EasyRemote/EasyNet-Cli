@@ -35,7 +35,7 @@
 //     name, owner_agent_uri, visibility, scope_subjects[],
 //     scope_agents[], source, schema_summary{input,
 //     output_receipt_body}, hints{read_only, destructive,
-//     idempotent, streaming_only}
+//     idempotent, streaming_only, bidi_only}
 //   }
 //
 // We model all fields. The visibility filter logic (PUBLIC always /
@@ -207,6 +207,8 @@ pub struct AbilityHints {
     pub idempotent: bool,
     #[serde(default)]
     pub streaming_only: bool,
+    #[serde(default)]
+    pub bidi_only: bool,
 }
 
 /// Per RFC §1.6, the JSON Schemas describing an ability's input

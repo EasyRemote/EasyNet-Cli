@@ -1,0 +1,11 @@
+schema_version = "1"
+name = "device.policy.simulate"
+description = "Dry-run policy.evaluate without side effects. Returns the same decision policy.evaluate would, named `would_decide` so a tool can't mistake the output for a binding decision."
+
+[input_schema]
+type = "object"
+required = ["invocation_envelope"]
+additionalProperties = false
+
+[input_schema.properties.invocation_envelope]
+type = "object"

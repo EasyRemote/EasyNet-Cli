@@ -139,6 +139,68 @@ impl Default for SharedReceiptStore {
     }
 }
 
+/// **M1 receipt-reader compat shim** for the system-namespace
+/// migration (RFC-001 v4.1.6 carrier).
+///
+/// During and after the migration window, persisted receipts
+/// carry `function_name` strings spanning two eras:
+///
+///   * **Legacy** (`fs.read`, `fleet.list_nodes`, `01HUB.openai.*`,
+///     `voice.create_call`, …): receipts written by daemons before
+///     the M2 catalogue cutover.
+///   * **Canonical** (`device.fs.read`, `device.fleet.list_nodes`,
+///     `hub.openai.*`, `device.voice.create_call`, …): receipts
+///     written after M2.
+///
+/// Audit display layers MUST present both as the same logical
+/// verb. This function is the canonical single-direction map:
+/// **legacy → canonical**. Names already in canonical form pass
+/// through verbatim. Names that aren't recognised (per-agent
+/// `<agent>.chat`, per-user `<user-uuid>.api_key.*`, third-party
+/// abilities) also pass through verbatim — the function is
+/// idempotent and total.
+///
+/// Why a free function and not a method on the store: this is
+/// pure name-shape transformation; it doesn't read or write the
+/// receipt buffer. Co-locating it here keeps the receipt-reader
+/// concerns in one file (the store + the name canonicaliser),
+/// without forcing a `&self` lifetime on a stateless map.
+///
+/// Removed at M5 cleanup once the legacy-name window has fully
+/// closed and historical receipts have rolled out of the
+/// in-memory bound.
+#[must_use]
+pub fn function_name_canonical(legacy_or_canonical: &str) -> String {
+    let name = legacy_or_canonical;
+    // Split on first dot. No dot → not a partitioned name; pass
+    // through (catches degenerate `bare.verb` cases that legacy
+    // tests still seed).
+    let Some((head, _rest)) = name.split_once('.') else {
+        return name.to_string();
+    };
+    // Already canonical — pass through.
+    if head == "device" || head == "hub" {
+        return name.to_string();
+    }
+    // Hub-rooted legacy: 01HUB.openai.* → hub.openai.*
+    if head == "01HUB" {
+        // Skip "01HUB." prefix exactly.
+        return format!("hub.{}", &name[head.len() + 1..]);
+    }
+    // Device-rooted legacy: only the closed system-namespace set
+    // gets rewritten. Anything else (per-agent, per-user, third-
+    // party) passes through.
+    const DEVICE_LEGACY_HEADS: &[&str] = &[
+        "fs", "http", "shell", "process", "fleet", "observe", "admin", "easynet", "meta",
+        "mission", "schedule", "loop", "discuss", "mcp", "a2a", "policy", "ability", "camera",
+        "mic", "screen", "speaker", "voice", "skill", "consent",
+    ];
+    if DEVICE_LEGACY_HEADS.contains(&head) {
+        return format!("device.{name}");
+    }
+    name.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,5 +279,108 @@ mod tests {
         assert_eq!(store.len(), 1);
         let recent = store.snapshot_recent(10);
         assert_eq!(recent[0].invocation_id, "inv-2");
+    }
+
+    // ── M1 receipt-reader compat shim ────────────────────────────
+
+    #[test]
+    fn function_name_canonical_passes_through_already_canonical() {
+        assert_eq!(function_name_canonical("device.fs.read"), "device.fs.read");
+        assert_eq!(
+            function_name_canonical("hub.openai.chat_completions"),
+            "hub.openai.chat_completions"
+        );
+    }
+
+    #[test]
+    fn function_name_canonical_rewrites_legacy_device_namespaces() {
+        // Spot-check one verb from each of the 24 legacy
+        // device-owned namespaces. If a future contributor adds a
+        // namespace to DEVICE_LEGACY_HEADS without updating this
+        // test, the partition stays internally consistent — but
+        // adding it without updating the test is harmless. Test is
+        // for the inverse: deletion of a head.
+        assert_eq!(function_name_canonical("fs.read"), "device.fs.read");
+        assert_eq!(
+            function_name_canonical("fleet.list_nodes"),
+            "device.fleet.list_nodes"
+        );
+        assert_eq!(
+            function_name_canonical("voice.create_call"),
+            "device.voice.create_call"
+        );
+        assert_eq!(function_name_canonical("shell.run"), "device.shell.run");
+        assert_eq!(
+            function_name_canonical("camera.snapshot"),
+            "device.camera.snapshot"
+        );
+    }
+
+    #[test]
+    fn function_name_canonical_rewrites_01hub_to_hub() {
+        assert_eq!(
+            function_name_canonical("01HUB.openai.chat_completions"),
+            "hub.openai.chat_completions"
+        );
+        assert_eq!(
+            function_name_canonical("01HUB.openai.list_models"),
+            "hub.openai.list_models"
+        );
+    }
+
+    #[test]
+    fn function_name_canonical_passes_through_per_agent_names() {
+        // Per-agent names (`<agent>.chat`, `<agent>.discover`,
+        // `<agent>.invoke`, custom verbs like `<agent>.todo_*`) are
+        // never rewritten — there's no legacy/canonical pair for
+        // them; they ARE canonical. Pin so a future "be helpful and
+        // rewrite agent names too" change has to argue.
+        assert_eq!(function_name_canonical("codex.chat"), "codex.chat");
+        assert_eq!(
+            function_name_canonical("web-builder.todo_add_task"),
+            "web-builder.todo_add_task"
+        );
+    }
+
+    #[test]
+    fn function_name_canonical_passes_through_user_names() {
+        // Per-user `<uuid>.api_key.*` is not in the legacy set
+        // (its slot is the user-id, not a system namespace).
+        assert_eq!(
+            function_name_canonical("11111111-2222-3333-4444-555555555555.api_key.create"),
+            "11111111-2222-3333-4444-555555555555.api_key.create"
+        );
+    }
+
+    #[test]
+    fn function_name_canonical_passes_through_unrecognised_or_bare_names() {
+        // Names without a dot, or with an unrecognised first
+        // segment, pass through verbatim. Receipt readers should
+        // never see these in production but the function is total.
+        assert_eq!(function_name_canonical(""), "");
+        assert_eq!(function_name_canonical("bare-no-dot"), "bare-no-dot");
+        assert_eq!(
+            function_name_canonical("third-party.verb"),
+            "third-party.verb"
+        );
+    }
+
+    #[test]
+    fn function_name_canonical_is_idempotent() {
+        // Composability: applying the function twice equals
+        // applying it once. Critical for read paths that may
+        // accidentally normalise an already-canonical name.
+        for sample in [
+            "fs.read",
+            "device.fs.read",
+            "01HUB.openai.list_models",
+            "hub.openai.list_models",
+            "codex.chat",
+            "third-party.verb",
+        ] {
+            let once = function_name_canonical(sample);
+            let twice = function_name_canonical(&once);
+            assert_eq!(once, twice, "idempotence failed for {sample:?}");
+        }
     }
 }

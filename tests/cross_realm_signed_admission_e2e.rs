@@ -210,8 +210,8 @@ fn signed_request(
 async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
     const REALM_A: &str = "realm-a";
     const REALM_B: &str = "realm-b";
-    const DEVICE_A_URI: &str = "easynet:///r/realm-a/agent/device-A";
-    const DAEMON_B_URI: &str = "easynet:///r/realm-b/agent/daemon-b";
+    const DEVICE_A_URI: &str = "easynet:///r/realm-a/device/device-A";
+    const DAEMON_B_URI: &str = "easynet:///r/realm-b/hub";
     const PEER_HUB_URI: &str = "in-process-A";
 
     // ── Mint device-A's signing key ─────────────────────────────
@@ -234,7 +234,7 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
     let daemon_a_anchor = Arc::new(daemon_a_anchor_inner);
     let daemon_a_admission = AdmissionFacade::new(
         daemon_a_anchor,
-        Some("easynet:///r/realm-a/agent/daemon-a".to_string()),
+        Some("easynet:///r/realm-a/hub".to_string()),
     );
     let daemon_a = Arc::new(
         DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), daemon_a_admission)
@@ -248,7 +248,7 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
     // any caller in realm-a.
     let federation_client: Arc<dyn FederationClient> = Arc::new(InProcessForwarder {
         peer: Arc::clone(&daemon_a),
-        peer_loopback_uri: "easynet:///r/realm-a/agent/daemon-a".to_string(),
+        peer_loopback_uri: "easynet:///r/realm-a/hub".to_string(),
     });
     let mut peers = std::collections::BTreeMap::new();
     peers.insert(REALM_A.to_string(), PEER_HUB_URI.to_string());
@@ -345,8 +345,8 @@ async fn cross_realm_caller_with_no_federated_peer_entry_rejected() {
     // `caller_signature_invalid` (the wire surface for "URI not
     // trusted").
     const REALM_B: &str = "realm-b";
-    const DEVICE_A_URI: &str = "easynet:///r/realm-a/agent/device-A";
-    const DAEMON_B_URI: &str = "easynet:///r/realm-b/agent/daemon-b";
+    const DEVICE_A_URI: &str = "easynet:///r/realm-a/device/device-A";
+    const DAEMON_B_URI: &str = "easynet:///r/realm-b/hub";
 
     let device_a_key = SigningKey::from_bytes(&[0xB2u8; 32]);
 

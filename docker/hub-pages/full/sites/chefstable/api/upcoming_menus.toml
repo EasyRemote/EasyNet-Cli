@@ -1,0 +1,117 @@
+kind = "static_json"
+
+[[response]]
+id = "may-09"
+date = "2026-05-09"
+day = "Saturday"
+title = "Hudson Valley Spring"
+chef = "Chef Marcel Rousseau"
+seats_total = 12
+seats_remaining = 4
+price = 285
+currency = "USD"
+theme = "A celebration of the first true harvest of the season — ramps, morels, and tender lamb from upstate farms."
+courses = [
+  "Amuse — chilled green strawberry gazpacho, lovage oil, smoked trout roe",
+  "First — hand-cut tartare of dry-aged Wagyu, cured egg yolk, charred ramp",
+  "Second — buckwheat agnolotti, morel cream, black truffle, aged Comté",
+  "Third — sea-salt baked turbot, brown butter dashi, sea beans",
+  "Fourth — Hudson Valley lamb saddle, fermented garlic scape, smoked aubergine",
+  "Cheese — Jasper Hill Bayley Hazen, fig leaf honey, walnut bread",
+  "Dessert — rhubarb soufflé, brown butter ice cream, sorrel granita",
+  "Mignardises — yuzu pâte de fruit, dark chocolate–olive oil truffle"
+]
+pairing = "Optional wine pairing — $185 (7 pours, biodynamic focus)"
+
+[[response]]
+id = "may-16"
+date = "2026-05-16"
+day = "Saturday"
+title = "Tides & Smoke"
+chef = "Chef Naomi Ishikawa"
+seats_total = 10
+seats_remaining = 2
+price = 320
+currency = "USD"
+theme = "A coastal Japanese counter menu cooked entirely over binchotan and Mexican white oak."
+courses = [
+  "Otsumami — Hokkaido scallop, ume kosho, shiso flower",
+  "Tsukuri — kinmedai sashimi, aged tamari, fresh wasabi",
+  "Yakimono — binchotan-grilled toro collar, kabosu, crisp shallot",
+  "Wanmono — clear dashi, hand-pulled tofu, junsai, yuzu peel",
+  "Niku — A5 Miyazaki sirloin, charred negi, smoked sea salt flight",
+  "Shokuji — uni donabe rice, ikura, nori, hot tea-poured ochazuke finish",
+  "Kanmi — warm hojicha financier, kuromitsu, brown sugar miso ice cream"
+]
+pairing = "Optional sake pairing — $165 (5 pours, junmai daiginjo focus)"
+
+[[response]]
+id = "may-23"
+date = "2026-05-23"
+day = "Saturday"
+title = "The Black Truffle Dinner"
+chef = "Chef Marcel Rousseau"
+seats_total = 12
+seats_remaining = 7
+price = 395
+currency = "USD"
+theme = "An eight-course homage to the last black truffles of the Périgord season — every course built around the diamond of the kitchen."
+courses = [
+  "Amuse — chestnut velouté, truffle pearl, brioche soldier",
+  "First — raw langoustine, melted truffle butter, brown crab consommé",
+  "Second — slow-cooked farm egg, truffle dashi, sourdough soldiers",
+  "Third — fresh tagliolini, beurre noisette, 18 grams shaved Périgord truffle",
+  "Fourth — turbot poached in vin jaune, leek royale, truffle nage",
+  "Fifth — squab en croûte, foie gras, Périgueux sauce",
+  "Cheese — Brillat-Savarin layered with black truffle",
+  "Dessert — truffled honey madeleines, milk ice cream, buckwheat tuile",
+  "Final — single black truffle bonbon, take-home"
+]
+pairing = "Reserve wine pairing — $245 (Burgundy & Jura focus)"
+
+[[response]]
+id = "may-30"
+date = "2026-05-30"
+day = "Saturday"
+title = "Pasta Sotto Voce"
+chef = "Chef Lia Conti"
+seats_total = 14
+seats_remaining = 9
+price = 245
+currency = "USD"
+theme = "Eleven hand-shaped pastas across three Italian regions — Puglia, Emilia-Romagna, Piedmont — each a single perfect bite."
+courses = [
+  "Antipasto — burrata di Andria, oil-cured anchovy, taralli crumb",
+  "Primo I — orecchiette, cima di rapa, garlic confit, breadcrumb",
+  "Primo II — culurgiones, pecorino fonduta, mint, brown butter",
+  "Primo III — tortellini in brodo di cappone, 36-month Parmigiano",
+  "Primo IV — tajarin al tartufo, 40 yolks per kilo, hazelnut butter",
+  "Primo V — agnolotti del plin, Sunday roast jus, sage",
+  "Secondo — brasato al Barolo, polenta taragna, gremolata",
+  "Formaggi — three from Cademartori, mostarda, walnut bread",
+  "Dolce — torta della nonna, pine nut, lemon curd, sambuca cream"
+]
+pairing = "Optional Italian pairing — $145 (6 pours, native varietals)"
+
+[[response]]
+id = "jun-06"
+date = "2026-06-06"
+day = "Saturday"
+title = "Fire & Ash"
+chef = "Chef Diego Aldama"
+seats_total = 10
+seats_remaining = 6
+price = 295
+currency = "USD"
+theme = "An open-fire menu in the Asador tradition — every course touches live coal, embers, or smoke."
+courses = [
+  "Snack — ember-roasted oyster, jamón fat, fino vinegar",
+  "First — wood-grilled sweet shrimp, garlic bread, charred lemon",
+  "Second — whole turbot a la parrilla, pil-pil, salt-baked potato",
+  "Third — txuleta of 9-year Galician ox, bone marrow, piquillos",
+  "Fourth — milk-fed lamb shoulder, ash-roasted onion, mint salsa",
+  "Cheese — Idiazábal aged in the smokehouse, quince, walnut",
+  "Dessert — burnt Basque cheesecake, smoked cherry, sherry caramel",
+  "Final — brasa-toasted marshmallow, dark chocolate, sea salt"
+]
+pairing = "Optional Iberian pairing — $175 (Rioja, Ribera, sherry flight)"

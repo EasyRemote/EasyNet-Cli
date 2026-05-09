@@ -181,14 +181,24 @@ pub fn register_for_agent(
     entry: AgentEntry,
     loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
 ) {
+    use crate::runtime::ability_dispatch::OwnerKind;
     let ability = format!("{agent_name}.{ABILITY_VERB}");
+    let owner = OwnerKind::Agent(agent_name.clone());
 
-    // RPC: the legacy synchronous one-shot path.
+    // RPC: the legacy synchronous one-shot path. Registered with
+    // the canonical chat manifest so the Frontend
+    // `InvokeAbilityDialog` renders a SchemaForm (prompt /
+    // context / session_id / skills / context_loaders / driver /
+    // stream / attachments) instead of a free-text JSON box.
+    // Without this, the dialog falls back to "no declared
+    // schema" and the user has to guess the args shape.
     let rpc_agent = agent_name.clone();
     let rpc_entry = entry.clone();
     let rpc_loaders = Arc::clone(&loaders);
-    reg.register_rpc(
+    reg.register_rpc_with_spec(
         &ability,
+        owner.clone(),
+        crate::core::ability_spec::default_chat_manifest(),
         Arc::new(move |args: Value| handler(&rpc_agent, &rpc_entry, &rpc_loaders, args)),
     );
 
@@ -223,7 +233,7 @@ pub fn register_for_agent(
             Arc::clone(&loaders),
             bare_ability,
         );
-        reg.register_rpc(&ability_name, h);
+        reg.register_rpc_with_owner(&ability_name, owner.clone(), h);
     }
 
     // Stream: emit framed events. v1 ships a Snapshot variant
@@ -231,8 +241,10 @@ pub fn register_for_agent(
     // is synchronous; once the driver gains an async token stream
     // the handler upgrades to `Live(broadcast::Receiver)` without
     // changing the wire frame shape.
-    reg.register_stream(
+    reg.register_stream_with_spec(
         &ability,
+        owner,
+        crate::core::ability_spec::default_chat_manifest(),
         Arc::new(move |args: Value| stream_handler(&agent_name, &entry, &loaders, args)),
     );
 }
@@ -534,6 +546,28 @@ fn handler(
     loaders: &[Arc<dyn ContextLoader>],
     args: Value,
 ) -> anyhow::Result<Value> {
+    invoke_direct_with_progress(agent_name, entry, loaders, args, None)
+}
+
+/// Execute one `<agent>.chat` turn directly in the current process and
+/// return the typed RPC payload the daemon handler normally returns.
+///
+/// Why this helper exists:
+///   * The daemon's registered RPC handler uses this logic.
+///   * The EAL interpreter's `agent.chat(...)` fast path also needs the
+///     same behaviour, but it must stay in the caller's process so the
+///     driver's live stderr timeline is visible to `easynet agent send`.
+///
+/// `progress_tx` is optional. When present, the underlying driver emits
+/// per-chunk progress into it while still returning the same final JSON
+/// envelope as the RPC handler.
+pub(crate) fn invoke_direct_with_progress(
+    agent_name: &str,
+    entry: &AgentEntry,
+    loaders: &[Arc<dyn ContextLoader>],
+    args: Value,
+    progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
+) -> anyhow::Result<Value> {
     let started = Instant::now();
     let parsed = ChatArgs::parse(&args)?;
 
@@ -668,8 +702,17 @@ fn handler(
         }
     }
     let driver_overrides = Some(&driver_with_resume);
-    let response_result = if tokio::runtime::Handle::try_current().is_ok() {
-        tokio::task::block_in_place(|| {
+    let dispatch_call = || {
+        if let Some(progress_tx) = progress_tx.clone() {
+            crate::runtime::dispatch::send_external_with_overrides_and_progress(
+                agent_name,
+                entry,
+                &parsed.prompt,
+                composed_context.as_deref(),
+                driver_overrides,
+                Some(progress_tx),
+            )
+        } else {
             crate::runtime::dispatch::send_external_with_overrides(
                 agent_name,
                 entry,
@@ -677,15 +720,12 @@ fn handler(
                 composed_context.as_deref(),
                 driver_overrides,
             )
-        })
+        }
+    };
+    let response_result = if tokio::runtime::Handle::try_current().is_ok() {
+        tokio::task::block_in_place(dispatch_call)
     } else {
-        crate::runtime::dispatch::send_external_with_overrides(
-            agent_name,
-            entry,
-            &parsed.prompt,
-            composed_context.as_deref(),
-            driver_overrides,
-        )
+        dispatch_call()
     };
 
     let resp = response_result?;

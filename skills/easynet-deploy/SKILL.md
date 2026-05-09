@@ -1,6 +1,6 @@
 ---
 name: easynet-deploy
-description: Build, deploy, and manage the EasyNet platform itself — backend (Go) + frontend (React) + Axon Hub on the production server, plus local dev workflows. Use when the user asks to deploy / restart / build EasyNet services, push changes to easynet.run, debug the production server, or run local backend/frontend dev — OR when YOU notice the user is editing platform code and probably needs to redeploy after.
+description: Build, deploy, and manage the EasyNet platform itself — backend (Go) + frontend (React) + Axon Hub on the production server, plus local dev workflows. Use when the user asks to deploy / restart / build EasyNet services, push changes to device.easynet.run, debug the production server, or run local backend/frontend dev — OR when YOU notice the user is editing platform code and probably needs to redeploy after.
 allowed-tools: [Bash, Read]
 ---
 
@@ -12,10 +12,10 @@ Build, deploy, and run the EasyNet platform across local dev + production server
 
 ### User-prompted triggers
 
-- The user says "deploy backend / frontend / EasyNet to easynet.run"
+- The user says "deploy backend / frontend / EasyNet to device.easynet.run"
 - The user says "restart axon-runtime / easynet-api on the prod server"
 - The user says "build EasyNet locally" / "run dev server"
-- The user mentions the production server `107.174.92.163` or domain `easynet.run`
+- The user mentions the production server `107.174.92.163` or domain `device.easynet.run`
 - The user asks how the prod server is configured (systemd units, Nginx, BaoTa)
 - The user has a backend / frontend code change and needs to push it
 
@@ -62,7 +62,7 @@ A 200 from the health endpoint plus `active` from both services is the green lig
 | `backend/` | Go (go-zero + Ent ORM) |
 | `Frontend/` | React + Vite + TypeScript + Tailwind |
 | `../EasyNet-Axon` (sibling repo) | Axon Hub source |
-| `easynet.run/axon/sdk/go@v0.27.14` | Go module published from EasyNet-Axon (Dendrite bridge) |
+| `device.easynet.run/axon/sdk/go@v0.27.14` | Go module published from EasyNet-Axon (Dendrite bridge) |
 
 Repo: `https://github.com/EasyRemote/EasyNet.git`
 
@@ -72,7 +72,7 @@ Repo: `https://github.com/EasyRemote/EasyNet.git`
 |---|---|
 | Host | `107.174.92.163` |
 | SSH | `ssh root@107.174.92.163` (key-based, no password) |
-| Domain | `easynet.run` (Let's Encrypt, BaoTa-managed) |
+| Domain | `device.easynet.run` (Let's Encrypt, BaoTa-managed) |
 | Panel | BaoTa at `https://107.174.92.163:8888` |
 | OS | Ubuntu 24.04 x86_64 |
 
@@ -130,7 +130,7 @@ scp /tmp/backend-src.tar.gz root@107.174.92.163:/tmp/
 ssh root@107.174.92.163 "
   rm -rf /tmp/backend-build && mkdir -p /tmp/backend-build
   cd /tmp/backend-build && tar -xzf /tmp/backend-src.tar.gz 2>/dev/null
-  CGO_ENABLED=1 go build -o /www/wwwroot/EasyNet.run/api/easynet easynet.go
+  CGO_ENABLED=1 go build -o /www/wwwroot/EasyNet.run/api/easynet device.easynet.go
   systemctl restart easynet-api
 "
 ```
@@ -174,7 +174,7 @@ curl -sf https://easynet.run/api/v1/health
 
 ```bash
 cd /Users/macbook.silan.tech/Documents/GitHub/EasyNet/backend
-go run easynet.go -f etc/easynet-api.yaml
+go run device.easynet.go -f etc/easynet-api.yaml
 # :8080, talks to local Axon at :50051
 ```
 
@@ -256,7 +256,7 @@ User has been editing backend/internal/handler/devices.go for 30 min and now say
 
 **Process:**
 1. Self-trigger: edits to platform code without explicit deploy → ask the user.
-2. "Want me to deploy this to easynet.run? Or is this for local-dev testing only?"
+2. "Want me to deploy this to device.easynet.run? Or is this for local-dev testing only?"
 3. Wait for confirmation before running deploy.
 
 ## Architecture notes

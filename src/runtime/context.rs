@@ -228,30 +228,6 @@ pub fn current() -> Option<DispatchContext> {
         .or_else(DispatchContext::from_env)
 }
 
-/// Read-only view of the current context, projected to the three fields
-/// that audit logs and tracing want: `(depth, mission_id, origin_agent)`.
-///
-/// Why this is the public surface, not raw field access on
-/// `DispatchContext`: callers outside `runtime::*` (e.g. the MCP provider's
-/// per-call audit line) should not depend on the field layout of
-/// `DispatchContext`. When we eventually add `tenant` to the context,
-/// every caller that read the struct directly would have to be updated;
-/// callers of `audit_tuple()` need only widen the tuple at one point.
-///
-/// All three fields are returned as owned strings (with the documented
-/// fall-back values for "no active context") so the caller can format
-/// them straight into a log line without further `match`-ing.
-pub fn audit_tuple() -> (String, String, String) {
-    match current() {
-        Some(c) => (
-            c.depth.to_string(),
-            c.mission_id,
-            c.origin_agent.unwrap_or_else(|| "?".to_string()),
-        ),
-        None => ("0".to_string(), "<none>".to_string(), "?".to_string()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

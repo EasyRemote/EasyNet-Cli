@@ -36,7 +36,11 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use clap::Args;
 use serde::{Deserialize, Serialize};
 
-use crate::persistence::config::{atomic_write_with_permissions, state_dir, WritePermissions};
+use crate::persistence::config::{
+    self, atomic_write_with_permissions, state_dir, WritePermissions,
+};
+use crate::support::output;
+use crate::uri;
 
 const DEFAULT_HUB_URL: &str = "http://127.0.0.1:8080";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -123,7 +127,7 @@ pub struct LoginArgs {
     #[arg(long, default_value = DEFAULT_HUB_URL)]
     pub hub: String,
 
-    /// Register the user first if `/auth/register` accepts it,
+    /// Register the user first if '/auth/register' accepts it,
     /// then log in. No-op when the email already exists. Useful
     /// for fresh dev rigs where the operator wants to avoid
     /// hand-running a separate register call.
@@ -131,7 +135,7 @@ pub struct LoginArgs {
     pub register_if_missing: bool,
 
     /// Nickname to use on register. Required when
-    /// `--register-if-missing` is set and the email is new.
+    /// '--register-if-missing' is set and the email is new.
     /// Falls back to the local part of the email.
     #[arg(long)]
     pub nickname: Option<String>,
@@ -262,24 +266,100 @@ pub fn run_logout(_args: LogoutArgs) -> anyhow::Result<()> {
 #[derive(Debug, Args)]
 pub struct WhoamiArgs;
 
+/// `whoami` answers "who am I to EasyNet right now?". There are
+/// two layers of identity:
+///
+/// - **User session** (`~/.easynet/auth.json`) — the human-level
+///   identity, established by `easynet auth login <email>`. Carries
+///   email / user_id / username / nickname.
+/// - **Device pairing** (`~/.easynet/credentials.json`) — the
+///   machine-level identity, established by `easynet device join
+///   <token>`. Carries node_id, realm, and (post-Phase 14)
+///   `username` of the user this device is paired to.
+///
+/// Per RFC-001 §3.2, a device is a first-class agent; a paired
+/// device implicitly carries its owner's identity. So a host that
+/// has run `device join` but not `auth login` still has a usable
+/// identity for most operations — `easynet start` / `easynet ability
+/// invoke` etc. don't require an interactive auth session, only
+/// the device credentials.
+///
+/// The reporting precedence:
+/// 1. Auth session present → render user-level identity.
+/// 2. No session but paired → render device-level identity (device
+///    URA, hub URA, paired username if known).
+/// 3. Neither → tell the user what to do.
 pub fn run_whoami(_args: WhoamiArgs) -> anyhow::Result<()> {
-    match load_session()? {
-        None => {
-            println!("(not logged in — run `easynet auth login <email>`)");
+    let session = load_session()?;
+    let creds = config::load_credentials().ok();
+
+    match (session, creds) {
+        (Some(s), creds) => {
+            // Layer 1 — full user session. We still surface the
+            // device URA when paired so the user knows which
+            // machine identity is wired to this account from this
+            // host. Rendered through `kv_section_stdout` for the
+            // same bold-cyan label / vertically-aligned look as
+            // banner and `runtime status`.
+            let device_ura = creds
+                .as_ref()
+                .map(|c| uri::device_uri(c.realm_str(), &c.node_id));
+            let mut rows: Vec<(&str, &str)> = vec![("email", s.email.as_str())];
+            if let Some(uid) = s.user_id.as_deref() {
+                rows.push(("user_id", uid));
+            }
+            if let Some(username) = s.username.as_deref() {
+                rows.push(("username", username));
+            }
+            if let Some(nick) = s.nickname.as_deref() {
+                rows.push(("nickname", nick));
+            }
+            rows.push(("hub", s.hub_url.as_str()));
+            if let Some(d) = device_ura.as_deref() {
+                rows.push(("device", d));
+            }
+            output::kv_section_stdout(&rows);
             Ok(())
         }
-        Some(s) => {
-            println!("email:    {}", s.email);
-            if let Some(uid) = &s.user_id {
-                println!("user_id:  {uid}");
+        (None, Some(c)) => {
+            // Layer 2 — paired but no interactive auth session.
+            // This is the common state on a freshly-joined device:
+            // the user typed `easynet device join <token>` and
+            // never bothered with `auth login`. They DO have an
+            // identity — the device URA — and most CLI commands
+            // accept it. Saying "not logged in" without explaining
+            // the device pairing was confusing (silan flagged this
+            // when `easynet start` worked despite `whoami` saying
+            // not logged in).
+            let realm = c.realm_str().to_string();
+            let hub_ura = uri::hub_uri(&realm);
+            let device_ura = uri::device_uri(&realm, &c.node_id);
+            let user_ura = c
+                .username
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|u| uri::user_uri(&realm, u));
+            println!("(no interactive auth session on this host)");
+            println!("paired as a device:");
+            let mut rows: Vec<(&str, &str)> = vec![("Hub", hub_ura.as_str())];
+            if let Some(ref u) = user_ura {
+                rows.push(("Current user", u.as_str()));
             }
-            if let Some(username) = &s.username {
-                println!("username: {username}");
-            }
-            if let Some(nick) = &s.nickname {
-                println!("nickname: {nick}");
-            }
-            println!("hub:      {}", s.hub_url);
+            rows.push(("Current device", device_ura.as_str()));
+            rows.push(("Realm", realm.as_str()));
+            output::kv_section_stdout(&rows);
+            println!();
+            println!(
+                "Most commands work with the device pairing. \
+                 Run 'easynet auth login <email>' to attach a \
+                 user-level session for ops that require it."
+            );
+            Ok(())
+        }
+        (None, None) => {
+            println!("(not logged in and not paired)");
+            println!("  • run 'easynet auth login <email>' for a user session, OR");
+            println!("  • run 'easynet device join <token>' to pair this device.");
             Ok(())
         }
     }
@@ -290,7 +370,7 @@ pub fn run_whoami(_args: WhoamiArgs) -> anyhow::Result<()> {
 #[derive(Debug, Args)]
 pub struct PairArgs {
     /// Print only the raw pairing_token (no other fields). Useful
-    /// for piping: `easynet auth pair --quiet | xargs easynet device join`.
+    /// for piping: 'easynet auth pair --quiet | xargs easynet device join'.
     #[arg(long)]
     pub quiet: bool,
 }
@@ -310,7 +390,7 @@ struct PairingResp {
 
 pub fn run_pair(args: PairArgs) -> anyhow::Result<()> {
     let session = load_session()?
-        .ok_or_else(|| anyhow!("not logged in — run `easynet auth login <email>` first"))?;
+        .ok_or_else(|| anyhow!("not logged in — run 'easynet auth login <email>' first"))?;
 
     let url = format!("{}/api/v1/devices/pairing", session.hub_url);
     let resp: PairingResp = ureq::post(&url)
@@ -377,7 +457,7 @@ pub fn run_pair(args: PairArgs) -> anyhow::Result<()> {
 
 fn auth_get_json<T: for<'de> Deserialize<'de>>(path: &str) -> anyhow::Result<T> {
     let session = load_session()?
-        .ok_or_else(|| anyhow!("not logged in — run `easynet auth login <email>` first"))?;
+        .ok_or_else(|| anyhow!("not logged in — run 'easynet auth login <email>' first"))?;
     let url = format!("{}{}", session.hub_url, path);
     let resp = ureq::get(&url)
         .timeout(HTTP_TIMEOUT)
@@ -385,7 +465,7 @@ fn auth_get_json<T: for<'de> Deserialize<'de>>(path: &str) -> anyhow::Result<T> 
         .call()
         .map_err(|e| match e {
             ureq::Error::Status(401, _) => anyhow!(
-                "HTTP 401 — token expired or invalid. Run `easynet auth login <email>` to refresh."
+                "HTTP 401 — token expired or invalid. Run 'easynet auth login <email>' to refresh."
             ),
             ureq::Error::Status(code, resp) => {
                 let body = resp.into_string().unwrap_or_default();
@@ -443,7 +523,7 @@ pub fn run_devices(args: DevicesArgs) -> anyhow::Result<()> {
         return Ok(());
     }
     if resp.items.is_empty() {
-        println!("(no devices — `easynet auth pair | xargs easynet device join` to attach one)");
+        println!("(no devices — 'easynet auth pair | xargs easynet device join' to attach one)");
         return Ok(());
     }
     println!(
@@ -491,7 +571,7 @@ struct AbilityItem {
 
 pub fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
     let session = load_session()?
-        .ok_or_else(|| anyhow!("not logged in — run `easynet auth login <email>` first"))?;
+        .ok_or_else(|| anyhow!("not logged in — run 'easynet auth login <email>' first"))?;
     let path = format!("/api/v1/devices/{}/abilities", args.node_id);
     let url = format!("{}{}", session.hub_url, path);
     let resp: AbilityListResp = match ureq::get(&url)
@@ -501,7 +581,7 @@ pub fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
     {
         Ok(resp) => resp.into_json().context("parse response JSON")?,
         Err(ureq::Error::Status(401, _)) => bail!(
-            "HTTP 401 — token expired or invalid. Run `easynet auth login <email>` to refresh."
+            "HTTP 401 — token expired or invalid. Run 'easynet auth login <email>' to refresh."
         ),
         Err(ureq::Error::Status(404, resp)) => {
             let body = resp.into_string().unwrap_or_default();
@@ -579,7 +659,7 @@ fn fallback_device_abilities_from_local_daemon(node_id: &str) -> anyhow::Result<
     let abilities = node
         .get("abilities")
         .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow!("device.describe returned no `abilities` array"))?;
+        .ok_or_else(|| anyhow!("device.describe returned no 'abilities' array"))?;
     let items = abilities
         .iter()
         .map(ability_item_from_descriptor)
@@ -665,13 +745,15 @@ pub struct ExecArgs {
     pub node_id: String,
     /// Shell command line. Wrap in quotes for whole shell strings:
     ///   easynet auth exec <node> -- "ls /tmp | head -5"
-    /// Or pass tokens after `--`:
+    /// Or pass tokens after '--':
     ///   easynet auth exec <node> -- ls /tmp
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub cmd: Vec<String>,
-    /// Ability tool name to invoke. Default `shell.run`. Override
-    /// to `process.exec` (typed argv) or any other registered tool.
-    #[arg(long, default_value = "shell.run")]
+    /// Ability tool name to invoke. Default 'device.shell.run'.
+    /// Override to 'device.process.exec' (typed argv) or any other
+    /// registered tool. Bare 'shell.run' / 'process.exec' are
+    /// accepted as legacy aliases and auto-prefixed with 'device.'.
+    #[arg(long, default_value = "device.shell.run")]
     pub tool: String,
     /// Timeout in milliseconds (default 30s).
     #[arg(long, default_value_t = 30_000)]
@@ -686,15 +768,24 @@ pub fn run_exec(args: ExecArgs) -> anyhow::Result<()> {
         bail!("no command — usage: easynet auth exec <node_id> -- <cmd> [args ...]");
     }
     let session = load_session()?
-        .ok_or_else(|| anyhow!("not logged in — run `easynet auth login <email>` first"))?;
+        .ok_or_else(|| anyhow!("not logged in — run 'easynet auth login <email>' first"))?;
     // Backend's POST /api/v1/abilities/invoke is what the frontend
     // uses for ad-hoc exec — `node_id` selects the target device,
     // `tool_name` picks the ability (shell.run / process.exec /
     // anything advertised by the device's daemon).
     let url = format!("{}/api/v1/abilities/invoke", session.hub_url);
-    let arguments = match args.tool.as_str() {
-        // shell.run takes a full command string.
-        "shell.run" | "process.exec" => {
+    // Auto-prefix legacy bare names with `device.` so a caller that
+    // still types `--tool shell.run` lands on the canonical handler
+    // post-RFC-001 v4.1.7. Names already prefixed (`device.*`,
+    // `hub.*`, agent-rooted) pass through unchanged.
+    let canonical_tool = match args.tool.as_str() {
+        "shell.run" => "device.shell.run".to_string(),
+        "process.exec" => "device.process.exec".to_string(),
+        other => other.to_string(),
+    };
+    let arguments = match canonical_tool.as_str() {
+        // shell.run / process.exec take a full command string.
+        "device.shell.run" | "device.process.exec" => {
             serde_json::json!({"command": args.cmd.join(" ")})
         }
         // Anything else: pass cmd tokens as an argv array; the
@@ -702,7 +793,7 @@ pub fn run_exec(args: ExecArgs) -> anyhow::Result<()> {
         _ => serde_json::json!({"argv": args.cmd}),
     };
     let body = serde_json::json!({
-        "tool_name": args.tool,
+        "tool_name": canonical_tool,
         "node_id": args.node_id,
         "arguments": arguments,
         "timeout_ms": args.timeout_ms,
@@ -714,7 +805,7 @@ pub fn run_exec(args: ExecArgs) -> anyhow::Result<()> {
         .send_json(body)
         .map_err(|e| match e {
             ureq::Error::Status(401, _) => {
-                anyhow!("HTTP 401 — token expired. Run `easynet auth login <email>` to refresh.")
+                anyhow!("HTTP 401 — token expired. Run 'easynet auth login <email>' to refresh.")
             }
             ureq::Error::Status(code, resp) => {
                 let body = resp.into_string().unwrap_or_default();
@@ -870,7 +961,7 @@ pub struct DeviceRemoveArgs {
 
 pub fn run_device_remove(args: DeviceRemoveArgs) -> anyhow::Result<()> {
     let session = load_session()?
-        .ok_or_else(|| anyhow!("not logged in — run `easynet auth login <email>` first"))?;
+        .ok_or_else(|| anyhow!("not logged in — run 'easynet auth login <email>' first"))?;
 
     if !args.yes {
         eprint!("remove device {} from this realm? [y/N] ", args.node_id);
@@ -896,7 +987,7 @@ pub fn run_device_remove(args: DeviceRemoveArgs) -> anyhow::Result<()> {
         .call()
         .map_err(|e| match e {
             ureq::Error::Status(401, _) => {
-                anyhow!("HTTP 401 — token expired. Run `easynet auth login <email>` to refresh.")
+                anyhow!("HTTP 401 — token expired. Run 'easynet auth login <email>' to refresh.")
             }
             ureq::Error::Status(code, resp) => {
                 let body = resp.into_string().unwrap_or_default();
@@ -928,7 +1019,7 @@ pub struct EventsArgs {
 
 pub fn run_events(args: EventsArgs) -> anyhow::Result<()> {
     let session = load_session()?
-        .ok_or_else(|| anyhow!("not logged in — run `easynet auth login <email>` first"))?;
+        .ok_or_else(|| anyhow!("not logged in — run 'easynet auth login <email>' first"))?;
 
     // Backend's /api/v1/events accepts the JWT as a query param
     // (matches the frontend's EventSource which can't set headers).
@@ -944,7 +1035,7 @@ pub fn run_events(args: EventsArgs) -> anyhow::Result<()> {
         .call()
         .map_err(|e| match e {
             ureq::Error::Status(401, _) => {
-                anyhow!("HTTP 401 — token expired. Run `easynet auth login <email>` to refresh.")
+                anyhow!("HTTP 401 — token expired. Run 'easynet auth login <email>' to refresh.")
             }
             ureq::Error::Status(code, resp) => {
                 let body = resp.into_string().unwrap_or_default();
@@ -990,10 +1081,10 @@ mod tests {
     #[test]
     fn ability_item_fallback_maps_federation_descriptor_shape() {
         let item = ability_item_from_descriptor(&serde_json::json!({
-            "name": "shell.run",
+            "name": "device.shell.run",
             "ability_version": "1",
         }));
-        assert_eq!(item.name.as_deref(), Some("shell.run"));
+        assert_eq!(item.name.as_deref(), Some("device.shell.run"));
         assert_eq!(item.version.as_deref(), Some("1"));
         assert_eq!(item.state.as_deref(), Some("ACTIVE"));
     }

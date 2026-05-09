@@ -71,9 +71,9 @@ pub enum DeviceAction {
 pub struct ShowArgs {
     /// Target substrate node id.
     pub node_id: String,
-    /// Output format. `table` emits the human-readable view; `json`
+    /// Output format. 'table' emits the human-readable view; 'json'
     /// emits the raw substrate record + abilities array. Aligned with
-    /// every other list/show command — see `support::output::OutputFormat`.
+    /// every other list/show command — see 'support::output::OutputFormat'.
     #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
     pub format: OutputFormat,
 }
@@ -135,8 +135,10 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_else(|| {
-            match crate::support::local_invoke::invoke_local_ability("easynet.discover", json!({}))
-            {
+            match crate::support::local_invoke::invoke_local_ability(
+                "device.meta.list_abilities",
+                json!({}),
+            ) {
                 Ok(catalogue) => catalogue
                     .get("abilities")
                     .and_then(|v| v.as_array())

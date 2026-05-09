@@ -1,0 +1,905 @@
+\documentclass[11pt,a4paper]{article}
+
+% ──────────────────────────────────────────────────────────────────────────
+% AXON-RFC-006 Appendix B (impl) — easynet pages (v0.5.1, byte-addressing URA)
+% Status: Draft v0.5.1.
+%   v0.5.1 follows two CTO clarifications on top of v0.5:
+%     1. The first segment of the URA tail is the user-id, not the
+%        agent-id. Projects are user-owned (a user is stable; the
+%        agent the user uses is ephemeral). Ability ownership in
+%        EasyNet ontology extends from `agent owns ability` to
+%        `(user | agent | hub | resource) owns ability`.
+%     2. The URA tail is not a single dot-flat string. It is
+%        `<dot-id-part>/<slash-path-part>`. The id part denotes the
+%        owner-and-project; the path part is the byte address inside
+%        the project, slash-separated, mirroring filesystem layout.
+%        A resource URA therefore directly addresses a public byte
+%        stream — `index.html`, `style.css`, `assets/logo.png` —
+%        not the project enclosing it.
+%   The ability namespace stays at one ability per project (not one
+%   per file). The ability accepts the path through args; the URA
+%   form `<user>.<project>/<path>` is purely an addressing form, not
+%   a per-file ability proliferation.
+%
+% Build:   xelatex AXON-RFC-006-B-easynet-webapp.tex
+% Companion (axiom):                AXON-RFC-006-stateful-easynet.tex
+% Companion (page sibling):         AXON-RFC-006-A-easynet-pages.tex
+% Companion (URA + ontology):       AXON-RFC-001-plan-v4.1.5.md
+% Companion (ontology theorem):     EasyNet-Axon/document/concepts/ONTOLOGY_AGENT_ABILITY.md
+% Backups:
+%   AXON-RFC-006-B-easynet-webapp.v0.3.tex.bak   (state-type detour)
+%   AXON-RFC-006-B-easynet-webapp.v0.4.tex.bak   (resource-as-state-type)
+%   AXON-RFC-006-B-easynet-webapp.v0.5.tex.bak   (project-as-resource, dot-only)
+% ──────────────────────────────────────────────────────────────────────────
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{xltabular}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{tcolorbox}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{parskip}
+\usepackage{xspace}
+
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setCJKmainfont{PingFang SC}[
+    BoldFont={PingFang SC Semibold},
+    ItalicFont={PingFang SC Light}
+]
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small AXON-RFC-006 Appendix B v0.5.1}
+\fancyhead[R]{\small easynet pages --- byte-addressing URA}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\titleformat{\section}{\Large\bfseries\color{black!85}}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\large\bfseries\color{black!75}}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{black!70}}{\thesubsubsection}{0.5em}{}
+
+\definecolor{normativecolor}{RGB}{180,30,30}
+\definecolor{derivedcolor}{RGB}{30,90,180}
+\definecolor{deferredcolor}{RGB}{120,90,30}
+\definecolor{codebg}{RGB}{245,245,248}
+\definecolor{codeborder}{RGB}{210,210,220}
+
+\newcommand{\normsv}{\textcolor{normativecolor}{\textbf{[normative]}}\xspace}
+\newcommand{\derived}{\textcolor{derivedcolor}{\textbf{[derived]}}\xspace}
+\newcommand{\deferred}{\textcolor{deferredcolor}{\textbf{[deferred]}}\xspace}
+
+\lstdefinestyle{ealstyle}{
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small,
+    frame=single,
+    rulecolor=\color{codeborder},
+    breaklines=true,
+    showstringspaces=false,
+    keywordstyle=\color{blue!70!black}\bfseries,
+    commentstyle=\color{green!40!black}\itshape,
+    stringstyle=\color{red!60!black},
+    morekeywords={resource,kind,realm,owner,uri,meta,ability,subject,caller,callee,receipt,call,let,mission,with,timeout,on,fn,struct,impl,pub,async,await},
+    columns=fullflexible,
+    keepspaces=true,
+    aboveskip=0.6em,
+    belowskip=0.6em,
+}
+\lstset{style=ealstyle}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+
+\newtcolorbox{invariant}[1][Invariant]{
+    colback=red!4!white,
+    colframe=red!50!black,
+    fonttitle=\bfseries,
+    title={Invariant --- #1},
+    sharp corners=south,
+    boxrule=0.6pt,
+}
+\newtcolorbox{notebox}[1][]{
+    colback=blue!4!white,
+    colframe=blue!50!black,
+    fonttitle=\bfseries,
+    title={Note},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+\newtcolorbox{warningbox}[1][]{
+    colback=orange!6!white,
+    colframe=orange!70!black,
+    fonttitle=\bfseries,
+    title={Boundary},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+\newtcolorbox{decisionbox}[1][]{
+    colback=purple!4!white,
+    colframe=purple!60!black,
+    fonttitle=\bfseries,
+    title={Open decision},
+    sharp corners=south,
+    boxrule=0.6pt,
+    #1
+}
+
+\title{
+    \vspace{-2em}
+    \textbf{\Large AXON-RFC-006 Appendix B (v0.5.1):}\\[0.2em]
+    \textbf{\Large \texttt{easynet pages} --- publishing a folder as a website}\\[0.4em]
+    \large User-owned projects, byte-addressing resource URAs,\\
+    \large kernel-enforced root sandbox\\[0.2em]
+    \large MVP: \texttt{hello-world.html + style.css}
+}
+\author{
+    Silan Hu \\ \small National University of Singapore
+}
+\date{Draft v0.5.1, \today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+A user publishes a folder. EasyNet mints a URA scheme that
+addresses every public byte in the folder: the URA tail is
+\texttt{<user-id>.<project-id>/<path>}, where the dot-joined
+prefix denotes user-and-project identity and the slash-suffixed
+path denotes the byte's location inside the project's root.
+The folder root is the project's hard sandbox boundary --- the
+fetch path runs inside a kernel-enforced resolver
+(\texttt{RESOLVE\_BENEATH}) that cannot escape the published
+root, no matter what symlinks or \texttt{..} components a
+caller supplies. One ability per project is registered
+(\texttt{<user-id>.<project-id>.page.fetch}); the Hub serves
+HTTP requests on \texttt{<project-id>.<user-id>.pages.<realm>}
+by \texttt{forward\_invoke}-ing that ability with the requested
+path. The minimum deliverable is two files,
+\texttt{hello-world.html} and \texttt{style.css}, served
+through a real browser fetch and a kernel-enforced sandbox.
+v0.5.1 is the addressing form; everything bigger (SPA, API,
+peer actions, federation, SCOPED visibility) is deliberate
+post-MVP.
+\end{abstract}
+
+\tableofcontents
+\vspace{1em}
+\hrule
+\vspace{1em}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{What changed from v0.5}
+\label{sec:v05-diff}
+
+v0.5 routed the read path through a project-level resource
+(\texttt{resource/pages.<rid>}) and made fetch take \texttt{path}
+as an argument. The two CTO clarifications collapsed the
+addressing form:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\linewidth}{l X}
+\toprule
+\textbf{v0.5} & \textbf{v0.5.1} \\
+\midrule
+URA tail was a single dot-flat string (\texttt{pages.<rid>}; tail used dots only)
+ & URA tail is \texttt{<user-id>.<project-id>/<path>} --- dot-joined identity and slash-joined byte path. The tail directly addresses a public byte stream. \\
+First segment of the ability/resource tail was an opaque rid
+ & First segment is the publishing user's id (alice, bob, \dots) --- a user-id, not an agent-id. Projects are user-owned. \\
+Resource URA was project-scoped; files were args
+ & Resource URA addresses bytes. \texttt{index.html}, \texttt{style.css}, \texttt{assets/logo.png} each carry a distinct resource URA. \\
+Ownership scope of an ability was implicitly ``agent or resource''
+ & Ability ownership extends to \texttt{(user \(\mid\) agent \(\mid\) hub \(\mid\) resource)}; this RFC roots the page-fetch ability at the user, namespaced by the project. \\
+URL was \texttt{<rid>.pages.<realm>}
+ & URL is \texttt{<project-id>.<user-id>.pages.<realm>/<path>}, mirroring URA tail one-to-one (subdomain holds project + user; path holds the byte path verbatim). \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\noindent The number of abilities registered is unchanged
+(one per project). The change is in addressing, not in
+ability proliferation.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{The URA shape}
+\label{sec:ura}
+
+\subsection{Tail grammar}
+
+\normsv{} URA v4.1.5 §A.URA-7 fixes the URA shape at three
+segments:
+
+\begin{lstlisting}
+easynet:///r/<realm>/<role>/<tail>
+\end{lstlisting}
+
+Within \texttt{<tail>}, this RFC adopts a two-part grammar:
+
+\begin{lstlisting}
+<tail> = <id-part> ( "/" <path-part> )?
+<id-part>   = <segment> ( "." <segment> )*           dot-joined
+<path-part> = <segment> ( "/" <segment> )*           slash-joined
+<segment>   = [a-zA-Z0-9_-]+
+\end{lstlisting}
+
+The id part denotes ownership and naming; the path part denotes
+a byte address inside whatever the id part identifies. Both
+parts are case-sensitive. Either part may be empty, but the
+slash separator only appears when both are non-empty.
+
+\begin{notebox}
+\textbf{This grammar is consistent with v4.1.5.} v4.1.5 §A.URA-7
+constrains the URA at the segment count of three, not the
+internal structure of the tail. The tail in this RFC is a
+single segment in the URA-segment sense; the dot/slash split is
+a profile-defined decomposition that the parser presents as
+\texttt{(id\_part, path\_part)}.
+\end{notebox}
+
+\subsection{Resource URA: byte addressing}
+
+\normsv{} A published folder yields one resource URA per public
+byte stream:
+
+\begin{lstlisting}
+easynet:///r/<realm>/resource/<user-id>.<project-id>/<path>
+                              └─── id-part ────────┘└─path─┘
+\end{lstlisting}
+
+For the running example:
+
+\begin{lstlisting}
+easynet:///r/easynet.run/resource/alice.papers/index.html
+easynet:///r/easynet.run/resource/alice.papers/style.css
+easynet:///r/easynet.run/resource/alice.papers/assets/logo.png
+\end{lstlisting}
+
+The \texttt{<path>} component mirrors the file's location under
+the published folder root (the publish target). It is verbatim
+filesystem path, with the leading slash present.
+
+\begin{invariant}[PG-INV-1 (root sandbox)]
+The path component of any \texttt{resource/<user-id>.<project-id>/<path>}
+URA \textbf{MUST} resolve to a regular file beneath the
+published folder root. Symbolic links, \texttt{..} traversal,
+and any other resolution that escapes the root are
+non-conformant. The daemon enforces this through a kernel
+contract (\S\ref{sec:sandbox}); it is not a user-space check.
+\end{invariant}
+
+\subsection{Ability URA: one per project}
+
+\normsv{} Despite each public byte carrying a distinct resource
+URA, only one ability is registered per project:
+
+\begin{lstlisting}
+easynet:///r/<realm>/ability/<user-id>.<project-id>.page.fetch
+                             └─── id-part ─────────────────┘
+\end{lstlisting}
+
+For the running example:
+
+\begin{lstlisting}
+easynet:///r/easynet.run/ability/alice.papers.page.fetch
+\end{lstlisting}
+
+The ability accepts a \texttt{path} argument; one
+\texttt{fetch} call returns one byte stream. Registering one
+ability per file would multiply registry weight by the file
+count without any expressive gain --- the per-file resource URA
+already addresses the byte; the ability is the method that
+reads it.
+
+\begin{invariant}[PG-INV-2 (one ability per project)]
+A project \textbf{MUST} register exactly one fetch ability,
+\texttt{ability/<user-id>.<project-id>.page.fetch}. Multiple
+fetch abilities (per-file or per-extension) are non-conformant.
+\end{invariant}
+
+\subsection{Ability ownership widens}
+
+\derived{} v4.1.5's ability namespace was rooted at agent
+identity (\texttt{ability/<agent-id>.<name>}). v0.5.1 widens
+the ownership category to \texttt{(user \(\mid\) agent \(\mid\)
+hub \(\mid\) resource)}. The widening is an ontology
+clarification, not a grammar change: ability tails were always
+free-form \texttt{<owner-id>.<name>} pairs; v0.5.1 lifts
+\texttt{<owner-id>} to the unifying notion of an ownership
+holder rather than the narrower notion of an agent.
+
+\begin{notebox}
+The widening composes with the existing ontology cleanly:
+\begin{itemize}[leftmargin=2em,itemsep=0.1em]
+    \item User-rooted: \texttt{ability/alice.papers.page.fetch} --- the page in this RFC.
+    \item Agent-rooted: \texttt{ability/alice.claude.skill.summarize} --- a Claude-Code-hosted skill.
+    \item Hub-rooted: \texttt{ability/01HUB.pages.serve} --- the Hub's HTTP boundary (\S\ref{sec:hub}).
+    \item Resource-rooted: \texttt{ability/<rid>.method} --- reserved for resources whose execution lives at the resource itself rather than at the user/agent (post-MVP shape).
+\end{itemize}
+The four roots share grammar; admission distinguishes them by
+the URA kind of the owner.
+\end{notebox}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Hub: the only HTTP boundary}
+\label{sec:hub}
+
+\subsection{Hub-as-agent owns one ability}
+
+\normsv{} The Hub binds the wildcard host pattern
+\texttt{*.*.pages.<realm>} on its TLS listener (two-level
+wildcard: project \texttt{.} user \texttt{.} pages \texttt{.}
+realm). On any HTTP request matching this pattern, the Hub
+invokes:
+
+\begin{lstlisting}
+caller   = hub/01HUB
+callee   = hub/01HUB
+ability  = ability/01HUB.pages.serve
+subject  = resource/<user-id>.<project-id>/<path>     // parsed from URL
+args     = {
+    method:      "GET",
+    request_id:  "...",
+    user_agent:  "...",
+}
+\end{lstlisting}
+
+The Hub's \texttt{pages.serve} ability:
+
+\begin{enumerate}[leftmargin=2em,itemsep=0.15em]
+    \item Parses the host: \texttt{<project-id>.<user-id>.pages.<realm>}.
+    \item Constructs the subject URA \texttt{resource/<user-id>.<project-id>/<path>}.
+    \item Resolves the host agent for the project through the federation directory.
+    \item Issues a \texttt{forward\_invoke} to the host:
+\begin{lstlisting}
+caller    = hub/01HUB
+callee    = agent/<host-of-project>
+ability   = ability/<user-id>.<project-id>.page.fetch
+subject   = resource/<user-id>.<project-id>/<path>
+args      = { path: "<path>" }
+\end{lstlisting}
+    \item Streams the returned bytes back to the browser with the Content-Type the fetch ability returned.
+    \item Emits one operational receipt for the serve.
+\end{enumerate}
+
+\begin{invariant}[PG-INV-3 (one Hub boundary)]
+HTTP requests for \texttt{*.*.pages.<realm>} \textbf{MUST}
+enter EasyNet through the \texttt{ability/01HUB.pages.serve}
+call site. There is no private back-channel that lets static
+bytes flow without the \texttt{forward\_invoke} round trip.
+\end{invariant}
+
+\subsection{URL form}
+\label{sec:url}
+
+\normsv{}
+
+\begin{lstlisting}
+https://<project-id>.<user-id>.pages.<realm>/<path>
+\end{lstlisting}
+
+For the running example:
+
+\begin{lstlisting}
+https://papers.alice.pages.easynet.run/index.html
+https://papers.alice.pages.easynet.run/style.css
+https://papers.alice.pages.easynet.run/assets/logo.png
+\end{lstlisting}
+
+URL and URA mirror each other exactly:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.18}
+\begin{tabular}{l l}
+\toprule
+\textbf{URL} & \textbf{URA} \\
+\midrule
+\texttt{https://papers.alice.pages.easynet.run/index.html}
+ & \texttt{easynet:///r/easynet.run/resource/alice.papers/index.html} \\
+\texttt{https://papers.alice.pages.easynet.run/assets/logo.png}
+ & \texttt{easynet:///r/easynet.run/resource/alice.papers/assets/logo.png} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The transformation is mechanical:
+
+\begin{enumerate}[leftmargin=2em,itemsep=0.1em]
+    \item Subdomain \texttt{<project>.<user>} \(\to\) URA id-part \texttt{<user>.<project>} (order reverses; the URL leads with the more-specific component, the URA leads with the owner).
+    \item URL path \(\to\) URA path-part verbatim.
+\end{enumerate}
+
+\subsection{rid: id, alias, content hash --- all interchangeable}
+
+\normsv{} \texttt{<project-id>} can be:
+
+\begin{itemize}[leftmargin=2em,itemsep=0.15em]
+    \item A user-chosen human-readable name (\texttt{papers},
+    \texttt{shop}, \texttt{notes}). Default for PUBLIC publishes.
+    Subject to per-user uniqueness check at publish time.
+    \item A content-addressed hash (the first 16 hex characters
+    of the folder's Merkle hash). Stable across hosts and
+    restarts; collision-free for federation.
+    \item An alias --- a separately-minted name pointing at a
+    specific content hash. Multiple aliases can resolve to the
+    same canonical project; renaming or transferring projects
+    is alias bookkeeping.
+\end{itemize}
+
+The Hub resolves all three through the federation directory; from
+the URL's perspective they are interchangeable. PUBLIC publishes
+default to user-chosen names; PRIVATE publishes (post-MVP)
+\textbf{MUST} use a 64-hex content hash or a separately-minted
+unguessable token.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Daemon: the read sandbox}
+\label{sec:sandbox}
+
+\normsv{} \texttt{ability/<user-id>.<project-id>.page.fetch}
+\textbf{MUST} run inside a kernel-enforced read sandbox
+rooted at the published folder. User-space path validation
+alone is non-conformant.
+
+\subsection{Mechanism (Linux)}
+
+On \texttt{pages.publish}, the daemon opens the folder as a
+directory file descriptor and pins it in memory:
+
+\begin{lstlisting}
+let folder_fd = open(folder_path, O_DIRECTORY | O_CLOEXEC)?;
+PublishedProjects.insert(
+    (user_id, project_id),
+    ProjectHandle {
+        folder_fd,                                 // pinned for the
+                                                   // lifetime of the publish
+        canonical_root: canonicalize(folder_path)?,
+        visibility,
+        file_size_cap: 100 * 1024 * 1024,         // 100 MiB
+    }
+);
+\end{lstlisting}
+
+On \texttt{fetch(path)}:
+
+\begin{lstlisting}
+let file_fd = openat2(
+    handle.folder_fd,
+    args.path.trim_start_matches('/'),
+    OpenHow {
+        flags:   O_RDONLY | O_NOFOLLOW | O_CLOEXEC,
+        mode:    0,
+        resolve: RESOLVE_BENEATH                    // kernel guarantee:
+                | RESOLVE_NO_SYMLINKS               //   resolution does
+                | RESOLVE_NO_MAGICLINKS,            //   not escape folder_fd
+    },
+)?;
+let metadata = fstat(file_fd)?;
+require!(metadata.is_regular_file());               // deny FIFO/dev/socket
+require!(metadata.size <= handle.file_size_cap);
+let bytes = read_to_end(file_fd)?;
+let mime  = mime_from_extension(args.path);
+return FetchResponse { bytes, content_type: mime };
+\end{lstlisting}
+
+\texttt{RESOLVE\_BENEATH} guarantees, at the kernel level,
+that path resolution cannot leave the directory the
+\texttt{dirfd} was opened on, regardless of \texttt{..}
+components, regardless of symlinks, regardless of how the
+filesystem mutates between calls.
+
+\begin{invariant}[PG-INV-4 (kernel-enforced sandbox)]
+Linux daemons \textbf{MUST} use \texttt{openat2(2)} with
+\texttt{RESOLVE\_BENEATH | RESOLVE\_NO\_SYMLINKS |
+RESOLVE\_NO\_MAGICLINKS} for every fetch read. The fall-back
+to \texttt{realpath()}-then-prefix-check is non-conformant: it
+races the filesystem (TOCTOU) and is bypassable.
+\end{invariant}
+
+\subsection{Mechanism (macOS)}
+
+\normsv{} macOS lacks \texttt{RESOLVE\_BENEATH}. v0.5.1
+mitigates with three layers:
+
+\begin{enumerate}[leftmargin=2em,itemsep=0.15em]
+    \item \texttt{realpath(3)} on the resolved candidate;
+    require \texttt{starts\_with(handle.canonical\_root)}.
+    \item \texttt{O\_NOFOLLOW | O\_CLOEXEC} on the open.
+    \item Daemon process wrapped in a Mach
+    \texttt{sandbox\_init}/\texttt{sandbox-exec} profile
+    declaring read-only access to published folders only.
+\end{enumerate}
+
+The macOS combination is structurally weaker than the Linux
+contract; production targets Linux, and macOS parity (a
+per-publish sandboxed worker) is deferred (see
+\S\ref{sec:open}).
+
+\subsection{Default-deny content discipline}
+
+\normsv{} Independent of the kernel sandbox, fetch enforces:
+
+\begin{itemize}[leftmargin=2em,itemsep=0.15em]
+    \item Files whose name starts with \texttt{.} (dotfiles)
+    are refused with 404 (\texttt{.git/}, \texttt{.env},
+    \texttt{.DS\_Store}, \dots).
+    \item Extensions outside the MIME allow-list are served as
+    \texttt{application/octet-stream} with
+    \texttt{Content-Disposition: attachment} so the browser
+    cannot interpret them as code.
+    \item Per-file size cap (default 100 MiB; configurable);
+    over-cap returns 502 to the Hub.
+\end{itemize}
+
+\subsection{MIME allow-list}
+
+\normsv{} v0.5.1 ships:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.18}
+\begin{tabular}{l l}
+\toprule
+\textbf{Extension} & \textbf{Content-Type} \\
+\midrule
+\texttt{.html, .htm}   & \texttt{text/html; charset=utf-8} \\
+\texttt{.css}          & \texttt{text/css; charset=utf-8} \\
+\texttt{.js, .mjs}     & \texttt{application/javascript; charset=utf-8} \\
+\texttt{.json}         & \texttt{application/json; charset=utf-8} \\
+\texttt{.svg}          & \texttt{image/svg+xml} \\
+\texttt{.png}          & \texttt{image/png} \\
+\texttt{.jpg, .jpeg}   & \texttt{image/jpeg} \\
+\texttt{.gif}          & \texttt{image/gif} \\
+\texttt{.webp}         & \texttt{image/webp} \\
+\texttt{.woff, .woff2} & \texttt{font/woff[2]} \\
+\texttt{.txt, .md}     & \texttt{text/plain; charset=utf-8} \\
+\texttt{(other)}       & \texttt{application/octet-stream} (download) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Receipts: two tiers}
+\label{sec:receipts}
+
+\normsv{} v0.5.1 keeps the v0.5 two-tier classification:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\linewidth}{l X X}
+\toprule
+\textbf{Tier} & \textbf{Used for} & \textbf{Storage} \\
+\midrule
+Canonical
+ & \texttt{<user-id>.pages.publish} (state-changing). One receipt per call. Persistent. Walk-chained.
+ & The receipt store from URA v2 plan §Phase 6. \\
+Operational
+ & \texttt{<user-id>.<project-id>.page.fetch}, \texttt{01HUB.pages.serve} (state-preserving, idempotent reads). One receipt per call.
+ & Bounded ring buffer (lossy under load); rates surfaced through \texttt{observe.health}. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\begin{invariant}[PG-INV-5 (idempotent reads are operational)]
+\texttt{<user-id>.<project-id>.page.fetch} and
+\texttt{01HUB.pages.serve} \textbf{MUST} be classified as
+operational receipts. Forcing read-path receipts onto the
+canonical chain saturates it under any realistic browser load.
+\end{invariant}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Minimum deliverable: \texttt{hello-world.html + style.css}}
+\label{sec:mvp}
+
+\subsection{Scenario}
+
+The publish folder:
+
+\begin{lstlisting}
+/Users/alice/site/
+    hello-world.html
+    style.css
+\end{lstlisting}
+
+Contents:
+
+\begin{lstlisting}
+hello-world.html
+————————————————————————————————————————————————
+<!doctype html>
+<html>
+  <head>
+    <link rel="stylesheet" href="style.css">
+    <title>Hello</title>
+  </head>
+  <body>
+    <h1>Hello, EasyNet.</h1>
+  </body>
+</html>
+
+style.css
+————————————————————————————————————————————————
+h1 { color: red; font-family: ui-sans-serif; }
+\end{lstlisting}
+
+\subsection{End-to-end trace}
+
+\textbf{Publish}:
+
+\begin{lstlisting}
+$ easynet ability invoke alice.pages.publish \
+    --args '{"folder":"/Users/alice/site",
+             "project_id":"papers",
+             "visibility":"PUBLIC"}'
+
+→ {
+    "project_uri": "easynet:///r/easynet.run/resource/alice.papers",
+    "url_root":    "https://papers.alice.pages.easynet.run/"
+  }
+\end{lstlisting}
+
+Daemon side:
+
+\begin{itemize}[leftmargin=2em,itemsep=0.12em]
+    \item \texttt{open("/Users/alice/site", O\_DIRECTORY)}; pins fd.
+    \item Inserts \texttt{(alice, papers) \(\to\) ProjectHandle} into in-memory \texttt{PublishedProjects}.
+    \item Registers \texttt{ability/alice.papers.page.fetch} into the local ability registry.
+    \item Emits canonical receipt: \texttt{ability=ability/alice.pages.publish}, \texttt{subject=user/alice}, \texttt{post=resource/alice.papers/}.
+\end{itemize}
+
+\textbf{Browser fetch (HTML)}:
+
+\begin{lstlisting}
+GET /hello-world.html HTTP/1.1
+Host: papers.alice.pages.easynet.run
+\end{lstlisting}
+
+\noindent Hub:
+\begin{itemize}[leftmargin=2em,itemsep=0.12em]
+    \item Subdomain parse: project=\texttt{papers}, user=\texttt{alice}.
+    \item Constructs subject: \texttt{resource/alice.papers/hello-world.html}.
+    \item Directory lookup \(\to\) host agent for \texttt{alice.papers}.
+    \item \texttt{forward\_invoke} \texttt{ability/alice.papers.page.fetch} with \texttt{args=\{path:"/hello-world.html"\}}.
+    \item Operational receipt for the serve.
+\end{itemize}
+
+\noindent Daemon:
+\begin{itemize}[leftmargin=2em,itemsep=0.12em]
+    \item \texttt{openat2(folder\_fd, "hello-world.html", RESOLVE\_BENEATH \dots)}.
+    \item \texttt{fstat} \(\to\) regular file, 173 bytes.
+    \item Read; MIME = \texttt{text/html; charset=utf-8}.
+    \item Operational receipt for the fetch.
+    \item Returns \texttt{FetchResponse}.
+\end{itemize}
+
+\noindent Browser response:
+
+\begin{lstlisting}
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Cache-Control: max-age=60
+Content-Length: 173
+
+<!doctype html>
+<html>
+  <head>
+    <link rel="stylesheet" href="style.css">
+    ...
+\end{lstlisting}
+
+\textbf{Browser fetch (CSS)}: identical pattern,
+\texttt{path = "/style.css"}, MIME \texttt{text/css}. Browser
+parses, applies \texttt{color: red} to the \texttt{h1}.
+
+\textbf{Path-traversal attempt}:
+
+\begin{lstlisting}
+GET /../../etc/passwd HTTP/1.1
+Host: papers.alice.pages.easynet.run
+
+→ HTTP/1.1 404 Not Found
+\end{lstlisting}
+
+\noindent The daemon's \texttt{openat2} returns
+\texttt{EXDEV} (or \texttt{ELOOP}, kernel-version dependent)
+because path resolution attempted to escape \texttt{folder\_fd}.
+The kernel refuses the open; the daemon never reads
+\texttt{/etc/passwd}; the Hub renders 404.
+
+\subsection{Test matrix}
+
+\renewcommand{\arraystretch}{1.18}
+\begin{xltabular}{\linewidth}{l l L{3.0cm} L{3.4cm} L{3.6cm}}
+\toprule
+\textbf{ID} & \textbf{Case} & \textbf{L1 (CLI)} & \textbf{L2 (HTTP)} & \textbf{L3 (state)} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{ID} & \textbf{Case} & \textbf{L1} & \textbf{L2} & \textbf{L3} \\
+\midrule
+\endhead
+M1 & \texttt{pages.publish} of two-file folder & exit 0; stdout has \texttt{project\_uri} + \texttt{url\_root} & --- & \texttt{PublishedProjects} contains the \texttt{(user,project)} entry; ability registry contains \texttt{ability/alice.papers.page.fetch}; canonical receipt logged \\
+M2 & \texttt{GET /hello-world.html} & --- & 200; \texttt{text/html}; body bytes match file & operational receipt logged \\
+M3 & \texttt{GET /style.css} & --- & 200; \texttt{text/css}; body bytes match file & operational receipt logged \\
+M4 & \texttt{GET /../../etc/passwd} (path traversal) & --- & 404 & daemon never opens the target file; \texttt{openat2} returns \texttt{EXDEV}; no read syscall to \texttt{/etc/passwd} \\
+M5 & \texttt{GET /nonexistent.html} & --- & 404 & no successful read \\
+M6 & dotfile probe (\texttt{GET /.env} or \texttt{/.git/HEAD}) & --- & 404 & blocked by default-deny dotfile rule \\
+M7 & symlink escape (folder contains \texttt{escape \(\to\) /etc/passwd}) & --- & 404 & \texttt{RESOLVE\_NO\_SYMLINKS} blocks open \\
+\bottomrule
+\end{xltabular}
+
+\noindent A phase ships only when \emph{every} case passes at
+all three layers. M4 + M6 + M7 are the security gates and
+must be explicit, not implicit.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Implementation plan}
+\label{sec:impl}
+
+\subsection{Module map (EasyNet-Cli)}
+
+\begin{lstlisting}
+src/runtime/agents/pages/                ← NEW (Phase 1)
+  mod.rs                                  ability registration
+  publish.rs                              <user>.pages.publish (canonical)
+  fetch.rs                                <user>.<project>.page.fetch
+                                          (operational)
+  state.rs                                PublishedProjects map
+                                          + ProjectHandle (folder_fd)
+  sandbox.rs                              openat2 wrapper (Linux);
+                                          realpath+sandbox-exec (macOS)
+  mime.rs                                 extension allow-list
+
+src/runtime/hub/                         ← NEW (Phase 1)
+  pages_listener.rs                       wildcard *.*.pages.<realm>
+                                          bind (in-daemon for MVP)
+  pages_serve_ability.rs                  ability/01HUB.pages.serve
+\end{lstlisting}
+
+\subsection{Effort (single engineer, full-time)}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\linewidth}{l l X}
+\toprule
+\textbf{Block} & \textbf{Time} & \textbf{Notes} \\
+\midrule
+Daemon abilities (\texttt{publish, fetch}) + state map + sandbox + MIME & 1.5 d & Linux \texttt{openat2} via \texttt{rustix}; macOS via \texttt{libc::realpath}. \\
+Hub listener + \texttt{pages.serve} + subdomain parsing + \texttt{forward\_invoke} & 1.0 d & Two-level wildcard subdomain parse; in-daemon Hub for MVP. \\
+Test harness (M1--M7) & 1.0 d & Docker-based; security cases observable through syscall trace. \\
+\midrule
+Total & \(\sim\)3.5 d & MVP shippable as one PR. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Beyond MVP --- post-v0.5.1, in shape only}
+\label{sec:post-mvp}
+
+The following is intentionally not specified in v0.5.1 and is
+listed only to keep it out of the MVP code:
+
+\begin{itemize}[leftmargin=2em,itemsep=0.15em]
+    \item \textbf{SPA support.} \texttt{spa\_fallback} arg on
+    publish; fetch returns \texttt{index.html} on path miss.
+    \item \textbf{API surface.} Additional project-owned
+    abilities under \texttt{ability/<user>.<project>.api.<verb>};
+    Hub gains a parallel \texttt{/api/<verb>} route (which
+    invokes the project-owned API ability rather than serving
+    bytes).
+    \item \textbf{Peer-agent action discovery.} Project-owned
+    \texttt{actions.*} abilities for runtime intent discovery
+    by other agents.
+    \item \textbf{Visibility = PRIVATE / SCOPED.} Capability-URL
+    semantics; \texttt{<project-id>} extends to a 64-hex
+    content hash or a separately-minted unguessable token.
+    \item \textbf{Federation.} Content-addressed
+    \texttt{<project-id>} means a second host with the same
+    bytes can serve the same URL; multi-host serve becomes
+    natural.
+    \item \textbf{Aliases.} \texttt{<user>.pages.alias} ability
+    mapping a slug to a content hash; \texttt{<slug>.<user>.pages.<realm>}
+    becomes a stable URL across content updates.
+    \item \textbf{Daemon-restart persistence.}
+    \texttt{PublishedProjects} survives restart by re-opening
+    \texttt{folder\_fd}s from a persisted manifest.
+\end{itemize}
+
+Each is purely additive: the URA shape, the sandbox boundary,
+the Hub-as-agent role, and the receipt tier classification all
+stay constant. v0.5.1 establishes the addressing form once;
+larger features compose over it.
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Open decisions}
+\label{sec:open}
+
+\begin{decisionbox}
+\textbf{Hub binary placement (MVP vs production).} v0.5.1 lets
+the daemon serve \texttt{*.*.pages.<realm>} on a local port for
+MVP. Production needs the Hub in the backend (Go), where TLS,
+wildcard certs, and shared cookie domain already exist. The
+cut-over is mechanical: the Go backend registers
+\texttt{ability/01HUB.pages.serve} doing the same
+\texttt{forward\_invoke}; ontology unchanged.
+\end{decisionbox}
+
+\begin{decisionbox}
+\textbf{macOS sandbox parity.} v0.5.1's macOS read sandbox is
+weaker than Linux's \texttt{RESOLVE\_BENEATH}. Strengthening
+paths: (a) per-publish sandboxed worker pinned to the folder via
+\texttt{sandbox-exec}; (b) wait for an Apple equivalent of
+\texttt{RESOLVE\_BENEATH}. Production targets Linux.
+\end{decisionbox}
+
+\begin{decisionbox}
+\textbf{\texttt{<project-id>} length and policy.} v0.5.1
+defaults to user-chosen names for PUBLIC. PRIVATE/SCOPED
+publishes will require 64-hex content hashes or 256-bit tokens.
+The chosen length must be recorded in the publish receipt so
+verification cannot silently widen attack surface.
+\end{decisionbox}
+
+\begin{decisionbox}
+\textbf{Wildcard subdomain TLS.} Production requires
+\texttt{*.*.pages.easynet.run} (two-level wildcard).
+Let's Encrypt issues two-level wildcards for
+\texttt{pages.easynet.run} only with DNS-01 challenge. The
+Hub deploy needs a DNS-01 ACME flow; this is operations work,
+not protocol work.
+\end{decisionbox}
+
+% ──────────────────────────────────────────────────────────────────────────
+\section{Coverage check}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.18}
+\begin{tabularx}{\linewidth}{l X l}
+\toprule
+\textbf{Rule} & \textbf{Discharged by} & \textbf{Where} \\
+\midrule
+URA v4.1.5 §A.URA-7 (3-segment URA) & The tail \texttt{<id-part>/<path-part>} is one URA segment & \S\ref{sec:ura} \\
+URA v4.1.5 §9 (callee \(\in\) hub/device/agent) & Fetch callee is \texttt{agent/<host>}; Hub-serve callee is \texttt{hub/01HUB} & \S\ref{sec:hub} \\
+ONTOLOGY §3.2 (skill = ability with visibility) & PRIVATE/SCOPED reuse the existing visibility enum & \S\ref{sec:post-mvp} \\
+ONTOLOGY (ability has one owner) & Owner widened from agent to (user \(\mid\) agent \(\mid\) hub \(\mid\) resource); single owner per ability preserved & \S\ref{sec:ura} \\
+AXIOM (every invocation produces a receipt) & Two-tier classification (canonical / operational) & \S\ref{sec:receipts} \\
+forward\_invoke endgame contract & Hub uses the standard \texttt{forward\_invoke}; no parallel path & \S\ref{sec:hub} \\
+Sandbox discipline (kernel-enforced) & PG-INV-4 (Linux \texttt{RESOLVE\_BENEATH}) & \S\ref{sec:sandbox} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\paragraph{Closing.} A URA that points at a public byte stream
+is the simplest answer to ``where is this byte on EasyNet'':
+the user-and-project name a sandboxed root, the path inside the
+URA names the byte. Publishing mints the addressing; the Hub
+translates HTTP into invocations of one project-owned ability;
+the kernel keeps the read path inside the published root. The
+MVP is two files, three days of code, seven test cases, and one
+ontology decision restated: the URA tail is identity-then-path,
+and the path part is real bytes inside the project's hard
+sandbox boundary.
+
+\vfill
+\hrule
+\vspace{0.4em}
+\noindent\small
+\textit{The URA is not a label on a thing. It is the address of
+a byte. The thing is whatever the address resolves to inside a
+sandbox the kernel guarantees.}
+
+\end{document}

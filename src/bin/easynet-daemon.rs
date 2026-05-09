@@ -165,6 +165,13 @@ async fn main() -> anyhow::Result<()> {
     // we pass None. A test or the standalone MCP server that
     // wants chat without any context injection passes
     // Some(Arc::new(Vec::new())) instead.
+    // Resolve user-rooted ability identity ONCE at daemon boot.
+    // EASYNET_PAGES_USER + credentials.json get read here and
+    // never again — the resolved value flows through to
+    // build_registry_for_daemon as an explicit argument so the
+    // registry build is deterministic and free of global env
+    // state.
+    let pages_identity = agents::PagesIdentity::from_env();
     let registry = agents::build_registry_for_daemon(
         kernel.session_service(),
         kernel.permission_service(),
@@ -172,6 +179,7 @@ async fn main() -> anyhow::Result<()> {
         kernel.schedule_service(),
         kernel.loop_service(),
         None,
+        pages_identity,
     );
 
     // Stage-2 dispatcher (executor). Wired with the unified registry
@@ -255,6 +263,31 @@ async fn main() -> anyhow::Result<()> {
             eprintln!("[runtime-dispatch] responder exited: {e:#}");
         }
     });
+
+    // RFC-006-B v0.6 — Pages reference system listener.
+    //
+    // Spawned only when `EASYNET_PAGES_PORT` is set; absence keeps
+    // the daemon's footprint unchanged for users who don't publish
+    // pages. The port matches the value `pages.publish` returns
+    // inside `url_root`, so:
+    //
+    //     EASYNET_PAGES_PORT=8787 easynet-daemon
+    //
+    // gives `http://<project>.<user>.pages.localhost:8787/` access.
+    if let Ok(port_str) = std::env::var("EASYNET_PAGES_PORT") {
+        if let Ok(port) = port_str.parse::<u16>() {
+            tokio::spawn(async move {
+                if let Err(e) = easynet_cli::runtime::hub::pages_listener::run(port).await {
+                    eprintln!("[pages-listener] exited: {e:#}");
+                }
+            });
+        } else {
+            eprintln!(
+                "[pages-listener] EASYNET_PAGES_PORT={port_str} is not a valid u16; \
+                 listener disabled"
+            );
+        }
+    }
 
     // Foreground: Control-plane IPC server. Returns when the listener
     // is dropped (i.e. never, in v1 — we exit on SIGTERM via the OS).

@@ -3,7 +3,8 @@
 //
 // File: src/cli/groups/runtime.rs
 // Description: `easynet runtime …` — every operation that affects the
-//              *local* Axon runtime process on this host.
+//              *local* runtime process on this host (daemon-only device
+//              mode or the legacy bridge/hub runtime).
 //
 // Verbs:
 //   start    Spawn (or attach to) a local runtime  (-> cli::start)
@@ -31,14 +32,15 @@ pub struct RuntimeArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum RuntimeAction {
-    /// Start a local Axon runtime as a background daemon (records pid
-    /// and endpoint in `~/.easynet/runtime.json`).
+    /// Start the local runtime (daemon-only device mode, or the
+    /// legacy bridge/hub runtime) and record state in
+    /// `~/.easynet/runtime.json`.
     Start(start::StartArgs),
     /// Signal the running runtime to shut down cleanly, then remove
     /// `~/.easynet/runtime.json`.
     Stop(stop::StopArgs),
-    /// Report runtime process liveness, bridge endpoint, Hub
-    /// reachability, and online/offline node counts.
+    /// Report runtime liveness, transport details, Hub reachability,
+    /// and online/offline node counts.
     Status(status::StatusArgs),
     /// Run the paired device in the foreground (no background daemon).
     /// Blocks until Ctrl-C; useful for `systemd` / container PID 1.
@@ -68,7 +70,7 @@ pub fn run(args: RuntimeArgs) -> anyhow::Result<()> {
 }
 
 fn run_logs(args: LogsArgs) -> anyhow::Result<()> {
-    let log_path = config::state_dir().join("axon.log");
+    let log_path = resolve_runtime_log_path();
     if !log_path.exists() {
         anyhow::bail!(
             "no runtime log file at {}\n\
@@ -115,4 +117,20 @@ fn run_logs(args: LogsArgs) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn resolve_runtime_log_path() -> std::path::PathBuf {
+    let daemon_log = config::state_dir().join("logs").join("easynet-daemon.log");
+    let axon_log = config::state_dir().join("axon.log");
+    match config::load().ok().map(|state| state.runtime_kind) {
+        Some(config::RuntimeKind::DaemonOnly) => daemon_log,
+        Some(config::RuntimeKind::AxonBridge) => axon_log,
+        None => {
+            if daemon_log.exists() {
+                daemon_log
+            } else {
+                axon_log
+            }
+        }
+    }
 }

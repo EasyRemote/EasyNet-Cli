@@ -11,7 +11,7 @@
 // into a recording invoker rather than the real Axon bridge.
 //
 // Pass criteria for the user-agent ability fix:
-//   * One `federation.advertise_abilities@1` call per user agent
+//   * One `federation.advertise_abilities` call per user agent
 //   * Owner URI in that payload matches the user-agent URA bootstrap
 //     minted in local-agents.json
 //   * The abilities array contains `<agent>.chat`
@@ -132,7 +132,7 @@ fn main() -> anyhow::Result<()> {
 
     println!("-- advertise_agent --");
     for (uri, payload) in &calls {
-        if uri.contains("federation.advertise_agent@1") {
+        if uri.contains("federation.advertise_agent") {
             let agent_uri = payload["agent_uri"].as_str().unwrap_or("?");
             let auth = &payload["signing_authority"];
             println!("  agent_uri = {agent_uri}");
@@ -143,7 +143,7 @@ fn main() -> anyhow::Result<()> {
 
     println!("-- advertise_abilities --");
     for (uri, payload) in &calls {
-        if uri.contains("federation.advertise_abilities@1") {
+        if uri.contains("federation.advertise_abilities") {
             let owner = payload["agent_uri"].as_str().unwrap_or("?");
             let abilities = payload["abilities"].as_array().cloned().unwrap_or_default();
             let names: Vec<&str> = abilities
@@ -188,7 +188,7 @@ fn main() -> anyhow::Result<()> {
         };
 
         let found = calls.iter().any(|(uri, payload)| {
-            uri.contains("federation.advertise_abilities@1")
+            uri.contains("federation.advertise_abilities")
                 && payload["agent_uri"].as_str() == Some(agent_uri.as_str())
                 && payload["abilities"]
                     .as_array()

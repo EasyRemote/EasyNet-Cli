@@ -37,12 +37,13 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::ability_dispatch::{LocalAbilityRegistry, StreamSource};
 use crate::runtime::domain::SessionId;
 use crate::runtime::execution::session::SessionService;
 
-pub const ABILITY_LIST: &str = "fleet.list_sessions";
-pub const ABILITY_ATTACH: &str = "fleet.attach_session";
+pub const ABILITY_LIST: &str = "device.fleet.list_sessions";
+pub const ABILITY_ATTACH: &str = "device.fleet.attach_session";
 
 /// Register the two session abilities on the registry. Called from
 /// `runtime::agents::build_registry`.
@@ -53,14 +54,16 @@ pub const ABILITY_ATTACH: &str = "fleet.attach_session";
 /// routes by call_mode.
 pub fn register(reg: &mut LocalAbilityRegistry, sessions: Arc<SessionService>) {
     let s_for_list = Arc::clone(&sessions);
-    reg.register_rpc(
-        ABILITY_LIST,
+    reg.register_rpc_with_owner(
+        "device.fleet.list_sessions",
+        OwnerKind::Device,
         Arc::new(move |args: Value| list_handler(&s_for_list, args)),
     );
     // attach is registered as a stream handler — see
     // runtime::ability_dispatch for the LocalStreamRegistry surface.
-    reg.register_stream(
-        ABILITY_ATTACH,
+    reg.register_stream_with_owner(
+        "device.fleet.attach_session",
+        OwnerKind::Device,
         Arc::new(move |args: Value| attach_handler(&sessions, args)),
     );
 }

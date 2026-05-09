@@ -1,0 +1,12 @@
+schema_version = "1"
+name = "device.mission.cancel"
+description = "Mark an in-flight mission run as cancelled. Best-effort: rewrites the run's meta.json to status=cancelled and removes the pid file; long-running step subprocesses are NOT killed today, they just stop being awaited. Returns `cancelled = false` (with informative meta) if the run was already terminal."
+
+[input_schema]
+type = "object"
+required = ["run_id"]
+additionalProperties = false
+
+[input_schema.properties.run_id]
+type = "string"
+description = "The run id of the mission to cancel."

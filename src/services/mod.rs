@@ -99,6 +99,14 @@ pub mod ability_catalog_store;
 /// the host's live `<self>.session`.
 pub mod advertised_agent_store;
 
+/// AXON-RFC-001 v4.1.7 hub-broadcast contract — caches hub-owned
+/// ability descriptors that the realm hub pushes via
+/// `federation.join` (full snapshot) + `federation.heartbeat`
+/// (incremental diff). `meta.list_abilities scope=realm` merges
+/// this cache with the device-local registry so users see both
+/// device-owned and hub-owned abilities through one query.
+pub mod hub_published_ability_store;
+
 /// Per-daemon nonce replay store (RFC 001 §5.2 step 4). Wraps the
 /// axon SDK's time-wheel store in `Arc<Mutex<…>>` so a single
 /// instance is shared across every concurrent invoke through the
@@ -140,6 +148,7 @@ pub mod self_identity;
 /// receipt write failure does not fail admission (PR-10 spec
 /// INV-5). Persistence is a future RFC concern; v1 is in-memory
 /// FIFO at `DEFAULT_RECEIPT_CAPACITY`.
+#[cfg(feature = "axon-pb")]
 pub mod receipt_store;
 
 /// Cross-hub federation transport (RFC-N PR-N1 onwards). The
@@ -161,5 +170,9 @@ pub mod federation_client;
 /// `DirectoryEvent` (the event-stream tagged enum) lands in
 /// N3-2; the `RemoteDirectoryClient` per-peer FSM and
 /// `SharedFederatedDirectoryView` cell land in N3-3. Pure data
-/// + serde — no feature gate.
+/// + serde, but the current file also hosts the streaming
+/// supervisor path that depends on proto-generated request types.
+/// Keep it behind `axon-pb` until the pure-data portion is split
+/// out.
+#[cfg(feature = "axon-pb")]
 pub mod federation_directory;

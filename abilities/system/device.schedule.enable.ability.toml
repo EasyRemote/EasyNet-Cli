@@ -1,0 +1,14 @@
+schema_version = "1"
+name = "device.schedule.enable"
+description = "Toggle a schedule's enabled flag. Disabled schedules stay in the registry but do not fire."
+
+[input_schema]
+type = "object"
+required = ["schedule_id", "enabled"]
+additionalProperties = false
+
+[input_schema.properties.enabled]
+type = "boolean"
+
+[input_schema.properties.schedule_id]
+type = "string"

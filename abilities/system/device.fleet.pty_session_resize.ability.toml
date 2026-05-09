@@ -1,0 +1,22 @@
+schema_version = "1"
+name = "device.fleet.pty_session_resize"
+description = "Resize a PTY session's cols × rows. Returns ack=false on unknown session_id so a caller polling SIGWINCH on a closed session can stop without special-casing."
+
+[input_schema]
+type = "object"
+required = ["session_id", "cols", "rows"]
+additionalProperties = false
+
+[input_schema.properties.cols]
+type = "integer"
+minimum = 1
+maximum = 65535
+
+[input_schema.properties.rows]
+type = "integer"
+minimum = 1
+maximum = 65535
+
+[input_schema.properties.session_id]
+type = "string"
+minLength = 1

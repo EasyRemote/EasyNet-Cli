@@ -402,7 +402,7 @@ mod tests {
         let uri = upsert_resource(
             &mut f,
             ResourceUpsert {
-                owner_agent: "easynet:///r/acme/agent/01DEV",
+                owner_agent: "easynet:///r/acme/device/01DEV",
                 metadata: json!({"sample_rates":[16000,48000]}),
                 ..spec(
                     ResourceType::Mic,
@@ -416,7 +416,7 @@ mod tests {
         assert_eq!(f.resources[0].kind, ResourceType::Mic);
         assert_eq!(f.resources[0].hardware_id, "BuiltInMic-AAPL-0001");
         assert_eq!(f.resources[0].display_name, "Built-in Microphone");
-        assert_eq!(f.resources[0].owner_agent, "easynet:///r/acme/agent/01DEV");
+        assert_eq!(f.resources[0].owner_agent, "easynet:///r/acme/device/01DEV");
     }
 
     #[test]
@@ -528,7 +528,7 @@ mod tests {
         upsert_resource(
             &mut f,
             ResourceUpsert {
-                owner_agent: "easynet:///r/acme/agent/01DEV",
+                owner_agent: "easynet:///r/acme/device/01DEV",
                 metadata: json!({"max_fps":60,"resolutions":["640x480","1280x720"]}),
                 ..spec(ResourceType::Camera, "h-cam-1", "Webcam")
             },

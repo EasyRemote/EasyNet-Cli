@@ -99,17 +99,76 @@ pub trait UriMinter {
     fn mint_id(&self, profile: &str, name: &str) -> String;
 }
 
-/// Production URI minter — uses `common::new_id` from the
-/// internal helper that the rest of the codebase uses for run/
-/// invocation IDs.
+/// Production URI minter — encodes the operator-meaningful name
+/// into the agent URA's agent-id slug so the friendly identity
+/// lives **inside** the canonical URA, not as out-of-band metadata.
+///
+/// Two minting rules, switched on profile class:
+///
+///   * **LLM profile** (`profile == "llm"`): the operator already
+///     gave a meaningful name through `easynet agent add <name>`
+///     (`probe-agent`, `codex`, `web-builder`, …). The minted
+///     agent-id is the raw `name` — no `llm-` prefix. This keeps
+///     the dispatch registry's `<agent>.chat` entries (registered
+///     by `runtime::agents::mod::build_registry_with_services`
+///     under `agents.json::keys`, i.e. the raw name) aligned with
+///     what `local-agents.json` advertises to the hub. Without
+///     this alignment, `/v1/chat/completions` resolves
+///     `model: "probe-agent"` to `agent/<user>.probe-agent` while
+///     the hub PresenceRegistry only knows
+///     `agent/<user>.llm-probe-agent`, and routing fails with
+///     "not in PresenceRegistry; either offline or never connected
+///     to this hub" (RFC-006-C v0.1 §INV-2).
+///
+///   * **System-managed profiles** (`consent`, `policy`, `mcp`):
+///     the name is auto-generated and generic (`default`,
+///     `fs-bridge`). The bare name would collide across profile
+///     classes (a hypothetical `consent/default` and
+///     `policy/default` would map to `agent/<user>.default`),
+///     which violates URA uniqueness. Keep the `<profile>-<name>`
+///     prefix so each profile carves its own agent-id space:
+///
+///       consent / default      → `consent-default`
+///       policy  / default      → `policy-default`
+///       mcp     / fs-bridge    → `mcp-fs-bridge`
+///
+/// Why encode the name (vs. the prior `a-<uuid>` style): the
+/// Frontend Agents page reads agent URAs and renders `<agent_id>`
+/// as the display label when no `display_name` metadata is
+/// present. With a uuid-hash agent_id the user sees
+/// `a-8c4523c3f3c94ed6931670c98a4e457e` — meaningless. With the
+/// encoded name they see `probe-agent` (LLM) or `consent-default`
+/// (system) and immediately know which agent they're looking at.
+/// The agent URA is the canonical identity and always carries
+/// the full information the resolver needs; piggybacking the
+/// friendly name on it (rather than threading a parallel
+/// `display_name` field through advertise → resolve → backend →
+/// frontend) is the honest fix.
+///
+/// Why `-` (not `.`) as separator on the system path: URA v4.1.5
+/// §A.URA-3 forbids dots inside `agent_id` — that namespace
+/// belongs to ability URIs (`agent/<user>.<agent>.<verb>` where
+/// each `<…>` is a single dot-free segment).
+///
+/// Stability: the encoded name MUST stay stable across daemon
+/// restarts (re-pairing must produce the same URA so backend
+/// receipts + frontend bookmarks keep working). `local-agents.json`
+/// persists the URA on first mint; the bootstrap repair path
+/// reuses it on subsequent runs.
+///
+/// Sanitisation: we trust the operator's `easynet agent add <name>`
+/// argument (the CLI rejects names with `/`, `.`, whitespace, or
+/// uppercase per `agent_spec.rs::validate_name`) so no further
+/// stripping is needed.
 pub struct UuidMinter;
 
 impl UriMinter for UuidMinter {
-    fn mint_id(&self, _profile: &str, _name: &str) -> String {
-        // Match axon's hub-profile minting style ("a-<uuid>").
-        // Keeping the prefix short (`a` for "agent") preserves
-        // grep-ability without cluttering the URA.
-        format!("a-{}", uuid::Uuid::new_v4().simple())
+    fn mint_id(&self, profile: &str, name: &str) -> String {
+        if profile == "llm" {
+            name.to_string()
+        } else {
+            format!("{profile}-{name}")
+        }
     }
 }
 
@@ -127,6 +186,35 @@ pub fn bootstrap_local_agents<M: UriMinter>(
     if !plan.host_device_uri.is_empty() {
         file.host_device_agent_uri = plan.host_device_uri.clone();
     }
+    // Drop orphan hosted-agent rows whose URI is structurally
+    // malformed under v4.1.5 §A.URA-3 (agent tail must be
+    // `<user>.<agent>` with both segments non-empty). These are
+    // legacy rows persisted by daemons that pre-date the strict
+    // tail rule — `easynet:///r/acme/agent/consent-default-0` and
+    // friends, where the entire tail collapsed into one bare
+    // segment. We only drop rows the current plan does NOT
+    // re-reference: rows the plan still owns by `(profile, name)`
+    // hit the repair branch below and get re-minted with the
+    // canonical realm + user_id.
+    //
+    // Rows referenced by the current plan are left to the repair
+    // branch even if malformed — we want repair to win over drop
+    // there so a transient plan-flip (operator toggles policy
+    // off/on) does not lose the persisted agent_id continuity.
+    //
+    // Pre-join (no realm yet) we leave malformed rows alone — the
+    // `<unjoined>` placeholders ARE structurally valid agent URAs
+    // (tail parses, just opaque), and any other malformed row
+    // will be reconsidered on the post-join bootstrap pass.
+    if !plan.realm.is_empty() && !plan.user_id.is_empty() {
+        let referenced = plan_referenced_keys(plan);
+        file.hosted_agents.retain(|e| {
+            if is_canonical_agent_uri(&e.agent_uri) {
+                return true;
+            }
+            referenced.contains(&(e.profile.clone(), e.name.clone()))
+        });
+    }
     let mut outcomes = Vec::new();
     let mut process = |profile: &str, name: &str, outcomes: &mut Vec<BootstrapOutcome>| {
         let existing = file
@@ -136,20 +224,20 @@ pub fn bootstrap_local_agents<M: UriMinter>(
             .map(|e| e.agent_uri.clone());
         let (uri, reused) = match existing {
             Some(existing_uri)
-                if uri_contains_unjoined(&existing_uri)
+                if needs_repair(&existing_uri, &plan.realm, &plan.user_id)
                     && !plan.realm.is_empty()
                     && !plan.user_id.is_empty() =>
             {
-                // Repair path: this row was minted before the device
-                // joined a realm. `<unjoined>` placeholders cause the
-                // hub-side `federation.resolve` visibility gate to
-                // skip the agent (the gate keys off a real user URA),
-                // so the agent shows up in `agent list` locally but
-                // never appears in backend `/api/v1/agents`. Now that
-                // we know the real realm + user_id post-join, keep
-                // the original agent_id (operators may have
-                // referenced it elsewhere) and rebuild a canonical
-                // URI around it. Persist so the repair is idempotent.
+                // Repair path: this row was minted under a stale
+                // shape (`<unjoined>` placeholder from pre-join,
+                // legacy non-`<user>.<agent>` tail from a v1 daemon,
+                // or a different realm/user from a previous pairing).
+                // Any of those break hub-side `federation.resolve`
+                // visibility filtering, so the agent shows up locally
+                // but never via `/api/v1/agents`. With the real realm
+                // + user_id known we keep the agent_id tail when it
+                // parses canonically (operators may have referenced
+                // it elsewhere) and otherwise mint a fresh one.
                 let agent_id = extract_agent_id_tail(&existing_uri)
                     .unwrap_or_else(|| minter.mint_id(profile, name));
                 let repaired = crate::uri::agent_uri(&plan.realm, &plan.user_id, &agent_id);
@@ -228,15 +316,60 @@ pub fn hosted_uris(file: &LocalAgentsFile) -> Vec<(String, String, String)> {
         .collect()
 }
 
-/// True iff the URI is one of the pre-join placeholders
-/// (`easynet:///r/<unjoined>/...` or `.../agent/<unjoined>.<id>`).
-/// Used by the bootstrap-time repair branch to decide whether a row
-/// in `agents.json` should be re-minted with the now-known realm +
-/// user_id. The check is intentionally substring-based — both the
-/// realm slot and the user_id slot can carry the placeholder, and
-/// either one is enough to fail backend-side visibility filtering.
-fn uri_contains_unjoined(uri: &str) -> bool {
-    uri.contains("<unjoined>")
+/// True iff the URI parses as a canonical v4.1.5 agent URA:
+/// `easynet:///r/<realm>/agent/<user>.<agent>` with both tail
+/// segments non-empty and free of internal dots / slashes. This
+/// is what `parse_ura(uri).kind == Agent` already enforces; we
+/// surface it as a named predicate so callers reading the
+/// bootstrap logic can match it against the prose ("structurally
+/// valid agent URA").
+fn is_canonical_agent_uri(uri: &str) -> bool {
+    matches!(
+        crate::uri::parse_ura(uri).map(|p| p.kind),
+        Ok(crate::uri::URAKind::Agent)
+    )
+}
+
+/// True iff the URI either fails the strict canonical shape check
+/// OR was minted under a different realm/user than the current
+/// plan. Either condition means the row's identity is stale for
+/// this daemon's current pairing — repair re-mints it under the
+/// real `(realm, user_id)` so hub-side `federation.resolve`
+/// visibility filtering and every downstream URA consumer (the
+/// `device.meta.list_abilities` synth, advertise, …) see one truth.
+///
+/// The `<unjoined>` placeholders parse fine structurally but
+/// always trip the realm/user mismatch arm because the literal
+/// strings `<unjoined>` cannot be the real realm or user_id.
+fn needs_repair(uri: &str, realm: &str, user_id: &str) -> bool {
+    let Ok(parsed) = crate::uri::parse_ura(uri) else {
+        return true;
+    };
+    if parsed.kind != crate::uri::URAKind::Agent {
+        return true;
+    }
+    parsed.realm != realm || parsed.user_id != user_id
+}
+
+/// Set of `(profile, name)` keys the current plan still owns.
+/// Used by the orphan-pruning pass at the top of
+/// `bootstrap_local_agents` to decide which malformed rows can be
+/// safely dropped vs which ones the repair branch will rewrite.
+fn plan_referenced_keys(plan: &BootstrapPlan) -> std::collections::HashSet<(String, String)> {
+    let mut s = std::collections::HashSet::new();
+    if plan.consent {
+        s.insert(("consent".into(), "default".into()));
+    }
+    if plan.policy {
+        s.insert(("policy".into(), "default".into()));
+    }
+    if plan.mcp {
+        s.insert(("mcp".into(), "default".into()));
+    }
+    for sub in &plan.llm_sub_agents {
+        s.insert(("llm".into(), sub.name.clone()));
+    }
+    s
 }
 
 /// Pull the agent_id tail from a `.../agent/<user>.<agent_id>` URI.
@@ -381,6 +514,29 @@ mod tests {
     }
 
     #[test]
+    fn uuid_minter_keeps_llm_names_bare_and_prefixes_system_profiles() {
+        // The dispatch registry registers `<agent>.chat` /
+        // `<agent>.invoke` / `<agent>.discover` under the raw
+        // `agents.json::keys` (i.e. the operator's
+        // `easynet agent add <name>` argument). The friendly URA
+        // minted into `local-agents.json` MUST agree with that
+        // raw name for the LLM profile, otherwise
+        // `/v1/chat/completions model=<name>` resolves to
+        // `agent/<user>.<name>` while the hub PresenceRegistry
+        // only knows `agent/<user>.llm-<name>`, and routing
+        // breaks with "not in PresenceRegistry".
+        let m = UuidMinter;
+        assert_eq!(m.mint_id("llm", "probe-agent"), "probe-agent");
+        assert_eq!(m.mint_id("llm", "codex"), "codex");
+        // System-managed profiles auto-generate generic names
+        // (`default`, `fs-bridge`); the prefix carves a per-class
+        // namespace so they never collide.
+        assert_eq!(m.mint_id("consent", "default"), "consent-default");
+        assert_eq!(m.mint_id("policy", "default"), "policy-default");
+        assert_eq!(m.mint_id("mcp", "fs-bridge"), "mcp-fs-bridge");
+    }
+
+    #[test]
     fn agent_type_for_returns_display_string() {
         let plan = plan_with(false, false, false, &[("claude", "claude-code")]);
         assert_eq!(
@@ -476,5 +632,186 @@ mod tests {
         assert!(extract_agent_id_tail("").is_none());
         assert!(extract_agent_id_tail("not-a-uri").is_none());
         assert!(extract_agent_id_tail("easynet:///r/acme").is_none());
+    }
+
+    // ── repair / prune of malformed legacy rows ────────────────────
+
+    #[test]
+    fn malformed_agent_uri_referenced_by_plan_is_repaired() {
+        // Legacy daemon persisted `easynet:///r/acme/agent/consent-default-0`
+        // — tail collapsed into one bare segment, fails v4.1.5
+        // §A.URA-3. Today's plan still owns `(consent, default)`,
+        // so the row must be re-minted (NOT reused as-is) with the
+        // current realm + user_id.
+        let mut file = LocalAgentsFile {
+            hosted_agents: vec![HostedAgentEntry {
+                profile: "consent".into(),
+                name: "default".into(),
+                agent_uri: "easynet:///r/acme/agent/consent-default-0".into(),
+                signing_authority: String::new(),
+                first_seen_at: String::new(),
+            }],
+            ..Default::default()
+        };
+        let plan = plan_with(true, false, false, &[]);
+        let outcomes = bootstrap_local_agents(&plan, &mut file, &CountingMinter::new());
+        assert_eq!(outcomes.len(), 1);
+        assert!(!outcomes[0].reused, "malformed row must NOT be reused");
+        assert!(
+            outcomes[0]
+                .agent_uri
+                .starts_with("easynet:///r/acme/agent/u1."),
+            "expected canonical user-anchored URA, got {:?}",
+            outcomes[0].agent_uri
+        );
+        assert!(
+            crate::uri::parse_ura(&outcomes[0].agent_uri).is_ok(),
+            "repaired URA must parse strictly"
+        );
+    }
+
+    #[test]
+    fn malformed_agent_uri_orphan_row_is_pruned_post_join() {
+        // Legacy stale row from a previous pairing — different
+        // realm, malformed shape, NOT referenced by the current
+        // plan. It is dead data: drop on first post-join boot.
+        let mut file = LocalAgentsFile {
+            hosted_agents: vec![
+                HostedAgentEntry {
+                    profile: "llm".into(),
+                    name: "old-agent".into(),
+                    agent_uri: "easynet:///r/old-realm/agent/old-tail".into(),
+                    signing_authority: String::new(),
+                    first_seen_at: String::new(),
+                },
+                HostedAgentEntry {
+                    profile: "consent".into(),
+                    name: "default".into(),
+                    agent_uri: "easynet:///r/acme/agent/u1.consent-keep".into(),
+                    signing_authority: String::new(),
+                    first_seen_at: String::new(),
+                },
+            ],
+            ..Default::default()
+        };
+        // Plan does NOT include (llm, old-agent); it includes
+        // (consent, default) under the canonical URA already.
+        let plan = plan_with(true, false, false, &[]);
+        let _ = bootstrap_local_agents(&plan, &mut file, &CountingMinter::new());
+        let names: Vec<_> = file
+            .hosted_agents
+            .iter()
+            .map(|e| (e.profile.clone(), e.name.clone()))
+            .collect();
+        assert!(
+            !names.contains(&("llm".into(), "old-agent".into())),
+            "orphan malformed row must be pruned"
+        );
+        assert!(
+            names.contains(&("consent".into(), "default".into())),
+            "canonical row referenced by plan must survive"
+        );
+    }
+
+    #[test]
+    fn pre_join_does_not_prune_malformed_rows() {
+        // Pre-join (no realm yet): leave the file alone. Even
+        // malformed rows must survive — they get reconsidered on
+        // the post-join pass when we know the real realm + user.
+        let mut file = LocalAgentsFile {
+            hosted_agents: vec![HostedAgentEntry {
+                profile: "llm".into(),
+                name: "old-agent".into(),
+                agent_uri: "easynet:///r/old-realm/agent/old-tail".into(),
+                signing_authority: String::new(),
+                first_seen_at: String::new(),
+            }],
+            ..Default::default()
+        };
+        let mut plan = plan_with(false, false, false, &[]);
+        plan.realm = String::new();
+        plan.user_id = String::new();
+        plan.host_device_uri = String::new();
+        let _ = bootstrap_local_agents(&plan, &mut file, &CountingMinter::new());
+        assert_eq!(file.hosted_agents.len(), 1, "pre-join must not prune");
+    }
+
+    #[test]
+    fn stale_realm_canonical_uri_is_repaired() {
+        // Row parses as a canonical agent URA but its realm and
+        // user_id belong to a previous pairing. We are now paired
+        // to a different realm; repair must re-mint under the
+        // current `(realm, user_id)` so federation visibility
+        // filtering keys off the right user.
+        let mut file = LocalAgentsFile {
+            hosted_agents: vec![HostedAgentEntry {
+                profile: "llm".into(),
+                name: "claude".into(),
+                agent_uri: "easynet:///r/old/agent/old-user.a-keep-me".into(),
+                signing_authority: String::new(),
+                first_seen_at: String::new(),
+            }],
+            ..Default::default()
+        };
+        let plan = plan_with(false, false, false, &[("claude", "claude-code")]);
+        let outcomes = bootstrap_local_agents(&plan, &mut file, &CountingMinter::new());
+        assert_eq!(outcomes.len(), 1);
+        assert!(!outcomes[0].reused);
+        // agent_id tail is preserved (operators may have referenced it).
+        assert_eq!(
+            outcomes[0].agent_uri,
+            "easynet:///r/acme/agent/u1.a-keep-me"
+        );
+    }
+
+    // ── helpers: is_canonical_agent_uri / needs_repair ─────────────
+
+    #[test]
+    fn is_canonical_agent_uri_accepts_v4_1_5_agent_shape() {
+        assert!(is_canonical_agent_uri(
+            "easynet:///r/acme/agent/alice.claude"
+        ));
+    }
+
+    #[test]
+    fn is_canonical_agent_uri_rejects_collapsed_tail() {
+        // The bug shape: tail with no `.` separator. Pre-v4.1.5
+        // daemons emitted this and it has been silently reused
+        // across boots.
+        assert!(!is_canonical_agent_uri(
+            "easynet:///r/acme/agent/consent-default-0"
+        ));
+    }
+
+    #[test]
+    fn is_canonical_agent_uri_rejects_non_agent_kinds() {
+        assert!(!is_canonical_agent_uri("easynet:///r/acme/device/01DEV"));
+        assert!(!is_canonical_agent_uri("easynet:///r/acme/hub"));
+        assert!(!is_canonical_agent_uri("agent://self"));
+        assert!(!is_canonical_agent_uri(""));
+    }
+
+    #[test]
+    fn needs_repair_flags_realm_or_user_drift() {
+        // Same shape, wrong realm → repair.
+        assert!(needs_repair("easynet:///r/old/agent/u1.a-1", "acme", "u1"));
+        // Same shape, wrong user → repair.
+        assert!(needs_repair(
+            "easynet:///r/acme/agent/old-user.a-1",
+            "acme",
+            "u1"
+        ));
+        // Match on both → no repair.
+        assert!(!needs_repair(
+            "easynet:///r/acme/agent/u1.a-1",
+            "acme",
+            "u1"
+        ));
+        // Unparseable → repair.
+        assert!(needs_repair(
+            "easynet:///r/acme/agent/collapsed-tail",
+            "acme",
+            "u1"
+        ));
     }
 }

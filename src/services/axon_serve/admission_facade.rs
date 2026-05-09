@@ -1011,8 +1011,8 @@ mod tests {
     fn envelope_with_caller(uri: &str) -> Envelope {
         Envelope {
             caller: Some(agent(uri)),
-            callee: Some(agent("easynet:///r/realm/agent/callee")),
-            subject: Some(subject("easynet:///r/realm/agent/callee")),
+            callee: Some(agent("easynet:///r/realm/hub")),
+            subject: Some(subject("easynet:///r/realm/hub")),
             invocation_nonce: vec![0x11u8; 16],
             ..Envelope::default()
         }
@@ -1139,7 +1139,9 @@ mod tests {
         // permission_denied without ever exercising the §5.2
         // pipeline.
         let facade = AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None);
-        let req = invoke_request(Some(envelope_with_caller("easynet:///r/realm/agent/n")));
+        let req = invoke_request(Some(envelope_with_caller(
+            "easynet:///r/realm/agent/test.external",
+        )));
         let err = facade.verify_invoke(&req).expect_err("must reject");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
         assert!(
@@ -1171,11 +1173,9 @@ mod tests {
     fn daemon_uri_loopback_bypasses_anchor_and_replay() {
         let facade = AdmissionFacade::new(
             Arc::new(RealmTrustAnchor::default()),
-            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+            Some("easynet:///r/realm/hub".to_string()),
         );
-        let req = invoke_request(Some(envelope_with_caller(
-            "easynet:///r/realm/agent/this-daemon",
-        )));
+        let req = invoke_request(Some(envelope_with_caller("easynet:///r/realm/hub")));
         facade
             .verify_invoke(&req)
             .expect("daemon loopback admitted without crypto");
@@ -1190,11 +1190,9 @@ mod tests {
         // never trigger the replay path.
         let facade = AdmissionFacade::new(
             Arc::new(RealmTrustAnchor::default()),
-            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+            Some("easynet:///r/realm/hub".to_string()),
         );
-        let req = invoke_request(Some(envelope_with_caller(
-            "easynet:///r/realm/agent/this-daemon",
-        )));
+        let req = invoke_request(Some(envelope_with_caller("easynet:///r/realm/hub")));
         for _ in 0..3 {
             facade.verify_invoke(&req).expect("every loopback admitted");
         }
@@ -1209,11 +1207,11 @@ mod tests {
         // that breaks the unsigned-envelope PR-6 e2e until commit
         // 7/N restores it with a signed payload.
         let facade = AdmissionFacade::new(
-            backend_anchor(&["easynet:///r/realm/agent/external"]),
-            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+            backend_anchor(&["easynet:///r/realm/agent/test.external"]),
+            Some("easynet:///r/realm/hub".to_string()),
         );
         let req = invoke_request(Some(envelope_with_caller(
-            "easynet:///r/realm/agent/external",
+            "easynet:///r/realm/agent/test.external",
         )));
         let err = facade.verify_invoke(&req).expect_err("must reject");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
@@ -1230,20 +1228,17 @@ mod tests {
         let pub_key = signing_key.verifying_key();
         let pub_key_b64 = BASE64_STANDARD.encode(pub_key.to_bytes());
 
-        let caller_uri = "easynet:///r/realm/agent/signer-A";
+        let caller_uri = "easynet:///r/realm/agent/test.signer-a";
         let trust = Arc::new(
             RealmTrustAnchor::from_entries(vec![backend_entry(caller_uri, pub_key_b64)])
                 .expect("anchor"),
         );
 
-        let facade = AdmissionFacade::new(
-            trust,
-            Some("easynet:///r/realm/agent/this-daemon".to_string()),
-        );
+        let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
 
         let (req, _digest) = signed_request_with_nonce(
             caller_uri,
-            "easynet:///r/realm/agent/this-daemon",
+            "easynet:///r/realm/hub",
             "self.echo",
             b"{}",
             &signing_key,
@@ -1264,8 +1259,8 @@ mod tests {
         let signing_key = SigningKey::from_bytes(&[0x55u8; 32]);
         let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
 
-        let caller_uri = "easynet:///r/realm/agent/receipt-emitter";
-        let callee_uri = "easynet:///r/realm/agent/this-daemon";
+        let caller_uri = "easynet:///r/realm/agent/test.receipt-emitter";
+        let callee_uri = "easynet:///r/realm/hub";
         let trust = Arc::new(
             RealmTrustAnchor::from_entries(vec![backend_entry(caller_uri, pub_key_b64)])
                 .expect("anchor"),
@@ -1318,11 +1313,9 @@ mod tests {
     fn loopback_admission_does_not_record_receipt() {
         let facade = AdmissionFacade::new(
             Arc::new(RealmTrustAnchor::default()),
-            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+            Some("easynet:///r/realm/hub".to_string()),
         );
-        let req = invoke_request(Some(envelope_with_caller(
-            "easynet:///r/realm/agent/this-daemon",
-        )));
+        let req = invoke_request(Some(envelope_with_caller("easynet:///r/realm/hub")));
         facade.verify_invoke(&req).expect("loopback admitted");
         assert!(
             facade.receipt_store().is_empty(),
@@ -1339,8 +1332,8 @@ mod tests {
         let signing_key = SigningKey::from_bytes(&[0xCCu8; 32]);
         let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
 
-        let caller_uri = "easynet:///r/realm/agent/replay-receipt";
-        let callee_uri = "easynet:///r/realm/agent/this-daemon";
+        let caller_uri = "easynet:///r/realm/agent/test.replay-receipt";
+        let callee_uri = "easynet:///r/realm/hub";
         let trust = Arc::new(
             RealmTrustAnchor::from_entries(vec![backend_entry(caller_uri, pub_key_b64)])
                 .expect("anchor"),
@@ -1380,7 +1373,7 @@ mod tests {
     /// annotation in a follow-up.
     #[test]
     fn device_uri_only_records_annotated_receipt() {
-        let caller_uri = "easynet:///r/realm/agent/unsigned-device";
+        let caller_uri = "easynet:///r/realm/device/unsigned-device";
         let trust = Arc::new(
             RealmTrustAnchor::from_entries(vec![device_entry(
                 caller_uri,
@@ -1388,10 +1381,7 @@ mod tests {
             )])
             .expect("anchor"),
         );
-        let facade = AdmissionFacade::new(
-            trust,
-            Some("easynet:///r/realm/agent/this-daemon".to_string()),
-        );
+        let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
         let req = invoke_request(Some(envelope_with_caller(caller_uri)));
         facade
             .verify_invoke(&req)
@@ -1418,19 +1408,16 @@ mod tests {
         let pub_key = signing_key.verifying_key();
         let pub_key_b64 = BASE64_STANDARD.encode(pub_key.to_bytes());
 
-        let caller_uri = "easynet:///r/realm/agent/replay";
+        let caller_uri = "easynet:///r/realm/agent/test.replay";
         let trust = Arc::new(
             RealmTrustAnchor::from_entries(vec![backend_entry(caller_uri, pub_key_b64)])
                 .expect("anchor"),
         );
-        let facade = AdmissionFacade::new(
-            trust,
-            Some("easynet:///r/realm/agent/this-daemon".to_string()),
-        );
+        let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
 
         let (req, _) = signed_request_with_nonce(
             caller_uri,
-            "easynet:///r/realm/agent/this-daemon",
+            "easynet:///r/realm/hub",
             "self.echo",
             b"{}",
             &signing_key,
@@ -1455,19 +1442,16 @@ mod tests {
         let other_key = SigningKey::from_bytes(&[0x66u8; 32]);
         let other_pub_b64 = BASE64_STANDARD.encode(other_key.verifying_key().to_bytes());
 
-        let caller_uri = "easynet:///r/realm/agent/wrong-key";
+        let caller_uri = "easynet:///r/realm/agent/test.wrong-key";
         let trust = Arc::new(
             RealmTrustAnchor::from_entries(vec![backend_entry(caller_uri, other_pub_b64)])
                 .expect("anchor"),
         );
-        let facade = AdmissionFacade::new(
-            trust,
-            Some("easynet:///r/realm/agent/this-daemon".to_string()),
-        );
+        let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
 
         let (req, _) = signed_request_with_nonce(
             caller_uri,
-            "easynet:///r/realm/agent/this-daemon",
+            "easynet:///r/realm/hub",
             "self.echo",
             b"{}",
             &signing_key,
@@ -1491,14 +1475,11 @@ mod tests {
         // the gating check.
         let signing_key = SigningKey::from_bytes(&[0x77u8; 32]);
         let trust = Arc::new(RealmTrustAnchor::default());
-        let facade = AdmissionFacade::new(
-            trust,
-            Some("easynet:///r/realm/agent/this-daemon".to_string()),
-        );
+        let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
 
         let (req, _) = signed_request_with_nonce(
-            "easynet:///r/realm/agent/uninvited",
-            "easynet:///r/realm/agent/this-daemon",
+            "easynet:///r/realm/agent/test.uninvited",
+            "easynet:///r/realm/hub",
             "self.echo",
             b"{}",
             &signing_key,
@@ -1515,19 +1496,16 @@ mod tests {
     fn invoke_stream_uses_same_pipeline() {
         let signing_key = SigningKey::from_bytes(&[0x88u8; 32]);
         let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
-        let caller_uri = "easynet:///r/realm/agent/streamer";
+        let caller_uri = "easynet:///r/realm/agent/test.streamer";
         let trust = Arc::new(
             RealmTrustAnchor::from_entries(vec![backend_entry(caller_uri, pub_key_b64)])
                 .expect("anchor"),
         );
-        let facade = AdmissionFacade::new(
-            trust,
-            Some("easynet:///r/realm/agent/this-daemon".to_string()),
-        );
+        let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
 
         let (req, _) = signed_request_with_nonce(
             caller_uri,
-            "easynet:///r/realm/agent/this-daemon",
+            "easynet:///r/realm/hub",
             "federation.subscribe_directory",
             b"{}",
             &signing_key,
@@ -1551,7 +1529,7 @@ mod tests {
         // listener split that PR-10 might introduce.
         let signing_key = SigningKey::from_bytes(&[0xAAu8; 32]);
         let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
-        let caller_uri = "easynet:///r/realm/agent/shared";
+        let caller_uri = "easynet:///r/realm/agent/test.shared";
         let trust = Arc::new(
             RealmTrustAnchor::from_entries(vec![backend_entry(caller_uri, pub_key_b64)])
                 .expect("anchor"),
@@ -1560,18 +1538,18 @@ mod tests {
         let store = SharedNonceReplayStore::new();
         let facade_a = AdmissionFacade::with_replay_store(
             Arc::clone(&trust),
-            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+            Some("easynet:///r/realm/hub".to_string()),
             store.clone(),
         );
         let facade_b = AdmissionFacade::with_replay_store(
             Arc::clone(&trust),
-            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+            Some("easynet:///r/realm/hub".to_string()),
             store.clone(),
         );
 
         let (req, _) = signed_request_with_nonce(
             caller_uri,
-            "easynet:///r/realm/agent/this-daemon",
+            "easynet:///r/realm/hub",
             "self.echo",
             b"{}",
             &signing_key,
@@ -1656,10 +1634,10 @@ mod tests {
         // without crypto. PR-8 will flip this arm to strict — for
         // PR-7 ship, it preserves URI-only PR-1 semantics for
         // already-deployed devices.
-        let caller_uri = "easynet:///r/realm/agent/device-A";
+        let caller_uri = "easynet:///r/realm/device/device-A";
         let facade = AdmissionFacade::new(
             device_anchor(caller_uri),
-            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+            Some("easynet:///r/realm/hub".to_string()),
         );
         // Bare envelope, no signature — the kind kernel.rs emits today.
         let req = invoke_request(Some(envelope_with_caller(caller_uri)));
@@ -1678,10 +1656,10 @@ mod tests {
         // device path is no-op so repeated identical envelopes admit
         // every time. Once PR-8 lands and devices sign, this test
         // flips its assertion (call 2 must reject as replay).
-        let caller_uri = "easynet:///r/realm/agent/device-B";
+        let caller_uri = "easynet:///r/realm/device/device-B";
         let facade = AdmissionFacade::new(
             device_anchor(caller_uri),
-            Some("easynet:///r/realm/agent/this-daemon".to_string()),
+            Some("easynet:///r/realm/hub".to_string()),
         );
         let req = invoke_request(Some(envelope_with_caller(caller_uri)));
         for _ in 0..3 {
@@ -1694,19 +1672,18 @@ mod tests {
     fn device_role_uses_strict_path_when_signature_is_present() {
         let signing_key = SigningKey::from_bytes(&[0xAB_u8; 32]);
         let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
-        let caller_uri = "easynet:///r/realm/agent/device-signed";
+        let caller_uri = "easynet:///r/realm/device/device-signed";
         let trust = Arc::new(
             RealmTrustAnchor::from_entries(vec![device_entry(caller_uri, pub_key_b64)])
                 .expect("anchor"),
         );
-        let facade = AdmissionFacade::new(
-            trust,
-            Some("easynet:///r/realm/agent/this-daemon".to_string()),
-        );
+        let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
 
         let (req, _) = signed_request_with_nonce(
             caller_uri,
             caller_uri,
+            // Wire-pinned legacy until EasyNet-Axon ships
+            // device.session acceptance (RFC-001 v4.1.6).
             "<self>.session",
             b"",
             &signing_key,
@@ -1731,8 +1708,8 @@ mod tests {
         // working — same trust anchor, two policies.
         let backend_signing = SigningKey::from_bytes(&[0xC0u8; 32]);
         let backend_pub_b64 = BASE64_STANDARD.encode(backend_signing.verifying_key().to_bytes());
-        let backend_uri = "easynet:///r/realm/agent/backend-svc";
-        let device_uri = "easynet:///r/realm/agent/device-C";
+        let backend_uri = "easynet:///r/realm/hub";
+        let device_uri = "easynet:///r/realm/device/device-C";
 
         let trust = Arc::new(
             RealmTrustAnchor::from_entries(vec![
@@ -1744,10 +1721,7 @@ mod tests {
             ])
             .expect("anchor"),
         );
-        let facade = AdmissionFacade::new(
-            trust,
-            Some("easynet:///r/realm/agent/this-daemon".to_string()),
-        );
+        let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
 
         // Device caller: unsigned, admitted.
         let device_req = invoke_request(Some(envelope_with_caller(device_uri)));
@@ -1766,7 +1740,7 @@ mod tests {
         // the nonce in the replay store.
         let (backend_signed, _) = signed_request_with_nonce(
             backend_uri,
-            "easynet:///r/realm/agent/this-daemon",
+            "easynet:///r/realm/hub",
             "self.echo",
             b"{}",
             &backend_signing,

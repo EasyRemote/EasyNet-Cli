@@ -1,0 +1,15 @@
+schema_version = "1"
+name = "device.openai.chat_completions"
+description = "OpenAI-compatible /v1/chat/completions served by the device daemon. Forwards a chat-completion request to a host-local chat-base ability (`<agent>.chat`) and projects the streaming/non-streaming reply into OpenAI's response shape."
+
+[input_schema]
+type = "object"
+required = ["request"]
+
+[input_schema.properties.auth_token]
+type = "string"
+description = "Bearer token bound to a `<user>.api_key` entry on this host."
+
+[input_schema.properties.request]
+type = "object"
+description = "OpenAI-compatible /v1/chat/completions request body."

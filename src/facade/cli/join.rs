@@ -58,7 +58,7 @@ struct PairingPreflight {
     #[serde(default)]
     hub_public_key_b64: String,
     #[serde(default)]
-    hub_agent_uri: String,
+    _hub_agent_uri: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -73,26 +73,32 @@ struct ValidatePairingPayload {
 pub struct JoinArgs {
     /// One-time pairing token (32-64 hex characters)
     pub token: String,
-    /// Hub API base URL for self-hosted Hubs (default: `https://easynet.run`)
+    /// Hub API base URL for self-hosted Hubs.
+    // No `(default: ...)` in the doc-comment — clap already renders
+    // the `[default: …]` suffix from `default_value_t` in `--help`.
+    // Listing it twice (once in prose, once via clap) is the kind
+    // of duplication silan flagged in the layout review.
     #[arg(long, default_value_t = format!("https://{}", config::DEFAULT_HUB_HOST))]
     pub hub: String,
-    /// Override Hub REST API base URL for credential verification (e.g. `http://localhost:8080`).
-    /// Only needed for local dev when the REST API is on a different host/port than the Hub.
+    // Description kept to one short line — clap 4's wrap algorithm
+    // declines to break URLs / backtick-fenced strings, so a long
+    // description spills past the term_width set in
+    // `bin/easynet.rs::apply_help_layout`. Verbose context lives
+    // in docs/ and the join.rs commit history.
+    /// Override Hub REST API base URL (local-dev only).
     #[arg(long)]
     pub hub_api: Option<String>,
-    /// Peer hub's daemon TLS listen address, used to populate the
-    /// local daemon's `[daemon.federated_peers]` entry for this
-    /// tenant. Form: `https://host:port` (e.g. `https://hub-b.example:50443`).
-    ///
-    /// Why this is operator-supplied: the Hub's pairing response
-    /// carries the **backend's** Axon endpoint (the inbound-from-
-    /// device gRPC port), which is NOT the peer daemon's TLS
-    /// listener. In a multi-hub deployment those addresses
-    /// differ. Without this flag the auto-wire either writes the
-    /// backend port (wrong for cross-hub dial) or assumes the
-    /// canonical 50443 (wrong if the operator picked a different
-    /// port). Pass `--peer-hub` when joining a tenant whose hub
-    /// you intend to route cross-hub calls to.
+    // The doc-comment below is a single paragraph on purpose. clap
+    // switches `--help` into multi-paragraph "long help" mode the
+    // moment ANY arg's doc-comment has a blank line in it — every
+    // other arg in the same struct then renders with extra spacing
+    // around it. The detailed rationale for `--peer-hub` (Hub
+    // pairing response carries the backend Axon endpoint, not the
+    // peer daemon's TLS listener; multi-hub deployments diverge)
+    // lives in docs/spec/RFC-002 §federation.forward_invoke and in
+    // the auto-wire commit message — that's where verbose context
+    // belongs, not in `--help`.
+    /// Peer hub's daemon TLS listener (https://host:port).
     #[arg(long)]
     pub peer_hub: Option<String>,
     /// Skip confirmation prompts (for non-interactive use)
@@ -108,7 +114,7 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
             existing.node_id, existing.hub_endpoint
         ));
         if !args.yes {
-            output::info("This will overwrite existing credentials. Run `easynet reset` first to un-pair cleanly.");
+            output::info("This will overwrite existing credentials. Run 'easynet reset' first to un-pair cleanly.");
             if !output::confirm("Continue?")? {
                 output::info("Cancelled.");
                 return Ok(());
@@ -145,7 +151,7 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
     // HOME via the daemon's own resolver. Idempotent — when a
     // daemon-config.toml already exists (operator wrote one or a
     // prior auto-wire ran) we leave it untouched.
-    if let Err(e) = ensure_minimal_daemon_config(&creds) {
+    if let Err(e) = crate::persistence::daemon_config::ensure_minimal_device_config(&creds) {
         output::warn(&format!(
             "[easynet join] could not write default daemon-config.toml: {e}. \
              Backend will report this device as REMOVED until you write one by hand."
@@ -180,7 +186,7 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
     // tells the operator the production posture has degraded.
     if let Err(e) = put_device_keypair_to_keyring(&creds) {
         output::warn(&format!(
-            "[easynet join] keyring daemon offline ({e}); falling back to deterministic key derivation. Start `easynet-keyring` for production-grade secret isolation."
+            "[easynet join] keyring daemon offline ({e}); falling back to deterministic key derivation. Start 'easynet-keyring' for production-grade secret isolation."
         ));
     }
 
@@ -204,68 +210,13 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
     output::detail("hub_endpoint", &creds.hub_endpoint);
     output::detail("tenant_id", &creds.tenant_id);
     eprintln!();
-    output::info("Run `easynet connect` to start the device agent.");
+    output::info("Run 'easynet connect' to start the device agent.");
     Ok(())
 }
 
 /// Push a fresh device keypair into the keyring under the
 /// canonical self URI + hub-role overlay. Phase 3C bridge: when
 /// the keyring is reachable, this is the production secret
-/// Ensure `~/.easynet/daemon-config.toml` exists with at least the
-/// minimal `[daemon]` block so the daemon's axon_serve sidecar
-/// binds the gRPC UDS at boot. Without this file the sidecar
-/// silently skips ("no transport-plane config; skipping gRPC
-/// listener"), backend's daemon_grpc client never finds
-/// `daemon.sock`, and `/api/v1/devices` returns the just-paired
-/// device as REMOVED.
-///
-/// Idempotent: if a config file already exists at the canonical
-/// path we leave it untouched (operator may have hand-written
-/// extra fields like `[daemon.federated_peers]` or hub-mode TLS
-/// pins). Only the no-config case writes a minimal template.
-///
-/// Errors only when the parent directory cannot be created or
-/// the write itself fails — both indicate a filesystem
-/// permission issue the operator must resolve.
-fn ensure_minimal_daemon_config(creds: &config::Credentials) -> anyhow::Result<()> {
-    let path = resolve_daemon_config_path();
-    if path.exists() {
-        return Ok(());
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let realm = if creds.tenant_id.trim().is_empty() {
-        "localhost"
-    } else {
-        creds.tenant_id.trim()
-    };
-    let hub_endpoint = creds.hub_endpoint.trim();
-    let body = format!(
-        "# Auto-generated by `easynet device join` on {now}.\n\
-         # Edit by hand to add `[daemon.federated_peers]`, hub-mode\n\
-         # TLS pins, or override the UDS path. Re-running `easynet\n\
-         # device join` against a different hub will leave this\n\
-         # file untouched (overwrite by hand if needed).\n\
-         [daemon]\n\
-         mode = \"device\"\n\
-         realm = \"{realm}\"\n\
-         hub_endpoint = \"{hub_endpoint}\"\n",
-        now = chrono::Utc::now().to_rfc3339(),
-        realm = realm,
-        hub_endpoint = hub_endpoint,
-    );
-    std::fs::write(&path, body)?;
-    Ok(())
-}
-
-fn resolve_daemon_config_path() -> std::path::PathBuf {
-    let head = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    std::path::Path::new(&head)
-        .join(".easynet")
-        .join("daemon-config.toml")
-}
-
 /// When the operator paired AFTER starting the local runtime, the
 /// initial boot missed the joined credentials and therefore never ran
 /// the bootstrap/advertise/register sequence that requires realm +
@@ -283,6 +234,16 @@ fn refresh_running_runtime_after_join(creds: &config::Credentials) {
         Ok(state) => state,
         Err(_) => return,
     };
+    if matches!(
+        state.runtime_kind,
+        crate::persistence::config::RuntimeKind::DaemonOnly
+    ) {
+        output::warn(
+            "paired successfully, but a local easynet-daemon is already running. \
+             Restart it with `easynet runtime stop && easynet runtime start` so it picks up the new credentials.",
+        );
+        return;
+    }
     match state.connect_bridge() {
         Ok(bridge) => {
             output::detail(
@@ -364,7 +325,7 @@ fn pairing_status_error_message(code: u16, body: &str) -> String {
     match code {
         404 => "pairing token expired or already used — create a new token from the Hub dashboard"
             .into(),
-        409 => "device already paired — run `easynet reset` first to un-pair, then retry".into(),
+        409 => "device already paired — run 'easynet reset' first to un-pair, then retry".into(),
         _ => format!("Hub rejected pairing (HTTP {code}): {body}"),
     }
 }
@@ -669,7 +630,7 @@ mod tests {
             tenant_id: "tenant-a".into(),
             node_id: "en-test-node".into(),
             hub_public_key_b64: String::new(),
-            hub_agent_uri: String::new(),
+            _hub_agent_uri: String::new(),
         };
         let payload = build_validate_pairing_payload(&preflight).expect("build payload");
         assert_eq!(payload.node_id, "en-test-node");
@@ -697,7 +658,7 @@ mod tests {
             tenant_id: "tenant-a".into(),
             node_id: "en-test-node".into(),
             hub_public_key_b64: String::new(),
-            hub_agent_uri: String::new(),
+            _hub_agent_uri: String::new(),
         };
         let err = validate_pairing_token("token_1234", &base, &preflight)
             .expect_err("transport failure should error");

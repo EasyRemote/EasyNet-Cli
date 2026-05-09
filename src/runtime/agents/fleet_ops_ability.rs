@@ -42,50 +42,59 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::agents::federation_probe;
 
-pub const ABILITY_LIST_NODES: &str = "fleet.list_nodes";
-pub const ABILITY_DESCRIBE_NODE: &str = "fleet.describe_node";
-pub const ABILITY_REMOVE_NODE: &str = "fleet.remove_node";
-pub const ABILITY_DEPLOY_ABILITY: &str = "fleet.deploy_ability";
-pub const ABILITY_UNINSTALL_ABILITY: &str = "fleet.uninstall_ability";
-pub const ABILITY_EXEC_REMOTE: &str = "fleet.exec_remote";
-pub const ABILITY_REGISTER_SELF: &str = "fleet.register_self";
-pub const ABILITY_DEREGISTER_SELF: &str = "fleet.deregister_self";
+pub const ABILITY_LIST_NODES: &str = "device.fleet.list_nodes";
+pub const ABILITY_DESCRIBE_NODE: &str = "device.fleet.describe_node";
+pub const ABILITY_REMOVE_NODE: &str = "device.fleet.remove_node";
+pub const ABILITY_DEPLOY_ABILITY: &str = "device.fleet.deploy_ability";
+pub const ABILITY_UNINSTALL_ABILITY: &str = "device.fleet.uninstall_ability";
+pub const ABILITY_EXEC_REMOTE: &str = "device.fleet.exec_remote";
+pub const ABILITY_REGISTER_SELF: &str = "device.fleet.register_self";
+pub const ABILITY_DEREGISTER_SELF: &str = "device.fleet.deregister_self";
 
 /// Register every fleet.* operation handler on `reg`. Called once
 /// at daemon boot from `runtime::agents::build_registry_with_services`.
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    reg.register_rpc(
-        ABILITY_LIST_NODES,
+    reg.register_rpc_with_owner(
+        "device.fleet.list_nodes",
+        OwnerKind::Device,
         Arc::new(|args| list_nodes_handler(args)),
     );
-    reg.register_rpc(
-        ABILITY_DESCRIBE_NODE,
+    reg.register_rpc_with_owner(
+        "device.fleet.describe_node",
+        OwnerKind::Device,
         Arc::new(|args| describe_node_handler(args)),
     );
-    reg.register_rpc(
-        ABILITY_REMOVE_NODE,
+    reg.register_rpc_with_owner(
+        "device.fleet.remove_node",
+        OwnerKind::Device,
         Arc::new(|args| remove_node_handler(args)),
     );
-    reg.register_rpc(
-        ABILITY_DEPLOY_ABILITY,
+    reg.register_rpc_with_owner(
+        "device.fleet.deploy_ability",
+        OwnerKind::Device,
         Arc::new(|args| deploy_ability_handler(args)),
     );
-    reg.register_rpc(
-        ABILITY_UNINSTALL_ABILITY,
+    reg.register_rpc_with_owner(
+        "device.fleet.uninstall_ability",
+        OwnerKind::Device,
         Arc::new(|args| uninstall_ability_handler(args)),
     );
-    reg.register_rpc(
-        ABILITY_EXEC_REMOTE,
+    reg.register_rpc_with_owner(
+        "device.fleet.exec_remote",
+        OwnerKind::Device,
         Arc::new(|args| exec_remote_handler(args)),
     );
-    reg.register_rpc(
-        ABILITY_REGISTER_SELF,
+    reg.register_rpc_with_owner(
+        "device.fleet.register_self",
+        OwnerKind::Device,
         Arc::new(|args| register_self_handler(args)),
     );
-    reg.register_rpc(
-        ABILITY_DEREGISTER_SELF,
+    reg.register_rpc_with_owner(
+        "device.fleet.deregister_self",
+        OwnerKind::Device,
         Arc::new(|args| deregister_self_handler(args)),
     );
 }

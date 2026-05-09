@@ -37,14 +37,14 @@ pub struct ExecArgs {
     /// Target device node id. Pass `local` for this device or a
     /// real node id once federation Invoke is wired.
     pub node: String,
-    /// Per-call deadline in seconds. `0` inherits the runtime
-    /// default. Default: 60 s (`support::timeouts::INVOKE_DEFAULT_SECS`).
+    /// Per-call deadline in seconds. '0' inherits the runtime
+    /// default. Default: 60 s ('support::timeouts::INVOKE_DEFAULT_SECS').
     #[arg(long, value_name = "SECS", default_value_t = timeouts::INVOKE_DEFAULT_SECS)]
     pub timeout: u64,
-    /// Command to execute (everything after `--`). Joined with
+    /// Command to execute (everything after '--'). Joined with
     /// spaces and passed to the handler verbatim; the handler
     /// chooses whether to shell-evaluate (defaults to NO — argv
-    /// dispatch via `process.exec` for safety).
+    /// dispatch via 'process.exec' for safety).
     #[arg(last = true)]
     pub command: Vec<String>,
 }
@@ -62,7 +62,7 @@ pub fn run(args: ExecArgs) -> anyhow::Result<()> {
         "timeout_ms": timeout_ms,
     });
     let result = if is_local_exec_target(&args.node) {
-        invoke_local_ability("process.exec", payload).context("invoke process.exec")?
+        invoke_local_ability("device.process.exec", payload).context("invoke process.exec")?
     } else {
         invoke_remote_process_exec(&args.node, payload)?
     };

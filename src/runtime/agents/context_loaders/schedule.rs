@@ -30,8 +30,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-#[cfg(test)]
-use chrono::TimeZone;
 use chrono::{DateTime, Utc};
 
 use crate::runtime::agents::chat_ability::ContextLoader;
@@ -154,14 +152,6 @@ impl ContextLoader for ScheduleLoader {
         }
         Ok(Some(out))
     }
-}
-
-// Helper for tests that need a deterministic "now" — not used in
-// production. Kept here so the test module can construct DateTime<Utc>
-// values without leaking the dependency into production callers.
-#[cfg(test)]
-pub(crate) fn ts(secs_from_epoch: i64) -> DateTime<Utc> {
-    Utc.timestamp_opt(secs_from_epoch, 0).unwrap()
 }
 
 #[cfg(test)]

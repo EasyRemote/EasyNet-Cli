@@ -24,6 +24,7 @@ use console::style;
 use crate::persistence::config;
 use crate::registry::agents;
 use crate::runtime::drivers::{claude_code, codex};
+use crate::support::net;
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
     /// Emit JSON instead of the human-readable report.
@@ -115,37 +116,61 @@ fn check_pairing() -> Check {
             name: "device pairing".to_string(),
             status: CheckStatus::Warn,
             detail: "not paired".to_string(),
-            hint: Some("Run `easynet device join <token>` to pair this host."),
+            hint: Some("Run 'easynet device join <token>' to pair this host."),
         },
     }
 }
 
 fn check_runtime() -> Check {
     match config::load() {
-        Ok(state) => match crate::support::local_invoke::invoke_local_ability(
-            "observe.health",
-            serde_json::json!({"source": "doctor"}),
-        ) {
-            Ok(_) => Check {
-                name: "local runtime".to_string(),
-                status: CheckStatus::Ok,
-                detail: format!("up at {}", state.endpoint),
-                hint: None,
+        Ok(state) => match state.runtime_kind {
+            config::RuntimeKind::DaemonOnly => match crate::support::local_invoke::invoke_local_ability(
+                "device.observe.health",
+                serde_json::json!({"source": "doctor"}),
+            ) {
+                Ok(_) => Check {
+                    name: "local runtime".to_string(),
+                    status: CheckStatus::Ok,
+                    detail: format!("daemon up at {}", state.endpoint),
+                    hint: None,
+                },
+                Err(e) => Check {
+                    name: "local runtime".to_string(),
+                    status: CheckStatus::Fail,
+                    detail: format!("metadata present, but observe.health failed: {e}"),
+                    hint: Some(
+                        "The runtime metadata exists, but the local daemon/control socket is not healthy.",
+                    ),
+                },
             },
-            Err(e) => Check {
-                name: "local runtime".to_string(),
-                status: CheckStatus::Fail,
-                detail: format!("metadata present, but observe.health failed: {e}"),
-                hint: Some(
-                    "The runtime metadata exists, but the local daemon/control socket is not healthy.",
-                ),
-            },
+            config::RuntimeKind::AxonBridge => {
+                let alive = state.pid.is_some_and(net::is_pid_alive)
+                    || net::discover_pid_from_endpoint(&state.endpoint).is_some();
+                if alive {
+                    Check {
+                        name: "local runtime".to_string(),
+                        status: CheckStatus::Ok,
+                        detail: format!("bridge runtime up at {}", state.endpoint),
+                        hint: None,
+                    }
+                } else {
+                    Check {
+                        name: "local runtime".to_string(),
+                        status: CheckStatus::Fail,
+                        detail: "runtime metadata present, but the bridge process is not alive"
+                            .to_string(),
+                        hint: Some(
+                            "Run 'easynet runtime stop' to clear stale state, then 'easynet runtime start'.",
+                        ),
+                    }
+                }
+            }
         },
         Err(_) => Check {
             name: "local runtime".to_string(),
             status: CheckStatus::Warn,
             detail: "not running".to_string(),
-            hint: Some("Run `easynet runtime start` to spawn a local runtime."),
+            hint: Some("Run 'easynet runtime start' to spawn a local runtime."),
         },
     }
 }
@@ -156,6 +181,19 @@ fn check_federation() -> Check {
     // and `easynet runtime status` use). DirectoryEntries carry a
     // `status` field (`active` / `stale` / `draining`); `non-active`
     // is the doctor's "peer probe failed" equivalent in the new shape.
+    if config::load()
+        .map(|state| state.uses_bridge())
+        .unwrap_or(false)
+    {
+        return Check {
+            name: "federation".to_string(),
+            status: CheckStatus::Warn,
+            detail: "bridge/hub mode has no local daemon federation probe".to_string(),
+            hint: Some(
+                "Start device mode ('easynet runtime start') if you want daemon-backed federation health checks.",
+            ),
+        };
+    }
     federation_check_impl()
 }
 
@@ -182,7 +220,7 @@ fn federation_check_impl() -> Check {
                              or no devices are paired across hubs"
                         .to_string(),
                     hint: Some(
-                        "Check `easynet federation peers` to confirm the trust anchor + \
+                        "Check 'easynet federation peers' to confirm the trust anchor + \
                          peer daemon health.",
                     ),
                 }
@@ -215,7 +253,7 @@ fn federation_check_impl() -> Check {
             name: "federation".to_string(),
             status: CheckStatus::Warn,
             detail: format!("federation.discover unavailable: {e}"),
-            hint: Some("Check that the daemon is running (`easynet runtime status`)."),
+            hint: Some("Check that the daemon is running ('easynet runtime status')."),
         },
     }
 }
@@ -225,9 +263,9 @@ fn federation_check_impl() -> Check {
     Check {
         name: "federation".to_string(),
         status: CheckStatus::Warn,
-        detail: "federation.discover requires the `axon-pb` build feature".to_string(),
+        detail: "federation.discover requires the 'axon-pb' build feature".to_string(),
         hint: Some(
-            "Production builds always include `axon-pb`; this is likely a minimal-feature build.",
+            "Production builds always include 'axon-pb'; this is likely a minimal-feature build.",
         ),
     }
 }
@@ -293,7 +331,7 @@ fn check_mcp_clients() -> Check {
             name: "mcp clients".to_string(),
             status: CheckStatus::Warn,
             detail: "no AI client wired up".to_string(),
-            hint: Some("Run `easynet mcp-install` to register EasyNet with Claude Code/Codex."),
+            hint: Some("Run 'easynet mcp-install' to register EasyNet with Claude Code/Codex."),
         }
     } else {
         Check {

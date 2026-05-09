@@ -58,16 +58,19 @@ use serde_json::{json, Value};
 use crate::registry::agents::{self, AgentEntry, AgentType};
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
-pub const ABILITY_START_AGENT: &str = "fleet.start_agent";
-pub const ABILITY_STOP_AGENT: &str = "fleet.stop_agent";
+use crate::runtime::ability_dispatch::OwnerKind;
+pub const ABILITY_START_AGENT: &str = "device.fleet.start_agent";
+pub const ABILITY_STOP_AGENT: &str = "device.fleet.stop_agent";
 
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    reg.register_rpc(
-        ABILITY_START_AGENT,
+    reg.register_rpc_with_owner(
+        "device.fleet.start_agent",
+        OwnerKind::Device,
         Arc::new(|args: Value| start_agent_handler(args)),
     );
-    reg.register_rpc(
-        ABILITY_STOP_AGENT,
+    reg.register_rpc_with_owner(
+        "device.fleet.stop_agent",
+        OwnerKind::Device,
         Arc::new(|args: Value| stop_agent_handler(args)),
     );
 }
@@ -156,8 +159,8 @@ fn stop_agent_handler(args: Value) -> anyhow::Result<Value> {
 ///
 /// Three input shapes are accepted:
 ///   * Bare name (`"claude"`) — returned as-is.
-///   * Canonical URA (`"easynet:///r/<realm>/agent/01LLM-claude"`) —
-///     extracts `<id>` from the path tail, then strips the
+///   * Canonical URA (`"easynet:///r/<realm>/agent/<user>.01LLM-claude"`) —
+///     strips the `<user>.` owner segment, then strips the
 ///     `01LLM-` prefix the device-profile mints.
 ///   * Anything else (typo, raw id without the prefix) — returned
 ///     as-is, so the registry lookup misses cleanly with `ack=false`
@@ -172,7 +175,10 @@ fn registry_name_from_input(name_or_uri: &str) -> String {
         .rsplit_once('/')
         .map(|(_, t)| t)
         .unwrap_or(name_or_uri);
-    // Step 2: peel the `01LLM-` device-profile prefix if present.
+    // Step 2: peel the `<user>.` owner prefix when the tail is a
+    // canonical v4.1.4 agent URI component like `u1.01LLM-claude`.
+    let tail = tail.split_once('.').map(|(_, rest)| rest).unwrap_or(tail);
+    // Step 3: peel the `01LLM-` device-profile prefix if present.
     // This is the only sanctioned llm-profile prefix today; if a
     // future profile mints a different shape, extend here (NOT at
     // every call site).
@@ -383,7 +389,7 @@ mod tests {
             }))
             .unwrap();
             let resp = stop_agent_handler(json!({
-                "name_or_uri": "easynet:///r/acme/agent/01LLM-claude"
+                "name_or_uri": "easynet:///r/acme/agent/u1.01LLM-claude"
             }))
             .unwrap();
             assert_eq!(
@@ -399,7 +405,7 @@ mod tests {
         assert_eq!(registry_name_from_input("claude"), "claude");
         // Canonical URA: peel path-tail and 01LLM- prefix.
         assert_eq!(
-            registry_name_from_input("easynet:///r/acme/agent/01LLM-claude"),
+            registry_name_from_input("easynet:///r/acme/agent/u1.01LLM-claude"),
             "claude"
         );
         // Bare id without the 01LLM- prefix: peel only the path-tail.
@@ -414,7 +420,7 @@ mod tests {
         // every dash-segment. Pin so a future "tidy" rsplit doesn't
         // break "my-claude" → "claude".
         assert_eq!(
-            registry_name_from_input("easynet:///r/acme/agent/01LLM-my-claude"),
+            registry_name_from_input("easynet:///r/acme/agent/u1.01LLM-my-claude"),
             "my-claude"
         );
     }

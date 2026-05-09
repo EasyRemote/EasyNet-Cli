@@ -54,6 +54,11 @@ pub enum TenantKind {
 }
 
 impl TenantKind {
+    /// Exhaustive list of storage kinds this module owns. Callers that need
+    /// to iterate every tenant-scoped directory use this instead of retyping
+    /// the enum cases and drifting from `as_dir()`.
+    pub const ALL: [Self; 4] = [Self::Runs, Self::Schedules, Self::DiscussRooms, Self::Loops];
+
     fn as_dir(self) -> &'static str {
         match self {
             Self::Runs => "runs",
@@ -68,6 +73,7 @@ impl TenantKind {
 /// `~/.easynet/tenants/<tenant>/<kind>/`. Does not create the
 /// directory; callers that need the dir to exist call `ensure()`.
 pub fn path_for_tenant(tenant: &TenantId, kind: TenantKind) -> PathBuf {
+    debug_assert!(TenantKind::ALL.contains(&kind));
     state_dir()
         .join("tenants")
         .join(tenant.as_str())
@@ -106,13 +112,10 @@ mod tests {
         // map to the same directory. Would silently corrupt one
         // store with another's writes.
         let t = TenantId::default_v1();
-        let kinds = [
-            TenantKind::Runs,
-            TenantKind::Schedules,
-            TenantKind::DiscussRooms,
-            TenantKind::Loops,
-        ];
-        let paths: Vec<_> = kinds.iter().map(|k| path_for_tenant(&t, *k)).collect();
+        let paths: Vec<_> = TenantKind::ALL
+            .iter()
+            .map(|k| path_for_tenant(&t, *k))
+            .collect();
         for i in 0..paths.len() {
             for j in (i + 1)..paths.len() {
                 assert_ne!(paths[i], paths[j], "kinds {i} and {j} map to the same path");

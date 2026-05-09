@@ -102,8 +102,9 @@ use sha2::{Digest, Sha256};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
+use crate::runtime::ability_dispatch::OwnerKind;
 /// Wire name. Pinned by the Tier 2.5 surface; rename = protocol break.
-pub const ABILITY_NAME: &str = "fs.edit";
+pub const ABILITY_NAME: &str = "device.fs.edit";
 
 /// Profile membership marker echoed in every receipt.
 pub const PROFILE_VERSION: &str = "baseline-locomotion-v1";
@@ -116,7 +117,7 @@ pub const PROFILE_VERSION: &str = "baseline-locomotion-v1";
 pub const MAX_EDIT_FILE_SIZE: u64 = 1024 * 1024 * 1024;
 
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    reg.register_rpc(ABILITY_NAME, Arc::new(handler));
+    reg.register_rpc_with_owner("device.fs.edit", OwnerKind::Device, Arc::new(handler));
 }
 
 fn handler(args: Value) -> Result<Value> {

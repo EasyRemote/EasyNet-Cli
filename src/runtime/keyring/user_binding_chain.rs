@@ -9,7 +9,7 @@
 //              `UserBindingToken` is the Ed25519-signed proof of
 //              "user U on realm A intends to be recognised as
 //              their realm B identity". Realm A's backend signs;
-//              realm B's `<self>.keyring.consume_federate_user_token`
+//              realm B's `device.keyring.consume_federate_user_token`
 //              ability verifies via PR-N2's FederatedKeyResolver
 //              and writes a binding entry.
 //
@@ -66,7 +66,7 @@ pub struct UserBindingToken {
     /// realm string per the canonical URI scheme.
     pub source_realm: String,
     /// User URI on the source realm, in the canonical form
-    /// `easynet:///r/<source_realm>/agent/<user-id>`.
+    /// `easynet:///r/<source_realm>/user/<user-id>`.
     pub source_user_uri: String,
     /// Source user's Ed25519 verifying-key bytes. Carried inline
     /// so the consuming realm doesn't need to round-trip
@@ -293,7 +293,7 @@ fn write_lp_bytes(out: &mut Vec<u8>, b: &[u8]) {
 /// Mutates the token's `signature` field in-place. The signing
 /// key MUST be the source realm's backend daemon identity per
 /// INV-1; this function does not enforce that — callers
-/// (the `<self>.keyring.federate_user_identity_token` ability
+/// (the `device.keyring.federate_user_identity_token` ability
 /// handler) verify before calling.
 pub fn sign_user_binding_token(
     token: &mut UserBindingToken,
@@ -345,7 +345,7 @@ mod tests {
     fn fixture_token(signing: &SigningKey) -> UserBindingToken {
         let mut token = UserBindingToken::new_unsigned(
             "realm-a",
-            "easynet:///r/realm-a/agent/user-c",
+            "easynet:///r/realm-a/user/user-c",
             signing.verifying_key().to_bytes(),
             "realm-b",
             1_714_500_000_000,
@@ -387,7 +387,7 @@ mod tests {
         let signing = SigningKey::from_bytes(&[0x33; 32]);
         let mut token_a = UserBindingToken::new_unsigned(
             "realm-a",
-            "easynet:///r/realm-a/agent/user",
+            "easynet:///r/realm-a/user/user",
             signing.verifying_key().to_bytes(),
             "realm-b",
             1_714_500_000_000,
@@ -461,7 +461,7 @@ mod tests {
         let attacker_signing = SigningKey::from_bytes(&[0xBB; 32]);
         let mut token = UserBindingToken::new_unsigned(
             "realm-a",
-            "easynet:///r/realm-a/agent/u",
+            "easynet:///r/realm-a/user/u",
             // Embed the LEGITIMATE pubkey so verify pulls the
             // right key — but sign with the attacker's key.
             real_signing.verifying_key().to_bytes(),

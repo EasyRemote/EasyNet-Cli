@@ -137,33 +137,33 @@ mod tests {
 
     #[test]
     fn device_ability_emits_selfsigned_header() {
-        let file = file_with("easynet:///r/acme/agent/01DEV");
-        let h = header_for_ability("observe.health", &file, None)
+        let file = file_with("easynet:///r/acme/device/01DEV");
+        let h = header_for_ability("device.observe.health", &file, None)
             .expect("device ability must produce a header");
-        assert_eq!(h.callee_agent_uri, "easynet:///r/acme/agent/01DEV");
-        assert_eq!(h.signer_agent_uri, "easynet:///r/acme/agent/01DEV");
+        assert_eq!(h.callee_agent_uri, "easynet:///r/acme/device/01DEV");
+        assert_eq!(h.signer_agent_uri, "easynet:///r/acme/device/01DEV");
         assert_eq!(h.model, SigningModel::Selfsigned);
     }
 
     #[test]
     fn consent_ability_emits_hosted_by_header_when_uri_persisted() {
-        let mut file = file_with("easynet:///r/acme/agent/01DEV");
+        let mut file = file_with("easynet:///r/acme/device/01DEV");
         upsert_hosted_agent(
             &mut file,
             "consent",
             "default",
-            "easynet:///r/acme/agent/01CON",
+            "easynet:///r/acme/agent/u1.01CON",
         );
-        let h = header_for_ability("consent.subscribe", &file, None)
+        let h = header_for_ability("device.consent.subscribe", &file, None)
             .expect("consent ability must produce a header");
-        assert_eq!(h.callee_agent_uri, "easynet:///r/acme/agent/01CON");
-        assert_eq!(h.signer_agent_uri, "easynet:///r/acme/agent/01DEV");
+        assert_eq!(h.callee_agent_uri, "easynet:///r/acme/agent/u1.01CON");
+        assert_eq!(h.signer_agent_uri, "easynet:///r/acme/device/01DEV");
         match &h.model {
             SigningModel::HostedBy {
                 host_uri,
                 host_attestation,
             } => {
-                assert_eq!(host_uri, "easynet:///r/acme/agent/01DEV");
+                assert_eq!(host_uri, "easynet:///r/acme/device/01DEV");
                 assert!(!host_attestation.is_empty());
             }
             _ => panic!("expected HostedBy"),
@@ -175,21 +175,21 @@ mod tests {
         // local-agents.json doesn't yet have a consent row (e.g.
         // bootstrap hasn't run). Better to return None than mint a
         // header pointing at a URA the hub doesn't know about.
-        let file = file_with("easynet:///r/acme/agent/01DEV");
+        let file = file_with("easynet:///r/acme/device/01DEV");
         assert!(
-            header_for_ability("consent.request", &file, None).is_none(),
+            header_for_ability("device.consent.request", &file, None).is_none(),
             "missing hosted URA must surface as None, not a fabricated header"
         );
     }
 
     #[test]
     fn llm_ability_requires_sub_agent_name_to_resolve_owner() {
-        let mut file = file_with("easynet:///r/acme/agent/01DEV");
+        let mut file = file_with("easynet:///r/acme/device/01DEV");
         upsert_hosted_agent(
             &mut file,
             "llm",
             "claude",
-            "easynet:///r/acme/agent/01LLM-claude",
+            "easynet:///r/acme/agent/u1.01LLM-claude",
         );
         // Without a sub-agent name we can't decide which LLM owns
         // the ability — return None.
@@ -197,26 +197,39 @@ mod tests {
         // With a name the lookup succeeds.
         let h = header_for_ability("conversation.send", &file, Some("claude"))
             .expect("named LLM ability must produce a header");
-        assert_eq!(h.callee_agent_uri, "easynet:///r/acme/agent/01LLM-claude");
+        assert_eq!(
+            h.callee_agent_uri,
+            "easynet:///r/acme/agent/u1.01LLM-claude"
+        );
     }
 
     #[test]
     fn llm_skill_ability_resolves_to_named_sub_agent() {
-        let mut file = file_with("easynet:///r/acme/agent/01DEV");
-        upsert_hosted_agent(&mut file, "llm", "claude", "easynet:///r/acme/agent/01LLM");
+        let mut file = file_with("easynet:///r/acme/device/01DEV");
+        upsert_hosted_agent(
+            &mut file,
+            "llm",
+            "claude",
+            "easynet:///r/acme/agent/u1.01LLM",
+        );
         let h = header_for_ability("skill.alive-video", &file, Some("claude"))
             .expect("skill.* with sub_agent must produce a header");
-        assert_eq!(h.callee_agent_uri, "easynet:///r/acme/agent/01LLM");
+        assert_eq!(h.callee_agent_uri, "easynet:///r/acme/agent/u1.01LLM");
     }
 
     #[test]
     fn mcp_bridge_ability_emits_hosted_by_header() {
-        let mut file = file_with("easynet:///r/acme/agent/01DEV");
-        upsert_hosted_agent(&mut file, "mcp", "default", "easynet:///r/acme/agent/01MCP");
-        let h = header_for_ability("mcp.bridge.list_tools", &file, None)
+        let mut file = file_with("easynet:///r/acme/device/01DEV");
+        upsert_hosted_agent(
+            &mut file,
+            "mcp",
+            "default",
+            "easynet:///r/acme/agent/u1.01MCP",
+        );
+        let h = header_for_ability("device.mcp.bridge.list_tools", &file, None)
             .expect("mcp.bridge ability must produce a header");
-        assert_eq!(h.callee_agent_uri, "easynet:///r/acme/agent/01MCP");
-        assert_eq!(h.signer_agent_uri, "easynet:///r/acme/agent/01DEV");
+        assert_eq!(h.callee_agent_uri, "easynet:///r/acme/agent/u1.01MCP");
+        assert_eq!(h.signer_agent_uri, "easynet:///r/acme/device/01DEV");
     }
 
     #[test]
@@ -224,8 +237,8 @@ mod tests {
         // Pre-join state: the dispatcher should not emit headers
         // because the host URA itself is unknown.
         let file = file_with("");
-        assert!(header_for_ability("observe.health", &file, None).is_none());
-        assert!(header_for_ability("consent.subscribe", &file, None).is_none());
+        assert!(header_for_ability("device.observe.health", &file, None).is_none());
+        assert!(header_for_ability("device.consent.subscribe", &file, None).is_none());
     }
 
     #[test]
@@ -233,17 +246,22 @@ mod tests {
         // The wire shape `<agent>.chat` embeds the sub-agent name.
         // The header builder special-cases this so chat dispatch
         // doesn't need out-of-band sub-agent context.
-        let mut file = file_with("easynet:///r/acme/agent/01DEV");
-        upsert_hosted_agent(&mut file, "llm", "claude", "easynet:///r/acme/agent/01LLM");
+        let mut file = file_with("easynet:///r/acme/device/01DEV");
+        upsert_hosted_agent(
+            &mut file,
+            "llm",
+            "claude",
+            "easynet:///r/acme/agent/u1.01LLM",
+        );
         let h = header_for_ability("claude.chat", &file, None)
             .expect("`<agent>.chat` must produce a header without sub_agent param");
-        assert_eq!(h.callee_agent_uri, "easynet:///r/acme/agent/01LLM");
-        assert_eq!(h.signer_agent_uri, "easynet:///r/acme/agent/01DEV");
+        assert_eq!(h.callee_agent_uri, "easynet:///r/acme/agent/u1.01LLM");
+        assert_eq!(h.signer_agent_uri, "easynet:///r/acme/device/01DEV");
     }
 
     #[test]
     fn agent_dot_chat_returns_none_when_sub_agent_not_registered() {
-        let file = file_with("easynet:///r/acme/agent/01DEV");
+        let file = file_with("easynet:///r/acme/device/01DEV");
         // No `llm/claude` row — no header.
         assert!(header_for_ability("claude.chat", &file, None).is_none());
     }
@@ -253,15 +271,15 @@ mod tests {
         // Some abilities (e.g. federation.* dispatched against the
         // local-process cache) are not owned by any profile this
         // file knows about — header builder must just return None.
-        let file = file_with("easynet:///r/acme/agent/01DEV");
+        let file = file_with("easynet:///r/acme/device/01DEV");
         assert!(header_for_ability("federation.heartbeat", &file, None).is_none());
         assert!(header_for_ability("totally.unknown", &file, None).is_none());
     }
 
     #[test]
     fn header_passes_validate() {
-        let file = file_with("easynet:///r/acme/agent/01DEV");
-        let h = header_for_ability("observe.health", &file, None).unwrap();
+        let file = file_with("easynet:///r/acme/device/01DEV");
+        let h = header_for_ability("device.observe.health", &file, None).unwrap();
         assert!(
             h.validate().is_ok(),
             "every emitted header must round-trip validate"

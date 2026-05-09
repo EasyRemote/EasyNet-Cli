@@ -153,6 +153,22 @@ pub const ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2: &str = "federation.subscrib
 /// realm at its end).
 pub const ABILITY_FEDERATION_LIST_USER_DEVICES: &str = "federation.list_user_devices";
 
+/// `federation.proxy_list_user_devices` — daemon-local proxy
+/// wrapper that fans `federation.list_user_devices` out across
+/// the specific peer hubs the backend selected for the current
+/// user. This ability is intentionally NOT a federation surface:
+/// callers must be the local backend (or daemon loopback), and
+/// the daemon owns the cross-hub dial + signing path so the Go
+/// backend never grows a second transport stack.
+pub const ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES: &str = "federation.proxy_list_user_devices";
+
+/// `federation.proxy_resolve` — daemon-local proxy wrapper that
+/// fans `federation.resolve` out across the specific peer hubs
+/// the backend selected. Used for user-owned agent listings and
+/// peer-device / peer-agent ability catalog reads without
+/// teaching the Go backend how to dial peers itself.
+pub const ABILITY_FEDERATION_PROXY_RESOLVE: &str = "federation.proxy_resolve";
+
 /// `federation.advertise_abilities` — backend self-registration
 /// path. Backend on boot publishes its own ability descriptors
 /// (`aggregate.list_skills_across_fleet` etc.) so they show up in
@@ -174,7 +190,7 @@ pub const ABILITY_FEDERATION_ADVERTISE_ABILITIES: &str = "federation.advertise_a
 /// fans out against an empty key cache.
 pub const ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY: &str = "runtime.bootstrap_self_identity";
 
-/// All ten federation.* ability names in deterministic order.
+/// All federation.* ability names in deterministic order.
 /// Iteration order is the order PR-4's schema-compat matrix files
 /// land on disk, so changing this slice without updating PR-4
 /// fixtures is a wire-compat break.
@@ -186,6 +202,8 @@ pub const FEDERATION_ABILITIES: &[&str] = &[
     ABILITY_FEDERATION_RESOLVE_KEY,
     ABILITY_FEDERATION_DISCOVER,
     ABILITY_FEDERATION_LIST_USER_DEVICES,
+    ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
+    ABILITY_FEDERATION_PROXY_RESOLVE,
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
     ABILITY_FEDERATION_REVOKE,
@@ -458,7 +476,7 @@ pub fn handle_heartbeat(
 // ─── federation.resolve ────────────────────────────────────────────
 
 /// Request payload for `federation.resolve`.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ResolveRequest {
     /// Optional URI prefix to filter the registry on. When absent,
     /// returns every online agent.
@@ -477,7 +495,7 @@ pub struct ResolveRequest {
     pub filter: Option<ResolveFilterRequest>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ResolveFilterRequest {
     #[serde(default)]
     pub agent_uri_prefix: Option<String>,
@@ -751,7 +769,7 @@ pub fn handle_discover(
 ///
 /// This realises PR-N4 spec §commit 4/N's INV-5 privacy default:
 /// a calling user only sees cross-realm devices that have been
-/// explicitly opted into by a `<self>.keyring.consume_federate_
+/// explicitly opted into by a `device.keyring.consume_federate_
 /// user_token` round on this hub.
 #[must_use]
 pub fn handle_discover_with_user_filter(
@@ -800,6 +818,37 @@ pub struct ListUserDevicesResponse {
     pub devices: Vec<crate::services::federation_directory::DirectoryEntry>,
 }
 
+/// Request payload for `federation.proxy_list_user_devices`.
+/// `tenant_id` is the user-owned device realm to enumerate on
+/// each peer; `peer_hub_urls` are the exact peer TLS listener
+/// URLs the backend selected from its `user_peer_hubs` table.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ProxyListUserDevicesRequest {
+    pub tenant_id: String,
+    #[serde(default)]
+    pub peer_hub_urls: Vec<String>,
+}
+
+/// Response payload for `federation.proxy_list_user_devices`.
+/// The daemon stamps each returned `DirectoryEntry` with the
+/// peer's `origin_realm` and `hub_endpoint` before returning it
+/// to the backend.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProxyListUserDevicesResponse {
+    pub devices: Vec<crate::services::federation_directory::DirectoryEntry>,
+}
+
+/// Request payload for `federation.proxy_resolve`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ProxyResolveRequest {
+    #[serde(default)]
+    pub peer_hub_urls: Vec<String>,
+    #[serde(default)]
+    pub uri_prefix: Option<String>,
+    #[serde(default)]
+    pub include_abilities: bool,
+}
+
 /// Handle a `federation.list_user_devices` invocation. Reads
 /// the supplied `PresenceRegistry` snapshot, filters URIs
 /// whose realm component matches `request.tenant_id`, and
@@ -817,8 +866,8 @@ pub struct ListUserDevicesResponse {
 /// URI compatibility:
 /// - Canonical v4.1.4 device sessions live under
 ///   `easynet:///r/<tenant>/device/<node>`.
-/// - Legacy pre-Phase-2A device sessions may still appear as the
-///   collapsed bare `.../agent/<node>` form.
+/// - Only canonical device-session URIs (`.../device/<node>`) are
+///   surfaced here.
 /// - Real agent-profile URIs (`.../agent/<user>.<agent>`) are not
 ///   device sessions and are ignored here.
 #[must_use]
@@ -827,33 +876,16 @@ pub fn handle_list_user_devices(
     registry: &PresenceRegistry,
 ) -> ListUserDevicesResponse {
     let tenant_device_prefix = crate::uri::realm_device_prefix(&request.tenant_id);
-    let tenant_legacy_agent_prefix = crate::uri::realm_agent_prefix(&request.tenant_id);
     let snapshot = registry.snapshot();
     let devices = snapshot
         .into_iter()
-        .filter(|uri| {
-            if uri.starts_with(&tenant_device_prefix) {
-                return true;
-            }
-            uri.strip_prefix(&tenant_legacy_agent_prefix)
-                .map(|tail| !tail.is_empty() && !tail.contains('.') && !tail.contains('/'))
-                .unwrap_or(false)
-        })
+        .filter(|uri| uri.starts_with(&tenant_device_prefix))
         .map(|uri| {
-            // Extract node_id from the canonical v4.1.4
-            // `/device/<node>` tail first; legacy bare
-            // `/agent/<node>` tails stay accepted during the
-            // migration window.
+            // Canonical v4.1.4 device URIs are the only input
+            // that should survive the prefix filter above.
             let node_id = match crate::uri::parse_ura(&uri) {
                 Ok(parsed) if parsed.kind == crate::uri::URAKind::Device => parsed.device_id,
-                _ => {
-                    let legacy = crate::uri::strip_v1_agent_prefix(&uri);
-                    if legacy == uri {
-                        String::new()
-                    } else {
-                        legacy
-                    }
-                }
+                _ => String::new(),
             };
             crate::services::federation_directory::DirectoryEntry {
                 agent_uri: uri,
@@ -1164,6 +1196,11 @@ mod tests {
             "federation.list_user_devices"
         );
         assert_eq!(
+            ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
+            "federation.proxy_list_user_devices"
+        );
+        assert_eq!(ABILITY_FEDERATION_PROXY_RESOLVE, "federation.proxy_resolve");
+        assert_eq!(
             ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
             "federation.subscribe_directory_v2"
         );
@@ -1175,16 +1212,16 @@ mod tests {
             ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
             "runtime.bootstrap_self_identity"
         );
-        // 12 federation.* abilities now wired (added advertise_abilities
+        // 14 federation.* abilities now wired (added advertise_abilities
         // for backend self-publish; bootstrap_self_identity is namespaced
         // under `runtime.*` so it lives outside this set).
-        assert_eq!(FEDERATION_ABILITIES.len(), 12);
+        assert_eq!(FEDERATION_ABILITIES.len(), 14);
     }
 
     #[test]
     fn join_receipt_hash_is_deterministic() {
-        let a = derive_join_receipt_hash("easynet:///r/realm/agent/n1", "realm");
-        let b = derive_join_receipt_hash("easynet:///r/realm/agent/n1", "realm");
+        let a = derive_join_receipt_hash("easynet:///r/realm/device/n1", "realm");
+        let b = derive_join_receipt_hash("easynet:///r/realm/device/n1", "realm");
         assert_eq!(
             a, b,
             "byte-identical input must produce byte-identical hash"
@@ -1214,7 +1251,7 @@ mod tests {
     #[test]
     fn handle_join_echoes_uri_and_realm() {
         let req = JoinRequest {
-            canonical_agent_uri: "easynet:///r/realm/agent/n1".to_string(),
+            canonical_agent_uri: "easynet:///r/realm/device/n1".to_string(),
             realm: "realm".to_string(),
         };
         let resp = handle_join(&req);
@@ -1227,7 +1264,7 @@ mod tests {
     fn handle_advertise_agent_returns_typed_ack() {
         let store = AdvertisedAgentStore::new();
         let req = AdvertiseAgentRequest {
-            agent_uri: "easynet:///r/realm/agent/n1".to_string(),
+            agent_uri: "easynet:///r/realm/agent/user.n1".to_string(),
             signing_authority: Some(AdvertiseSigningAuthorityRequest::HostedBy {
                 host_uri: "easynet:///r/realm/device/dev-1".to_string(),
             }),
@@ -1239,7 +1276,7 @@ mod tests {
         assert!(resp.ack);
         assert!(!resp.replaced_prior);
         let stored = store
-            .get("easynet:///r/realm/agent/n1")
+            .get("easynet:///r/realm/agent/user.n1")
             .expect("advertised agent must be stored");
         assert_eq!(stored.host_uri(), Some("easynet:///r/realm/device/dev-1"));
     }
@@ -1248,15 +1285,15 @@ mod tests {
     fn handle_heartbeat_reports_registry_size() {
         let registry = PresenceRegistry::new();
         registry.insert(
-            "easynet:///r/realm/agent/a".to_string(),
+            "easynet:///r/realm/device/a".to_string(),
             make_dispatch_sender(),
         );
         registry.insert(
-            "easynet:///r/realm/agent/b".to_string(),
+            "easynet:///r/realm/device/b".to_string(),
             make_dispatch_sender(),
         );
         let req = HeartbeatRequest {
-            agent_uri: "easynet:///r/realm/agent/a".to_string(),
+            agent_uri: "easynet:///r/realm/device/a".to_string(),
         };
         let resp = handle_heartbeat(&req, &registry);
         assert_eq!(resp.membership_status, "active");
@@ -1267,15 +1304,15 @@ mod tests {
     fn handle_resolve_with_no_filter_returns_all_sorted() {
         let registry = PresenceRegistry::new();
         registry.insert(
-            "easynet:///r/realm/agent/c".to_string(),
+            "easynet:///r/realm/device/c".to_string(),
             make_dispatch_sender(),
         );
         registry.insert(
-            "easynet:///r/realm/agent/a".to_string(),
+            "easynet:///r/realm/device/a".to_string(),
             make_dispatch_sender(),
         );
         registry.insert(
-            "easynet:///r/realm/agent/b".to_string(),
+            "easynet:///r/realm/device/b".to_string(),
             make_dispatch_sender(),
         );
 
@@ -1293,9 +1330,9 @@ mod tests {
         assert_eq!(
             uris,
             vec![
-                "easynet:///r/realm/agent/a",
-                "easynet:///r/realm/agent/b",
-                "easynet:///r/realm/agent/c",
+                "easynet:///r/realm/device/a",
+                "easynet:///r/realm/device/b",
+                "easynet:///r/realm/device/c",
             ]
         );
         for agent in &resp.agents {
@@ -1307,11 +1344,11 @@ mod tests {
     fn handle_resolve_with_prefix_filters_correctly() {
         let registry = PresenceRegistry::new();
         registry.insert(
-            "easynet:///r/realm-a/agent/x".to_string(),
+            "easynet:///r/realm-a/device/x".to_string(),
             make_dispatch_sender(),
         );
         registry.insert(
-            "easynet:///r/realm-b/agent/y".to_string(),
+            "easynet:///r/realm-b/device/y".to_string(),
             make_dispatch_sender(),
         );
 
@@ -1326,7 +1363,7 @@ mod tests {
             None,
         );
         assert_eq!(resp.agents.len(), 1);
-        assert_eq!(resp.agents[0].uri, "easynet:///r/realm-a/agent/x");
+        assert_eq!(resp.agents[0].uri, "easynet:///r/realm-a/device/x");
     }
 
     #[test]
@@ -1372,7 +1409,7 @@ mod tests {
             RealmTrustAnchor, TrustedAgent, TrustedAgentRole,
         };
         let entry = TrustedAgent {
-            agent_uri: "easynet:///r/realm-a/agent/n1".to_string(),
+            agent_uri: "easynet:///r/realm-a/device/n1".to_string(),
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             role: TrustedAgentRole::Device,
             added_at_unix_ms: 1_700_000_000_000,
@@ -1383,7 +1420,7 @@ mod tests {
         let anchor = RealmTrustAnchor::from_entries(vec![entry]).expect("anchor");
         let resp = handle_resolve_key(
             &ResolveKeyRequest {
-                agent_uri: "easynet:///r/realm-a/agent/n1".to_string(),
+                agent_uri: "easynet:///r/realm-a/device/n1".to_string(),
             },
             &anchor,
         )
@@ -1400,7 +1437,7 @@ mod tests {
         let anchor = RealmTrustAnchor::default();
         let resp = handle_resolve_key(
             &ResolveKeyRequest {
-                agent_uri: "easynet:///r/realm-a/agent/missing".to_string(),
+                agent_uri: "easynet:///r/realm-a/device/missing".to_string(),
             },
             &anchor,
         );
@@ -1421,7 +1458,7 @@ mod tests {
         let mut realm_a = DirectoryView::new("realm-a".to_string());
         realm_a.apply_frame(&DirectoryEvent::Snapshot {
             entries: vec![DirectoryEntry {
-                agent_uri: "easynet:///r/realm-a/agent/user-c".to_string(),
+                agent_uri: "easynet:///r/realm-a/user/user-c".to_string(),
                 node_id: "user-c".to_string(),
                 display_name: None,
                 status: "active".to_string(),
@@ -1433,7 +1470,7 @@ mod tests {
         let mut realm_c = DirectoryView::new("realm-c".to_string());
         realm_c.apply_frame(&DirectoryEvent::Snapshot {
             entries: vec![DirectoryEntry {
-                agent_uri: "easynet:///r/realm-c/agent/unbound".to_string(),
+                agent_uri: "easynet:///r/realm-c/user/unbound".to_string(),
                 node_id: "unbound".to_string(),
                 display_name: None,
                 status: "active".to_string(),
@@ -1464,7 +1501,7 @@ mod tests {
             .record_binding(
                 FederatedUserBinding {
                     source_realm: "realm-a".to_string(),
-                    source_user_uri: "easynet:///r/realm-a/agent/user-c".to_string(),
+                    source_user_uri: "easynet:///r/realm-a/user/user-c".to_string(),
                     source_user_pubkey_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
                         .to_string(),
                     local_user_id: "user-on-b".to_string(),
@@ -1487,7 +1524,7 @@ mod tests {
         assert_eq!(resp.entries.len(), 1);
         assert_eq!(
             resp.entries[0].agent_uri,
-            "easynet:///r/realm-a/agent/user-c"
+            "easynet:///r/realm-a/user/user-c"
         );
     }
 
@@ -1516,7 +1553,7 @@ mod tests {
         assert_eq!(resp.entries.len(), 1);
         assert_eq!(
             resp.entries[0].agent_uri,
-            "easynet:///r/realm-a/agent/user-c"
+            "easynet:///r/realm-a/user/user-c"
         );
     }
 
@@ -1559,7 +1596,7 @@ mod tests {
         // view but is unbound for the calling user. Filter out.
         let resp = handle_discover_with_user_filter(
             &DiscoverRequest {
-                agent_uri: Some("easynet:///r/realm-c/agent/unbound".to_string()),
+                agent_uri: Some("easynet:///r/realm-c/user/unbound".to_string()),
                 ..Default::default()
             },
             &view,
@@ -1620,7 +1657,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_list_user_devices_accepts_legacy_agent_device_shape_only() {
+    fn handle_list_user_devices_ignores_legacy_agent_device_shape() {
         let registry = PresenceRegistry::new();
         registry.insert(
             "easynet:///r/tenant-a/agent/node-legacy".to_string(),
@@ -1637,11 +1674,9 @@ mod tests {
             },
             &registry,
         );
-        assert_eq!(resp.devices.len(), 1, "real agent URIs must be ignored");
-        assert_eq!(resp.devices[0].node_id, "node-legacy");
-        assert_eq!(
-            resp.devices[0].agent_uri,
-            "easynet:///r/tenant-a/agent/node-legacy"
+        assert!(
+            resp.devices.is_empty(),
+            "legacy and hosted agent URIs must be ignored"
         );
     }
 
@@ -1665,7 +1700,7 @@ mod tests {
     #[test]
     fn handle_revoke_reports_was_active_correctly() {
         let registry = PresenceRegistry::new();
-        let uri = "easynet:///r/realm/agent/n1".to_string();
+        let uri = "easynet:///r/realm/device/n1".to_string();
         registry.insert(uri.clone(), make_dispatch_sender());
 
         let resp = handle_revoke(
@@ -1723,7 +1758,7 @@ mod tests {
         let target_reply = b"hello from device-b".to_vec();
         let resp = handle_forward_invoke(
             &ForwardInvokeRequest {
-                target_uri: "easynet:///r/realm/agent/n1".to_string(),
+                target_uri: "easynet:///r/realm/device/n1".to_string(),
                 inner_envelope_b64: String::new(),
                 causal_context_bytes: Vec::new(),
                 forward_deadline_ms: 0,
@@ -1743,7 +1778,7 @@ mod tests {
         // target_offline a Status::failed_precondition).
         let resp = handle_forward_invoke(
             &ForwardInvokeRequest {
-                target_uri: "easynet:///r/realm/agent/n1".to_string(),
+                target_uri: "easynet:///r/realm/device/n1".to_string(),
                 inner_envelope_b64: String::new(),
                 causal_context_bytes: Vec::new(),
                 forward_deadline_ms: 0,
@@ -1768,7 +1803,7 @@ mod tests {
         // DEC-N5 §3 can derive the inner deadline.
         let audit_bytes: Vec<u8> = vec![0xCA, 0xFE, 0xBA, 0xBE, 0x00, 0xFF];
         let original = serde_json::json!({
-            "target_uri": "easynet:///r/realm/agent/n1",
+            "target_uri": "easynet:///r/realm/device/n1",
             "inner_envelope_b64": "",
             "causal_context_bytes": audit_bytes,
             "forward_deadline_ms": 12_345_u64,
@@ -1786,7 +1821,7 @@ mod tests {
         // deserialise — the new fields default to empty / zero
         // sentinels per the `#[serde(default)]` annotation.
         let pre_c1a = serde_json::json!({
-            "target_uri": "easynet:///r/realm/agent/n1",
+            "target_uri": "easynet:///r/realm/device/n1",
             "inner_envelope_b64": "",
         });
         let bytes = serde_json::to_vec(&pre_c1a).unwrap();
@@ -1799,11 +1834,11 @@ mod tests {
     fn build_subscribe_directory_initial_snapshot_is_sorted() {
         let registry = PresenceRegistry::new();
         registry.insert(
-            "easynet:///r/realm/agent/c".to_string(),
+            "easynet:///r/realm/device/c".to_string(),
             make_dispatch_sender(),
         );
         registry.insert(
-            "easynet:///r/realm/agent/a".to_string(),
+            "easynet:///r/realm/device/a".to_string(),
             make_dispatch_sender(),
         );
 
@@ -1815,7 +1850,7 @@ mod tests {
             .collect();
         assert_eq!(
             uris,
-            vec!["easynet:///r/realm/agent/a", "easynet:///r/realm/agent/c"]
+            vec!["easynet:///r/realm/device/a", "easynet:///r/realm/device/c"]
         );
     }
 }

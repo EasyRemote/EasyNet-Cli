@@ -20,3 +20,4 @@ Cargo.lock
 
 # Claude Code project-local sidecar.
 .claude/
+docker/hub-pages/full/vendor/

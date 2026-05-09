@@ -49,8 +49,57 @@ pub fn step(msg: &str) {
     eprintln!("  {msg}");
 }
 
+/// Single key/value row at fixed 2-space indent, no width
+/// alignment. Kept for callers that mix `detail()` with prose
+/// `info()` lines where padding would look artificial.
+///
+/// For tabular output (multiple `detail()`s in a block) prefer
+/// `kv_section()` — it pads every key to the column width derived
+/// from the longest key in the block, so the values line up
+/// vertically. Banner and `runtime status` use that one.
 pub fn detail(key: &str, value: &str) {
     eprintln!("  {key}: {value}");
+}
+
+/// Render a vertically-aligned key/value block. Every key gets
+/// padded with spaces so the values start at the same column,
+/// regardless of how long individual keys are. Keys render in
+/// bold cyan (matching the banner's accent), values in default
+/// terminal style — same palette the `easynet --help` banner
+/// uses, so the visual feel of `easynet --help`,
+/// `easynet runtime status`, and `easynet auth whoami` is
+/// identical.
+///
+/// Stderr (status surface). Use [`kv_section_stdout`] for the
+/// authoritative-data surfaces (`auth whoami`, where consumers
+/// might pipe to grep / jq).
+pub fn kv_section(rows: &[(&str, &str)]) {
+    for line in format_kv_rows(rows) {
+        eprintln!("{line}");
+    }
+}
+
+/// Same layout + palette as [`kv_section`] but writes to stdout.
+/// Use this when the rendered block is the *answer* to the
+/// command's question (e.g. `whoami` printing identity facts), so
+/// `cmd | grep email` keeps working.
+pub fn kv_section_stdout(rows: &[(&str, &str)]) {
+    for line in format_kv_rows(rows) {
+        println!("{line}");
+    }
+}
+
+/// Build the styled key/value lines without writing them. The
+/// stderr / stdout split lives in the two thin wrappers above so
+/// the formatting is one source of truth.
+fn format_kv_rows(rows: &[(&str, &str)]) -> Vec<String> {
+    let width = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+    rows.iter()
+        .map(|(k, v)| {
+            let padded = format!("{k:<width$}");
+            format!("  {} {v}", style(format!("{padded}:")).cyan().bold())
+        })
+        .collect()
 }
 
 pub fn table(headers: &[&str]) -> Table {

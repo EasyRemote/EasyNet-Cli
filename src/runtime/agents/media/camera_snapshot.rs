@@ -56,6 +56,7 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 
 use crate::persistence::resources::{self, lookup_by_uri, ResourceEntry, ResourceType};
+use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::ability_dispatch::{EnvelopeContext, LocalAbilityRegistry};
 use crate::runtime::agents::media_abilities::{ABILITY_CAMERA_SNAPSHOT, REASON_SUBJECT_IN_ARGS};
 
@@ -266,8 +267,9 @@ impl SnapshotBackend for SyntheticBackend {
 /// stub becomes unreachable. Reversing the order silently leaves
 /// the stub in place.
 pub fn register_with_backend(reg: &mut LocalAbilityRegistry, backend: Arc<dyn SnapshotBackend>) {
-    reg.register_rpc_with_envelope(
-        ABILITY_CAMERA_SNAPSHOT,
+    reg.register_rpc_with_envelope_and_owner(
+        "device.camera.snapshot",
+        OwnerKind::Device,
         Arc::new(move |env: EnvelopeContext, args: Value| handler(&backend, env, args)),
     );
 }
@@ -391,7 +393,7 @@ mod tests {
             file,
             ResourceUpsert {
                 realm: "acme",
-                owner_agent: "easynet:///r/acme/agent/01DEV",
+                owner_agent: "easynet:///r/acme/device/01DEV",
                 kind: ResourceType::Camera,
                 binding: ResourceBinding::LocalDevice,
                 hardware_id,
@@ -584,7 +586,7 @@ mod tests {
             &mut file,
             ResourceUpsert {
                 realm: "acme",
-                owner_agent: "easynet:///r/acme/agent/01DEV",
+                owner_agent: "easynet:///r/acme/device/01DEV",
                 kind: ResourceType::Mic, // not a camera
                 binding: ResourceBinding::LocalDevice,
                 hardware_id: "h-mic-not-camera",

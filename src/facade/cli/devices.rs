@@ -42,6 +42,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+#[cfg(feature = "axon-pb")]
 use anyhow::Context;
 use clap::Args;
 use console::style;
@@ -118,7 +119,7 @@ pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
             output::info("No devices found.");
         } else {
             output::info(&format!(
-                "No {} devices found. Use `--state all` to include all states.",
+                "No {} devices found. Use '--state all' to include all states.",
                 args.state
             ));
         }

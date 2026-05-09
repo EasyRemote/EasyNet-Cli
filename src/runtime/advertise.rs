@@ -53,101 +53,53 @@ pub struct AdvertiseOutcome {
     pub result: Result<AdvertiseAgentReceipt, String>,
 }
 
-/// Resource URI form expected by the bridge for federation.* calls
-/// against the hub-profile Agent. `<realm>` is filled at call time
-/// from the daemon's join receipt; `<hub_uri>` segment is fixed
-/// because every realm has exactly one canonical hub-profile Agent.
-// Visibility token must be one of `pub | org | prv` per the SDK
-// canonicalizer (client-sdk/src/domain/easynet/semantic.rs); the
-// pre-existing `private` literal silently failed canonicalization
-// with `invalid visibility for r easynet URI` on every advertise
-// call — operators saw "advertise X failed" with no entry in the
-// realm directory. Hub-profile URIs are not public, so we use `prv`.
-const FED_ADVERTISE_AGENT_RESOURCE_FMT: &str =
-    "easynet:///r/prv/hub/{realm}/abilities/federation.advertise_agent@1?tenant_id={tenant}";
+const FED_ADVERTISE_AGENT_ABILITY_NAME: &str = "federation.advertise_agent";
+const FED_ADVERTISE_ABILITIES_ABILITY_NAME: &str = "federation.advertise_abilities";
+const FED_RESOLVE_ABILITY_NAME: &str = "federation.resolve";
+const FED_REVOKE_ABILITY_NAME: &str = "federation.revoke";
+const FED_HEARTBEAT_ABILITY_NAME: &str = "federation.heartbeat";
+const FED_RESOLVE_KEY_ABILITY_NAME: &str = "federation.resolve_key";
+const FED_FORWARD_INVOKE_ABILITY_NAME: &str = "federation.forward_invoke";
 
-const FED_ADVERTISE_ABILITIES_RESOURCE_FMT: &str =
-    "easynet:///r/prv/hub/{realm}/abilities/federation.advertise_abilities@1?tenant_id={tenant}";
-
-/// `federation.resolve` — read-only directory query against the
-/// realm's hub. Same `prv` visibility as the advertise pair (hub-
-/// profile abilities are private to the realm, not network-public).
-const FED_RESOLVE_RESOURCE_FMT: &str =
-    "easynet:///r/prv/hub/{realm}/abilities/federation.resolve@1?tenant_id={tenant}";
-
-/// `federation.revoke` — voluntary leave (or operator-initiated
-/// revocation) of an Agent's directory entry. CLI shutdown calls
-/// this on the daemon's own device-profile URI to remove its
-/// directory presence cleanly. RFC-001 §A14 reserves this hub
-/// ability for the legacy `deregister_node` migration path.
-const FED_REVOKE_RESOURCE_FMT: &str =
-    "easynet:///r/prv/hub/{realm}/abilities/federation.revoke@1?tenant_id={tenant}";
-
-/// `federation.heartbeat` — membership liveness ping. Periodically
-/// re-stamps the hub's `last_heartbeat_unix_ms` so the directory
-/// sweep doesn't evict the daemon's record. Replaces the legacy
-/// gRPC `NodeHeartbeat` RPC removed by AXON-RFC-001 P1.5.
-const FED_HEARTBEAT_RESOURCE_FMT: &str =
-    "easynet:///r/prv/hub/{realm}/abilities/federation.heartbeat@1?tenant_id={tenant}";
-
-/// RFC-002 §5.1 federation.resolve_key — agent_uri → public_key
-/// lookup against the realm directory.
-const FED_RESOLVE_KEY_RESOURCE_FMT: &str =
-    "easynet:///r/prv/hub/{realm}/abilities/federation.resolve_key@1?tenant_id={tenant}";
-
-/// RFC-002 §5.2 federation.forward_invoke — hub-mediated cross-
-/// device dispatch.
-const FED_FORWARD_INVOKE_RESOURCE_FMT: &str =
-    "easynet:///r/prv/hub/{realm}/abilities/federation.forward_invoke@1?tenant_id={tenant}";
-
-/// Build the canonical resource URI for `federation.advertise_agent`
-/// against the realm's hub. Public so call sites can construct the
-/// URI consistently without re-typing the format string.
-///
-/// `tenant_id` is mandatory: the SDK canonicalizer rejects any non-
-/// `pub` URI that does not carry `?tenant_id=...` and it must match
-/// the envelope tenant. Building the query here keeps every advertise
-/// caller from re-implementing it.
-pub fn advertise_agent_resource_uri(realm: &str, tenant_id: &str) -> String {
-    FED_ADVERTISE_AGENT_RESOURCE_FMT
-        .replace("{realm}", realm)
-        .replace("{tenant}", tenant_id)
+fn hub_ability_resource_uri(realm: &str, ability_name: &str) -> String {
+    crate::uri::hub_ability_uri(realm, ability_name)
 }
 
-pub fn advertise_abilities_resource_uri(realm: &str, tenant_id: &str) -> String {
-    FED_ADVERTISE_ABILITIES_RESOURCE_FMT
-        .replace("{realm}", realm)
-        .replace("{tenant}", tenant_id)
+/// Build the canonical hub-owned ability URI for
+/// `federation.advertise_agent`.
+pub fn advertise_agent_resource_uri(realm: &str, _tenant_id: &str) -> String {
+    let _ = _tenant_id;
+    hub_ability_resource_uri(realm, FED_ADVERTISE_AGENT_ABILITY_NAME)
 }
 
-/// Build the canonical resource URI for `federation.resolve` against
-/// the realm's hub. Inbound counterpart to `advertise_*`: peers query
-/// this to discover what every other agent in the realm has
-/// published.
-pub fn resolve_resource_uri(realm: &str, tenant_id: &str) -> String {
-    FED_RESOLVE_RESOURCE_FMT
-        .replace("{realm}", realm)
-        .replace("{tenant}", tenant_id)
+pub fn advertise_abilities_resource_uri(realm: &str, _tenant_id: &str) -> String {
+    let _ = _tenant_id;
+    hub_ability_resource_uri(realm, FED_ADVERTISE_ABILITIES_ABILITY_NAME)
 }
 
-/// Build the canonical resource URI for `federation.revoke` against
-/// the realm's hub. Used by the CLI shutdown path to remove the
-/// daemon's own directory entry — replaces the deprecated
-/// `bridge.deregister_node` gRPC call.
-pub fn revoke_resource_uri(realm: &str, tenant_id: &str) -> String {
-    FED_REVOKE_RESOURCE_FMT
-        .replace("{realm}", realm)
-        .replace("{tenant}", tenant_id)
+/// Build the canonical hub-owned ability URI for
+/// `federation.resolve`. Inbound counterpart to `advertise_*`:
+/// peers query this to discover what every other agent in the realm
+/// has published.
+pub fn resolve_resource_uri(realm: &str, _tenant_id: &str) -> String {
+    let _ = _tenant_id;
+    hub_ability_resource_uri(realm, FED_RESOLVE_ABILITY_NAME)
 }
 
-/// Build the canonical resource URI for `federation.heartbeat`
-/// against the realm's hub. Periodic invocation keeps the daemon's
-/// directory entry alive. Replaces the deprecated
-/// `bridge.NodeHeartbeat` keepalive RPC.
-pub fn heartbeat_resource_uri(realm: &str, tenant_id: &str) -> String {
-    FED_HEARTBEAT_RESOURCE_FMT
-        .replace("{realm}", realm)
-        .replace("{tenant}", tenant_id)
+/// Build the canonical hub-owned ability URI for
+/// `federation.revoke`. Used by the CLI shutdown path to remove the
+/// daemon's own directory entry.
+pub fn revoke_resource_uri(realm: &str, _tenant_id: &str) -> String {
+    let _ = _tenant_id;
+    hub_ability_resource_uri(realm, FED_REVOKE_ABILITY_NAME)
+}
+
+/// Build the canonical hub-owned ability URI for
+/// `federation.heartbeat`. Periodic invocation keeps the daemon's
+/// directory entry alive.
+pub fn heartbeat_resource_uri(realm: &str, _tenant_id: &str) -> String {
+    let _ = _tenant_id;
+    hub_ability_resource_uri(realm, FED_HEARTBEAT_ABILITY_NAME)
 }
 
 /// Wire shape for `federation.advertise_abilities` arguments. Not in
@@ -237,24 +189,20 @@ impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
         // sees a subject that matches the URI's parsed
         // `<visibility>:<subject_type>:<subject_value>` decomposition.
         //
-        // Two shapes the daemon legitimately calls:
-        //   1. `r/<vis>/hub/<realm>/abilities/...` — hub-profile
-        //      (federation.advertise_*, federation.resolve, runtime.*).
-        //      Subject MUST be `easynet:<vis>:hub:<realm>`.
-        //   2. `r/<vis>/agent/<id>/abilities/...` — agent-profile.
-        //      Subject is `easynet:<vis>:reg:agent.<id>` and is the
-        //      SDK's default when subject_id = None — no override
-        //      needed.
+        // Two canonical shapes the daemon legitimately calls:
+        //   1. `easynet:///r/<realm>/hub` — hub profile. Subject MUST
+        //      be `easynet:prv:hub:<realm>`.
+        //   2. `easynet:///r/<realm>/ability/hub.<ns>.<verb>` —
+        //      hub-owned ability. Subject is still the hub profile,
+        //      so we override to the same `easynet:prv:hub:<realm>`.
         //
         // Pre-fix every call passed `subject_id = None`, which the
-        // SDK defaulted to the agent form regardless of URI shape.
-        // Hub-shaped URIs therefore got `agent.<node>` as subject
-        // and the runtime rejected with AXON_EASYNET_SUBJECT_MISMATCH
+        // SDK defaulted to the agent form. Hub-owned ability URIs
+        // therefore got `agent.<node>` as subject and the runtime
+        // rejected with AXON_EASYNET_SUBJECT_MISMATCH
         // ("subject_id does not match resource URI subject"), even
         // though the daemon's bootstrap_self_identity had succeeded
-        // and topology had the key. Two-layer subject mismatch:
-        // first the URI-vs-subject check at canonicalize fails,
-        // never even reaching the topology key lookup.
+        // and topology had the key.
         let subject_id = subject_id_from_resource_uri(resource_uri);
         // The metadata bag carries TWO load-bearing entries:
         //
@@ -308,43 +256,23 @@ impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
 /// Derive the canonical `subject_id` an envelope should carry for a
 /// given EasyNet resource URI. Returns `None` for URIs the helper
 /// doesn't recognise (the SDK falls back to its default
-/// `easynet:<vis>:reg:agent.<owner>` form, which is correct for
-/// agent-profile URIs and what the SDK already does).
+/// `easynet:prv:reg:agent.<owner>` form, which is fine for non-hub
+/// callers). Legacy `.../abilities/...` resource shapes are retired
+/// and intentionally not recognised here.
 ///
 /// Visible to tests via the module re-export below; the function is
 /// pure (no I/O, no state) so a test that pins each shape is
 /// sufficient.
 pub(crate) fn subject_id_from_resource_uri(resource_uri: &str) -> Option<String> {
-    // Strip the scheme and `//` authority. RFC-001 canonical shape
-    // is `easynet:///r/<vis>/<subject_type>/<subject_value>/abilities/<name>@<ver>`.
-    // We deliberately match by structural prefix rather than trying
-    // to parse a full URL — the canonicalizer downstream owns
-    // structural validation.
-    let after_scheme = resource_uri.strip_prefix("easynet:///")?;
-    let mut parts = after_scheme.split('/');
-    if parts.next()? != "r" {
-        return None;
+    if let Ok(parsed) = crate::uri::parse_ura(resource_uri) {
+        match parsed.kind {
+            crate::uri::URAKind::Hub => return Some(format!("easynet:prv:hub:{}", parsed.realm)),
+            crate::uri::URAKind::Ability if parsed.user_id == "hub" => {
+                return Some(format!("easynet:prv:hub:{}", parsed.realm));
+            }
+            _ => {}
+        }
     }
-    let visibility = parts.next()?;
-    let subject_type = parts.next()?;
-    let subject_value = parts.next()?;
-    if !matches!(visibility, "pub" | "org" | "prv") {
-        return None;
-    }
-    // Hub-profile: `r/<vis>/hub/<realm>/abilities/...` →
-    // `easynet:<vis>:hub:<realm>`.
-    if subject_type == "hub" {
-        return Some(format!("easynet:{visibility}:hub:{subject_value}"));
-    }
-    // Agent-profile: `r/<vis>/agent/<id>/abilities/...` →
-    // `easynet:<vis>:reg:agent.<id>`. We let the SDK fall back to
-    // its default by returning None — the same shape it already
-    // builds.
-    if subject_type == "agent" {
-        return None;
-    }
-    // Other subject_types (none today; reserved for future): fall
-    // through to SDK default rather than guessing.
     None
 }
 
@@ -531,10 +459,38 @@ pub fn heartbeat<I: AbilityInvoker>(
     realm: &str,
 ) -> Result<(), String> {
     let resource_uri = heartbeat_resource_uri(realm, tenant_id);
-    // federation.heartbeat takes no arguments; the hub keys the
-    // refresh on the envelope's caller URI alone.
-    let payload = serde_json::json!({});
-    let _ = invoker.invoke_ability(tenant_id, &resource_uri, payload)?;
+    // AXON-RFC-001 v4.1.7 hub-broadcast contract: pass the
+    // device's last-seen hub-abilities revision so the hub can
+    // answer with an incremental diff. The store starts at
+    // revision 0 (empty cache); the hub treats `since=0` as
+    // "fully out of date" and replies with the full snapshot in
+    // the diff's `added` field. v4.1.6 hubs ignore the field and
+    // omit `hub_abilities_diff` from the receipt; the parse path
+    // below treats absent diff as "no change".
+    let store = crate::services::hub_published_ability_store::global();
+    let since = store.revision();
+    let payload = serde_json::json!({
+        "since_abilities_revision": since,
+    });
+    let response = invoker.invoke_ability(tenant_id, &resource_uri, payload)?;
+    // Best-effort diff application: a malformed body or a hub
+    // that doesn't speak the contract leaves the store unchanged
+    // (same as before this PR landed).
+    let body = unwrap_result_json(response);
+    if let Ok(receipt) =
+        serde_json::from_value::<crate::runtime::federation_client::HeartbeatReceipt>(body)
+    {
+        let diff = receipt.hub_abilities_diff;
+        let added_n = diff.added.len();
+        let removed_n = diff.removed.len();
+        if added_n != 0 || removed_n != 0 {
+            store.apply_diff(diff);
+            eprintln!(
+                "[heartbeat] hub-broadcast diff: +{added_n} -{removed_n} (rev now {})",
+                store.revision()
+            );
+        }
+    }
     Ok(())
 }
 
@@ -546,9 +502,7 @@ pub fn resolve_key<I: AbilityInvoker>(
     realm: &str,
     agent_uri: &str,
 ) -> Result<crate::runtime::federation_client::ResolveKeyReceipt, String> {
-    let resource_uri = FED_RESOLVE_KEY_RESOURCE_FMT
-        .replace("{realm}", realm)
-        .replace("{tenant}", tenant_id);
+    let resource_uri = hub_ability_resource_uri(realm, FED_RESOLVE_KEY_ABILITY_NAME);
     let payload = serde_json::json!({ "agent_uri": agent_uri });
     let response = invoker.invoke_ability(tenant_id, &resource_uri, payload)?;
     let receipt_body = unwrap_result_json(response);
@@ -568,9 +522,7 @@ pub fn forward_invoke<I: AbilityInvoker>(
 ) -> Result<crate::runtime::federation_client::ForwardInvokeReceipt, String> {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
-    let resource_uri = FED_FORWARD_INVOKE_RESOURCE_FMT
-        .replace("{realm}", realm)
-        .replace("{tenant}", tenant_id);
+    let resource_uri = hub_ability_resource_uri(realm, FED_FORWARD_INVOKE_ABILITY_NAME);
     let arguments_bytes =
         serde_json::to_vec(arguments).map_err(|e| format!("encode forward args: {e}"))?;
     let arguments_b64 = STANDARD.encode(&arguments_bytes);
@@ -710,13 +662,33 @@ mod tests {
 
     #[test]
     fn resource_uri_substitutes_realm_correctly() {
+        // Public helpers now return canonical hub-owned ability URAs.
         assert_eq!(
             advertise_agent_resource_uri("acme", "tenant-1"),
-            "easynet:///r/prv/hub/acme/abilities/federation.advertise_agent@1?tenant_id=tenant-1"
+            "easynet:///r/acme/ability/hub.federation.advertise_agent"
         );
         assert_eq!(
             advertise_abilities_resource_uri("contoso", "tenant-2"),
-            "easynet:///r/prv/hub/contoso/abilities/federation.advertise_abilities@1?tenant_id=tenant-2"
+            "easynet:///r/contoso/ability/hub.federation.advertise_abilities"
+        );
+    }
+
+    #[test]
+    fn subject_id_parser_understands_canonical_hub_ability_uri() {
+        assert_eq!(
+            subject_id_from_resource_uri(
+                "easynet:///r/acme/ability/hub.federation.advertise_agent"
+            )
+            .as_deref(),
+            Some("easynet:prv:hub:acme")
+        );
+    }
+
+    #[test]
+    fn bridge_invoker_keeps_canonical_hub_owned_ability_uri() {
+        assert_eq!(
+            hub_ability_resource_uri("acme", "runtime.register_local_tool"),
+            "easynet:///r/acme/ability/hub.runtime.register_local_tool"
         );
     }
 
@@ -730,7 +702,7 @@ mod tests {
             &invoker,
             "tenant",
             "acme",
-            "easynet:///r/acme/agent/01DEV",
+            "easynet:///r/acme/device/01DEV",
             "deadbeef",
         );
         let receipt = outcome.result.expect("must succeed");
@@ -738,7 +710,7 @@ mod tests {
         assert!(!receipt.replaced_prior);
 
         let payload = invoker.last_payload.borrow().clone().unwrap();
-        assert_eq!(payload["agent_uri"], "easynet:///r/acme/agent/01DEV");
+        assert_eq!(payload["agent_uri"], "easynet:///r/acme/device/01DEV");
         assert_eq!(payload["public_key_hex"], "deadbeef");
         assert_eq!(payload["signing_authority"]["kind"], "self_signed");
     }
@@ -753,8 +725,8 @@ mod tests {
             &invoker,
             "tenant",
             "acme",
-            "easynet:///r/acme/agent/01LLM",
-            "easynet:///r/acme/agent/01DEV",
+            "easynet:///r/acme/agent/u1.01LLM",
+            "easynet:///r/acme/device/01DEV",
         );
         let receipt = outcome.result.expect("must succeed");
         assert!(receipt.replaced_prior);
@@ -763,7 +735,7 @@ mod tests {
         assert_eq!(payload["signing_authority"]["kind"], "hosted_by");
         assert_eq!(
             payload["signing_authority"]["host_uri"],
-            "easynet:///r/acme/agent/01DEV"
+            "easynet:///r/acme/device/01DEV"
         );
         assert_eq!(payload["public_key_hex"], "");
     }
@@ -774,12 +746,12 @@ mod tests {
             &AlwaysFails,
             "tenant",
             "acme",
-            "easynet:///r/acme/agent/01DEV",
+            "easynet:///r/acme/device/01DEV",
             "00",
         );
         let err = outcome.result.expect_err("must surface invoker error");
         assert!(err.contains("transport timeout"));
-        assert_eq!(outcome.agent_uri, "easynet:///r/acme/agent/01DEV");
+        assert_eq!(outcome.agent_uri, "easynet:///r/acme/device/01DEV");
     }
 
     #[test]
@@ -791,7 +763,7 @@ mod tests {
             &invoker,
             "tenant",
             "acme",
-            "easynet:///r/acme/agent/01DEV",
+            "easynet:///r/acme/device/01DEV",
             "00",
         );
         let err = outcome.result.expect_err("malformed receipt must surface");
@@ -804,14 +776,14 @@ mod tests {
         let descriptors = vec![
             AbilityDescriptor::new(
                 "observe.health",
-                "easynet:///r/acme/agent/01DEV",
+                "easynet:///r/acme/device/01DEV",
                 Visibility::Public,
             )
             .unwrap()
             .with_source("kernel:built-in"),
             AbilityDescriptor::new(
                 "fleet.list_agents",
-                "easynet:///r/acme/agent/01DEV",
+                "easynet:///r/acme/device/01DEV",
                 Visibility::Scoped,
             )
             .unwrap(),
@@ -820,13 +792,13 @@ mod tests {
             &invoker,
             "tenant",
             "acme",
-            "easynet:///r/acme/agent/01DEV",
+            "easynet:///r/acme/device/01DEV",
             &descriptors,
         )
         .expect("must succeed");
 
         let payload = invoker.last_payload.borrow().clone().unwrap();
-        assert_eq!(payload["agent_uri"], "easynet:///r/acme/agent/01DEV");
+        assert_eq!(payload["agent_uri"], "easynet:///r/acme/device/01DEV");
         let abilities = payload["abilities"]
             .as_array()
             .expect("abilities must be array");
@@ -838,20 +810,12 @@ mod tests {
 
     #[test]
     fn advertise_abilities_targets_correct_resource_uri() {
-        // `advertise_abilities_resource_uri` substitutes both
-        // `{realm}` and `{tenant}` placeholders. The parallel test
-        // above (`advertise_agent_targets_correct_resource_uri`)
-        // already pins the substituted form for the agent variant.
-        // This test was previously asserting the raw template
-        // (`tenant_id={tenant}`) and silently regressed when the
-        // substitution landed; pinning the post-substitution shape
-        // catches a future regression that "forgets" to replace
-        // one of the placeholders.
+        // Fake invokers observe the canonical business-layer URI.
         let invoker = RecordingInvoker::new(serde_json::json!({"ack": true}));
         let _ = advertise_abilities(&invoker, "tenant", "acme", "u", &[]).unwrap();
         assert_eq!(
             invoker.last_resource_uri.borrow().as_deref().unwrap(),
-            "easynet:///r/prv/hub/acme/abilities/federation.advertise_abilities@1?tenant_id=tenant"
+            "easynet:///r/acme/ability/hub.federation.advertise_abilities"
         );
     }
 }

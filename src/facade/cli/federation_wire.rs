@@ -202,7 +202,7 @@ pub fn auto_wire_federated_peer_from_credentials(
     let resolution = resolve_peer_hub_endpoint(operator_peer_hub, &creds.hub_endpoint);
     if let PeerHubResolution::Guessed { endpoint, source } = &resolution {
         eprintln!(
-            "[easynet join] peer hub endpoint not supplied; guessing `{endpoint}` from \
+            "[easynet join] peer hub endpoint not supplied; guessing '{endpoint}' from \
              `{source}` (canonical hub-to-hub port {CANONICAL_HUB_TO_HUB_PORT}). \
              If your peer daemon's TLS listener is on a different host or port, \
              re-run join with `--peer-hub <https://host:port>` or edit \
@@ -419,7 +419,7 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
                 eprintln!(
                     "[easynet join] could not append hub entry to realm-trust.toml ({err}); \
                      backend's federation.* calls will be admission-rejected until you \
-                     add `[[trusted_agent]] role = \"hub\"` for {hub_uri} by hand."
+                     add `[[trusted_agent]] role = \"hub\"' for {hub_uri} by hand."
                 );
                 after_device
             }
@@ -569,7 +569,7 @@ fn upsert_trusted_agent_inner(
         .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
     let agents = agents_item
         .as_array_of_tables_mut()
-        .ok_or_else(|| anyhow::anyhow!("`trusted_agent` is not a TOML array of tables"))?;
+        .ok_or_else(|| anyhow::anyhow!("'trusted_agent' is not a TOML array of tables"))?;
 
     // Idempotent path: an existing entry with our agent_uri
     // means the canonical writer (or a previous join run) already
@@ -1017,7 +1017,7 @@ added_at_unix_ms = 100
     fn upsert_self_trusted_agent_preserves_existing_unrelated_rows() {
         let raw = r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/tenant-a/agent/other-device"
+agent_uri = "easynet:///r/tenant-a/device/other-device"
 public_key_b64 = "OTHER-KEY"
 role = "device"
 added_at_unix_ms = 1

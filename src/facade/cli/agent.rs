@@ -92,8 +92,8 @@ pub struct RemoveArgs {
     /// the registry row is removed; the directory is kept so
     /// the operator can re-register the same name later and
     /// pick up previous runs / skills. The flag is deliberately
-    /// opt-in because `rm -rf` on a directory that carries an
-    /// operator's `.env` credentials is a destructive action.
+    /// opt-in because 'rm -rf' on a directory that carries an
+    /// operator's '.env' credentials is a destructive action.
     #[arg(long)]
     pub purge: bool,
 }
@@ -101,9 +101,9 @@ pub struct RemoveArgs {
 #[derive(Debug, Args)]
 pub struct PruneArgs {
     /// Show what would be removed without mutating the
-    /// registry. Pairs well with `agent list`'s "path missing"
-    /// rows — an operator running `prune --dry-run` first sees
-    /// exactly which rows will disappear.
+    /// registry. Pairs well with the "path missing" rows in
+    /// 'agent list' — an operator running 'prune --dry-run'
+    /// first sees exactly which rows will disappear.
     #[arg(long)]
     pub dry_run: bool,
 }
@@ -114,20 +114,20 @@ pub struct SendArgs {
     pub name: String,
     /// Prompt body sent verbatim to the agent.
     pub prompt: String,
-    /// Prior conversation to prepend under a `## Context (previous
-    /// discussion)` section. Use this to carry state across separate
-    /// `agent send` invocations when you want the agent to build on an
+    /// Prior conversation to prepend under a "## Context (previous
+    /// discussion)" section. Use this to carry state across separate
+    /// 'agent send' invocations when you want the agent to build on an
     /// earlier reply without re-pasting the history inline.
     #[arg(long, value_name = "TEXT")]
     pub context: Option<String>,
     /// Per-call deadline in seconds. LLM dispatches can legitimately
     /// take many minutes, so the default is 15 min
-    /// (`support::timeouts::AGENT_SEND_DEFAULT_SECS`). `0` inherits the
+    /// ('support::timeouts::AGENT_SEND_DEFAULT_SECS'). '0' inherits the
     /// runtime default.
     #[arg(long, value_name = "SECS", default_value_t = timeouts::AGENT_SEND_DEFAULT_SECS)]
     pub timeout: u64,
     /// Write the raw stream-json trace (one event per line) to this file.
-    /// The prompt is saved alongside it as `<file>.prompt.txt`.
+    /// The prompt is saved alongside it as '<file>.prompt.txt'.
     #[arg(long, value_name = "FILE")]
     pub trace: Option<std::path::PathBuf>,
 }
@@ -149,16 +149,16 @@ pub struct SetArgs {
     /// Registered agent name (from `easynet agent list`).
     pub name: String,
     /// New model identifier. Pass any string the underlying CLI
-    /// accepts for `--model` — `claude --model` and `codex
-    /// --model` accept aliases (e.g. `sonnet`, `opus`) or full
-    /// names (e.g. `claude-opus-4-7`). Neither CLI exposes an
-    /// enumeration surface, so we deliberately do NOT validate
-    /// the value — that would force EasyNet to ship a stale
-    /// allow-list. Validation happens at invocation time when the
-    /// underlying CLI sees the flag.
+    /// accepts for --model. Both 'claude --model' and 'codex
+    /// --model' accept aliases (e.g. sonnet, opus) or full names
+    /// (e.g. claude-opus-4-7). Neither CLI exposes an enumeration
+    /// surface, so we deliberately do NOT validate the value —
+    /// that would force EasyNet to ship a stale allow-list.
+    /// Validation happens at invocation time when the underlying
+    /// CLI sees the flag.
     ///
-    /// Pass `--model ''` (empty string) to CLEAR the model and let
-    /// the CLI fall back to its own default.
+    /// Pass an empty string (--model "") to CLEAR the model and
+    /// let the CLI fall back to its own default.
     #[arg(long)]
     pub model: Option<String>,
 }
@@ -205,7 +205,7 @@ fn run_add(args: AddArgs) -> anyhow::Result<()> {
     let root = agents_root_for(&args.name);
     if root.join("agent.toml").exists() && !registry.agents.contains_key(&args.name) {
         anyhow::bail!(
-            "agent root at {} already carries an `agent.toml` but no registry row. \
+            "agent root at {} already carries an 'agent.toml' but no registry row. \
              Import it by hand (add a registry row pointing at this path) or remove \
              the directory before running `agent add`.",
             root.display()
@@ -292,6 +292,22 @@ fn run_add(args: AddArgs) -> anyhow::Result<()> {
         output::detail("model", m);
     }
     output::detail("root", &directory.root().display().to_string());
+
+    // Eagerly project the workspace so the seeded skills (the
+    // `easynet-collaborate` and `easynet-pages-author` SKILL.md
+    // files) are on disk immediately after `agent add`, not
+    // lazily on the first dispatch. Operators using a freshly-
+    // added agent through `claude --resume` (or any non-easynet
+    // entry path) get the briefing without an EasyNet round-trip
+    // first. Best-effort: a projection failure logs but does not
+    // fail the registration.
+    if let Err(e) = crate::runtime::workspace::ensure_from_directory(&directory) {
+        eprintln!(
+            "[agent add warn] could not project workspace at {}: {e:#}; \
+             skills will land on first dispatch",
+            directory.root().display()
+        );
+    }
 
     // Publish the new agent's manifests to the local axon-runtime so
     // they appear in `ListMCPTools` (and therefore the EasyNet
@@ -390,7 +406,7 @@ fn publish_to_local_runtime_best_effort(agent_name: &str, directory: &AgentDirec
                         "local daemon gRPC directory sync also failed: {local_msg}"
                     ));
                     output::warn(
-                        "  → peers and backend `/api/v1/agents` will stay stale until the next successful advertise round",
+                        "  → peers and backend '/api/v1/agents' will stay stale until the next successful advertise round",
                     );
                 }
             },
@@ -432,7 +448,7 @@ fn publish_to_local_runtime_best_effort(agent_name: &str, directory: &AgentDirec
             );
             output::warn(&format!("direct hub publish failed: {hub_msg}"));
             output::warn(
-                "  → run `easynet runtime start` to start it; then `easynet agent add ...` \
+                "  → run 'easynet runtime start' to start it; then 'easynet agent add ...' \
                  again will publish, or restart the daemon to re-register every agent",
             );
         }
@@ -527,6 +543,7 @@ fn publish_bootstrap_plan_outcomes_via_invoker<I: crate::runtime::advertise::Abi
     crate::runtime::publish::republish_abilities_via_advertise(invoker, tenant_id, plan)
 }
 
+#[cfg(feature = "axon-pb")]
 fn publish_bootstrap_plan_via_invoker_silent<I: crate::runtime::advertise::AbilityInvoker>(
     tenant_id: &str,
     plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
@@ -611,6 +628,7 @@ fn revoke_agent_via_invoker<I: crate::runtime::advertise::AbilityInvoker>(
     }
 }
 
+#[cfg(any(test, feature = "axon-pb"))]
 fn hub_invoke_endpoint(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -623,25 +641,21 @@ fn hub_invoke_endpoint(raw: &str) -> Result<String, String> {
         return Ok(trimmed.to_string());
     }
     if trimmed.contains("://") {
-        return Err(format!("unsupported hub endpoint scheme in `{trimmed}`"));
+        return Err(format!("unsupported hub endpoint scheme in '{trimmed}'"));
     }
     Ok(format!("http://{trimmed}"))
 }
 
+#[cfg(any(test, feature = "axon-pb"))]
 fn ability_name_from_resource_uri(resource_uri: &str) -> Option<String> {
-    let tail = resource_uri.split("/abilities/").nth(1)?;
-    let without_query = tail.split('?').next().unwrap_or(tail);
-    let ability = without_query
-        .split('@')
-        .next()
-        .unwrap_or(without_query)
-        .trim();
-    if ability.is_empty() {
-        return None;
-    }
-    Some(ability.to_string())
+    // Canonical v4.1.4 ability URAs encode the member-call target as
+    // `<owner>.<agent>.<verb>`. Routing wants just `<agent>.<verb>`,
+    // e.g. `federation.advertise_agent` for
+    // `easynet:///r/acme/ability/hub.federation.advertise_agent`.
+    crate::uri::qualified_ability_name(resource_uri)
 }
 
+#[cfg(any(test, feature = "axon-pb"))]
 fn direct_hub_trust_match(endpoint_url: &str) -> Option<Option<std::path::PathBuf>> {
     for path in direct_hub_trust_path_candidates() {
         let anchor =
@@ -656,6 +670,7 @@ fn direct_hub_trust_match(endpoint_url: &str) -> Option<Option<std::path::PathBu
     None
 }
 
+#[cfg(any(test, feature = "axon-pb"))]
 fn direct_hub_trust_path_candidates() -> Vec<std::path::PathBuf> {
     let mut candidates = Vec::new();
     if let Some(override_path) = std::env::var_os("EASYNET_REALM_TRUST_PATH") {
@@ -779,7 +794,7 @@ impl crate::runtime::advertise::AbilityInvoker for DirectLocalDaemonAbilityInvok
         payload_json: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
         let function_name = ability_name_from_resource_uri(resource_uri).ok_or_else(|| {
-            format!("cannot derive ability name from resource URI `{resource_uri}`")
+            format!("cannot derive ability name from resource URI '{resource_uri}'")
         })?;
         self.invoke_function(&function_name, payload_json)
     }
@@ -813,7 +828,7 @@ fn publish_via_local_daemon_best_effort_silent(
     _caller_uri: &str,
     _plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
 ) -> Result<(), String> {
-    Err("local daemon publish requires the `axon-pb` feature".into())
+    Err("local daemon publish requires the 'axon-pb' feature".into())
 }
 
 #[cfg(feature = "axon-pb")]
@@ -853,7 +868,7 @@ impl DirectHubAbilityInvoker {
 
         runtime.block_on(async move {
             let mut endpoint = tonic::transport::Endpoint::from_shared(endpoint_url.clone())
-                .map_err(|e| format!("invalid hub endpoint `{endpoint_url}`: {e}"))?
+                .map_err(|e| format!("invalid hub endpoint '{endpoint_url}': {e}"))?
                 .timeout(std::time::Duration::from_secs(10))
                 .connect_timeout(std::time::Duration::from_secs(5));
 
@@ -861,7 +876,7 @@ impl DirectHubAbilityInvoker {
                 let tls = match direct_hub_trust_match(&endpoint_url) {
                     Some(Some(path)) => {
                         crate::services::federation_client::pinned_tls_config(path.as_path())
-                            .map_err(|e| format!("load pinned CA for `{endpoint_url}`: {e}"))?
+                            .map_err(|e| format!("load pinned CA for '{endpoint_url}': {e}"))?
                     }
                     Some(None) | None => {
                         tonic::transport::ClientTlsConfig::new().with_native_roots()
@@ -869,13 +884,13 @@ impl DirectHubAbilityInvoker {
                 };
                 endpoint = endpoint
                     .tls_config(tls)
-                    .map_err(|e| format!("configure TLS for `{endpoint_url}`: {e}"))?;
+                    .map_err(|e| format!("configure TLS for '{endpoint_url}': {e}"))?;
             }
 
             let channel = endpoint
                 .connect()
                 .await
-                .map_err(|e| format!("connect to hub `{endpoint_url}`: {e}"))?;
+                .map_err(|e| format!("connect to hub '{endpoint_url}': {e}"))?;
             let mut client = crate::pb::axon::v1::invocation_client::InvocationClient::new(channel);
             let request = crate::pb::axon::v1::InvokeRequest {
                 envelope: Some(crate::pb::axon::v1::Envelope {
@@ -923,7 +938,7 @@ impl crate::runtime::advertise::AbilityInvoker for DirectHubAbilityInvoker {
         payload_json: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
         let function_name = ability_name_from_resource_uri(resource_uri).ok_or_else(|| {
-            format!("cannot derive ability name from resource URI `{resource_uri}`")
+            format!("cannot derive ability name from resource URI '{resource_uri}'")
         })?;
         self.invoke_function(&function_name, payload_json)
     }
@@ -958,7 +973,7 @@ fn publish_to_hub_direct_best_effort(
     _caller_uri: &str,
     _plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
 ) -> Result<(), String> {
-    Err("direct hub publish requires the `axon-pb` feature".into())
+    Err("direct hub publish requires the 'axon-pb' feature".into())
 }
 
 #[cfg(not(feature = "axon-pb"))]
@@ -968,7 +983,7 @@ fn publish_to_hub_direct_best_effort_silent(
     _caller_uri: &str,
     _plan: &crate::runtime::agents::profiles::bootstrap::BootstrapPlan,
 ) -> Result<(), String> {
-    Err("direct hub publish requires the `axon-pb` feature".into())
+    Err("direct hub publish requires the 'axon-pb' feature".into())
 }
 
 #[cfg(feature = "axon-pb")]
@@ -993,7 +1008,7 @@ fn revoke_from_hub_direct_best_effort(
     _agent_uri: &str,
     _reason: &str,
 ) -> Result<(), String> {
-    Err("direct hub revoke requires the `axon-pb` feature".into())
+    Err("direct hub revoke requires the 'axon-pb' feature".into())
 }
 
 /// Map the legacy `AgentType` tag onto the `RuntimeKind` used
@@ -1303,7 +1318,7 @@ fn run_set(args: SetArgs) -> anyhow::Result<()> {
     let registry_before = agents::load_agents()?;
     if !registry_before.agents.contains_key(&args.name) {
         anyhow::bail!(
-            "agent '{}' is not registered; run `easynet agent list` to see registered \
+            "agent '{}' is not registered; run 'easynet agent list' to see registered \
              names, or `easynet agent add {} --type …` to register it first",
             args.name,
             args.name,
@@ -1354,7 +1369,7 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
     // a clear error before we go through the mission machinery.
     let registry = agents::load_agents()?;
     let _entry = registry.agents.get(&args.name).ok_or_else(|| {
-        anyhow::anyhow!("agent '{}' not found. Run `easynet agent list`.", args.name)
+        anyhow::anyhow!("agent '{}' not found. Run 'easynet agent list'.", args.name)
     })?;
 
     // User-visible counterpart to the doc-comment ontology reference.
@@ -1763,7 +1778,7 @@ fn open_registered_agent(name: &str) -> anyhow::Result<AgentDirectory> {
     let registry = agents::load_agents()?;
     let entry = registry.agents.get(name).ok_or_else(|| {
         anyhow::anyhow!(
-            "agent '{name}' is not registered; run `easynet agent list` to see \
+            "agent '{name}' is not registered; run 'easynet agent list' to see \
              registered names, or `easynet agent add {name} --type …` to register it"
         )
     })?;
@@ -1801,7 +1816,7 @@ fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
         );
         eprintln!(
             "  {}",
-            style("Drop a `<verb>.ability.toml` into that directory to declare one.").dim(),
+            style("Drop a '<verb>.ability.toml' into that directory to declare one.").dim(),
         );
         eprintln!();
         return Ok(());
@@ -1854,7 +1869,7 @@ fn run_publish(args: PublishArgs) -> anyhow::Result<()> {
         // future Axon path — keeps the flag's contract honest:
         // today every successful `agent publish` is a dry-run.
         anyhow::bail!(
-            "only `--dry-run` is supported in this release. Live publishing through \
+            "only '--dry-run' is supported in this release. Live publishing through \
              Axon lands in a later PR. Re-run with `--dry-run` to preview the \
              `<agent>.<ability>` tools that would be registered."
         );
@@ -2008,7 +2023,7 @@ fn summarize_schema(schema: &serde_json::Value) -> String {
 fn run_refresh() -> anyhow::Result<()> {
     let (bridge, _state) = crate::persistence::config::load_and_connect().map_err(|e| {
         anyhow::anyhow!(
-            "could not reach local axon-runtime: {e}; run `easynet runtime start` first"
+            "could not reach local axon-runtime: {e}; run 'easynet runtime start' first"
         )
     })?;
     let creds = crate::persistence::config::load_credentials()
@@ -2021,7 +2036,7 @@ fn run_refresh() -> anyhow::Result<()> {
     )?;
     if plan.realm.is_empty() {
         anyhow::bail!(
-            "daemon is not joined to a realm yet; run `easynet join <token>` before refresh"
+            "daemon is not joined to a realm yet; run 'easynet join <token>' before refresh"
         );
     }
     // Pin the caller URI for the refresh sweep — same reason as
@@ -2126,15 +2141,27 @@ mod tests {
     }
 
     #[test]
-    fn ability_name_from_resource_uri_extracts_name_without_version_or_query() {
+    fn ability_name_from_resource_uri_extracts_canonical_hub_ability_id() {
+        // Canonical hub-owned ability: reserved owner `hub`, agent
+        // namespace `federation`, verb `advertise_agent`.
         assert_eq!(
             ability_name_from_resource_uri(
-                "easynet:///r/prv/hub/acme/abilities/federation.advertise_agent@1?tenant_id=acme"
+                "easynet:///r/acme/ability/hub.federation.advertise_agent"
             )
             .as_deref(),
             Some("federation.advertise_agent")
         );
         assert_eq!(ability_name_from_resource_uri("not-a-resource-uri"), None);
+    }
+
+    #[test]
+    fn ability_name_from_resource_uri_rejects_retired_legacy_shape() {
+        assert_eq!(
+            ability_name_from_resource_uri(
+                "easynet:///r/prv/hub/acme/abilities/federation.advertise_agent@1?tenant_id=acme"
+            ),
+            None
+        );
     }
 
     #[test]
@@ -2579,7 +2606,7 @@ tls_ca_pem_path = "/tmp/home-ca.pem"
         let err = run_abilities(AbilitiesArgs {
             name: "alice".into(),
         })
-        .expect_err("orphan row must error on `agent abilities`");
+        .expect_err("orphan row must error on 'agent abilities'");
         assert!(format!("{err}").contains("no on-disk root"));
     }
 

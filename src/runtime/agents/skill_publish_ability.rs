@@ -64,17 +64,30 @@ use serde_json::{json, Value};
 use crate::registry::agents;
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
+use crate::runtime::ability_dispatch::OwnerKind;
 /// Wire name: `skill.publish`. Matched by curator-issued calls.
-pub const ABILITY_PUBLISH: &str = "skill.publish";
+pub const ABILITY_PUBLISH: &str = "device.skill.publish";
 /// Wire name: `skill.unpublish`. Curator + operator both call it.
-pub const ABILITY_UNPUBLISH: &str = "skill.unpublish";
+pub const ABILITY_UNPUBLISH: &str = "device.skill.unpublish";
 /// Wire name: `skill.list`. Thin facade over `fleet.list_abilities`.
-pub const ABILITY_LIST: &str = "skill.list";
+pub const ABILITY_LIST: &str = "device.skill.list";
 
 pub fn register(reg: &mut LocalAbilityRegistry) {
-    reg.register_rpc(ABILITY_PUBLISH, Arc::new(publish_handler));
-    reg.register_rpc(ABILITY_UNPUBLISH, Arc::new(unpublish_handler));
-    reg.register_rpc(ABILITY_LIST, Arc::new(list_handler));
+    reg.register_rpc_with_owner(
+        "device.skill.publish",
+        OwnerKind::Device,
+        Arc::new(publish_handler),
+    );
+    reg.register_rpc_with_owner(
+        "device.skill.unpublish",
+        OwnerKind::Device,
+        Arc::new(unpublish_handler),
+    );
+    reg.register_rpc_with_owner(
+        "device.skill.list",
+        OwnerKind::Device,
+        Arc::new(list_handler),
+    );
 }
 
 /// `skill.publish` — materialise a curator-authored skill.

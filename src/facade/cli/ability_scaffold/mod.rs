@@ -171,7 +171,7 @@ pub fn run_new(args: NewArgs) -> anyhow::Result<()> {
         );
     }
     output::info(
-        "next: `easynet ability deploy <path> --node <node>` (or `ability validate <path>` first)",
+        "next: 'easynet ability deploy <path> --node <node>' (or 'ability validate <path>' first)",
     );
     Ok(())
 }
@@ -217,8 +217,8 @@ fn validate_manifest_at(dir: &std::path::Path) -> anyhow::Result<ValidationRepor
 
     // version: non-empty string if present; a default is applied at deploy time.
     match manifest.get("version") {
-        Some(v) if !v.is_string() => errors.push("field `version` must be a string".into()),
-        None => warnings.push("field `version` is absent; deploy will default to 1.0.0".into()),
+        Some(v) if !v.is_string() => errors.push("field 'version' must be a string".into()),
+        None => warnings.push("field 'version' is absent; deploy will default to 1.0.0".into()),
         _ => {}
     }
 
@@ -239,7 +239,7 @@ fn validate_manifest_at(dir: &std::path::Path) -> anyhow::Result<ValidationRepor
     for field in ["input_schema", "output_schema"] {
         if let Some(v) = manifest.get(field) {
             if !v.is_object() {
-                errors.push(format!("field `{field}` must be a JSON object"));
+                errors.push(format!("field '{field}' must be a JSON object"));
             }
         }
     }
@@ -276,7 +276,7 @@ pub fn run_validate(args: ValidateArgs) -> anyhow::Result<()> {
 
     if !report.errors.is_empty() {
         bail!(
-            "{} error(s); fix them before `ability deploy`",
+            "{} error(s); fix them before 'ability deploy'",
             report.errors.len()
         );
     }

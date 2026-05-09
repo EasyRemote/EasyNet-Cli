@@ -110,8 +110,19 @@ use crate::pb::axon::v1::{
 
 /// Daemon-side ability name this initiator targets. The hub's
 /// `InvokeBidi` dispatcher routes on
-/// `EnvelopeOpen.target.ability_name` and the `<self>.session`
-/// arm is the hub-side acceptor PR-2 commit 1/N lands.
+/// `EnvelopeOpen.target.ability_name`.
+///
+/// **Wire-pinned** — the production hub at `easynet.run` only
+/// accepts the legacy `<self>.session` literal today. The M4
+/// canonical rename to `device.session` is held until EasyNet-Axon
+/// (the hub-side gRPC dispatcher) ships matching dual-name
+/// acceptance. EasyNet-Cli's M1 dual-aliasing answers both names
+/// inbound, so the rename is safe on the device side; the
+/// blocker is the hub's bidi dispatch table.
+///
+/// See `docs/open-questions/deprecate-self-alias-in-ability-names.md`
+/// Stage 2 / Stage 4. RFC-001 v4.1.6 is the carrier window for the
+/// wire-break.
 pub const ABILITY_SELF_SESSION: &str = "<self>.session";
 
 /// Stream id used by every BinaryChunk on the session bidi. PR-2
@@ -526,6 +537,255 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
                 ability_catalog.len()
             );
         }
+
+        // Hosted-agent advertise prelude (RFC-006-B v0.6 §URL +
+        // RFC-006-C v0.1 §INV-2). The hub's
+        // `lookup_target_with_agent_fallback` consults
+        // `AdvertisedAgentStore` when the wire callee is an agent
+        // URA `agent/<u>.<a>`; without these advertise calls the
+        // store is empty and chat-base / page.fetch invocations
+        // fall through to `target_offline`.
+        //
+        // Owner segments derived from the local ability catalog:
+        // every ability whose tail is `<owner>.<rest>` implies the
+        // daemon hosts agent `<owner>` (skip hub-rooted `01HUB.*`
+        // and the placeholder `<self>.*` shapes). Each unique
+        // `<owner>` is advertised once as
+        // `agent/<owner>.<owner>` HostedBy <caller_uri>; the user-
+        // segment of the agent URA matches the daemon's owner
+        // convention (EASYNET_PAGES_USER for pages, agent_name
+        // for chat-base).
+        let realm = caller_uri
+            .strip_prefix("easynet:///r/")
+            .and_then(|s| s.split_once('/'))
+            .map(|(r, _)| r.to_string())
+            .unwrap_or_default();
+        // user_segment resolution order (most authoritative first):
+        //   1. EASYNET_PAGES_USER env — explicit operator override,
+        //      used in the docker e2e harness + multi-user dev rigs.
+        //   2. credentials.json `username` — set by `easynet device join`
+        //      after the backend resolves the pairing token to a user
+        //      account. This is the production path on silan's Mac.
+        // Empty means "no joined user identity available"; the
+        // hosted-agent advertise prelude is a no-op in that case
+        // (caller is in a transitional state and will republish on
+        // reconnect once credentials are present).
+        let user_segment = std::env::var("EASYNET_PAGES_USER")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .or_else(|| {
+                crate::persistence::config::load_credentials()
+                    .ok()
+                    .and_then(|c| c.username)
+                    .filter(|v| !v.is_empty())
+            })
+            .unwrap_or_default();
+        // System / hub-tier namespaces that must never be mistaken
+        // for sub-agent identities when we synthesise the per-device
+        // agent roster for the hub. These are device-internal verbs
+        // (`fs.read`, `fleet.list_nodes`, `voice.create_call`, …) or
+        // hub-rooted verbs (`01HUB.openai.chat_completions`); their
+        // ability-name first segment is a *namespace*, not an agent
+        // name, and the federation directory rejects them as agent
+        // URAs anyway. Without this skip list every system namespace
+        // shipped through `ability_catalog` would be advertised to
+        // the hub as if it were a hosted agent --- silently flooding
+        // the agent roster and pushing real sub-agents out of the
+        // visible result on the Frontend Agents page.
+        //
+        // M5 of the system-namespace migration: post-M3 every
+        // system ability in the catalogue is canonical
+        // (`device.*` / `hub.*`); the prelude scanner only needs
+        // to recognise those two heads to skip them. The 24-element
+        // legacy-namespace skip list collapsed to two structural
+        // entries plus `<self>` (still needed because the wire-
+        // pinned trio `<self>.session` / `<self>.invoke_remote` /
+        // `<self>.register_device_pubkey` remains on legacy until
+        // M4 ships in lockstep with EasyNet-Axon — see
+        // `docs/open-questions/deprecate-self-alias-in-ability-names.md`).
+        //
+        // The previous structure kept the closed legacy set as
+        // defense-in-depth in case a stale call site emitted a
+        // legacy-named ability into the catalogue. Post-M3 the
+        // registry physically rejects legacy registrations
+        // (`register_*_aliased` deleted), so the defense is
+        // redundant and dropping it removes the maintenance
+        // hazard of "remember to update the list when adding a
+        // new system namespace".
+        // Collect every hosted agent URA the daemon should
+        // advertise. Two sources, in priority order:
+        //
+        //   1. `local-agents.json` (authoritative). Each row
+        //      already carries the canonical agent_uri minted at
+        //      `easynet agent add` time (post-RFC-001 v4.1.7 the
+        //      mint is `<profile>-<name>` so the URA tail is
+        //      operator-meaningful: `consent-default-0`,
+        //      `llm-claude-1`, …). We advertise the URA verbatim;
+        //      no string reconstruction.
+        //
+        //   2. Synthetic `pages` / `files` user-scoped agents
+        //      (RFC-006-B + RFC-006-C). These are not stored in
+        //      local-agents.json — the page/file servers register
+        //      under `<user>.{pages,files}.*` ability names at
+        //      runtime. We mint the URA in-line and advertise.
+        //
+        // Pre-fix the scanner derived owners from
+        // `ability_catalog`'s first dotted segment. Post-M3 every
+        // system ability is rooted under `device.*` / `hub.*`,
+        // so the catalogue scan only finds owner names that
+        // happen to match `<user>.<agent>.chat`-style chat
+        // verbs (codex, web-builder, …). Friendly-minted hosted
+        // agents like `consent-default-0` registered abilities
+        // under `device.consent.*` and the scanner's SYSTEM
+        // skip-list filtered them out — so the Frontend
+        // DeviceDetailPage saw "0 agents" even when six were
+        // hosted. Reading local-agents.json directly fixes this
+        // by going to the source of truth.
+        #[derive(Debug, Clone)]
+        struct AdvertiseEntry {
+            agent_uri: String,
+            /// The agent_uri's tail (`<user>.<agent_id>` after
+            /// `agent/`), used purely for log lines + the
+            /// pages/files user-scoped marker check.
+            short_label: String,
+        }
+
+        let mut entries: Vec<AdvertiseEntry> = Vec::new();
+        let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+
+        // Source 1: local-agents.json hosted_agents.
+        let local_agents_file = crate::persistence::local_agents::load().unwrap_or_default();
+        for hosted in &local_agents_file.hosted_agents {
+            if hosted.agent_uri.is_empty() {
+                continue;
+            }
+            // Reject pre-join placeholder URAs (`<unjoined>`).
+            // Bootstrap repairs these on the next pass once the
+            // realm + user_id land in credentials; advertising
+            // them now would just push junk into the directory.
+            if hosted.agent_uri.contains("<unjoined>") {
+                continue;
+            }
+            if !seen.insert(hosted.agent_uri.clone()) {
+                continue;
+            }
+            // Derive short_label from the URA tail for log lines.
+            let short_label = crate::uri::parse_ura(&hosted.agent_uri)
+                .ok()
+                .filter(|p| p.kind == crate::uri::URAKind::Agent)
+                .map(|p| format!("{}.{}", p.user_id, p.agent_id))
+                .unwrap_or_else(|| hosted.agent_uri.clone());
+            entries.push(AdvertiseEntry {
+                agent_uri: hosted.agent_uri.clone(),
+                short_label,
+            });
+        }
+
+        // Source 2: synthetic pages + files. These don't appear
+        // in local-agents.json (no `agent add` step mints them)
+        // but the page-server / file-server handlers register
+        // ability families under `<user>.{pages,files}.*` at
+        // boot, so the AdvertisedAgentStore needs entries for
+        // them or RFC-006-B `agent/<user>.pages` URLs route to
+        // `target_offline`.
+        if !realm.is_empty() && !user_segment.is_empty() && user_segment != "self" {
+            for synthetic in ["pages", "files"] {
+                let uri = format!("easynet:///r/{realm}/agent/{user_segment}.{synthetic}");
+                if seen.insert(uri.clone()) {
+                    entries.push(AdvertiseEntry {
+                        agent_uri: uri,
+                        short_label: format!("{user_segment}.{synthetic}"),
+                    });
+                }
+            }
+        }
+
+        if !realm.is_empty() && !user_segment.is_empty() && !entries.is_empty() {
+            // Extract this device's node_id from the caller URA
+            // (`easynet:///r/<realm>/device/<node_id>`) so we can
+            // tell the hub which physical host serves each
+            // advertised agent. Without it, `/api/v1/agents` falls
+            // back to `<user>.<agent>` for `node_id`, and the
+            // Frontend DeviceDetailPage's `agent.node_id ===
+            // device.node_id` filter excludes the agent from the
+            // device's hosted-agent list — so files / pages /
+            // dynamically-added LLM agents would silently vanish
+            // from the device view.
+            let caller_node_id = crate::uri::parse_ura(&caller_uri)
+                .ok()
+                .filter(|p| p.kind == crate::uri::URAKind::Device)
+                .map(|p| p.device_id);
+            eprintln!(
+                "[session] sending federation.advertise_agent prelude for {} agent(s) \
+                 under user `{}`: {:?}",
+                entries.len(),
+                user_segment,
+                entries.iter().map(|e| &e.short_label).collect::<Vec<_>>()
+            );
+            // user-scoped synthetic agents: pages + files exist
+            // per-user, not per-device. Every device the user owns
+            // serves them, and the user-content (published web
+            // projects, uploaded blobs) is logically owned by the
+            // user, not by any one host. Advertising them with a
+            // concrete `host_node_id` makes `/api/v1/agents`
+            // last-writer-wins — whichever device happened to
+            // advertise most recently captures the directory
+            // record, and the Frontend DeviceDetailPage filter
+            // (`agent.node_id === device.node_id`) shows them on
+            // an arbitrary device while hiding them from every
+            // other one. We advertise them with no host_node_id
+            // instead; backend `/api/v1/agents` falls back to the
+            // `<user>.<agent>` string sentinel, the Frontend reads
+            // that as "not bound to a specific device" and lists
+            // them at the user level. forward_invoke against
+            // `agent/<user>.{pages,files}` still resolves correctly
+            // because the hub keeps the agent_uri → host_uri
+            // mapping in `AdvertisedAgentStore`, independent of
+            // the directory's `host_node_id`.
+            //
+            // Detection rule: the synthetic markers are agent_id
+            // == "pages" / "files" exactly (no profile prefix).
+            // Friendly-minted hosted agents have prefixed ids
+            // (`consent-default-0`, `llm-pages` would never collide
+            // with the synthetic `pages`).
+            const USER_SCOPED_AGENT_IDS: &[&str] = &["pages", "files"];
+            for entry in &entries {
+                // Decide whether this entry is the user-scoped
+                // pages/files synthetic. Read the agent_id off
+                // the URA so renames in the synthesis source
+                // don't drift away from this check.
+                let agent_id = crate::uri::parse_ura(&entry.agent_uri)
+                    .ok()
+                    .filter(|p| p.kind == crate::uri::URAKind::Agent)
+                    .map(|p| p.agent_id)
+                    .unwrap_or_default();
+                let host_for_advertise = if USER_SCOPED_AGENT_IDS.contains(&agent_id.as_str()) {
+                    None
+                } else {
+                    caller_node_id.as_deref()
+                };
+                if let Err(err) = send_advertise_agent_prelude(
+                    &mut client,
+                    &caller_uri,
+                    &entry.agent_uri,
+                    host_for_advertise,
+                )
+                .await
+                {
+                    eprintln!(
+                        "[session] advertise_agent {} prelude soft-failed \
+                         (code={:?}, msg={:?})",
+                        entry.agent_uri,
+                        err.code(),
+                        err.message(),
+                    );
+                }
+            }
+            eprintln!(
+                "[session] advertise_agent prelude done ({} agent(s))",
+                entries.len()
+            );
+        }
     }
 
     let (up_tx, up_rx) = mpsc::channel::<InvokeBidiUp>(SESSION_UP_CHANNEL_CAPACITY);
@@ -774,7 +1034,36 @@ async fn send_federation_join_prelude(
     };
 
     match client.invoke(request).await {
-        Ok(_) => Ok(()),
+        Ok(reply) => {
+            // AXON-RFC-001 v4.1.7 hub-broadcast contract: parse
+            // the receipt body so the device seeds its
+            // HubPublishedAbilityStore with whatever the hub
+            // currently advertises. Failures here are
+            // best-effort — a malformed body or absent fields
+            // (talking to a v4.1.6 hub) leaves the store empty,
+            // which is the correct legacy behavior.
+            let body_bytes = reply.into_inner().result;
+            if !body_bytes.is_empty() {
+                if let Ok(body) = serde_json::from_slice::<
+                    crate::runtime::federation_client::JoinReceipt,
+                >(&body_bytes)
+                {
+                    let store = crate::services::hub_published_ability_store::global();
+                    store.seed_from_snapshot(
+                        body.hub_abilities_revision,
+                        body.hub_published_abilities,
+                    );
+                    if !store.is_empty() {
+                        eprintln!(
+                            "[session] hub-broadcast: seeded {} hub-published abilities at rev={}",
+                            store.len(),
+                            body.hub_abilities_revision,
+                        );
+                    }
+                }
+            }
+            Ok(())
+        }
         // Already-a-member is a benign outcome; surface as success.
         Err(status)
             if status.code() == tonic::Code::AlreadyExists
@@ -798,6 +1087,62 @@ async fn send_federation_join_prelude(
 /// the runtime's per-ability descriptor and can be added here if a
 /// future projection wants them; v1 advertises just enough to
 /// surface the catalog rows.
+/// Session-prelude variant of `federation.advertise_agent`. The
+/// device tells the hub "I host agent `<agent_uri>`"; the hub
+/// upserts an `AdvertisedAgentRecord { agent_uri, host_uri }` so
+/// later inbound invocations addressed to that agent URA resolve
+/// to this device's bidi sender via
+/// `lookup_target_with_agent_fallback`.
+async fn send_advertise_agent_prelude(
+    client: &mut crate::pb::axon::v1::invocation_client::InvocationClient<Channel>,
+    caller_uri: &str,
+    agent_uri: &str,
+    host_node_id: Option<&str>,
+) -> Result<(), tonic::Status> {
+    use crate::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
+
+    // `host_node_id` is the device's bare uuid (extracted from
+    // the caller URA). The hub stores it on the directory record
+    // so RFC-002 §5.2 forward_invoke knows which UDS-bound
+    // local-tool registration to dispatch into, and so backend
+    // `/api/v1/agents` populates `AgentInfo.node_id` correctly
+    // — without which DeviceDetailPage's hosted-agent filter
+    // silently drops the agent from the device view.
+    let mut body = serde_json::json!({
+        "agent_uri": agent_uri,
+        "signing_authority": {
+            "kind": "hosted_by",
+            "host_uri": caller_uri,
+        },
+    });
+    if let Some(node_id) = host_node_id {
+        if let Some(map) = body.as_object_mut() {
+            map.insert(
+                "host_node_id".to_string(),
+                serde_json::Value::String(node_id.to_string()),
+            );
+        }
+    }
+    let arguments = serde_json::to_vec(&body).map_err(|e| {
+        tonic::Status::internal(format!("federation.advertise_agent prelude serialize: {e}"))
+    })?;
+
+    let request = InvokeRequest {
+        envelope: Some(Envelope {
+            caller: Some(AgentIdentity {
+                uri: caller_uri.to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        function_name: "federation.advertise_agent".to_string(),
+        arguments,
+        ..Default::default()
+    };
+
+    client.invoke(request).await.map(|_| ())
+}
+
 async fn send_advertise_abilities_prelude(
     client: &mut crate::pb::axon::v1::invocation_client::InvocationClient<Channel>,
     caller_uri: &str,
@@ -1179,7 +1524,7 @@ mod tests {
 
     #[test]
     fn build_session_envelope_open_carries_caller_uri_and_ability_name() {
-        let frame = build_session_envelope_open("easynet:///r/realm/agent/n1");
+        let frame = build_session_envelope_open("easynet:///r/realm/device/n1");
         let UpPayload::EnvelopeOpen(eo) = frame.payload.expect("payload") else {
             panic!("frame 0 must be EnvelopeOpen");
         };
@@ -1196,13 +1541,13 @@ mod tests {
                 .and_then(|e| e.caller.as_ref())
                 .map(|a| a.uri.as_str())
                 .unwrap_or(""),
-            "easynet:///r/realm/agent/n1",
+            "easynet:///r/realm/device/n1",
         );
     }
 
     #[test]
     fn build_session_envelope_open_includes_one_stream_descriptor() {
-        let frame = build_session_envelope_open("easynet:///r/realm/agent/n1");
+        let frame = build_session_envelope_open("easynet:///r/realm/device/n1");
         let UpPayload::EnvelopeOpen(eo) = frame.payload.expect("payload") else {
             panic!("payload");
         };
@@ -1215,7 +1560,7 @@ mod tests {
     fn build_session_envelope_open_with_seed_adds_signature_and_nonce() {
         let seed = [0x42_u8; 32];
         let frame =
-            build_session_envelope_open_with_seed("easynet:///r/realm/agent/n1", Some(seed));
+            build_session_envelope_open_with_seed("easynet:///r/realm/device/n1", Some(seed));
         assert_eq!(frame.sequence, 0);
         assert_eq!(frame.mac.len(), 64);
 
@@ -1236,7 +1581,7 @@ mod tests {
                 .as_ref()
                 .map(|s| s.uri.as_str())
                 .unwrap_or(""),
-            "easynet:///r/realm/agent/n1",
+            "easynet:///r/realm/device/n1",
         );
     }
 
@@ -1281,7 +1626,7 @@ mod tests {
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let result = dial_and_run_session(
             "not a valid uri".to_string(),
-            "easynet:///r/realm/agent/n1".to_string(),
+            "easynet:///r/realm/device/n1".to_string(),
             None,
             None,
             dispatcher,
@@ -1307,7 +1652,7 @@ mod tests {
             Duration::from_secs(5),
             dial_and_run_session(
                 "http://127.0.0.1:1".to_string(),
-                "easynet:///r/realm/agent/n1".to_string(),
+                "easynet:///r/realm/device/n1".to_string(),
                 None,
                 None,
                 dispatcher,
@@ -1336,7 +1681,7 @@ mod tests {
         let bogus = std::path::PathBuf::from("/tmp/easynet-test-no-such-ca-file-xyz.pem");
         let result = dial_and_run_session(
             "https://127.0.0.1:1".to_string(),
-            "easynet:///r/realm/agent/n1".to_string(),
+            "easynet:///r/realm/device/n1".to_string(),
             None,
             Some(bogus.as_path()),
             dispatcher,
@@ -1359,7 +1704,7 @@ mod tests {
 
         let supervisor_handle = tokio::spawn(run_session_supervisor(
             "http://127.0.0.1:1".to_string(),
-            "easynet:///r/realm/agent/n1".to_string(),
+            "easynet:///r/realm/device/n1".to_string(),
             None,
             None,
             dispatcher,
@@ -1388,7 +1733,7 @@ mod tests {
 
         let result = dial_and_run_session_with_idle_timeout(
             format!("http://{addr}"),
-            "easynet:///r/realm/agent/n1".to_string(),
+            "easynet:///r/realm/device/n1".to_string(),
             None,
             None,
             dispatcher,
@@ -1414,7 +1759,7 @@ mod tests {
 
         let result = dial_and_run_session_with_idle_timeout(
             format!("http://{addr}"),
-            "easynet:///r/realm/agent/n1".to_string(),
+            "easynet:///r/realm/device/n1".to_string(),
             None,
             None,
             dispatcher,

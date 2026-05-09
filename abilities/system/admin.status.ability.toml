@@ -1,7 +1,0 @@
-schema_version = "1"
-name = "admin.status"
-description = "Operator-facing component snapshot: build version, membership state, ability count, hosted-Agent count. v1 is a cheap rollup for `easynet status` dashboards; live probes land later."
-
-[input_schema]
-type = "object"
-additionalProperties = false

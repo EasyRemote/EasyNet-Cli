@@ -68,9 +68,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::execution::discuss::DiscussService;
 
-pub const ABILITY_DISCUSS_ROUND: &str = "mission.discuss_round";
+pub const ABILITY_DISCUSS_ROUND: &str = "device.mission.discuss_round";
 
 /// Default upper bound on cycles per sub-turn. Generous enough that
 /// a healthy discussion converges (3–5 cycles typical), small
@@ -115,8 +116,9 @@ pub fn register(
 ) {
     let svc = Arc::clone(&discuss);
     let handle = Arc::clone(&dispatch_registry_handle);
-    reg.register_rpc(
-        ABILITY_DISCUSS_ROUND,
+    reg.register_rpc_with_owner(
+        "device.mission.discuss_round",
+        OwnerKind::Device,
         Arc::new(move |args| discuss_round_handler(&svc, &handle, args)),
     );
 }
