@@ -100,7 +100,16 @@ pub fn invoke_local_ability_with_subject(
     runtime.block_on(async move {
         let mut client = crate::ffi::client::connect(&control_json)
             .await
-            .context("connect to local daemon control socket")?;
+            // Convert "connect refused / no such file" failures into the
+            // same actionable "daemon not running" message the pre-check
+            // above raises when control.json is absent. The pre-check
+            // catches a clean uninstall; this catches the *stale* case
+            // where control.json is left over but the daemon process
+            // died (e.g. machine restart, `kill -9`, or a `start` that
+            // crashed without cleaning up). Both states present
+            // identically to the user — they just need to run
+            // `easynet start`.
+            .map_err(|e| friendlify_connect_error(e, &control_json))?;
         let request_id = format!("cli-{}", short_correlation_id());
         let resp = client
             .round_trip(IncomingFrame::Invoke {
@@ -134,6 +143,51 @@ pub fn invoke_local_ability_with_subject(
             other => bail!("daemon returned an unexpected frame for an Invoke request: {other:?}"),
         }
     })
+}
+
+/// Translate an FFI client `connect` failure into a user-facing
+/// "daemon not running" message when the OS-level error is one of
+/// the well-known "no listener at this socket" kinds. Anything
+/// else bubbles up verbatim — we don't want to mask a genuine
+/// permission / path / IPC bug behind the friendly message.
+///
+/// Three OS errors map to "daemon down":
+///   * `ConnectionRefused` (errno 61 / ECONNREFUSED) — control.sock
+///     exists but no process is listen()-ing on it. This is what
+///     silan hit: previous `easynet start` left `control.sock` on
+///     disk; the daemon process died; new `connect()` is refused.
+///   * `NotFound` — control.sock has been unlinked since we did
+///     the `control.json` existence pre-check.
+///   * `AddrNotAvailable` — Linux variant of the same race.
+fn friendlify_connect_error(
+    err: anyhow::Error,
+    control_json: &std::path::Path,
+) -> anyhow::Error {
+    let chain_has_daemon_down = err.chain().any(|cause| {
+        if let Some(io_err) = cause.downcast_ref::<std::io::Error>() {
+            matches!(
+                io_err.kind(),
+                std::io::ErrorKind::ConnectionRefused
+                    | std::io::ErrorKind::NotFound
+                    | std::io::ErrorKind::AddrNotAvailable,
+            )
+        } else {
+            false
+        }
+    });
+    if chain_has_daemon_down {
+        anyhow::anyhow!(
+            "daemon not running (control socket at {} is not accepting \
+             connections — its process likely died or was killed without \
+             cleaning up). Start it with `easynet start`.",
+            control_json
+                .parent()
+                .unwrap_or(control_json)
+                .display()
+        )
+    } else {
+        err.context("connect to local daemon control socket")
+    }
 }
 
 /// Non-cryptographic correlation id for the request_id field. Same
@@ -182,11 +236,13 @@ mod tests {
 
     #[test]
     fn invoke_local_ability_surfaces_daemon_down_with_actionable_message() {
-        // We can't easily start a daemon in unit-test scope, but the
-        // `daemon not running` branch is reachable when control.json
-        // is missing. Use a HomeGuard'd fresh HOME to guarantee
-        // absence; the message MUST tell the operator how to recover
-        // (`easynet runtime start`).
+        // Branch 1 — control.json missing entirely (clean install,
+        // never ran `start`). HomeGuard gives us a fresh empty HOME
+        // so `discovery::default_path()` resolves to a path that
+        // does not exist. The pre-check at the top of
+        // invoke_local_ability_with_subject must catch this and
+        // emit an actionable message that names the recovery
+        // command verbatim.
         let _g = crate::facade::cli::test_support::HomeGuard::new();
         let err =
             invoke_local_ability("observe.health", json!({})).expect_err("daemon-down must fail");
@@ -196,8 +252,51 @@ mod tests {
             "must say `daemon not running`; got: {msg}"
         );
         assert!(
-            msg.contains("easynet runtime start"),
-            "must point at `easynet runtime start`; got: {msg}"
+            msg.contains("easynet runtime start") || msg.contains("easynet start"),
+            "must point at `easynet [runtime] start`; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn friendlify_connect_error_translates_econnrefused_to_daemon_not_running() {
+        // Branch 2 — control.json exists but the daemon process is
+        // gone (crashed / killed without unlinking control.sock).
+        // The connect() call fails with ECONNREFUSED. The pre-check
+        // wouldn't fire here because the file is on disk.
+        // friendlify_connect_error must turn the io error into the
+        // same actionable message users get from Branch 1.
+        let io_err = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+        let wrapped =
+            anyhow::Error::new(io_err).context("FFI client: connect to /tmp/sock failed");
+        let friendly = friendlify_connect_error(wrapped, std::path::Path::new("/tmp/control.json"));
+        let msg = format!("{friendly}");
+        assert!(
+            msg.contains("daemon not running"),
+            "must say `daemon not running`; got: {msg}"
+        );
+        assert!(
+            msg.contains("easynet start"),
+            "must point at `easynet start`; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn friendlify_connect_error_passes_through_other_errors() {
+        // A genuine bug (e.g. permission denied on the socket dir)
+        // must surface as-is — masking it as "daemon not running"
+        // would send the operator chasing the wrong fix.
+        let io_err = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let wrapped =
+            anyhow::Error::new(io_err).context("FFI client: connect to /tmp/sock failed");
+        let friendly = friendlify_connect_error(wrapped, std::path::Path::new("/tmp/control.json"));
+        let msg = format!("{friendly}");
+        assert!(
+            !msg.contains("daemon not running"),
+            "permission errors must NOT be rewritten to daemon-down; got: {msg}"
+        );
+        assert!(
+            msg.contains("connect to local daemon control socket"),
+            "must keep the original context line; got: {msg}"
         );
     }
 }

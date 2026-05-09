@@ -134,10 +134,18 @@ pub async fn connect(control_json_path: &Path) -> anyhow::Result<IpcClient> {
     })?;
 
     let stream = UnixStream::connect(&socket_path).await.map_err(|e| {
-        anyhow::anyhow!(
-            "FFI client: connect to {} failed: {e}",
+        // Wrap the io::Error as a *cause* (anyhow::Error::new) and
+        // attach the human-readable message via `.context(...)` so
+        // upstream code can downcast through the chain to the
+        // original io::Error and pattern-match on its kind. Earlier
+        // we built this with `anyhow::anyhow!("…: {e}")` which
+        // formats the io::Error into a string and drops its kind —
+        // breaking the friendlify_connect_error pre-check in
+        // `support/local_invoke.rs`.
+        anyhow::Error::new(e).context(format!(
+            "FFI client: connect to {} failed",
             socket_path.display()
-        )
+        ))
     })?;
 
     // Same codec the daemon uses. Default 8 MiB max frame size is
