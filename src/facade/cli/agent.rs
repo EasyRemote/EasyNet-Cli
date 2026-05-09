@@ -1611,32 +1611,36 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
         anyhow::anyhow!("agent '{}' not found. Run 'easynet agent list'.", args.name)
     })?;
 
+    // `--resume` is picker-only — single job, no prompt allowed.
+    // Validate this BEFORE resolving the session id so we don't
+    // open the TTY picker just to throw the result away.
+    if args.resume && args.prompt.is_some() {
+        anyhow::bail!(
+            "`--resume` does not take a PROMPT; it only sets the latest \
+             session. Run `easynet agent send {} --resume` to pick a \
+             session, then `agent send {0} --follow \"<msg>\"` to send.",
+            args.name
+        );
+    }
+
     // Resolve the session_id BEFORE we kick off mission machinery.
     // The chat ability mints a fresh id when none is supplied; a
     // concrete id triggers the resume path on the daemon side.
     let resolved_session_id = resolve_session_id(&args)?;
 
-    // Two prompt-handling regimes:
+    // Two prompt regimes after the early `--resume + prompt`
+    // rejection above:
     //
-    //   * `--resume` with no prompt — picker-only mode. The user
-    //     ran `easynet agent send <name> --resume` to pick a
-    //     prior session and make IT the latest one (so a later
-    //     `--follow` lands on the chosen session). No new turn is
-    //     sent. Bump the index pointer and return.
-    //
-    //   * Anything else — prompt is mandatory. We refuse with a
-    //     typed error rather than letting the EAL string-quoter
-    //     panic on an empty literal.
+    //   `--resume` (no prompt) → picker → set latest pointer → exit.
+    //   anything else          → prompt required (send a new turn).
     let prompt = match args.prompt.as_deref() {
         Some(p) => p.to_string(),
         None => {
-            // Only `--resume` allows a missing prompt; the other
-            // session-flag combinations REQUIRE a prompt because
-            // they're meant to send a new turn.
             if !args.resume {
                 anyhow::bail!(
-                    "PROMPT is required (omit only when `--resume` is the sole \
-                     session flag and you want the picker to set the latest pointer)"
+                    "PROMPT is required (omit only when `--resume` is the \
+                     sole session flag, in which case the picker just sets \
+                     the latest pointer)."
                 );
             }
             let sid = resolved_session_id
