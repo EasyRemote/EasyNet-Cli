@@ -71,9 +71,9 @@ pub enum DeviceAction {
 pub struct ShowArgs {
     /// Target substrate node id.
     pub node_id: String,
-    /// Output format. `table` emits the human-readable view; `json`
+    /// Output format. 'table' emits the human-readable view; 'json'
     /// emits the raw substrate record + abilities array. Aligned with
-    /// every other list/show command — see `support::output::OutputFormat`.
+    /// every other list/show command — see 'support::output::OutputFormat'.
     #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
     pub format: OutputFormat,
 }

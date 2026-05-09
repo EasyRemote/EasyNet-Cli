@@ -35,15 +35,15 @@ use crate::support::{net, output};
 
 #[derive(Debug, Args)]
 pub struct ResetArgs {
-    /// Proceed even when a runtime is still active (`easynet start` would
+    /// Proceed even when a runtime is still active ('easynet start' would
     /// otherwise need to stop first). This does NOT skip the confirmation
-    /// prompt — see `--yes`.
+    /// prompt — see '--yes'.
     #[arg(long)]
     pub force: bool,
     /// Skip the interactive confirmation. Required for non-interactive /
-    /// CI use, where the terminal-detection guard in `output::confirm`
-    /// would otherwise refuse. Orthogonal to `--force`: `--yes` skips
-    /// the confirmation, `--force` skips the "runtime-still-running"
+    /// CI use, where the terminal-detection guard in 'output::confirm'
+    /// would otherwise refuse. Orthogonal to '--force': '--yes' skips
+    /// the confirmation, '--force' skips the "runtime-still-running"
     /// guard.
     #[arg(long, short = 'y')]
     pub yes: bool,
@@ -57,7 +57,7 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
         if let Some(ref state) = runtime_state {
             if state.pid.is_some_and(net::is_pid_alive) {
                 anyhow::bail!(
-                    "runtime is currently running — run `easynet stop` first, or use `easynet reset --force`"
+                    "runtime is currently running — run 'easynet stop' first, or use 'easynet reset --force'"
                 );
             }
         }

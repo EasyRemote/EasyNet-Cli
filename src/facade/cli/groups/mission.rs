@@ -75,9 +75,9 @@ pub struct ListArgs {
     /// Maximum number of runs to show.
     #[arg(long, default_value_t = 20)]
     pub limit: usize,
-    /// Output format. `table` prints the human-readable run history;
-    /// `json` emits the meta records as a JSON array. Aligned with
-    /// every other list/show command — see `support::output::OutputFormat`.
+    /// Output format. 'table' prints the human-readable run history;
+    /// 'json' emits the meta records as a JSON array. Aligned with
+    /// every other list/show command — see 'support::output::OutputFormat'.
     #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
     pub format: OutputFormat,
 }
@@ -232,7 +232,7 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
     }
 
     if runs.is_empty() {
-        output::info("No mission runs recorded yet. Run `easynet mission run <file.eal>`.");
+        output::info("No mission runs recorded yet. Run 'easynet mission run <file.eal>'.");
         return Ok(());
     }
 

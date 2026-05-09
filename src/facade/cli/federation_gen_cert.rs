@@ -50,7 +50,7 @@ pub struct GenCertArgs {
     #[arg(long)]
     pub out_dir: PathBuf,
     /// Common Name (CN) and SAN entry for the leaf cert. Use the
-    /// hostname or IP the peer dialer will see — `localhost` for
+    /// hostname or IP the peer dialer will see — 'localhost' for
     /// loopback-only demos, the public DNS name for a real
     /// deployment.
     #[arg(long, default_value = "localhost")]

@@ -73,26 +73,32 @@ struct ValidatePairingPayload {
 pub struct JoinArgs {
     /// One-time pairing token (32-64 hex characters)
     pub token: String,
-    /// Hub API base URL for self-hosted Hubs (default: `https://easynet.run`)
+    /// Hub API base URL for self-hosted Hubs.
+    // No `(default: ...)` in the doc-comment — clap already renders
+    // the `[default: …]` suffix from `default_value_t` in `--help`.
+    // Listing it twice (once in prose, once via clap) is the kind
+    // of duplication silan flagged in the layout review.
     #[arg(long, default_value_t = format!("https://{}", config::DEFAULT_HUB_HOST))]
     pub hub: String,
-    /// Override Hub REST API base URL for credential verification (e.g. `http://localhost:8080`).
-    /// Only needed for local dev when the REST API is on a different host/port than the Hub.
+    // Description kept to one short line — clap 4's wrap algorithm
+    // declines to break URLs / backtick-fenced strings, so a long
+    // description spills past the term_width set in
+    // `bin/easynet.rs::apply_help_layout`. Verbose context lives
+    // in docs/ and the join.rs commit history.
+    /// Override Hub REST API base URL (local-dev only).
     #[arg(long)]
     pub hub_api: Option<String>,
-    /// Peer hub's daemon TLS listen address, used to populate the
-    /// local daemon's `[daemon.federated_peers]` entry for this
-    /// tenant. Form: `https://host:port` (e.g. `https://hub-b.example:50443`).
-    ///
-    /// Why this is operator-supplied: the Hub's pairing response
-    /// carries the **backend's** Axon endpoint (the inbound-from-
-    /// device gRPC port), which is NOT the peer daemon's TLS
-    /// listener. In a multi-hub deployment those addresses
-    /// differ. Without this flag the auto-wire either writes the
-    /// backend port (wrong for cross-hub dial) or assumes the
-    /// canonical 50443 (wrong if the operator picked a different
-    /// port). Pass `--peer-hub` when joining a tenant whose hub
-    /// you intend to route cross-hub calls to.
+    // The doc-comment below is a single paragraph on purpose. clap
+    // switches `--help` into multi-paragraph "long help" mode the
+    // moment ANY arg's doc-comment has a blank line in it — every
+    // other arg in the same struct then renders with extra spacing
+    // around it. The detailed rationale for `--peer-hub` (Hub
+    // pairing response carries the backend Axon endpoint, not the
+    // peer daemon's TLS listener; multi-hub deployments diverge)
+    // lives in docs/spec/RFC-002 §federation.forward_invoke and in
+    // the auto-wire commit message — that's where verbose context
+    // belongs, not in `--help`.
+    /// Peer hub's daemon TLS listener (https://host:port).
     #[arg(long)]
     pub peer_hub: Option<String>,
     /// Skip confirmation prompts (for non-interactive use)
@@ -108,7 +114,7 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
             existing.node_id, existing.hub_endpoint
         ));
         if !args.yes {
-            output::info("This will overwrite existing credentials. Run `easynet reset` first to un-pair cleanly.");
+            output::info("This will overwrite existing credentials. Run 'easynet reset' first to un-pair cleanly.");
             if !output::confirm("Continue?")? {
                 output::info("Cancelled.");
                 return Ok(());
@@ -180,7 +186,7 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
     // tells the operator the production posture has degraded.
     if let Err(e) = put_device_keypair_to_keyring(&creds) {
         output::warn(&format!(
-            "[easynet join] keyring daemon offline ({e}); falling back to deterministic key derivation. Start `easynet-keyring` for production-grade secret isolation."
+            "[easynet join] keyring daemon offline ({e}); falling back to deterministic key derivation. Start 'easynet-keyring' for production-grade secret isolation."
         ));
     }
 
@@ -204,7 +210,7 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
     output::detail("hub_endpoint", &creds.hub_endpoint);
     output::detail("tenant_id", &creds.tenant_id);
     eprintln!();
-    output::info("Run `easynet connect` to start the device agent.");
+    output::info("Run 'easynet connect' to start the device agent.");
     Ok(())
 }
 
@@ -319,7 +325,7 @@ fn pairing_status_error_message(code: u16, body: &str) -> String {
     match code {
         404 => "pairing token expired or already used — create a new token from the Hub dashboard"
             .into(),
-        409 => "device already paired — run `easynet reset` first to un-pair, then retry".into(),
+        409 => "device already paired — run 'easynet reset' first to un-pair, then retry".into(),
         _ => format!("Hub rejected pairing (HTTP {code}): {body}"),
     }
 }

@@ -37,14 +37,14 @@ pub struct ExecArgs {
     /// Target device node id. Pass `local` for this device or a
     /// real node id once federation Invoke is wired.
     pub node: String,
-    /// Per-call deadline in seconds. `0` inherits the runtime
-    /// default. Default: 60 s (`support::timeouts::INVOKE_DEFAULT_SECS`).
+    /// Per-call deadline in seconds. '0' inherits the runtime
+    /// default. Default: 60 s ('support::timeouts::INVOKE_DEFAULT_SECS').
     #[arg(long, value_name = "SECS", default_value_t = timeouts::INVOKE_DEFAULT_SECS)]
     pub timeout: u64,
-    /// Command to execute (everything after `--`). Joined with
+    /// Command to execute (everything after '--'). Joined with
     /// spaces and passed to the handler verbatim; the handler
     /// chooses whether to shell-evaluate (defaults to NO — argv
-    /// dispatch via `process.exec` for safety).
+    /// dispatch via 'process.exec' for safety).
     #[arg(last = true)]
     pub command: Vec<String>,
 }

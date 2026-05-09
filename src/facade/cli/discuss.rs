@@ -44,15 +44,15 @@ use crate::support::local_invoke::invoke_local_ability;
 #[derive(Debug, Args)]
 pub struct DiscussArgs {
     /// Comma-separated list of agent names (e.g. "claude,codex").
-    /// Required when starting a new discussion (no `--room`).
-    /// Ignored when `--room` is set — the room's existing
+    /// Required when starting a new discussion (no '--room').
+    /// Ignored when '--room' is set — the room's existing
     /// participants are used.
     #[arg(long)]
     pub agents: Option<String>,
 
     /// Discussion topic / human turn message. On a new discussion
-    /// (no `--room`) this is both the room's topic and the human's
-    /// first posted turn. On a continuation (`--room ROOM_ID`)
+    /// (no '--room') this is both the room's topic and the human's
+    /// first posted turn. On a continuation ('--room ROOM_ID')
     /// this is the next human turn.
     #[arg(long)]
     pub topic: String,
@@ -70,11 +70,11 @@ pub struct DiscussArgs {
     pub max_cycles: u32,
 
     /// Optional per-agent role assignment, repeatable. Form:
-    /// `--role <agent>=<role description>`. Agents listed here
+    /// '--role <agent>=<role description>'. Agents listed here
     /// skip the cycle-1 self-nomination prompt and stay in the
     /// assigned role for the duration of the sub-turn. Useful
     /// when the operator wants explicit dramatis personae
-    /// (e.g. `--role claude=skeptic --role codex=builder`).
+    /// (e.g. '--role claude=skeptic --role codex=builder').
     #[arg(long = "role", value_name = "AGENT=ROLE")]
     pub roles: Vec<String>,
 
@@ -100,7 +100,7 @@ pub fn run(args: DiscussArgs) -> anyhow::Result<()> {
                 .filter(|s| !s.is_empty())
                 .collect();
             if participants.is_empty() {
-                bail!("--agents was provided but parsed empty; pass `claude,codex,...`");
+                bail!("--agents was provided but parsed empty; pass 'claude,codex,...'");
             }
             let create_resp = invoke_local_ability(
                 "device.discuss.create",
@@ -175,7 +175,7 @@ pub fn run(args: DiscussArgs) -> anyhow::Result<()> {
                 role_map.insert(agent.to_string(), Value::String(role.to_string()));
             }
             None => bail!(
-                "--role {entry:?} is missing `=`; expected `<agent>=<role description>` \
+                "--role {entry:?} is missing '='; expected '<agent>=<role description>' \
                  (e.g. --role claude=skeptic)"
             ),
         }

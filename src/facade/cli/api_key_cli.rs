@@ -82,7 +82,7 @@ fn current_user() -> anyhow::Result<String> {
         return Ok(v);
     }
     anyhow::bail!(
-        "no user identity bound to this daemon — run `easynet device pair` first \
+        "no user identity bound to this daemon — run 'easynet device pair' first \
          (or set EASYNET_PAGES_USER for dev rigs)"
     )
 }
@@ -120,7 +120,7 @@ fn run_create(a: CreateArgs) -> anyhow::Result<()> {
         println!("  key_uri: {key_uri}");
         println!("  token:   {token}");
         if !a.no_cache {
-            println!("  cached:  ~/.easynet/api_keys.local.toml (used by `easynet llm-api`)");
+            println!("  cached:  ~/.easynet/api_keys.local.toml (used by 'easynet llm-api')");
         }
         println!("  ⚠ this is the only time the token is shown — save it now.");
     }

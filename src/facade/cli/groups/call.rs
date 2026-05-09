@@ -71,7 +71,7 @@ pub struct CreateArgs {
     #[arg(long, default_value = "easynet.run")]
     pub provider: String,
     /// Output format. Aligned with every other list/show command —
-    /// see `support::output::OutputFormat`.
+    /// see 'support::output::OutputFormat'.
     #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
     pub format: OutputFormat,
 }
@@ -81,7 +81,7 @@ pub struct ShowArgs {
     /// Call identifier.
     pub call_id: String,
     /// Output format. Aligned with every other list/show command —
-    /// see `support::output::OutputFormat`.
+    /// see 'support::output::OutputFormat'.
     #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
     pub format: OutputFormat,
 }

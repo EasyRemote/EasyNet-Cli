@@ -38,8 +38,8 @@ pub struct LlmApiArgs {
     #[arg(long)]
     pub model: Option<String>,
     /// API key bearer. Default: $EASYNET_API_KEY env, then
-    /// `~/.easynet/api_keys.local.toml` (written by
-    /// `easynet api-key create`).
+    /// '~/.easynet/api_keys.local.toml' (written by
+    /// 'easynet api-key create').
     #[arg(long)]
     pub key: Option<String>,
     /// Optional system message.

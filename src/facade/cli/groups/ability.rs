@@ -90,14 +90,14 @@ pub struct ShowArgs {
     pub name: String,
     /// ⚠ Reserved for federation-tier resolution. Today this CLI
     /// pulls metadata from the local daemon's catalogue (post
-    /// AXON-RFC-001 P1.5 there is no remote `list_mcp_tools`
-    /// surface). Passing `--node` returns a precise error rather
+    /// AXON-RFC-001 P1.5 there is no remote 'list_mcp_tools'
+    /// surface). Passing '--node' returns a precise error rather
     /// than silently auto-resolving locally.
     #[arg(long, short = 'n', value_name = "NODE_ID")]
     pub node: Option<String>,
-    /// Output format. `table` emits the human-readable contract view;
-    /// `json` emits the raw underlying registry record. Aligned with
-    /// every other list/show command — see `support::output::OutputFormat`.
+    /// Output format. 'table' emits the human-readable contract view;
+    /// 'json' emits the raw underlying registry record. Aligned with
+    /// every other list/show command — see 'support::output::OutputFormat'.
     #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
     pub format: OutputFormat,
 }
@@ -110,8 +110,8 @@ pub struct UninstallArgs {
     /// `--install-id` so existing scripts keep parsing while the
     /// federation Invoke replacement is wired.
     pub name: String,
-    /// Reserved for federation-tier uninstall. See `--node` on
-    /// `ability show`.
+    /// Reserved for federation-tier uninstall. See '--node' on
+    /// 'ability show'.
     #[arg(long, short = 'n', value_name = "NODE_ID")]
     pub node: Option<String>,
     /// Install id from the deploy receipt. Reserved for the

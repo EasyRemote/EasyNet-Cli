@@ -81,7 +81,7 @@ pub struct DiscoverArgs {
     /// Filter cross-realm entries by the calling user's
     /// federated bindings (PR-N4 INV-5 privacy default). Only
     /// entries whose URI is on the calling daemon's own realm
-    /// or has a recorded binding for `user-id` are returned.
+    /// or has a recorded binding for 'user-id' are returned.
     /// Absent ⇒ unfiltered (operator / audit query path).
     #[arg(long = "user-id")]
     pub local_user_id: Option<String>,

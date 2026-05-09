@@ -62,25 +62,16 @@ use crate::uri::{parse_ura, URAKind};
 
 #[derive(Debug, Args)]
 pub struct AbilitiesArgs {
-    /// Filter to a single agent's owned abilities. Equivalent to
-    /// `easynet agent abilities <name>`. The filter matches
-    /// abilities whose qualified name starts with `<agent>.`.
+    /// Filter to a single agent's owned abilities. Equivalent to 'easynet agent abilities <name>'.
     #[arg(long, value_name = "NAME")]
     pub agent: Option<String>,
-    /// ⚠ Reserved for federation routing. `--node` may only be used
-    /// today to pin to the local node; passing any other value
-    /// surfaces a precise error pointing at the missing federation
-    /// Invoke entry. Listing across nodes ships in a follow-up to
-    /// AXON-RFC-001 P1.5.
+    /// Reserved for federation routing — only the local node is accepted today; remote listing ships post-AXON-RFC-001 P1.5.
     #[arg(long, short = 'n', value_name = "NODE_ID")]
     pub node: Option<String>,
-    /// Glob pattern to filter by ability name (e.g. `fs.*`,
-    /// `claude.*`, `*.health`). The bare `--pattern ""` is equivalent
-    /// to omitting the flag.
+    /// Glob pattern to filter by ability name (e.g. fs.*, claude.*, *.health). Empty pattern is equivalent to omitting the flag.
     #[arg(long, default_value = "")]
     pub pattern: String,
-    /// Output format. `table` is the default human view; `json`
-    /// emits the raw catalogue, suitable for piping into `jq`.
+    /// Output format — table (human, default) or json (raw catalogue, jq-friendly).
     #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
     pub format: OutputFormat,
 }
@@ -667,18 +658,26 @@ mod tests {
         assert_eq!(split_qualified("orphan-verb"), ("system", "orphan-verb"));
     }
 
+    /// Joint-plan phase 1.5: `--node <other>` no longer hard-bails;
+    /// it forwards `easynet.discover` to the target device URA
+    /// through `federation.forward_invoke`. The forward path only
+    /// exists in builds with `--features axon-pb`; without the
+    /// feature `invoke_remote_easynet_discover` short-circuits to
+    /// `federation_not_wired_error`, which is asserted by
+    /// `run_with_remote_node_short_circuits_when_axon_pb_off` below.
+    /// Splitting the two cases lets `cargo test --lib` (default
+    /// features) AND `cargo test --features axon-pb` both pass.
+    #[cfg(feature = "axon-pb")]
     #[test]
     fn run_with_remote_node_routes_through_forward_invoke() {
-        // Joint-plan phase 1.5: `--node <other>` no longer hard-bails
-        // — it forwards `easynet.discover` to the target device URA
-        // through `federation.forward_invoke`. In a unit-test
-        // environment the local daemon UDS is absent, so the call
-        // surfaces as either "daemon not running" / "cannot resolve
-        // node ... without local credentials" / "forward
-        // easynet.discover to target=...". The contract this test
-        // pins is "remote node attempts the forward path" — error
-        // message MUST mention either the forward target or one of
-        // the resolution-stage errors so a script can grep for it.
+        // In a unit-test environment the local daemon UDS is absent,
+        // so the call surfaces as either "daemon not running" /
+        // "cannot resolve node ... without local credentials" /
+        // "forward easynet.discover to target=...". The contract
+        // this test pins is "remote node attempts the forward path"
+        // — error message MUST mention either the forward target or
+        // one of the resolution-stage errors so a script can grep
+        // for it.
         let err = run(AbilitiesArgs {
             agent: None,
             node: Some("some-remote-node".into()),
@@ -693,6 +692,27 @@ mod tests {
                 || msg.contains("credentials")
                 || msg.contains("federation"),
             "must mention forward / daemon / credentials / federation; got: {msg}"
+        );
+    }
+
+    /// Counterpart to the test above — pins the no-feature build's
+    /// behaviour: the `--node` path returns the "axon-pb required"
+    /// error verbatim, with the offending action ("listing
+    /// abilities on remote node ...") in front.
+    #[cfg(not(feature = "axon-pb"))]
+    #[test]
+    fn run_with_remote_node_short_circuits_when_axon_pb_off() {
+        let err = run(AbilitiesArgs {
+            agent: None,
+            node: Some("some-remote-node".into()),
+            pattern: String::new(),
+            format: OutputFormat::Table,
+        })
+        .expect_err("remote --node without axon-pb must surface a typed error");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("axon-pb") && msg.contains("listing abilities on remote node"),
+            "must point at the missing feature gate; got: {msg}"
         );
     }
 

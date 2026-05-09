@@ -55,7 +55,11 @@ fn install_ctrlc_handler(shutdown: &ShutdownSignal) {
 
 #[derive(Debug, Args)]
 pub struct StartArgs {
-    /// Hub endpoint (e.g. `axon://easynet.run:50051`)
+    /// Hub endpoint (e.g. axon://easynet.run:50051).
+    // No backticks: some terminals (iTerm2, Warp) auto-highlight
+    // backtick-fenced text with an inverted background, producing
+    // a visual "white block" in `--help`. The example URL is clear
+    // without them.
     #[arg(long, default_value = config::DEFAULT_HUB)]
     pub hub: String,
     /// Tenant ID
@@ -114,7 +118,7 @@ pub fn run(args: StartArgs) -> anyhow::Result<()> {
     if let Ok(state) = config::load() {
         if state.pid.is_some_and(net::is_pid_alive) {
             anyhow::bail!(
-                "runtime already running (run `easynet stop` first, or remove ~/.easynet/runtime.json)"
+                "runtime already running (run 'easynet stop' first, or remove ~/.easynet/runtime.json)"
             );
         }
         output::info("Detected stale runtime state (process not running). Cleaning up...");
@@ -139,7 +143,7 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     let tenant = creds.tenant_id.clone();
     if args.hub != config::DEFAULT_HUB && args.hub != hub {
         output::warn(&format!(
-            "--hub {} ignored; using {} from credentials. Run `easynet reset` to un-pair first.",
+            "--hub {} ignored; using {} from credentials. Run 'easynet reset' to un-pair first.",
             args.hub, hub
         ));
     }
@@ -203,7 +207,7 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     if args.foreground {
         run_foreground_with_daemon(&creds, args.no_mcp)
     } else {
-        output::info("Daemon running in background. Use `easynet stop` to stop.");
+        output::info("Daemon running in background. Use 'easynet stop' to stop.");
         Ok(())
     }
 }
@@ -749,8 +753,8 @@ where
     let Ok(creds) = config::load_credentials() else {
         output::info("No credentials found.");
         output::info("Visit https://easynet.run or your Hub to create a pairing token,");
-        output::info("then run `easynet join <token>` to pair this device.");
-        output::info("If you're running a Hub, use `easynet start --as-hub` instead.");
+        output::info("then run 'easynet join <token>' to pair this device.");
+        output::info("If you're running a Hub, use 'easynet start --as-hub' instead.");
         anyhow::bail!("no credentials — cannot start device agent");
     };
 
@@ -766,7 +770,7 @@ where
             config::delete_credentials().ok();
             eprintln!("  Stale credentials cleaned up.");
             eprintln!("  Visit https://easynet.run or your Hub to create a new pairing token,");
-            eprintln!("  then run `easynet join <token>`.");
+            eprintln!("  then run 'easynet join <token>'.");
             anyhow::bail!("credential revoked");
         }
     }
@@ -820,7 +824,7 @@ fn run_as_hub(args: &StartArgs) -> anyhow::Result<()> {
         output::success("Hub stopped");
     } else {
         let _ = ManuallyDrop::new(srv);
-        output::info("Hub running in background. Use `easynet stop` to stop.");
+        output::info("Hub running in background. Use 'easynet stop' to stop.");
     }
     Ok(())
 }

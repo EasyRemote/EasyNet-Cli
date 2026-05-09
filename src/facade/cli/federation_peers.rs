@@ -174,7 +174,7 @@ fn print_plain(federated_peers: &BTreeMap<String, String>, trusted_hubs: &[Trust
     output::info("To invoke an ability against a peer device, pass --node:");
     output::info("  easynet ability invoke <ability> --node easynet:///r/<tenant>/device/<node>");
     output::info(
-        "where <tenant> appears in `federated_peers` above and <node> is the peer device's node_id.",
+        "where <tenant> appears in 'federated_peers' above and <node> is the peer device's node_id.",
     );
     output::info(
         "Cross-realm device enumeration (auto-discovering <node>) requires PR-N3 directory federation.",

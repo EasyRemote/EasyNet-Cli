@@ -30,7 +30,7 @@ use crate::support::local_invoke::invoke_local_ability;
 #[derive(Debug, Args)]
 pub struct ThinkArgs {
     /// The worker agent (and judge by default). Must be a registered
-    /// agent — confirm with `easynet agent list`.
+    /// agent — confirm with 'easynet agent list'.
     #[arg(long)]
     pub agent: String,
 
@@ -46,7 +46,7 @@ pub struct ThinkArgs {
     #[arg(long, default_value_t = 5)]
     pub max_cycles: u32,
 
-    /// Optional separate judge agent. Defaults to `--agent`.
+    /// Optional separate judge agent. Defaults to '--agent'.
     /// Sessions are independent regardless — this flag only changes
     /// which agent's chat ability and tool catalog the judge uses.
     #[arg(long)]

@@ -116,7 +116,7 @@ fn check_pairing() -> Check {
             name: "device pairing".to_string(),
             status: CheckStatus::Warn,
             detail: "not paired".to_string(),
-            hint: Some("Run `easynet device join <token>` to pair this host."),
+            hint: Some("Run 'easynet device join <token>' to pair this host."),
         },
     }
 }
@@ -160,7 +160,7 @@ fn check_runtime() -> Check {
                         detail: "runtime metadata present, but the bridge process is not alive"
                             .to_string(),
                         hint: Some(
-                            "Run `easynet runtime stop` to clear stale state, then `easynet runtime start`.",
+                            "Run 'easynet runtime stop' to clear stale state, then 'easynet runtime start'.",
                         ),
                     }
                 }
@@ -170,7 +170,7 @@ fn check_runtime() -> Check {
             name: "local runtime".to_string(),
             status: CheckStatus::Warn,
             detail: "not running".to_string(),
-            hint: Some("Run `easynet runtime start` to spawn a local runtime."),
+            hint: Some("Run 'easynet runtime start' to spawn a local runtime."),
         },
     }
 }
@@ -190,7 +190,7 @@ fn check_federation() -> Check {
             status: CheckStatus::Warn,
             detail: "bridge/hub mode has no local daemon federation probe".to_string(),
             hint: Some(
-                "Start device mode (`easynet runtime start`) if you want daemon-backed federation health checks.",
+                "Start device mode ('easynet runtime start') if you want daemon-backed federation health checks.",
             ),
         };
     }
@@ -220,7 +220,7 @@ fn federation_check_impl() -> Check {
                              or no devices are paired across hubs"
                         .to_string(),
                     hint: Some(
-                        "Check `easynet federation peers` to confirm the trust anchor + \
+                        "Check 'easynet federation peers' to confirm the trust anchor + \
                          peer daemon health.",
                     ),
                 }
@@ -253,7 +253,7 @@ fn federation_check_impl() -> Check {
             name: "federation".to_string(),
             status: CheckStatus::Warn,
             detail: format!("federation.discover unavailable: {e}"),
-            hint: Some("Check that the daemon is running (`easynet runtime status`)."),
+            hint: Some("Check that the daemon is running ('easynet runtime status')."),
         },
     }
 }
@@ -263,9 +263,9 @@ fn federation_check_impl() -> Check {
     Check {
         name: "federation".to_string(),
         status: CheckStatus::Warn,
-        detail: "federation.discover requires the `axon-pb` build feature".to_string(),
+        detail: "federation.discover requires the 'axon-pb' build feature".to_string(),
         hint: Some(
-            "Production builds always include `axon-pb`; this is likely a minimal-feature build.",
+            "Production builds always include 'axon-pb'; this is likely a minimal-feature build.",
         ),
     }
 }
@@ -331,7 +331,7 @@ fn check_mcp_clients() -> Check {
             name: "mcp clients".to_string(),
             status: CheckStatus::Warn,
             detail: "no AI client wired up".to_string(),
-            hint: Some("Run `easynet mcp-install` to register EasyNet with Claude Code/Codex."),
+            hint: Some("Run 'easynet mcp-install' to register EasyNet with Claude Code/Codex."),
         }
     } else {
         Check {

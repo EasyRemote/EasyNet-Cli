@@ -87,7 +87,7 @@ pub fn run(args: ConfigArgs) -> anyhow::Result<()> {
                 "session_bridge_exec_enabled set to {}",
                 settings.session_bridge_exec_enabled
             ));
-            output::info("Note: reconnect required to apply. Run `easynet stop && easynet start` or restart `easynet connect`.");
+            output::info("Note: reconnect required to apply. Run 'easynet stop && easynet start' or restart 'easynet connect'.");
         }
     }
     Ok(())

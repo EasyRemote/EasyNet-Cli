@@ -40,10 +40,10 @@ use crate::support::output;
 pub struct DeployArgs {
     /// Path to the ability directory (must contain `ability.json`).
     pub path: String,
-    /// Target device node id. Use `local` to deploy onto this
+    /// Target device node id. Use 'local' to deploy onto this
     /// device's own ability registry; any other node id requires
     /// the federation Invoke transport (the handler returns a
-    /// typed `federation_not_wired` error in that case until it
+    /// typed 'federation_not_wired' error in that case until it
     /// ships).
     #[arg(long = "node", short = 'n', value_name = "NODE_ID")]
     pub node: String,
