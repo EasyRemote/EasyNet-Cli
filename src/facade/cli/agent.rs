@@ -154,7 +154,14 @@ pub struct SendArgs {
     /// Registered agent name (from `easynet agent list`).
     pub name: String,
     /// Prompt body sent verbatim to the agent.
-    pub prompt: String,
+    ///
+    /// Optional only when --resume is the sole flag and no prompt
+    /// follows: `easynet agent send <name> --resume` opens the
+    /// picker, lets the operator select a prior session, marks
+    /// that session as the new latest (so a later --follow lands
+    /// on it), and exits without sending. Every other invocation
+    /// requires a prompt.
+    pub prompt: Option<String>,
     /// Prior conversation to prepend under a "## Context (previous
     /// discussion)" section. Use this to carry state across separate
     /// 'agent send' invocations when you want the agent to build on an
@@ -1609,6 +1616,51 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
     // concrete id triggers the resume path on the daemon side.
     let resolved_session_id = resolve_session_id(&args)?;
 
+    // Two prompt-handling regimes:
+    //
+    //   * `--resume` with no prompt — picker-only mode. The user
+    //     ran `easynet agent send <name> --resume` to pick a
+    //     prior session and make IT the latest one (so a later
+    //     `--follow` lands on the chosen session). No new turn is
+    //     sent. Bump the index pointer and return.
+    //
+    //   * Anything else — prompt is mandatory. We refuse with a
+    //     typed error rather than letting the EAL string-quoter
+    //     panic on an empty literal.
+    let prompt = match args.prompt.as_deref() {
+        Some(p) => p.to_string(),
+        None => {
+            // Only `--resume` allows a missing prompt; the other
+            // session-flag combinations REQUIRE a prompt because
+            // they're meant to send a new turn.
+            if !args.resume {
+                anyhow::bail!(
+                    "PROMPT is required (omit only when `--resume` is the sole \
+                     session flag and you want the picker to set the latest pointer)"
+                );
+            }
+            let sid = resolved_session_id
+                .clone()
+                .expect("resume path always returns a session id");
+            crate::persistence::chat_sessions::set_latest_session(&args.name, &sid)?;
+            eprintln!(
+                "  {} {} {}",
+                style("[agent-send]").dim(),
+                style("set latest session →").dim(),
+                style(&sid).cyan(),
+            );
+            eprintln!(
+                "  {}",
+                style(format!(
+                    "next `easynet agent send {} --follow \"...\"` will land on this session.",
+                    args.name
+                ))
+                .dim(),
+            );
+            return Ok(());
+        }
+    };
+
     // User-visible counterpart to the doc-comment ontology reference.
     // Tells the user exactly what path their command is taking, so they
     // can reason about why a mission run dir appears, why MCP audit
@@ -1633,12 +1685,9 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
     // the EAL string literal is exactly the prompt the agent will see.
     let composed_prompt = match args.context.as_deref() {
         Some(ctx) if !ctx.trim().is_empty() => {
-            format!(
-                "{}\n\n## Context (previous discussion)\n\n{}\n",
-                args.prompt, ctx
-            )
+            format!("{prompt}\n\n## Context (previous discussion)\n\n{ctx}\n")
         }
-        _ => args.prompt.clone(),
+        _ => prompt.clone(),
     };
 
     // Build the single-line EAL mission source. The mission name is
@@ -1782,7 +1831,7 @@ fn run_send(args: SendArgs) -> anyhow::Result<()> {
         crate::persistence::chat_sessions::write_turn_best_effort(
             &args.name,
             sid,
-            &args.prompt,
+            &prompt,
             &reply_text,
             &tool_calls,
             &usage_value,

@@ -318,6 +318,28 @@ pub fn write_turn(
     Ok(())
 }
 
+/// Mark `session_id` as the agent's most-recent session without
+/// recording a new turn. Used by `easynet agent send <name>
+/// --resume` (no prompt): the operator picks a prior session,
+/// the picker returns its id, and we bump the index pointer so
+/// the next `--follow` lands on the chosen session. The session
+/// must already exist in the on-disk log; calling this for an
+/// unknown id is treated as an error so `--resume` doesn't
+/// accidentally create a placeholder index row.
+pub fn set_latest_session(agent: &str, session_id: &str) -> anyhow::Result<()> {
+    let mut idx = load_index(agent);
+    let known = idx.sessions.iter().any(|s| s.session_id == session_id);
+    if !known {
+        anyhow::bail!(
+            "session {session_id} not in {agent}'s index — \
+             nothing to mark as latest"
+        );
+    }
+    idx.latest = session_id.to_string();
+    save_index(agent, &idx)?;
+    Ok(())
+}
+
 /// Best-effort wrapper used by `run_send`. Logs a stderr warning
 /// on failure but never propagates the error to the caller, so a
 /// disk-full / read-only-mount situation can't break the chat
@@ -510,5 +532,33 @@ mod tests {
         // We can't easily induce a write error without root, so
         // this test just confirms the wrapper exists and returns.
         write_turn_best_effort("nope", "x", "p", "r", &[], &json!({}));
+    }
+
+    #[test]
+    fn set_latest_session_bumps_pointer_for_known_id() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        write_turn("demot", "old", "x", "y", &[], &json!({})).unwrap();
+        write_turn("demot", "new", "x", "y", &[], &json!({})).unwrap();
+        // After both writes "new" is latest.
+        assert_eq!(latest_session("demot"), Some("new".to_string()));
+        // Pick the older one — pointer must follow without
+        // touching the JSONL.
+        set_latest_session("demot", "old").expect("known id");
+        assert_eq!(latest_session("demot"), Some("old".to_string()));
+        // The two JSONL files still exist with their original
+        // turn counts (only the index pointer moved).
+        let old_lines = load_session("demot", "old").unwrap();
+        assert_eq!(old_lines.len(), 2, "meta + 1 turn");
+    }
+
+    #[test]
+    fn set_latest_session_rejects_unknown_id() {
+        let _g = crate::facade::cli::test_support::HomeGuard::new();
+        write_turn("demot", "real", "x", "y", &[], &json!({})).unwrap();
+        let err = set_latest_session("demot", "ghost")
+            .expect_err("unknown id must surface a typed error");
+        assert!(format!("{err}").contains("not in demot's index"));
+        // Pointer must not have moved.
+        assert_eq!(latest_session("demot"), Some("real".to_string()));
     }
 }
