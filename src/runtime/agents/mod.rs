@@ -911,6 +911,7 @@ pub struct SystemAbilityMetadata {
     pub name: String,
     pub description: &'static str,
     pub input_schema: serde_json::Value,
+    pub hints: crate::runtime::ability_descriptor::AbilityHints,
 }
 
 /// Every published system ability's metadata, in the deterministic
@@ -924,8 +925,11 @@ pub struct SystemAbilityMetadata {
 /// different (synthesised) schema. Filter is by suffix because the
 /// agent name varies per install.
 pub fn published_abilities() -> Vec<SystemAbilityMetadata> {
-    published_ability_names()
+    let registry = build_registry();
+    registry
+        .list_abilities()
         .into_iter()
+        .filter(|name| is_canonical_or_unmapped(name))
         .filter(|name| !name.ends_with(".chat"))
         // RFC-002 §3.3 keyring abilities are owner-namespaced under
         // `device` and self-described by `keyring::abilities` — they
@@ -936,9 +940,33 @@ pub fn published_abilities() -> Vec<SystemAbilityMetadata> {
         .map(|name| SystemAbilityMetadata {
             description: description_for(&name),
             input_schema: input_schema_for(&name),
+            hints: discovery_hints_for(&registry, &name),
             name,
         })
         .collect()
+}
+
+pub(crate) fn discovery_hints_for(
+    registry: &crate::runtime::ability_dispatch::LocalAbilityRegistry,
+    name: &str,
+) -> crate::runtime::ability_descriptor::AbilityHints {
+    if name.ends_with(".chat") {
+        // Hosted chat abilities are registered on the local stream
+        // surface today, but the user-facing control-plane path still
+        // serves them through unary invoke + OpenAI compatibility.
+        // Advertising them as `streaming_only` would regress the UI
+        // into choosing InvokeStream against a daemon path that is not
+        // yet wired for generic stream fallback.
+        return Default::default();
+    }
+    let has_rpc = registry.has_rpc(name);
+    let has_stream = registry.has_stream(name);
+    let has_bidi = registry.has_bidi(name);
+    crate::runtime::ability_descriptor::AbilityHints {
+        streaming_only: has_stream && !has_rpc && !has_bidi,
+        bidi_only: has_bidi,
+        ..Default::default()
+    }
 }
 
 /// Human-readable description for a published system ability name.
@@ -1853,6 +1881,83 @@ mod tests {
             Some("object"),
             "input schema must declare type:object; got {:?}",
             skill.input_schema
+        );
+        assert!(
+            !skill.hints.streaming_only && !skill.hints.bidi_only,
+            "device.fleet.list_abilities must stay unary-only; got hints {:?}",
+            skill.hints
+        );
+    }
+
+    #[test]
+    fn published_abilities_marks_server_stream_routes_as_streaming_only() {
+        let metas = published_abilities();
+        for name in [
+            "device.consent.subscribe",
+            "device.discuss.subscribe",
+            "device.loop.subscribe",
+            "device.fleet.attach_session",
+            "device.mic.subscribe",
+            "device.camera.subscribe",
+            "device.screen.subscribe",
+            "device.voice.subscribe",
+        ] {
+            let meta = metas
+                .iter()
+                .find(|m| m.name == name)
+                .unwrap_or_else(|| panic!("{name} must be published"));
+            assert!(
+                meta.hints.streaming_only,
+                "{name} must advertise streaming_only so callers use InvokeStream"
+            );
+            assert!(!meta.hints.bidi_only, "{name} is server-stream, not bidi");
+        }
+    }
+
+    #[test]
+    fn published_abilities_marks_bidi_routes_as_bidi_only() {
+        let metas = published_abilities();
+        for name in [
+            "device.fleet.file_transfer",
+            "device.fleet.pty_session_attach",
+            "device.fleet.session_attach",
+            "device.speaker.publish",
+            "device.voice.transcribe",
+        ] {
+            let meta = metas
+                .iter()
+                .find(|m| m.name == name)
+                .unwrap_or_else(|| panic!("{name} must be published"));
+            assert!(meta.hints.bidi_only, "{name} must advertise bidi_only");
+            assert!(
+                !meta.hints.streaming_only,
+                "{name} must not masquerade as server-stream"
+            );
+        }
+    }
+
+    #[test]
+    fn discovery_hints_leave_agent_chat_on_unary_control_plane_path() {
+        use crate::registry::agents::{AgentEntry, AgentType};
+        let mut agents = AgentRegistry::default();
+        agents
+            .agents
+            .insert("alice".into(), AgentEntry::new(AgentType::ClaudeCode, None));
+        let reg = build_registry_with_services(
+            Arc::new(SessionService::new()),
+            Arc::new(PermissionService::new()),
+            Arc::new(DiscussService::new()),
+            Arc::new(ScheduleService::new()),
+            Arc::new(LoopService::new()),
+            &agents,
+            Arc::new(Vec::new()),
+            crate::runtime::agents::PagesIdentity::default(),
+        );
+        let hints = discovery_hints_for(&reg, "alice.chat");
+        assert!(
+            !hints.streaming_only && !hints.bidi_only,
+            "alice.chat must stay on the unary/OpenAI control-plane path until generic InvokeStream support lands; got {:?}",
+            hints
         );
     }
 

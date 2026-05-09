@@ -64,6 +64,7 @@ pub fn descriptors_for(
             AbilityDescriptor::new(m.name.clone(), owner_agent_uri, Visibility::Scoped)
                 .expect("registry-derived names satisfy descriptor invariants")
                 .with_input_schema(m.input_schema.clone())
+                .with_hints(m.hints.clone())
                 .with_source("kernel:built-in")
                 .with_description(m.description)
         })

@@ -624,10 +624,9 @@ mod tests {
 
     #[test]
     fn resolve_model_to_ability_accepts_canonical_chat_ability_ura() {
-        let got = resolve_model_to_ability(
-            "easynet:///r/easynet.run/ability/alice.codex.codex.chat",
-        )
-        .expect("canonical URA must resolve");
+        let got =
+            resolve_model_to_ability("easynet:///r/easynet.run/ability/alice.codex.codex.chat")
+                .expect("canonical URA must resolve");
         assert_eq!(got, "codex.chat");
     }
 

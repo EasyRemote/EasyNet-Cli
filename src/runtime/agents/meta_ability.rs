@@ -327,6 +327,7 @@ fn list_abilities_handler(
             let Some(owner) = owner_string.as_deref() else {
                 continue;
             };
+            let transport_hints = crate::runtime::agents::discovery_hints_for(&registry, &name);
             // Synthesised descriptor. When the registration site
             // landed an `AbilityManifest` via `register_*_with_spec`
             // (chat ability + the family that follows it), surface
@@ -345,6 +346,7 @@ fn list_abilities_handler(
                         let mut d = d
                             .with_description(manifest.description())
                             .with_input_schema(manifest.input_schema().clone())
+                            .with_hints(transport_hints.clone())
                             .with_source("registry");
                         if let Some(out) = manifest.output_schema() {
                             d = d.with_output_schema(out.clone());
@@ -357,6 +359,7 @@ fn list_abilities_handler(
                              pass JSON arguments by trial or consult the \
                              workspace TOML if one exists)",
                         )
+                        .with_hints(transport_hints)
                         .with_source("registry"),
                 };
                 by_name.insert(name.clone(), descriptor);
@@ -558,8 +561,29 @@ mod tests {
         // Frontend `InvokeAbilityDialog` falls back to "no
         // declared schema" for chat abilities and the user sees a
         // free-text JSON box with no hint about the args shape.
+        //
+        // Fixture isolation: the synth path drops Agent-owned
+        // descriptors when `realm` is missing (no
+        // credentials.json), so we point HOME at an empty dir
+        // (HomeGuard) AND write a minimal credentials.json so
+        // realm resolves to "alice-realm". Without this fixture,
+        // the test passes when run alone (because it leaks the
+        // developer's real $HOME credentials.json) and fails when
+        // run with siblings that HomeGuard a clean dir — which is
+        // the race we're closing.
+        use crate::persistence::config::{save_credentials, Credentials};
         use crate::runtime::ability_dispatch::OwnerKind;
         use std::sync::OnceLock;
+
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        let creds = Credentials {
+            node_id: "test-node".to_string(),
+            credential_token: "test-token".to_string(),
+            hub_endpoint: "axon://hub.test:50051".to_string(),
+            tenant_id: "alice-realm".to_string(),
+            ..Default::default()
+        };
+        save_credentials(&creds).expect("seed credentials.json fixture");
 
         let mut reg = LocalAbilityRegistry::new();
         let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
@@ -569,11 +593,20 @@ mod tests {
         // one `register` runs against) and then publish it
         // through the OnceLock seam so the synth path picks it up.
         let mut live_reg = LocalAbilityRegistry::new();
-        live_reg.register_rpc_with_spec(
+        live_reg.register_stream_with_spec(
             "alice.chat",
             OwnerKind::Agent("alice".to_string()),
             crate::core::ability_spec::default_chat_manifest(),
-            Arc::new(|_args| Ok(json!({}))),
+            Arc::new(|_args| Ok(crate::runtime::ability_dispatch::StreamSource::Snapshot(
+                Vec::new(),
+            ))),
+        );
+        live_reg.register_stream_with_owner(
+            "alice.subscribe",
+            OwnerKind::Agent("alice".to_string()),
+            Arc::new(|_args| Ok(crate::runtime::ability_dispatch::StreamSource::Snapshot(
+                Vec::new(),
+            ))),
         );
         // A second entry registered the legacy way (no manifest)
         // exercises the fallback arm so we know synth still emits
@@ -612,6 +645,21 @@ mod tests {
             input_schema["properties"]["prompt"].is_object(),
             "chat manifest declares `prompt` as a property; synth must surface it. \
              Got: {input_schema}"
+        );
+        assert_eq!(
+            chat["hints"]["streaming_only"],
+            json!(false),
+            "chat stays on the unary/OpenAI control-plane path for now"
+        );
+
+        let subscribe = abilities
+            .iter()
+            .find(|a| a["name"] == "alice.subscribe")
+            .expect("alice.subscribe must surface from the live registry");
+        assert_eq!(
+            subscribe["hints"]["streaming_only"],
+            json!(true),
+            "non-chat manifest-backed stream abilities must surface streaming_only"
         );
 
         let legacy = abilities

@@ -643,6 +643,12 @@ impl LocalAbilityRegistry {
         self.rpc.get(ability)
     }
 
+    /// True iff an RPC-mode handler is registered for `ability`,
+    /// including the envelope-aware variant.
+    pub fn has_rpc(&self, ability: &str) -> bool {
+        self.rpc.contains_key(ability) || self.rpc_with_env.contains_key(ability)
+    }
+
     /// List all statically-registered RPC ability names. Does NOT
     /// include names that only resolve through the fallback chain
     /// (those are synthesised at lookup time and have no static
@@ -703,9 +709,21 @@ impl LocalAbilityRegistry {
         self.stream.get(ability)
     }
 
+    /// True iff a server-stream handler is registered for `ability`,
+    /// including the envelope-aware variant.
+    pub fn has_stream(&self, ability: &str) -> bool {
+        self.stream.contains_key(ability) || self.stream_with_env.contains_key(ability)
+    }
+
     /// Returns Some when a bidi handler is registered for `ability`.
     pub fn get_bidi(&self, ability: &str) -> Option<&LocalBidiHandler> {
         self.bidi.get(ability)
+    }
+
+    /// True iff a bidirectional-stream handler is registered for
+    /// `ability`, including the envelope-aware variant.
+    pub fn has_bidi(&self, ability: &str) -> bool {
+        self.bidi.contains_key(ability) || self.bidi_with_env.contains_key(ability)
     }
 }
 

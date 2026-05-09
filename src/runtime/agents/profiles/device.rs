@@ -150,6 +150,7 @@ pub fn descriptors_for(
         let descriptor = AbilityDescriptor::new(meta.name.clone(), owner_agent_uri, visibility)
             .expect("registry-derived names satisfy descriptor invariants")
             .with_input_schema(meta.input_schema.clone())
+            .with_hints(meta.hints.clone())
             .with_source("kernel:built-in")
             .with_description(meta.description);
         out.push(descriptor);

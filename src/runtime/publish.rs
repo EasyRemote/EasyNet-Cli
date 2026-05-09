@@ -215,6 +215,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
     // A registry-load failure degrades to "no per-agent advertise
     // this cycle" rather than blocking the rest of publish — the
     // outcome row surfaces the reason.
+    let live_registry = crate::runtime::agents::build_registry();
     match crate::registry::agents::load_agents() {
         Ok(reg) => {
             for (name, entry) in &reg.agents {
@@ -238,6 +239,10 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
                             let mut d = d
                                 .with_description(spec.description())
                                 .with_input_schema(spec.parameters().clone())
+                                .with_hints(crate::runtime::agents::discovery_hints_for(
+                                    &live_registry,
+                                    spec.name(),
+                                ))
                                 .with_source(format!("agent:{name}"));
                             if let Some(host_node_id) = host_node_id.as_ref() {
                                 d = d.with_metadata_entry("host_node_id", host_node_id.clone());
