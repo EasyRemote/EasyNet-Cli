@@ -62,9 +62,9 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 
-use crate::persistence::config::{atomic_write_with_permissions, agents_root, WritePermissions};
+use crate::persistence::config::{agents_root, atomic_write_with_permissions, WritePermissions};
 
 /// Maximum bytes of `prompt` / `reply` we capture for the index
 /// preview. The full text always lives in the JSONL; this cap
@@ -210,8 +210,7 @@ pub fn list_sessions(agent: &str) -> Vec<SessionDescriptor> {
 /// `agent sessions show <session_id>`.
 pub fn load_session(agent: &str, session_id: &str) -> anyhow::Result<Vec<Value>> {
     let path = session_file(agent, session_id);
-    let raw = fs::read_to_string(&path)
-        .with_context(|| format!("read {}", path.display()))?;
+    let raw = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
     let mut out = Vec::new();
     for (lineno, line) in raw.lines().enumerate() {
         if line.trim().is_empty() {
@@ -241,8 +240,7 @@ pub fn write_turn(
     usage: &Value,
 ) -> anyhow::Result<()> {
     let dir = sessions_dir(agent);
-    fs::create_dir_all(&dir)
-        .with_context(|| format!("create sessions dir {}", dir.display()))?;
+    fs::create_dir_all(&dir).with_context(|| format!("create sessions dir {}", dir.display()))?;
 
     let path = session_file(agent, session_id);
     let now = chrono::Utc::now().to_rfc3339();
@@ -293,11 +291,7 @@ pub fn write_turn(
     let mut idx = load_index(agent);
     idx.latest = session_id.to_string();
     let preview = make_preview(prompt);
-    if let Some(existing) = idx
-        .sessions
-        .iter_mut()
-        .find(|s| s.session_id == session_id)
-    {
+    if let Some(existing) = idx.sessions.iter_mut().find(|s| s.session_id == session_id) {
         existing.last_turn_at = now.clone();
         existing.turn_count += 1;
         existing.prompt_preview = preview;
@@ -384,8 +378,8 @@ fn rescan_dir(agent: &str) -> anyhow::Result<Vec<SessionDescriptor>> {
         return Ok(Vec::new());
     }
     let mut out = Vec::new();
-    for entry in fs::read_dir(&dir)
-        .with_context(|| format!("scan sessions dir {}", dir.display()))?
+    for entry in
+        fs::read_dir(&dir).with_context(|| format!("scan sessions dir {}", dir.display()))?
     {
         let entry = entry?;
         let path = entry.path();
@@ -453,8 +447,15 @@ mod tests {
     #[test]
     fn write_then_load_round_trip() {
         let _g = crate::facade::cli::test_support::HomeGuard::new();
-        write_turn("demot", "sess-1", "hi", "hello", &[], &json!({"input_tokens": 10}))
-            .expect("write");
+        write_turn(
+            "demot",
+            "sess-1",
+            "hi",
+            "hello",
+            &[],
+            &json!({"input_tokens": 10}),
+        )
+        .expect("write");
         let lines = load_session("demot", "sess-1").expect("load");
         assert_eq!(lines.len(), 2, "session_meta + 1 turn");
         assert_eq!(lines[0]["type"], "session_meta");
