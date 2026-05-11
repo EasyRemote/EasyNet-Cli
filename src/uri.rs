@@ -256,6 +256,25 @@ pub fn resource_uri(realm: &str, user_id: &str, ns: ResourceNamespace, path: &st
     )
 }
 
+/// Resource v4.1.5 dot-id form. `owner_id` must include a dot
+/// (`device.<uuid>`, `<user>.<project>`, ...), which distinguishes it
+/// from the legacy `<user>/<namespace>/<path>` substrate form.
+pub fn resource_dot_uri(realm: &str, owner_id: &str, path: &str) -> String {
+    let clean = path.strip_prefix('/').unwrap_or(path);
+    format!("{URI_SCHEME}{realm}/resource/{owner_id}/{clean}")
+}
+
+/// Canonical route locator for a device-owned ability. This is a
+/// resource URA, not an ability URA: device built-ins are invoked via
+/// the device callee and are not user-owned agent ability subjects.
+pub fn device_ability_resource_uri(realm: &str, device_id: &str, ability_id: &str) -> String {
+    resource_dot_uri(
+        realm,
+        &format!("device.{device_id}"),
+        &format!("ability/{ability_id}"),
+    )
+}
+
 // ── Realm-scoped prefixes (federation.resolve filters) ─────────
 
 pub fn realm_user_prefix(realm: &str) -> String {
@@ -444,7 +463,8 @@ pub fn realm_from_ura(uri: &str) -> String {
 
 /// Render the natural display id for a URA. device/user → bare id;
 /// agent → "<user>.<agent>"; ability → "<user>.<agent>.<ab>";
-/// hub → "hub"; resource → "<user>/<ns>/<path>". Returns the URI
+/// hub → "hub"; resource → "<user>/<ns>/<path>" or
+/// "<dot-id>/<path>". Returns the URI
 /// itself on parse failure so callers can chain a v1 fallback.
 pub fn display_id(uri: &str) -> String {
     match parse_ura(uri) {
@@ -455,12 +475,11 @@ pub fn display_id(uri: &str) -> String {
             URAKind::Agent => format!("{}.{}", c.user_id, c.agent_id),
             URAKind::Ability => format!("{}.{}.{}", c.user_id, c.agent_id, c.ability_id),
             URAKind::Hub => "hub".to_string(),
-            URAKind::Resource => format!(
-                "{}/{}/{}",
-                c.user_id,
-                c.namespace.map(|n| n.as_str()).unwrap_or(""),
-                c.path
-            ),
+            URAKind::Resource => match c.namespace {
+                Some(ns) => format!("{}/{}/{}", c.user_id, ns.as_str(), c.path),
+                None if c.path.is_empty() => c.user_id,
+                None => format!("{}/{}", c.user_id, c.path),
+            },
             URAKind::Unknown => uri.to_string(),
         },
     }
@@ -696,6 +715,21 @@ mod tests {
         assert_eq!(p.user_id, "u1");
         assert_eq!(p.namespace, Some(ResourceNamespace::Fs));
         assert_eq!(p.path, "tmp/foo.txt");
+    }
+
+    #[test]
+    fn parse_device_ability_resource_uri() {
+        let uri = device_ability_resource_uri("localhost", "dev-1", "fleet.health");
+        assert_eq!(
+            uri,
+            "easynet:///r/localhost/resource/device.dev-1/ability/fleet.health"
+        );
+        let p = parse_ura(&uri).unwrap();
+        assert_eq!(p.kind, URAKind::Resource);
+        assert_eq!(p.user_id, "device.dev-1");
+        assert_eq!(p.namespace, None);
+        assert_eq!(p.path, "ability/fleet.health");
+        assert_eq!(display_id(&uri), "device.dev-1/ability/fleet.health");
     }
 
     #[test]
