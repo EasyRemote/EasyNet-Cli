@@ -51,21 +51,13 @@
 
 #![cfg(feature = "axon-pb")]
 
-use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use serde_json::{json, Value};
-use tonic::transport::{Endpoint, Uri};
-use tower::service_fn;
 
 use crate::pb::axon::v1::invocation_client::InvocationClient;
 use crate::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest, SubjectIdentity};
-
-/// Default UDS path the daemon binds for its `Invocation` gRPC
-/// server. Mirrors `persistence::daemon_config::DEFAULT_DAEMON_UDS_PATH`
-/// since the same tilde-expanded path is the wire contract.
-const DEFAULT_DAEMON_GRPC_UDS_PATH: &str = "~/.easynet/daemon.sock";
 
 /// Validate a `--node` argument as a canonical EasyNet device URI.
 /// Returns the URI string when it parses; surfaces a typed error
@@ -182,10 +174,10 @@ pub fn invoke_via_federation_forward(
     node_uri: &str,
     caller_uri: Option<&str>,
 ) -> anyhow::Result<Value> {
-    let socket_path = expand_home(DEFAULT_DAEMON_GRPC_UDS_PATH);
-    if !socket_path.exists() {
+    let socket_path = crate::support::local_daemon_grpc::resolve_socket_path();
+    if !crate::support::local_daemon_grpc::probe_accepting(&socket_path) {
         bail!(
-            "daemon not running (no gRPC socket at {}). \
+            "daemon not running (local gRPC listener unreachable at {}). \
              Start it with `easynet runtime start`.",
             socket_path.display()
         );
@@ -303,22 +295,13 @@ pub fn invoke_via_federation_forward(
         .context("build tokio runtime for federation invoke")?;
 
     runtime.block_on(async move {
-        let socket = socket_path.clone();
-        let endpoint = Endpoint::try_from("http://[::1]:50051") // dummy URI for tonic;
-            // the connector below replaces the network with UDS
-            .context("build tonic endpoint")?
-            .timeout(Duration::from_secs(30))
-            .connect_timeout(Duration::from_secs(10));
-        let channel = endpoint
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let path = socket.clone();
-                async move {
-                    let stream = tokio::net::UnixStream::connect(path).await?;
-                    Ok::<_, std::io::Error>(hyper_util::rt::TokioIo::new(stream))
-                }
-            }))
-            .await
-            .context("connect to local daemon gRPC UDS socket")?;
+        let channel = crate::support::local_daemon_grpc::connect_channel(
+            socket_path.clone(),
+            Duration::from_secs(30),
+            Duration::from_secs(10),
+        )
+        .await
+        .context("connect to local daemon gRPC endpoint")?;
 
         let mut client = InvocationClient::new(channel);
         let response = client.invoke(request).await.map_err(|status| {
@@ -435,10 +418,10 @@ pub fn invoke_federation_discover(
     agent_uri_filter: Option<&str>,
     caller_uri: Option<&str>,
 ) -> anyhow::Result<Vec<Value>> {
-    let socket_path = expand_home(DEFAULT_DAEMON_GRPC_UDS_PATH);
-    if !socket_path.exists() {
+    let socket_path = crate::support::local_daemon_grpc::resolve_socket_path();
+    if !crate::support::local_daemon_grpc::probe_accepting(&socket_path) {
         bail!(
-            "daemon not running (no gRPC socket at {}). \
+            "daemon not running (local gRPC listener unreachable at {}). \
              Start it with `easynet runtime start`.",
             socket_path.display()
         );
@@ -487,32 +470,26 @@ pub fn invoke_federation_discover(
         .build()
         .context("build tokio runtime for federation.discover")?;
 
-    let response = runtime.block_on(async move {
-        let socket = socket_path.clone();
-        let endpoint = Endpoint::try_from("http://[::1]:50051")
-            .context("build tonic endpoint")?
-            .timeout(Duration::from_secs(10))
-            .connect_timeout(Duration::from_secs(5));
-        let channel = endpoint
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let path = socket.clone();
-                async move {
-                    let stream = tokio::net::UnixStream::connect(path).await?;
-                    Ok::<_, std::io::Error>(hyper_util::rt::TokioIo::new(stream))
-                }
-            }))
-            .await
-            .context("connect to local daemon gRPC UDS")?;
-        let mut client = InvocationClient::new(channel);
-        let resp = client.invoke(request).await.map_err(|status| {
-            anyhow!(
-                "daemon rejected federation.discover: code={:?} message={}",
-                status.code(),
-                status.message()
+    let response: crate::pb::axon::v1::InvokeResponse = {
+        runtime.block_on(async move {
+            let channel = crate::support::local_daemon_grpc::connect_channel(
+                socket_path.clone(),
+                Duration::from_secs(10),
+                Duration::from_secs(5),
             )
-        })?;
-        Ok::<_, anyhow::Error>(resp.into_inner())
-    })?;
+            .await
+            .context("connect to local daemon gRPC endpoint")?;
+            let mut client = InvocationClient::new(channel);
+            let resp = client.invoke(request).await.map_err(|status| {
+                anyhow!(
+                    "daemon rejected federation.discover: code={:?} message={}",
+                    status.code(),
+                    status.message()
+                )
+            })?;
+            Ok::<_, anyhow::Error>(resp.into_inner())
+        })?
+    };
 
     let body: Value =
         serde_json::from_slice(&response.result).context("decode discover response body")?;
@@ -546,10 +523,10 @@ pub fn invoke_federation_revoke(
     reason: &str,
     caller_uri: Option<&str>,
 ) -> anyhow::Result<()> {
-    let socket_path = expand_home(DEFAULT_DAEMON_GRPC_UDS_PATH);
-    if !socket_path.exists() {
+    let socket_path = crate::support::local_daemon_grpc::resolve_socket_path();
+    if !crate::support::local_daemon_grpc::probe_accepting(&socket_path) {
         bail!(
-            "daemon not running (no gRPC socket at {}). \
+            "daemon not running (local gRPC listener unreachable at {}). \
              Start it with `easynet runtime start`.",
             socket_path.display()
         );
@@ -599,21 +576,13 @@ pub fn invoke_federation_revoke(
         .context("build tokio runtime for federation.revoke")?;
 
     runtime.block_on(async move {
-        let socket = socket_path.clone();
-        let endpoint = Endpoint::try_from("http://[::1]:50051")
-            .context("build tonic endpoint")?
-            .timeout(Duration::from_secs(10))
-            .connect_timeout(Duration::from_secs(5));
-        let channel = endpoint
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let path = socket.clone();
-                async move {
-                    let stream = tokio::net::UnixStream::connect(path).await?;
-                    Ok::<_, std::io::Error>(hyper_util::rt::TokioIo::new(stream))
-                }
-            }))
-            .await
-            .context("connect to local daemon gRPC UDS")?;
+        let channel = crate::support::local_daemon_grpc::connect_channel(
+            socket_path.clone(),
+            Duration::from_secs(10),
+            Duration::from_secs(5),
+        )
+        .await
+        .context("connect to local daemon gRPC endpoint")?;
         let mut client = InvocationClient::new(channel);
         let _ = client.invoke(request).await.map_err(|status| {
             anyhow!(
@@ -624,19 +593,6 @@ pub fn invoke_federation_revoke(
         })?;
         Ok::<_, anyhow::Error>(())
     })
-}
-
-/// Tilde-expand `~/...` paths the same way the rest of the daemon
-/// codebase does. Centralised here so the helper does not depend
-/// on `services::axon_serve::boot::expand_home` (which lives behind
-/// a feature wall).
-fn expand_home(path: &str) -> PathBuf {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
-    }
-    PathBuf::from(path)
 }
 
 /// Generate a fresh `call_id` for the inner envelope payload's

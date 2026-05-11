@@ -510,9 +510,19 @@ fn json_response_with_cors(status: StatusCode, value: serde_json::Value) -> Resp
 
 #[cfg(test)]
 mod tests {
-    use super::{pages_health_response, parse_pages_host};
-    use axum::body::to_bytes;
-    use axum::http::StatusCode;
+    use super::{handle, pages_health_response, parse_pages_host};
+    use axum::body::{to_bytes, Body};
+    use axum::http::{header, Request, StatusCode};
+    use serde_json::json;
+    use std::sync::{Arc, OnceLock};
+    use std::time::SystemTime;
+    use tempfile::TempDir;
+
+    use crate::runtime::ability_dispatch::{LocalAbilityRegistry, OwnerKind};
+    use crate::runtime::agents::pages::sandbox::open_directory;
+    use crate::runtime::agents::pages::state::{
+        ProjectHandle, Visibility, DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS,
+    };
 
     #[test]
     fn parses_localhost() {
@@ -549,5 +559,138 @@ mod tests {
             payload.get("pid").and_then(|v| v.as_u64()),
             Some(std::process::id() as u64)
         );
+    }
+
+    fn publish_temp_project(user: &str, project_id: &str, files: &[(&str, &str)]) -> TempDir {
+        let dir = TempDir::new().expect("tempdir");
+        for (rel_path, content) in files {
+            let full = dir.path().join(rel_path);
+            if let Some(parent) = full.parent() {
+                std::fs::create_dir_all(parent).expect("parent dir");
+            }
+            std::fs::write(full, content).expect("write file");
+        }
+        let canonical_root = std::fs::canonicalize(dir.path()).expect("canonical root");
+        let folder_handle = open_directory(&canonical_root).expect("open directory");
+        PUBLISHED_PROJECTS.insert(
+            (user.to_string(), project_id.to_string()),
+            Arc::new(ProjectHandle {
+                user: user.to_string(),
+                project_id: project_id.to_string(),
+                folder_handle,
+                canonical_root,
+                visibility: Visibility::Public,
+                file_size_cap: DEFAULT_FILE_SIZE_CAP,
+                started_at: SystemTime::now(),
+            }),
+        );
+        dir
+    }
+
+    fn ensure_openai_http_registry() {
+        static INIT: OnceLock<()> = OnceLock::new();
+        INIT.get_or_init(|| {
+            let mut reg = LocalAbilityRegistry::new();
+            reg.register_rpc_with_owner(
+                "codex.chat",
+                OwnerKind::Agent("codex".into()),
+                Arc::new(|_args| Ok(json!({"reply":"ok"}))),
+            );
+            let reg = Arc::new(reg);
+            let handle = Arc::new(OnceLock::new());
+            handle
+                .set(reg)
+                .expect("dispatch handle OnceLock should set once");
+            crate::runtime::agents::openai_compat_ability::set_dispatch_handle(handle);
+            crate::runtime::agents::openai_compat_ability::set_identity(
+                crate::runtime::agents::PagesIdentity {
+                    user: Some("alice".into()),
+                    realm: Some("easynet.run".into()),
+                    listener_port: Some(8787),
+                },
+            );
+        });
+    }
+
+    #[tokio::test]
+    async fn api_route_serves_static_json_manifest() {
+        let user = "alice";
+        let project_id = "recipes";
+        let key = (user.to_string(), project_id.to_string());
+        let _dir = publish_temp_project(
+            user,
+            project_id,
+            &[(
+                "api/hello.toml",
+                "kind = \"static_json\"\nresponse = { ok = true, source = \"pages\" }\n",
+            )],
+        );
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/hello")
+            .header(
+                header::HOST,
+                format!("{project_id}.{user}.pages.localhost:8787"),
+            )
+            .body(Body::from("{\"ignored\":true}"))
+            .expect("request");
+        let resp = handle(req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), 1024).await.expect("body bytes");
+        let payload: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["source"], "pages");
+
+        PUBLISHED_PROJECTS.remove(&key);
+    }
+
+    #[tokio::test]
+    async fn v1_models_lists_chat_ability_models() {
+        ensure_openai_http_registry();
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/v1/models")
+            .body(Body::empty())
+            .expect("request");
+        let resp = handle(req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), 4096).await.expect("body bytes");
+        let payload: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        let models = payload["data"].as_array().expect("data array");
+        assert!(models.iter().any(|entry| {
+            entry.get("id").and_then(|v| v.as_str())
+                == Some("easynet:///r/easynet.run/ability/alice.codex.codex.chat")
+        }));
+    }
+
+    #[tokio::test]
+    async fn v1_chat_completions_routes_to_chat_ability() {
+        ensure_openai_http_registry();
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({
+                    "model": "easynet:///r/easynet.run/ability/alice.codex.codex.chat",
+                    "messages": [
+                        {"role": "user", "content": "reply with: ok"}
+                    ]
+                })
+                .to_string(),
+            ))
+            .expect("request");
+        let resp = handle(req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), 4096).await.expect("body bytes");
+        let payload: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(
+            payload["model"],
+            "easynet:///r/easynet.run/ability/alice.codex.codex.chat"
+        );
+        assert_eq!(payload["choices"][0]["message"]["content"], "ok");
     }
 }

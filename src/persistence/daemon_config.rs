@@ -109,6 +109,12 @@ pub fn default_config_path() -> PathBuf {
 
 /// Expanded location of the daemon's gRPC UDS socket.
 pub fn default_uds_path() -> PathBuf {
+    #[cfg(windows)]
+    {
+        return PathBuf::from(crate::support::named_pipe::scoped_pipe_name("daemon-grpc"));
+    }
+
+    #[cfg(not(windows))]
     expand_home_path(Path::new(DEFAULT_DAEMON_UDS_PATH))
 }
 
@@ -280,9 +286,7 @@ impl DaemonConfig {
             })
             .transpose()?;
 
-        let uds_path = uds_path
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(DEFAULT_DAEMON_UDS_PATH));
+        let uds_path = uds_path.map(PathBuf::from).unwrap_or_else(default_uds_path);
 
         if matches!(mode, DaemonMode::Device) && hub_endpoint.is_none() {
             return Err(DaemonConfigError::DeviceMissingHubEndpoint);
@@ -649,6 +653,16 @@ mod tests {
         ))
         .expect("valid hub config");
 
+        #[cfg(windows)]
+        {
+            let actual = cfg.uds_path().display().to_string();
+            assert!(
+                actual.starts_with(r"\\.\pipe\easynet-daemon-grpc-"),
+                "unexpected windows daemon pipe: {actual}"
+            );
+            return;
+        }
+
         assert_eq!(cfg.uds_path().to_str(), Some(DEFAULT_DAEMON_UDS_PATH));
     }
 
@@ -660,6 +674,17 @@ mod tests {
             "unexpected default config path: {}",
             default_config_path().display()
         );
+
+        #[cfg(windows)]
+        {
+            let actual = default_uds_path().display().to_string();
+            assert!(
+                actual.starts_with(r"\\.\pipe\easynet-daemon-grpc-"),
+                "unexpected windows daemon pipe path: {actual}"
+            );
+            return;
+        }
+
         assert!(
             default_uds_path().ends_with(".easynet/daemon.sock"),
             "unexpected default uds path: {}",
@@ -679,6 +704,7 @@ mod tests {
             hub_api_base: None,
             username: None,
             hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
         };
 
         ensure_minimal_device_config(&creds).expect("write minimal config");

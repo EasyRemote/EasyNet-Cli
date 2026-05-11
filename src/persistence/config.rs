@@ -426,6 +426,14 @@ pub struct Credentials {
     /// identity.json directly when same-host).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hub_pubkey_b64: Option<String>,
+    /// Optional base64-encoded PEM trust anchor for the hub's
+    /// public TLS listener. Self-hosted hubs with private/self-
+    /// signed CAs populate this during pairing preflight so the
+    /// join flow can persist a local CA pin before the daemon
+    /// opens `<self>.session`. Publicly-trusted hubs leave it
+    /// empty and runtime dials fall back to native OS roots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hub_tls_ca_pem_b64: Option<String>,
 }
 
 impl Credentials {
@@ -671,6 +679,7 @@ mod tests {
             hub_api_base: Some("https://api.example.com/".into()),
             username: None,
             hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
         };
         assert_eq!(creds.api_base(), "https://api.example.com");
     }
@@ -790,6 +799,7 @@ mod tests {
             hub_api_base: None,
             username: None,
             hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
         };
         assert_eq!(creds.api_base(), "https://my-hub.example.org");
     }

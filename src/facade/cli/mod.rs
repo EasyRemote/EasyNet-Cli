@@ -94,11 +94,11 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub(crate) mod abilities;
-pub mod banner;
 pub(crate) mod ability_scaffold;
 pub(crate) mod agent;
 pub(crate) mod agent_sessions;
 pub(crate) mod auth;
+pub mod banner;
 pub(crate) mod completion;
 pub(crate) mod config_cmd;
 pub(crate) mod connect;
@@ -573,8 +573,7 @@ mod help_template_sync_tests {
 
         let missing_from_template: Vec<&String> =
             enum_names.difference(&template_no_help).collect();
-        let extra_in_template: Vec<&String> =
-            template_no_help.difference(&enum_names).collect();
+        let extra_in_template: Vec<&String> = template_no_help.difference(&enum_names).collect();
 
         assert!(
             missing_from_template.is_empty() && extra_in_template.is_empty(),

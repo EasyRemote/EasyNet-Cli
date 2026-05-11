@@ -200,7 +200,11 @@ fn write_runtime_status(buf: &mut String, style: ColourMode) {
     let (dot_sgr, dot, daemon_text) = if daemon_alive {
         (sgr::OK, "●", "running")
     } else if runtime_state.is_some() {
-        (sgr::WARN, "●", "metadata present but process not responding")
+        (
+            sgr::WARN,
+            "●",
+            "metadata present but process not responding",
+        )
     } else {
         // No daemon, no metadata — render as plain dim text rather
         // than a coloured warning. Not-paired is the default state
@@ -214,7 +218,10 @@ fn write_runtime_status(buf: &mut String, style: ColourMode) {
         &format!(
             "{} {}",
             style.paint(dot_sgr, dot),
-            style.paint(if daemon_alive { sgr::ACCENT } else { sgr::DIM }, daemon_text),
+            style.paint(
+                if daemon_alive { sgr::ACCENT } else { sgr::DIM },
+                daemon_text
+            ),
         ),
     );
 
@@ -429,9 +436,6 @@ mod tests {
     #[test]
     fn no_color_strips_ansi() {
         let out = render_plain();
-        assert!(
-            !out.contains('\x1b'),
-            "ANSI escape leaked despite NO_COLOR"
-        );
+        assert!(!out.contains('\x1b'), "ANSI escape leaked despite NO_COLOR");
     }
 }

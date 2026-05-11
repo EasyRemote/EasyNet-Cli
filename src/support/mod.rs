@@ -72,12 +72,15 @@
 /// cross-hub path.
 #[cfg(feature = "axon-pb")]
 pub(crate) mod federation_invoke;
+pub(crate) mod local_daemon_grpc;
 /// One helper — `invoke_local_ability(name, args)` — used by every
 /// CLI subcommand to talk to the local daemon's AbilityDispatcher.
 /// Per the AXON-RFC-001 ontology, every CLI action collapses to
 /// one ability Invoke; centralising the IPC dance here means a
 /// future transport swap lands in one file instead of N.
 pub(crate) mod local_invoke;
+#[cfg(windows)]
+pub mod named_pipe;
 pub(crate) mod net;
 pub(crate) mod node;
 pub(crate) mod output;

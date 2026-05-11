@@ -51,24 +51,15 @@
 
 #![cfg(feature = "axon-pb")]
 
-use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use clap::Args;
 use console::style;
-use hyper_util::rt::TokioIo;
 use serde_json::{json, Value};
-use tonic::transport::Endpoint;
-use tonic::transport::Uri;
-use tower::service_fn;
 
 use crate::pb::axon::v1::invocation_client::InvocationClient;
 use crate::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest, SubjectIdentity};
-
-/// Default daemon-config UDS path. The daemon's gRPC server
-/// binds the same socket via `start_axon_serve_sidecar`.
-const DEFAULT_DAEMON_GRPC_UDS_PATH: &str = "~/.easynet/daemon.sock";
 
 #[derive(Debug, Args)]
 pub struct DiscoverArgs {
@@ -95,22 +86,11 @@ pub struct DiscoverArgs {
 /// Mirrors the same env-override + tilde-expansion the
 /// federation_invoke bridge uses so the two CLI surfaces stay
 /// aligned across test deployments.
-fn resolve_socket_path() -> PathBuf {
-    let raw = std::env::var("EASYNET_DAEMON_GRPC_UDS")
-        .unwrap_or_else(|_| DEFAULT_DAEMON_GRPC_UDS_PATH.to_string());
-    if let Some(rest) = raw.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
-    }
-    PathBuf::from(raw)
-}
-
 pub fn run(args: DiscoverArgs) -> anyhow::Result<()> {
-    let socket_path = resolve_socket_path();
-    if !socket_path.exists() {
+    let socket_path = crate::support::local_daemon_grpc::resolve_socket_path();
+    if !crate::support::local_daemon_grpc::probe_accepting(&socket_path) {
         bail!(
-            "daemon gRPC socket not found at {} — start the daemon first \
+            "daemon gRPC listener not reachable at {} — start the daemon first \
              (`easynet runtime start`) and confirm `~/.easynet/daemon-config.toml` \
              enables the transport plane.",
             socket_path.display()
@@ -168,32 +148,26 @@ pub fn run(args: DiscoverArgs) -> anyhow::Result<()> {
         .build()
         .context("build tokio runtime for federation discover")?;
 
-    let response = runtime.block_on(async move {
-        let socket = socket_path.clone();
-        let endpoint = Endpoint::try_from("http://[::1]:50051")
-            .context("build tonic endpoint")?
-            .timeout(Duration::from_secs(10))
-            .connect_timeout(Duration::from_secs(5));
-        let channel = endpoint
-            .connect_with_connector(service_fn(move |_: Uri| {
-                let path = socket.clone();
-                async move {
-                    let stream = tokio::net::UnixStream::connect(path).await?;
-                    Ok::<_, std::io::Error>(TokioIo::new(stream))
-                }
-            }))
-            .await
-            .context("connect to local daemon gRPC UDS")?;
-        let mut client = InvocationClient::new(channel);
-        let resp = client.invoke(request).await.map_err(|status| {
-            anyhow!(
-                "daemon rejected federation.discover: code={:?} message={}",
-                status.code(),
-                status.message()
+    let response: crate::pb::axon::v1::InvokeResponse = {
+        runtime.block_on(async move {
+            let channel = crate::support::local_daemon_grpc::connect_channel(
+                socket_path.clone(),
+                Duration::from_secs(10),
+                Duration::from_secs(5),
             )
-        })?;
-        Ok::<_, anyhow::Error>(resp.into_inner())
-    })?;
+            .await
+            .context("connect to local daemon gRPC endpoint")?;
+            let mut client = InvocationClient::new(channel);
+            let resp = client.invoke(request).await.map_err(|status| {
+                anyhow!(
+                    "daemon rejected federation.discover: code={:?} message={}",
+                    status.code(),
+                    status.message()
+                )
+            })?;
+            Ok::<_, anyhow::Error>(resp.into_inner())
+        })?
+    };
 
     let body: serde_json::Value =
         serde_json::from_slice(&response.result).context("decode discover response body")?;

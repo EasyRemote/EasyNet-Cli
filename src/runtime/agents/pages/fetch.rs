@@ -17,7 +17,6 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::io::Read;
-use std::os::fd::AsFd;
 use std::sync::Arc;
 
 use base64::Engine;
@@ -64,7 +63,7 @@ pub fn handle_fetch(user: &str, project_id: &str, args: Value) -> anyhow::Result
         })?
         .clone();
 
-    let mut file = open_beneath(handle.folder_fd.as_fd(), &handle.canonical_root, path)?;
+    let mut file = open_beneath(&handle.folder_handle, &handle.canonical_root, path)?;
     let size = validate_regular(&file, handle.file_size_cap)?;
 
     let mut bytes = Vec::with_capacity(size as usize);

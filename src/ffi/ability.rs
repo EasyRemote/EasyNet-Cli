@@ -50,6 +50,7 @@ use crate::ffi::errors::{
 use crate::ffi::handle::{get, lib_runtime, EasynetHandle};
 use crate::ffi::strings::{alloc_output_cstring, read_cstr};
 use crate::services::control::frames::{IncomingFrame, OutgoingFrame};
+#[cfg(unix)]
 use crate::services::control::transport;
 
 /// Subscription id type returned from `easynet_ability_subscribe`.
@@ -426,12 +427,27 @@ async fn run_subscription(
         Ok(None) => anyhow::bail!("control.json missing at {}", control_path.display()),
         Err(e) => anyhow::bail!("read control.json: {e}"),
     };
-    let socket_path = disc
-        .socket_path
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("control.json has no socket_path"))?;
-    let _ = transport::default_socket_path(); // re-export keeps the import "used"
-    let stream = tokio::net::UnixStream::connect(&socket_path).await?;
+    #[cfg(unix)]
+    let stream = {
+        let socket_path = disc
+            .socket_path
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("control.json has no socket_path"))?;
+        let _ = transport::default_socket_path(); // re-export keeps the import "used"
+        tokio::net::UnixStream::connect(&socket_path).await?
+    };
+    #[cfg(windows)]
+    let stream = {
+        let pipe_name = disc
+            .pipe_name
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("control.json has no pipe_name"))?;
+        crate::support::named_pipe::connect_with_retry(
+            &pipe_name,
+            std::time::Duration::from_secs(5),
+        )
+        .await?
+    };
     let codec = tokio_util::codec::LengthDelimitedCodec::builder()
         .little_endian()
         .new_codec();
@@ -507,15 +523,15 @@ async fn run_subscription(
     result
 }
 
-async fn run_subscription_loop(
-    framed: &mut tokio_util::codec::Framed<
-        tokio::net::UnixStream,
-        tokio_util::codec::LengthDelimitedCodec,
-    >,
+async fn run_subscription_loop<T>(
+    framed: &mut tokio_util::codec::Framed<T, tokio_util::codec::LengthDelimitedCodec>,
     token: &tokio_util::sync::CancellationToken,
     wire_sub_id: &str,
     tx: &std::sync::mpsc::Sender<Vec<u8>>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     use bytes::Bytes;
     use futures::{SinkExt, StreamExt};
 

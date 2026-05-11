@@ -41,7 +41,6 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::os::fd::AsFd;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
@@ -113,7 +112,7 @@ fn load_manifest(user: &str, project_id: &str, verb: &str) -> anyhow::Result<Api
         .clone();
 
     let rel = format!("/api/{verb}.toml");
-    let mut file = open_beneath(handle.folder_fd.as_fd(), &handle.canonical_root, &rel)?;
+    let mut file = open_beneath(&handle.folder_handle, &handle.canonical_root, &rel)?;
     use std::io::Read;
     let mut buf = String::new();
     file.read_to_string(&mut buf)
@@ -257,4 +256,94 @@ pub fn handle_api(user: &str, project_id: &str, verb: &str, args: Value) -> anyh
 #[allow(dead_code)]
 pub fn manifest_relpath(verb: &str) -> PathBuf {
     PathBuf::from(format!("api/{verb}.toml"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::ability_dispatch::{LocalAbilityRegistry, OwnerKind};
+    use crate::runtime::agents::pages::sandbox::open_directory;
+    use crate::runtime::agents::pages::state::{
+        ProjectHandle, Visibility, DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS,
+    };
+    use serde_json::json;
+    use std::sync::{Arc, OnceLock};
+    use std::time::SystemTime;
+    use tempfile::TempDir;
+
+    fn publish_project_with_manifest(
+        user: &str,
+        project_id: &str,
+        verb: &str,
+        manifest_toml: &str,
+    ) -> TempDir {
+        let dir = TempDir::new().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("api")).expect("api dir");
+        std::fs::write(dir.path().join(format!("api/{verb}.toml")), manifest_toml)
+            .expect("manifest");
+        let canonical_root = std::fs::canonicalize(dir.path()).expect("canonical root");
+        let folder_handle = open_directory(&canonical_root).expect("open directory");
+        PUBLISHED_PROJECTS.insert(
+            (user.to_string(), project_id.to_string()),
+            Arc::new(ProjectHandle {
+                user: user.to_string(),
+                project_id: project_id.to_string(),
+                folder_handle,
+                canonical_root,
+                visibility: Visibility::Public,
+                file_size_cap: DEFAULT_FILE_SIZE_CAP,
+                started_at: SystemTime::now(),
+            }),
+        );
+        dir
+    }
+
+    fn install_dispatch_registry_once() {
+        static INIT: OnceLock<()> = OnceLock::new();
+        INIT.get_or_init(|| {
+            let mut reg = LocalAbilityRegistry::new();
+            reg.register_rpc_with_owner(
+                "demo.backend",
+                OwnerKind::Agent("demo".into()),
+                Arc::new(|args| Ok(json!({"ok": true, "echo": args}))),
+            );
+            let reg = Arc::new(reg);
+            let handle = Arc::new(OnceLock::new());
+            handle
+                .set(reg)
+                .expect("dispatch handle OnceLock should set once");
+            set_dispatch_handle(handle);
+        });
+    }
+
+    #[test]
+    fn ability_manifest_invokes_registry_handler() {
+        install_dispatch_registry_once();
+        let user = "alice";
+        let project_id = "todo";
+        let key = (user.to_string(), project_id.to_string());
+        let _dir = publish_project_with_manifest(
+            user,
+            project_id,
+            "submit",
+            "kind = \"ability\"\nability = \"demo.backend\"\n",
+        );
+
+        let resp = handle_api(
+            user,
+            project_id,
+            "submit",
+            json!({
+                "body": {"task": "ship windows support"},
+                "method": "POST"
+            }),
+        )
+        .expect("handle_api ok");
+
+        assert_eq!(resp["status"], 200);
+        assert_eq!(resp["body"]["ok"], true);
+        assert_eq!(resp["body"]["echo"]["task"], "ship windows support");
+
+        PUBLISHED_PROJECTS.remove(&key);
+    }
 }

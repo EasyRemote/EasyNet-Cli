@@ -770,10 +770,10 @@ impl DirectLocalDaemonAbilityInvoker {
         if caller_uri.trim().is_empty() {
             return Err("host device URI is empty; cannot publish via local daemon".into());
         }
-        let socket_path = local_daemon_grpc_socket_path();
-        if !socket_path.exists() {
+        let socket_path = crate::support::local_daemon_grpc::resolve_socket_path();
+        if !crate::support::local_daemon_grpc::probe_accepting(&socket_path) {
             return Err(format!(
-                "daemon gRPC socket not found at {}",
+                "daemon gRPC listener not reachable at {}",
                 socket_path.display()
             ));
         }
@@ -798,20 +798,13 @@ impl DirectLocalDaemonAbilityInvoker {
             .map_err(|e| format!("build tokio runtime for local daemon publish: {e}"))?;
 
         runtime.block_on(async move {
-            let endpoint = tonic::transport::Endpoint::try_from("http://[::1]:50051")
-                .map_err(|e| format!("build tonic endpoint: {e}"))?
-                .timeout(std::time::Duration::from_secs(10))
-                .connect_timeout(std::time::Duration::from_secs(5));
-            let channel = endpoint
-                .connect_with_connector(tower::service_fn(move |_: tonic::transport::Uri| {
-                    let path = socket_path.clone();
-                    async move {
-                        let stream = tokio::net::UnixStream::connect(path).await?;
-                        Ok::<_, std::io::Error>(hyper_util::rt::TokioIo::new(stream))
-                    }
-                }))
-                .await
-                .map_err(|e| format!("connect to local daemon gRPC socket: {e}"))?;
+            let channel = crate::support::local_daemon_grpc::connect_channel(
+                socket_path.clone(),
+                std::time::Duration::from_secs(10),
+                std::time::Duration::from_secs(5),
+            )
+            .await
+            .map_err(|e| format!("connect to local daemon gRPC socket: {e}"))?;
             let mut client = crate::pb::axon::v1::invocation_client::InvocationClient::new(channel);
             let request = crate::pb::axon::v1::InvokeRequest {
                 envelope: Some(crate::pb::axon::v1::Envelope {
@@ -863,18 +856,6 @@ impl crate::runtime::advertise::AbilityInvoker for DirectLocalDaemonAbilityInvok
         })?;
         self.invoke_function(&function_name, payload_json)
     }
-}
-
-#[cfg(feature = "axon-pb")]
-fn local_daemon_grpc_socket_path() -> std::path::PathBuf {
-    let raw = std::env::var("EASYNET_DAEMON_GRPC_UDS")
-        .unwrap_or_else(|_| crate::persistence::daemon_config::DEFAULT_DAEMON_UDS_PATH.to_string());
-    if let Some(rest) = raw.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return std::path::PathBuf::from(home).join(rest);
-        }
-    }
-    std::path::PathBuf::from(raw)
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1450,9 +1431,8 @@ fn resolve_session_id(args: &SendArgs) -> anyhow::Result<Option<String>> {
     // we double-check defensively in case future refactors break
     // the group decl. Cheaper than discovering the silent failure
     // mode in production.
-    let n_flags = (args.follow as u8)
-        + args.session_id.as_ref().map_or(0, |_| 1)
-        + (args.resume as u8);
+    let n_flags =
+        (args.follow as u8) + args.session_id.as_ref().map_or(0, |_| 1) + (args.resume as u8);
     if n_flags > 1 {
         anyhow::bail!(
             "--follow, --session-id, and --resume are mutually exclusive; pass at most one"
@@ -2440,10 +2420,7 @@ fn run_sessions(args: ChatHistoryArgs) -> anyhow::Result<()> {
     // rather than "no sessions" for a typo'd name.
     let registry = agents::load_agents()?;
     if !registry.agents.contains_key(&args.name) {
-        anyhow::bail!(
-            "agent '{}' not found. Run 'easynet agent list'.",
-            args.name
-        );
+        anyhow::bail!("agent '{}' not found. Run 'easynet agent list'.", args.name);
     }
     match args.action {
         ChatHistoryAction::List(a) => run_sessions_list(&args.name, a),
@@ -2474,17 +2451,11 @@ fn run_sessions_list(agent: &str, args: ChatHistoryListArgs) -> anyhow::Result<(
         let marker = if s.session_id == latest { "*" } else { " " };
         println!(
             "{}{:<37} {:<22} {:>6}  {}",
-            marker,
-            s.session_id,
-            s.last_turn_at,
-            s.turn_count,
-            s.prompt_preview,
+            marker, s.session_id, s.last_turn_at, s.turn_count, s.prompt_preview,
         );
     }
     println!();
-    println!(
-        "  '*' marks the most-recent session ('agent send {agent} --follow' resumes it)."
-    );
+    println!("  '*' marks the most-recent session ('agent send {agent} --follow' resumes it).");
     Ok(())
 }
 

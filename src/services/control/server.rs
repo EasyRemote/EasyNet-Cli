@@ -45,9 +45,14 @@ use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use tokio::net::UnixStream;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
+
+#[cfg(all(windows, test))]
+use tokio::net::windows::named_pipe::NamedPipeServer;
+#[cfg(all(unix, test))]
+use tokio::net::UnixStream;
 
 use crate::runtime::kernel_api::KernelApi;
 use crate::services::control::ability_proxy::{AbilityProxy, BidiRegistry, CancelRegistry};
@@ -97,7 +102,10 @@ pub async fn run(proxy: AbilityProxy) -> anyhow::Result<()> {
 /// Accept connections forever, spawn one tokio task per connection.
 /// Extracted as a free function so tests can drive it with an
 /// arbitrary listener instead of going through `bind_default`.
-pub async fn accept_loop(listener: ControlListener, proxy: AbilityProxy) -> anyhow::Result<()> {
+pub(crate) async fn accept_loop(
+    listener: ControlListener,
+    proxy: AbilityProxy,
+) -> anyhow::Result<()> {
     match listener {
         #[cfg(unix)]
         ControlListener::Uds(uds) => {
@@ -115,6 +123,16 @@ pub async fn accept_loop(listener: ControlListener, proxy: AbilityProxy) -> anyh
                 });
             }
         }
+        #[cfg(windows)]
+        ControlListener::NamedPipe(mut listener) => loop {
+            let stream = listener.accept().await?;
+            let proxy = proxy.clone();
+            tokio::spawn(async move {
+                if let Err(e) = serve_connection(stream, proxy).await {
+                    eprintln!("[control] connection ended with error: {e:#}");
+                }
+            });
+        },
         ControlListener::Unsupported => anyhow::bail!(
             "control-plane listener is the Unsupported variant; \
              v10.5 R1 does not yet wire this platform"
@@ -144,7 +162,10 @@ pub async fn accept_loop(listener: ControlListener, proxy: AbilityProxy) -> anyh
 ///
 ///   writer task     ← `OutgoingFrame` from `out_rx`
 ///                  → length-prefixed JSON write to the connection
-async fn serve_connection(stream: UnixStream, proxy: AbilityProxy) -> anyhow::Result<()> {
+async fn serve_connection<S>(stream: S, proxy: AbilityProxy) -> anyhow::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let codec = LengthDelimitedCodec::builder().little_endian().new_codec();
     let framed = Framed::new(stream, codec);
     let (mut sink, mut source) = framed.split();
@@ -246,8 +267,18 @@ pub fn make_proxy(kernel: Arc<dyn KernelApi>) -> AbilityProxy {
 /// test can dial into the real server harness; route them through
 /// this wrapper instead of pub-ing the private function.
 #[cfg(test)]
+#[cfg(unix)]
 pub(crate) async fn serve_one_for_test(
     stream: UnixStream,
+    proxy: AbilityProxy,
+) -> anyhow::Result<()> {
+    serve_connection(stream, proxy).await
+}
+
+#[cfg(test)]
+#[cfg(windows)]
+pub(crate) async fn serve_one_for_test(
+    stream: NamedPipeServer,
     proxy: AbilityProxy,
 ) -> anyhow::Result<()> {
     serve_connection(stream, proxy).await

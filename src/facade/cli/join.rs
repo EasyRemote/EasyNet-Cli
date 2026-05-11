@@ -57,6 +57,13 @@ struct PairingPreflight {
     /// path reads the on-disk identity file when same-host).
     #[serde(default)]
     hub_public_key_b64: String,
+    /// Optional base64-encoded PEM trust anchor for the hub's
+    /// public TLS listener. Self-hosted hubs populate this so the
+    /// join flow can pin the CA locally before runtime start;
+    /// publicly-trusted hubs leave it empty and the daemon later
+    /// falls back to native roots.
+    #[serde(default)]
+    hub_tls_ca_pem_b64: String,
     #[serde(default)]
     _hub_agent_uri: String,
 }
@@ -477,17 +484,17 @@ fn validate_pairing_token(
             preflight.tenant_id
         );
     }
-    // Cross-machine cold-start fix: stash the hub pubkey from
-    // preflight onto the in-memory + on-disk credentials so that
-    // `auto_wire_self_realm_trust_from_credentials` (called by the
-    // join entry point right after this function returns) can
-    // populate the device's `realm-trust.toml` without needing
-    // on-host access to the hub's identity.json file. Empty when
-    // paired against a pre-v4.1.4 hub — the legacy file lookup
-    // path stays as the same-host fallback.
+    // Cross-machine cold-start fix: stash the hub's signing and
+    // TLS trust material from preflight onto the in-memory +
+    // on-disk credentials so the follow-up trust auto-wire can
+    // populate `realm-trust.toml` plus any local pinned CA file
+    // without needing on-host access to hub-local files.
     let mut creds = creds;
     if !preflight.hub_public_key_b64.trim().is_empty() {
         creds.hub_pubkey_b64 = Some(preflight.hub_public_key_b64.trim().to_string());
+    }
+    if !preflight.hub_tls_ca_pem_b64.trim().is_empty() {
+        creds.hub_tls_ca_pem_b64 = Some(preflight.hub_tls_ca_pem_b64.trim().to_string());
     }
     Ok(creds)
 }
@@ -560,6 +567,7 @@ mod tests {
             hub_api_base: None,
             username: None,
             hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
         };
         let err = validate_pairing_response(creds).expect_err("missing node_id must fail");
         assert!(err.to_string().contains("missing node_id"));
@@ -593,6 +601,7 @@ mod tests {
             hub_api_base: None,
             username: None,
             hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
         };
         backfill_credentials_username_from_auth_session(&mut creds);
         assert_eq!(creds.username.as_deref(), Some("alice"));
@@ -630,6 +639,7 @@ mod tests {
             tenant_id: "tenant-a".into(),
             node_id: "en-test-node".into(),
             hub_public_key_b64: String::new(),
+            hub_tls_ca_pem_b64: String::new(),
             _hub_agent_uri: String::new(),
         };
         let payload = build_validate_pairing_payload(&preflight).expect("build payload");
@@ -658,6 +668,7 @@ mod tests {
             tenant_id: "tenant-a".into(),
             node_id: "en-test-node".into(),
             hub_public_key_b64: String::new(),
+            hub_tls_ca_pem_b64: String::new(),
             _hub_agent_uri: String::new(),
         };
         let err = validate_pairing_token("token_1234", &base, &preflight)

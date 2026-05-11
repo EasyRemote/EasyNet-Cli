@@ -43,7 +43,10 @@
 
 use std::path::{Path, PathBuf};
 
+#[cfg(not(windows))]
 use crate::persistence::config::state_dir;
+#[cfg(windows)]
+use crate::support::named_pipe::{scoped_pipe_name, PipeListener};
 
 /// Filename for the Unix Domain Socket inside the user's
 /// `~/.easynet/` directory. Pinned so the Client FFI library can
@@ -55,9 +58,11 @@ pub const UDS_FILENAME: &str = "control.sock";
 /// enum, so adding a new variant (e.g. Named Pipe on Windows)
 /// produces a compile error at every match site — preventing a
 /// silent platform skew.
-pub enum ControlListener {
+pub(crate) enum ControlListener {
     #[cfg(unix)]
     Uds(tokio::net::UnixListener),
+    #[cfg(windows)]
+    NamedPipe(PipeListener),
     /// Windows / iOS / Android etc. — not yet wired. See module
     /// header for plan reference.
     #[allow(dead_code)]
@@ -69,6 +74,10 @@ impl std::fmt::Debug for ControlListener {
         match self {
             #[cfg(unix)]
             Self::Uds(_) => f.write_str("ControlListener::Uds(<UnixListener>)"),
+            #[cfg(windows)]
+            Self::NamedPipe(listener) => {
+                write!(f, "ControlListener::NamedPipe({})", listener.name())
+            }
             Self::Unsupported => f.write_str("ControlListener::Unsupported"),
         }
     }
@@ -108,6 +117,12 @@ impl ControlAddress {
 
 /// Default UDS path for the local control plane: `~/.easynet/control.sock`.
 pub fn default_socket_path() -> PathBuf {
+    #[cfg(windows)]
+    {
+        return PathBuf::from(scoped_pipe_name("control"));
+    }
+
+    #[cfg(not(windows))]
     state_dir().join(UDS_FILENAME)
 }
 
@@ -127,7 +142,7 @@ pub fn default_socket_path() -> PathBuf {
 ///
 /// On Windows: returns a clear "not yet implemented" error per the
 /// v1 platform-scope decision.
-pub fn bind_default() -> anyhow::Result<(ControlListener, ControlAddress)> {
+pub(crate) fn bind_default() -> anyhow::Result<(ControlListener, ControlAddress)> {
     let path = default_socket_path();
     bind_at(&path)
 }
@@ -135,7 +150,7 @@ pub fn bind_default() -> anyhow::Result<(ControlListener, ControlAddress)> {
 /// Test-friendly variant: bind at an arbitrary path. Same semantics
 /// as `bind_default` but skips the `state_dir()` lookup so unit
 /// tests can pin the socket inside a temp directory.
-pub fn bind_at(path: &Path) -> anyhow::Result<(ControlListener, ControlAddress)> {
+pub(crate) fn bind_at(path: &Path) -> anyhow::Result<(ControlListener, ControlAddress)> {
     #[cfg(unix)]
     {
         if let Some(parent) = path.parent() {
@@ -160,12 +175,28 @@ pub fn bind_at(path: &Path) -> anyhow::Result<(ControlListener, ControlAddress)>
 
     #[cfg(not(unix))]
     {
-        let _ = path;
-        anyhow::bail!(
-            "control-plane Named Pipe transport not yet implemented in v1 of PR-DAEMON; \
-             v10.5 R1 lists non-Unix platforms as out-of-scope until a Windows \
-             Client binding requests it"
-        )
+        #[cfg(windows)]
+        {
+            let name = path
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("named-pipe path is not valid UTF-8"))?
+                .to_string();
+            let listener = PipeListener::bind(name.clone())?;
+            return Ok((
+                ControlListener::NamedPipe(listener),
+                ControlAddress::NamedPipe(name),
+            ));
+        }
+
+        #[cfg(not(windows))]
+        {
+            let _ = path;
+            anyhow::bail!(
+                "control-plane Named Pipe transport not yet implemented in v1 of PR-DAEMON; \
+                 v10.5 R1 lists non-Unix platforms as out-of-scope until a Windows \
+                 Client binding requests it"
+            )
+        }
     }
 }
 

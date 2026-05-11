@@ -597,16 +597,20 @@ mod tests {
             "alice.chat",
             OwnerKind::Agent("alice".to_string()),
             crate::core::ability_spec::default_chat_manifest(),
-            Arc::new(|_args| Ok(crate::runtime::ability_dispatch::StreamSource::Snapshot(
-                Vec::new(),
-            ))),
+            Arc::new(|_args| {
+                Ok(crate::runtime::ability_dispatch::StreamSource::Snapshot(
+                    Vec::new(),
+                ))
+            }),
         );
         live_reg.register_stream_with_owner(
             "alice.subscribe",
             OwnerKind::Agent("alice".to_string()),
-            Arc::new(|_args| Ok(crate::runtime::ability_dispatch::StreamSource::Snapshot(
-                Vec::new(),
-            ))),
+            Arc::new(|_args| {
+                Ok(crate::runtime::ability_dispatch::StreamSource::Snapshot(
+                    Vec::new(),
+                ))
+            }),
         );
         // A second entry registered the legacy way (no manifest)
         // exercises the fallback arm so we know synth still emits
