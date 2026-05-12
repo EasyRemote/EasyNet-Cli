@@ -155,10 +155,21 @@ pub fn handle(
             args.agent_uri,
         ))
     })?;
+    // Device roams across realms by design (a laptop paired to
+    // realm A keeps its URI when re-anchoring at realm B). Every
+    // other role — including User — must register in its home
+    // realm. User cross-realm roaming (DEC-EU §multi-realm) does
+    // NOT happen via remote registration; instead the visiting
+    // realm's admission gate resolves the user pubkey through
+    // `federation.resolve_key` against the user's home realm with
+    // `presented_pubkey_b64` pinned. That keeps the home realm as
+    // the single source of truth for user signing credentials —
+    // no peer can fabricate a "user X registered here" row.
     if parsed_realm != daemon_realm && !matches!(role, TrustedAgentRole::Device) {
         return Err(Status::permission_denied(format!(
             "<self>.register_device_pubkey: role `{}` requires agent_uri realm `{parsed_realm}` \
-             to match daemon realm `{daemon_realm}`",
+             to match daemon realm `{daemon_realm}` — cross-realm user pubkey resolution \
+             happens via federation.resolve_key, not via remote registration",
             args.role,
         )));
     }
@@ -218,8 +229,10 @@ fn parse_role(raw: &str) -> Result<TrustedAgentRole, Status> {
         "device" => Ok(TrustedAgentRole::Device),
         "backend" => Ok(TrustedAgentRole::Backend),
         "hub" => Ok(TrustedAgentRole::Hub),
+        "user" => Ok(TrustedAgentRole::User),
         other => Err(Status::invalid_argument(format!(
-            "<self>.register_device_pubkey: role `{other}` is not one of device|backend|hub",
+            "<self>.register_device_pubkey: role `{other}` is not one of \
+             device|backend|hub|user",
         ))),
     }
 }
@@ -277,6 +290,11 @@ fn realm_error_to_status(err: RealmTrustError) -> Status {
     match err {
         RealmTrustError::DuplicateUri { agent_uri } => Status::already_exists(format!(
             "<self>.register_device_pubkey: agent_uri `{agent_uri}` already in trust set",
+        )),
+        RealmTrustError::DuplicateUserPubkey { agent_uri } => Status::already_exists(format!(
+            "<self>.register_device_pubkey: user `{agent_uri}` already has this exact \
+             public key registered (different pubkeys per device are expected; same pubkey \
+             twice is a no-op pairing retry)",
         )),
         RealmTrustError::ReadFailed { path, source } => Status::internal(format!(
             "<self>.register_device_pubkey: read {path:?}: {source}"

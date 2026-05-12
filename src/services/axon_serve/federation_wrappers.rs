@@ -658,7 +658,7 @@ pub fn handle_resolve(
 /// peer-side handler: the local trust anchor is consulted for the
 /// supplied `agent_uri` and its base64-encoded Ed25519 public key
 /// is returned (or `Status::not_found` when absent).
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ResolveKeyRequest {
     /// The canonical agent URI whose verifying key the caller
     /// needs. The peer hub returns its locally-known key
@@ -666,6 +666,14 @@ pub struct ResolveKeyRequest {
     /// enforced caller-side by the FederatedKeyResolver before
     /// dialling, never here.
     pub agent_uri: String,
+    /// DEC-EU §multi-realm. For user-role URIs (multi-device → N
+    /// pubkeys), the caller pins the exact pubkey it observed on
+    /// the envelope; the peer answers with that pubkey iff it is
+    /// registered under the URI. Hub / backend / device URIs are
+    /// 1:1 and ignore this field. Absent / empty falls back to
+    /// the legacy single-value lookup.
+    #[serde(default)]
+    pub presented_pubkey_b64: Option<String>,
 }
 
 /// Response payload for `federation.resolve_key`. The 32-byte
@@ -695,6 +703,21 @@ pub fn handle_resolve_key(
     request: &ResolveKeyRequest,
     trust_anchor: &crate::services::realm_trust_anchor::RealmTrustAnchor,
 ) -> Option<ResolveKeyResponse> {
+    // DEC-EU multi-device user URIs: caller supplies the pubkey it
+    // observed on the envelope; we confirm it's in the user bucket.
+    // Single-value roles (hub/backend/device) ignore this field and
+    // fall through to the legacy lookup below.
+    if let Some(pk) = request
+        .presented_pubkey_b64
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        if let Some(entry) = trust_anchor.lookup_user_by_pubkey(&request.agent_uri, pk) {
+            return Some(ResolveKeyResponse {
+                public_key_b64: entry.public_key_b64.clone(),
+            });
+        }
+    }
     trust_anchor
         .lookup(&request.agent_uri)
         .map(|entry| ResolveKeyResponse {
@@ -1421,6 +1444,7 @@ mod tests {
         let resp = handle_resolve_key(
             &ResolveKeyRequest {
                 agent_uri: "easynet:///r/realm-a/device/n1".to_string(),
+                presented_pubkey_b64: None,
             },
             &anchor,
         )
@@ -1438,6 +1462,7 @@ mod tests {
         let resp = handle_resolve_key(
             &ResolveKeyRequest {
                 agent_uri: "easynet:///r/realm-a/device/missing".to_string(),
+                presented_pubkey_b64: None,
             },
             &anchor,
         );
@@ -1445,6 +1470,61 @@ mod tests {
             resp.is_none(),
             "miss must surface as None for caller status mapping"
         );
+    }
+
+    #[test]
+    fn handle_resolve_key_user_role_pins_the_presented_pubkey() {
+        use crate::services::realm_trust_anchor::{
+            RealmTrustAnchor, TrustedAgent, TrustedAgentRole,
+        };
+
+        let pk_a = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        let pk_b = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA=";
+        let alice = "easynet:///r/realm/user/alice";
+        let entries = [pk_a, pk_b].into_iter().map(|pk| TrustedAgent {
+            agent_uri: alice.to_string(),
+            public_key_b64: pk.to_string(),
+            role: TrustedAgentRole::User,
+            added_at_unix_ms: 1_714_000_000_000,
+            origin_tenant_id: None,
+            hub_uri: None,
+            tls_ca_pem_path: None,
+        });
+        let anchor = RealmTrustAnchor::from_entries(entries.collect()).expect("anchor");
+
+        // Presented = pk_a → resolves to pk_a.
+        let resp = handle_resolve_key(
+            &ResolveKeyRequest {
+                agent_uri: alice.to_string(),
+                presented_pubkey_b64: Some(pk_a.to_string()),
+            },
+            &anchor,
+        )
+        .expect("pk_a resolves");
+        assert_eq!(resp.public_key_b64, pk_a);
+
+        // Presented = pk_b → resolves to pk_b. Multi-device proof.
+        let resp = handle_resolve_key(
+            &ResolveKeyRequest {
+                agent_uri: alice.to_string(),
+                presented_pubkey_b64: Some(pk_b.to_string()),
+            },
+            &anchor,
+        )
+        .expect("pk_b resolves");
+        assert_eq!(resp.public_key_b64, pk_b);
+
+        // Presented = unknown → miss.
+        let resp = handle_resolve_key(
+            &ResolveKeyRequest {
+                agent_uri: alice.to_string(),
+                presented_pubkey_b64: Some(
+                    "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=".to_string(),
+                ),
+            },
+            &anchor,
+        );
+        assert!(resp.is_none(), "unknown pubkey under known user must miss");
     }
 
     // ── N3-N4 bridge: handle_discover_with_user_filter ─────────

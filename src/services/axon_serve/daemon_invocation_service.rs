@@ -101,6 +101,12 @@ use crate::services::axon_serve::register_device_pubkey::{
     handle as handle_register_device_pubkey, parse_realm_from_uri,
     ABILITY_SELF_REGISTER_DEVICE_PUBKEY,
 };
+use crate::services::axon_serve::revoke_user_pubkey::{
+    handle as handle_revoke_user_pubkey, ABILITY_SELF_REVOKE_USER_PUBKEY,
+};
+use crate::services::axon_serve::list_user_pubkeys::{
+    handle as handle_list_user_pubkeys, ABILITY_SELF_LIST_USER_PUBKEYS,
+};
 use crate::services::axon_serve::session_initiator::{SessionSigningSeed, ABILITY_SELF_SESSION};
 use crate::services::federated_peers_cell::SharedFederatedPeers;
 use crate::services::federation_client::FederationClient;
@@ -772,6 +778,12 @@ impl Invocation for DaemonInvocationService {
             ABILITY_SELF_REGISTER_DEVICE_PUBKEY => {
                 self.dispatch_register_device_pubkey(&inner.arguments)
             }
+            ABILITY_SELF_REVOKE_USER_PUBKEY => {
+                self.dispatch_revoke_user_pubkey(&inner.arguments)
+            }
+            ABILITY_SELF_LIST_USER_PUBKEYS => {
+                self.dispatch_list_user_pubkeys(&inner.arguments)
+            }
             other => Err(Status::unimplemented(format!(
                 "easynet-daemon: ability `{other}` is not handled by the federation wrappers; \
                  LocalAbilityRegistry fallback wires in RFC-003 PR-1 commit 7/9 \
@@ -1046,6 +1058,55 @@ impl DaemonInvocationService {
             &ctx.trust_anchor_path,
             &ctx.cell,
         )?;
+        Ok(Response::new(InvokeResponse {
+            result: body,
+            result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            state: InvocationState::Completed as i32,
+            ..InvokeResponse::default()
+        }))
+    }
+
+    /// DEC-EU §revocation. Same trust-write ctx the register ability
+    /// uses; the revoke surface only mutates user-role entries.
+    fn dispatch_revoke_user_pubkey(
+        &self,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let ctx = self.register_pubkey.as_ref().ok_or_else(|| {
+            Status::failed_precondition(
+                "<self>.revoke_user_pubkey: this daemon was booted without the trust-write \
+                 surface (use `with_register_pubkey(...)` at boot to enable).",
+            )
+        })?;
+        let body = handle_revoke_user_pubkey(
+            arguments,
+            &ctx.daemon_realm,
+            &ctx.trust_anchor_path,
+            &ctx.cell,
+        )?;
+        Ok(Response::new(InvokeResponse {
+            result: body,
+            result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            state: InvocationState::Completed as i32,
+            ..InvokeResponse::default()
+        }))
+    }
+
+    /// DEC-EU §multi-host-list. Read-only inventory of user-role
+    /// pubkeys. Uses the same cell as register/revoke so list
+    /// results always agree with the in-memory authoritative state
+    /// admission consults.
+    fn dispatch_list_user_pubkeys(
+        &self,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let ctx = self.register_pubkey.as_ref().ok_or_else(|| {
+            Status::failed_precondition(
+                "<self>.list_user_pubkeys: this daemon was booted without the trust \
+                 surface; no listing available.",
+            )
+        })?;
+        let body = handle_list_user_pubkeys(arguments, &ctx.cell)?;
         Ok(Response::new(InvokeResponse {
             result: body,
             result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),

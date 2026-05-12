@@ -536,7 +536,16 @@ impl AdmissionFacade {
             // just consulted for membership — keeps "membership
             // hit" and "key resolved" referring to the same anchor
             // version.
-            TrustedAgentRole::Backend | TrustedAgentRole::Hub => {
+            //
+            // User: DEC-EU first-class-caller admission. Same
+            // strict 4-step gate as Backend/Hub — the entire point
+            // of promoting user from Subject to Caller is that the
+            // user's signature is independently verifiable, so
+            // there is no URI-only fallback arm for User the way
+            // there is for legacy Device.
+            TrustedAgentRole::Backend
+            | TrustedAgentRole::Hub
+            | TrustedAgentRole::User => {
                 self.run_strict_admission(envelope, ability, args, snapshot)
             }
         }
@@ -569,27 +578,46 @@ impl AdmissionFacade {
         let axiom_signature = build_axiom_signature(envelope.caller_signature.as_ref())
             .map_err(axon_error_to_status)?;
 
-        // **PR-N2 commit 1/N**. Build a `FederatedKeyResolver`
-        // that wraps the per-call snapshot trust anchor with
-        // the daemon-shared federation client + federated_peers
-        // cell. Same-realm callers short-circuit on the local
-        // anchor lookup (zero added latency); cross-realm
-        // callers fall through to a peer hub's
-        // `federation.resolve_key` ability iff the operator
-        // marked their tenant as federated. The
-        // `FederatedKeyResolver` mirrors the
-        // `TrustAnchorKeyResolver` shape on the local-only
-        // path, so single-realm setups are byte-identical to
-        // PR-7 commit 4/N.
-        let resolver: Box<dyn KeyResolver> = Box::new(
-            FederatedKeyResolver::new(
+        // DEC-EU §multi-device. The SDK's `KeyResolver` trait takes
+        // only a URI; for User-role callers the URI is 1:N and a
+        // bare lookup picks the lex-smallest registered pubkey,
+        // which silently fails verify for every other device. The
+        // pinned resolver keys on (URI, envelope-presented pubkey)
+        // and refuses any pubkey not registered under that URI.
+        //
+        // Non-user callers continue to use FederatedKeyResolver
+        // because their URI is 1:1 (hub/backend/device) and the
+        // cross-hub `federation.resolve_key` dial is meaningful
+        // for them. User cross-realm roaming is a known followup
+        // (see federation_wrappers::handle_resolve_key, which now
+        // accepts presented_pubkey_b64 — the cross-hub dialer
+        // needs a parallel patch in federated_key_resolver.rs to
+        // forward it; tracked under DEC-EU §multi-realm-resolve).
+        let resolver: Box<dyn KeyResolver> = if envelope_caller_is_user(envelope) {
+            let pubkey_b64 = envelope_presented_pubkey_b64(envelope);
+            Box::new(crate::services::axon_serve::pinned_user_key_resolver::PinnedUserKeyResolver::new(
                 trust_anchor,
-                self.federation_client.clone(),
-                self.federated_peers.snapshot(),
-                self.self_realm.clone(),
+                pubkey_b64,
+            ))
+        } else {
+            // **PR-N2 commit 1/N**. Build a `FederatedKeyResolver`
+            // that wraps the per-call snapshot trust anchor with
+            // the daemon-shared federation client + federated_peers
+            // cell. Same-realm callers short-circuit on the local
+            // anchor lookup (zero added latency); cross-realm
+            // callers fall through to a peer hub's
+            // `federation.resolve_key` ability iff the operator
+            // marked their tenant as federated.
+            Box::new(
+                FederatedKeyResolver::new(
+                    trust_anchor,
+                    self.federation_client.clone(),
+                    self.federated_peers.snapshot(),
+                    self.self_realm.clone(),
+                )
+                .with_cache(self.federated_key_cache.clone()),
             )
-            .with_cache(self.federated_key_cache.clone()),
-        );
+        };
 
         let result = self.replay_store.with_inner(|store| {
             run_admission(
@@ -975,6 +1003,46 @@ fn envelope_carries_signature_material(envelope: &Envelope) -> bool {
         .as_ref()
         .map(|sig| !sig.algorithm.trim().is_empty() || !sig.signature.is_empty())
         .unwrap_or(false)
+}
+
+/// DEC-EU §multi-device: returns true iff `envelope.caller.uri`
+/// parses to a User-kind URA. Drives the PinnedUserKeyResolver
+/// branch in `run_strict_admission`.
+fn envelope_caller_is_user(envelope: &Envelope) -> bool {
+    let Some(caller) = envelope.caller.as_ref() else {
+        return false;
+    };
+    matches!(
+        crate::uri::parse_ura(&caller.uri).map(|p| p.kind),
+        Ok(crate::uri::URAKind::User)
+    )
+}
+
+/// DEC-EU §multi-device: read the public key the envelope presented
+/// via `caller_signature.key_id_hint`. The backend encodes the
+/// signer's raw 32-byte Ed25519 verifying key as base64 and stores
+/// it in this field; the daemon admission gate trims and returns it
+/// verbatim so `PinnedUserKeyResolver` can pin the verify key to
+/// exactly the one the browser used to sign.
+///
+/// The pubkey hint is `key_id_hint` not a new proto field because
+/// `types.proto` already documents `key_id_hint` as "non-trustworthy
+/// hint, verifiers MUST resolve independently" — exactly our use:
+/// the daemon doesn't trust the hint blindly, it confirms the hint's
+/// pubkey is registered under the Caller URI in `realm-trust.toml`
+/// before treating it as the verify key.
+///
+/// Empty when the envelope is hub / device / backend-signed (those
+/// callers don't need pubkey disambiguation), or when the caller
+/// neglected to set the hint (a programming error; downstream
+/// PinnedUserKeyResolver surfaces `unknown_agent_uri` and admission
+/// rejects).
+fn envelope_presented_pubkey_b64(envelope: &Envelope) -> String {
+    envelope
+        .caller_signature
+        .as_ref()
+        .map(|sig| sig.key_id_hint.trim().to_string())
+        .unwrap_or_default()
 }
 
 // (PR-N2 commit 1/N) The local-only `TrustAnchorKeyResolver`
