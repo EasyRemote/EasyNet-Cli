@@ -110,12 +110,12 @@ pub fn handle_publish(
         );
     }
 
-    let folder_fd = open_directory(&canonical_root)?;
+    let folder_handle = open_directory(&canonical_root)?;
 
     let handle = Arc::new(ProjectHandle {
         user: user.to_string(),
         project_id: project_id.to_string(),
-        folder_fd,
+        folder_handle,
         canonical_root: canonical_root.clone(),
         visibility,
         file_size_cap: DEFAULT_FILE_SIZE_CAP,

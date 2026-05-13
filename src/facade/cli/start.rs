@@ -247,7 +247,9 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
 /// Named Pipes, and the spawn-twice race that motivates this
 /// probe is a Unix-specific failure mode.
 fn probe_daemon_alive() -> bool {
-    probe_uds_alive(&crate::services::control::transport::default_socket_path())
+    crate::support::local_daemon_grpc::probe_accepting(
+        &crate::services::control::transport::default_socket_path(),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -262,31 +264,19 @@ struct PagesListenerExpectation {
     expected_pid: Option<u32>,
 }
 
-#[cfg(unix)]
-fn probe_uds_alive(sock: &std::path::Path) -> bool {
-    if !sock.exists() {
-        return false;
-    }
-    std::os::unix::net::UnixStream::connect(sock).is_ok()
-}
-
-#[cfg(not(unix))]
-fn probe_uds_alive(_sock: &std::path::Path) -> bool {
-    false
-}
-
 fn wait_for_local_daemon_ready(
     timeout: std::time::Duration,
     pages_listener: Option<PagesListenerExpectation>,
 ) -> anyhow::Result<DaemonSockets> {
     let sockets = DaemonSockets {
         control_socket: crate::services::control::transport::default_socket_path(),
-        grpc_socket: crate::persistence::daemon_config::resolved_local_uds_path(),
+        grpc_socket: crate::support::local_daemon_grpc::resolve_socket_path(),
     };
     let start = std::time::Instant::now();
     while start.elapsed() < timeout {
         let sockets_ready =
-            probe_uds_alive(&sockets.control_socket) && probe_uds_alive(&sockets.grpc_socket);
+            crate::support::local_daemon_grpc::probe_accepting(&sockets.control_socket)
+                && crate::support::local_daemon_grpc::probe_accepting(&sockets.grpc_socket);
         let pages_ready = pages_listener.is_none_or(|expectation| {
             pages_listener_matches(expectation.port, expectation.expected_pid)
         });
@@ -320,17 +310,25 @@ fn discover_existing_daemon_pid() -> Option<u32> {
         return Some(pid);
     }
 
-    let output = std::process::Command::new("pgrep")
-        .args(["-f", "easynet-daemon"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
+    #[cfg(windows)]
+    {
         return None;
     }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| line.trim().parse::<u32>().ok())
-        .find(|pid| *pid != std::process::id() && net::is_pid_alive(*pid))
+
+    #[cfg(not(windows))]
+    {
+        let output = std::process::Command::new("pgrep")
+            .args(["-f", "easynet-daemon"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.trim().parse::<u32>().ok())
+            .find(|pid| *pid != std::process::id() && net::is_pid_alive(*pid))
+    }
 }
 
 fn spawn_easynet_daemon(node_id: &str, pages_listener_port: u16) -> Option<std::process::Child> {
@@ -990,6 +988,7 @@ mod tests {
             hub_api_base: Some("https://api.example.com".into()),
             username: None,
             hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
         }
     }
 
@@ -1167,7 +1166,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let sock = dir.path().join("control.sock");
         assert!(!sock.exists());
-        assert!(!probe_uds_alive(&sock));
+        assert!(!crate::support::local_daemon_grpc::probe_accepting(&sock));
     }
 
     #[cfg(unix)]
@@ -1177,7 +1176,7 @@ mod tests {
         let sock = dir.path().join("control.sock");
         std::fs::write(&sock, b"").expect("write empty file");
         assert!(sock.exists());
-        assert!(!probe_uds_alive(&sock));
+        assert!(!crate::support::local_daemon_grpc::probe_accepting(&sock));
     }
 
     #[cfg(unix)]
@@ -1186,7 +1185,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let sock = dir.path().join("control.sock");
         let _listener = std::os::unix::net::UnixListener::bind(&sock).expect("bind probe");
-        assert!(probe_uds_alive(&sock));
+        assert!(crate::support::local_daemon_grpc::probe_accepting(&sock));
     }
 
     #[test]

@@ -76,8 +76,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio_stream::wrappers::UnixListenerStream;
+#[cfg(windows)]
+use tonic::transport::server::Connected;
 use tonic::transport::{Identity, Server, ServerTlsConfig};
+
+#[cfg(windows)]
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+#[cfg(windows)]
+use tokio::net::windows::named_pipe::NamedPipeServer;
+#[cfg(windows)]
+use tokio_stream::wrappers::ReceiverStream;
+#[cfg(unix)]
+use tokio_stream::wrappers::UnixListenerStream;
 
 use crate::pb::axon::v1::invocation_server::InvocationServer;
 use crate::persistence::daemon_config::{DaemonConfig, DaemonMode, DEFAULT_DAEMON_CONFIG_PATH};
@@ -92,6 +102,8 @@ use crate::services::pending_dispatch::PendingDispatchMap;
 use crate::services::presence_registry::PresenceRegistry;
 use crate::services::realm_trust_anchor::{RealmTrustAnchor, DEFAULT_REALM_TRUST_PATH};
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
+#[cfg(windows)]
+use crate::support::named_pipe::PipeListener;
 
 /// Maximum decoded gRPC message size for InvocationServer/Client on
 /// both directions. tonic's default cap is 4 MiB which aborted
@@ -105,6 +117,53 @@ use crate::services::trust_anchor_cell::SharedTrustAnchor;
 /// same cap as the server side; without that the asymmetry triggers
 /// `OutOfRange: decoded message length too large` mid-stream.
 pub const MAX_INVOCATION_GRPC_MESSAGE_BYTES: usize = 1 << 30;
+
+#[cfg(windows)]
+#[derive(Debug)]
+struct NamedPipeGrpcIo(NamedPipeServer);
+
+#[cfg(windows)]
+impl Connected for NamedPipeGrpcIo {
+    type ConnectInfo = ();
+
+    fn connect_info(&self) -> Self::ConnectInfo {}
+}
+
+#[cfg(windows)]
+impl AsyncRead for NamedPipeGrpcIo {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
+    }
+}
+
+#[cfg(windows)]
+impl AsyncWrite for NamedPipeGrpcIo {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.0).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.0).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.0).poll_shutdown(cx)
+    }
+}
 
 /// Bring the RFC-003 transport plane online as a sidecar to the
 /// existing easynet-daemon process.
@@ -570,6 +629,7 @@ fn spawn_session_supervisor(
     ));
 }
 
+#[cfg(unix)]
 fn spawn_uds_listener(
     config: &DaemonConfig,
     service: DaemonInvocationService,
@@ -648,6 +708,74 @@ fn spawn_uds_listener(
     });
 
     Ok(())
+}
+
+#[cfg(windows)]
+fn spawn_uds_listener(
+    config: &DaemonConfig,
+    service: DaemonInvocationService,
+) -> anyhow::Result<()> {
+    let pipe_name = config
+        .uds_path()
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("daemon-config named-pipe path is not valid UTF-8"))?
+        .to_string();
+    let mut listener = PipeListener::bind(pipe_name.clone()).map_err(|err| {
+        anyhow::anyhow!("failed to bind axon_serve named pipe {}: {err}", pipe_name)
+    })?;
+
+    eprintln!(
+        "[axon-serve] gRPC InvocationServer listening on named pipe {}",
+        pipe_name
+    );
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<std::io::Result<NamedPipeGrpcIo>>(32);
+    tokio::spawn(async move {
+        loop {
+            match listener.accept().await {
+                Ok(stream) => {
+                    if tx.send(Ok(NamedPipeGrpcIo(stream))).await.is_err() {
+                        break;
+                    }
+                }
+                Err(err) => {
+                    let _ = tx.send(Err(err)).await;
+                    break;
+                }
+            }
+        }
+    });
+
+    let incoming = ReceiverStream::new(rx);
+    tokio::spawn(async move {
+        let result = Server::builder()
+            .http2_keepalive_interval(Some(Duration::from_secs(5)))
+            .http2_keepalive_timeout(Some(Duration::from_secs(10)))
+            .tcp_keepalive(Some(Duration::from_secs(15)))
+            .add_service(
+                InvocationServer::new(service)
+                    .max_decoding_message_size(MAX_INVOCATION_GRPC_MESSAGE_BYTES)
+                    .max_encoding_message_size(MAX_INVOCATION_GRPC_MESSAGE_BYTES),
+            )
+            .serve_with_incoming(incoming)
+            .await;
+        if let Err(err) = result {
+            eprintln!("[axon-serve] gRPC named-pipe server exited with error: {err:#}");
+        }
+    });
+
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn spawn_uds_listener(
+    _config: &DaemonConfig,
+    _service: DaemonInvocationService,
+) -> anyhow::Result<()> {
+    anyhow::bail!(
+        "axon_serve local listener is unavailable on this platform until the local transport \
+         backend lands"
+    )
 }
 
 /// Spawn the hub-mode TCP+TLS gRPC listener (PR-10 commit 1/N).

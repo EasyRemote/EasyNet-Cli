@@ -39,10 +39,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use easynet_cli::services::keyring::{
-    home_relative, vault_error_to_response, KeyringRequest, KeyringResponse, MasterKeySource,
-    Vault, DEFAULT_KEYRING_SOCKET_REL, DEFAULT_VAULT_REL,
+    default_socket_path, home_relative, vault_error_to_response, KeyringRequest, KeyringResponse,
+    MasterKeySource, Vault, DEFAULT_VAULT_REL,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(windows)]
+use easynet_cli::support::named_pipe::PipeListener;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+#[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Mutex;
 
@@ -55,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| home_relative(DEFAULT_VAULT_REL));
     let socket_path = std::env::var_os("EASYNET_KEYRING_SOCKET_PATH")
         .map(PathBuf::from)
-        .unwrap_or_else(|| home_relative(DEFAULT_KEYRING_SOCKET_REL));
+        .unwrap_or_else(default_socket_path);
 
     let source = resolve_master_key_source()?;
     let vault = Vault::open_or_init(&vault_path, &source).map_err(|e| {
@@ -70,64 +73,76 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         vault.list().len()
     );
 
-    if let Some(parent) = socket_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    if socket_path.exists() {
-        // Refuse to overwrite. If a previous daemon crashed leaving
-        // the socket file, the operator removes it explicitly so a
-        // running daemon doesn't get its socket yanked silently.
-        return Err(format!(
-            "[easynet-keyring] socket already exists at {} — remove it before starting (likely a stale file from a previous crash)",
-            socket_path.display()
-        )
-        .into());
-    }
-    let listener = UnixListener::bind(&socket_path)?;
     #[cfg(unix)]
-    {
+    let listener = {
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        if socket_path.exists() {
+            // Refuse to overwrite. If a previous daemon crashed leaving
+            // the socket file, the operator removes it explicitly so a
+            // running daemon doesn't get its socket yanked silently.
+            return Err(format!(
+                "[easynet-keyring] socket already exists at {} — remove it before starting (likely a stale file from a previous crash)",
+                socket_path.display()
+            )
+            .into());
+        }
+        let listener = UnixListener::bind(&socket_path)?;
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    eprintln!(
-        "[easynet-keyring] listening on {} (mode 0600)",
-        socket_path.display()
-    );
+        eprintln!(
+            "[easynet-keyring] listening on {} (mode 0600)",
+            socket_path.display()
+        );
+        listener
+    };
+
+    #[cfg(windows)]
+    let mut listener = {
+        let pipe_name = socket_path.to_string_lossy().to_string();
+        let listener = PipeListener::bind(pipe_name.clone())?;
+        eprintln!("[easynet-keyring] listening on {pipe_name}");
+        listener
+    };
 
     let shared = Arc::new(Mutex::new(vault));
-    let socket_for_cleanup = socket_path.clone();
+    #[cfg(unix)]
+    {
+        let socket_for_cleanup = socket_path.clone();
+        // Best-effort cleanup on Ctrl-C / SIGTERM. The daemon process
+        // exiting without unlinking the socket leaves the host in a
+        // state where the next daemon restart fails the
+        // `socket_path.exists()` guard above. Catching SIGTERM /
+        // SIGINT and unlinking before exit makes the operator's
+        // restart cycle smooth.
+        tokio::spawn(async move {
+            let mut sigterm =
+                match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("[easynet-keyring] cannot watch SIGTERM: {e}");
+                        return;
+                    }
+                };
+            let mut sigint =
+                match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("[easynet-keyring] cannot watch SIGINT: {e}");
+                        return;
+                    }
+                };
+            tokio::select! {
+                _ = sigterm.recv() => eprintln!("[easynet-keyring] SIGTERM, shutting down"),
+                _ = sigint.recv() => eprintln!("[easynet-keyring] SIGINT, shutting down"),
+            }
+            let _ = std::fs::remove_file(&socket_for_cleanup);
+            std::process::exit(0);
+        });
+    }
 
-    // Best-effort cleanup on Ctrl-C / SIGTERM. The daemon process
-    // exiting without unlinking the socket leaves the host in a
-    // state where the next daemon restart fails the
-    // `socket_path.exists()` guard above. Catching SIGTERM /
-    // SIGINT and unlinking before exit makes the operator's
-    // restart cycle smooth.
-    tokio::spawn(async move {
-        let mut sigterm =
-            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("[easynet-keyring] cannot watch SIGTERM: {e}");
-                    return;
-                }
-            };
-        let mut sigint =
-            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("[easynet-keyring] cannot watch SIGINT: {e}");
-                    return;
-                }
-            };
-        tokio::select! {
-            _ = sigterm.recv() => eprintln!("[easynet-keyring] SIGTERM, shutting down"),
-            _ = sigint.recv() => eprintln!("[easynet-keyring] SIGINT, shutting down"),
-        }
-        let _ = std::fs::remove_file(&socket_for_cleanup);
-        std::process::exit(0);
-    });
-
+    #[cfg(unix)]
     loop {
         let (stream, _addr) = match listener.accept().await {
             Ok(t) => t,
@@ -143,12 +158,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
+
+    #[cfg(windows)]
+    loop {
+        let stream = match listener.accept().await {
+            Ok(stream) => stream,
+            Err(e) => {
+                eprintln!("[easynet-keyring] accept: {e}");
+                continue;
+            }
+        };
+        let vault_for_conn = Arc::clone(&shared);
+        tokio::spawn(async move {
+            if let Err(e) = handle_connection(stream, vault_for_conn).await {
+                eprintln!("[easynet-keyring] connection: {e}");
+            }
+        });
+    }
 }
 
-async fn handle_connection(
-    mut stream: UnixStream,
+async fn handle_connection<S>(
+    mut stream: S,
     vault: Arc<Mutex<Vault>>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     loop {
         let mut len_buf = [0u8; 4];
         match stream.read_exact(&mut len_buf).await {
@@ -242,10 +277,13 @@ async fn dispatch(req: KeyringRequest, vault: &Arc<Mutex<Vault>>) -> KeyringResp
     }
 }
 
-async fn write_response(
-    stream: &mut UnixStream,
+async fn write_response<S>(
+    stream: &mut S,
     resp: &KeyringResponse,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    S: AsyncWrite + Unpin,
+{
     let body = serde_json::to_vec(resp)?;
     let len = (body.len() as u32).to_be_bytes();
     stream.write_all(&len).await?;

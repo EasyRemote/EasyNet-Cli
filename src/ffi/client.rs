@@ -43,8 +43,12 @@ use std::path::Path;
 
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use tokio::net::UnixStream;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
+
+#[cfg(windows)]
+use tokio::net::windows::named_pipe::NamedPipeClient;
+#[cfg(unix)]
+use tokio::net::UnixStream;
 
 use crate::services::control::discovery::{
     self, ControlDiscovery, IpcVersionRange, IPC_VERSION_V1,
@@ -56,7 +60,10 @@ use crate::services::control::frames::{IncomingFrame, OutgoingFrame};
 /// We hold the framed stream behind the type alias for readability;
 /// every read and write goes through the same codec the server uses
 /// (4-byte little-endian length prefix + JSON payload).
+#[cfg(unix)]
 type FramedUds = Framed<UnixStream, LengthDelimitedCodec>;
+#[cfg(windows)]
+type FramedPipe = Framed<NamedPipeClient, LengthDelimitedCodec>;
 
 pub struct IpcClient {
     /// Negotiated protocol version. v1 always equals
@@ -70,7 +77,10 @@ pub struct IpcClient {
     /// The framed UDS connection. Held inside the same struct as
     /// the discovery snapshot so a `round_trip` call has both
     /// pieces in scope without re-reading control.json.
+    #[cfg(unix)]
     framed: FramedUds,
+    #[cfg(windows)]
+    framed: FramedPipe,
 }
 
 // Manual Debug because `Framed<UnixStream, _>` is not Debug.
@@ -126,6 +136,7 @@ pub async fn connect(control_json_path: &Path) -> anyhow::Result<IpcClient> {
     // returns the intersection range; `max` is the agreed protocol version.
     let chosen_version = chosen.max;
 
+    #[cfg(unix)]
     let socket_path = disc.socket_path.clone().ok_or_else(|| {
         anyhow::anyhow!(
             "FFI client: control.json reports no UDS socket_path; \
@@ -133,6 +144,15 @@ pub async fn connect(control_json_path: &Path) -> anyhow::Result<IpcClient> {
         )
     })?;
 
+    #[cfg(windows)]
+    let pipe_name = disc.pipe_name.clone().ok_or_else(|| {
+        anyhow::anyhow!(
+            "FFI client: control.json reports no pipe_name; \
+             this Windows build requires named-pipe control transport"
+        )
+    })?;
+
+    #[cfg(unix)]
     let stream = UnixStream::connect(&socket_path).await.map_err(|e| {
         // Wrap the io::Error as a *cause* (anyhow::Error::new) and
         // attach the human-readable message via `.context(...)` so
@@ -151,12 +171,28 @@ pub async fn connect(control_json_path: &Path) -> anyhow::Result<IpcClient> {
     // Same codec the daemon uses. Default 8 MiB max frame size is
     // ample for v1 JSON envelopes; v2 may tighten when proto binary
     // payloads come in.
+    #[cfg(unix)]
     let codec = LengthDelimitedCodec::builder().little_endian().new_codec();
+    #[cfg(unix)]
+    let framed = Framed::new(stream, codec);
+    #[cfg(windows)]
+    let stream = crate::support::named_pipe::connect_with_retry(
+        &pipe_name,
+        std::time::Duration::from_secs(5),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("FFI client: connect to named pipe {pipe_name}: {e}"))?;
+    #[cfg(windows)]
+    let codec = LengthDelimitedCodec::builder().little_endian().new_codec();
+    #[cfg(windows)]
     let framed = Framed::new(stream, codec);
 
     Ok(IpcClient {
         ipc_version: chosen_version,
         daemon_discovery: disc,
+        #[cfg(unix)]
+        framed,
+        #[cfg(windows)]
         framed,
     })
 }

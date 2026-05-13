@@ -25,6 +25,7 @@ if (-not (Test-Path $InstallDir)) {
 }
 Copy-Item (Join-Path $TmpDir "easynet.exe") (Join-Path $InstallDir "easynet.exe") -Force
 Copy-Item (Join-Path $TmpDir "easynet-daemon.exe") (Join-Path $InstallDir "easynet-daemon.exe") -Force
+Copy-Item (Join-Path $TmpDir "easynet-keyring.exe") (Join-Path $InstallDir "easynet-keyring.exe") -Force
 
 # Install dendrite bridge
 if (-not (Test-Path $NativeDir)) {
@@ -52,7 +53,7 @@ if ($UserPath -notlike "*$InstallDir*") {
 
 # Remove stale binaries from other PATH dirs that would shadow the install
 $PathDirs = $env:Path -split ";"
-foreach ($bin in @("easynet.exe", "easynet-daemon.exe", "axon-runtime.exe")) {
+foreach ($bin in @("easynet.exe", "easynet-daemon.exe", "easynet-keyring.exe", "axon-runtime.exe")) {
     foreach ($dir in $PathDirs) {
         if ($dir -eq $InstallDir) { continue }
         $candidate = Join-Path $dir $bin
@@ -72,6 +73,7 @@ Write-Host "  ✓ EasyNet CLI installed successfully!"
 Write-Host ""
 Write-Host "    easynet.exe         → $InstallDir"
 Write-Host "    easynet-daemon.exe  → $InstallDir"
+Write-Host "    easynet-keyring.exe → $InstallDir"
 Write-Host "    dendrite bridge     → $NativeDir"
 Write-Host ""
 Write-Host "  Run 'easynet --help' to get started."

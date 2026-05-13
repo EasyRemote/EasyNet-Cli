@@ -406,12 +406,26 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
                 return Ok(());
             }
         };
+    let hub_ca_pem_path = match persist_hub_tls_ca_pem_for_join(creds) {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!(
+                "[easynet join] could not persist hub TLS CA PEM ({err}); continuing without \
+                 a local CA pin. Self-signed hub dials may fail until you write \
+                 `tls_ca_pem_path` for {hub_uri} by hand."
+            );
+            None
+        }
+    };
+
     let updated = match hub_pubkey_b64_opt {
-        Some(hub_pubkey_b64) => match upsert_trusted_agent_inner(
+        Some(hub_pubkey_b64) => match upsert_hub_trusted_agent(
             &after_device,
             &hub_uri,
             &hub_pubkey_b64,
-            "hub",
+            creds.tenant_id.trim(),
+            creds.hub_endpoint.trim(),
+            hub_ca_pem_path.as_deref(),
             added_at_unix_ms,
         ) {
             Ok(s) => s,
@@ -527,6 +541,36 @@ fn realm_trust_path_for_join() -> PathBuf {
     PathBuf::from(".easynet/realm-trust.toml")
 }
 
+fn hub_tls_ca_path_for_join(realm: &str) -> PathBuf {
+    let state_dir = crate::persistence::config::state_dir();
+    let trust_dir = state_dir.join("trust").join("hubs");
+    trust_dir.join(format!("{realm}.ca.pem"))
+}
+
+fn persist_hub_tls_ca_pem_for_join(creds: &Credentials) -> anyhow::Result<Option<PathBuf>> {
+    use anyhow::Context as _;
+    use base64::Engine as _;
+
+    let Some(raw_b64) = creds
+        .hub_tls_ca_pem_b64
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    else {
+        return Ok(None);
+    };
+
+    let pem = base64::engine::general_purpose::STANDARD
+        .decode(raw_b64)
+        .context("decode hub_tls_ca_pem_b64")?;
+    let path = hub_tls_ca_path_for_join(creds.tenant_id.trim());
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    atomic_write(&path, &pem)?;
+    Ok(Some(path))
+}
+
 /// TOML edit: insert-or-update a `[[trusted_agent]]` row whose
 /// `agent_uri` matches the joining device. Preserves every other
 /// row + comment via `toml_edit`. Idempotent when the row already
@@ -540,17 +584,51 @@ fn upsert_self_trusted_agent(
     public_key_b64: &str,
     added_at_unix_ms: u64,
 ) -> anyhow::Result<String> {
-    upsert_trusted_agent_inner(raw, agent_uri, public_key_b64, "device", added_at_unix_ms)
+    upsert_trusted_agent_inner(
+        raw,
+        agent_uri,
+        public_key_b64,
+        "device",
+        None,
+        None,
+        None,
+        added_at_unix_ms,
+    )
 }
 
-/// Generic [[trusted_agent]] upsert. `role` ∈ {"device", "hub", "agent"}.
-/// Idempotent on (agent_uri); skips entirely when a row with the
-/// same URI is already present (preserves operator-edited fields).
+fn upsert_hub_trusted_agent(
+    raw: &str,
+    agent_uri: &str,
+    public_key_b64: &str,
+    origin_tenant_id: &str,
+    hub_uri: &str,
+    tls_ca_pem_path: Option<&Path>,
+    added_at_unix_ms: u64,
+) -> anyhow::Result<String> {
+    upsert_trusted_agent_inner(
+        raw,
+        agent_uri,
+        public_key_b64,
+        "hub",
+        Some(origin_tenant_id),
+        Some(hub_uri),
+        tls_ca_pem_path,
+        added_at_unix_ms,
+    )
+}
+
+/// Generic [[trusted_agent]] upsert. Device rows stay append-only;
+/// hub rows are upgraded in place so legacy v4.1.4 entries gain the
+/// schema-B `origin_tenant_id` / `hub_uri` / `tls_ca_pem_path`
+/// fields required by device-mode `<self>.session` bootstrap.
 fn upsert_trusted_agent_inner(
     raw: &str,
     agent_uri: &str,
     public_key_b64: &str,
     role: &str,
+    origin_tenant_id: Option<&str>,
+    hub_uri: Option<&str>,
+    tls_ca_pem_path: Option<&Path>,
     added_at_unix_ms: u64,
 ) -> anyhow::Result<String> {
     use toml_edit::{value, ArrayOfTables, DocumentMut, Item, Table};
@@ -571,23 +649,31 @@ fn upsert_trusted_agent_inner(
         .as_array_of_tables_mut()
         .ok_or_else(|| anyhow::anyhow!("'trusted_agent' is not a TOML array of tables"))?;
 
-    // Idempotent path: an existing entry with our agent_uri
-    // means the canonical writer (or a previous join run) already
-    // populated this row. Leave it untouched so we preserve any
-    // operator-edited fields (e.g. role override for an admin-
-    // promoted device, or a pubkey explicitly rotated through the
-    // canonical `<self>.register_device_pubkey` writer). The
-    // pubkey-mismatch case is treated identically: the existing
-    // entry is authoritative; a re-pair that legitimately rotates
-    // the key should go through `easynet reset` first.
-    let already_present = agents.iter().any(|existing| {
+    let existing_index = agents.iter().position(|existing| {
         existing
             .get("agent_uri")
             .and_then(|i| i.as_str())
             .map(|s| s == agent_uri)
             .unwrap_or(false)
     });
-    if already_present {
+    if let Some(existing_index) = existing_index {
+        let existing = agents
+            .get_mut(existing_index)
+            .ok_or_else(|| anyhow::anyhow!("trusted_agent index disappeared during update"))?;
+        if role != "hub" {
+            return Ok(doc.to_string());
+        }
+        existing.insert("public_key_b64", value(public_key_b64));
+        existing.insert("role", value(role));
+        if let Some(v) = origin_tenant_id {
+            existing.insert("origin_tenant_id", value(v));
+        }
+        if let Some(v) = hub_uri {
+            existing.insert("hub_uri", value(v));
+        }
+        if let Some(v) = tls_ca_pem_path {
+            existing.insert("tls_ca_pem_path", value(v.display().to_string()));
+        }
         return Ok(doc.to_string());
     }
 
@@ -597,12 +683,15 @@ fn upsert_trusted_agent_inner(
     row.insert("public_key_b64", value(public_key_b64));
     row.insert("role", value(role));
     row.insert("added_at_unix_ms", value(added_at_unix_ms as i64));
-    // `origin_tenant_id`, `hub_uri`, `tls_ca_pem_path` are
-    // Hub-role-only fields specific to peer-hub trust entries
-    // (cross-realm TLS dial); they're omitted here since the
-    // local hub trust entry is dialed via the local UDS and
-    // peer-hub entries are written by docker-e2e-cross-hub.sh
-    // or operator hand.
+    if let Some(v) = origin_tenant_id {
+        row.insert("origin_tenant_id", value(v));
+    }
+    if let Some(v) = hub_uri {
+        row.insert("hub_uri", value(v));
+    }
+    if let Some(v) = tls_ca_pem_path {
+        row.insert("tls_ca_pem_path", value(v.display().to_string()));
+    }
     agents.push(row);
 
     Ok(doc.to_string())
@@ -912,6 +1001,7 @@ listen_tcp = "127.0.0.1:50443"
             hub_api_base: None,
             username: None,
             hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
         };
         auto_wire_federated_peer_from_credentials(&creds, None).expect("auto-wire");
 
@@ -947,6 +1037,7 @@ listen_tcp = "127.0.0.1:50443"
             hub_api_base: None,
             username: None,
             hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
         };
         auto_wire_federated_peer_from_credentials(&creds, None).expect("empty tenant is no-op");
     }
@@ -1051,6 +1142,7 @@ added_at_unix_ms = 1
             hub_api_base: None,
             username: None,
             hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
         };
         auto_wire_self_realm_trust_from_credentials(&creds)
             .expect("empty node_id is a no-op (no panic, no write)");
@@ -1078,6 +1170,7 @@ added_at_unix_ms = 1
         // assertion. Using a deterministic 32-byte seed keeps the
         // assertion stable.
         let staged_seed: [u8; 32] = [42; 32];
+        let staged_ca_pem = b"-----BEGIN CERTIFICATE-----\ndocker-ca\n-----END CERTIFICATE-----\n";
         let staged_seed_hex = staged_seed
             .iter()
             .map(|b| format!("{b:02x}"))
@@ -1116,12 +1209,15 @@ added_at_unix_ms = 1
         let creds = Credentials {
             node_id: "dev-1".into(),
             credential_token: "tok".into(),
-            hub_endpoint: "axon://hub:50051".into(),
+            hub_endpoint: "https://hub-a:50443".into(),
             tenant_id: "tenant-a".into(),
             deploy_signature: "sig".into(),
             hub_api_base: None,
             username: None,
             hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: Some(
+                base64::engine::general_purpose::STANDARD.encode(staged_ca_pem),
+            ),
         };
         auto_wire_self_realm_trust_from_credentials(&creds).expect("auto-wire ok");
 
@@ -1182,6 +1278,23 @@ added_at_unix_ms = 1
             Some(expected_hub_pk.as_str()),
             "hub pubkey must be the ed25519 projection of the staged identity.json's seed",
         );
+        assert_eq!(
+            hub_row.get("origin_tenant_id").and_then(|v| v.as_str()),
+            Some("tenant-a"),
+            "hub trust row must carry schema-B origin_tenant_id so device-mode boot can \
+             resolve the local hub via lookup_peer_hub(...)",
+        );
+        assert_eq!(
+            hub_row.get("hub_uri").and_then(|v| v.as_str()),
+            Some("https://hub-a:50443"),
+            "hub trust row must pin the exact public hub endpoint runtime dials",
+        );
+        let ca_path = hub_row
+            .get("tls_ca_pem_path")
+            .and_then(|v| v.as_str())
+            .expect("hub trust row must persist a tls_ca_pem_path");
+        let ca_body = std::fs::read(ca_path).expect("read persisted hub CA PEM");
+        assert_eq!(ca_body, staged_ca_pem);
 
         // Re-running is idempotent: file size unchanged.
         let body_before = body;

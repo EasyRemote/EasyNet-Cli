@@ -21,7 +21,6 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::fs;
-use std::os::fd::OwnedFd;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -29,6 +28,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+
+use super::sandbox::PublishedFolderHandle;
 
 /// Visibility marker. v0 supports PUBLIC only; PRIVATE/SCOPED
 /// reject at the publish boundary with a clear error and are
@@ -71,7 +72,7 @@ impl Visibility {
 pub struct ProjectHandle {
     pub user: String,
     pub project_id: String,
-    pub folder_fd: OwnedFd,
+    pub folder_handle: PublishedFolderHandle,
     pub canonical_root: PathBuf,
     pub visibility: Visibility,
     pub file_size_cap: u64,
@@ -216,8 +217,8 @@ pub(crate) fn restore_published_projects(user: &str) -> anyhow::Result<RestoreSu
                 continue;
             }
         };
-        let folder_fd = match super::sandbox::open_directory(&canonical_root) {
-            Ok(fd) => fd,
+        let folder_handle = match super::sandbox::open_directory(&canonical_root) {
+            Ok(handle) => handle,
             Err(_) => {
                 cleaned_snapshot_needed = true;
                 summary.skipped += 1;
@@ -227,7 +228,7 @@ pub(crate) fn restore_published_projects(user: &str) -> anyhow::Result<RestoreSu
         let handle = Arc::new(ProjectHandle {
             user: record.user.clone(),
             project_id: record.project_id.clone(),
-            folder_fd,
+            folder_handle,
             canonical_root,
             visibility,
             file_size_cap: record.file_size_cap,

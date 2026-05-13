@@ -45,6 +45,7 @@
 // Public so integration tests + future external embedders can
 // construct `Credentials`. Inner field visibility on the struct
 // itself is already `pub`.
+pub mod chat_sessions;
 pub mod config;
 /// Daemon-side configuration for the gRPC InvocationServer
 /// (`~/.easynet/daemon-config.toml`). Authored by RFC-003 PR-1; see

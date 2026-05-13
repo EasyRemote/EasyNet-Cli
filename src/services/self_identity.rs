@@ -32,16 +32,17 @@
 // Copyright (c) 2026-2027 easynet. All rights reserved.
 
 use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
 use ed25519_dalek::{Signature, VerifyingKey};
 
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+
 use crate::services::keyring::{
-    home_relative, KeyringRequest, KeyringResponse, MasterKeySource, Vault,
-    DEFAULT_KEYRING_SOCKET_REL,
+    default_socket_path, KeyringRequest, KeyringResponse, MasterKeySource, Vault,
 };
 
 /// Errors surfaced by `SelfIdentity` callers. Most are 1:1 with
@@ -129,7 +130,7 @@ impl KeyringClient {
     /// path. Same default as `easynet-keyring` daemon's bind
     /// path so the typical case is "just works".
     pub fn default_path() -> Self {
-        Self::new(home_relative(DEFAULT_KEYRING_SOCKET_REL))
+        Self::new(default_socket_path())
     }
 
     /// Override the per-call timeout. Default is 10s.
@@ -140,18 +141,50 @@ impl KeyringClient {
 
     fn rpc(&self, req: &KeyringRequest) -> Result<KeyringResponse, SelfIdentityError> {
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stream = UnixStream::connect(&self.socket_path).map_err(|e| {
-            SelfIdentityError::DaemonOffline {
-                path: self.socket_path.clone(),
-                reason: e.to_string(),
+
+        #[cfg(unix)]
+        let mut stream = {
+            let stream = UnixStream::connect(&self.socket_path).map_err(|e| {
+                SelfIdentityError::DaemonOffline {
+                    path: self.socket_path.clone(),
+                    reason: e.to_string(),
+                }
+            })?;
+            stream
+                .set_read_timeout(Some(self.timeout))
+                .map_err(|e| SelfIdentityError::Transport(format!("set_read_timeout: {e}")))?;
+            stream
+                .set_write_timeout(Some(self.timeout))
+                .map_err(|e| SelfIdentityError::Transport(format!("set_write_timeout: {e}")))?;
+            stream
+        };
+
+        #[cfg(windows)]
+        let mut stream = {
+            let deadline = std::time::Instant::now() + self.timeout;
+            loop {
+                match std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&self.socket_path)
+                {
+                    Ok(file) => break file,
+                    Err(err)
+                        if std::time::Instant::now() < deadline
+                            && (err.kind() == std::io::ErrorKind::NotFound
+                                || err.raw_os_error() == Some(231)) =>
+                    {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    Err(err) => {
+                        return Err(SelfIdentityError::DaemonOffline {
+                            path: self.socket_path.clone(),
+                            reason: err.to_string(),
+                        });
+                    }
+                }
             }
-        })?;
-        stream
-            .set_read_timeout(Some(self.timeout))
-            .map_err(|e| SelfIdentityError::Transport(format!("set_read_timeout: {e}")))?;
-        stream
-            .set_write_timeout(Some(self.timeout))
-            .map_err(|e| SelfIdentityError::Transport(format!("set_write_timeout: {e}")))?;
+        };
 
         let body = serde_json::to_vec(req)
             .map_err(|e| SelfIdentityError::Framing(format!("encode request: {e}")))?;

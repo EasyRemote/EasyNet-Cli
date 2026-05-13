@@ -23,8 +23,12 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::fs::File;
-use std::os::fd::BorrowedFd;
 use std::path::Path;
+
+#[cfg(unix)]
+pub type PublishedFolderHandle = std::os::fd::OwnedFd;
+#[cfg(not(unix))]
+pub type PublishedFolderHandle = std::path::PathBuf;
 
 /// Result of sandboxed open: a regular-file `File` handle that the
 /// kernel guarantees lives inside the dirfd's subtree.
@@ -36,7 +40,7 @@ use std::path::Path;
 /// by `realpath()` + prefix-check + `O_NOFOLLOW`. Production
 /// targets Linux; macOS support is dev-only.
 pub fn open_beneath(
-    folder_fd: BorrowedFd<'_>,
+    folder_handle: &PublishedFolderHandle,
     canonical_root: &Path,
     rel_path: &str,
 ) -> anyhow::Result<File> {
@@ -60,37 +64,42 @@ pub fn open_beneath(
         }
     }
 
-    open_inner(folder_fd, canonical_root, normalized)
+    open_inner(folder_handle, canonical_root, normalized)
 }
 
 #[cfg(target_os = "linux")]
 fn open_inner(
-    folder_fd: BorrowedFd<'_>,
+    folder_handle: &PublishedFolderHandle,
     _canonical_root: &Path,
     normalized: &str,
 ) -> anyhow::Result<File> {
     use rustix::fs::{openat2, Mode, OFlags, ResolveFlags};
+    use std::os::fd::AsFd;
 
     // Pin the resolution to the dirfd's subtree at the kernel level.
     let resolve = ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS;
     let oflags = OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW;
 
-    let fd =
-        openat2(folder_fd, normalized, oflags, Mode::empty(), resolve).map_err(
-            |errno| match errno {
-                rustix::io::Errno::XDEV => anyhow::anyhow!("path escapes published root"),
-                rustix::io::Errno::LOOP => anyhow::anyhow!("path traverses a symlink"),
-                rustix::io::Errno::NOENT => anyhow::anyhow!("file not found: {normalized}"),
-                other => anyhow::anyhow!("openat2 failed: {other}"),
-            },
-        )?;
+    let fd = openat2(
+        folder_handle.as_fd(),
+        normalized,
+        oflags,
+        Mode::empty(),
+        resolve,
+    )
+    .map_err(|errno| match errno {
+        rustix::io::Errno::XDEV => anyhow::anyhow!("path escapes published root"),
+        rustix::io::Errno::LOOP => anyhow::anyhow!("path traverses a symlink"),
+        rustix::io::Errno::NOENT => anyhow::anyhow!("file not found: {normalized}"),
+        other => anyhow::anyhow!("openat2 failed: {other}"),
+    })?;
 
     Ok(File::from(fd))
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(unix, not(target_os = "linux")))]
 fn open_inner(
-    _folder_fd: BorrowedFd<'_>,
+    _folder_handle: &PublishedFolderHandle,
     canonical_root: &Path,
     normalized: &str,
 ) -> anyhow::Result<File> {
@@ -138,17 +147,37 @@ fn open_inner(
     Ok(unsafe { File::from_raw_fd(raw) })
 }
 
+#[cfg(not(unix))]
+fn open_inner(
+    _folder_handle: &PublishedFolderHandle,
+    canonical_root: &Path,
+    normalized: &str,
+) -> anyhow::Result<File> {
+    let candidate = canonical_root.join(normalized);
+    let resolved =
+        std::fs::canonicalize(&candidate).map_err(|e| anyhow::anyhow!("file not found: {e}"))?;
+    if !resolved.starts_with(canonical_root) {
+        anyhow::bail!("path escapes published root");
+    }
+    if std::fs::symlink_metadata(&candidate)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        anyhow::bail!("path traverses a symlink");
+    }
+    File::open(&resolved).map_err(|e| anyhow::anyhow!("open failed: {e}"))
+}
+
 /// Stat-then-validate the opened file: must be a regular file (not
 /// a FIFO / socket / device / directory) and within `size_cap`.
 pub fn validate_regular(file: &File, size_cap: u64) -> anyhow::Result<u64> {
-    use std::os::unix::fs::MetadataExt;
     let meta = file
         .metadata()
         .map_err(|e| anyhow::anyhow!("stat failed: {e}"))?;
     if !meta.is_file() {
         anyhow::bail!("not a regular file");
     }
-    let size = meta.size();
+    let size = meta.len();
     if size > size_cap {
         anyhow::bail!("file size {size} exceeds cap {size_cap}");
     }
@@ -157,7 +186,8 @@ pub fn validate_regular(file: &File, size_cap: u64) -> anyhow::Result<u64> {
 
 /// Open a directory by absolute path, returning an owned fd suitable
 /// for storing inside a `ProjectHandle`. Used at publish time.
-pub fn open_directory(path: &Path) -> anyhow::Result<std::os::fd::OwnedFd> {
+#[cfg(unix)]
+pub fn open_directory(path: &Path) -> anyhow::Result<PublishedFolderHandle> {
     use std::ffi::CString;
     let cstr = CString::new(path.as_os_str().as_encoded_bytes())
         .map_err(|_| anyhow::anyhow!("folder path contains nul byte"))?;
@@ -173,4 +203,9 @@ pub fn open_directory(path: &Path) -> anyhow::Result<std::os::fd::OwnedFd> {
     }
     use std::os::fd::FromRawFd;
     Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(raw) })
+}
+
+#[cfg(not(unix))]
+pub fn open_directory(path: &Path) -> anyhow::Result<PublishedFolderHandle> {
+    Ok(path.to_path_buf())
 }

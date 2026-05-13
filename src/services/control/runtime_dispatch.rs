@@ -74,7 +74,11 @@ use std::path::{Path, PathBuf};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+
+#[cfg(windows)]
+use crate::support::named_pipe::{scoped_pipe_name, PipeListener};
+#[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
 
 use crate::services::control::ability_proxy::AbilityProxy;
@@ -146,6 +150,10 @@ pub fn dispatch_socket_path() -> PathBuf {
             return PathBuf::from(p);
         }
     }
+    #[cfg(windows)]
+    {
+        return PathBuf::from(scoped_pipe_name("runtime-dispatch"));
+    }
     crate::persistence::config::state_dir().join(DEFAULT_RUNTIME_DISPATCH_SOCK_NAME)
 }
 
@@ -178,51 +186,84 @@ pub async fn run(proxy: AbilityProxy) -> anyhow::Result<()> {
     accept_loop(listener, proxy).await
 }
 
+#[derive(Debug)]
+enum DispatchListener {
+    #[cfg(unix)]
+    Unix(UnixListener),
+    #[cfg(windows)]
+    NamedPipe(PipeListener),
+}
+
 /// Bind the socket, recovering from a stale file left by a prior
 /// daemon crash. Async because the liveness probe (UnixStream
 /// connect) is async.
-async fn bind_socket(path: &Path) -> anyhow::Result<UnixListener> {
-    if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            std::fs::create_dir_all(parent)?;
+async fn bind_socket(path: &Path) -> anyhow::Result<DispatchListener> {
+    #[cfg(unix)]
+    {
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        match UnixListener::bind(path) {
+            Ok(l) => Ok(DispatchListener::Unix(l)),
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                // Stale socket from a prior daemon crash. Probe — if a
+                // live process accepts, we abort; otherwise we unlink
+                // and retry.
+                if UnixStream::connect(path).await.is_ok() {
+                    anyhow::bail!(
+                        "another process already accepts on {} — refusing to overwrite",
+                        path.display()
+                    );
+                }
+                let _ = std::fs::remove_file(path);
+                UnixListener::bind(path)
+                    .map(DispatchListener::Unix)
+                    .map_err(|e| {
+                        anyhow::anyhow!("rebind {} after stale unlink: {e}", path.display())
+                    })
+            }
+            Err(e) => Err(anyhow::anyhow!("bind {}: {e}", path.display())),
         }
     }
-    match UnixListener::bind(path) {
-        Ok(l) => Ok(l),
-        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-            // Stale socket from a prior daemon crash. Probe — if a
-            // live process accepts, we abort; otherwise we unlink
-            // and retry.
-            if UnixStream::connect(path).await.is_ok() {
-                anyhow::bail!(
-                    "another process already accepts on {} — refusing to overwrite",
-                    path.display()
-                );
-            }
-            let _ = std::fs::remove_file(path);
-            UnixListener::bind(path)
-                .map_err(|e| anyhow::anyhow!("rebind {} after stale unlink: {e}", path.display()))
-        }
-        Err(e) => Err(anyhow::anyhow!("bind {}: {e}", path.display())),
+    #[cfg(windows)]
+    {
+        PipeListener::bind(path.to_string_lossy().to_string())
+            .map(DispatchListener::NamedPipe)
+            .map_err(|e| anyhow::anyhow!("bind {}: {e}", path.display()))
     }
 }
 
 /// Accept connections forever, spawn one task per connection.
 /// One request per connection; the task ends after writing the
 /// response.
-pub async fn accept_loop(listener: UnixListener, proxy: AbilityProxy) -> anyhow::Result<()> {
-    loop {
-        let (stream, _peer) = listener.accept().await?;
-        let proxy = proxy.clone();
-        tokio::spawn(async move {
-            if let Err(e) = serve_one(stream, proxy).await {
-                // Per-connection failures never crash the loop. We
-                // log via eprintln (mirrors server.rs); a future
-                // structured-logging pass routes both modules
-                // through `tracing`.
-                eprintln!("[runtime-dispatch] connection error: {e:#}");
-            }
-        });
+async fn accept_loop(listener: DispatchListener, proxy: AbilityProxy) -> anyhow::Result<()> {
+    match listener {
+        #[cfg(unix)]
+        DispatchListener::Unix(listener) => loop {
+            let (stream, _peer) = listener.accept().await?;
+            let proxy = proxy.clone();
+            tokio::spawn(async move {
+                if let Err(e) = serve_one(stream, proxy).await {
+                    // Per-connection failures never crash the loop. We
+                    // log via eprintln (mirrors server.rs); a future
+                    // structured-logging pass routes both modules
+                    // through `tracing`.
+                    eprintln!("[runtime-dispatch] connection error: {e:#}");
+                }
+            });
+        },
+        #[cfg(windows)]
+        DispatchListener::NamedPipe(mut listener) => loop {
+            let stream = listener.accept().await?;
+            let proxy = proxy.clone();
+            tokio::spawn(async move {
+                if let Err(e) = serve_one(stream, proxy).await {
+                    eprintln!("[runtime-dispatch] connection error: {e:#}");
+                }
+            });
+        },
     }
 }
 
@@ -230,8 +271,11 @@ pub async fn accept_loop(listener: UnixListener, proxy: AbilityProxy) -> anyhow:
 /// dispatches, writes one line, closes. Stream mode reads one line,
 /// dispatches, writes a multi-line stream of frame lines, then closes.
 /// `mode` is parsed from the request (default "rpc").
-async fn serve_one(stream: UnixStream, proxy: AbilityProxy) -> anyhow::Result<()> {
-    let (read_half, mut write_half) = stream.into_split();
+async fn serve_one<S>(stream: S, proxy: AbilityProxy) -> anyhow::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let (read_half, mut write_half) = tokio::io::split(stream);
     let mut reader = BufReader::new(read_half);
     let mut line = String::new();
     let n = reader.read_line(&mut line).await?;

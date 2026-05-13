@@ -74,6 +74,7 @@ fn creds(tenant: &str, node: &str) -> Credentials {
         hub_api_base: None,
         username: None,
         hub_pubkey_b64: None,
+        hub_tls_ca_pem_b64: None,
     }
 }
 

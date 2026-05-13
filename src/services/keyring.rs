@@ -690,6 +690,17 @@ pub fn home_relative(rel: &str) -> PathBuf {
     home.join(rel)
 }
 
+/// Default transport endpoint for the keyring daemon.
+pub fn default_socket_path() -> PathBuf {
+    #[cfg(windows)]
+    {
+        return PathBuf::from(crate::support::named_pipe::scoped_pipe_name("keyring"));
+    }
+
+    #[cfg(not(windows))]
+    home_relative(DEFAULT_KEYRING_SOCKET_REL)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

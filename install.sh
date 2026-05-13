@@ -63,6 +63,7 @@ main() {
     echo ""
     echo "    easynet                      → $INSTALL_DIR/"
     echo "    easynet-daemon               → $INSTALL_DIR/"
+    echo "    easynet-keyring              → $INSTALL_DIR/"
     echo "    libaxon_dendrite_bridge.$LIB_EXT  → $NATIVE_DIR/"
     echo ""
     if [ -n "${PROFILE:-}" ]; then
@@ -178,14 +179,16 @@ download_and_install() {
     # that). Plain mv into INSTALL_DIR — no per-step sudo, no tty
     # juggling.
     #
-    # The transport-plane rollout ships exactly two binaries:
-    # `easynet` (user-facing CLI) and `easynet-daemon` (long-running
-    # control + InvocationServer sidecar). Treat the daemon as a
-    # required artefact: if the tarball is missing it, the release is
+    # The transport-plane rollout ships three binaries:
+    # `easynet` (user-facing CLI), `easynet-daemon` (long-running
+    # control + InvocationServer sidecar), and `easynet-keyring`
+    # (device-signing vault sidecar). Treat them as required
+    # artefacts: if the tarball is missing one, the release is
     # malformed and the installer should fail loudly.
     mv "${TMPDIR}/easynet"        "${INSTALL_DIR}/easynet"
     mv "${TMPDIR}/easynet-daemon" "${INSTALL_DIR}/easynet-daemon"
-    chmod +x "${INSTALL_DIR}/easynet" "${INSTALL_DIR}/easynet-daemon"
+    mv "${TMPDIR}/easynet-keyring" "${INSTALL_DIR}/easynet-keyring"
+    chmod +x "${INSTALL_DIR}/easynet" "${INSTALL_DIR}/easynet-daemon" "${INSTALL_DIR}/easynet-keyring"
 
     # Install dendrite bridge library under the REAL user's home so
     # the daemon can dlopen it without LD_LIBRARY_PATH gymnastics.
@@ -261,11 +264,11 @@ reload_shell() {
 }
 
 cleanup_stale_binaries() {
-    # Remove stale easynet/easynet-daemon/axon-runtime binaries from
+    # Remove stale easynet/easynet-daemon/easynet-keyring/axon-runtime binaries from
     # other PATH dirs
     # that would shadow the freshly installed copy. We're root here,
     # so direct rm — no nested sudo dance.
-    for bin in easynet easynet-daemon axon-runtime; do
+    for bin in easynet easynet-daemon easynet-keyring axon-runtime; do
         IFS=:
         for dir in $PATH; do
             unset IFS

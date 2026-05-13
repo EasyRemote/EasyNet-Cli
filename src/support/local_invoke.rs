@@ -159,10 +159,7 @@ pub fn invoke_local_ability_with_subject(
 ///   * `NotFound` — control.sock has been unlinked since we did
 ///     the `control.json` existence pre-check.
 ///   * `AddrNotAvailable` — Linux variant of the same race.
-fn friendlify_connect_error(
-    err: anyhow::Error,
-    control_json: &std::path::Path,
-) -> anyhow::Error {
+fn friendlify_connect_error(err: anyhow::Error, control_json: &std::path::Path) -> anyhow::Error {
     let chain_has_daemon_down = err.chain().any(|cause| {
         if let Some(io_err) = cause.downcast_ref::<std::io::Error>() {
             matches!(
@@ -180,10 +177,7 @@ fn friendlify_connect_error(
             "daemon not running (control socket at {} is not accepting \
              connections — its process likely died or was killed without \
              cleaning up). Start it with `easynet start`.",
-            control_json
-                .parent()
-                .unwrap_or(control_json)
-                .display()
+            control_json.parent().unwrap_or(control_json).display()
         )
     } else {
         err.context("connect to local daemon control socket")
@@ -266,8 +260,7 @@ mod tests {
         // friendlify_connect_error must turn the io error into the
         // same actionable message users get from Branch 1.
         let io_err = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
-        let wrapped =
-            anyhow::Error::new(io_err).context("FFI client: connect to /tmp/sock failed");
+        let wrapped = anyhow::Error::new(io_err).context("FFI client: connect to /tmp/sock failed");
         let friendly = friendlify_connect_error(wrapped, std::path::Path::new("/tmp/control.json"));
         let msg = format!("{friendly}");
         assert!(
@@ -286,8 +279,7 @@ mod tests {
         // must surface as-is — masking it as "daemon not running"
         // would send the operator chasing the wrong fix.
         let io_err = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
-        let wrapped =
-            anyhow::Error::new(io_err).context("FFI client: connect to /tmp/sock failed");
+        let wrapped = anyhow::Error::new(io_err).context("FFI client: connect to /tmp/sock failed");
         let friendly = friendlify_connect_error(wrapped, std::path::Path::new("/tmp/control.json"));
         let msg = format!("{friendly}");
         assert!(
