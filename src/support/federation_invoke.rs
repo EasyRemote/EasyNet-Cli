@@ -21,7 +21,7 @@
 //    `Invocation` server (default `~/.easynet/daemon.sock`).
 // 3. It sends an `InvokeRequest` whose `function_name` is
 //    `federation.forward_invoke` and whose `arguments` is the
-//    JSON `{target_uri, inner_envelope_b64}` shape that
+//    JSON `{target_ura, inner_envelope_b64}` shape that
 //    `federation_wrappers::ForwardInvokeRequest` deserialises.
 //    The inner envelope carries the original `(ability, args)`
 //    pair so the peer-side daemon can dispatch it once it lands.
@@ -57,9 +57,9 @@ use anyhow::{anyhow, bail, Context};
 use serde_json::{json, Value};
 
 use crate::pb::axon::v1::invocation_client::InvocationClient;
-use crate::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest, SubjectIdentity};
+use crate::services::axon_serve::ProtoEnvelope;
 
-/// Validate a `--node` argument as a canonical EasyNet device URI.
+/// Validate a `--node` argument as a canonical EasyNet device or hub URI.
 /// Returns the URI string when it parses; surfaces a typed error
 /// when it doesn't, with the exact wire-shape we expect quoted in
 /// the message so the operator can fix the typo.
@@ -71,26 +71,13 @@ use crate::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest, SubjectIdentit
 /// or the realm hub, never hosted user agents.
 pub fn parse_node_uri(node: &str) -> anyhow::Result<String> {
     let trimmed = node.trim();
-    if !trimmed.starts_with("easynet:///r/") {
-        bail!(
-            "--node `{trimmed}` is not a canonical EasyNet device URI. \
-             Expected shape: easynet:///r/<realm>/device/<node-uuid>. \
+    let parsed = crate::ura::parse_ura(trimmed).map_err(|err| {
+        anyhow::anyhow!(
+            "--node `{trimmed}` is not a canonical EasyNet device or hub URI: {err}. \
              A bare hostname or `https://...` URL is not accepted. \
              {URI_DISCOVERY_HINT}"
-        );
-    }
-    // Past the `r/` prefix, require at least `<realm>/<role>/<node>`
-    // so the daemon's parsers have non-empty tenant + node
-    // components to extract. Accept only canonical `device`
-    // targets here; legacy `agent/<node>` device aliases are
-    // retired and must be repaired before they reach this helper.
-    let after = trimmed
-        .strip_prefix("easynet:///r/")
-        .expect("prefix checked above");
-    let mut parts = after.splitn(3, '/');
-    let realm = parts.next().unwrap_or("");
-    let role = parts.next().unwrap_or("");
-    let node_id = parts.next().unwrap_or("");
+        )
+    })?;
 
     // URI v4.1.4: `/hub` is a complete URA on its own (no id-tail);
     // it identifies the realm's singleton hub. `--node easynet:///r/<realm>/hub`
@@ -100,33 +87,16 @@ pub fn parse_node_uri(node: &str) -> anyhow::Result<String> {
     // dispatcher fans out across federated_peers (when the local
     // daemon is forwarding on behalf of a CLI bound to a peer
     // realm).
-    if role == "hub" {
-        if !node_id.is_empty() {
-            bail!(
-                "--node `{trimmed}` has trailing tail after /hub; URI v4.1.4 hub URI is bare \
-                 (no id segment). Expected: easynet:///r/<realm>/hub. \
-                 {URI_DISCOVERY_HINT}"
-            );
-        }
-        if realm.is_empty() {
-            bail!(
-                "--node `{trimmed}` has empty realm. Expected: easynet:///r/<realm>/hub. \
-                 {URI_DISCOVERY_HINT}"
-            );
-        }
+    if parsed.kind == crate::ura::URAKind::Hub {
         return Ok(trimmed.to_string());
     }
 
-    if realm.is_empty()
-        || node_id.is_empty()
-        || node_id.contains('/')
-        || (role == "device" && node_id.contains('.'))
-        || role != "device"
-    {
+    if parsed.kind != crate::ura::URAKind::Device {
         bail!(
             "--node `{trimmed}` does not parse as easynet:///r/<realm>/device/<node-uuid>. \
-             Got realm={realm:?}, segment={role:?}, node={node_id:?}. \
-             {URI_DISCOVERY_HINT}"
+             Got kind={}. \
+             {URI_DISCOVERY_HINT}",
+            parsed.kind
         );
     }
     Ok(trimmed.to_string())
@@ -172,7 +142,7 @@ pub fn invoke_via_federation_forward(
     ability: &str,
     args: Value,
     node_uri: &str,
-    caller_uri: Option<&str>,
+    caller_ura: Option<&str>,
 ) -> anyhow::Result<Value> {
     let socket_path = crate::support::local_daemon_grpc::resolve_socket_path();
     if !crate::support::local_daemon_grpc::probe_accepting(&socket_path) {
@@ -184,7 +154,7 @@ pub fn invoke_via_federation_forward(
     }
 
     // The daemon's `federation.forward_invoke` request shape per
-    // DEC-N4 §2.1: `ForwardInvokeRequest { target_uri,
+    // DEC-N4 §2.1: `ForwardInvokeRequest { target_ura,
     // inner_envelope_b64, causal_context_bytes,
     // forward_deadline_ms }`. The inner envelope carries the
     // original `(ability, args, call_id)` tuple as a JSON blob;
@@ -220,7 +190,7 @@ pub fn invoke_via_federation_forward(
     // caller (instead of a direct CLI dial), it will populate
     // both with real values per PR-N5 §1 / DEC-N5 §3.
     let forward_args = json!({
-        "target_uri": node_uri,
+        "target_ura": node_uri,
         "inner_envelope_b64": inner_envelope_b64,
         "causal_context_bytes": Vec::<u8>::new(),
         "forward_deadline_ms": 0_u64,
@@ -238,15 +208,15 @@ pub fn invoke_via_federation_forward(
     // admission gate rejects an envelope missing either with
     // `AXON_AXIOM_ENVELOPE_INCOMPLETE:callee_missing`. For a
     // `federation.forward_invoke` call the inner ability's
-    // `target_uri` is the ultimate addressee, so we stamp it as
+    // `target_ura` is the ultimate addressee, so we stamp it as
     // both `callee` (intermediate routing hop addressee per A1
     // "intermediate hops MAY repeat target") and `subject` (the
     // identity the inner ability runs against). This matches the
     // backend Go side's `daemon_grpc/invoke_remote.go` envelope
     // convention.
     // v4.1.5 §A.URA-3 strict parsing: agent tail MUST be
-    // `<user-uuid>.<agent-id>` (split on dot). The legacy
-    // `r/cli/agent/local` fallback fails the strict parser
+    // `<user-uuid>.<agent-id>` (split on dot). The
+    // `r/cli/agent/local` alias fails the strict parser
     // because `local` has no dot. Use the device shape instead —
     // `r/cli/device/local` parses cleanly (device tail is a bare
     // token with no dot/slash). The daemon's loopback bypass +
@@ -254,7 +224,7 @@ pub fn invoke_via_federation_forward(
     // but we want the wire to ship a parseable URA so that any
     // caller-side strict validator (or a future enforce-mode
     // flip) does not reject the envelope.
-    let resolved_caller_uri = caller_uri
+    let resolved_caller_ura = caller_ura
         .unwrap_or("easynet:///r/cli/device/local")
         .to_string();
     // AXIOM §A1: `invocation_nonce` is a 16-byte random value the
@@ -262,32 +232,8 @@ pub fn invoke_via_federation_forward(
     // (`AXON_NONCE_REPLAY` rejects on a hit in the replay window).
     // CLI-initiated calls are one-shot, so a fresh `OsRng` 16-byte
     // sample per call is sufficient.
-    use rand::RngCore;
-    let mut invocation_nonce = vec![0u8; 16];
-    rand::rngs::OsRng.fill_bytes(&mut invocation_nonce);
-    let envelope = Envelope {
-        caller: Some(AgentIdentity {
-            uri: resolved_caller_uri,
-            ..AgentIdentity::default()
-        }),
-        callee: Some(AgentIdentity {
-            uri: node_uri.to_string(),
-            ..AgentIdentity::default()
-        }),
-        subject: Some(SubjectIdentity {
-            uri: node_uri.to_string(),
-            ..SubjectIdentity::default()
-        }),
-        invocation_nonce,
-        ..Envelope::default()
-    };
-
-    let request = InvokeRequest {
-        envelope: Some(envelope),
-        function_name: "federation.forward_invoke".to_string(),
-        arguments: forward_args_bytes,
-        ..InvokeRequest::default()
-    };
+    let request = ProtoEnvelope::targeted(&resolved_caller_ura, node_uri, node_uri)?
+        .invoke_request("federation.forward_invoke", forward_args_bytes)?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -402,11 +348,11 @@ pub fn invoke_via_federation_forward(
 /// shape.
 ///
 /// Args:
-///   * `agent_uri_filter` — optional URI filter passed verbatim
+///   * `agent_ura_filter` — optional URI filter passed verbatim
 ///     to the daemon. `None` returns the full federated
 ///     directory; `Some(uri)` returns at most one entry (lex
 ///     tie-break on peer realm).
-///   * `caller_uri` — optional caller URI for the envelope. When
+///   * `caller_ura` — optional caller URI for the envelope. When
 ///     `None`, falls back to the device URI minted from
 ///     `credentials.json`, then the generic
 ///     `easynet:///r/cli/device/local` placeholder. The daemon's
@@ -415,8 +361,8 @@ pub fn invoke_via_federation_forward(
 /// Returns the `entries` array as a `Vec<Value>` (each element
 /// is a `DirectoryEntry`-shaped JSON object).
 pub fn invoke_federation_discover(
-    agent_uri_filter: Option<&str>,
-    caller_uri: Option<&str>,
+    agent_ura_filter: Option<&str>,
+    caller_ura: Option<&str>,
 ) -> anyhow::Result<Vec<Value>> {
     let socket_path = crate::support::local_daemon_grpc::resolve_socket_path();
     if !crate::support::local_daemon_grpc::probe_accepting(&socket_path) {
@@ -428,42 +374,22 @@ pub fn invoke_federation_discover(
     }
 
     let mut req_args = json!({});
-    if let Some(uri) = agent_uri_filter {
-        req_args["agent_uri"] = Value::String(uri.to_string());
+    if let Some(uri) = agent_ura_filter {
+        req_args["agent_ura"] = Value::String(uri.to_string());
     }
     let arg_bytes = serde_json::to_vec(&req_args).context("encode discover args")?;
 
-    let resolved_caller = caller_uri
+    let resolved_caller = caller_ura
         .map(str::to_string)
         .or_else(|| {
             crate::persistence::config::load_credentials()
                 .ok()
-                .map(|c| crate::uri::device_uri(&c.tenant_id, &c.node_id))
+                .map(|c| crate::ura::device_ura(&c.tenant_id, &c.node_id))
         })
-        .unwrap_or_else(|| crate::uri::device_uri("cli", "local"));
+        .unwrap_or_else(|| crate::ura::device_ura("cli", "local"));
 
-    let envelope = Envelope {
-        caller: Some(AgentIdentity {
-            uri: resolved_caller.clone(),
-            ..AgentIdentity::default()
-        }),
-        callee: Some(AgentIdentity {
-            uri: resolved_caller.clone(),
-            ..AgentIdentity::default()
-        }),
-        subject: Some(SubjectIdentity {
-            uri: resolved_caller,
-            ..SubjectIdentity::default()
-        }),
-        ..Envelope::default()
-    };
-
-    let request = InvokeRequest {
-        envelope: Some(envelope),
-        function_name: "federation.discover".to_string(),
-        arguments: arg_bytes,
-        ..InvokeRequest::default()
-    };
+    let request = ProtoEnvelope::loopback(resolved_caller)?
+        .invoke_request("federation.discover", arg_bytes)?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -503,25 +429,25 @@ pub fn invoke_federation_discover(
 /// `federation.revoke` against the local daemon's gRPC
 /// InvocationServer. Removes the named Agent's directory entry on
 /// the hub. CLI lifecycle surfaces (`easynet device remove`,
-/// `easynet device reset --force`) call this helper instead of the
-/// legacy `fleet.remove_node` / `fleet.deregister_self` ack-only
-/// stubs.
+/// `easynet device reset --force`) call this helper instead of
+/// local-only `device.node.remove` / `device.node.deregister`
+/// acknowledgements.
 ///
 /// Args:
-///   * `agent_uri` — canonical URI of the Agent to revoke (typically
+///   * `agent_ura` — canonical URI of the Agent to revoke (typically
 ///     a device URA `easynet:///r/<realm>/device/<id>`).
 ///   * `reason` — operator-supplied label, written through to the
 ///     receipt for audit. `"deregister"` / `"reset"` are common.
-///   * `caller_uri` — same fallback chain as
+///   * `caller_ura` — same fallback chain as
 ///     `invoke_federation_discover`.
 ///
 /// Returns `Ok(())` on a successful ack from the daemon. Best-effort
 /// by contract on the hub side, but this helper still surfaces
 /// transport / parse errors so callers can log them honestly.
 pub fn invoke_federation_revoke(
-    agent_uri: &str,
+    agent_ura: &str,
     reason: &str,
-    caller_uri: Option<&str>,
+    caller_ura: Option<&str>,
 ) -> anyhow::Result<()> {
     let socket_path = crate::support::local_daemon_grpc::resolve_socket_path();
     if !crate::support::local_daemon_grpc::probe_accepting(&socket_path) {
@@ -533,42 +459,22 @@ pub fn invoke_federation_revoke(
     }
 
     let req_args = json!({
-        "agent_uri": agent_uri,
+        "agent_ura": agent_ura,
         "reason": reason,
     });
     let arg_bytes = serde_json::to_vec(&req_args).context("encode revoke args")?;
 
-    let resolved_caller = caller_uri
+    let resolved_caller = caller_ura
         .map(str::to_string)
         .or_else(|| {
             crate::persistence::config::load_credentials()
                 .ok()
-                .map(|c| crate::uri::device_uri(&c.tenant_id, &c.node_id))
+                .map(|c| crate::ura::device_ura(&c.tenant_id, &c.node_id))
         })
-        .unwrap_or_else(|| crate::uri::device_uri("cli", "local"));
+        .unwrap_or_else(|| crate::ura::device_ura("cli", "local"));
 
-    let envelope = Envelope {
-        caller: Some(AgentIdentity {
-            uri: resolved_caller.clone(),
-            ..AgentIdentity::default()
-        }),
-        callee: Some(AgentIdentity {
-            uri: resolved_caller.clone(),
-            ..AgentIdentity::default()
-        }),
-        subject: Some(SubjectIdentity {
-            uri: resolved_caller,
-            ..SubjectIdentity::default()
-        }),
-        ..Envelope::default()
-    };
-
-    let request = InvokeRequest {
-        envelope: Some(envelope),
-        function_name: "federation.revoke".to_string(),
-        arguments: arg_bytes,
-        ..InvokeRequest::default()
-    };
+    let request =
+        ProtoEnvelope::loopback(resolved_caller)?.invoke_request("federation.revoke", arg_bytes)?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -669,8 +575,8 @@ mod tests {
         // indicates v1 `agent/01HUB`-style mistake.
         let err = parse_node_uri("easynet:///r/realm/hub/01HUB").expect_err("trailing id rejected");
         assert!(
-            err.to_string().contains("trailing tail"),
-            "expected trailing-tail diagnostic, got: {err}"
+            err.to_string().contains("unexpected tail"),
+            "expected hub tail diagnostic, got: {err}"
         );
     }
 
@@ -682,17 +588,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_node_uri_rejects_legacy_agent_device_shape() {
+    fn parse_node_uri_rejects_agent_device_alias_shape() {
         let err = parse_node_uri("easynet:///r/realm-b/agent/n1")
-            .expect_err("legacy device alias must be rejected");
-        assert!(format!("{err}").contains("does not parse"));
+            .expect_err("device alias must be rejected");
+        assert!(format!("{err}").contains("agent tail must"));
     }
 
     #[test]
     fn parse_node_uri_rejects_https_url() {
         let err = parse_node_uri("https://hub.example/r/foo").expect_err("https rejected");
         assert!(
-            format!("{err}").contains("not a canonical EasyNet device URI"),
+            format!("{err}").contains("not a canonical EasyNet device or hub URI"),
             "error message must cite the canonical-URI requirement, got: {err}"
         );
     }
@@ -707,7 +613,7 @@ mod tests {
     fn parse_node_uri_rejects_missing_tenant() {
         let err = parse_node_uri("easynet:///r//device/n1").expect_err("empty tenant rejected");
         assert!(
-            format!("{err}").contains("does not parse"),
+            format!("{err}").contains("missing <realm>"),
             "must surface a structural-mismatch error, got: {err}"
         );
     }
@@ -716,21 +622,21 @@ mod tests {
     fn parse_node_uri_rejects_missing_node_id() {
         let err =
             parse_node_uri("easynet:///r/realm-b/device/").expect_err("empty node id rejected");
-        assert!(format!("{err}").contains("does not parse"));
+        assert!(format!("{err}").contains("device URI requires"));
     }
 
     #[test]
     fn parse_node_uri_rejects_extra_path_segments() {
         let err = parse_node_uri("easynet:///r/realm-b/device/n1/ability/x")
             .expect_err("extra segments rejected");
-        assert!(format!("{err}").contains("does not parse"));
+        assert!(format!("{err}").contains("device-id must be bare"));
     }
 
     #[test]
     fn parse_node_uri_rejects_real_agent_profile_uri() {
         let err = parse_node_uri("easynet:///r/realm-b/agent/alice.claude")
             .expect_err("hosted agent must not be accepted");
-        assert!(format!("{err}").contains("agent profile"));
+        assert!(format!("{err}").contains("kind=agent"));
     }
 
     #[test]
@@ -740,7 +646,7 @@ mod tests {
         // operator notices before the URI hits the daemon.
         let err =
             parse_node_uri("easynet:///r/realm-b/notarole/n1").expect_err("wrong keyword rejected");
-        assert!(format!("{err}").contains("does not parse"));
+        assert!(format!("{err}").contains("unknown role"));
     }
 
     #[test]

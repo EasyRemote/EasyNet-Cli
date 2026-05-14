@@ -9,8 +9,6 @@
 //! ------------------------
 //!   conversation.send / conversation.stream  (default visibility SCOPED [P8])
 //!   session.create / session.list / session.resume / session.close
-//!   device.meta.describe / device.meta.list_abilities / device.meta.acquire / device.meta.forget
-//!     / device.meta.publish / device.meta.compose / device.meta.cancel
 //!   skill.<name>  (per-skill PRIVATE abilities; one per directory in
 //!                  ~/.claude/skills/, ~/.agents/skills/, etc.)
 //!
@@ -24,17 +22,14 @@ pub const LLM_PROFILE_ABILITY_PREFIXES: &[&str] = &[
     // spec, `meta.*` is device-profile-owned (device-introspection
     // is a host concern; per-agent introspection uses the
     // `{ scope: "<self>" }` parameter). LLM profile's surface is
-    // `conversation.*` / `session.*` / `<agent>.skill.*`. Legacy
-    // bare-namespace prefixes are kept as a defense-in-depth
-    // fallback for stale call sites that emit a legacy-named
-    // ability into a profile-side selector.
+    // `conversation.*` / `session.*` / private `skill.*`.
     //
     // `device.voice.*` was previously listed here on the
     // assumption that voice signaling is an LLM-owned ability
     // family (RFC-005 v3.2 A6/A7). The handlers actually run
     // on the device daemon (`OwnerKind::Device` in the
     // registry); claiming them in this profile caused the
-    // catalogue's `descriptors_for(agent_uri)` to stamp every
+    // catalogue's `descriptors_for(agent_ura)` to stamp every
     // voice verb with the agent URA, so `easynet ability list`
     // grouped them under AGENT instead of DEVICE / SYSTEM and
     // the KIND column read `agent`. Per the truth-table spec
@@ -45,7 +40,6 @@ pub const LLM_PROFILE_ABILITY_PREFIXES: &[&str] = &[
     // profile via DEVICE_PROFILE_ABILITY_PREFIXES.
     "conversation.",
     "session.",
-    "device.skill.",
     "skill.",
 ];
 
@@ -55,21 +49,18 @@ pub fn owns(ability_name: &str) -> bool {
         .any(|p| ability_name.starts_with(p))
 }
 
-/// AbilityDescriptors for every conversation.* / session.* / meta.*
-/// / skill.* in the live registry, anchored to the LLM-profile
+/// AbilityDescriptors for every conversation.* / session.* /
+/// skill.* in the live registry, anchored to the LLM-profile
 /// Agent's URA. Per RFC §1.1 + §18:
 ///   * skill.*         → PRIVATE (per-skill, owner-only by default)
 ///   * conversation.*  → SCOPED  (default per [P8] correction)
 ///   * session.*       → SCOPED
-///   * meta.*          → SCOPED  (callable PUBLIC, results filtered)
 ///
-/// `device.meta.describe` is technically PUBLIC per §18, but we mark it
-/// SCOPED here for safety; the higher-level dispatcher upgrades to
-/// PUBLIC when it lands. P4.7 narrows the SCOPED axes.
+/// P4.7 narrows the SCOPED axes.
 pub fn descriptors_for(
-    owner_agent_uri: &str,
+    owner_agent_ura: &str,
 ) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
-    descriptors_for_with_metadata(owner_agent_uri, None)
+    descriptors_for_with_metadata(owner_agent_ura, None)
 }
 
 /// Same as `descriptors_for`, but stamps each emitted descriptor's
@@ -85,10 +76,10 @@ pub fn descriptors_for(
 /// it without a protocol-level discriminator.
 ///
 /// Callers that don't know the agent type pass `None`; only the
-/// fleet-level dispatcher (which loads `registry::agents`) has
+/// agent-registry dispatcher (which loads `registry::agents`) has
 /// the type in hand at advertise time.
 pub fn descriptors_for_with_metadata(
-    owner_agent_uri: &str,
+    owner_agent_ura: &str,
     agent_type_display: Option<&str>,
 ) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
     use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
@@ -101,7 +92,7 @@ pub fn descriptors_for_with_metadata(
             } else {
                 Visibility::Scoped
             };
-            let mut desc = AbilityDescriptor::new(m.name.clone(), owner_agent_uri, visibility)
+            let mut desc = AbilityDescriptor::new(m.name.clone(), owner_agent_ura, visibility)
                 .expect("registry-derived names satisfy descriptor invariants")
                 .with_input_schema(m.input_schema.clone())
                 .with_hints(m.hints.clone())
@@ -121,17 +112,17 @@ mod tests {
 
     #[test]
     fn owns_recognizes_llm_namespaces() {
-        // Q3 of truth-table spec: meta.* is device-profile-owned,
-        // NOT llm-profile. The LLM surface is conversation.*,
-        // session.*, device.skill.*. meta.* and device.voice.*
-        // fall through to the device profile (the voice signaling
-        // handlers run on the host daemon).
+        // Q3 of truth-table spec: meta.* and device.skill.* are
+        // device-profile-owned, NOT llm-profile. The LLM surface is
+        // conversation.*, session.*, and private skill.*.
         assert!(owns("conversation.send"));
         assert!(owns("conversation.stream"));
         assert!(owns("session.create"));
         assert!(owns("session.resume"));
-        assert!(owns("device.skill.alive-video"));
-        assert!(owns("device.skill.design"));
+        assert!(owns("skill.alive-video"));
+        assert!(owns("skill.design"));
+        assert!(!owns("device.skill.list"));
+        assert!(!owns("device.skill.tree"));
         // device.voice.* is NOT llm-owned post-truth-table fix —
         // the handlers run on the device daemon.
         assert!(!owns("device.voice.subscribe"));
@@ -141,7 +132,7 @@ mod tests {
 
     #[test]
     fn owns_rejects_other_profiles() {
-        assert!(!owns("device.fleet.list_abilities"));
+        assert!(!owns("device.skill.list"));
         assert!(!owns("device.consent.subscribe"));
         assert!(!owns("device.policy.evaluate"));
     }

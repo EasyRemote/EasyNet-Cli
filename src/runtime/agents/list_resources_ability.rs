@@ -6,7 +6,7 @@
 // Resource discovery surface for the eight physical-channel abilities
 // (mic.subscribe, camera.subscribe, …). A consumer wishing to record
 // "Chrome" calls `meta.list_resources(types=["application"])`, picks
-// the application's `resource_uri`, then invokes
+// the application's `resource_ura`, then invokes
 // `screen.subscribe(subject=<that uri>)`.
 //
 // Wire shape (RFC-005 v3.2 A9):
@@ -15,7 +15,7 @@
 //                         "window"|"speaker"|"voice"|"asr_model"] }
 //   receipt: {
 //     "resources": [
-//       { "resource_uri", "type", "display_name", "owner_agent",
+//       { "resource_ura", "type", "display_name", "owner_agent",
 //         "binding", "metadata" }
 //     ]
 //   }
@@ -121,7 +121,7 @@ fn parse_kinds(raw: Option<&Value>) -> anyhow::Result<Vec<ResourceType>> {
 /// device-naming scheme to remote callers).
 fn project(e: &ResourceEntry) -> Value {
     json!({
-        "resource_uri": e.resource_uri,
+        "resource_ura": e.resource_ura,
         "owner_agent":  e.owner_agent,
         "type":         e.kind.as_str(),
         "binding":      e.binding.as_str(),
@@ -162,7 +162,7 @@ pub fn input_schema() -> Value {
 pub fn description() -> &'static str {
     "List physical and logical resources held by this Agent (mics, \
      cameras, displays, applications, windows, speakers, voice \
-     profiles, ASR models). Each entry's `resource_uri` is the \
+     profiles, ASR models). Each entry's `resource_ura` is the \
      canonical subject for media abilities (mic.subscribe, \
      camera.snapshot, ...). Optional `types` filter narrows the \
      result."

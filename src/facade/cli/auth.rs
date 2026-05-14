@@ -40,7 +40,7 @@ use crate::persistence::config::{
     self, atomic_write_with_permissions, state_dir, WritePermissions,
 };
 use crate::support::output;
-use crate::uri;
+use crate::ura;
 
 const DEFAULT_HUB_URL: &str = "http://127.0.0.1:8080";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -303,7 +303,7 @@ pub fn run_whoami(_args: WhoamiArgs) -> anyhow::Result<()> {
             // banner and `runtime status`.
             let device_ura = creds
                 .as_ref()
-                .map(|c| uri::device_uri(c.realm_str(), &c.node_id));
+                .map(|c| ura::device_ura(c.realm_str(), &c.node_id));
             let mut rows: Vec<(&str, &str)> = vec![("email", s.email.as_str())];
             if let Some(uid) = s.user_id.as_deref() {
                 rows.push(("user_id", uid));
@@ -332,13 +332,13 @@ pub fn run_whoami(_args: WhoamiArgs) -> anyhow::Result<()> {
             // when `easynet start` worked despite `whoami` saying
             // not logged in).
             let realm = c.realm_str().to_string();
-            let hub_ura = uri::hub_uri(&realm);
-            let device_ura = uri::device_uri(&realm, &c.node_id);
+            let hub_ura = ura::hub_ura(&realm);
+            let device_ura = ura::device_ura(&realm, &c.node_id);
             let user_ura = c
                 .username
                 .as_deref()
                 .filter(|s| !s.is_empty())
-                .map(|u| uri::user_uri(&realm, u));
+                .map(|u| ura::user_ura(&realm, u));
             println!("(no interactive auth session on this host)");
             println!("paired as a device:");
             let mut rows: Vec<(&str, &str)> = vec![("Hub", hub_ura.as_str())];
@@ -448,7 +448,7 @@ pub fn run_pair(args: PairArgs) -> anyhow::Result<()> {
 //
 // Why not under `easynet device` (the existing group)?
 // `easynet device list` already exists and talks to the LOCAL
-// daemon UDS via `fleet.list_nodes` (device-mode CLI: "what does
+// daemon UDS via `device.node.list` (device-mode CLI: "what does
 // THIS device see in its hub federation?"). Operator-mode HTTP
 // is a different lens entirely: "what does the BACKEND know about
 // the realm, viewed as the logged-in user?". Keeping the two
@@ -636,30 +636,30 @@ pub fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
 
 /// Joint-plan unified path: when the backend HTTP API can't find a
 /// device (typically cross-hub), fall back to the daemon's
-/// `device.describe` ability — the same surface
+/// `device.node.describe` ability — the same surface
 /// `easynet device show` uses post-phase-1.2.
 ///
 /// Routing matches the rest of the CLI:
 ///   * `node_id` matches this device's own node id → invoke
-///     `device.describe` locally over the control socket.
+///     `device.node.describe` locally over the control socket.
 ///   * Otherwise → resolve the target as a canonical device URA:
 ///     cross-hub directory hit first, local-realm fallback second,
-///     then forward_invoke `device.describe`.
+///     then forward_invoke `device.node.describe`.
 ///     The backend HTTP API surface only exposes bare uuid today,
 ///     but a canonical URA still lands here correctly if passed by
 ///     a future caller.
 ///
-/// The legacy `fleet.describe_node` path handled both arms server-
+/// The legacy `device.node.describe` path handled both arms server-
 /// side; the daemon-side handler is on the phase 4 cull list. This
 /// helper preserves the operator-visible behaviour while the
 /// dependency moves.
 fn fallback_device_abilities_from_local_daemon(node_id: &str) -> anyhow::Result<AbilityListResp> {
     let node = describe_node_via_unified_path(node_id)
-        .with_context(|| format!("invoke device.describe for node {node_id}"))?;
+        .with_context(|| format!("invoke device.node.describe for node {node_id}"))?;
     let abilities = node
         .get("abilities")
         .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow!("device.describe returned no 'abilities' array"))?;
+        .ok_or_else(|| anyhow!("device.node.describe returned no 'abilities' array"))?;
     let items = abilities
         .iter()
         .map(ability_item_from_descriptor)
@@ -682,10 +682,10 @@ fn describe_node_via_unified_path(node_id: &str) -> anyhow::Result<serde_json::V
     let is_local = !local_node.is_empty() && trimmed == local_node;
     if is_local {
         return crate::support::local_invoke::invoke_local_ability(
-            "device.describe",
-            serde_json::json!({}),
+            "device.node.describe",
+            serde_json::json!({"node_id": "local"}),
         )
-        .context("invoke device.describe (local)");
+        .context("invoke device.node.describe (local)");
     }
 
     describe_node_remote(trimmed, &local_tenant)
@@ -694,15 +694,15 @@ fn describe_node_via_unified_path(node_id: &str) -> anyhow::Result<serde_json::V
 #[cfg(feature = "axon-pb")]
 fn describe_node_remote(node: &str, local_tenant: &str) -> anyhow::Result<serde_json::Value> {
     let _ = local_tenant;
-    let target_uri = crate::support::remote_device::resolve_target_device_uri(node)?;
-    let caller_uri = crate::support::remote_device::caller_device_uri_from_credentials();
+    let target_ura = crate::support::remote_device::resolve_target_device_ura(node)?;
+    let caller_ura = crate::support::remote_device::caller_device_uri_from_credentials();
     crate::support::federation_invoke::invoke_via_federation_forward(
-        "device.describe",
-        serde_json::json!({}),
-        &target_uri,
-        caller_uri.as_deref(),
+        "device.node.describe",
+        serde_json::json!({"node_id": "local"}),
+        &target_ura,
+        caller_ura.as_deref(),
     )
-    .with_context(|| format!("forward device.describe to target={target_uri}"))
+    .with_context(|| format!("forward device.node.describe to target={target_ura}"))
 }
 
 #[cfg(not(feature = "axon-pb"))]

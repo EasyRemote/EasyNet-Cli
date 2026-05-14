@@ -2,12 +2,12 @@
 // =======================================
 //
 // File: src/facade/cli/status.rs
-// Description: Hub connection info + fleet summary. Joint-plan
+// Description: Hub connection info + device summary. Joint-plan
 //              unified path: cross-device enumeration goes through
 //              `federation.discover` (the same surface
 //              `easynet device list` uses); ability count goes
 //              through `easynet.discover`. No more
-//              `fleet.list_nodes` — that handler is on the phase 4
+//              `device.node.list` — that handler is on the phase 4
 //              cull list.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
@@ -20,7 +20,7 @@ use crate::persistence::config;
 use crate::support::local_invoke::invoke_local_ability;
 use crate::support::net;
 use crate::support::output;
-use crate::uri;
+use crate::ura;
 
 #[derive(Debug, Args)]
 pub struct StatusArgs {}
@@ -38,8 +38,8 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
     if let Ok(creds) = config::load_credentials() {
         output::info("Device pairing:");
         let realm = creds.realm_str();
-        let hub_ura = uri::hub_uri(realm);
-        let device_ura = uri::device_uri(realm, &creds.node_id);
+        let hub_ura = ura::hub_ura(realm);
+        let device_ura = ura::device_ura(realm, &creds.node_id);
         // Per RFC-001 §3.2, hub / user / device are all first-class
         // agents; we surface all three URAs in scope-broadest-first
         // order to match the banner. The user row is conditional on
@@ -51,7 +51,7 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
             .username
             .as_deref()
             .filter(|s| !s.is_empty())
-            .map(|u| uri::user_uri(realm, u));
+            .map(|u| ura::user_ura(realm, u));
         let mut rows: Vec<(&str, &str)> = vec![("Hub", hub_ura.as_str())];
         if let Some(ref u) = user_ura {
             rows.push(("Current user", u.as_str()));
@@ -111,7 +111,7 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
             || net::discover_pid_from_endpoint(&state.endpoint).is_some();
         if alive {
             output::info(
-                "Bridge-mode runtime is up. Local daemon-only fleet and ability probes are skipped in this mode.",
+                "Bridge-mode runtime is up. Local daemon-only device and ability probes are skipped in this mode.",
             );
         } else {
             output::warn(

@@ -69,7 +69,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::core::ability_spec::Visibility;
+use crate::core::ability_spec::{AbilityManifest, Visibility};
 use crate::registry::agents::{AgentEntry, AgentRegistry};
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
@@ -97,9 +97,10 @@ pub fn register_for_agent<F>(
     let provider: Arc<dyn Fn() -> AgentRegistry + Send + Sync> = Arc::new(agent_registry_provider);
     let qualified = format!("{agent_name}.{ABILITY_VERB}");
     let agent = agent_name.clone();
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_spec(
         &qualified,
         OwnerKind::Agent(agent_name),
+        manifest(),
         Arc::new(move |args: Value| dispatch(&agent, &provider, &dispatch_registry_handle, args)),
     );
 }
@@ -323,10 +324,10 @@ fn resolve_via_federation(
     // gate rejects with AXON_MEMBERSHIP_REQUIRED — same caller-URI
     // fix we apply at the daemon-boot advertise call site (see
     // `facade::cli::start::republish_via_federation_best_effort`).
-    let device_caller_uri = crate::uri::device_uri(tenant, &creds.node_id);
-    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+    let device_caller_ura = crate::ura::device_ura(tenant, &creds.node_id);
+    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(
         &bridge,
-        device_caller_uri,
+        device_caller_ura,
     );
     // Tenant_filter wire shape mirrors RFC-002 §5 update:
     //   * User scope → None: hub auto-fills caller_tenant.
@@ -727,6 +728,11 @@ pub fn input_schema() -> Value {
     })
 }
 
+pub fn manifest() -> AbilityManifest {
+    AbilityManifest::new(ABILITY_VERB, description(), input_schema())
+        .expect("discover ability manifest is static and validated by tests")
+}
+
 pub fn description() -> &'static str {
     "Walk the discovery ladder (self → device → easynet) and return \
      ranked candidates matching the optional query. Tier 3 \
@@ -749,6 +755,23 @@ mod tests {
 
     fn obj_schema() -> Value {
         json!({"type": "object"})
+    }
+
+    #[test]
+    fn register_publishes_discover_manifest_description() {
+        let mut reg = LocalAbilityRegistry::new();
+        register_for_agent(
+            &mut reg,
+            "claude".into(),
+            AgentRegistry::default,
+            Arc::new(std::sync::OnceLock::new()),
+        );
+
+        let manifest = reg
+            .manifest_for("claude.discover")
+            .expect("discover registration must publish its manifest");
+        assert_eq!(manifest.description(), description());
+        assert_eq!(manifest.input_schema(), &input_schema());
     }
 
     /// Build a temp workspace with `<root>/abilities/<verb>.ability.toml`
@@ -833,7 +856,7 @@ mod tests {
             .unwrap()
             .is_federated());
         // Unknown still rejected.
-        assert!(parse_scope(&json!({"scope": "fleet"})).is_err());
+        assert!(parse_scope(&json!({"scope": "unknown-scope"})).is_err());
     }
 
     #[test]

@@ -404,11 +404,11 @@ fn dispatch_remote_via_forward_invoke(
             });
         }
 
-        let target_uri = if trimmed.starts_with("easynet:///r/") {
+        let target_ura = if crate::ura::parse_ura(trimmed).is_ok() {
             crate::support::federation_invoke::parse_node_uri(trimmed)
                 .map_err(|e| EalError::Validation(format!("parse target URI: {e}")))?
         } else if !tenant.is_empty() {
-            crate::uri::device_uri(tenant, trimmed)
+            crate::ura::device_ura(tenant, trimmed)
         } else {
             return Err(EalError::Validation(format!(
                 "cannot resolve EAL device target {trimmed:?}: no tenant in scope; \
@@ -416,18 +416,18 @@ fn dispatch_remote_via_forward_invoke(
             )));
         };
 
-        let caller_uri = crate::persistence::config::load_credentials()
+        let caller_ura = crate::persistence::config::load_credentials()
             .ok()
             .filter(|c| !c.tenant_id.trim().is_empty() && !c.node_id.trim().is_empty())
-            .map(|c| crate::uri::device_uri(c.tenant_id.trim(), c.node_id.trim()));
+            .map(|c| crate::ura::device_ura(c.tenant_id.trim(), c.node_id.trim()));
         crate::support::federation_invoke::invoke_via_federation_forward(
             ability_name,
             arguments.clone(),
-            &target_uri,
-            caller_uri.as_deref(),
+            &target_ura,
+            caller_ura.as_deref(),
         )
         .map_err(|e| {
-            EalError::Unavailable(format!("forward_invoke {ability_name} → {target_uri}: {e}"))
+            EalError::Unavailable(format!("forward_invoke {ability_name} → {target_ura}: {e}"))
         })
     }
     #[cfg(not(feature = "axon-pb"))]

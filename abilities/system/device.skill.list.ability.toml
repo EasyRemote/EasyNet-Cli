@@ -1,9 +1,14 @@
 schema_version = "1"
 name = "device.skill.list"
-description = "List skills installed for an agent (or all agents). Thin facade over fleet.list_abilities; returns the same InstalledSkill row shape."
+description = "List skills installed for an agent (or all agents). Canonical skill inventory surface; returns InstalledSkill rows."
 
 [input_schema]
 type = "object"
+additionalProperties = false
+
+[input_schema.properties.agent_ura]
+type = "string"
+description = "Canonical owner agent URA used by the daemon to return authoritative skill resource_ura values."
 
 [input_schema.properties.owner_agent_id]
 type = "string"

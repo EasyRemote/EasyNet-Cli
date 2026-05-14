@@ -1,14 +1,11 @@
-// EasyNet CLI — fleet.* (skill enumeration as a system ability)
+// EasyNet CLI — skill inventory filesystem walk
 // =====================================================================
 //
-// File: src/runtime/system/skill_ability.rs
-// Description: Surfaces installed skills (marketplace + agent-native
-//              global pools) through the unified ability dispatch
-//              channel. Replaces the SSH-based path the EasyNet
-//              backend used to take (`ExecCommand("easynet skill
-//              list --json")`), which was disabled by default for
-//              safety reasons and broke whenever PATH/HOME differed
-//              for the exec context.
+// File: src/runtime/agents/skill_ability.rs
+// Description: Shared filesystem walk behind `device.skill.list`.
+//              This module is not registered as a standalone system
+//              ability; it exists so `device.skill.list` and CLI
+//              tests use one source of truth for installed skills.
 //
 // Why "skill list" is an ability, not a separate gRPC RPC
 // -------------------------------------------------------
@@ -17,7 +14,7 @@
 //
 //   ListMCPTools (federation discovery) → CallMCPTool (execution)
 //
-// MCP tools, sessions (`fleet.list_sessions`), schedules
+// MCP tools, sessions (`device.session.list`), schedules
 // (`schedule.list`), discuss rooms (`discuss.create`),
 // permission requests (`consent.subscribe`), and now
 // skills all use this single pattern. A fresh RPC per resource type
@@ -25,23 +22,12 @@
 // each grow a parallel parser; routing through abilities reuses the
 // machinery once.
 //
-// v1 verbs
-// --------
-// Only `fleet.list_abilities` lands in this commit — that is the verb
-// the EasyNet frontend's Skills page needs. Future verbs (`install`,
-// `remove`, `upgrade`) will be wired in subsequent commits and reuse
-// the same registration template; the CLI commands
-// (`easynet skill install/remove/upgrade`) keep their existing
-// implementations and simply route through the ability when called
-// from frontends.
-//
 // Wire shape
 // ----------
-// The ability returns a JSON object `{ "items": [InstallRecord, ...] }`
-// where each item matches the on-wire `InstalledSkill` schema the
-// EasyNet backend already speaks (so backend doesn't need to
-// re-shape — it just forwards). Specifically each item carries:
-//   * name, description, agent_id
+// The exported helper returns `{ "items": [InstallRecord, ...] }`
+// where each item matches the on-wire `InstalledSkill` schema. Each
+// item carries:
+//   * name, description, agent_id, resource_ura
 //   * source = { kind, identifier, ref?, subpath? }
 //   * content_hash (empty for global-pool skills)
 //   * size_bytes, installed_at, last_checked_at?, upgrade_available
@@ -49,50 +35,20 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::sync::Arc;
-
 use serde_json::{json, Value};
 
 use crate::registry::agents;
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
-/// The wire-level ability name. Pinned because backend + frontend
-/// query it by string; a rename would break both repos at once.
-pub const ABILITY_LIST: &str = "device.fleet.list_abilities";
-
-/// Register every skill verb on the registry. v1 only ships `list`;
-/// the other verbs (`install`, `remove`, `upgrade`) plug in here
-/// without changing the call shape.
-///
-/// Stateless: takes no service handle because skill enumeration is a
-/// pure file-system walk over `~/.easynet/agents.json` plus the
-/// per-agent global pools. Symmetric with `ping::register` — no
-/// captured state, no per-request bookkeeping.
-pub fn register(reg: &mut LocalAbilityRegistry) {
-    use crate::runtime::ability_dispatch::OwnerKind;
-    reg.register_rpc_with_owner(
-        "device.fleet.list_abilities",
-        OwnerKind::Device,
-        Arc::new(list_handler),
-    );
-}
-
-/// Crate-internal entry for the `fleet.list_abilities` walk. Used
-/// by `skill_publish_ability::list_handler` so the curator's
-/// `skill.list` verb returns byte-identical rows to what the
-/// operator-facing Skills page sees through `fleet.list_abilities`.
-/// Single source of truth for the on-disk skill enumeration.
+/// Crate-internal entry for the `device.skill.list` walk.
 pub(crate) fn list_handler_for_args(args: Value) -> anyhow::Result<Value> {
     list_handler(args)
 }
 
-/// `fleet.list_abilities` RPC handler.
+/// Skill inventory handler.
 ///
-/// Args: `{ "agent_id": "<name>"? }` — when present, filter to skills
-/// owned by that agent; absent or empty = list across every
-/// registered agent. Mirrors backend's `ListInstalledReq.AgentID`
-/// shape so the backend's call into this ability is a 1:1 forward
-/// of its inbound HTTP request params.
+/// Args: `{ "owner_agent_id": "<name>"? }` — when present, filter to
+/// skills owned by that agent; absent or empty = list across every
+/// registered agent.
 ///
 /// Returns: `{ "items": [InstalledSkill, ...] }`. The InstalledSkill
 /// shape matches `EasyNet/backend/internal/types/custom_types.go`
@@ -104,12 +60,20 @@ pub(crate) fn list_handler_for_args(args: Value) -> anyhow::Result<Value> {
 fn list_handler(args: Value) -> anyhow::Result<Value> {
     let agent_filter = args
         .as_object()
-        .and_then(|o| o.get("agent_id"))
+        .and_then(|o| o.get("owner_agent_id").or_else(|| o.get("agent_id")))
         .and_then(Value::as_str)
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
     let registry = agents::load_agents()?;
+    let local_agents = crate::persistence::local_agents::load().ok();
+    let explicit_agent_ura = args
+        .as_object()
+        .and_then(|o| o.get("agent_ura"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
 
     // Collect rows in the same shape `easynet skill list --json`
     // emitted historically — the backend already knows how to read
@@ -177,10 +141,7 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
                             // operator sees the warning in the
                             // daemon log; the rest of the list
                             // surfaces normally.
-                            eprintln!(
-                                "fleet.list_abilities: skipping {}: {e}",
-                                dir_entry.path().display()
-                            );
+                            eprintln!("skill.list: skipping {}: {e}", dir_entry.path().display());
                         }
                     }
                 }
@@ -204,21 +165,68 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
     // for downstream byte-stable comparisons.
     let items: Vec<Value> = rows
         .into_iter()
-        .map(|r| serde_json::to_value(r).unwrap_or(Value::Null))
+        .map(|r| {
+            let mut value = serde_json::to_value(&r).unwrap_or(Value::Null);
+            if let Some(resource_ura) = skill_resource_ura(
+                local_agents.as_ref(),
+                explicit_agent_ura.as_deref(),
+                &r.agent_id,
+                &r.name,
+            ) {
+                if let Some(obj) = value.as_object_mut() {
+                    obj.insert("resource_ura".to_string(), json!(resource_ura));
+                }
+            }
+            value
+        })
         .collect();
 
     Ok(json!({ "items": items }))
 }
 
-/// JSON Schema for the input. Surfaces in the discovery catalog so
-/// a UI knows the verb accepts `{ agent_id: string? }`.
+fn skill_resource_ura(
+    local_agents: Option<&crate::persistence::local_agents::LocalAgentsFile>,
+    explicit_agent_ura: Option<&str>,
+    agent_name: &str,
+    skill_name: &str,
+) -> Option<String> {
+    let agent_ura = explicit_agent_ura
+        .map(str::to_string)
+        .or_else(|| hosted_agent_ura(local_agents?, agent_name))?;
+    let parsed = crate::ura::parse_ura(&agent_ura).ok()?;
+    if parsed.kind != crate::ura::URAKind::Agent {
+        return None;
+    }
+    Some(crate::ura::resource_dot_ura(
+        &parsed.realm,
+        &format!("agent.{}.{}", parsed.user_id, parsed.agent_id),
+        &format!("skill/{skill_name}"),
+    ))
+}
+
+fn hosted_agent_ura(
+    local_agents: &crate::persistence::local_agents::LocalAgentsFile,
+    agent_name: &str,
+) -> Option<String> {
+    local_agents
+        .hosted_agents
+        .iter()
+        .find(|entry| entry.name == agent_name)
+        .map(|entry| entry.agent_ura.clone())
+}
+
+/// JSON Schema for the input.
 pub fn list_input_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "agent_id": {
+            "owner_agent_id": {
                 "type": "string",
                 "description": "Restrict the list to skills owned by this agent. Absent = every registered agent."
+            },
+            "agent_ura": {
+                "type": "string",
+                "description": "Canonical agent URA for the selected owner; used to derive resource_ura on returned rows."
             }
         },
         "additionalProperties": false,
@@ -227,9 +235,8 @@ pub fn list_input_schema() -> Value {
 
 /// Human-readable blurb for discovery surfaces.
 pub fn list_description() -> &'static str {
-    "List installed skills across registered agents. \
-     Combines marketplace installs (<agent-root>/skills/) with the \
-     agent-native global pools (~/.claude/skills, ~/.agents/skills)."
+    "List installed skills across registered agents. Combines managed skill installs \
+     with agent-native global pools and returns InstalledSkill rows."
 }
 
 #[cfg(test)]
@@ -238,28 +245,20 @@ mod tests {
 
     #[test]
     fn registration_makes_list_dispatchable() {
-        // Minimum-viable check: ABILITY_LIST registers an RPC handler
-        // that the dispatcher can find. End-to-end (with real agents
-        // + skills) is exercised via the smoke script; this test
-        // pins the registration shape so a missing register() call
-        // trips here instead of in production.
-        let mut reg = LocalAbilityRegistry::new();
-        register(&mut reg);
-        assert!(reg.get_rpc(ABILITY_LIST).is_some());
+        let res = list_handler_for_args(json!({})).expect("list helper ok");
+        assert!(res.get("items").and_then(Value::as_array).is_some());
     }
 
     #[test]
     fn list_input_schema_is_object_with_optional_agent_id() {
-        // The schema is the contract a UI renders. Pin the keys so
-        // a typo in `agent_id` (or a future "agent" rename without
-        // the backend half) trips here.
+        // The schema is the contract a UI renders. Pin the keys so a typo trips here.
         let s = list_input_schema();
         assert_eq!(s["type"], "object");
         assert_eq!(s["additionalProperties"], false);
         let props = s["properties"].as_object().expect("properties is object");
-        assert!(props.contains_key("agent_id"));
-        assert_eq!(props["agent_id"]["type"], "string");
-        // No `required` array — agent_id is optional (omitted = list
+        assert!(props.contains_key("owner_agent_id"));
+        assert_eq!(props["owner_agent_id"]["type"], "string");
+        // No `required` array — owner_agent_id is optional (omitted = list
         // across every agent).
         assert!(s.get("required").is_none());
     }

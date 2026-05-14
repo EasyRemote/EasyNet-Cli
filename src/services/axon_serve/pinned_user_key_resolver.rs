@@ -4,7 +4,7 @@
 // File: src/services/axon_serve/pinned_user_key_resolver.rs
 //
 // DEC-EU §multi-device. The SDK's `KeyResolver` trait signature is
-// `fn resolve(&self, caller_uri: &str) -> VerifyingKey`. For
+// `fn resolve(&self, caller_ura: &str) -> VerifyingKey`. For
 // hub/backend/device URIs that's a 1:1 mapping. For user URIs it
 // is NOT: under DEC-EU multi-device, one user URI carries N
 // pubkeys (one per signing device). A bare-URI resolver has to
@@ -16,7 +16,7 @@
 // envelope's presented public key (the runtime peels it from
 // `envelope.caller_signature.public_key` at admission time) and
 // answers "yes, that exact key" if and only if it is registered
-// under `caller_uri` in the trust anchor's user bucket.
+// under `caller_ura` in the trust anchor's user bucket.
 //
 // Used by `admission_facade::run_strict_admission` for User-role
 // callers. Hub / backend / device callers continue to use
@@ -59,8 +59,8 @@ use ed25519_dalek::VerifyingKey;
 use crate::services::realm_trust_anchor::RealmTrustAnchor;
 
 /// Resolver pinned to the public key the envelope presented. Yes/no
-/// answer keyed by (caller_uri, presented_pubkey) — anything else
-/// surfaces as `unknown_agent_uri`, matching the
+/// answer keyed by (caller_ura, presented_pubkey) — anything else
+/// surfaces as `unknown_agent_ura`, matching the
 /// `FederatedKeyResolver` failure shape.
 pub struct PinnedUserKeyResolver {
     trust_anchor: Arc<RealmTrustAnchor>,
@@ -77,34 +77,34 @@ impl PinnedUserKeyResolver {
 }
 
 impl KeyResolver for PinnedUserKeyResolver {
-    fn resolve(&self, caller_uri: &str) -> Result<VerifyingKey, AxonError> {
+    fn resolve(&self, caller_ura: &str) -> Result<VerifyingKey, AxonError> {
         let entry = self
             .trust_anchor
-            .lookup_user_by_pubkey(caller_uri, &self.presented_pubkey_b64)
+            .lookup_user_by_pubkey(caller_ura, &self.presented_pubkey_b64)
             .ok_or_else(|| {
                 AxonError::new(easynet_axon::invocation::AxonErrorKind::InvalidArgument)
-                    .with_reason("unknown_agent_uri")
+                    .with_reason("unknown_agent_ura")
                     .with_message(format!(
-                        "user_uri:{caller_uri}:presented_pubkey_not_registered"
+                        "user_ura:{caller_ura}:presented_pubkey_not_registered"
                     ))
             })?;
         let raw = BASE64_STANDARD.decode(&entry.public_key_b64).map_err(|e| {
             AxonError::new(easynet_axon::invocation::AxonErrorKind::InvalidArgument)
                 .with_reason("public_key_b64_decode_failed")
-                .with_message(format!("user_uri:{caller_uri}:{e}"))
+                .with_message(format!("user_ura:{caller_ura}:{e}"))
         })?;
         let arr: [u8; 32] = raw.as_slice().try_into().map_err(|_| {
             AxonError::new(easynet_axon::invocation::AxonErrorKind::InvalidArgument)
                 .with_reason("public_key_wrong_length")
                 .with_message(format!(
-                    "user_uri:{caller_uri}:expected_32_got_{}",
+                    "user_ura:{caller_ura}:expected_32_got_{}",
                     raw.len()
                 ))
         })?;
         VerifyingKey::from_bytes(&arr).map_err(|e| {
             AxonError::new(easynet_axon::invocation::AxonErrorKind::InvalidArgument)
                 .with_reason("public_key_parse_failed")
-                .with_message(format!("user_uri:{caller_uri}:{e}"))
+                .with_message(format!("user_ura:{caller_ura}:{e}"))
         })
     }
 }
@@ -127,7 +127,7 @@ mod tests {
         for pk in [&pk_a, &pk_b] {
             anchor
                 .append_agent(TrustedAgent {
-                    agent_uri: alice.to_string(),
+                    agent_ura: alice.to_string(),
                     public_key_b64: pk.clone(),
                     role: TrustedAgentRole::User,
                     added_at_unix_ms: 1_714_000_000_000,
@@ -161,18 +161,18 @@ mod tests {
         let resolver = PinnedUserKeyResolver::new(anchor, unregistered);
         let err = resolver.resolve(alice).expect_err("must reject");
         assert!(
-            err.reason.contains("unknown_agent_uri"),
-            "want unknown_agent_uri, got {err:?}"
+            err.reason.contains("unknown_agent_ura"),
+            "want unknown_agent_ura, got {err:?}"
         );
     }
 
     #[test]
-    fn rejects_unknown_user_uri() {
+    fn rejects_unknown_user_ura() {
         let (anchor, pk_a, _pk_b, _alice) = anchor_with_two_user_keys();
         let resolver = PinnedUserKeyResolver::new(anchor, pk_a);
         let err = resolver
             .resolve("easynet:///r/realm/user/bob")
             .expect_err("must reject");
-        assert!(err.reason.contains("unknown_agent_uri"));
+        assert!(err.reason.contains("unknown_agent_ura"));
     }
 }

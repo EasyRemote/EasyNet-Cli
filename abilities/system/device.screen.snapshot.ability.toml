@@ -1,6 +1,6 @@
 schema_version = "1"
 name = "device.screen.snapshot"
-description = "Capture one still image of a screen target. Subject MUST be a screen resource_uri whose type is `display`, `application`, or `window`. Optional `region` arg is valid ONLY when subject's type is `display`."
+description = "Capture one still image of a screen target. Subject MUST be a screen resource_ura whose type is `display`, `application`, or `window`. Optional `region` arg is valid ONLY when subject's type is `display`."
 
 [input_schema]
 type = "object"

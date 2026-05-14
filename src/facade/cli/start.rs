@@ -153,6 +153,7 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
 
     crate::persistence::daemon_config::ensure_minimal_device_config(&creds)
         .context("ensure daemon-config.toml for device mode")?;
+    let _ = super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds);
 
     let daemon_handle = spawn_easynet_daemon(&creds.node_id, pages_listener_port);
     let expected_pages_pid = daemon_handle.as_ref().map(std::process::Child::id);
@@ -179,29 +180,39 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     config::save(&state)?;
 
     output::success("EasyNet daemon started");
-    output::detail("grpc_socket", &endpoint);
-    output::detail(
-        "control_socket",
-        &sockets.control_socket.display().to_string(),
+    let control_socket = sockets.control_socket.display().to_string();
+    let hub_api = creds.api_base();
+    let pages_url_root = format!(
+        "http://<project>.{user}.pages.localhost:{pages_listener_port}/",
+        user = creds
+            .username
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("<user>")
     );
-    output::detail("hub", &hub);
-    output::detail("tenant", &tenant);
-    output::detail(
-        "pages_url_root",
-        &format!(
-            "http://<project>.{user}.pages.localhost:{pages_listener_port}/",
-            user = creds
-                .username
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .unwrap_or("<user>")
-        ),
-    );
-    if let Some(pid) = pid {
-        output::detail("pid", &pid.to_string());
+    let pid_display = pid.map(|pid| pid.to_string());
+    let mut rows = vec![
+        ("daemon_socket", endpoint.as_str()),
+        ("control_socket", control_socket.as_str()),
+        ("hub_session", hub.as_str()),
+        ("hub_api", hub_api.as_str()),
+        ("realm", tenant.as_str()),
+        ("pages_url_root", pages_url_root.as_str()),
+    ];
+    if let Some(ref pid) = pid_display {
+        rows.push(("pid", pid.as_str()));
     }
+    output::kv_section(&rows);
     if !credential_verified {
-        output::warn("credential not verified (Hub unreachable during startup)");
+        output::warn(&format!(
+            "credential not verified: Hub API unreachable at {hub_api}"
+        ));
+        output::step(
+            "Pairing is still present, but startup could not confirm it with the Hub API.",
+        );
+        output::step(
+            "For Docker/local hubs, re-pair with --hub http://127.0.0.1:8080 or pass --hub-api.",
+        );
     }
 
     if args.foreground {
@@ -525,11 +536,11 @@ pub(crate) fn republish_via_federation_best_effort(
     };
     // Pin the caller URI for hub-shaped federation calls so the
     // bridge stamps `envelope.caller.uri` to a canonical URA —
-    // `plan.host_device_uri` already carries that shape (see
+    // `plan.host_device_ura` already carries that shape (see
     // `build_bootstrap_plan_from`).
-    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(
         bridge,
-        plan.host_device_uri.clone(),
+        plan.host_device_ura.clone(),
     );
 
     // Bootstrap self-identity FIRST. Every subsequent signed Invoke
@@ -604,7 +615,7 @@ pub(crate) fn republish_via_federation_best_effort(
     // NoBinding — even though the daemon is right there listening on
     // its dispatch UDS. Best-effort: a register failure leaves the
     // dispatch path degraded but keeps boot moving.
-    if !plan.realm.is_empty() && !plan.host_device_uri.is_empty() {
+    if !plan.realm.is_empty() && !plan.host_device_ura.is_empty() {
         let dispatch_endpoint = crate::services::control::runtime_dispatch::dispatch_endpoint_uri();
         let reg_outcomes = crate::runtime::publish::register_local_tools_via_runtime(
             &invoker,
@@ -704,6 +715,7 @@ pub(crate) fn build_bootstrap_plan_from(
         .map(|(name, entry)| LlmSubAgent {
             name: name.clone(),
             agent_type_display: entry.agent_type.to_string(),
+            model: entry.model.clone(),
         })
         .collect();
 
@@ -715,11 +727,11 @@ pub(crate) fn build_bootstrap_plan_from(
         // node_id from credentials is the local node identifier
         // (`en-...`). Wrap it in the canonical URA shape so every
         // downstream consumer (advertise_self_signed_device,
-        // BridgeAbilityInvoker::with_caller_uri, hub
+        // BridgeAbilityInvoker::with_caller_ura, hub
         // self-signed-must-equal-caller check) sees one form. The
         // bare node_id remains accessible separately via
         // `creds.node_id` when an entry path needs it.
-        host_device_uri: crate::uri::device_uri(tenant_id, node_id),
+        host_device_ura: crate::ura::device_ura(tenant_id, node_id),
         // Defaults match plan §1's "default-on consent on
         // interactive hosts"; policy + mcp default off until
         // [profiles] config wiring lands.
@@ -734,9 +746,8 @@ pub(crate) fn build_bootstrap_plan_from(
 /// `None` if the URA shape is not the expected
 /// `easynet:///r/<realm>/agent/<id>` form. Used by `agent remove`
 /// to find which hub to send `federation.revoke` to.
-pub(crate) fn realm_from_agent_uri(uri: &str) -> Option<&str> {
-    let rest = uri.strip_prefix("easynet:///r/")?;
-    rest.split_once('/').map(|(realm, _)| realm)
+pub(crate) fn realm_from_agent_ura(uri: &str) -> Option<String> {
+    crate::ura::parse_ura(uri).ok().map(|parsed| parsed.realm)
 }
 
 /// Load credentials and verify against Hub. Returns error on revoked/missing credentials.
@@ -761,8 +772,9 @@ where
         CredentialCheck::NetworkUnavailable => Ok((creds, false)),
         CredentialCheck::Revoked(msg) => {
             eprintln!("{} {msg}", console::style("✗").red().bold());
-            eprintln!("  node_id: {}", creds.node_id);
-            eprintln!("  hub:     {}", creds.hub_endpoint);
+            eprintln!("  node_id:     {}", creds.node_id);
+            eprintln!("  hub_session: {}", creds.hub_endpoint);
+            eprintln!("  hub_api:     {}", creds.api_base());
             eprintln!("  Credential revoked or device removed from account.");
             eprintln!();
             config::delete_credentials().ok();
@@ -966,7 +978,8 @@ fn verify_credential(creds: &config::Credentials) -> CredentialCheck {
         Err(ureq::Error::Status(code, _)) => classify_credential_status_code(code),
         Err(e) => {
             output::warn(&format!(
-                "could not verify credential ({e}), continuing anyway"
+                "could not verify credential via {base} (session endpoint: {}): {e}; continuing anyway",
+                creds.hub_endpoint
             ));
             CredentialCheck::NetworkUnavailable
         }
@@ -1079,7 +1092,7 @@ mod tests {
         let plan = build_bootstrap_plan(&creds).expect("plan must build");
         assert_eq!(plan.realm, "tenant-test");
         assert_eq!(
-            plan.host_device_uri,
+            plan.host_device_ura,
             "easynet:///r/tenant-test/device/node-test"
         );
         assert!(plan.consent, "consent default-on per plan §1");
@@ -1129,33 +1142,36 @@ mod tests {
         assert_eq!(plan.realm, "tenant-test");
         assert_eq!(plan.user_id, "user-test");
         assert_eq!(
-            plan.host_device_uri,
+            plan.host_device_ura,
             "easynet:///r/tenant-test/device/node-test"
         );
     }
 
     #[test]
-    fn realm_from_agent_uri_extracts_segment() {
+    fn realm_from_agent_ura_extracts_segment() {
         // URI v4.1.4: hub is realm-singleton (no sub-id); device-id
         // is bare UUID. Function is shape-agnostic — only the
         // `<realm>/<rest>` boundary matters.
-        assert_eq!(realm_from_agent_uri("easynet:///r/acme/hub"), Some("acme"));
         assert_eq!(
-            realm_from_agent_uri(
+            realm_from_agent_ura("easynet:///r/acme/hub"),
+            Some("acme".to_string())
+        );
+        assert_eq!(
+            realm_from_agent_ura(
                 "easynet:///r/contoso/device/4065c47a-ec6f-4330-87a5-0d69787709b8"
             ),
-            Some("contoso")
+            Some("contoso".to_string())
         );
     }
 
     #[test]
-    fn realm_from_agent_uri_returns_none_for_malformed_uris() {
-        assert_eq!(realm_from_agent_uri(""), None);
-        assert_eq!(realm_from_agent_uri("not-an-uri"), None);
-        assert_eq!(realm_from_agent_uri("easynet:///r/"), None);
-        assert_eq!(realm_from_agent_uri("easynet:///r/acme"), None);
+    fn realm_from_agent_ura_returns_none_for_malformed_uris() {
+        assert_eq!(realm_from_agent_ura(""), None);
+        assert_eq!(realm_from_agent_ura("not-an-uri"), None);
+        assert_eq!(realm_from_agent_ura("easynet:///r/"), None);
+        assert_eq!(realm_from_agent_ura("easynet:///r/acme"), None);
         assert_eq!(
-            realm_from_agent_uri("http://example.com/r/acme/agent/X"),
+            realm_from_agent_ura("http://example.com/r/acme/agent/X"),
             None
         );
     }

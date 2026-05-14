@@ -417,8 +417,8 @@ impl SelfIdentity for InMemoryVault {
 pub fn canonical_self_uris(realm: &str, node_id: &str) -> (String, Vec<String>) {
     let realm = realm.trim();
     let node_id = node_id.trim();
-    let primary = format!("easynet:///r/{realm}/device/{node_id}");
-    let hub_overlay = format!("easynet:///r/{realm}/hub");
+    let primary = crate::ura::device_ura(realm, node_id);
+    let hub_overlay = crate::ura::hub_ura(realm);
     (primary, vec![hub_overlay])
 }
 

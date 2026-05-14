@@ -295,21 +295,22 @@ mod tests {
 
     #[test]
     fn registration_makes_both_dispatchable() {
-        let arc = build_bridge_registry(|| vec![d("observe.health")]);
+        let arc = build_bridge_registry(|| vec![d("device.observe.health")]);
         assert!(arc.get_rpc(ABILITY_LIST_TOOLS).is_some());
         assert!(arc.get_rpc(ABILITY_CALL_TOOL).is_some());
     }
 
     #[test]
     fn list_tools_returns_projection_of_provider_descriptors() {
-        let arc = build_bridge_registry(|| vec![d("observe.health"), d("fleet.list_agents")]);
+        let arc =
+            build_bridge_registry(|| vec![d("device.observe.health"), d("device.agent.list")]);
         let handler = arc.get_rpc(ABILITY_LIST_TOOLS).unwrap();
         let resp = handler(json!({})).unwrap();
         let tools = resp["tools"].as_array().expect("tools array");
         assert_eq!(tools.len(), 2);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert!(names.contains(&"observe.health"));
-        assert!(names.contains(&"fleet.list_agents"));
+        assert!(names.contains(&"device.observe.health"));
+        assert!(names.contains(&"device.agent.list"));
     }
 
     #[test]
@@ -375,7 +376,7 @@ mod tests {
         // §A5 enforcement: the descriptor list is the source of
         // truth for which names are callable. test.echo IS in the
         // registry but NOT in the catalogue → call_tool refuses.
-        let arc = build_bridge_registry(|| vec![d("observe.health")]); // no test.echo
+        let arc = build_bridge_registry(|| vec![d("device.observe.health")]); // no test.echo
         let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
         let resp = handler(json!({
             "name": "test.echo",

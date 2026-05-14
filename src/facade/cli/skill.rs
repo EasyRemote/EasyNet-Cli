@@ -167,6 +167,8 @@ pub fn run(args: SkillArgs) -> anyhow::Result<()> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallRecord {
     pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
     pub agent_id: String,
     pub source: SkillSource,
     /// SHA-256 over the sorted file tree of the installed skill
@@ -235,7 +237,7 @@ impl SkillSource {
 
 fn run_install(args: InstallArgs) -> anyhow::Result<()> {
     // Thin CLI wrapper around the pure `install_skill` helper so the
-    // ability handler (skill_install_ability.rs / fleet.skill_install)
+    // ability handler (skill_install_ability.rs / device.skill.install)
     // can call the same code path the operator-facing `easynet skill
     // install` runs. Keeping `run_install` as a stdout-emitter and
     // `install_skill` as the typed-result helper means the ability
@@ -249,7 +251,7 @@ fn run_install(args: InstallArgs) -> anyhow::Result<()> {
 /// Pure install helper: fetches the source, atomically moves into
 /// the agent's skills/ dir, writes the install record, and returns
 /// it. No stdout, no CLI dep. Used by `run_install` (CLI) and
-/// `fleet.skill_install` ability (daemon ability dispatch).
+/// `device.skill.install` ability (daemon ability dispatch).
 ///
 /// `pub(crate)` because the only callers are in this crate
 /// (run_install in this file + skill_install_ability handler in
@@ -323,6 +325,7 @@ pub(crate) fn install_skill(
 
     let record = InstallRecord {
         name: fetch_result.name.clone(),
+        description: skill_description_from_dir(&target_dir),
         agent_id: agent.to_string(),
         source: SkillSource {
             kind: effective.kind.clone(),
@@ -539,6 +542,37 @@ pub(crate) fn global_skill_pools_for(
     }
 }
 
+pub(crate) fn global_skill_dir_for(
+    agent_type: agents::AgentType,
+    skill_name: &str,
+) -> Option<std::path::PathBuf> {
+    for (_label, pool_dir) in global_skill_pools_for(agent_type) {
+        let entries = match fs::read_dir(pool_dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for dir_entry in entries.flatten() {
+            let path = dir_entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let dir_name = match path.file_name().and_then(|s| s.to_str()) {
+                Some(n) if !n.starts_with('.') => n.to_string(),
+                _ => continue,
+            };
+            if !looks_like_skill_dir(&path) {
+                continue;
+            }
+            let parsed_name =
+                parse_skill_md_name(&path.join("SKILL.md")).unwrap_or_else(|| dir_name.clone());
+            if parsed_name == skill_name || dir_name == skill_name {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
 /// Walk a global skill pool and append one synthetic InstallRecord
 /// per skill directory it contains. Skips directories that don't
 /// look like a skill (no `SKILL.md` and no nested `skill.json`).
@@ -578,21 +612,21 @@ pub(crate) fn scan_global_pool_into(
         if dir_name.starts_with('.') {
             continue;
         }
-        let skill_md = path.join("SKILL.md");
-        let skill_json = path.join("skill.json");
-        if !skill_md.exists() && !skill_json.exists() {
+        if !looks_like_skill_dir(&path) {
             // Not a skill directory shape — could be an unrelated
             // user folder under ~/.claude. Silent skip.
             continue;
         }
         // Best-effort metadata extraction. Frontmatter `name` wins
         // when present; otherwise the directory name is the fallback.
+        let skill_md = path.join("SKILL.md");
         let parsed_name = parse_skill_md_name(&skill_md).unwrap_or_else(|| dir_name.clone());
         let size_bytes = directory_size_bytes(&path);
         let installed_at = file_mtime_iso(&path).unwrap_or_default();
 
         rows.push(InstallRecord {
             name: parsed_name,
+            description: skill_description_from_dir(&path),
             agent_id: agent_name.to_string(),
             source: SkillSource {
                 // `kind = "global"` distinguishes these from the
@@ -619,6 +653,28 @@ pub(crate) fn scan_global_pool_into(
     }
 }
 
+fn looks_like_skill_dir(path: &std::path::Path) -> bool {
+    path.join("SKILL.md").exists() || path.join("skill.json").exists()
+}
+
+pub(crate) fn skill_description_from_dir(path: &std::path::Path) -> String {
+    skill_description_from_markdown(&path.join("SKILL.md")).unwrap_or_default()
+}
+
+fn skill_description_from_markdown(path: &std::path::Path) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+    if let Some(frontmatter) = skill_md_frontmatter(&content) {
+        if let Some(description) = frontmatter_field(frontmatter, "description") {
+            return Some(description);
+        }
+    }
+    content
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with("---"))
+        .map(|line| line.to_string())
+}
+
 /// Extract the `name:` field from a SKILL.md YAML frontmatter
 /// block. Returns None on any parse failure — the caller falls back
 /// to the directory name. We do a minimal hand parse rather than
@@ -627,12 +683,21 @@ pub(crate) fn scan_global_pool_into(
 fn parse_skill_md_name(skill_md: &std::path::Path) -> Option<String> {
     let content = fs::read_to_string(skill_md).ok()?;
     // Frontmatter is delimited by `---` lines at the top.
+    let frontmatter = skill_md_frontmatter(&content)?;
+    frontmatter_field(frontmatter, "name")
+}
+
+fn skill_md_frontmatter(content: &str) -> Option<&str> {
     let body = content.strip_prefix("---")?.strip_prefix('\n')?;
     let end = body.find("\n---")?;
-    let frontmatter = &body[..end];
+    Some(&body[..end])
+}
+
+fn frontmatter_field(frontmatter: &str, field: &str) -> Option<String> {
+    let prefix = format!("{field}:");
     for line in frontmatter.lines() {
         let trimmed = line.trim_start();
-        if let Some(rest) = trimmed.strip_prefix("name:") {
+        if let Some(rest) = trimmed.strip_prefix(&prefix) {
             let value = rest.trim().trim_matches('"').trim_matches('\'').to_string();
             if !value.is_empty() {
                 return Some(value);
@@ -684,7 +749,7 @@ fn run_upgrade(args: UpgradeArgs) -> anyhow::Result<()> {
 /// new ref into place, and returns the new InstallRecord on success.
 /// On failure the backup is restored — the caller never observes a
 /// half-upgraded state. No stdout, no CLI dep. Used by `run_upgrade`
-/// (CLI) and `fleet.skill_upgrade` ability.
+/// (CLI) and `device.skill.upgrade` ability.
 ///
 /// `pub(crate)` for the same reason as install_skill.
 ///
@@ -734,6 +799,7 @@ pub(crate) fn upgrade_skill(
         let size_bytes = tree_size(&skill_dir, &[".easynet"])?;
         let rec = InstallRecord {
             name: existing.name.clone(),
+            description: skill_description_from_dir(&skill_dir),
             agent_id: agent.to_string(),
             source: SkillSource {
                 kind: existing.source.kind.clone(),
@@ -779,7 +845,7 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
 
 /// Pure remove helper: deletes the skill directory and returns Ok
 /// when the skill was present and the delete succeeded. No stdout,
-/// no CLI dep. Used by `run_remove` (CLI) and `fleet.skill_remove`
+/// no CLI dep. Used by `run_remove` (CLI) and `device.skill.remove`
 /// ability.
 ///
 /// `pub(crate)` for the same reason as install_skill.
@@ -1204,6 +1270,7 @@ mod tests {
     fn install_record_serialize_emits_content_hash_on_wire() {
         let rec = InstallRecord {
             name: "alpha".into(),
+            description: "Alpha skill".into(),
             agent_id: "alice".into(),
             source: SkillSource {
                 kind: "github".into(),
@@ -1221,6 +1288,10 @@ mod tests {
         assert!(
             wire.contains("\"content_hash\":\"sha256:deadbeef\""),
             "wire must emit 'content_hash' (not the Rust field name): {wire}"
+        );
+        assert!(
+            wire.contains("\"description\":\"Alpha skill\""),
+            "wire must include the skill description: {wire}"
         );
         assert!(
             !wire.contains("skill_tree_hash"),
@@ -1247,6 +1318,7 @@ mod tests {
         }"#;
         let rec: InstallRecord = serde_json::from_str(wire).unwrap();
         assert_eq!(rec.skill_tree_hash, "sha256:wire");
+        assert_eq!(rec.description, "");
     }
 
     // ─── TempDirGuard ─────────────────────────────────────────────

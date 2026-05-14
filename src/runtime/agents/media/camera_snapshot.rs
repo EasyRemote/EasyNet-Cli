@@ -309,7 +309,7 @@ fn handler(
     // INV-SUBJECT-ENVELOPE positive half: read subject from envelope.
     let subject = env.subject.as_ref().ok_or_else(|| {
         anyhow::anyhow!(
-            "{ABILITY_CAMERA_SNAPSHOT}: subject required (resource_uri \
+            "{ABILITY_CAMERA_SNAPSHOT}: subject required (resource_ura \
              of a camera); reason={REASON_SUBJECT_REQUIRED}"
         )
     })?;
@@ -574,7 +574,7 @@ mod tests {
         );
     }
 
-    /// Caller asks `camera.snapshot` against a `mic` resource_uri
+    /// Caller asks `camera.snapshot` against a `mic` resource_ura
     /// → reason="resource_type_mismatch". A real-world UX bug that
     /// would otherwise produce a confusing later error from the
     /// camera backend; catching at the handler edge is much clearer.

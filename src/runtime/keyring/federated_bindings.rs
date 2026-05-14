@@ -7,7 +7,7 @@
 //              `user_binding_chain.rs` (commit 1/N): when a realm B
 //              user successfully consumes a `UserBindingToken`
 //              issued by realm A, an entry is written here mapping
-//              `(source_realm, source_user_uri, source_user_pubkey)
+//              `(source_realm, source_user_ura, source_user_pubkey)
 //              → realm_B_user_id`. Future cross-realm
 //              `<self>.discover` calls filter their results
 //              through the binding to surface "the user's own
@@ -57,7 +57,7 @@ pub struct FederatedUserBinding {
     /// the consumed `UserBindingToken`).
     pub source_realm: String,
     /// User URI on the source realm.
-    pub source_user_uri: String,
+    pub source_user_ura: String,
     /// Source user's Ed25519 verifying key, base64-encoded for
     /// stable JSON. The structural length contract (32 bytes)
     /// is enforced on the upstream consume path.
@@ -132,16 +132,16 @@ impl FederatedBindingsStore {
     }
 
     /// Find the local user id bound to `(source_realm,
-    /// source_user_uri)`. Returns `None` when no such binding
+    /// source_user_ura)`. Returns `None` when no such binding
     /// has been consumed.
     #[must_use]
-    pub fn find_local_user(&self, source_realm: &str, source_user_uri: &str) -> Option<String> {
+    pub fn find_local_user(&self, source_realm: &str, source_user_ura: &str) -> Option<String> {
         self.inner
             .read()
             .expect("rwlock poisoned")
             .bindings
             .iter()
-            .find(|b| b.source_realm == source_realm && b.source_user_uri == source_user_uri)
+            .find(|b| b.source_realm == source_realm && b.source_user_ura == source_user_ura)
             .map(|b| b.local_user_id.clone())
     }
 
@@ -206,7 +206,7 @@ mod tests {
     fn binding_fixture() -> FederatedUserBinding {
         FederatedUserBinding {
             source_realm: "realm-a".to_string(),
-            source_user_uri: "easynet:///r/realm-a/user/user-c".to_string(),
+            source_user_ura: "easynet:///r/realm-a/user/user-c".to_string(),
             source_user_pubkey_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             local_user_id: "user-c-on-realm-b".to_string(),
             bound_at_unix_ms: 1_714_500_000_000,
@@ -228,7 +228,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             store
-                .find_local_user(&b.source_realm, &b.source_user_uri)
+                .find_local_user(&b.source_realm, &b.source_user_ura)
                 .as_deref(),
             Some("user-c-on-realm-b")
         );
@@ -286,7 +286,7 @@ mod tests {
         store
             .record_binding(
                 FederatedUserBinding {
-                    source_user_uri: "easynet:///r/realm-a/user/another".to_string(),
+                    source_user_ura: "easynet:///r/realm-a/user/another".to_string(),
                     ..binding_fixture()
                 },
                 "n2".to_string(),

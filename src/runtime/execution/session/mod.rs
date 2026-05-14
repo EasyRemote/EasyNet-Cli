@@ -3,8 +3,8 @@
 //
 // File: src/runtime/execution/session/mod.rs
 // Description: Session sub-service. Tracks the live-agent-run
-//              registry that PR-ATTACH's `fleet.list_sessions` /
-//              `fleet.attach_session` abilities query and
+//              registry that `device.session.list` /
+//              `device.session.attach` abilities query and
 //              subscribe to.
 //
 // What this owns

@@ -29,6 +29,7 @@ pub mod auth;
 pub mod call;
 pub mod device;
 pub mod federation;
+pub mod invocation;
 pub mod mcp;
 pub mod mission;
 pub mod runtime;

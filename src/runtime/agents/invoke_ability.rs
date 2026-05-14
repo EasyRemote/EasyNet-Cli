@@ -66,7 +66,7 @@ use std::time::Instant;
 
 use serde_json::{json, Value};
 
-use crate::core::ability_spec::Visibility;
+use crate::core::ability_spec::{AbilityManifest, Visibility};
 use crate::registry::agents::AgentRegistry;
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
@@ -99,9 +99,10 @@ pub fn register_for_agent<F>(
     let provider: Arc<dyn Fn() -> AgentRegistry + Send + Sync> = Arc::new(agent_registry_provider);
     let qualified = format!("{agent_name}.{ABILITY_VERB}");
     let caller = agent_name.clone();
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_spec(
         &qualified,
         OwnerKind::Agent(agent_name),
+        manifest(),
         Arc::new(move |args: Value| dispatch(&caller, &provider, &dispatch_registry_handle, args)),
     );
 }
@@ -322,10 +323,10 @@ fn audit_invoke(
     } else {
         Value::String(metadata.request_id.clone())
     };
-    let caller_uri = if metadata.caller_uri.is_empty() {
+    let caller_ura = if metadata.caller_ura.is_empty() {
         Value::Null
     } else {
-        Value::String(metadata.caller_uri.clone())
+        Value::String(metadata.caller_ura.clone())
     };
     let line = json!({
         "ts": chrono::Utc::now().to_rfc3339(),
@@ -338,7 +339,7 @@ fn audit_invoke(
         "error": error_message,
         "elapsed_ms": elapsed_ms,
         "request_id": request_id,
-        "caller_uri": caller_uri,
+        "caller_ura": caller_ura,
     });
 
     let path = audit_log_path();
@@ -419,7 +420,7 @@ fn lookup_access_policy(
 /// (so they don't perturb args_digest / canonical bytes). The
 /// EasyNet-backend cliipc adapter sets at minimum:
 ///
-///   * `_caller_uri`       — original HTTP caller's URA
+///   * `_caller_ura`       — original HTTP caller's URA
 ///   * `_request_id`       — `req-…` correlation token from the HTTP
 ///                            edge; flows into the audit row + the
 ///                            forward_invoke hop
@@ -451,7 +452,7 @@ struct InvokeMetadata {
     /// Original HTTP caller's URA. Recorded in the audit row so the
     /// device-side log can identify the operator behind a backend
     /// request without grepping the backend log.
-    caller_uri: String,
+    caller_ura: String,
 }
 
 impl InvokeArgs {
@@ -510,7 +511,7 @@ impl InvokeArgs {
         //
         // Exception: `_`-prefixed fields are reserved as the
         // sidecar-metadata slot (the EasyNet backend adapter uses
-        // `_caller_uri`, `_request_id`, `_idempotency_key`,
+        // `_caller_ura`, `_request_id`, `_idempotency_key`,
         // `_timeout_ms`). These flow through IPC for observability
         // and routing context but DO NOT enter args_digest or the
         // signed envelope. Unknown `_`-prefixed fields are
@@ -540,8 +541,8 @@ impl InvokeArgs {
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string(),
-            caller_uri: obj
-                .get("_caller_uri")
+            caller_ura: obj
+                .get("_caller_ura")
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string(),
@@ -588,6 +589,11 @@ pub fn input_schema() -> Value {
     })
 }
 
+pub fn manifest() -> AbilityManifest {
+    AbilityManifest::new(ABILITY_VERB, description(), input_schema())
+        .expect("invoke ability manifest is static and validated by tests")
+}
+
 pub fn description() -> &'static str {
     "Invoke a discovered ability by name. Pair with <self>.discover \
      once you've picked a candidate from the discovery ladder. Returns \
@@ -606,6 +612,23 @@ mod tests {
 
     fn obj_schema() -> Value {
         json!({"type": "object"})
+    }
+
+    #[test]
+    fn register_publishes_invoke_manifest_description() {
+        let mut reg = LocalAbilityRegistry::new();
+        register_for_agent(
+            &mut reg,
+            "claude".into(),
+            AgentRegistry::default,
+            Arc::new(std::sync::OnceLock::new()),
+        );
+
+        let manifest = reg
+            .manifest_for("claude.invoke")
+            .expect("invoke registration must publish its manifest");
+        assert_eq!(manifest.description(), description());
+        assert_eq!(manifest.input_schema(), &input_schema());
     }
 
     fn workspace_with_manifest(
@@ -699,13 +722,13 @@ mod tests {
 
     #[test]
     fn parse_accepts_underscore_prefixed_sidecar_fields() {
-        // Backend cliipc adapter ships `_caller_uri`, `_request_id`,
+        // Backend cliipc adapter ships `_caller_ura`, `_request_id`,
         // `_idempotency_key`, `_timeout_ms` as IPC-only sidecars.
         // The handler must accept them silently — they don't enter
         // args_digest / canonical bytes / signed envelope.
         let parsed = InvokeArgs::parse(&json!({
             "ability": "weather",
-            "_caller_uri": "easynet:///r/silan.localhost/hub",
+            "_caller_ura": "easynet:///r/silan.localhost/hub",
             "_request_id": "req-deadbeef00112233",
             "_idempotency_key": "idem-abc",
             "_timeout_ms": 5000,
@@ -714,7 +737,7 @@ mod tests {
         .expect("sidecar fields must not be rejected");
         assert_eq!(parsed.metadata.request_id, "req-deadbeef00112233");
         assert_eq!(
-            parsed.metadata.caller_uri,
+            parsed.metadata.caller_ura,
             "easynet:///r/silan.localhost/hub",
         );
         // Sidecars MUST NOT bleed into the inner ability args; the
@@ -733,7 +756,7 @@ mod tests {
         .unwrap();
         // Default empty strings, not panic / not error.
         assert_eq!(parsed.metadata.request_id, "");
-        assert_eq!(parsed.metadata.caller_uri, "");
+        assert_eq!(parsed.metadata.caller_ura, "");
     }
 
     #[test]
@@ -745,11 +768,11 @@ mod tests {
         let parsed = InvokeArgs::parse(&json!({
             "ability": "weather",
             "_request_id": 12345,
-            "_caller_uri": null,
+            "_caller_ura": null,
         }))
         .unwrap();
         assert_eq!(parsed.metadata.request_id, "");
-        assert_eq!(parsed.metadata.caller_uri, "");
+        assert_eq!(parsed.metadata.caller_ura, "");
     }
 
     #[test]
@@ -1007,7 +1030,7 @@ mod tests {
     #[test]
     fn forward_invoke_routes_federation_target_through_invoker() {
         let _g = fwd::test_lock();
-        fwd::set_test_knower(|uri| uri.starts_with("easynet:///r/"));
+        fwd::set_test_knower(|uri| crate::ura::parse_ura(uri).is_ok());
         fwd::set_test_router(|target, ability, args| {
             assert_eq!(target, "easynet:///r/exp-realm/device/alice-node");
             assert_eq!(ability, "ping");
@@ -1054,7 +1077,7 @@ mod tests {
     #[test]
     fn forward_invoke_propagates_typed_remote_error() {
         let _g = fwd::test_lock();
-        fwd::set_test_knower(|uri| uri.starts_with("easynet:///r/"));
+        fwd::set_test_knower(|uri| crate::ura::parse_ura(uri).is_ok());
         fwd::set_test_router(|_t, _a, _x| {
             Err(anyhow::anyhow!("AXON_TARGET_OFFLINE: peer unreachable"))
         });

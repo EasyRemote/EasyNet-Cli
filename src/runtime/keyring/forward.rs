@@ -7,9 +7,9 @@
 // registry. Tonight's wiring keeps the contract minimal:
 //
 //   trait CliForwardInvoker {
-//       fn invoke(&self, target_uri: &str, ability: &str, args: Value)
+//       fn invoke(&self, target_ura: &str, ability: &str, args: Value)
 //           -> anyhow::Result<Value>;
-//       fn knows_target(&self, target_uri: &str) -> bool;
+//       fn knows_target(&self, target_ura: &str) -> bool;
 //   }
 //
 // At daemon boot the federation transport (bridge + tenant + realm)
@@ -35,13 +35,13 @@ pub trait CliForwardInvoker: Send + Sync {
     /// Returns true when this invoker can route to the named target.
     /// Used so `dispatch` can fall back to `target_not_registered`
     /// without attempting a futile network call.
-    fn knows_target(&self, target_uri: &str) -> bool;
+    fn knows_target(&self, target_ura: &str) -> bool;
 
     /// Issue the forward invoke. Returns the unwrapped result body
     /// (the same Value the local handler would have returned). On
     /// hub-side typed failure (AXON_TARGET_OFFLINE etc.) returns
     /// Err with the typed code in the message string.
-    fn invoke(&self, target_uri: &str, ability: &str, args: Value) -> anyhow::Result<Value>;
+    fn invoke(&self, target_ura: &str, ability: &str, args: Value) -> anyhow::Result<Value>;
 }
 
 static FORWARD_INVOKER: OnceLock<Arc<dyn CliForwardInvoker>> = OnceLock::new();
@@ -62,7 +62,7 @@ pub fn forward_invoker() -> Option<Arc<dyn CliForwardInvoker>> {
 /// any v4.1.5 `easynet:///r/<realm>/...` URA. Bare names
 /// (no scheme) are treated as local.
 pub fn is_federation_target(target: &str) -> bool {
-    target.starts_with("easynet:///r/")
+    crate::ura::parse_ura(target).is_ok()
 }
 
 /// Test routing slot. Tests install a closure here; the static
@@ -87,18 +87,18 @@ static TEST_ROUTER: OnceLock<std::sync::Mutex<Option<TestRouter>>> = OnceLock::n
 static TEST_KNOWER: OnceLock<std::sync::Mutex<Option<TestKnower>>> = OnceLock::new();
 
 impl CliForwardInvoker for TestSinkInvoker {
-    fn knows_target(&self, target_uri: &str) -> bool {
+    fn knows_target(&self, target_ura: &str) -> bool {
         let lock = TEST_KNOWER.get_or_init(|| std::sync::Mutex::new(None));
         match lock.lock().unwrap().as_ref() {
-            Some(f) => f(target_uri),
+            Some(f) => f(target_ura),
             None => false,
         }
     }
-    fn invoke(&self, target_uri: &str, ability: &str, args: Value) -> anyhow::Result<Value> {
+    fn invoke(&self, target_ura: &str, ability: &str, args: Value) -> anyhow::Result<Value> {
         let lock = TEST_ROUTER.get_or_init(|| std::sync::Mutex::new(None));
         let g = lock.lock().unwrap();
         match g.as_ref() {
-            Some(f) => f(target_uri, ability, args),
+            Some(f) => f(target_ura, ability, args),
             None => Err(anyhow::anyhow!("test router not installed")),
         }
     }

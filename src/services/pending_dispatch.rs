@@ -120,7 +120,7 @@ impl Drop for PendingHandle {
     }
 }
 
-/// Per-call-id pending entry. Carries the `target_uri` of the
+/// Per-call-id pending entry. Carries the `target_ura` of the
 /// device the caller is waiting on so a `PresenceEvent::Offline`
 /// for that URI can fail-fast every outstanding waiter targeting
 /// it (PR-N6 mid-flight cancellation: pre-fix the daemon's
@@ -129,7 +129,7 @@ impl Drop for PendingHandle {
 /// 30s HTTP timeout instead of an immediate `target_offline`).
 struct PendingEntry {
     sender: oneshot::Sender<DispatchResult>,
-    target_uri: String,
+    target_ura: String,
 }
 
 #[derive(Debug, Default)]
@@ -141,7 +141,7 @@ struct PendingDispatchInner {
 impl std::fmt::Debug for PendingEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PendingEntry")
-            .field("target_uri", &self.target_uri)
+            .field("target_ura", &self.target_ura)
             .field("sender", &"<oneshot::Sender>")
             .finish()
     }
@@ -169,13 +169,13 @@ impl PendingDispatchMap {
     }
 
     /// Register a new pending dispatch keyed to a specific
-    /// `target_uri`. When that URI's session goes offline the
+    /// `target_ura`. When that URI's session goes offline the
     /// daemon's presence-event watcher calls `cancel_for(uri,
     /// "target_offline")` to release every outstanding waiter
     /// immediately, instead of letting the caller block on the
     /// HTTP / gRPC request timeout (30s) for a session that's
     /// already known-dead.
-    pub fn register_pending_for(&self, target_uri: &str) -> PendingHandle {
+    pub fn register_pending_for(&self, target_ura: &str) -> PendingHandle {
         let sequence = self.inner.next_call_id.fetch_add(1, Ordering::Relaxed);
         let call_id = sequence << 1;
         let (tx, rx) = oneshot::channel();
@@ -183,7 +183,7 @@ impl PendingDispatchMap {
             call_id,
             PendingEntry {
                 sender: tx,
-                target_uri: target_uri.to_string(),
+                target_ura: target_ura.to_string(),
             },
         );
         PendingHandle {
@@ -204,19 +204,19 @@ impl PendingDispatchMap {
         }
     }
 
-    /// Cancel every outstanding pending dispatch whose `target_uri`
+    /// Cancel every outstanding pending dispatch whose `target_ura`
     /// matches. Called from the daemon's presence-event watcher
     /// when a `<self>.session` reverse channel drops — without this,
     /// `forward_invoke` callers would block on `oneshot::Receiver`
     /// until their HTTP request timeout fired (typically 30s) for a
     /// target whose offline state is already known. Returns the
     /// number of entries cancelled.
-    pub fn cancel_for(&self, target_uri: &str, error_reason: &str) -> usize {
+    pub fn cancel_for(&self, target_ura: &str, error_reason: &str) -> usize {
         let to_cancel: Vec<u64> = self
             .inner
             .entries
             .iter()
-            .filter(|e| e.value().target_uri == target_uri)
+            .filter(|e| e.value().target_ura == target_ura)
             .map(|e| *e.key())
             .collect();
         let mut count = 0;
@@ -240,7 +240,7 @@ impl PendingDispatchMap {
 }
 
 /// One streamed event flowing back from a target device's remote
-/// bidi session. Same-hub remote `fleet.file_transfer` uses this:
+/// bidi session. Same-hub remote `device.fs.transfer` uses this:
 /// zero or more `Chunk`s followed by exactly one `Terminal`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DispatchStreamEvent {

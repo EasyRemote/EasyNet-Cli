@@ -21,13 +21,13 @@
 // Schema
 // ------
 // {
-//   "host_device_agent_uri": "easynet:///r/<realm>/agent/<id>",
+//   "host_device_agent_ura": "easynet:///r/<realm>/agent/<id>",
 //   "hosted_agents": [
 //     {
 //       "profile":            "consent" | "policy" | "mcp" | "llm",
 //       "name":               "default" | "claude" | "codex" | …,
-//       "agent_uri":          "easynet:///r/<realm>/agent/<id>",
-//       "signing_authority":  "hosted_by:<host_device_agent_uri>",
+//       "agent_ura":          "easynet:///r/<realm>/agent/<id>",
+//       "signing_authority":  "hosted_by:<host_device_agent_ura>",
 //       "first_seen_at":      "<rfc3339>"
 //     },
 //     …
@@ -63,7 +63,7 @@ pub struct LocalAgentsFile {
     /// first successful `federation.join`. Populated from the join
     /// receipt body.
     #[serde(default)]
-    pub host_device_agent_uri: String,
+    pub host_device_agent_ura: String,
     /// Hosted Agents (consent / policy / mcp / llm-per-sub-agent).
     /// Order is insertion order; readers MUST NOT rely on order.
     #[serde(default)]
@@ -81,8 +81,8 @@ pub struct HostedAgentEntry {
     pub name: String,
     /// Canonical URA assigned by `federation.advertise_agent` (or
     /// minted locally for hosted Agents in §1.3 Model B).
-    pub agent_uri: String,
-    /// `"hosted_by:<host_device_agent_uri>"` per §1.3.
+    pub agent_ura: String,
+    /// `"hosted_by:<host_device_agent_ura>"` per §1.3.
     pub signing_authority: String,
     /// RFC 3339 timestamp; useful for operator triage when a stale
     /// entry's profile no longer exists in config.
@@ -124,7 +124,7 @@ pub fn lookup_hosted_uri(file: &LocalAgentsFile, profile: &str, name: &str) -> O
     file.hosted_agents
         .iter()
         .find(|e| e.profile == profile && e.name == name)
-        .map(|e| e.agent_uri.clone())
+        .map(|e| e.agent_ura.clone())
 }
 
 /// Insert or update a hosted Agent entry. Returns `true` when an
@@ -134,14 +134,14 @@ pub fn upsert_hosted_agent(
     file: &mut LocalAgentsFile,
     profile: &str,
     name: &str,
-    agent_uri: &str,
+    agent_ura: &str,
 ) -> bool {
-    let signing_authority = if file.host_device_agent_uri.is_empty() {
+    let signing_authority = if file.host_device_agent_ura.is_empty() {
         // Pre-join state: keep the field shape but flag the host as
         // unknown. The first persisted post-join save replaces this.
         "hosted_by:<unset>".to_string()
     } else {
-        format!("hosted_by:{}", file.host_device_agent_uri)
+        format!("hosted_by:{}", file.host_device_agent_ura)
     };
     let now = chrono::Utc::now().to_rfc3339();
     if let Some(entry) = file
@@ -149,14 +149,14 @@ pub fn upsert_hosted_agent(
         .iter_mut()
         .find(|e| e.profile == profile && e.name == name)
     {
-        entry.agent_uri = agent_uri.to_string();
+        entry.agent_ura = agent_ura.to_string();
         entry.signing_authority = signing_authority;
         return true;
     }
     file.hosted_agents.push(HostedAgentEntry {
         profile: profile.to_string(),
         name: name.to_string(),
-        agent_uri: agent_uri.to_string(),
+        agent_ura: agent_ura.to_string(),
         signing_authority,
         first_seen_at: now,
     });
@@ -173,14 +173,14 @@ mod tests {
         // default rather than touching state_dir() so the test does
         // not depend on the user's $HOME.
         let f = LocalAgentsFile::default();
-        assert!(f.host_device_agent_uri.is_empty());
+        assert!(f.host_device_agent_ura.is_empty());
         assert!(f.hosted_agents.is_empty());
     }
 
     #[test]
     fn upsert_inserts_when_absent_and_returns_false() {
         let mut f = LocalAgentsFile {
-            host_device_agent_uri: "easynet:///r/acme/device/01DEV".into(),
+            host_device_agent_ura: "easynet:///r/acme/device/01DEV".into(),
             hosted_agents: Vec::new(),
         };
         let replaced =
@@ -198,14 +198,14 @@ mod tests {
     #[test]
     fn upsert_replaces_when_present_and_returns_true() {
         let mut f = LocalAgentsFile {
-            host_device_agent_uri: "easynet:///r/acme/device/01DEV".into(),
+            host_device_agent_ura: "easynet:///r/acme/device/01DEV".into(),
             hosted_agents: Vec::new(),
         };
         upsert_hosted_agent(&mut f, "llm", "claude", "uri-v1");
         let replaced = upsert_hosted_agent(&mut f, "llm", "claude", "uri-v2");
         assert!(replaced);
         assert_eq!(f.hosted_agents.len(), 1);
-        assert_eq!(f.hosted_agents[0].agent_uri, "uri-v2");
+        assert_eq!(f.hosted_agents[0].agent_ura, "uri-v2");
     }
 
     #[test]
@@ -233,7 +233,7 @@ mod tests {
     #[test]
     fn round_trip_serde_preserves_all_fields() {
         let mut f = LocalAgentsFile {
-            host_device_agent_uri: "easynet:///r/acme/device/01DEV".into(),
+            host_device_agent_ura: "easynet:///r/acme/device/01DEV".into(),
             hosted_agents: Vec::new(),
         };
         upsert_hosted_agent(&mut f, "llm", "claude", "uri-llm");
@@ -250,12 +250,12 @@ mod tests {
         // daemons must still parse the file (serde default behaviour
         // for our struct is to ignore unknown fields).
         let json = r#"{
-            "host_device_agent_uri": "easynet:///r/acme/device/01DEV",
+            "host_device_agent_ura": "easynet:///r/acme/device/01DEV",
             "hosted_agents": [
                 {
                     "profile": "llm",
                     "name": "claude",
-                    "agent_uri": "uri-1",
+                    "agent_ura": "uri-1",
                     "signing_authority": "hosted_by:easynet:///r/acme/device/01DEV",
                     "first_seen_at": "2026-04-27T00:00:00Z",
                     "future_field": "ignored"

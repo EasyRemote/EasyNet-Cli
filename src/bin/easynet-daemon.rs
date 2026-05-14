@@ -44,6 +44,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use easynet_cli::facade::cli::run_daemon;
+use easynet_cli::persistence::daemon_config::{default_config_path, DaemonConfig};
 use easynet_cli::runtime::ability_dispatch::AbilityDispatcher;
 use easynet_cli::runtime::agents;
 use easynet_cli::runtime::domain::{NodeId, ScheduleId, TenantId};
@@ -51,7 +52,7 @@ use easynet_cli::runtime::execution::loop_instance::KernelLoopInvocationDriver;
 use easynet_cli::runtime::execution::schedule::ScheduleService;
 use easynet_cli::runtime::gateway::NoopGateway;
 use easynet_cli::runtime::gateway_api::GatewayApi;
-use easynet_cli::runtime::invocation::{fresh_nonce_hex, CausalContext, Invocation};
+use easynet_cli::runtime::invocation::{CausalContext, Invocation};
 use easynet_cli::runtime::invocation_target::{LocalNodeResolver, TargetResolver};
 use easynet_cli::runtime::kernel::Kernel;
 use easynet_cli::runtime::kernel_api::KernelApi;
@@ -172,12 +173,14 @@ async fn main() -> anyhow::Result<()> {
     // registry build is deterministic and free of global env
     // state.
     let pages_identity = agents::PagesIdentity::from_env();
+    let invocation_ledger = open_invocation_ledger();
     let registry = agents::build_registry_for_daemon(
         kernel.session_service(),
         kernel.permission_service(),
         kernel.discuss_service(),
         kernel.schedule_service(),
         kernel.loop_service(),
+        invocation_ledger.clone(),
         None,
         pages_identity,
     );
@@ -219,9 +222,10 @@ async fn main() -> anyhow::Result<()> {
     // dependency.
     #[cfg(feature = "axon-pb")]
     {
-        if let Err(e) = easynet_cli::services::axon_serve::start_axon_serve_sidecar(Arc::clone(
-            &dispatcher_for_kernel,
-        )) {
+        if let Err(e) = easynet_cli::services::axon_serve::start_axon_serve_sidecar(
+            Arc::clone(&dispatcher_for_kernel),
+            invocation_ledger,
+        ) {
             eprintln!("[axon-serve] sidecar boot failed: {e:#}");
         }
     }
@@ -245,7 +249,7 @@ async fn main() -> anyhow::Result<()> {
     // by constructing a real Invocation per fire and routing it
     // through Kernel::invoke. The Kernel admits the Session,
     // dispatches the agent, and terminates — Clients subscribed
-    // to fleet.attach_session see the same lifecycle they would
+    // to device.session.attach see the same lifecycle they would
     // see for a Client-initiated invoke.
     spawn_schedule_tick(kernel_for_tick, schedule_for_tick);
 
@@ -294,6 +298,27 @@ async fn main() -> anyhow::Result<()> {
     server::run(proxy).await
 }
 
+fn open_invocation_ledger() -> Option<Arc<easynet_axon::invocation::InvocationLedger>> {
+    let config = match DaemonConfig::load(&default_config_path()) {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("[daemon] invocation ledger disabled: daemon config unavailable: {err}");
+            return None;
+        }
+    };
+    let path = config.billing_dir().join("invocations.redb");
+    match easynet_axon::invocation::InvocationLedger::open(&path) {
+        Ok(ledger) => Some(Arc::new(ledger)),
+        Err(err) => {
+            eprintln!(
+                "[daemon] invocation ledger disabled at {}: {err}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
 /// Spawn the schedule tick runner. Every `TICK_PERIOD` it asks the
 /// ScheduleService for due fires and routes each through
 /// `Kernel::invoke` as a real Invocation:
@@ -308,7 +333,7 @@ async fn main() -> anyhow::Result<()> {
 ///
 /// Kernel::invoke admits a Session keyed by invocation_id and
 /// emits the lifecycle events Clients subscribe to via
-/// fleet.attach_session. Failed agent dispatches surface as
+/// device.session.attach. Failed agent dispatches surface as
 /// `Failed(reason)` Receipts — operators see the same diagnostic
 /// they would see if they dispatched the agent manually.
 ///
@@ -374,15 +399,29 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
                         fire.schedule_id, fire.fire_at, fire.catch_up
                     ),
                 };
-                let inv = Invocation {
-                    caller: format!("easynet://nodes/{}", entry.target_node.as_str()),
-                    callee: format!("easynet://nodes/{}", entry.target_node.as_str()),
-                    ability: format!("{}.chat", agent),
-                    subject: format!("easynet://schedules/{}", fire.schedule_id),
-                    nonce_hex: fresh_nonce_hex(),
-                    causal_context: CausalContext::Null,
-                    args: serde_json::json!({"prompt": prompt}),
-                    caller_signature: None,
+                let local_device_uri =
+                    easynet_cli::ura::device_ura("default", entry.target_node.as_str());
+                let schedule_subject_ura = easynet_cli::ura::resource_dot_ura(
+                    "default",
+                    &format!("schedule.{}", fire.schedule_id.as_str()),
+                    "",
+                );
+                let inv = match Invocation::try_new(
+                    local_device_uri.clone(),
+                    local_device_uri,
+                    format!("{}.chat", agent),
+                    schedule_subject_ura,
+                    CausalContext::Null,
+                    serde_json::json!({"prompt": prompt}),
+                ) {
+                    Ok(inv) => inv,
+                    Err(err) => {
+                        eprintln!(
+                            "[schedule-tick] invalid invocation for {}: {err:#}",
+                            fire.schedule_id
+                        );
+                        continue;
+                    }
                 };
                 eprintln!(
                     "[schedule-tick] firing {} → {}.chat at {}",

@@ -1,4 +1,4 @@
-// EasyNet CLI — fleet.pty_session_{input,read,resize} ability handlers
+// EasyNet CLI — device.terminal.{input,read,resize} ability handlers
 // =====================================================================
 //
 // File: src/runtime/agents/pty_io_ability.rs
@@ -9,9 +9,9 @@
 // every Frontend Terminal session before the WS bidi optimisation
 // lands — depends on this trio:
 //
-//   * `fleet.pty_session_input`  (RPC) — push base64 stdin bytes
-//   * `fleet.pty_session_read`   (RPC) — drain stdout up to timeout
-//   * `fleet.pty_session_resize` (RPC) — set cols × rows
+//   * `device.terminal.input`  (RPC) — push base64 stdin bytes
+//   * `device.terminal.read`   (RPC) — drain stdout up to timeout
+//   * `device.terminal.resize` (RPC) — set cols × rows
 //
 // Why a separate file from `pty_lifecycle_ability`
 // ------------------------------------------------
@@ -75,9 +75,9 @@ use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::execution::pty::{PtyService, PtySessionId};
 
-pub const ABILITY_PTY_SESSION_INPUT: &str = "device.fleet.pty_session_input";
-pub const ABILITY_PTY_SESSION_READ: &str = "device.fleet.pty_session_read";
-pub const ABILITY_PTY_SESSION_RESIZE: &str = "device.fleet.pty_session_resize";
+pub const ABILITY_PTY_SESSION_INPUT: &str = "device.terminal.input";
+pub const ABILITY_PTY_SESSION_READ: &str = "device.terminal.read";
+pub const ABILITY_PTY_SESSION_RESIZE: &str = "device.terminal.resize";
 
 /// Default per-call read budget when the caller doesn't supply one.
 /// 5s matches backend PTYDriver's poll cadence (~200 ms idle reads
@@ -317,58 +317,28 @@ impl PtyIoService {
 /// shared `PtyService` (lifecycle) + `PtyIoService` (I/O state) so
 /// every handler observes the same session and state tables.
 ///
-/// Two name families register the same handlers:
-///   * `fleet.pty_session_*`  (canonical local-IPC name; CLI subcommands
-///                              and stdio MCP server use these)
-///   * `fleet.session_*`      (axon-runtime wire-name family; backend's
-///                              PTYDriver dispatches under these
-///                              because terminal_proxy.rs in the
-///                              runtime registers the same handlers
-///                              under the shorter prefix)
-///
-/// In host-mode (backend → daemon UDS → `<self>.invoke_remote` →
-/// device's local AbilityDispatcher), backend's PTYDriver hits the
-/// `fleet.session_*` name and would otherwise 404 on this dispatcher
-/// because it only knew `fleet.pty_session_*`. Registering aliases
-/// closes that gap without forcing every CLI surface or downstream
-/// SDK to switch names.
 pub fn register(reg: &mut LocalAbilityRegistry, pty: Arc<PtyService>, io: PtyIoService) {
     use crate::runtime::ability_dispatch::LocalRpcHandler;
     {
         let pty = Arc::clone(&pty);
         let io = io.clone();
         let handler: LocalRpcHandler = Arc::new(move |args: Value| input_handler(&pty, &io, args));
-        reg.register_rpc_with_owner(
-            "device.fleet.pty_session_input",
-            OwnerKind::Device,
-            Arc::clone(&handler),
-        );
-        reg.register_rpc_with_owner("device.fleet.session_input", OwnerKind::Device, handler);
+        reg.register_rpc_with_owner("device.terminal.input", OwnerKind::Device, handler);
     }
     {
         let pty = Arc::clone(&pty);
         let io = io.clone();
         let handler: LocalRpcHandler = Arc::new(move |args: Value| read_handler(&pty, &io, args));
-        reg.register_rpc_with_owner(
-            "device.fleet.pty_session_read",
-            OwnerKind::Device,
-            Arc::clone(&handler),
-        );
-        reg.register_rpc_with_owner("device.fleet.session_read", OwnerKind::Device, handler);
+        reg.register_rpc_with_owner("device.terminal.read", OwnerKind::Device, handler);
     }
     {
         let pty = Arc::clone(&pty);
         let handler: LocalRpcHandler = Arc::new(move |args: Value| resize_handler(&pty, args));
-        reg.register_rpc_with_owner(
-            "device.fleet.pty_session_resize",
-            OwnerKind::Device,
-            Arc::clone(&handler),
-        );
-        reg.register_rpc_with_owner("device.fleet.session_resize", OwnerKind::Device, handler);
+        reg.register_rpc_with_owner("device.terminal.resize", OwnerKind::Device, handler);
     }
 }
 
-/// `fleet.pty_session_input` handler.
+/// `device.terminal.input` handler.
 ///
 /// Args: `{ session_id: string, data: string (base64) }`.
 /// Returns: `{ ack: bool, bytes_written: int }`. ack=false +
@@ -443,7 +413,7 @@ fn input_handler(pty: &Arc<PtyService>, io: &PtyIoService, args: Value) -> anyho
     Ok(json!({"ack": true, "bytes_written": written}))
 }
 
-/// `fleet.pty_session_read` handler.
+/// `device.terminal.read` handler.
 ///
 /// Args: `{ session_id: string, timeout?: number (seconds) }`.
 /// Returns:
@@ -509,7 +479,7 @@ fn read_handler(pty: &Arc<PtyService>, io: &PtyIoService, args: Value) -> anyhow
     Ok(resp)
 }
 
-/// `fleet.pty_session_resize` handler.
+/// `device.terminal.resize` handler.
 ///
 /// Args: `{ session_id: string, cols: int, rows: int }`.
 /// Returns: `{ ack: bool }`. ack=false when the session_id is
@@ -614,7 +584,7 @@ pub fn resize_input_schema() -> Value {
 
 pub fn input_description() -> &'static str {
     "Push base64-encoded stdin bytes into a PTY session. Pairs \
-     with fleet.pty_session_read to form the unary RPC data plane \
+     with device.terminal.read to form the unary RPC data plane \
      used by the EasyNet backend's PTYDriver."
 }
 

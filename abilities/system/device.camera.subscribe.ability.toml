@@ -1,6 +1,6 @@
 schema_version = "1"
 name = "device.camera.subscribe"
-description = "Subscribe to a camera resource. Returns a server-pushed stream of video BinaryChunk frames at the requested fps / resolution / codec. Subject MUST be a camera resource_uri."
+description = "Subscribe to a camera resource. Returns a server-pushed stream of video BinaryChunk frames at the requested fps / resolution / codec. Subject MUST be a camera resource_ura."
 
 [input_schema]
 type = "object"

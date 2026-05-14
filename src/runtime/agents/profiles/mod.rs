@@ -8,7 +8,7 @@
 //!
 //! Registered profiles
 //! -------------------
-//!   device   — fleet.*, observe.*, admin.*, meta.*, schedule.*,
+//!   device   — device.*, admin.*, meta.*, schedule.*,
 //!              loop.*, discuss.* (host-resident operational abilities)
 //!   consent  — consent.* (human-in-the-loop approval flow)
 //!   policy   — policy.* (admission policy evaluation)
@@ -50,10 +50,10 @@ pub mod policy;
 /// the same catalog.
 pub fn load_host_descriptors() -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
     let local = crate::persistence::local_agents::load().unwrap_or_default();
-    let host_uri = if local.host_device_agent_uri.is_empty() {
+    let host_ura = if local.host_device_agent_ura.is_empty() {
         "self".to_string()
     } else {
-        local.host_device_agent_uri.clone()
+        local.host_device_agent_ura.clone()
     };
     let consent_uri =
         crate::persistence::local_agents::lookup_hosted_uri(&local, "consent", "default");
@@ -64,10 +64,10 @@ pub fn load_host_descriptors() -> Vec<crate::runtime::ability_descriptor::Abilit
         .hosted_agents
         .iter()
         .filter(|e| e.profile == "llm")
-        .map(|e| (e.name.clone(), e.agent_uri.clone()))
+        .map(|e| (e.name.clone(), e.agent_ura.clone()))
         .collect();
     all_descriptors_for_host(
-        &host_uri,
+        &host_ura,
         consent_uri.as_deref(),
         policy_uri.as_deref(),
         mcp_uri.as_deref(),
@@ -113,12 +113,12 @@ mod tests {
     fn aggregator_with_only_device_returns_device_descriptors_only() {
         // URA v4.1.5 §A.URA-1: device URIs use the `device` role
         // (not the legacy v1 `agent/01DEV` placeholder). Production
-        // mints this via `crate::uri::device_uri` (start.rs:623).
+        // mints this via `crate::ura::device_ura` (start.rs:623).
         let device_uri = "easynet:///r/acme/device/4065c47a-ec6f-4330-87a5-0d69787709b8";
         let all = all_descriptors_for_host(device_uri, None, None, None, &[]);
         assert!(!all.is_empty());
         for d in &all {
-            assert_eq!(d.owner_agent_uri, device_uri);
+            assert_eq!(d.owner_agent_ura, device_uri);
             assert!(device::owns(&d.name));
         }
     }
@@ -138,7 +138,7 @@ mod tests {
         let consent_uri = "easynet:///r/acme/agent/00000000-0000-0000-0000-000000000001.consent";
         let all = all_descriptors_for_host(device_uri, Some(consent_uri), None, None, &[]);
         let owners: std::collections::HashSet<&str> =
-            all.iter().map(|d| d.owner_agent_uri.as_str()).collect();
+            all.iter().map(|d| d.owner_agent_ura.as_str()).collect();
         assert!(owners.contains(device_uri));
         assert!(owners.contains(consent_uri));
     }

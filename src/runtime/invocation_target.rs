@@ -42,7 +42,7 @@ use serde_json::Value;
 #[derive(Debug, Clone)]
 pub struct InvocationPlan {
     /// Fully-qualified ability name (`<agent>.chat`,
-    /// `fleet.attach_session`, etc.).
+    /// `device.session.attach`, etc.).
     pub ability: String,
 
     /// Raw JSON args. v1 uses serde JSON; v2 will switch to

@@ -18,6 +18,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::path::{Path, PathBuf};
+#[cfg(any(windows, feature = "axon-pb"))]
 use std::time::Duration;
 
 /// Resolve the local daemon Invocation endpoint. Historical env var

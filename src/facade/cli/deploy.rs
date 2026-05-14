@@ -5,7 +5,7 @@
 // Description: Publish an ability bundle to a target node.
 //
 // Per the ability-only ontology, deploying an ability is itself an
-// ability invocation: the operator invokes `fleet.deploy_ability`
+// ability invocation: the operator invokes `device.ability.deploy`
 // on the local daemon, passing the local path and target node id.
 // The daemon-side handler reads the bundle, validates the manifest,
 // computes the integrity digest, and publishes through the
@@ -17,7 +17,7 @@
 // -----------------------
 //   1. Validate args locally (path exists, node id non-empty).
 //   2. Map args → JSON request body.
-//   3. invoke_local_ability("device.fleet.deploy_ability", body).
+//   3. invoke_local_ability("device.ability.deploy", body).
 //   4. Print the daemon's response.
 //
 // All policy (manifest validation, signature handling, ordering of
@@ -63,13 +63,13 @@ pub fn run(args: DeployArgs) -> anyhow::Result<()> {
         style(&args.node).cyan()
     );
     let result = invoke_local_ability(
-        "device.fleet.deploy_ability",
+        "device.ability.deploy",
         json!({
             "path": args.path,
             "node_id": args.node,
         }),
     )
-    .context("invoke fleet.deploy_ability")?;
+    .context("invoke device.ability.deploy")?;
     eprintln!("{}", style("✓").green());
 
     if let Some(install_id) = result.get("install_id").and_then(|v| v.as_str()) {

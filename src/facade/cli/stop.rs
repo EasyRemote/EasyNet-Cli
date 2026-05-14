@@ -64,7 +64,7 @@ pub fn run(_args: StopArgs) -> anyhow::Result<()> {
     if !hb_killed {
         if config::load_credentials().is_ok() {
             // Per the ability-only ontology this would invoke
-            // `fleet.deregister_self` on the daemon. The daemon is
+            // `device.node.deregister` on the daemon. The daemon is
             // about to be torn down here, so going through its IPC
             // surface for one last call would race the shutdown.
             // The legacy `bridge.deregister_node` was removed by
@@ -112,11 +112,11 @@ fn best_effort_revoke_via_daemon() {
             Ok(creds) => creds,
             Err(_) => return,
         };
-        let caller_uri = crate::uri::device_uri(&creds.tenant_id, &creds.node_id);
+        let caller_ura = crate::ura::device_ura(&creds.tenant_id, &creds.node_id);
         let revoke = crate::support::federation_invoke::invoke_federation_revoke(
-            &caller_uri,
+            &caller_ura,
             "device shutdown",
-            Some(&caller_uri),
+            Some(&caller_ura),
         );
         if let Err(e) = revoke {
             output::warn(&format!(

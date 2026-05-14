@@ -1,6 +1,7 @@
 //! device profile — RFC-001 §1.
 //!
-//! An Agent advertising fleet.* + observe.* + admin.* + meta.* +
+//! An Agent advertising device-hosted operational abilities plus observe,
+//! admin, meta,
 //! schedule.* + loop.* + discuss.* abilities. Default-on; one per
 //! easynet-daemon instance. Represents the local host's
 //! operational surface.
@@ -10,7 +11,7 @@
 //!
 //! Owned ability namespaces (per plan §1)
 //! --------------------------------------
-//!   fleet.*       (wired in agents/skill_ability.rs + session_ability.rs etc.)
+//!   device.*      (hosted operation surface: device.agent.*, device.node.*, etc.)
 //!   observe.*     (wired in agents/ping.rs as device.observe.health)
 //!   schedule.*    (wired in agents/schedule_ability.rs)
 //!   loop.*        (wired in agents/loop_ability.rs)
@@ -23,20 +24,15 @@
 /// the registry's full ability list down to the device-profile's
 /// portion.
 pub const DEVICE_PROFILE_ABILITY_PREFIXES: &[&str] = &[
-    "fleet.",
     "observe.",
     "schedule.",
     "loop.",
     "discuss.",
     "meta.",
     "admin.",
-    // device.* — joint-plan unified-path replacement for the
-    // self-arm of device.fleet.describe_node. Per the URA `device` role
-    // canonicalisation, ability names follow the noun-verb shape:
-    // `device.describe` describes "this device". Cross-device
-    // routing is the caller's job (forward_invoke against the
-    // target device URA), so the ability namespace lives on the
-    // device profile.
+    // device.* — device-hosted abilities. Cross-device routing is
+    // the caller's job (forward_invoke against the target device URA);
+    // the ability namespace describes resources owned by this device.
     "device.",
     // AXIOM Tier 2.5 Baseline Locomotion Profile members. Every
     // host-embodied agent claiming `baseline-locomotion-v1`
@@ -71,7 +67,7 @@ pub const DEVICE_PROFILE_ABILITY_PREFIXES: &[&str] = &[
     // handlers actually run on the device daemon
     // (`OwnerKind::Device` in the registry); claiming them in
     // the LLM profile caused the catalogue's
-    // `descriptors_for(agent_uri)` to stamp every voice verb
+    // `descriptors_for(agent_ura)` to stamp every voice verb
     // with the agent URA, so `easynet ability list` grouped
     // them under AGENT and the KIND column read `agent`.
     // Ownership here reflects "where does the handler run" per
@@ -120,17 +116,17 @@ pub fn owns(ability_name: &str) -> bool {
 /// Wire shape — for each name in the registry that `owns(name)`
 /// returns true for:
 ///   * observe.*  → PUBLIC
-///   * everything else (fleet/admin/schedule/loop/discuss/meta) →
+///   * everything else (device/admin/schedule/loop/discuss/meta) →
 ///     SCOPED with scope_subjects/scope_agents = Any (P4.1 default).
 ///     P4.7 narrows the SCOPED axes to the host operator URA on
 ///     daemon boot.
 ///
-/// `owner_agent_uri` is the device-profile Agent's canonical URA,
+/// `owner_agent_ura` is the device-profile Agent's canonical URA,
 /// minted at first `federation.join` and persisted via
 /// `local-agents.json`. Caller passes it in so this module stays
 /// pure (no daemon-state coupling).
 pub fn descriptors_for(
-    owner_agent_uri: &str,
+    owner_agent_ura: &str,
 ) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
     use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
     let mut out = Vec::new();
@@ -139,7 +135,7 @@ pub fn descriptors_for(
             continue;
         }
         // M2 of system-namespace migration: catalogue entries are
-        // canonical (`device.observe.*`, `device.fleet.*`, …); the
+        // canonical (`device.observe.*`, `device.agent.*`, …); the
         // visibility split that previously branched on the legacy
         // `observe.` prefix follows suit.
         let visibility = if meta.name.starts_with("device.observe.") {
@@ -147,7 +143,7 @@ pub fn descriptors_for(
         } else {
             Visibility::Scoped
         };
-        let descriptor = AbilityDescriptor::new(meta.name.clone(), owner_agent_uri, visibility)
+        let descriptor = AbilityDescriptor::new(meta.name.clone(), owner_agent_ura, visibility)
             .expect("registry-derived names satisfy descriptor invariants")
             .with_input_schema(meta.input_schema.clone())
             .with_hints(meta.hints.clone())
@@ -164,7 +160,10 @@ mod tests {
 
     #[test]
     fn owns_recognizes_every_documented_namespace() {
-        assert!(owns("device.fleet.list_abilities"));
+        assert!(owns("device.skill.list"));
+        assert!(owns("device.skill.install"));
+        assert!(owns("device.skill.remove"));
+        assert!(owns("device.skill.upgrade"));
         assert!(owns("device.observe.health"));
         assert!(owns("device.schedule.add"));
         assert!(owns("device.loop.create"));
@@ -184,7 +183,7 @@ mod tests {
         assert!(owns("device.a2a.bridge.send_task"));
         assert!(owns("device.a2a.client.send_task"));
         // Joint-plan device.* unified-path namespace.
-        assert!(owns("device.describe"));
+        assert!(owns("device.node.describe"));
         // RFC-005 v3.2 voice signaling — moved here from the
         // LLM profile because the handlers run on the device
         // daemon (`OwnerKind::Device`). Catalogue entries get
@@ -210,18 +209,18 @@ mod tests {
             "device.process.exec",
             "device.shell.run",
             "device.http.request",
-            // PTY family — inhabits fleet.* prefix already, but
-            // let's pin them here so a future renamer trips this
+            // PTY family — pin the full terminal surface here so a
+            // future renamer trips this
             // test instead of silently breaking the catalog. The
             // unary I/O trio (input/read/resize) lives alongside
             // attach (bidi) so the backend's PTYDriver — which
             // talks unary RPC — sees a fully-served wire surface.
-            "device.fleet.pty_session_create",
-            "device.fleet.pty_session_close",
-            "device.fleet.pty_session_attach",
-            "device.fleet.pty_session_input",
-            "device.fleet.pty_session_read",
-            "device.fleet.pty_session_resize",
+            "device.terminal.create",
+            "device.terminal.close",
+            "device.terminal.attach",
+            "device.terminal.input",
+            "device.terminal.read",
+            "device.terminal.resize",
         ] {
             assert!(
                 owns(name),
@@ -255,7 +254,7 @@ mod tests {
                 "device::descriptors_for emitted '{}' which it does not own",
                 d.name
             );
-            assert_eq!(d.owner_agent_uri, owner);
+            assert_eq!(d.owner_agent_ura, owner);
             assert_eq!(d.source, "kernel:built-in");
         }
     }

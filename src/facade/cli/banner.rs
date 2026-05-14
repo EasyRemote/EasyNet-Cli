@@ -32,7 +32,7 @@ use std::io::IsTerminal;
 
 use crate::persistence::config;
 use crate::support::net;
-use crate::uri;
+use crate::ura;
 
 /// Width of the status-block label column ("Daemon:", "Hub:",
 /// "Current device:"). Picked so the longest label fits with one
@@ -253,11 +253,11 @@ fn write_runtime_status(buf: &mut String, style: ColourMode) {
     match &creds {
         Some(c) => {
             let realm = c.realm_str();
-            let hub_ura = uri::hub_uri(realm);
-            let device_ura = uri::device_uri(realm, &c.node_id);
+            let hub_ura = ura::hub_ura(realm);
+            let device_ura = ura::device_ura(realm, &c.node_id);
             write_row(buf, style, "Hub:", &style.paint(sgr::DIM, &hub_ura));
             if let Some(username) = c.username.as_deref().filter(|s| !s.is_empty()) {
-                let user_ura = uri::user_uri(realm, username);
+                let user_ura = ura::user_ura(realm, username);
                 write_row(
                     buf,
                     style,

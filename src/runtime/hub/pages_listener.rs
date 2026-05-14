@@ -435,7 +435,7 @@ async fn handle_v1_chat_completions(req: Request<Body>) -> Response<Body> {
         // Unary path. Strip easynet-only metadata and return.
         let mut response = value;
         if let serde_json::Value::Object(ref mut m) = response {
-            m.remove("easynet_user_uri");
+            m.remove("easynet_user_ura");
         }
         return json_response_with_cors(StatusCode::OK, response);
     }
@@ -661,7 +661,7 @@ mod tests {
         let models = payload["data"].as_array().expect("data array");
         assert!(models.iter().any(|entry| {
             entry.get("id").and_then(|v| v.as_str())
-                == Some("easynet:///r/easynet.run/ability/alice.codex.codex.chat")
+                == Some("easynet:///r/easynet.run/ability/alice.codex.chat")
         }));
     }
 
@@ -675,7 +675,7 @@ mod tests {
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(
                 json!({
-                    "model": "easynet:///r/easynet.run/ability/alice.codex.codex.chat",
+                    "model": "easynet:///r/easynet.run/ability/alice.codex.chat",
                     "messages": [
                         {"role": "user", "content": "reply with: ok"}
                     ]
@@ -689,7 +689,7 @@ mod tests {
         let payload: serde_json::Value = serde_json::from_slice(&body).expect("json body");
         assert_eq!(
             payload["model"],
-            "easynet:///r/easynet.run/ability/alice.codex.codex.chat"
+            "easynet:///r/easynet.run/ability/alice.codex.chat"
         );
         assert_eq!(payload["choices"][0]["message"]["content"], "ok");
     }

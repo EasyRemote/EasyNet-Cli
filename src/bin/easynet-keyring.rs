@@ -46,7 +46,7 @@ use easynet_cli::services::keyring::{
 use easynet_cli::support::named_pipe::PipeListener;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 #[cfg(unix)]
-use tokio::net::{UnixListener, UnixStream};
+use tokio::net::UnixListener;
 use tokio::sync::Mutex;
 
 const MAX_FRAME_BYTES: usize = 64 * 1024;

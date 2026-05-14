@@ -40,18 +40,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-/// Unified Resource Address. Placeholder-typed as an opaque string in
-/// v1 — the URA scheme (`easynet://...`) is itself under AXIOM §3 and
-/// has no CLI-side construction rule yet. Callers may stuff a plain
-/// node_id or agent_id here; future validation will tighten to the
-/// URA grammar.
+/// Unified Resource Address.
+///
+/// URAs are canonical `easynet:///r/<realm>/...` addresses. New code
+/// should construct them through `crate::ura` builders and validate
+/// externally supplied values with `crate::ura::parse_ura`. Plain
+/// node ids, agent ids, or ad-hoc route fragments are not valid
+/// Invocation URAs.
 pub type Ura = String;
 
-/// Ability URI. In v1 this is the same `<agent>.<verb>` or
-/// `system.<feature>.<verb>` string the ability registry already
-/// consumes; the `easynet://` URI prefix is added when signed
-/// invocation ships in v2.
-pub type AbilityUri = String;
+/// Ability member-call name.
+///
+/// This is the registry function name (`<agent>.<verb>`,
+/// `device.skill.list`, `federation.resolve_key`, ...). The route or
+/// resource URA that locates a published ability is carried by the
+/// envelope/registry layers, not by this dispatch key.
+pub type AbilityName = String;
 
 /// The four shapes `causal_context` may take per AXIOM §2.x.
 ///
@@ -100,7 +104,7 @@ impl CausalContext {
 pub struct Invocation {
     pub caller: Ura,
     pub callee: Ura,
-    pub ability: AbilityUri,
+    pub ability: AbilityName,
     pub subject: Ura,
     /// 16-byte caller-generated nonce, hex-encoded. v1 generates via
     /// `fresh_nonce_hex()` at Control-layer admission time.
@@ -114,6 +118,37 @@ pub struct Invocation {
 }
 
 impl Invocation {
+    pub fn try_new(
+        caller: Ura,
+        callee: Ura,
+        ability: AbilityName,
+        subject: Ura,
+        causal_context: CausalContext,
+        args: Value,
+    ) -> anyhow::Result<Self> {
+        let invocation = Self {
+            caller,
+            callee,
+            ability,
+            subject,
+            nonce_hex: fresh_nonce_hex(),
+            causal_context,
+            args,
+            caller_signature: None,
+        };
+        invocation.validate()?;
+        Ok(invocation)
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        validate_ura_field("caller", &self.caller)?;
+        validate_ura_field("callee", &self.callee)?;
+        validate_ura_field("subject", &self.subject)?;
+        validate_ability_name(&self.ability)?;
+        validate_nonce_hex(&self.nonce_hex)?;
+        Ok(())
+    }
+
     /// Canonical byte representation used for hashing. Order-stable by
     /// serde_json's `to_vec` on the named struct, which is
     /// insertion-order for struct fields and sorted-by-key for
@@ -126,6 +161,34 @@ impl Invocation {
         cloned.caller_signature = None;
         serde_json::to_vec(&cloned).unwrap_or_default()
     }
+}
+
+fn validate_ura_field(field: &str, value: &str) -> anyhow::Result<()> {
+    let value = value.trim();
+    if value.is_empty() {
+        anyhow::bail!("{field} URA must not be empty");
+    }
+    crate::ura::parse_ura(value).map_err(|e| anyhow::anyhow!("{field} URA is invalid: {e}"))?;
+    Ok(())
+}
+
+fn validate_ability_name(value: &str) -> anyhow::Result<()> {
+    let value = value.trim();
+    if value.is_empty() {
+        anyhow::bail!("ability must not be empty");
+    }
+    if value.chars().any(char::is_whitespace) {
+        anyhow::bail!("ability must not contain whitespace");
+    }
+    Ok(())
+}
+
+fn validate_nonce_hex(value: &str) -> anyhow::Result<()> {
+    let raw = hex::decode(value).map_err(|e| anyhow::anyhow!("nonce_hex is not hex: {e}"))?;
+    if raw.len() != 16 {
+        anyhow::bail!("nonce_hex must encode exactly 16 bytes");
+    }
+    Ok(())
 }
 
 /// Compute `invocation_id = sha256(canonical_bytes(inv))`, hex-encoded.
@@ -142,9 +205,9 @@ pub fn invocation_id_of(inv: &Invocation) -> String {
 
 /// Generate a fresh 16-byte nonce, hex-encoded.
 ///
-/// Uses the process pid + wall-clock nanos + a uuid v4 seed.
-/// Collision-resistant enough for v1 admission dedup (5-minute
-/// window, single-tenant). v2 may switch to an OS-level RNG.
+/// Uses a UUID v4 random seed; collision-resistant enough for v1
+/// admission dedup. Wire proto envelopes use `ProtoEnvelope`, which
+/// emits a binary 16-byte nonce directly.
 pub fn fresh_nonce_hex() -> String {
     let uuid_bytes = uuid::Uuid::new_v4().into_bytes();
     hex::encode(uuid_bytes)
@@ -205,10 +268,10 @@ mod tests {
 
     fn sample_invocation() -> Invocation {
         Invocation {
-            caller: "easynet://nodes/a".into(),
-            callee: "easynet://nodes/b".into(),
+            caller: "easynet:///r/localhost/device/dev-a".into(),
+            callee: "easynet:///r/localhost/device/dev-b".into(),
             ability: "observe.health".into(),
-            subject: "easynet://nodes/b".into(),
+            subject: "easynet:///r/localhost/device/dev-b".into(),
             nonce_hex: "00112233445566778899aabbccddeeff".into(),
             causal_context: CausalContext::Null,
             args: json!({}),
@@ -260,6 +323,29 @@ mod tests {
         let b = fresh_nonce_hex();
         assert_ne!(a, b);
         assert_eq!(a.len(), 32, "16 bytes hex-encoded is 32 chars");
+    }
+
+    #[test]
+    fn validate_rejects_non_ura_caller() {
+        let mut inv = sample_invocation();
+        inv.caller = "agent://self".into();
+        let err = inv.validate().unwrap_err();
+        assert!(format!("{err}").contains("caller URA is invalid"));
+    }
+
+    #[test]
+    fn try_new_builds_valid_invocation_with_fresh_nonce() {
+        let inv = Invocation::try_new(
+            "easynet:///r/localhost/device/dev-a".into(),
+            "easynet:///r/localhost/device/dev-b".into(),
+            "device.skill.list".into(),
+            "easynet:///r/localhost/device/dev-b".into(),
+            CausalContext::Null,
+            json!({}),
+        )
+        .unwrap();
+        assert_eq!(inv.nonce_hex.len(), 32);
+        inv.validate().unwrap();
     }
 
     #[test]

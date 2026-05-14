@@ -65,7 +65,7 @@ struct PairingPreflight {
     #[serde(default)]
     hub_tls_ca_pem_b64: String,
     #[serde(default)]
-    _hub_agent_uri: String,
+    _hub_agent_ura: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -136,13 +136,18 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
         .hub_api
         .as_ref()
         .map(|s| s.trim_end_matches('/').to_string());
+    let has_explicit_hub_api_override = hub_api_override.is_some();
     let validate_base = pick_validate_base(&args.hub, hub_api_override.as_deref());
     output::info("Preparing pairing...");
     let preflight = preflight_pairing_token(&token, &validate_base)?;
     output::info("Validating pairing token...");
     let mut creds = validate_pairing_token(&token, &validate_base, &preflight)?;
     backfill_credentials_username_from_auth_session(&mut creds);
-    creds.hub_api_base = hub_api_override;
+    if rewrite_local_docker_session_endpoint(&mut creds, &validate_base) {
+        output::detail("hub_session", &creds.hub_endpoint);
+    }
+    creds.hub_api_base =
+        persisted_hub_api_base_for_pairing(&creds, &validate_base, has_explicit_hub_api_override);
     config::save_credentials(&creds)?;
 
     // Ensure a minimal daemon-config.toml exists. Without it the
@@ -385,6 +390,119 @@ fn pick_validate_base(hub: &str, hub_api_override: Option<&str>) -> String {
         .unwrap_or_else(|| hub.to_string())
 }
 
+fn persisted_hub_api_base_for_pairing(
+    creds: &config::Credentials,
+    validate_base: &str,
+    explicit_override: bool,
+) -> Option<String> {
+    let normalized = validate_base.trim_end_matches('/').to_string();
+    if normalized.is_empty() {
+        return None;
+    }
+    if explicit_override || normalized != creds.api_base() {
+        return Some(normalized);
+    }
+    None
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct UrlEndpointParts {
+    scheme: String,
+    host: String,
+    port: Option<String>,
+    suffix: String,
+}
+
+fn parse_url_endpoint(value: &str) -> Option<UrlEndpointParts> {
+    let (scheme, rest) = value.trim().split_once("://")?;
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    let suffix = rest[authority_end..].to_string();
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, hp)| hp);
+    if host_port.is_empty() {
+        return None;
+    }
+
+    let (host, port) = if let Some(after_bracket) = host_port.strip_prefix('[') {
+        let bracket_end = after_bracket.find(']')?;
+        let host = after_bracket[..bracket_end].to_string();
+        let tail = &after_bracket[bracket_end + 1..];
+        let port = tail
+            .strip_prefix(':')
+            .filter(|p| !p.is_empty())
+            .map(str::to_string);
+        (host, port)
+    } else if let Some((host, port)) = host_port.rsplit_once(':') {
+        if !host.is_empty() && port.chars().all(|c| c.is_ascii_digit()) {
+            (host.to_string(), Some(port.to_string()))
+        } else {
+            (host_port.to_string(), None)
+        }
+    } else {
+        (host_port.to_string(), None)
+    };
+
+    Some(UrlEndpointParts {
+        scheme: scheme.to_string(),
+        host,
+        port,
+        suffix,
+    })
+}
+
+fn format_authority(host: &str, port: Option<&str>) -> String {
+    let host = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    };
+    match port {
+        Some(port) => format!("{host}:{port}"),
+        None => host,
+    }
+}
+
+fn is_loopback_or_localhost(host: &str) -> bool {
+    let lower = host.to_ascii_lowercase();
+    lower == "localhost" || lower == "::1" || lower.starts_with("127.")
+}
+
+fn is_docker_internal_hub_host(host: &str) -> bool {
+    let lower = host.to_ascii_lowercase();
+    lower == "hub" || lower.starts_with("hub-")
+}
+
+fn rewrite_local_docker_session_endpoint(
+    creds: &mut config::Credentials,
+    validate_base: &str,
+) -> bool {
+    let Some(validate_parts) = parse_url_endpoint(validate_base) else {
+        return false;
+    };
+    if !is_loopback_or_localhost(&validate_parts.host) {
+        return false;
+    }
+
+    let Some(session_parts) = parse_url_endpoint(&creds.hub_endpoint) else {
+        return false;
+    };
+    if !is_docker_internal_hub_host(&session_parts.host) {
+        return false;
+    }
+
+    let rewritten = format!(
+        "{}://{}{}",
+        session_parts.scheme,
+        format_authority(&validate_parts.host, session_parts.port.as_deref()),
+        session_parts.suffix
+    );
+    if rewritten == creds.hub_endpoint {
+        return false;
+    }
+    creds.hub_endpoint = rewritten;
+    true
+}
+
 fn preflight_pairing_token(token: &str, hub_base: &str) -> anyhow::Result<PairingPreflight> {
     let base = hub_base.trim_end_matches('/');
     let url = format!("{base}/api/v1/devices/pairing/{token}/preflight");
@@ -620,6 +738,117 @@ mod tests {
     }
 
     #[test]
+    fn persisted_hub_api_base_keeps_explicit_override() {
+        let creds = config::Credentials {
+            node_id: "node".into(),
+            credential_token: "cred".into(),
+            hub_endpoint: "https://hub:50443".into(),
+            tenant_id: "tenant".into(),
+            deploy_signature: "sig".into(),
+            hub_api_base: None,
+            username: None,
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+        };
+        let persisted = persisted_hub_api_base_for_pairing(&creds, "http://127.0.0.1:8080/", true);
+        assert_eq!(persisted.as_deref(), Some("http://127.0.0.1:8080"));
+    }
+
+    #[test]
+    fn persisted_hub_api_base_keeps_validate_base_when_session_endpoint_is_internal() {
+        let creds = config::Credentials {
+            node_id: "node".into(),
+            credential_token: "cred".into(),
+            hub_endpoint: "https://hub:50443".into(),
+            tenant_id: "tenant".into(),
+            deploy_signature: "sig".into(),
+            hub_api_base: None,
+            username: None,
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+        };
+        let persisted = persisted_hub_api_base_for_pairing(&creds, "http://127.0.0.1:8080", false);
+        assert_eq!(persisted.as_deref(), Some("http://127.0.0.1:8080"));
+    }
+
+    #[test]
+    fn persisted_hub_api_base_omits_default_when_it_matches_derived_api_base() {
+        let creds = config::Credentials {
+            node_id: "node".into(),
+            credential_token: "cred".into(),
+            hub_endpoint: "https://easynet.run:50443".into(),
+            tenant_id: "tenant".into(),
+            deploy_signature: "sig".into(),
+            hub_api_base: None,
+            username: None,
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+        };
+        let persisted = persisted_hub_api_base_for_pairing(&creds, "https://easynet.run", false);
+        assert_eq!(persisted, None);
+    }
+
+    #[test]
+    fn rewrite_local_docker_session_endpoint_uses_loopback_api_host() {
+        let mut creds = config::Credentials {
+            node_id: "node".into(),
+            credential_token: "cred".into(),
+            hub_endpoint: "https://hub:50443".into(),
+            tenant_id: "tenant".into(),
+            deploy_signature: "sig".into(),
+            hub_api_base: None,
+            username: None,
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+        };
+        assert!(rewrite_local_docker_session_endpoint(
+            &mut creds,
+            "http://127.0.0.1:8080"
+        ));
+        assert_eq!(creds.hub_endpoint, "https://127.0.0.1:50443");
+    }
+
+    #[test]
+    fn rewrite_local_docker_session_endpoint_keeps_container_to_container_join() {
+        let mut creds = config::Credentials {
+            node_id: "node".into(),
+            credential_token: "cred".into(),
+            hub_endpoint: "https://hub:50443".into(),
+            tenant_id: "tenant".into(),
+            deploy_signature: "sig".into(),
+            hub_api_base: None,
+            username: None,
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+        };
+        assert!(!rewrite_local_docker_session_endpoint(
+            &mut creds,
+            "http://hub:8080"
+        ));
+        assert_eq!(creds.hub_endpoint, "https://hub:50443");
+    }
+
+    #[test]
+    fn rewrite_local_docker_session_endpoint_keeps_public_session_endpoint() {
+        let mut creds = config::Credentials {
+            node_id: "node".into(),
+            credential_token: "cred".into(),
+            hub_endpoint: "https://easynet.run:50443".into(),
+            tenant_id: "tenant".into(),
+            deploy_signature: "sig".into(),
+            hub_api_base: None,
+            username: None,
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+        };
+        assert!(!rewrite_local_docker_session_endpoint(
+            &mut creds,
+            "http://127.0.0.1:8080"
+        ));
+        assert_eq!(creds.hub_endpoint, "https://easynet.run:50443");
+    }
+
+    #[test]
     fn derive_device_public_key_hex_matches_runtime_derivation() {
         let tenant_id = "tenant-a";
         let node_id = "en-test-node";
@@ -640,7 +869,7 @@ mod tests {
             node_id: "en-test-node".into(),
             hub_public_key_b64: String::new(),
             hub_tls_ca_pem_b64: String::new(),
-            _hub_agent_uri: String::new(),
+            _hub_agent_ura: String::new(),
         };
         let payload = build_validate_pairing_payload(&preflight).expect("build payload");
         assert_eq!(payload.node_id, "en-test-node");
@@ -669,7 +898,7 @@ mod tests {
             node_id: "en-test-node".into(),
             hub_public_key_b64: String::new(),
             hub_tls_ca_pem_b64: String::new(),
-            _hub_agent_uri: String::new(),
+            _hub_agent_ura: String::new(),
         };
         let err = validate_pairing_token("token_1234", &base, &preflight)
             .expect_err("transport failure should error");

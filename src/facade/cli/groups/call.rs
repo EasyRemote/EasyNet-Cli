@@ -165,13 +165,13 @@ fn invoke_call_signaling(ability: &str, args: Value) -> anyhow::Result<Value> {
         let realm = creds.realm_str().trim();
         let node_id = creds.node_id.trim();
         if !realm.is_empty() && !node_id.is_empty() {
-            let hub_uri = crate::uri::hub_uri(realm);
-            let caller_uri = crate::uri::device_uri(realm, node_id);
+            let hub_uri = crate::ura::hub_ura(realm);
+            let caller_ura = crate::ura::device_ura(realm, node_id);
             return crate::support::federation_invoke::invoke_via_federation_forward(
                 ability,
                 args,
                 &hub_uri,
-                Some(&caller_uri),
+                Some(&caller_ura),
             )
             .with_context(|| format!("invoke {ability} against realm hub"));
         }

@@ -48,7 +48,7 @@ use serde_json::Value;
 /// the hub-profile's `ForwardInvokeArgs` exactly.
 #[derive(Debug, Clone, Serialize)]
 pub struct ForwardInvokeArgs {
-    pub target_uri: String,
+    pub target_ura: String,
     pub ability_name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub function_name: String,
@@ -74,12 +74,12 @@ pub struct ForwardInvokeReceipt {
 /// RFC-002 §5.1 federation.resolve_key argument shape.
 #[derive(Debug, Clone, Serialize)]
 pub struct ResolveKeyArgs {
-    pub agent_uri: String,
+    pub agent_ura: String,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct ResolveKeyReceipt {
-    pub agent_uri: String,
+    pub agent_ura: String,
     pub public_key_hex: String,
     pub status: String,
     #[serde(default)]
@@ -120,7 +120,7 @@ pub struct JoinArgs {
 /// default contract.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct JoinReceipt {
-    pub canonical_agent_uri: String,
+    pub membership_ura: String,
     pub realm: String,
     pub join_receipt_hash: String,
     #[serde(default)]
@@ -201,7 +201,7 @@ pub struct HubAbilitiesDiff {
 /// policy, mcp, llm-per-sub-agent) with the realm directory.
 #[derive(Debug, Clone, Serialize)]
 pub struct AdvertiseAgentArgs {
-    pub agent_uri: String,
+    pub agent_ura: String,
     /// Empty when the hosted Agent has no key of its own (the
     /// common case for §1.3 Model B; receipts are signed by the
     /// host's key, attested via host_attestation in the
@@ -226,7 +226,7 @@ pub enum AdvertisedSigningAuthority {
     SelfSigned,
     /// Agent is hosted by another Agent that signs its receipts
     /// (Model B — every CLI-spawned hosted Agent).
-    HostedBy { host_uri: String },
+    HostedBy { host_ura: String },
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -257,7 +257,7 @@ pub struct ResolveArgs {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ResolveFilter {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_uri_prefix: Option<String>,
+    pub agent_ura_prefix: Option<String>,
     /// When true, the Hub includes each agent's
     /// `advertised_abilities` in the receipt. Default false keeps
     /// the listing payload small for the common "is this agent
@@ -360,30 +360,30 @@ mod tests {
     #[test]
     fn advertise_args_serializes_self_signed_kind() {
         let args = AdvertiseAgentArgs {
-            agent_uri: "easynet:///r/acme/device/01DEV".into(),
+            agent_ura: "easynet:///r/acme/device/01DEV".into(),
             public_key_hex: "aa".into(),
             signing_authority: AdvertisedSigningAuthority::SelfSigned,
             host_node_id: None,
         };
         let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
         assert_eq!(v["signing_authority"]["kind"], "self_signed");
-        assert_eq!(v["agent_uri"], "easynet:///r/acme/device/01DEV");
+        assert_eq!(v["agent_ura"], "easynet:///r/acme/device/01DEV");
     }
 
     #[test]
-    fn advertise_args_serializes_hosted_kind_with_host_uri() {
+    fn advertise_args_serializes_hosted_kind_with_host_ura() {
         let args = AdvertiseAgentArgs {
-            agent_uri: "easynet:///r/acme/agent/u1.01LLM".into(),
+            agent_ura: "easynet:///r/acme/agent/u1.01LLM".into(),
             public_key_hex: "".into(),
             signing_authority: AdvertisedSigningAuthority::HostedBy {
-                host_uri: "easynet:///r/acme/device/01DEV".into(),
+                host_ura: "easynet:///r/acme/device/01DEV".into(),
             },
             host_node_id: None,
         };
         let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
         assert_eq!(v["signing_authority"]["kind"], "hosted_by");
         assert_eq!(
-            v["signing_authority"]["host_uri"],
+            v["signing_authority"]["host_ura"],
             "easynet:///r/acme/device/01DEV"
         );
     }
@@ -391,12 +391,12 @@ mod tests {
     #[test]
     fn join_receipt_round_trips_through_serde() {
         let body = json!({
-            "canonical_agent_uri": "easynet:///r/acme/device/01DEV",
+            "membership_ura": "easynet:///r/acme/device/01DEV",
             "realm": "acme",
             "join_receipt_hash": "abc123"
         });
         let parsed: JoinReceipt = parse_receipt_value(&body).unwrap();
-        assert_eq!(parsed.canonical_agent_uri, "easynet:///r/acme/device/01DEV");
+        assert_eq!(parsed.membership_ura, "easynet:///r/acme/device/01DEV");
         assert_eq!(parsed.realm, "acme");
         assert_eq!(parsed.join_receipt_hash, "abc123");
     }
@@ -426,13 +426,13 @@ mod tests {
     fn resolve_filter_emits_prefix_when_set() {
         let args = ResolveArgs {
             filter: Some(ResolveFilter {
-                agent_uri_prefix: Some("easynet:///r/acme/".into()),
+                agent_ura_prefix: Some("easynet:///r/acme/".into()),
                 include_abilities: false,
                 tenant_filter: None,
             }),
         };
         let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
-        assert_eq!(v["filter"]["agent_uri_prefix"], "easynet:///r/acme/");
+        assert_eq!(v["filter"]["agent_ura_prefix"], "easynet:///r/acme/");
     }
 
     #[test]

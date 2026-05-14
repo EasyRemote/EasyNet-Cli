@@ -211,7 +211,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         .and_then(Value::as_str)
         .unwrap_or("ACTIVE");
     let owner = entry
-        .get("owner_agent_uri")
+        .get("owner_agent_ura")
         .and_then(Value::as_str)
         .or_else(|| {
             // Fall back to deriving owner from the qualified name
@@ -259,7 +259,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
 
 fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
     if !args.yes {
-        let prompt = format!("Uninstall ability '{}' from this fleet?", args.name);
+        let prompt = format!("Uninstall ability '{}' from this device set?", args.name);
         if !output::confirm(&prompt)? {
             output::info("aborted");
             return Ok(());
@@ -272,8 +272,8 @@ fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
     if let Some(iid) = args.install_id.as_deref().filter(|s| !s.trim().is_empty()) {
         body["install_id"] = serde_json::json!(iid);
     }
-    let result = invoke_local_ability("device.fleet.uninstall_ability", body)
-        .context("invoke fleet.uninstall_ability")?;
+    let result = invoke_local_ability("device.ability.uninstall", body)
+        .context("invoke device.ability.uninstall")?;
     output::success(&format!("uninstalled {}", args.name));
     if !result.is_null() {
         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -291,15 +291,15 @@ fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
 /// local-realm fallback.
 #[cfg(feature = "axon-pb")]
 fn invoke_remote_easynet_discover(node: &str) -> anyhow::Result<Value> {
-    let target_uri = crate::support::remote_device::resolve_target_device_uri(node)?;
-    let caller_uri = crate::support::remote_device::caller_device_uri_from_credentials();
+    let target_ura = crate::support::remote_device::resolve_target_device_ura(node)?;
+    let caller_ura = crate::support::remote_device::caller_device_uri_from_credentials();
     crate::support::federation_invoke::invoke_via_federation_forward(
         "easynet.discover",
         serde_json::json!({}),
-        &target_uri,
-        caller_uri.as_deref(),
+        &target_ura,
+        caller_ura.as_deref(),
     )
-    .with_context(|| format!("forward easynet.discover to target={target_uri}"))
+    .with_context(|| format!("forward easynet.discover to target={target_ura}"))
 }
 
 #[cfg(not(feature = "axon-pb"))]

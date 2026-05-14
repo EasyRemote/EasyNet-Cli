@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://easynet.dev/schemas/descriptor/transition_descriptor.schema.json",
   "title": "TransitionAbilityDescriptorIncrement",
-  "description": "Schema delta added to the existing AbilityDescriptor (plan v4.1.1 §1.6) by RFC-006. Existing descriptor fields (name, owner_agent_uri, visibility, scope_*, source, schema_summary, hints) are unchanged and not repeated here. This schema describes ONLY the new RFC-006 fields. The 'class' field is mandatory on every descriptor; 'transition_id', 'state_type', 'state_key_arg', and the [transition] block are mandatory iff class == 'Transition'.",
+  "description": "Schema delta added to the existing AbilityDescriptor (plan v4.1.1 §1.6) by RFC-006. Existing descriptor fields (name, owner_agent_ura, visibility, scope_*, source, schema_summary, hints) are unchanged and not repeated here. This schema describes ONLY the new RFC-006 fields. The 'class' field is mandatory on every descriptor; 'transition_id', 'state_type', 'state_key_arg', and the [transition] block are mandatory iff class == 'Transition'.",
   "type": "object",
   "required": ["class"],
   "properties": {

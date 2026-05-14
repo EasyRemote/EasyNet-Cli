@@ -105,22 +105,22 @@ impl BridgeForwardInvoker {
     /// device URA and (when the target's realm is non-local) routes
     /// through its installed `GrpcHubForwardDispatcher` to the
     /// owning shard.
-    fn dispatch_to_bridge(&self, target_uri: &str, ability: &str, args: &Value) -> Result<Value> {
+    fn dispatch_to_bridge(&self, target_ura: &str, ability: &str, args: &Value) -> Result<Value> {
         // Pin the caller URI to the daemon's own keyring-bound
         // device subject so the receiving hub's KeyResolver can
         // find the public key. Today's KeyResolver finds it by
         // bound_subject; the device record was mirrored at boot
         // by mirror_derived_keys_into_keyring.
-        let caller_uri = self
+        let caller_ura = self
             .keyring
             .device_subject()
             .ok_or_else(|| anyhow!("keyring has no device_subject; daemon not joined"))?;
-        let invoker = BridgeAbilityInvoker::with_caller_uri(&self.bridge, caller_uri);
+        let invoker = BridgeAbilityInvoker::with_caller_ura(&self.bridge, caller_ura);
         let receipt = forward_invoke(
             &invoker,
             &self.tenant,
             &self.realm,
-            target_uri,
+            target_ura,
             ability,
             args,
         )
@@ -150,16 +150,16 @@ impl BridgeForwardInvoker {
 }
 
 impl CliForwardInvoker for BridgeForwardInvoker {
-    fn knows_target(&self, target_uri: &str) -> bool {
+    fn knows_target(&self, target_ura: &str) -> bool {
         // Two checks: peer table (TOFU-recorded peers) and the
         // local agent registry's bound_subject (the operator can
         // pre-seed peers via keyring.peer_add).
-        if self.keyring.find_peer_by_uri(target_uri).is_some() {
+        if self.keyring.find_peer_by_uri(target_ura).is_some() {
             return true;
         }
         if self
             .keyring
-            .find_active_entry_by_subject(target_uri)
+            .find_active_entry_by_subject(target_ura)
             .is_some()
         {
             return true;
@@ -173,8 +173,8 @@ impl CliForwardInvoker for BridgeForwardInvoker {
         true
     }
 
-    fn invoke(&self, target_uri: &str, ability: &str, args: Value) -> Result<Value> {
-        self.dispatch_to_bridge(target_uri, ability, &args)
+    fn invoke(&self, target_ura: &str, ability: &str, args: Value) -> Result<Value> {
+        self.dispatch_to_bridge(target_ura, ability, &args)
     }
 }
 

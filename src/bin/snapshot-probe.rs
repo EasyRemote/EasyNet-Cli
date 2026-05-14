@@ -15,7 +15,7 @@ fn main() -> anyhow::Result<()> {
         .context("usage: snapshot-probe <output-jpg>")?;
 
     let entry = easynet_cli::persistence::resources::ResourceEntry {
-        resource_uri: "easynet:///r/probe/resource/probe-camera".to_string(),
+        resource_ura: "easynet:///r/probe/resource/probe-camera".to_string(),
         owner_agent: String::new(),
         kind: easynet_cli::persistence::resources::ResourceType::Camera,
         binding: easynet_cli::persistence::resources::ResourceBinding::LocalDevice,

@@ -134,7 +134,7 @@ pub fn handle_publish(
     // other.
     register_fetch_ability(&registry, user, project_id);
 
-    let project_uri = format!("easynet:///r/{realm}/resource/{user}.{project_id}/");
+    let project_uri = crate::ura::resource_dot_ura(realm, &format!("{user}.{project_id}"), "/");
     let url_root = super::pages_public_url_root(realm, user, project_id);
 
     Ok(json!({

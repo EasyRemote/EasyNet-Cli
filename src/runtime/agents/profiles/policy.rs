@@ -27,14 +27,14 @@ pub fn owns(ability_name: &str) -> bool {
 /// §18 (only the admission gate calls device.policy.evaluate; only
 /// operators publish/list policies). P4.7 narrows scope axes.
 pub fn descriptors_for(
-    owner_agent_uri: &str,
+    owner_agent_ura: &str,
 ) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
     use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
     crate::runtime::agents::published_abilities()
         .into_iter()
         .filter(|m| owns(&m.name))
         .map(|m| {
-            AbilityDescriptor::new(m.name.clone(), owner_agent_uri, Visibility::Scoped)
+            AbilityDescriptor::new(m.name.clone(), owner_agent_ura, Visibility::Scoped)
                 .expect("registry-derived names satisfy descriptor invariants")
                 .with_input_schema(m.input_schema.clone())
                 .with_hints(m.hints.clone())
@@ -59,6 +59,6 @@ mod tests {
     #[test]
     fn owns_rejects_other_profiles() {
         assert!(!owns("device.consent.request"));
-        assert!(!owns("device.fleet.list_abilities"));
+        assert!(!owns("device.skill.list"));
     }
 }

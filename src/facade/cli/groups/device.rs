@@ -105,7 +105,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     // Joint-plan unified path (海峰 + 凉冰, 2026-05-03): every
     // cross-device dispatch flows through
     // `federation.forward_invoke`; each daemon describes ITSELF via
-    // `device.describe` (no `node_id` argument). The CLI is the
+    // `device.node.describe {node_id:"local"}`. The CLI is the
     // routing-decision site:
     //   * `args.node_id` looks like a canonical URA  → forward to it
     //   * bare uuid that matches this device's node id → describe self
@@ -119,10 +119,6 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     //                                                    cannot answer
     //   * `local`                                      → describe self
     //
-    // This collapses the legacy `fleet.describe_node {node_id}` shape
-    // — which had a self-arm AND a same-realm `federation.resolve`
-    // fallback baked into the handler — onto the single path every
-    // other cross-device call already takes.
     let node = describe_target(&args.node_id)
         .with_context(|| format!("describe node {}", args.node_id))?;
 
@@ -162,7 +158,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         .and_then(|v| v.as_str())
         .unwrap_or(&args.node_id);
 
-    // `fleet.describe_node` returns a string `state` (HEALTHY /
+    // `device.node.describe` returns a string `state` (HEALTHY /
     // STANDALONE / REMOVED / etc) and a boolean `paired`. Fall
     // back to integer-indexed `state` for compatibility with any
     // future federation-tier handler that still serialises the
@@ -252,7 +248,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
             .and_then(|v| v.as_str())
             .unwrap_or("-");
         let owner = a
-            .get("owner_agent_uri")
+            .get("owner_agent_ura")
             .and_then(|v| v.as_str())
             .or_else(|| name.split_once('.').map(|(o, _)| o))
             .unwrap_or("-");
@@ -282,7 +278,7 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
     // `federation.revoke` directly through the daemon's gRPC
     // InvocationServer (the same surface
     // `runtime/advertise.rs::revoke_agent` and the heartbeat
-    // sidecar's shutdown hook use). The legacy `fleet.remove_node`
+    // sidecar's shutdown hook use). The legacy `device.node.remove`
     // ability was a P1.5 placeholder — local-arm refused with
     // "use device reset", remote-arm raised `federation_not_wired`
     // — so it never moved real federation state. The new path
@@ -304,10 +300,10 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
         .unwrap_or_default();
 
     let trimmed = args.node_id.trim();
-    let target_uri = if trimmed.starts_with("easynet:///r/") {
-        canonicalize_remove_target_uri(trimmed)?
+    let target_ura = if crate::ura::parse_ura(trimmed).is_ok() {
+        canonicalize_remove_target_ura(trimmed)?
     } else if !local_tenant.is_empty() {
-        crate::uri::device_uri(&local_tenant, trimmed)
+        crate::ura::device_ura(&local_tenant, trimmed)
     } else {
         anyhow::bail!(
             "cannot resolve node {trimmed:?}: pass a canonical \
@@ -316,11 +312,11 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
     };
 
     let local_uri = if !local_tenant.is_empty() && !local_node.is_empty() {
-        crate::uri::device_uri(&local_tenant, &local_node)
+        crate::ura::device_ura(&local_tenant, &local_node)
     } else {
         String::new()
     };
-    if !local_uri.is_empty() && local_uri == target_uri {
+    if !local_uri.is_empty() && local_uri == target_ura {
         anyhow::bail!(
             "refusing to revoke this device's own URI ({local_uri}); use \
              `easynet device reset` to clear local credentials and \
@@ -339,52 +335,52 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
         }
     }
 
-    invoke_revoke(&target_uri, &args.reason, local_uri.as_str())
-        .with_context(|| format!("revoke {target_uri}"))?;
+    invoke_revoke(&target_ura, &args.reason, local_uri.as_str())
+        .with_context(|| format!("revoke {target_ura}"))?;
 
     output::success(&format!("removed {}", args.node_id));
     Ok(())
 }
 
 #[cfg(feature = "axon-pb")]
-fn canonicalize_remove_target_uri(uri: &str) -> anyhow::Result<String> {
+fn canonicalize_remove_target_ura(uri: &str) -> anyhow::Result<String> {
     crate::support::federation_invoke::parse_node_uri(uri)
 }
 
 #[cfg(not(feature = "axon-pb"))]
-fn canonicalize_remove_target_uri(uri: &str) -> anyhow::Result<String> {
+fn canonicalize_remove_target_ura(uri: &str) -> anyhow::Result<String> {
     Ok(uri.to_string())
 }
 
 #[cfg(feature = "axon-pb")]
-fn invoke_revoke(target_uri: &str, reason: &str, caller_uri: &str) -> anyhow::Result<()> {
-    let caller_opt = if caller_uri.is_empty() {
+fn invoke_revoke(target_ura: &str, reason: &str, caller_ura: &str) -> anyhow::Result<()> {
+    let caller_opt = if caller_ura.is_empty() {
         None
     } else {
-        Some(caller_uri)
+        Some(caller_ura)
     };
-    crate::support::federation_invoke::invoke_federation_revoke(target_uri, reason, caller_opt)
+    crate::support::federation_invoke::invoke_federation_revoke(target_ura, reason, caller_opt)
 }
 
 #[cfg(not(feature = "axon-pb"))]
-fn invoke_revoke(target_uri: &str, _reason: &str, _caller_uri: &str) -> anyhow::Result<()> {
+fn invoke_revoke(target_ura: &str, _reason: &str, _caller_ura: &str) -> anyhow::Result<()> {
     Err(crate::support::local_invoke::federation_not_wired_error(
-        &format!("revoking {target_uri:?}"),
+        &format!("revoking {target_ura:?}"),
     ))
 }
 
 /// Joint-plan unified-path dispatch for `easynet device show`.
 ///
 /// Resolves `node_id` (either a canonical URA or a bare uuid /
-/// the literal `local`) into the right `device.describe` call:
+/// the literal `local`) into the right `device.node.describe` call:
 ///
 ///   * `local` or matches this daemon's own node id → invoke
-///     `device.describe` locally over the control socket.
+///     `device.node.describe` locally over the control socket.
 ///   * canonical URA pointing at a remote device → forward_invoke
-///     `device.describe` against that URA.
+///     `device.node.describe` against that URA.
 ///   * bare uuid that does not match local → wrap in this device's
 ///     realm and forward_invoke (matches the legacy
-///     `fleet.describe_node` same-realm fallback).
+///     `device.node.describe` same-realm fallback).
 fn describe_target(node_id: &str) -> anyhow::Result<Value> {
     let trimmed = node_id.trim();
     let creds = crate::persistence::config::load_credentials().ok();
@@ -403,10 +399,10 @@ fn describe_target(node_id: &str) -> anyhow::Result<Value> {
 
     if is_local {
         return crate::support::local_invoke::invoke_local_ability(
-            "device.describe",
-            serde_json::json!({}),
+            "device.node.describe",
+            serde_json::json!({"node_id": "local"}),
         )
-        .context("invoke device.describe (local)");
+        .context("invoke device.node.describe (local)");
     }
 
     invoke_remote_describe(trimmed, &local_tenant)
@@ -415,16 +411,16 @@ fn describe_target(node_id: &str) -> anyhow::Result<Value> {
 #[cfg(feature = "axon-pb")]
 fn invoke_remote_describe(node: &str, local_tenant: &str) -> anyhow::Result<Value> {
     let _ = local_tenant;
-    let target_uri = crate::support::remote_device::resolve_target_device_uri(node)?;
+    let target_ura = crate::support::remote_device::resolve_target_device_ura(node)?;
 
-    let caller_uri = crate::support::remote_device::caller_device_uri_from_credentials();
+    let caller_ura = crate::support::remote_device::caller_device_uri_from_credentials();
     crate::support::federation_invoke::invoke_via_federation_forward(
-        "device.describe",
-        serde_json::json!({}),
-        &target_uri,
-        caller_uri.as_deref(),
+        "device.node.describe",
+        serde_json::json!({"node_id": "local"}),
+        &target_ura,
+        caller_ura.as_deref(),
     )
-    .with_context(|| format!("forward device.describe to target={target_uri}"))
+    .with_context(|| format!("forward device.node.describe to target={target_ura}"))
 }
 
 #[cfg(not(feature = "axon-pb"))]

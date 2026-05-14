@@ -1,7 +1,7 @@
 // EasyNet CLI — KeyResolver implementations (RFC-002 §4)
 // =======================================================
 //
-// LocalKeyringResolver  — resolves agent_uri → VerifyingKey from local
+// LocalKeyringResolver  — resolves agent_ura → VerifyingKey from local
 //                         keyring entries (bound_subject match).
 // PeerKeyringResolver   — resolves from the peer_table (TOFU public
 //                         keys recorded for federation peers).
@@ -18,38 +18,38 @@ use ed25519_dalek::VerifyingKey;
 use std::sync::Arc;
 
 use super::handle::KeyringHandle;
-use crate::uri::{parse_ura, URAKind};
+use crate::ura::{parse_ura, URAKind};
 
 #[derive(Debug, thiserror::Error)]
 pub enum KeyResolveError {
-    #[error("agent_uri not known to this resolver")]
+    #[error("agent_ura not known to this resolver")]
     Unknown,
-    #[error("public key recorded for {agent_uri} is malformed: {reason}")]
-    Malformed { agent_uri: String, reason: String },
+    #[error("public key recorded for {agent_ura} is malformed: {reason}")]
+    Malformed { agent_ura: String, reason: String },
 }
 
 pub trait KeyResolver: Send + Sync {
-    fn resolve(&self, agent_uri: &str) -> std::result::Result<VerifyingKey, KeyResolveError>;
+    fn resolve(&self, agent_ura: &str) -> std::result::Result<VerifyingKey, KeyResolveError>;
 }
 
-fn decode_pk(agent_uri: &str, b64: &str) -> std::result::Result<VerifyingKey, KeyResolveError> {
+fn decode_pk(agent_ura: &str, b64: &str) -> std::result::Result<VerifyingKey, KeyResolveError> {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
     let bytes = STANDARD
         .decode(b64)
         .map_err(|e| KeyResolveError::Malformed {
-            agent_uri: agent_uri.to_string(),
+            agent_ura: agent_ura.to_string(),
             reason: format!("base64: {e}"),
         })?;
     let arr: [u8; 32] = bytes
         .as_slice()
         .try_into()
         .map_err(|_| KeyResolveError::Malformed {
-            agent_uri: agent_uri.to_string(),
+            agent_ura: agent_ura.to_string(),
             reason: format!("public key length {} != 32", bytes.len()),
         })?;
     VerifyingKey::from_bytes(&arr).map_err(|e| KeyResolveError::Malformed {
-        agent_uri: agent_uri.to_string(),
+        agent_ura: agent_ura.to_string(),
         reason: format!("invalid ed25519 point: {e}"),
     })
 }
@@ -65,12 +65,12 @@ impl LocalKeyringResolver {
 }
 
 impl KeyResolver for LocalKeyringResolver {
-    fn resolve(&self, agent_uri: &str) -> std::result::Result<VerifyingKey, KeyResolveError> {
+    fn resolve(&self, agent_ura: &str) -> std::result::Result<VerifyingKey, KeyResolveError> {
         let entry = self
             .keyring
-            .find_active_entry_by_subject(agent_uri)
+            .find_active_entry_by_subject(agent_ura)
             .ok_or(KeyResolveError::Unknown)?;
-        decode_pk(agent_uri, &entry.public_key_b64)
+        decode_pk(agent_ura, &entry.public_key_b64)
     }
 }
 
@@ -85,15 +85,15 @@ impl PeerKeyringResolver {
 }
 
 impl KeyResolver for PeerKeyringResolver {
-    fn resolve(&self, agent_uri: &str) -> std::result::Result<VerifyingKey, KeyResolveError> {
+    fn resolve(&self, agent_ura: &str) -> std::result::Result<VerifyingKey, KeyResolveError> {
         let peer = self
             .keyring
-            .find_peer_by_uri(agent_uri)
+            .find_peer_by_uri(agent_ura)
             .ok_or(KeyResolveError::Unknown)?;
         if peer.status != super::store::PeerStatus::Trusted {
             return Err(KeyResolveError::Unknown);
         }
-        decode_pk(agent_uri, &peer.public_key_b64)
+        decode_pk(agent_ura, &peer.public_key_b64)
     }
 }
 
@@ -108,9 +108,9 @@ impl ChainResolver {
 }
 
 impl KeyResolver for ChainResolver {
-    fn resolve(&self, agent_uri: &str) -> std::result::Result<VerifyingKey, KeyResolveError> {
+    fn resolve(&self, agent_ura: &str) -> std::result::Result<VerifyingKey, KeyResolveError> {
         for r in &self.resolvers {
-            match r.resolve(agent_uri) {
+            match r.resolve(agent_ura) {
                 Ok(k) => return Ok(k),
                 Err(KeyResolveError::Unknown) => continue,
                 Err(e) => return Err(e),
@@ -138,12 +138,12 @@ pub fn default_chain(keyring: Arc<KeyringHandle>) -> ChainResolver {
 /// **PR-N4 spec §commit 4/N**. Wraps the local keyring + the
 /// `FederatedBindingsStore` from commit 3/N in a chain:
 ///
-///   1. **local-first**: if `agent_uri`'s realm matches
+///   1. **local-first**: if `agent_ura`'s realm matches
 ///      `local_realm`, the URI's user-id is the URI itself —
 ///      no federated lookup needed (and INV-3 says the user
 ///      always speaks for themselves on their home realm).
 ///   2. **federated fallback**: otherwise, look up
-///      `(parsed_realm, agent_uri)` in the bindings store.
+///      `(parsed_realm, agent_ura)` in the bindings store.
 ///      Some(local_user_id) ⇒ the cross-realm user has been
 ///      consumed-bound; None ⇒ the URI belongs to a federated
 ///      realm but the user has not opted into binding (INV-5
@@ -193,14 +193,14 @@ impl FederatedUserResolver {
 
     /// Resolve a URI to a federated-binding outcome.
     #[must_use]
-    pub fn resolve_user(&self, user_uri: &str) -> FederatedUserOutcome {
-        let Some(realm) = parse_realm_from_user_uri(user_uri) else {
+    pub fn resolve_user(&self, user_ura: &str) -> FederatedUserOutcome {
+        let Some(realm) = parse_realm_from_user_ura(user_ura) else {
             return FederatedUserOutcome::Malformed;
         };
         if realm == self.local_realm {
             return FederatedUserOutcome::Local;
         }
-        match self.bindings.find_local_user(&realm, user_uri) {
+        match self.bindings.find_local_user(&realm, user_ura) {
             Some(local) => FederatedUserOutcome::BoundLocalUser(local),
             None => FederatedUserOutcome::NotBound,
         }
@@ -209,11 +209,11 @@ impl FederatedUserResolver {
 
 /// Parse the realm slice from a canonical EasyNet user URI
 /// (`easynet:///r/<realm>/user/<id>`). Mirrors
-/// `runtime::keyring::abilities::parse_realm_from_user_uri` —
+/// `runtime::keyring::abilities::parse_realm_from_user_ura` —
 /// duplicated rather than re-exported to keep the resolver
 /// layer free of any cross-module imports beyond
 /// `super::federated_bindings`.
-fn parse_realm_from_user_uri(uri: &str) -> Option<String> {
+fn parse_realm_from_user_ura(uri: &str) -> Option<String> {
     let parsed = parse_ura(uri).ok()?;
     (parsed.kind == URAKind::User).then_some(parsed.realm)
 }
@@ -307,7 +307,7 @@ mod tests {
             .record_binding(
                 FederatedUserBinding {
                     source_realm: "realm-a".to_string(),
-                    source_user_uri: "easynet:///r/realm-a/user/user-c".to_string(),
+                    source_user_ura: "easynet:///r/realm-a/user/user-c".to_string(),
                     source_user_pubkey_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
                         .to_string(),
                     local_user_id: "user-c-on-realm-b".to_string(),
@@ -350,7 +350,7 @@ mod tests {
             .record_binding(
                 FederatedUserBinding {
                     source_realm: "realm-a".to_string(),
-                    source_user_uri: "easynet:///r/realm-a/user/user-c".to_string(),
+                    source_user_ura: "easynet:///r/realm-a/user/user-c".to_string(),
                     source_user_pubkey_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
                         .to_string(),
                     local_user_id: "user-c-on-realm-b".to_string(),

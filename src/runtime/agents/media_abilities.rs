@@ -3,7 +3,7 @@
 //
 // File: src/runtime/agents/media_abilities.rs
 //
-// Eight physical-channel abilities, all `subject = resource_uri`,
+// Eight physical-channel abilities, all `subject = resource_ura`,
 // all RFC-006 class ∈ {Stream, Query}. Per the binding invariants
 // in plan v3.2:
 //
@@ -136,7 +136,7 @@ const ABILITIES: &[AbilityRow] = &[
         name: ABILITY_MIC_SUBSCRIBE,
         description: "Subscribe to a microphone resource. Returns a server-pushed \
                       stream of audio BinaryChunk frames in the requested codec. \
-                      Subject MUST be a mic resource_uri (use meta.list_resources \
+                      Subject MUST be a mic resource_ura (use meta.list_resources \
                       to discover).",
         input_schema: capture_audio_args,
         class: AbilityClass::Stream,
@@ -146,7 +146,7 @@ const ABILITIES: &[AbilityRow] = &[
         name: ABILITY_CAMERA_SUBSCRIBE,
         description: "Subscribe to a camera resource. Returns a server-pushed \
                       stream of video BinaryChunk frames at the requested fps / \
-                      resolution / codec. Subject MUST be a camera resource_uri.",
+                      resolution / codec. Subject MUST be a camera resource_ura.",
         input_schema: video_subscribe_args_no_region,
         class: AbilityClass::Stream,
         shape: DispatchShape::Stream,
@@ -154,8 +154,8 @@ const ABILITIES: &[AbilityRow] = &[
     AbilityRow {
         name: ABILITY_CAMERA_SNAPSHOT,
         description: "Capture one still image from a camera resource. Subject MUST \
-                      be a camera resource_uri. Returns { image_bytes_b64 OR \
-                      payloadstore_uri, captured_at } in the receipt body.",
+                      be a camera resource_ura. Returns { image_bytes_b64 OR \
+                      payloadstore_ura, captured_at } in the receipt body.",
         input_schema: snapshot_args_no_region,
         class: AbilityClass::Query,
         shape: DispatchShape::Rpc,
@@ -163,7 +163,7 @@ const ABILITIES: &[AbilityRow] = &[
     AbilityRow {
         name: ABILITY_SCREEN_SUBSCRIBE,
         description: "Subscribe to a screen target. Subject MUST be a screen \
-                      resource_uri whose type is `display`, `application`, or \
+                      resource_ura whose type is `display`, `application`, or \
                       `window` (use meta.list_resources to discover). Optional \
                       `region` arg is valid ONLY when subject's type is `display` \
                       (window/application bounds are self-defining).",
@@ -174,7 +174,7 @@ const ABILITIES: &[AbilityRow] = &[
     AbilityRow {
         name: ABILITY_SCREEN_SNAPSHOT,
         description: "Capture one still image of a screen target. Subject MUST be \
-                      a screen resource_uri whose type is `display`, `application`, \
+                      a screen resource_ura whose type is `display`, `application`, \
                       or `window`. Optional `region` arg is valid ONLY when \
                       subject's type is `display`.",
         input_schema: snapshot_args_with_region,
@@ -186,7 +186,7 @@ const ABILITIES: &[AbilityRow] = &[
         description: "Push audio frames to a speaker resource. Caller streams \
                       BinaryChunk frames UP; downstream channel exists per axon \
                       bidi shape but emits no frames. Subject MUST be a speaker \
-                      resource_uri.",
+                      resource_ura.",
         input_schema: playback_audio_args,
         class: AbilityClass::Stream,
         shape: DispatchShape::Bidi,
@@ -195,7 +195,7 @@ const ABILITIES: &[AbilityRow] = &[
         name: ABILITY_VOICE_SUBSCRIBE,
         description: "Subscribe to an LLM voice profile. Returns a server-pushed \
                       stream of TTS audio BinaryChunk frames. Subject MUST be a \
-                      voice resource_uri (one llm may expose multiple voice \
+                      voice resource_ura (one llm may expose multiple voice \
                       profiles).",
         input_schema: tts_output_args,
         class: AbilityClass::Stream,
@@ -206,7 +206,7 @@ const ABILITIES: &[AbilityRow] = &[
         description: "Stream audio in, receive transcription text out. True bidi: \
                       caller pushes audio BinaryChunk UP, callee returns text \
                       BinaryChunk (or structured JSON) DOWN. Subject MUST be an \
-                      ASR-model resource_uri.",
+                      ASR-model resource_ura.",
         input_schema: transcribe_args,
         class: AbilityClass::Stream,
         shape: DispatchShape::Bidi,
@@ -341,7 +341,7 @@ fn query_stub(ability: &str, args: Value) -> anyhow::Result<Value> {
     reject_subject_in_args(ability, &args)?;
     // PR3: resolve envelope.subject → device → capture single
     // frame → encode → return { image_bytes_b64 OR
-    //                           payloadstore_uri, captured_at }.
+    //                           payloadstore_ura, captured_at }.
     anyhow::bail!("{ability}: device backend not yet wired (PR3 lands snapshot capture)")
 }
 
@@ -392,7 +392,7 @@ fn playback_audio_args() -> Value {
 }
 
 /// TTS output (voice.subscribe): the LLM picks the voice via
-/// subject (resource_uri); the caller picks how it wants the
+/// subject (resource_ura); the caller picks how it wants the
 /// audio framed. No `channels` (TTS is mono); no codec list (the
 /// llm's voice resource declares its codec capabilities, the
 /// caller asks for one).
@@ -545,7 +545,11 @@ mod tests {
 
     #[test]
     fn projections_return_none_for_non_media_names() {
-        for non_media in ["observe.health", "fleet.list_agents", "totally.unknown"] {
+        for non_media in [
+            "device.observe.health",
+            "device.agent.list",
+            "totally.unknown",
+        ] {
             assert!(description(non_media).is_none());
             assert!(input_schema(non_media).is_none());
             assert!(rfc006(non_media).is_none());

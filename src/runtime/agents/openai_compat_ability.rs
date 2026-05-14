@@ -51,7 +51,7 @@ pub(crate) fn set_identity(identity: crate::runtime::agents::PagesIdentity) {
         user: identity.user,
         realm: identity
             .realm
-            .unwrap_or_else(|| crate::uri::REALM_EASYNET.to_string()),
+            .unwrap_or_else(|| crate::ura::REALM_EASYNET.to_string()),
     });
 }
 
@@ -140,21 +140,24 @@ fn flatten_messages(messages: &[Value]) -> (String, Option<String>) {
 /// Resolve an OpenAI model id to a local chat-base ability name.
 ///
 /// Preferred shape: canonical ability URA
-///   `easynet:///r/<realm>/ability/<user>.<agent>.<agent>.chat`
+///   `easynet:///r/<realm>/ability/<user>.<agent>.chat`
 ///
 /// Backward-compat shape:
 ///   `<agent>` or `<agent>.chat`
 fn resolve_model_to_ability(model: &str) -> anyhow::Result<String> {
     if model.starts_with("easynet:///") {
-        let parsed = crate::uri::parse_ura(model)
+        let parsed = crate::ura::parse_ura(model)
             .map_err(|e| anyhow::anyhow!("model must be a valid ability URA: {e}"))?;
-        if parsed.kind != crate::uri::URAKind::Ability {
+        if parsed.kind != crate::ura::URAKind::Ability {
             anyhow::bail!("model must be an ability URA");
         }
-        if parsed.ability_id != format!("{}.chat", parsed.agent_id) {
-            anyhow::bail!("model must point to the canonical <agent>.chat ability URA");
+        if crate::ura::ability_name_from_parts(&parsed).as_deref() != Some("chat") {
+            anyhow::bail!("model must point to the canonical agent chat ability URA");
         }
-        return Ok(parsed.ability_id);
+        return Ok(crate::ura::agent_scoped_registry_ability(
+            &crate::ura::agent_ura(&parsed.realm, &parsed.user_id, &parsed.agent_id),
+            "chat",
+        ));
     }
     if model.ends_with(".chat") {
         return Ok(model.to_string());
@@ -196,7 +199,7 @@ pub fn handle_chat_completions(args: Value) -> anyhow::Result<Value> {
     // INV-2: resolve API key. If no token supplied, accept (for
     // in-process callers like easynet llm-api CLI invoking via
     // local IPC); only the HTTP boundary requires the token.
-    let user_uri = if let Some(tok) = auth_token.as_deref() {
+    let user_ura = if let Some(tok) = auth_token.as_deref() {
         let (uri, _id_prefix) =
             api_key_ability::resolve_token(tok).map_err(|e| anyhow::anyhow!("auth failed: {e}"))?;
         Some(uri)
@@ -317,7 +320,7 @@ pub fn handle_chat_completions(args: Value) -> anyhow::Result<Value> {
                 "completion_tokens": completion_tokens,
                 "total_tokens":      prompt_tokens + completion_tokens,
             },
-            "easynet_user_uri": user_uri,
+            "easynet_user_ura": user_ura,
         }));
     }
 
@@ -400,7 +403,7 @@ pub fn handle_chat_completions(args: Value) -> anyhow::Result<Value> {
         "stream":          true,
         "chunks":          chunks,
         "done_sentinel":   "[DONE]",
-        "easynet_user_uri": user_uri,
+        "easynet_user_ura": user_ura,
     }))
 }
 
@@ -478,7 +481,9 @@ fn project_model_id_with_identity(
     let Some(user) = identity.user.as_deref() else {
         return ability_name.to_string();
     };
-    crate::uri::ability_uri(&identity.realm, user, agent_id, ability_name)
+    let owner_ura = crate::ura::agent_ura(&identity.realm, user, agent_id);
+    let public_name = crate::ura::public_ability_name_for_owner(&owner_ura, ability_name);
+    crate::ura::ability_ura(&identity.realm, user, agent_id, &public_name)
 }
 
 // ─── EasyNet URA dereference for multimodal message content ──────
@@ -518,7 +523,7 @@ fn deref_easynet_uris_in_messages(messages: &mut Vec<Value>) {
                 if let Some(nested) = block.get_mut(*nested_key) {
                     if let Some(url) = nested.get_mut("url") {
                         if let Some(s) = url.as_str() {
-                            if s.starts_with("easynet:///r/") {
+                            if crate::ura::parse_ura(s).is_ok() {
                                 if let Ok(data_url) = deref_to_data_url(s) {
                                     *url = Value::String(data_url);
                                 }
@@ -532,7 +537,7 @@ fn deref_easynet_uris_in_messages(messages: &mut Vec<Value>) {
                 for url_key in &["url", "file_url"] {
                     if let Some(url) = file.get_mut(*url_key) {
                         if let Some(s) = url.as_str() {
-                            if s.starts_with("easynet:///r/") {
+                            if crate::ura::parse_ura(s).is_ok() {
                                 if let Ok(data_url) = deref_to_data_url(s) {
                                     *url = Value::String(data_url);
                                 }
@@ -553,8 +558,8 @@ fn deref_to_data_url(uri: &str) -> anyhow::Result<String> {
     use base64::Engine;
 
     let parsed =
-        crate::uri::parse_ura(uri).map_err(|e| anyhow::anyhow!("deref `{uri}`: parse: {e}"))?;
-    if !matches!(parsed.kind, crate::uri::URAKind::Resource) {
+        crate::ura::parse_ura(uri).map_err(|e| anyhow::anyhow!("deref `{uri}`: parse: {e}"))?;
+    if !matches!(parsed.kind, crate::ura::URAKind::Resource) {
         anyhow::bail!("deref `{uri}`: not a resource URA");
     }
     // Owner segment is `<userID>.<owner-tail>` for v4.1.5 dot-id
@@ -624,9 +629,8 @@ mod tests {
 
     #[test]
     fn resolve_model_to_ability_accepts_canonical_chat_ability_ura() {
-        let got =
-            resolve_model_to_ability("easynet:///r/easynet.run/ability/alice.codex.codex.chat")
-                .expect("canonical URA must resolve");
+        let got = resolve_model_to_ability("easynet:///r/easynet.run/ability/alice.codex.chat")
+            .expect("canonical URA must resolve");
         assert_eq!(got, "codex.chat");
     }
 
@@ -641,7 +645,7 @@ mod tests {
         let got = project_model_id_with_identity(&reg, "codex.chat", Some(&identity));
         assert_eq!(
             got,
-            "easynet:///r/easynet.run/ability/alice.codex.codex.chat"
+            "easynet:///r/easynet.run/ability/alice.codex.chat"
         );
     }
 }

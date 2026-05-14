@@ -9,15 +9,15 @@
 //              filters the returned `DirectoryEntry` set down to
 //              URA-kind = `device` projections.
 //
-// Why the cut over from `fleet.list_nodes`
+// Why the cut over from `device.node.list`
 // -----------------------------------------
-// `fleet.list_nodes` was the AXON-RFC-001 P1.5 placeholder that
+// `device.node.list` was the AXON-RFC-001 P1.5 placeholder that
 // fanned out only the local probe view + a same-realm
 // `federation.resolve` fallback. The joint plan
 // (海峰 + 凉冰, 2026-05-03) collapses every cross-device dispatch
 // onto `federation.forward_invoke`; for read-only directory
 // queries the canonical surface is `federation.discover`. One
-// helper, one path; the legacy `fleet.list_nodes` arm gets
+// helper, one path; the legacy `device.node.list` arm gets
 // removed in the cull phase.
 //
 // Wire shape (post-cut)
@@ -26,7 +26,7 @@
 // per `services::federation_directory::DirectoryEntry`:
 //
 //   {
-//     agent_uri: "easynet:///r/<realm>/device/<id>",
+//     agent_ura: "easynet:///r/<realm>/device/<id>",
 //     node_id: "<id>",
 //     display_name: <Option<String>>,
 //     status: "active" | "stale" | "draining",
@@ -37,7 +37,7 @@
 //
 // We project this into the row shape the existing renderer
 // expects (`node_id`, `state`, `online`, `last_seen_unix_ms`,
-// `is_self`, `agent_uri`, …) so the print path is unchanged.
+// `is_self`, `agent_ura`, …) so the print path is unchanged.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -78,7 +78,7 @@ pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
         .unwrap_or_default();
     let self_uri = creds
         .as_ref()
-        .map(|c| crate::uri::device_uri(&c.tenant_id, &c.node_id));
+        .map(|c| crate::ura::device_ura(&c.tenant_id, &c.node_id));
 
     let entries = fetch_directory_entries(self_uri.as_deref())?;
     let nodes: Vec<Value> = entries
@@ -162,11 +162,11 @@ fn fetch_directory_entries(_self_uri: Option<&str>) -> anyhow::Result<Vec<Value>
 /// resource URIs) is a non-device row and gets dropped from the
 /// device-list view.
 fn is_device_entry(entry: &Value) -> bool {
-    let uri = entry.get("agent_uri").and_then(Value::as_str).unwrap_or("");
+    let uri = entry.get("agent_ura").and_then(Value::as_str).unwrap_or("");
     if uri.is_empty() {
         return false;
     }
-    crate::uri::parse_ura(uri)
+    crate::ura::parse_ura(uri)
         .map(|p| !p.device_id.is_empty() && p.agent_id.is_empty())
         .unwrap_or(false)
 }
@@ -179,8 +179,8 @@ fn is_device_entry(entry: &Value) -> bool {
 /// other value lands as `state: "UNKNOWN"` rather than crashing
 /// the renderer.
 fn project_directory_entry(entry: Value, self_uri: Option<&str>) -> Value {
-    let agent_uri = entry
-        .get("agent_uri")
+    let agent_ura = entry
+        .get("agent_ura")
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
@@ -213,11 +213,11 @@ fn project_directory_entry(entry: Value, self_uri: Option<&str>) -> Value {
         .get("hub_endpoint")
         .and_then(Value::as_str)
         .map(str::to_string);
-    let is_self = self_uri.map(|u| u == agent_uri).unwrap_or(false);
+    let is_self = self_uri.map(|u| u == agent_ura).unwrap_or(false);
 
     let mut row = json!({
         "node_id": node_id,
-        "agent_uri": agent_uri,
+        "agent_ura": agent_ura,
         "display_name": display_name,
         "state": state,
         "online": online,
@@ -372,7 +372,7 @@ mod tests {
     #[test]
     fn is_device_entry_accepts_canonical_device_ura() {
         let entry = json!({
-            "agent_uri": "easynet:///r/easynet.run/device/abc-123",
+            "agent_ura": "easynet:///r/easynet.run/device/abc-123",
         });
         assert!(is_device_entry(&entry));
     }
@@ -380,7 +380,7 @@ mod tests {
     #[test]
     fn is_device_entry_rejects_agent_ura() {
         let entry = json!({
-            "agent_uri": "easynet:///r/easynet.run/agent/alice.claude",
+            "agent_ura": "easynet:///r/easynet.run/agent/alice.claude",
         });
         assert!(!is_device_entry(&entry));
     }
@@ -388,7 +388,7 @@ mod tests {
     #[test]
     fn project_maps_active_to_healthy_and_marks_self() {
         let entry = json!({
-            "agent_uri": "easynet:///r/r1/device/n1",
+            "agent_ura": "easynet:///r/r1/device/n1",
             "node_id": "n1",
             "status": "active",
             "origin_realm": "r1",
@@ -403,7 +403,7 @@ mod tests {
     #[test]
     fn project_maps_stale_to_suspect_offline() {
         let entry = json!({
-            "agent_uri": "easynet:///r/r1/device/n2",
+            "agent_ura": "easynet:///r/r1/device/n2",
             "node_id": "n2",
             "status": "stale",
         });

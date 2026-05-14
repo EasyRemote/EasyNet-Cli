@@ -15,7 +15,7 @@
 // result (RPC)" or "name + JSON args → stream of JSON frames
 // (Subscribe)". Keeping the ABI at two functions means:
 //
-//   (a) Adding `fleet.attach_session` doesn't bump the ABI.
+//   (a) Adding `device.session.attach` doesn't bump the ABI.
 //   (b) Client bindings can be auto-generated from `.proto` files
 //       without a per-ability C wrapper layer.
 //   (c) The ABI stability contract has exactly two functions to
@@ -725,7 +725,7 @@ mod tests {
         // through; reject at the ABI boundary rather than crashing
         // later when the first frame arrives.
         let h = live_handle_no_client();
-        let ability = CString::new("fleet.attach_session").unwrap();
+        let ability = CString::new("device.session.attach").unwrap();
         let args = CString::new("{}").unwrap();
         let mut sub: SubscriptionId = 42;
         let code = unsafe {

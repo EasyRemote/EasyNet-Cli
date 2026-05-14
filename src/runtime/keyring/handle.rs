@@ -122,15 +122,15 @@ impl KeyringHandle {
             .cloned()
     }
 
-    /// Return the active entry whose `bound_subject == agent_uri`.
-    pub fn find_active_entry_by_subject(&self, agent_uri: &str) -> Option<Entry> {
+    /// Return the active entry whose `bound_subject == agent_ura`.
+    pub fn find_active_entry_by_subject(&self, agent_ura: &str) -> Option<Entry> {
         self.inner
             .lock()
             .unwrap()
             .entries
             .iter()
             .find(|e| {
-                e.status == KeyStatus::Active && e.bound_subject.as_deref() == Some(agent_uri)
+                e.status == KeyStatus::Active && e.bound_subject.as_deref() == Some(agent_ura)
             })
             .cloned()
     }

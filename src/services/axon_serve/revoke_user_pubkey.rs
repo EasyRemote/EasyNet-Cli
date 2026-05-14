@@ -2,7 +2,7 @@
 // ===========================================================
 //
 // File: src/services/axon_serve/revoke_user_pubkey.rs
-// DEC-EU §revocation. Removes a (user_uri, public_key_b64) entry
+// DEC-EU §revocation. Removes a (user_ura, public_key_b64) entry
 // from the daemon's `realm-trust.toml` and re-publishes the shared
 // trust-anchor cell so subsequent admission calls cannot use the
 // revoked key.
@@ -15,7 +15,7 @@
 // Inputs
 // ------
 //   {
-//     "agent_uri":      "easynet:///r/{realm}/user/{user_id}",
+//     "agent_ura":      "easynet:///r/{realm}/user/{user_id}",
 //     "public_key_b64": "<base64 standard, 32-byte ed25519 vk>"
 //   }
 //
@@ -30,7 +30,7 @@
 // -----------
 // User entries currently must register in their home realm
 // (`register_device_pubkey` enforces this in DEC-EU phase 1).
-// Revocation enforces the same scope: `agent_uri.realm == daemon_realm`.
+// Revocation enforces the same scope: `agent_ura.realm == daemon_realm`.
 // Cross-realm user roaming is the DEC-EU §multi-realm followup
 // (阶段 3.3); when that lands, this check relaxes in lockstep.
 //
@@ -45,9 +45,7 @@ use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
 use tonic::Status;
 
-use crate::services::realm_trust_anchor::{
-    RealmTrustAnchor, RealmTrustError, TrustedAgent,
-};
+use crate::services::realm_trust_anchor::{RealmTrustAnchor, RealmTrustError, TrustedAgent};
 use crate::services::trust_anchor_cell::SharedTrustAnchor;
 
 /// Wire-stable ability name. The backend pins this verbatim.
@@ -55,7 +53,7 @@ pub const ABILITY_SELF_REVOKE_USER_PUBKEY: &str = "<self>.revoke_user_pubkey";
 
 #[derive(Debug, Deserialize)]
 struct RevokeArgs {
-    agent_uri: String,
+    agent_ura: String,
     public_key_b64: String,
 }
 
@@ -77,9 +75,9 @@ pub fn handle(
         ))
     })?;
 
-    if args.agent_uri.is_empty() {
+    if args.agent_ura.is_empty() {
         return Err(Status::invalid_argument(
-            "<self>.revoke_user_pubkey: agent_uri is required",
+            "<self>.revoke_user_pubkey: agent_ura is required",
         ));
     }
     if args.public_key_b64.is_empty() {
@@ -89,15 +87,15 @@ pub fn handle(
     }
     validate_public_key_b64(&args.public_key_b64)?;
 
-    let parsed_realm = parse_realm_from_uri(&args.agent_uri).ok_or_else(|| {
+    let parsed_realm = parse_realm_from_uri(&args.agent_ura).ok_or_else(|| {
         Status::invalid_argument(format!(
-            "<self>.revoke_user_pubkey: agent_uri `{}` does not match the canonical user URA",
-            args.agent_uri,
+            "<self>.revoke_user_pubkey: agent_ura `{}` does not match the canonical user URA",
+            args.agent_ura,
         ))
     })?;
     if parsed_realm != daemon_realm {
         return Err(Status::permission_denied(format!(
-            "<self>.revoke_user_pubkey: agent_uri realm `{parsed_realm}` must match daemon \
+            "<self>.revoke_user_pubkey: agent_ura realm `{parsed_realm}` must match daemon \
              realm `{daemon_realm}` (cross-realm user roaming is DEC-EU §multi-realm followup)",
         )));
     }
@@ -110,7 +108,7 @@ pub fn handle(
     let mut next_anchor =
         RealmTrustAnchor::from_entries(next_entries.split_off(0)).map_err(realm_error_to_status)?;
     let removed = next_anchor
-        .remove_user_pubkey(&args.agent_uri, &args.public_key_b64)
+        .remove_user_pubkey(&args.agent_ura, &args.public_key_b64)
         .map_err(realm_error_to_status)?;
 
     next_anchor
@@ -149,21 +147,18 @@ fn validate_public_key_b64(raw: &str) -> Result<(), Status> {
 /// the realm component. Mirrors register_device_pubkey's parser so
 /// the two surfaces accept the same URI shape.
 fn parse_realm_from_uri(uri: &str) -> Option<String> {
-    let rest = uri.strip_prefix("easynet:///r/")?;
-    let realm = rest.split('/').next()?;
-    if realm.is_empty() {
-        return None;
-    }
-    Some(realm.to_string())
+    crate::ura::parse_ura(uri).ok().map(|parsed| parsed.realm)
 }
 
 fn realm_error_to_status(err: RealmTrustError) -> Status {
     match err {
-        RealmTrustError::InvalidUriForRole { agent_uri, role, detail } => {
-            Status::invalid_argument(format!(
-                "<self>.revoke_user_pubkey: {role} URI `{agent_uri}` invalid: {detail}"
-            ))
-        }
+        RealmTrustError::InvalidUriForRole {
+            agent_ura,
+            role,
+            detail,
+        } => Status::invalid_argument(format!(
+            "<self>.revoke_user_pubkey: {role} URI `{agent_ura}` invalid: {detail}"
+        )),
         RealmTrustError::WriteFailed { path, source } => Status::internal(format!(
             "<self>.revoke_user_pubkey: write {path:?}: {source}"
         )),
@@ -179,8 +174,8 @@ mod tests {
     use super::*;
     use crate::services::realm_trust_anchor::TrustedAgentRole;
     use crate::services::trust_anchor_cell::SharedTrustAnchor;
-    use std::sync::Arc;
     use serde_json::json;
+    use std::sync::Arc;
     use tempfile::tempdir;
 
     fn b64_pubkey() -> String {
@@ -200,7 +195,7 @@ mod tests {
         let pubkey = b64_pubkey();
         anchor
             .append_agent(TrustedAgent {
-                agent_uri: "easynet:///r/realm/user/alice".to_string(),
+                agent_ura: "easynet:///r/realm/user/alice".to_string(),
                 public_key_b64: pubkey.clone(),
                 role: TrustedAgentRole::User,
                 added_at_unix_ms: 1_714_000_000_000,
@@ -213,7 +208,7 @@ mod tests {
         let cell = SharedTrustAnchor::new(Arc::new(anchor));
 
         let args = serde_json::to_vec(&json!({
-            "agent_uri": "easynet:///r/realm/user/alice",
+            "agent_ura": "easynet:///r/realm/user/alice",
             "public_key_b64": pubkey,
         }))
         .unwrap();
@@ -234,7 +229,7 @@ mod tests {
         let cell = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
 
         let args = serde_json::to_vec(&json!({
-            "agent_uri": "easynet:///r/realm/user/alice",
+            "agent_ura": "easynet:///r/realm/user/alice",
             "public_key_b64": b64_pubkey(),
         }))
         .unwrap();
@@ -251,7 +246,7 @@ mod tests {
         let cell = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
 
         let args = serde_json::to_vec(&json!({
-            "agent_uri": "easynet:///r/other-realm/user/alice",
+            "agent_ura": "easynet:///r/other-realm/user/alice",
             "public_key_b64": b64_pubkey(),
         }))
         .unwrap();
@@ -266,7 +261,7 @@ mod tests {
         let cell = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
 
         let args = serde_json::to_vec(&json!({
-            "agent_uri": "easynet:///r/realm/user/alice",
+            "agent_ura": "easynet:///r/realm/user/alice",
             "public_key_b64": "not-base64",
         }))
         .unwrap();

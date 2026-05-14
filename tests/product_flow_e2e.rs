@@ -142,9 +142,9 @@ fn user_join_two_devices_chat_round_trip() {
     // looks the target up in the hub directory and dispatches
     // through the gRPC forward channel.
     let device2_uri_clone = device2_uri.clone();
-    fwd::set_test_knower(move |target_uri: &str| target_uri == device2_uri_clone);
+    fwd::set_test_knower(move |target_ura: &str| target_ura == device2_uri_clone);
     let device2_dispatch_for_closure = device2_dispatch_for_router.clone();
-    fwd::set_test_router(move |target_uri, ability, args| {
+    fwd::set_test_router(move |target_ura, ability, args| {
         // We get the bare ability name (e.g. "chat") from
         // invoke_ability — synthesise the qualified `agent2.chat`
         // before calling device2's resolver, just like the real
@@ -153,7 +153,7 @@ fn user_join_two_devices_chat_round_trip() {
         let handler = device2_dispatch_for_closure
             .resolve_rpc(&qualified)
             .ok_or_else(|| anyhow::anyhow!("ability_not_found on remote: {qualified}"))?;
-        let _ = target_uri;
+        let _ = target_ura;
         handler(args)
     });
 

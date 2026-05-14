@@ -14,7 +14,7 @@
 // What this command does
 // ----------------------
 // Dials the local daemon's gRPC UDS, sends a unary
-// `federation.discover` request with optional `agent_uri` /
+// `federation.discover` request with optional `agent_ura` /
 // `local_user_id` filters, and renders the returned
 // `DirectoryEntry` list as a table (default) or JSON (--json).
 //
@@ -42,7 +42,7 @@
 //
 // `--json` emits a structured payload:
 //
-//   { "entries": [ { "agent_uri": "...", "node_id": "...",
+//   { "entries": [ { "agent_ura": "...", "node_id": "...",
 //     "display_name": null, "status": "active", "origin_realm": "...",
 //     "hub_endpoint": "...", "last_seen_unix_ms": null }, ... ] }
 //
@@ -59,7 +59,7 @@ use console::style;
 use serde_json::{json, Value};
 
 use crate::pb::axon::v1::invocation_client::InvocationClient;
-use crate::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest, SubjectIdentity};
+use crate::services::axon_serve::ProtoEnvelope;
 
 #[derive(Debug, Args)]
 pub struct DiscoverArgs {
@@ -67,7 +67,7 @@ pub struct DiscoverArgs {
     /// returns at most one matching entry across all federated
     /// peers (lex tie-break on peer realm).
     #[arg(long)]
-    pub agent_uri: Option<String>,
+    pub agent_ura: Option<String>,
 
     /// Filter cross-realm entries by the calling user's
     /// federated bindings (PR-N4 INV-5 privacy default). Only
@@ -103,8 +103,8 @@ pub fn run(args: DiscoverArgs) -> anyhow::Result<()> {
     // pipeline. PR-N5 will replace this with a real signed
     // operator envelope when the user-as-subject surface lands.
     let mut req_args = json!({});
-    if let Some(uri) = args.agent_uri.as_deref() {
-        req_args["agent_uri"] = Value::String(uri.to_string());
+    if let Some(uri) = args.agent_ura.as_deref() {
+        req_args["agent_ura"] = Value::String(uri.to_string());
     }
     if let Some(user) = args.local_user_id.as_deref() {
         req_args["local_user_id"] = Value::String(user.to_string());
@@ -115,33 +115,13 @@ pub fn run(args: DiscoverArgs) -> anyhow::Result<()> {
     // loopback bypass admits us. If credentials are missing,
     // fall back to a generic operator URI; the daemon will
     // reject if its trust set hasn't been wired for that URI.
-    let caller_uri = crate::persistence::config::load_credentials()
+    let caller_ura = crate::persistence::config::load_credentials()
         .ok()
-        .map(|c| crate::uri::device_uri(&c.tenant_id, &c.node_id))
-        .unwrap_or_else(|| crate::uri::device_uri("cli", "local"));
+        .map(|c| crate::ura::device_ura(&c.tenant_id, &c.node_id))
+        .unwrap_or_else(|| crate::ura::device_ura("cli", "local"));
 
-    let envelope = Envelope {
-        caller: Some(AgentIdentity {
-            uri: caller_uri.clone(),
-            ..Default::default()
-        }),
-        callee: Some(AgentIdentity {
-            uri: caller_uri.clone(),
-            ..Default::default()
-        }),
-        subject: Some(SubjectIdentity {
-            uri: caller_uri,
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-
-    let request = InvokeRequest {
-        envelope: Some(envelope),
-        function_name: "federation.discover".to_string(),
-        arguments: arg_bytes,
-        ..Default::default()
-    };
+    let request =
+        ProtoEnvelope::loopback(caller_ura)?.invoke_request("federation.discover", arg_bytes)?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -200,8 +180,8 @@ pub fn run(args: DiscoverArgs) -> anyhow::Result<()> {
         "AGENT_URI", "NODE_ID", "STATUS", "ORIGIN_REALM", "HUB_ENDPOINT"
     );
     for entry in &entries {
-        let agent_uri = entry
-            .get("agent_uri")
+        let agent_ura = entry
+            .get("agent_ura")
             .and_then(Value::as_str)
             .unwrap_or("-");
         let node_id = entry.get("node_id").and_then(Value::as_str).unwrap_or("-");
@@ -216,7 +196,7 @@ pub fn run(args: DiscoverArgs) -> anyhow::Result<()> {
             .unwrap_or("-");
         println!(
             "{:<58} {:<14} {:<10} {:<14} {}",
-            agent_uri, node_id, status, origin_realm, hub_endpoint
+            agent_ura, node_id, status, origin_realm, hub_endpoint
         );
     }
     Ok(())

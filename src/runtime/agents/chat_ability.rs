@@ -21,7 +21,7 @@
 //
 // Per-agent registration
 // ----------------------
-// Unlike `observe.health` (one handler globally) or `fleet.list_sessions`
+// Unlike `device.observe.health` (one handler globally) or `device.session.list`
 // (one handler that reads from a shared `SessionService`), chat
 // registers one handler **per agent** in the registry. The handler
 // closure captures the agent name + entry by value, so a later
@@ -2147,11 +2147,12 @@ mod tests {
         let _ = CallMode::Rpc; // keep the import live in case future
                                // versions of the test branch on mode.
 
+        let device_uri = crate::ura::device_ura("localhost", "a");
         let inv = Invocation {
-            caller: "easynet://nodes/a".into(),
-            callee: "easynet://nodes/a".into(),
+            caller: device_uri.clone(),
+            callee: device_uri.clone(),
             ability: "alice.chat".into(),
-            subject: "easynet://nodes/a".into(),
+            subject: device_uri,
             nonce_hex: "aa".repeat(16),
             causal_context: CausalContext::Null,
             args: json!({"prompt": "hi"}),

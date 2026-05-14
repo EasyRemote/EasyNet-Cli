@@ -1,4 +1,4 @@
-// EasyNet CLI — fleet.file_transfer bidi ability
+// EasyNet CLI — device.fs.transfer bidi ability
 // =================================================
 //
 // File: src/runtime/agents/file_transfer_ability.rs
@@ -77,7 +77,7 @@ use tokio::sync::mpsc;
 use crate::runtime::ability_dispatch::{BidiSource, LocalAbilityRegistry};
 
 use crate::runtime::ability_dispatch::OwnerKind;
-pub const ABILITY_FILE_TRANSFER: &str = "device.fleet.file_transfer";
+pub const ABILITY_FILE_TRANSFER: &str = "device.fs.transfer";
 
 /// Maximum bytes per file_transfer call. 1 GiB matches order-of-
 /// magnitude what an HTTP upload through nginx would tolerate;
@@ -108,7 +108,7 @@ const UPLOAD_RECV_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// path stays uniform.
 pub fn register(reg: &mut LocalAbilityRegistry) {
     reg.register_bidi_with_owner(
-        "device.fleet.file_transfer",
+        "device.fs.transfer",
         OwnerKind::Device,
         Arc::new(move |args: Value| open_handler(args)),
     );

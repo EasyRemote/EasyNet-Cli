@@ -174,7 +174,10 @@ impl AsyncWrite for NamedPipeGrpcIo {
 /// listeners do come up, they run on the caller's tokio runtime as
 /// detached tasks; they own their `PresenceRegistry` Arc and stay
 /// alive until the runtime shuts down.
-pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::Result<()> {
+pub fn start_axon_serve_sidecar(
+    dispatcher: Arc<AbilityDispatcher>,
+    invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
+) -> anyhow::Result<()> {
     let config_path = expand_home(DEFAULT_DAEMON_CONFIG_PATH);
     let config = match DaemonConfig::load(&config_path) {
         Ok(cfg) => cfg,
@@ -190,7 +193,7 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
     let daemon_identity = load_daemon_identity();
     let daemon_uri = daemon_identity
         .as_ref()
-        .map(|identity| identity.caller_uri.clone());
+        .map(|identity| identity.caller_ura.clone());
     if let Some(identity) = daemon_identity.as_ref() {
         maybe_bootstrap_runtime_self_identity(identity);
     }
@@ -362,13 +365,31 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
         .with_federated_directory_cell(federated_directory_cell.clone())
         // **PR-1 commit 7/9 (LB-56)**. Thread the boot-supplied
         // `Arc<AbilityDispatcher>` so that a `federation.forward_
-        // invoke` call whose `target_uri` matches THIS daemon's
+        // invoke` call whose `target_ura` matches THIS daemon's
         // own URI falls through to local execution against the
         // registered `LocalAbilityRegistry` instead of surfacing
         // `target_offline`. Closes the source-cited PR-1 commit
         // 7/9 hole at line 27/32/42/455/497 of
         // `daemon_invocation_service.rs`.
         .with_local_dispatcher(Arc::clone(&dispatcher));
+
+    if let Some(ledger) = invocation_ledger {
+        service = service.with_invocation_ledger(ledger);
+    } else {
+        match easynet_axon::invocation::InvocationLedger::open(
+            config.billing_dir().join("invocations.redb"),
+        ) {
+            Ok(ledger) => {
+                service = service.with_invocation_ledger(Arc::new(ledger));
+            }
+            Err(err) => {
+                eprintln!(
+                    "[axon-serve] invocation ledger disabled at {}: {err}",
+                    config.billing_dir().display()
+                );
+            }
+        }
+    }
 
     if let Ok(seed) = crate::services::axon_serve::daemon_invocation_service::read_hub_identity_seed(
         config.realm(),
@@ -457,14 +478,14 @@ pub fn start_axon_serve_sidecar(dispatcher: Arc<AbilityDispatcher>) -> anyhow::R
         // v4.1.5 device shape (`r/cli/device/local`) — the
         // legacy `r/cli/agent/local` shape would fail the
         // strict parser (§A.URA-3: agent tail needs a dot).
-        let supervisor_caller_uri = daemon_uri
+        let supervisor_caller_ura = daemon_uri
             .clone()
             .unwrap_or_else(|| "easynet:///r/cli/device/local".to_string());
         spawn_federated_directory_streaming_supervisor(
             client,
             federated_peers_cell.clone(),
             federated_directory_cell.clone(),
-            supervisor_caller_uri,
+            supervisor_caller_ura,
         );
     }
 
@@ -590,7 +611,7 @@ fn spawn_session_supervisor(
          {}; {signing_state}; tls={ca_state}; {escalation_state_str}; \
          LocalAbilityDispatcher will execute inbound SessionDispatch::Dispatch \
          frames through the boot-threaded AbilityDispatcher Arc",
-        identity.caller_uri,
+        identity.caller_ura,
     );
     // Cancel oneshot held for the daemon process's lifetime — the
     // supervisor exits when the cancel sender drops, which happens
@@ -619,7 +640,7 @@ fn spawn_session_supervisor(
     let dispatcher = Arc::new(local_dispatcher);
     tokio::spawn(run_session_supervisor(
         hub_endpoint,
-        identity.caller_uri,
+        identity.caller_ura,
         identity.signing_seed,
         hub_ca_pem_path,
         dispatcher,
@@ -866,14 +887,14 @@ fn spawn_tcp_tls_listener(
 
 #[derive(Debug, Clone)]
 struct DaemonIdentity {
-    caller_uri: String,
+    caller_ura: String,
     signing_seed: Option<SessionSigningSeed>,
 }
 
 #[derive(Debug, serde::Deserialize)]
 struct StoredDeviceIdentity {
     #[serde(default)]
-    agent_uri: Option<String>,
+    agent_ura: Option<String>,
     #[serde(default)]
     realm: Option<String>,
     #[serde(default)]
@@ -886,12 +907,12 @@ struct StoredDeviceIdentity {
 /// signing seed from `~/.easynet/credentials.json`.
 ///
 /// Compatibility rules:
-/// - legacy sparse fixtures that only carry `agent_uri` still load
+/// - legacy sparse fixtures that only carry `agent_ura` still load
 ///   and boot; they simply omit the signing seed and therefore keep
 ///   the old unsigned frame-0 behaviour
 /// - modern credentials with `(realm|tenant_id, node_id)` always
 ///   derive the canonical v4.1.4 device URI from those fields,
-///   even when an old `agent_uri` is still persisted alongside
+///   even when an old `agent_ura` is still persisted alongside
 ///   them. This keeps daemon session registration aligned with
 ///   CLI-side `forward_invoke` targets during the URI migration.
 /// - once we have the canonical `(realm, node_id)` pair, derive the
@@ -905,7 +926,7 @@ fn load_daemon_identity() -> Option<DaemonIdentity> {
 }
 
 fn daemon_identity_from_stored(stored: &StoredDeviceIdentity) -> Option<DaemonIdentity> {
-    let caller_uri = canonical_caller_uri_from_stored_identity(stored)?;
+    let caller_ura = canonical_caller_ura_from_stored_identity(stored)?;
 
     let realm = stored
         .realm
@@ -921,18 +942,18 @@ fn daemon_identity_from_stored(stored: &StoredDeviceIdentity) -> Option<DaemonId
                 .filter(|tenant| !tenant.is_empty())
                 .map(str::to_string)
         })
-        .or_else(|| realm_from_agent_uri(&caller_uri));
+        .or_else(|| realm_from_agent_ura(&caller_ura));
     let node_id = stored
         .node_id
         .as_deref()
         .map(str::trim)
         .filter(|node| !node.is_empty())
         .map(str::to_string)
-        .or_else(|| device_id_from_caller_uri(&caller_uri));
+        .or_else(|| device_id_from_caller_ura(&caller_ura));
 
     // Phase 3D: prefer the keyring vault's seed when the operator
     // has opted in via EASYNET_KEYRING_PASSPHRASE. The vault's
-    // primary_self for this device is `caller_uri`; the role
+    // primary_self for this device is `caller_ura`; the role
     // overlay also matches HubURI(realm) on the same host, so
     // backend (Go side, Phase 3D's Go reader) and daemon (Rust
     // side here) end up signing with the **same** Ed25519 seed.
@@ -941,7 +962,7 @@ fn daemon_identity_from_stored(stored: &StoredDeviceIdentity) -> Option<DaemonId
     // vault) silently fall through to the v4.1.4 deterministic
     // derive — operators who have not yet rolled their daemons
     // onto the keyring stay unaffected.
-    let signing_seed = if let Some(seed) = try_load_daemon_seed_from_keyring(&caller_uri) {
+    let signing_seed = if let Some(seed) = try_load_daemon_seed_from_keyring(&caller_ura) {
         Some(seed)
     } else {
         match (realm.as_deref(), node_id.as_deref()) {
@@ -954,7 +975,7 @@ fn daemon_identity_from_stored(stored: &StoredDeviceIdentity) -> Option<DaemonId
     };
 
     Some(DaemonIdentity {
-        caller_uri,
+        caller_ura,
         signing_seed,
     })
 }
@@ -968,8 +989,8 @@ fn daemon_identity_from_stored(stored: &StoredDeviceIdentity) -> Option<DaemonId
 /// - The heartbeat daemon also bootstraps before its first tick.
 /// - `easynet-daemon` can, however, boot in shapes where neither of
 ///   those has fired yet while local CLI surfaces already route
-///   through `BridgeAbilityInvoker` (`device.describe` ->
-///   `federation.resolve`, `fleet.list_nodes`, etc.).
+///   through `BridgeAbilityInvoker` (`device.node.describe` ->
+///   `federation.resolve`, `device.node.list`, etc.).
 ///
 /// In that window the runtime rejects signed federation reads with
 /// `AXON_EASYNET_SUBJECT_KEY_UNREGISTERED`. Bootstrapping here closes
@@ -984,10 +1005,10 @@ fn daemon_identity_from_stored(stored: &StoredDeviceIdentity) -> Option<DaemonId
 /// already registered the keys, the runtime simply keeps the prior
 /// entries and startup proceeds unchanged.
 fn maybe_bootstrap_runtime_self_identity(identity: &DaemonIdentity) {
-    let Some(realm) = realm_from_agent_uri(&identity.caller_uri) else {
+    let Some(realm) = realm_from_agent_ura(&identity.caller_ura) else {
         return;
     };
-    let Some(node_id) = device_id_from_caller_uri(&identity.caller_uri) else {
+    let Some(node_id) = device_id_from_caller_ura(&identity.caller_ura) else {
         return;
     };
 
@@ -1011,9 +1032,9 @@ fn maybe_bootstrap_runtime_self_identity(identity: &DaemonIdentity) {
             return;
         }
     };
-    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+    let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(
         &bridge,
-        identity.caller_uri.clone(),
+        identity.caller_ura.clone(),
     );
     match crate::runtime::publish::bootstrap_self_identity_via_runtime(
         &invoker, &realm, &realm, &node_id,
@@ -1076,7 +1097,7 @@ fn try_load_daemon_seed_from_keyring(self_uri: &str) -> Option<[u8; 32]> {
     }
 }
 
-fn canonical_caller_uri_from_stored_identity(stored: &StoredDeviceIdentity) -> Option<String> {
+fn canonical_caller_ura_from_stored_identity(stored: &StoredDeviceIdentity) -> Option<String> {
     let realm = stored
         .realm
         .as_deref()
@@ -1096,18 +1117,18 @@ fn canonical_caller_uri_from_stored_identity(stored: &StoredDeviceIdentity) -> O
         .filter(|node| !node.is_empty());
 
     if let (Some(realm), Some(node_id)) = (realm, node_id) {
-        return Some(crate::uri::device_uri(realm, node_id));
+        return Some(crate::ura::device_ura(realm, node_id));
     }
 
     stored
-        .agent_uri
+        .agent_ura
         .as_deref()
         .map(str::trim)
         .filter(|uri| !uri.is_empty())
         .map(str::to_string)
 }
 
-// URI v4.1.5: strict parsing via crate::uri::parse_ura per memory
+// URI v4.1.5: strict parsing via crate::ura::parse_ura per memory
 // `feedback_no_legacy_ura.md`. The daemon's stored caller URI in
 // v4.1.5 is always `easynet:///r/<realm>/device/<device-uuid>`
 // (device-mode CLI's self-identity URA), so we only need to match
@@ -1120,8 +1141,8 @@ fn canonical_caller_uri_from_stored_identity(stored: &StoredDeviceIdentity) -> O
 // Returning `None` triggers the parent code's "skip signing seed"
 // branch (CLI starts unsigned, harmless in dev).
 
-fn realm_from_agent_uri(uri: &str) -> Option<String> {
-    let parsed = crate::uri::parse_ura(uri).ok()?;
+fn realm_from_agent_ura(uri: &str) -> Option<String> {
+    let parsed = crate::ura::parse_ura(uri).ok()?;
     if parsed.realm.is_empty() {
         None
     } else {
@@ -1129,8 +1150,8 @@ fn realm_from_agent_uri(uri: &str) -> Option<String> {
     }
 }
 
-fn device_id_from_caller_uri(uri: &str) -> Option<String> {
-    let parsed = crate::uri::parse_ura(uri).ok()?;
+fn device_id_from_caller_ura(uri: &str) -> Option<String> {
+    let parsed = crate::ura::parse_ura(uri).ok()?;
     // Only Device-kind URIs carry a device_id field; other kinds
     // leave it empty. Empty == not a device URA.
     if parsed.device_id.is_empty() {
@@ -1443,7 +1464,7 @@ fn spawn_federated_directory_streaming_supervisor(
     federation_client: Arc<dyn crate::services::federation_client::FederationClient>,
     federated_peers_cell: crate::services::federated_peers_cell::SharedFederatedPeers,
     federated_directory_cell: crate::services::federation_directory::SharedFederatedDirectoryView,
-    caller_uri: String,
+    caller_ura: String,
 ) {
     tokio::spawn(async move {
         // peer_realm -> oneshot::Sender that cancels the
@@ -1470,7 +1491,7 @@ fn spawn_federated_directory_streaming_supervisor(
                         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
                         let realm_owned = peer_realm.to_string();
                         let uri_owned = peer_hub_uri.to_string();
-                        let caller_owned = caller_uri.clone();
+                        let caller_owned = caller_ura.clone();
                         let client_clone = Arc::clone(&federation_client_outer);
                         let cell_clone = directory_cell_outer.clone();
                         tokio::spawn(async move {
@@ -1540,15 +1561,15 @@ mod tests {
     }
 
     #[test]
-    fn canonical_caller_uri_prefers_realm_and_node_over_legacy_agent_uri() {
+    fn canonical_caller_ura_prefers_realm_and_node_over_legacy_agent_ura() {
         let stored = StoredDeviceIdentity {
-            agent_uri: Some("easynet:///r/legacy/agent/old-node".to_string()),
+            agent_ura: Some("easynet:///r/legacy/agent/old-node".to_string()),
             realm: Some("realm-a".to_string()),
             tenant_id: Some("legacy".to_string()),
             node_id: Some("device-123".to_string()),
         };
         assert_eq!(
-            canonical_caller_uri_from_stored_identity(&stored).as_deref(),
+            canonical_caller_ura_from_stored_identity(&stored).as_deref(),
             Some("easynet:///r/realm-a/device/device-123"),
         );
     }
@@ -1556,14 +1577,14 @@ mod tests {
     #[test]
     fn daemon_identity_from_stored_accepts_realm_only_credentials() {
         let stored = StoredDeviceIdentity {
-            agent_uri: None,
+            agent_ura: None,
             realm: Some("realm-a".to_string()),
             tenant_id: None,
             node_id: Some("device-123".to_string()),
         };
         let identity = daemon_identity_from_stored(&stored).expect("identity");
         assert_eq!(
-            identity.caller_uri,
+            identity.caller_ura,
             "easynet:///r/realm-a/device/device-123"
         );
         assert!(
@@ -1573,16 +1594,16 @@ mod tests {
     }
 
     #[test]
-    fn daemon_identity_from_stored_falls_back_to_agent_uri_when_fields_missing() {
+    fn daemon_identity_from_stored_falls_back_to_agent_ura_when_fields_missing() {
         let stored = StoredDeviceIdentity {
-            agent_uri: Some("easynet:///r/realm-a/agent/legacy-node".to_string()),
+            agent_ura: Some("easynet:///r/realm-a/agent/legacy-node".to_string()),
             realm: None,
             tenant_id: None,
             node_id: None,
         };
         let identity = daemon_identity_from_stored(&stored).expect("identity");
         assert_eq!(
-            identity.caller_uri,
+            identity.caller_ura,
             "easynet:///r/realm-a/agent/legacy-node"
         );
         assert!(
@@ -1625,7 +1646,7 @@ mod tests {
         std::env::set_var("EASYNET_KEYRING_VAULT_PATH", &vault_path);
 
         let stored = StoredDeviceIdentity {
-            agent_uri: None,
+            agent_ura: None,
             realm: Some("host-test".to_string()),
             tenant_id: None,
             node_id: Some("dev-uuid".to_string()),
@@ -1635,7 +1656,7 @@ mod tests {
         std::env::remove_var("EASYNET_KEYRING_PASSPHRASE");
         std::env::remove_var("EASYNET_KEYRING_VAULT_PATH");
 
-        assert_eq!(identity.caller_uri, primary);
+        assert_eq!(identity.caller_ura, primary);
         let got = identity.signing_seed.expect("seed");
         assert_eq!(
             got, seed,
@@ -1658,7 +1679,7 @@ mod tests {
         std::env::remove_var("EASYNET_KEYRING_VAULT_PATH");
 
         let stored = StoredDeviceIdentity {
-            agent_uri: None,
+            agent_ura: None,
             realm: Some("realm-no-vault".to_string()),
             tenant_id: None,
             node_id: Some("dev-uuid".to_string()),
@@ -1676,7 +1697,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", temp.path());
         let identity = DaemonIdentity {
-            caller_uri: "easynet:///r/realm-a/device/device-123".to_string(),
+            caller_ura: "easynet:///r/realm-a/device/device-123".to_string(),
             signing_seed: None,
         };
         maybe_bootstrap_runtime_self_identity(&identity);
@@ -1696,7 +1717,7 @@ mod tests {
         let dispatcher = Arc::new(AbilityDispatcher::new(registry, gateway));
 
         // No panic, no error — soft skip is the contract.
-        start_axon_serve_sidecar(dispatcher).expect("missing config is a soft skip");
+        start_axon_serve_sidecar(dispatcher, None).expect("missing config is a soft skip");
     }
 
     #[test]
@@ -1707,7 +1728,7 @@ mod tests {
             &path,
             r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/realm/hub"
+agent_ura = "easynet:///r/realm/hub"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "backend"
 added_at_unix_ms = 1714492800000
@@ -1732,7 +1753,7 @@ added_at_unix_ms = 1714492800000
             &path,
             r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/realm/hub"
+agent_ura = "easynet:///r/realm/hub"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "backend"
 added_at_unix_ms = 1714492800000
@@ -1828,7 +1849,7 @@ tls_key_pem = {key:?}
             // Errors from the TLS bind are acceptable — what
             // matters is that the federation client + peers
             // wire-up did not panic before we got there.
-            let _ = start_axon_serve_sidecar(dispatcher);
+            let _ = start_axon_serve_sidecar(dispatcher, None);
         });
         // futures::FutureExt::catch_unwind would be nicer; we
         // use std::panic::catch_unwind via a synchronous wrapper

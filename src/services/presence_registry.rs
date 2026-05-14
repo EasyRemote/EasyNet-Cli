@@ -175,20 +175,20 @@ pub enum OfflineReason {
 /// log writers) drive their state from this stream.
 #[derive(Debug, Clone)]
 pub enum PresenceEvent {
-    /// A new `<self>.session` was accepted for the given URI. If a
-    /// previous session existed for the same URI it is implicitly
+    /// A new `<self>.session` was accepted for the given URA. If a
+    /// previous session existed for the same URA it is implicitly
     /// offline (this event was preceded by an `Offline` for the
     /// displaced sender — the registry guarantees the order).
     Online {
-        /// Caller-claimed URI keyed in the registry.
-        uri: String,
+        /// Caller-claimed URA keyed in the registry.
+        ura: String,
     },
 
     /// A previously-online session is now offline. The reason
     /// indicates how the registry learnt of the loss.
     Offline {
-        /// Caller-claimed URI keyed in the registry.
-        uri: String,
+        /// Caller-claimed URA keyed in the registry.
+        ura: String,
 
         /// How the session ended.
         reason: OfflineReason,
@@ -279,11 +279,11 @@ impl PresenceRegistry {
             // Online for the newcomer; ignore broadcast send errors
             // (no subscribers is not an error).
             let _ = self.events.send(PresenceEvent::Offline {
-                uri: uri.clone(),
+                ura: uri.clone(),
                 reason: OfflineReason::StreamClosed,
             });
         }
-        let _ = self.events.send(PresenceEvent::Online { uri });
+        let _ = self.events.send(PresenceEvent::Online { ura: uri });
         PresenceRegistration {
             session_id,
             displaced,
@@ -297,7 +297,7 @@ impl PresenceRegistry {
         let prior = self.by_uri.remove(uri).map(|(_k, slot)| slot.sender);
         if prior.is_some() {
             let _ = self.events.send(PresenceEvent::Offline {
-                uri: uri.to_string(),
+                ura: uri.to_string(),
                 reason,
             });
         }
@@ -323,7 +323,7 @@ impl PresenceRegistry {
             .map(|(_k, slot)| slot.sender);
         if prior.is_some() {
             let _ = self.events.send(PresenceEvent::Offline {
-                uri: uri.to_string(),
+                ura: uri.to_string(),
                 reason,
             });
         }
@@ -452,8 +452,8 @@ mod tests {
         );
 
         match subscriber.recv().await.expect("event") {
-            PresenceEvent::Online { uri } => {
-                assert_eq!(uri, "easynet:///r/realm/device/n1");
+            PresenceEvent::Online { ura } => {
+                assert_eq!(ura, "easynet:///r/realm/device/n1");
             }
             other => panic!("expected Online, got {other:?}"),
         }
@@ -470,10 +470,10 @@ mod tests {
 
         match subscriber.recv().await.expect("event") {
             PresenceEvent::Offline {
-                uri: out_uri,
+                ura: out_ura,
                 reason,
             } => {
-                assert_eq!(out_uri, uri);
+                assert_eq!(out_ura, uri);
                 assert_eq!(reason, OfflineReason::StreamReset);
             }
             other => panic!("expected Offline, got {other:?}"),
@@ -500,10 +500,10 @@ mod tests {
         match (first, second) {
             (
                 PresenceEvent::Offline {
-                    uri: u1,
+                    ura: u1,
                     reason: OfflineReason::StreamClosed,
                 },
-                PresenceEvent::Online { uri: u2 },
+                PresenceEvent::Online { ura: u2 },
             ) => {
                 assert_eq!(u1, uri);
                 assert_eq!(u2, uri);
@@ -584,7 +584,7 @@ mod tests {
 
         for n in 0..10 {
             registry.insert(
-                crate::uri::agent_uri("realm", "u1", &format!("n{n}")),
+                crate::ura::agent_ura("realm", "u1", &format!("n{n}")),
                 make_dispatch_sender(),
             );
         }

@@ -85,6 +85,7 @@ pub const DEFAULT_DAEMON_UDS_PATH: &str = "~/.easynet/daemon.sock";
 /// override is via the daemon binary's `--config <path>` argument
 /// (handled in the binary, not here).
 pub const DEFAULT_DAEMON_CONFIG_PATH: &str = "~/.easynet/daemon-config.toml";
+pub const DEFAULT_BILLING_DIR: &str = "~/.easynet/billing";
 
 /// Expand a `~/...` path against the current process's HOME. Paths
 /// without the prefix are returned unchanged. Kept in
@@ -118,6 +119,14 @@ pub fn default_uds_path() -> PathBuf {
     expand_home_path(Path::new(DEFAULT_DAEMON_UDS_PATH))
 }
 
+pub fn default_billing_dir() -> PathBuf {
+    std::env::var_os("EASYNET_WORKSPACE")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .map(|workspace| workspace.join("billing"))
+        .unwrap_or_else(|| expand_home_path(Path::new(DEFAULT_BILLING_DIR)))
+}
+
 /// Resolve the daemon's gRPC UDS socket using the local config file when
 /// present, else fall back to the canonical default path.
 ///
@@ -136,15 +145,18 @@ pub fn resolved_local_uds_path() -> PathBuf {
 /// Ensure the local daemon has at least the minimal device-mode config
 /// needed to boot its gRPC/session sidecar.
 ///
-/// Idempotent: if the canonical config file already exists, it is left
-/// untouched so operator-authored fields (custom `uds_path`,
-/// `federated_peers`, hub-mode TLS settings) survive intact.
+/// Idempotent: if the canonical config file already exists in device
+/// mode, only the credential-derived identity fields (`realm`,
+/// `hub_endpoint`) are synchronized. Operator-authored fields such as
+/// custom `uds_path` and `federated_peers` survive intact. Hub/both
+/// mode configs are left untouched because they describe a different
+/// deployment topology.
 pub fn ensure_minimal_device_config(
     creds: &crate::persistence::config::Credentials,
 ) -> anyhow::Result<()> {
     let path = default_config_path();
     if path.exists() {
-        return Ok(());
+        return sync_existing_device_config_with_credentials(&path, creds);
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -167,8 +179,72 @@ pub fn ensure_minimal_device_config(
         realm = realm,
         hub_endpoint = hub_endpoint,
     );
-    std::fs::write(&path, body)?;
+    crate::persistence::config::atomic_write(&path, body.as_bytes())?;
     Ok(())
+}
+
+fn sync_existing_device_config_with_credentials(
+    path: &Path,
+    creds: &crate::persistence::config::Credentials,
+) -> anyhow::Result<()> {
+    let raw = fs::read_to_string(path)?;
+    let updated = sync_existing_device_config_toml(&raw, creds)?;
+    if updated != raw {
+        crate::persistence::config::atomic_write(path, updated.as_bytes())?;
+    }
+    Ok(())
+}
+
+fn sync_existing_device_config_toml(
+    raw: &str,
+    creds: &crate::persistence::config::Credentials,
+) -> anyhow::Result<String> {
+    use anyhow::Context as _;
+    use toml_edit::{value, DocumentMut, Item, Table};
+
+    let mut doc: DocumentMut = raw.parse().context("parse daemon-config.toml")?;
+    let daemon_item = doc
+        .as_table_mut()
+        .entry("daemon")
+        .or_insert_with(|| Item::Table(Table::new()));
+    let daemon_table = daemon_item
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("[daemon] is not a TOML table"))?;
+
+    let mode = daemon_table
+        .get("mode")
+        .and_then(|item| item.as_str())
+        .unwrap_or("device");
+    if mode != "device" {
+        return Ok(raw.to_string());
+    }
+
+    let realm = if creds.tenant_id.trim().is_empty() {
+        "localhost"
+    } else {
+        creds.tenant_id.trim()
+    };
+    let hub_endpoint = creds.hub_endpoint.trim();
+    let mut changed = false;
+
+    if daemon_table.get("realm").and_then(|item| item.as_str()) != Some(realm) {
+        daemon_table.insert("realm", value(realm));
+        changed = true;
+    }
+    if daemon_table
+        .get("hub_endpoint")
+        .and_then(|item| item.as_str())
+        != Some(hub_endpoint)
+    {
+        daemon_table.insert("hub_endpoint", value(hub_endpoint));
+        changed = true;
+    }
+
+    if changed {
+        Ok(doc.to_string())
+    } else {
+        Ok(raw.to_string())
+    }
 }
 
 /// Three deployment modes recognised by the daemon binary. Each
@@ -211,6 +287,7 @@ pub struct DaemonConfig {
     tls_cert_pem: Option<PathBuf>,
     tls_key_pem: Option<PathBuf>,
     uds_path: PathBuf,
+    billing_dir: PathBuf,
     /// **PR-N1 commit 3a/N**. Operator-curated `tenant → hub_uri`
     /// map the federation dispatcher consults when `federation.
     /// forward_invoke` targets a tenant whose realm is not local.
@@ -265,6 +342,7 @@ impl DaemonConfig {
             tls_cert_pem,
             tls_key_pem,
             uds_path,
+            billing_dir,
             federated_peers,
         } = daemon;
 
@@ -287,6 +365,9 @@ impl DaemonConfig {
             .transpose()?;
 
         let uds_path = uds_path.map(PathBuf::from).unwrap_or_else(default_uds_path);
+        let billing_dir = billing_dir
+            .map(PathBuf::from)
+            .unwrap_or_else(default_billing_dir);
 
         if matches!(mode, DaemonMode::Device) && hub_endpoint.is_none() {
             return Err(DaemonConfigError::DeviceMissingHubEndpoint);
@@ -300,6 +381,7 @@ impl DaemonConfig {
             tls_cert_pem: tls_cert_pem.map(PathBuf::from),
             tls_key_pem: tls_key_pem.map(PathBuf::from),
             uds_path,
+            billing_dir,
             federated_peers: federated_peers.unwrap_or_default(),
         })
     }
@@ -370,6 +452,10 @@ impl DaemonConfig {
         &self.uds_path
     }
 
+    pub fn billing_dir(&self) -> &Path {
+        &self.billing_dir
+    }
+
     /// **PR-N1 commit 3a/N**. Operator-curated cross-tenant
     /// dispatch map. Empty when the operator did not configure
     /// any federation peers — the federation dispatcher then
@@ -382,12 +468,12 @@ impl DaemonConfig {
 
 /// Internal deserialisation shape. Pub-within-crate only so unit
 /// tests can build instances without round-tripping through TOML.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub(crate) struct RawDaemonConfig {
     pub(crate) daemon: RawDaemonSection,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub(crate) struct RawDaemonSection {
     pub(crate) mode: DaemonMode,
     pub(crate) realm: String,
@@ -401,6 +487,8 @@ pub(crate) struct RawDaemonSection {
     pub(crate) tls_key_pem: Option<String>,
     #[serde(default)]
     pub(crate) uds_path: Option<String>,
+    #[serde(default)]
+    pub(crate) billing_dir: Option<String>,
     /// PR-N1 commit 3a/N: operator-curated `tenant → hub_uri`
     /// map for cross-tenant `federation.forward_invoke` routing.
     /// `#[serde(default)]` so legacy daemon-config.toml files
@@ -475,6 +563,7 @@ mod tests {
                 tls_cert_pem: cert.map(str::to_string),
                 tls_key_pem: key.map(str::to_string),
                 uds_path: None,
+                billing_dir: None,
                 federated_peers: None,
             },
         }
@@ -496,6 +585,27 @@ mod tests {
         assert_eq!(cfg.realm(), "easynet.run");
         assert_eq!(cfg.hub_endpoint(), Some("https://hub.example.com:50051"));
         assert!(cfg.listen_tcp().is_none());
+    }
+
+    #[test]
+    fn billing_dir_defaults_and_can_be_configured() {
+        let mut raw = raw(
+            DaemonMode::Device,
+            "easynet.run",
+            Some("https://hub.example.com:50051"),
+            None,
+            None,
+            None,
+        );
+        let defaulted = DaemonConfig::from_raw(raw.clone()).expect("default config");
+        assert!(defaulted.billing_dir().ends_with(".easynet/billing"));
+
+        raw.daemon.billing_dir = Some("/tmp/easynet-workspace/billing".to_string());
+        let configured = DaemonConfig::from_raw(raw).expect("configured billing dir");
+        assert_eq!(
+            configured.billing_dir(),
+            Path::new("/tmp/easynet-workspace/billing")
+        );
     }
 
     #[test]
@@ -693,9 +803,9 @@ mod tests {
     }
 
     #[test]
-    fn ensure_minimal_device_config_writes_default_file_once() {
+    fn ensure_minimal_device_config_writes_default_file_and_syncs_device_fields() {
         let _g = HomeGuard::new();
-        let creds = crate::persistence::config::Credentials {
+        let mut creds = crate::persistence::config::Credentials {
             node_id: "node-1".into(),
             credential_token: "token".into(),
             hub_endpoint: "https://hub.example:50443".into(),
@@ -714,9 +824,55 @@ mod tests {
         assert!(body.contains("realm = \"tenant-a\""));
         assert!(body.contains("hub_endpoint = \"https://hub.example:50443\""));
 
-        std::fs::write(&path, "sentinel\n").expect("overwrite config");
-        ensure_minimal_device_config(&creds).expect("idempotent write");
-        let unchanged = std::fs::read_to_string(&path).expect("read sentinel");
-        assert_eq!(unchanged, "sentinel\n");
+        std::fs::write(
+            &path,
+            r#"[daemon]
+mode = "device"
+realm = "old-tenant"
+hub_endpoint = "https://hub:50443"
+uds_path = "/tmp/custom.sock"
+
+[daemon.federated_peers]
+"tenant-b" = "https://hub-b:50443"
+"#,
+        )
+        .expect("overwrite config");
+        creds.hub_endpoint = "https://127.0.0.1:50443".into();
+        ensure_minimal_device_config(&creds).expect("sync device config");
+        let synced = std::fs::read_to_string(&path).expect("read synced config");
+        assert!(synced.contains("realm = \"tenant-a\""));
+        assert!(synced.contains("hub_endpoint = \"https://127.0.0.1:50443\""));
+        assert!(synced.contains("uds_path = \"/tmp/custom.sock\""));
+        assert!(synced.contains("\"tenant-b\" = \"https://hub-b:50443\""));
+    }
+
+    #[test]
+    fn ensure_minimal_device_config_does_not_rewrite_hub_mode_config() {
+        let _g = HomeGuard::new();
+        let creds = crate::persistence::config::Credentials {
+            node_id: "node-1".into(),
+            credential_token: "token".into(),
+            hub_endpoint: "https://127.0.0.1:50443".into(),
+            tenant_id: "tenant-a".into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: None,
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+        };
+        let path = default_config_path();
+        std::fs::create_dir_all(path.parent().expect("config parent")).expect("mkdir");
+        let raw = r#"[daemon]
+mode = "both"
+realm = "hub-realm"
+listen_tcp = "0.0.0.0:50443"
+tls_cert_pem = "/tmp/cert.pem"
+tls_key_pem = "/tmp/key.pem"
+"#;
+        std::fs::write(&path, raw).expect("write hub config");
+
+        ensure_minimal_device_config(&creds).expect("hub mode left alone");
+        let unchanged = std::fs::read_to_string(&path).expect("read hub config");
+        assert_eq!(unchanged, raw);
     }
 }

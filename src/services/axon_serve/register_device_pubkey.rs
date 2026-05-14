@@ -23,7 +23,7 @@
 // Inputs
 // ------
 //   {
-//     "agent_uri":      "easynet:///r/{realm}/device/{device_id}" | "easynet:///r/{realm}/hub",
+//     "agent_ura":      "easynet:///r/{realm}/device/{device_id}" | "easynet:///r/{realm}/hub",
 //     "public_key_b64": "<base64 standard, 32-byte ed25519 vk>",
 //     "role":           "device" | "backend" | "hub"
 //   }
@@ -31,7 +31,7 @@
 // Realm cross-boundary rule
 // -------------------------
 // `role = "device"` is allowed to register an out-of-realm
-// `agent_uri`. Production pairing stamps device URIs under the
+// `agent_ura`. Production pairing stamps device URIs under the
 // owning user's realm (`tenant_id = user_id`) while the hosting
 // daemon may run a platform realm (for example
 // `easynet-platform`). The trust anchor is keyed by full URI, not
@@ -87,7 +87,7 @@ pub const ABILITY_SELF_REGISTER_DEVICE_PUBKEY: &str = "<self>.register_device_pu
 /// rather than a serde decoder error.
 #[derive(Debug, Deserialize)]
 struct RegisterArgs {
-    agent_uri: String,
+    agent_ura: String,
     public_key_b64: String,
     role: String,
 }
@@ -107,7 +107,7 @@ pub struct RegisterResponse {
 ///
 ///   1. Decode `arguments` JSON into `RegisterArgs`. Any decoder
 ///      failure → `Status::invalid_argument`.
-///   2. Validate `agent_uri` matches the trust-writer policy:
+///   2. Validate `agent_ura` matches the trust-writer policy:
 ///      device entries may target any realm, backend/hub entries
 ///      must stay daemon-local. Policy mismatch →
 ///      `Status::permission_denied`.
@@ -134,9 +134,9 @@ pub fn handle(
         ))
     })?;
 
-    if args.agent_uri.is_empty() {
+    if args.agent_ura.is_empty() {
         return Err(Status::invalid_argument(
-            "<self>.register_device_pubkey: agent_uri is required",
+            "<self>.register_device_pubkey: agent_ura is required",
         ));
     }
     if args.public_key_b64.is_empty() {
@@ -148,11 +148,11 @@ pub fn handle(
 
     let role = parse_role(&args.role)?;
 
-    let parsed_realm = parse_realm_from_uri(&args.agent_uri).ok_or_else(|| {
+    let parsed_realm = parse_realm_from_uri(&args.agent_ura).ok_or_else(|| {
         Status::invalid_argument(format!(
-            "<self>.register_device_pubkey: agent_uri `{}` does not match the URA \
+            "<self>.register_device_pubkey: agent_ura `{}` does not match the URA \
              supported canonical/legacy trust-entry shape",
-            args.agent_uri,
+            args.agent_ura,
         ))
     })?;
     // Device roams across realms by design (a laptop paired to
@@ -167,7 +167,7 @@ pub fn handle(
     // no peer can fabricate a "user X registered here" row.
     if parsed_realm != daemon_realm && !matches!(role, TrustedAgentRole::Device) {
         return Err(Status::permission_denied(format!(
-            "<self>.register_device_pubkey: role `{}` requires agent_uri realm `{parsed_realm}` \
+            "<self>.register_device_pubkey: role `{}` requires agent_ura realm `{parsed_realm}` \
              to match daemon realm `{daemon_realm}` — cross-realm user pubkey resolution \
              happens via federation.resolve_key, not via remote registration",
             args.role,
@@ -175,7 +175,7 @@ pub fn handle(
     }
 
     let entry = TrustedAgent {
-        agent_uri: args.agent_uri.clone(),
+        agent_ura: args.agent_ura.clone(),
         public_key_b64: args.public_key_b64.clone(),
         role,
         added_at_unix_ms: now_unix_ms(),
@@ -263,15 +263,8 @@ fn validate_public_key_b64(raw: &str) -> Result<(), Status> {
 /// the canonical `easynet:///r/` prefix per RFC 001 §3.1; non-canon
 /// prefixes (`easynet://...`, query-stringed, etc.) fall through
 /// to `None` so a malformed URI reaches the user not the disk.
-pub(crate) fn parse_realm_from_uri(uri: &str) -> Option<&str> {
-    let rest = uri.strip_prefix("easynet:///r/")?;
-    let realm_end = rest.find('/')?;
-    let realm = &rest[..realm_end];
-    if realm.is_empty() {
-        None
-    } else {
-        Some(realm)
-    }
+pub(crate) fn parse_realm_from_uri(uri: &str) -> Option<String> {
+    crate::ura::parse_ura(uri).ok().map(|parsed| parsed.realm)
 }
 
 fn now_unix_ms() -> u64 {
@@ -288,11 +281,11 @@ fn now_unix_ms() -> u64 {
 /// at daemon logs.
 fn realm_error_to_status(err: RealmTrustError) -> Status {
     match err {
-        RealmTrustError::DuplicateUri { agent_uri } => Status::already_exists(format!(
-            "<self>.register_device_pubkey: agent_uri `{agent_uri}` already in trust set",
+        RealmTrustError::DuplicateUri { agent_ura } => Status::already_exists(format!(
+            "<self>.register_device_pubkey: agent_ura `{agent_ura}` already in trust set",
         )),
-        RealmTrustError::DuplicateUserPubkey { agent_uri } => Status::already_exists(format!(
-            "<self>.register_device_pubkey: user `{agent_uri}` already has this exact \
+        RealmTrustError::DuplicateUserPubkey { agent_ura } => Status::already_exists(format!(
+            "<self>.register_device_pubkey: user `{agent_ura}` already has this exact \
              public key registered (different pubkeys per device are expected; same pubkey \
              twice is a no-op pairing retry)",
         )),
@@ -309,11 +302,11 @@ fn realm_error_to_status(err: RealmTrustError) -> Status {
             "<self>.register_device_pubkey: serialize {path:?}: {source}"
         )),
         RealmTrustError::InvalidUriForRole {
-            agent_uri,
+            agent_ura,
             role,
             detail,
         } => Status::invalid_argument(format!(
-            "<self>.register_device_pubkey: trusted {role} URI `{agent_uri}` is invalid: {detail}"
+            "<self>.register_device_pubkey: trusted {role} URI `{agent_ura}` is invalid: {detail}"
         )),
     }
 }
@@ -327,7 +320,7 @@ mod tests {
 
     fn args_bytes(uri: &str, key: &str, role: &str) -> Vec<u8> {
         serde_json::to_vec(&json!({
-            "agent_uri": uri,
+            "agent_ura": uri,
             "public_key_b64": key,
             "role": role
         }))
@@ -437,13 +430,13 @@ mod tests {
     }
 
     #[test]
-    fn empty_agent_uri_rejected_with_invalid_argument() {
+    fn empty_agent_ura_rejected_with_invalid_argument() {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
         let args = args_bytes("", &test_pub_b64(), "device");
         let err = handle(&args, "r1", &path, &cell).expect_err("must reject");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
-        assert!(err.message().contains("agent_uri is required"));
+        assert!(err.message().contains("agent_ura is required"));
     }
 
     #[test]
@@ -530,9 +523,12 @@ mod tests {
     fn parse_realm_from_uri_handles_canonical_shape() {
         assert_eq!(
             parse_realm_from_uri("easynet:///r/realm-x/device/n1"),
-            Some("realm-x")
+            Some("realm-x".to_string())
         );
-        assert_eq!(parse_realm_from_uri("easynet:///r/abc/hub"), Some("abc"));
+        assert_eq!(
+            parse_realm_from_uri("easynet:///r/abc/hub"),
+            Some("abc".to_string())
+        );
         assert_eq!(parse_realm_from_uri("easynet:///r//device/n1"), None);
         assert_eq!(parse_realm_from_uri("https://example.com"), None);
         assert_eq!(parse_realm_from_uri("easynet://r/x/device/n1"), None); // missing third slash

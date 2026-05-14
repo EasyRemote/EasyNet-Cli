@@ -224,7 +224,7 @@ fn ensure_device_subject(
         None => {
             // Synthesise + bind on first install. Subsequent calls
             // re-use the bound subject so re-installs are idempotent.
-            let synth = crate::uri::device_uri(&creds.tenant_id, &creds.node_id);
+            let synth = crate::ura::device_ura(&creds.tenant_id, &creds.node_id);
             keyring
                 .set_device_subject(synth.clone())
                 .map_err(|e| format!("keyring.set_device_subject({synth}): {e}"))?;
@@ -343,10 +343,10 @@ mod tests {
     }
 
     #[test]
-    fn synthesised_device_subject_uses_canonical_device_uri() {
+    fn synthesised_device_subject_uses_canonical_device_ura() {
         let c = creds("acme.com", "node-1");
         let k = keyring();
-        let expected = crate::uri::device_uri(&c.tenant_id, &c.node_id);
+        let expected = crate::ura::device_ura(&c.tenant_id, &c.node_id);
         let got = ensure_device_subject(&k, &c).expect("subject synthesised");
         assert_eq!(got, expected);
         assert_eq!(k.device_subject().as_deref(), Some(expected.as_str()));

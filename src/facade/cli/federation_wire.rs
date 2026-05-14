@@ -360,7 +360,7 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
     // `/device/` role segment; emitting the legacy `/agent/`
     // shape would land in a parallel namespace the parser
     // strict-rejects.
-    let agent_uri = crate::uri::device_uri(creds.tenant_id.trim(), creds.node_id.trim());
+    let agent_ura = crate::ura::device_ura(creds.tenant_id.trim(), creds.node_id.trim());
     let public_key_b64 = crate::runtime::publish::derive_owner_public_key_b64(
         creds.tenant_id.trim(),
         creds.node_id.trim(),
@@ -385,7 +385,7 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
     // stashes it on `Credentials.hub_pubkey_b64`. Prefer that when
     // present; fall back to the on-disk file lookup for single-host
     // dev rigs where the device + hub share `$HOME`.
-    let hub_uri = crate::uri::hub_uri(creds.tenant_id.trim());
+    let hub_uri = crate::ura::hub_ura(creds.tenant_id.trim());
     let hub_pubkey_b64_opt: Option<String> = creds
         .hub_pubkey_b64
         .as_ref()
@@ -394,7 +394,7 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
         .or_else(|| read_backend_hub_pubkey_b64(creds.tenant_id.trim()));
 
     let after_device =
-        match upsert_self_trusted_agent(&raw, &agent_uri, &public_key_b64, added_at_unix_ms) {
+        match upsert_self_trusted_agent(&raw, &agent_ura, &public_key_b64, added_at_unix_ms) {
             Ok(s) => s,
             Err(err) => {
                 eprintln!(
@@ -502,7 +502,7 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
 /// backendIdentityRecord`:
 ///   {
 ///     "private_key_seed_hex": "<64-hex>",
-///     "agent_uri": "easynet:///r/<realm>/hub",
+///     "agent_ura": "easynet:///r/<realm>/hub",
 ///     "created_at_unix_ms": <int>
 ///   }
 fn read_backend_hub_pubkey_b64(realm: &str) -> Option<String> {
@@ -572,7 +572,7 @@ fn persist_hub_tls_ca_pem_for_join(creds: &Credentials) -> anyhow::Result<Option
 }
 
 /// TOML edit: insert-or-update a `[[trusted_agent]]` row whose
-/// `agent_uri` matches the joining device. Preserves every other
+/// `agent_ura` matches the joining device. Preserves every other
 /// row + comment via `toml_edit`. Idempotent when the row already
 /// has the same `public_key_b64` (the deterministic derivation
 /// from `(tenant_id, node_id)` should always produce the same
@@ -580,13 +580,13 @@ fn persist_hub_tls_ca_pem_for_join(creds: &Credentials) -> anyhow::Result<Option
 /// against the same credentials is a no-op).
 fn upsert_self_trusted_agent(
     raw: &str,
-    agent_uri: &str,
+    agent_ura: &str,
     public_key_b64: &str,
     added_at_unix_ms: u64,
 ) -> anyhow::Result<String> {
     upsert_trusted_agent_inner(
         raw,
-        agent_uri,
+        agent_ura,
         public_key_b64,
         "device",
         None,
@@ -598,7 +598,7 @@ fn upsert_self_trusted_agent(
 
 fn upsert_hub_trusted_agent(
     raw: &str,
-    agent_uri: &str,
+    agent_ura: &str,
     public_key_b64: &str,
     origin_tenant_id: &str,
     hub_uri: &str,
@@ -607,7 +607,7 @@ fn upsert_hub_trusted_agent(
 ) -> anyhow::Result<String> {
     upsert_trusted_agent_inner(
         raw,
-        agent_uri,
+        agent_ura,
         public_key_b64,
         "hub",
         Some(origin_tenant_id),
@@ -623,7 +623,7 @@ fn upsert_hub_trusted_agent(
 /// fields required by device-mode `<self>.session` bootstrap.
 fn upsert_trusted_agent_inner(
     raw: &str,
-    agent_uri: &str,
+    agent_ura: &str,
     public_key_b64: &str,
     role: &str,
     origin_tenant_id: Option<&str>,
@@ -651,9 +651,9 @@ fn upsert_trusted_agent_inner(
 
     let existing_index = agents.iter().position(|existing| {
         existing
-            .get("agent_uri")
+            .get("agent_ura")
             .and_then(|i| i.as_str())
-            .map(|s| s == agent_uri)
+            .map(|s| s == agent_ura)
             .unwrap_or(false)
     });
     if let Some(existing_index) = existing_index {
@@ -679,7 +679,7 @@ fn upsert_trusted_agent_inner(
 
     // No existing entry: append a fresh row.
     let mut row = Table::new();
-    row.insert("agent_uri", value(agent_uri));
+    row.insert("agent_ura", value(agent_ura));
     row.insert("public_key_b64", value(public_key_b64));
     row.insert("role", value(role));
     row.insert("added_at_unix_ms", value(added_at_unix_ms as i64));
@@ -1063,7 +1063,7 @@ listen_tcp = "127.0.0.1:50443"
         assert_eq!(arr.len(), 1, "exactly one entry written");
         let row = arr[0].as_table().expect("row is a table");
         assert_eq!(
-            row.get("agent_uri").and_then(|v| v.as_str()),
+            row.get("agent_ura").and_then(|v| v.as_str()),
             Some("easynet:///r/tenant-a/device/dev-1"),
         );
         assert_eq!(row.get("role").and_then(|v| v.as_str()), Some("device"));
@@ -1085,7 +1085,7 @@ listen_tcp = "127.0.0.1:50443"
         // edit) is authoritative.
         let raw = r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/tenant-a/device/dev-1"
+agent_ura = "easynet:///r/tenant-a/device/dev-1"
 public_key_b64 = "OPERATOR-WRITTEN-VALUE"
 role = "device"
 added_at_unix_ms = 100
@@ -1108,7 +1108,7 @@ added_at_unix_ms = 100
     fn upsert_self_trusted_agent_preserves_existing_unrelated_rows() {
         let raw = r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/tenant-a/device/other-device"
+agent_ura = "easynet:///r/tenant-a/device/other-device"
 public_key_b64 = "OTHER-KEY"
 role = "device"
 added_at_unix_ms = 1
@@ -1180,7 +1180,7 @@ added_at_unix_ms = 1
         std::fs::write(
             identity_dir.join("identity.json"),
             format!(
-                r#"{{"private_key_seed_hex":"{staged_seed_hex}","agent_uri":"easynet:///r/tenant-a/hub","created_at_unix_ms":1}}"#,
+                r#"{{"private_key_seed_hex":"{staged_seed_hex}","agent_ura":"easynet:///r/tenant-a/hub","created_at_unix_ms":1}}"#,
             ),
         )
         .expect("write identity.json");
@@ -1242,7 +1242,7 @@ added_at_unix_ms = 1
             .and_then(|v| v.as_table())
             .expect("device entry present");
         assert_eq!(
-            device_row.get("agent_uri").and_then(|v| v.as_str()),
+            device_row.get("agent_ura").and_then(|v| v.as_str()),
             Some("easynet:///r/tenant-a/device/dev-1"),
         );
         let expected_dev_pk =
@@ -1260,7 +1260,7 @@ added_at_unix_ms = 1
             .and_then(|v| v.as_table())
             .expect("hub entry present");
         assert_eq!(
-            hub_row.get("agent_uri").and_then(|v| v.as_str()),
+            hub_row.get("agent_ura").and_then(|v| v.as_str()),
             Some("easynet:///r/tenant-a/hub"),
             "hub URI is the realm-singleton shape; admits backend's federation.* dispatches",
         );

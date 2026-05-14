@@ -99,7 +99,7 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
     // Joint-plan unified path (phase 1.4): when the daemon is still
     // alive (the `--force` path bypasses guard 1, so this is the only
     // condition that lands here) call `federation.revoke` against
-    // this device's URA. The legacy `fleet.deregister_self` ability
+    // this device's URA. The legacy `device.node.deregister` ability
     // was an ack-only no-op — the hub never learned the device went
     // away, so directory entries lingered until the keepalive sweep.
     // The new path reaches `PresenceRegistry::force_revoke` and the
@@ -109,7 +109,7 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
     if let Some(creds) = config::load_credentials().ok() {
         if let Some(ref state) = runtime_state {
             if state.pid.is_some_and(net::is_pid_alive) {
-                let device_uri = crate::uri::device_uri(&creds.tenant_id, &creds.node_id);
+                let device_uri = crate::ura::device_ura(&creds.tenant_id, &creds.node_id);
                 match invoke_federation_revoke_for_reset(&device_uri) {
                     Ok(_) => output::info("Device deregistered with hub (federation.revoke)"),
                     Err(e) => output::warn(&format!(

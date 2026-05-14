@@ -10,12 +10,12 @@
 //
 // Inputs
 // ------
-//   {"agent_uri": "easynet:///r/{realm}/user/{user_id}"}
+//   {"agent_ura": "easynet:///r/{realm}/user/{user_id}"}
 //
 // Output
 // ------
 //   {
-//     "agent_uri": "...",
+//     "agent_ura": "...",
 //     "keys": [{"public_key_b64": "...", "added_at_unix_ms": ...}, ...]
 //   }
 //
@@ -31,7 +31,7 @@ pub const ABILITY_SELF_LIST_USER_PUBKEYS: &str = "<self>.list_user_pubkeys";
 
 #[derive(Debug, Deserialize)]
 struct ListArgs {
-    agent_uri: String,
+    agent_ura: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -42,7 +42,7 @@ pub struct ListedUserKey {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ListResponse {
-    pub agent_uri: String,
+    pub agent_ura: String,
     pub keys: Vec<ListedUserKey>,
 }
 
@@ -52,15 +52,15 @@ pub fn handle(arguments: &[u8], cell: &SharedTrustAnchor) -> Result<Vec<u8>, Sta
             "<self>.list_user_pubkeys: arguments JSON decode failed: {err}"
         ))
     })?;
-    if args.agent_uri.is_empty() {
+    if args.agent_ura.is_empty() {
         return Err(Status::invalid_argument(
-            "<self>.list_user_pubkeys: agent_uri is required",
+            "<self>.list_user_pubkeys: agent_ura is required",
         ));
     }
 
     let snapshot = cell.snapshot();
     let keys: Vec<ListedUserKey> = snapshot
-        .lookup_user_all(&args.agent_uri)
+        .lookup_user_all(&args.agent_ura)
         .iter()
         .map(|e| ListedUserKey {
             public_key_b64: e.public_key_b64.clone(),
@@ -69,7 +69,7 @@ pub fn handle(arguments: &[u8], cell: &SharedTrustAnchor) -> Result<Vec<u8>, Sta
         .collect();
 
     serde_json::to_vec(&ListResponse {
-        agent_uri: args.agent_uri,
+        agent_ura: args.agent_ura,
         keys,
     })
     .map_err(|err| {
@@ -98,7 +98,7 @@ mod tests {
         for seed in [1u8, 2, 3] {
             anchor
                 .append_agent(TrustedAgent {
-                    agent_uri: "easynet:///r/realm/user/alice".to_string(),
+                    agent_ura: "easynet:///r/realm/user/alice".to_string(),
                     public_key_b64: b64_pubkey(seed),
                     role: TrustedAgentRole::User,
                     added_at_unix_ms: 1_700_000_000_000 + u64::from(seed),
@@ -109,19 +109,19 @@ mod tests {
                 .expect("append");
         }
         let cell = SharedTrustAnchor::new(Arc::new(anchor));
-        let args = serde_json::to_vec(&json!({"agent_uri": "easynet:///r/realm/user/alice"}))
-            .unwrap();
+        let args =
+            serde_json::to_vec(&json!({"agent_ura": "easynet:///r/realm/user/alice"})).unwrap();
         let body = handle(&args, &cell).expect("ok");
         let resp: ListResponse = serde_json::from_slice(&body).unwrap();
-        assert_eq!(resp.agent_uri, "easynet:///r/realm/user/alice");
+        assert_eq!(resp.agent_ura, "easynet:///r/realm/user/alice");
         assert_eq!(resp.keys.len(), 3);
     }
 
     #[test]
     fn list_returns_empty_for_unknown_user() {
         let cell = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
-        let args = serde_json::to_vec(&json!({"agent_uri": "easynet:///r/realm/user/missing"}))
-            .unwrap();
+        let args =
+            serde_json::to_vec(&json!({"agent_ura": "easynet:///r/realm/user/missing"})).unwrap();
         let body = handle(&args, &cell).expect("ok");
         let resp: ListResponse = serde_json::from_slice(&body).unwrap();
         assert!(resp.keys.is_empty());

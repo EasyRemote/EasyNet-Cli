@@ -24,7 +24,7 @@
 //             `KeyResolver`                  (RFC 001 §5.2 step 3)
 //          d. `NonceReplayStore::check_and_record` against the
 //             daemon-shared store            (RFC 001 §5.2 step 4)
-//      - **Device** → URI-only for legacy unsigned callers; if the
+//      - **Device** → URI-only for unsigned device callers; if the
 //        device already carries a real signature+nonce the same
 //        strict 4-step pipeline runs immediately. This keeps
 //        deployed unsigned devices alive while letting PR-2/PR-7
@@ -74,7 +74,7 @@
 // Invariants
 // ----------
 // **Invariant 1 (caller URI required)**: Every inbound RPC must
-// carry an `Envelope` with a non-empty `caller.uri`. The dispatcher
+// carry an `Envelope` with a non-empty `caller.ura`. The dispatcher
 // receives `Status::invalid_argument` for any RPC missing this; it
 // is a wire-level requirement, not a policy choice.
 //
@@ -92,7 +92,7 @@
 // verify against the trust anchor's public-key entry rejects with
 // the same reason; a nonce already observed inside the dedup
 // window rejects with `AXON_NONCE_REPLAY`. The `Device` path keeps
-// URI-only admission for unsigned legacy callers, but any device
+// URI-only admission for unsigned device callers, but any device
 // envelope that already carries signature material runs the same
 // strict pipeline immediately.
 //
@@ -120,7 +120,7 @@ use easynet_axon::invocation::admission::{
 };
 use easynet_axon::invocation::axiom::{
     AgentIdentity as AxiomAgentIdentity, CallerSignature as AxiomCallerSignature, CausalContext,
-    InvocationEnvelope, KeyResolver, ReceiptRef, SubjectIdentity, UriProfile,
+    InvocationEnvelope, KeyResolver, ReceiptRef, SubjectIdentity, UraProfile,
 };
 use easynet_axon::invocation::{
     AxonError as InvocationError, AxonErrorKind as InvocationErrorKind,
@@ -249,8 +249,7 @@ impl AdmissionFacade {
     ) -> Self {
         let self_realm = daemon_uri
             .as_deref()
-            .and_then(crate::services::axon_serve::register_device_pubkey::parse_realm_from_uri)
-            .map(str::to_string);
+            .and_then(crate::services::axon_serve::register_device_pubkey::parse_realm_from_uri);
         Self {
             trust_anchor,
             daemon_uri,
@@ -326,8 +325,7 @@ impl AdmissionFacade {
     ) -> Self {
         let self_realm = daemon_uri
             .as_deref()
-            .and_then(crate::services::axon_serve::register_device_pubkey::parse_realm_from_uri)
-            .map(str::to_string);
+            .and_then(crate::services::axon_serve::register_device_pubkey::parse_realm_from_uri);
         Self {
             trust_anchor: SharedTrustAnchor::new(trust_anchor),
             daemon_uri,
@@ -414,19 +412,19 @@ impl AdmissionFacade {
     /// fast path; full admission requires the (ability, args) tuple
     /// the other entrypoints supply.
     ///
-    /// PR-7 note: this is the URI-only legacy gate. The bidi path
+    /// PR-7 note: this is the URI-only transitional gate. The bidi path
     /// has migrated to `verify_envelope_for_bidi`. Remove once
     /// PR-2's session bidi handler also supplies (ability, args).
     pub fn verify_envelope_uri_only(&self, envelope: &Envelope) -> Result<(), Status> {
-        let caller_uri = caller_uri_required(envelope)?;
-        if self.is_loopback(caller_uri) {
+        let caller_ura = caller_ura_required(envelope)?;
+        if self.is_loopback(caller_ura) {
             return Ok(());
         }
         let snapshot = self.trust_anchor.snapshot();
-        if snapshot.lookup(caller_uri).is_some() {
+        if snapshot.lookup(caller_ura).is_some() {
             return Ok(());
         }
-        Err(permission_denied_unknown_caller(caller_uri))
+        Err(permission_denied_unknown_caller(caller_ura))
     }
 
     // ── Internal pipeline ────────────────────────────────────────
@@ -455,10 +453,10 @@ impl AdmissionFacade {
         ability: &str,
         args: &[u8],
     ) -> Result<(), Status> {
-        let caller_uri = caller_uri_required(envelope)?;
+        let caller_ura = caller_ura_required(envelope)?;
 
         // Invariant 2: loopback bypass. Daemon trusts itself.
-        if self.is_loopback(caller_uri) {
+        if self.is_loopback(caller_ura) {
             return Ok(());
         }
 
@@ -490,13 +488,13 @@ impl AdmissionFacade {
         // tenants the operator listed in `federated_peers` can
         // bypass the local-membership reject) while opening the
         // cross-realm signed-admission door.
-        let trusted = match snapshot.lookup(caller_uri) {
+        let trusted = match snapshot.lookup(caller_ura) {
             Some(entry) => entry,
             None => {
-                if self.is_federated_caller(caller_uri) {
+                if self.is_federated_caller(caller_ura) {
                     return self.run_strict_admission(envelope, ability, args, snapshot);
                 }
-                return Err(permission_denied_unknown_caller(caller_uri));
+                return Err(permission_denied_unknown_caller(caller_ura));
             }
         };
 
@@ -509,7 +507,7 @@ impl AdmissionFacade {
             //
             // PR-10 commit 4/N: emit a receipt even on this URI-only
             // path so the audit pipeline sees the call happen. The
-            // `reason` annotation `"unsigned_caller_uri_admitted"`
+            // `reason` annotation `"unsigned_caller_ura_admitted"`
             // distinguishes this from a strict-path admit; PR-8
             // flips Device to strict and the annotation becomes
             // dead in a follow-up.
@@ -523,7 +521,7 @@ impl AdmissionFacade {
                         args,
                         "admitted",
                         InvocationState::Completed,
-                        "unsigned_caller_uri_admitted",
+                        "unsigned_caller_ura_admitted",
                     );
                     Ok(())
                 }
@@ -542,10 +540,8 @@ impl AdmissionFacade {
             // of promoting user from Subject to Caller is that the
             // user's signature is independently verifiable, so
             // there is no URI-only fallback arm for User the way
-            // there is for legacy Device.
-            TrustedAgentRole::Backend
-            | TrustedAgentRole::Hub
-            | TrustedAgentRole::User => {
+            // there is for unsigned Device callers.
+            TrustedAgentRole::Backend | TrustedAgentRole::Hub | TrustedAgentRole::User => {
                 self.run_strict_admission(envelope, ability, args, snapshot)
             }
         }
@@ -595,10 +591,12 @@ impl AdmissionFacade {
         // forward it; tracked under DEC-EU §multi-realm-resolve).
         let resolver: Box<dyn KeyResolver> = if envelope_caller_is_user(envelope) {
             let pubkey_b64 = envelope_presented_pubkey_b64(envelope);
-            Box::new(crate::services::axon_serve::pinned_user_key_resolver::PinnedUserKeyResolver::new(
-                trust_anchor,
-                pubkey_b64,
-            ))
+            Box::new(
+                crate::services::axon_serve::pinned_user_key_resolver::PinnedUserKeyResolver::new(
+                    trust_anchor,
+                    pubkey_b64,
+                ),
+            )
         } else {
             // **PR-N2 commit 1/N**. Build a `FederatedKeyResolver`
             // that wraps the per-call snapshot trust anchor with
@@ -673,7 +671,7 @@ impl AdmissionFacade {
     ///   AXON_AXIOM_ENVELOPE_INCOMPLETE | AXON_CALLER_SIGNATURE_INVALID
     ///   | AXON_NONCE_REPLAY)`
     /// - Device URI-only-no-op path →
-    ///   `("admitted", Completed, "unsigned_caller_uri_admitted")`
+    ///   `("admitted", Completed, "unsigned_caller_ura_admitted")`
     ///
     /// Field shape:
     /// - `receipt_type` / `state` / `reason` come from the call
@@ -718,7 +716,7 @@ impl AdmissionFacade {
             envelope
                 .caller
                 .as_ref()
-                .map(|c| c.uri.as_str())
+                .map(|c| c.ura.as_str())
                 .unwrap_or(""),
             ability,
             hex_lower(&envelope.invocation_nonce),
@@ -748,14 +746,14 @@ impl AdmissionFacade {
         self.receipt_store.record(receipt);
     }
 
-    fn is_loopback(&self, caller_uri: &str) -> bool {
+    fn is_loopback(&self, caller_ura: &str) -> bool {
         match self.daemon_uri.as_deref() {
-            Some(self_uri) => caller_uri == self_uri,
+            Some(self_uri) => caller_ura == self_uri,
             None => false,
         }
     }
 
-    /// **PR-N2 commit 1/N**. Decide whether `caller_uri` belongs to
+    /// **PR-N2 commit 1/N**. Decide whether `caller_ura` belongs to
     /// a federated peer realm — i.e. a realm the operator has
     /// explicitly opted into by adding a `[daemon.federated_peers]`
     /// map entry mapping `tenant → hub_uri`.
@@ -766,12 +764,12 @@ impl AdmissionFacade {
     ///   - a federation client is wired (without one, the strict
     ///     path's FederatedKeyResolver has no way to dial the peer
     ///     and would just fail closed — short-circuit here)
-    fn is_federated_caller(&self, caller_uri: &str) -> bool {
+    fn is_federated_caller(&self, caller_ura: &str) -> bool {
         let Some(client) = self.federation_client.as_ref() else {
             return false;
         };
         let _ = client; // presence-only check; resolver does the dial
-        let Some(caller_tenant) = parse_realm_from_uri(caller_uri) else {
+        let Some(caller_tenant) = parse_realm_from_uri(caller_ura) else {
             return false;
         };
         if let Some(self_realm) = self.self_realm.as_deref() {
@@ -780,7 +778,7 @@ impl AdmissionFacade {
             }
         }
         let peers = self.federated_peers.snapshot();
-        peers.contains_key(caller_tenant)
+        peers.contains_key(&caller_tenant)
     }
 }
 
@@ -794,7 +792,7 @@ impl AdmissionFacade {
 /// device sessions register under `.../device/<id>`. Reuse the same
 /// realm parser as `<self>.register_device_pubkey` so all canonical
 /// role tails stay accepted.
-fn parse_realm_from_uri(uri: &str) -> Option<&str> {
+fn parse_realm_from_uri(uri: &str) -> Option<String> {
     crate::services::axon_serve::register_device_pubkey::parse_realm_from_uri(uri)
 }
 
@@ -811,25 +809,25 @@ fn hex_lower(bytes: &[u8]) -> String {
     out
 }
 
-/// Extract `caller.uri` and reject as `invalid_argument` if absent
+/// Extract `caller.ura` and reject as `invalid_argument` if absent
 /// or empty. Shared by every entrypoint so the wire-level
 /// "caller URI required" message is identical across surfaces.
-fn caller_uri_required(envelope: &Envelope) -> Result<&str, Status> {
+fn caller_ura_required(envelope: &Envelope) -> Result<&str, Status> {
     envelope
         .caller
         .as_ref()
-        .map(|c| c.uri.as_str())
+        .map(|c| c.ura.as_str())
         .filter(|u| !u.is_empty())
         .ok_or_else(|| {
             Status::invalid_argument(
-                "envelope.caller.uri is required (Invariant 1: caller URI required)",
+                "envelope.caller.ura is required (Invariant 1: caller URI required)",
             )
         })
 }
 
-fn permission_denied_unknown_caller(caller_uri: &str) -> Status {
+fn permission_denied_unknown_caller(caller_ura: &str) -> Status {
     Status::permission_denied(format!(
-        "caller URI `{caller_uri}` is not in the realm trust anchor; \
+        "caller URI `{caller_ura}` is not in the realm trust anchor; \
          pairing-flow registration via `<self>.register_device_pubkey` \
          (PR-7 commit 5/N) populates the trust set",
     ))
@@ -910,9 +908,9 @@ fn build_axiom_envelope(
     let args_digest: [u8; 32] = hasher.finalize().into();
 
     Ok(InvocationEnvelope {
-        caller: AxiomAgentIdentity::new(caller.uri.clone(), caller_profile),
-        callee: AxiomAgentIdentity::new(callee.uri.clone(), callee_profile),
-        subject: SubjectIdentity::new(subject.uri.clone(), subject_profile),
+        caller: AxiomAgentIdentity::new(caller.ura.clone(), caller_profile),
+        callee: AxiomAgentIdentity::new(callee.ura.clone(), callee_profile),
+        subject: SubjectIdentity::new(subject.ura.clone(), subject_profile),
         ability: ability.to_string(),
         args_digest,
         invocation_nonce,
@@ -925,11 +923,11 @@ fn build_axiom_envelope(
 /// behaviour — the proto wire allows the field to be empty when the
 /// default is in effect, and admission must produce the same
 /// canonical bytes either way.
-fn parse_profile_or_default(profile: &str) -> Result<UriProfile, InvocationError> {
+fn parse_profile_or_default(profile: &str) -> Result<UraProfile, InvocationError> {
     if profile.is_empty() {
-        return Ok(UriProfile::EasynetStrictV2);
+        return Ok(UraProfile::EasynetStrictV2);
     }
-    UriProfile::parse(profile)
+    UraProfile::parse(profile)
 }
 
 fn bridge_causal_context(ctx: &PbCausalContext) -> Result<CausalContext, InvocationError> {
@@ -942,7 +940,7 @@ fn bridge_causal_context(ctx: &PbCausalContext) -> Result<CausalContext, Invocat
             let receipt_hash = receipt_hash_from_bytes(&r.receipt_hash)?;
             Ok(CausalContext::Scalar(ReceiptRef {
                 receipt_hash,
-                receipt_uri: r.receipt_uri.clone(),
+                receipt_ura: r.receipt_ura.clone(),
             }))
         }
         causal_context::Form::List(list) => {
@@ -950,7 +948,7 @@ fn bridge_causal_context(ctx: &PbCausalContext) -> Result<CausalContext, Invocat
             for r in &list.prior {
                 out.push(ReceiptRef {
                     receipt_hash: receipt_hash_from_bytes(&r.receipt_hash)?,
-                    receipt_uri: r.receipt_uri.clone(),
+                    receipt_ura: r.receipt_ura.clone(),
                 });
             }
             Ok(CausalContext::List(out))
@@ -959,7 +957,7 @@ fn bridge_causal_context(ctx: &PbCausalContext) -> Result<CausalContext, Invocat
             let root = receipt_hash_from_bytes(&m.root)?;
             Ok(CausalContext::Merkle {
                 root,
-                proof_uri: m.proof_uri.clone(),
+                proof_ura: m.proof_ura.clone(),
             })
         }
     }
@@ -1005,7 +1003,7 @@ fn envelope_carries_signature_material(envelope: &Envelope) -> bool {
         .unwrap_or(false)
 }
 
-/// DEC-EU §multi-device: returns true iff `envelope.caller.uri`
+/// DEC-EU §multi-device: returns true iff `envelope.caller.ura`
 /// parses to a User-kind URA. Drives the PinnedUserKeyResolver
 /// branch in `run_strict_admission`.
 fn envelope_caller_is_user(envelope: &Envelope) -> bool {
@@ -1013,8 +1011,8 @@ fn envelope_caller_is_user(envelope: &Envelope) -> bool {
         return false;
     };
     matches!(
-        crate::uri::parse_ura(&caller.uri).map(|p| p.kind),
-        Ok(crate::uri::URAKind::User)
+        crate::ura::parse_ura(&caller.ura).map(|p| p.kind),
+        Ok(crate::ura::URAKind::User)
     )
 }
 
@@ -1035,7 +1033,7 @@ fn envelope_caller_is_user(envelope: &Envelope) -> bool {
 /// Empty when the envelope is hub / device / backend-signed (those
 /// callers don't need pubkey disambiguation), or when the caller
 /// neglected to set the hint (a programming error; downstream
-/// PinnedUserKeyResolver surfaces `unknown_agent_uri` and admission
+/// PinnedUserKeyResolver surfaces `unknown_agent_ura` and admission
 /// rejects).
 fn envelope_presented_pubkey_b64(envelope: &Envelope) -> String {
     envelope
@@ -1064,14 +1062,14 @@ mod tests {
 
     fn agent(uri: &str) -> PbAgentIdentity {
         PbAgentIdentity {
-            uri: uri.to_string(),
+            ura: uri.to_string(),
             ..PbAgentIdentity::default()
         }
     }
 
     fn subject(uri: &str) -> PbSubjectIdentity {
         PbSubjectIdentity {
-            uri: uri.to_string(),
+            ura: uri.to_string(),
             ..PbSubjectIdentity::default()
         }
     }
@@ -1097,7 +1095,7 @@ mod tests {
 
     fn entry_with_role(uri: &str, public_key_b64: String, role: TrustedAgentRole) -> TrustedAgent {
         TrustedAgent {
-            agent_uri: uri.to_string(),
+            agent_ura: uri.to_string(),
             public_key_b64,
             role,
             added_at_unix_ms: 1_714_492_800_000,
@@ -1139,8 +1137,8 @@ mod tests {
     /// is variable so distinct tests don't collide on the daemon-
     /// shared replay store.
     fn signed_request_with_nonce(
-        caller_uri: &str,
-        callee_uri: &str,
+        caller_ura: &str,
+        callee_ura: &str,
         ability: &str,
         args: &[u8],
         signing_key: &SigningKey,
@@ -1155,9 +1153,9 @@ mod tests {
         let args_digest: [u8; 32] = hasher.finalize().into();
 
         let axiom_env = InvocationEnvelope {
-            caller: AxiomAgentIdentity::new(caller_uri, UriProfile::EasynetStrictV2),
-            callee: AxiomAgentIdentity::new(callee_uri, UriProfile::EasynetStrictV2),
-            subject: SubjectIdentity::new(callee_uri, UriProfile::EasynetStrictV2),
+            caller: AxiomAgentIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
+            callee: AxiomAgentIdentity::new(callee_ura, UraProfile::EasynetStrictV2),
+            subject: SubjectIdentity::new(callee_ura, UraProfile::EasynetStrictV2),
             ability: ability.to_string(),
             args_digest,
             invocation_nonce: nonce,
@@ -1168,15 +1166,15 @@ mod tests {
 
         let envelope = Envelope {
             caller: Some(PbAgentIdentity {
-                uri: caller_uri.to_string(),
+                ura: caller_ura.to_string(),
                 profile: "easynet-strict-v2".to_string(),
             }),
             callee: Some(PbAgentIdentity {
-                uri: callee_uri.to_string(),
+                ura: callee_ura.to_string(),
                 profile: "easynet-strict-v2".to_string(),
             }),
             subject: Some(PbSubjectIdentity {
-                uri: callee_uri.to_string(),
+                ura: callee_ura.to_string(),
                 profile: "easynet-strict-v2".to_string(),
             }),
             invocation_nonce: nonce.to_vec(),
@@ -1229,7 +1227,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_caller_uri_returns_invalid_argument() {
+    fn missing_caller_ura_returns_invalid_argument() {
         let facade = AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None);
         let req = invoke_request(Some(Envelope::default()));
         let err = facade.verify_invoke(&req).expect_err("must reject");
@@ -1296,16 +1294,16 @@ mod tests {
         let pub_key = signing_key.verifying_key();
         let pub_key_b64 = BASE64_STANDARD.encode(pub_key.to_bytes());
 
-        let caller_uri = "easynet:///r/realm/agent/test.signer-a";
+        let caller_ura = "easynet:///r/realm/agent/test.signer-a";
         let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(caller_uri, pub_key_b64)])
+            RealmTrustAnchor::from_entries(vec![backend_entry(caller_ura, pub_key_b64)])
                 .expect("anchor"),
         );
 
         let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
 
         let (req, _digest) = signed_request_with_nonce(
-            caller_uri,
+            caller_ura,
             "easynet:///r/realm/hub",
             "self.echo",
             b"{}",
@@ -1327,18 +1325,18 @@ mod tests {
         let signing_key = SigningKey::from_bytes(&[0x55u8; 32]);
         let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
 
-        let caller_uri = "easynet:///r/realm/agent/test.receipt-emitter";
-        let callee_uri = "easynet:///r/realm/hub";
+        let caller_ura = "easynet:///r/realm/agent/test.receipt-emitter";
+        let callee_ura = "easynet:///r/realm/hub";
         let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(caller_uri, pub_key_b64)])
+            RealmTrustAnchor::from_entries(vec![backend_entry(caller_ura, pub_key_b64)])
                 .expect("anchor"),
         );
-        let facade = AdmissionFacade::new(trust, Some(callee_uri.to_string()));
+        let facade = AdmissionFacade::new(trust, Some(callee_ura.to_string()));
         assert!(facade.receipt_store().is_empty());
 
         let (req, _digest) = signed_request_with_nonce(
-            caller_uri,
-            callee_uri,
+            caller_ura,
+            callee_ura,
             "self.echo",
             b"{}",
             &signing_key,
@@ -1356,16 +1354,16 @@ mod tests {
                 .caller_binding
                 .as_ref()
                 .expect("caller_binding present")
-                .uri,
-            caller_uri
+                .ura,
+            caller_ura
         );
         assert_eq!(
             receipt
                 .callee_binding
                 .as_ref()
                 .expect("callee_binding present")
-                .uri,
-            callee_uri
+                .ura,
+            callee_ura
         );
         assert_eq!(receipt.invocation_nonce, vec![0x77u8; 16]);
         assert!(
@@ -1400,17 +1398,17 @@ mod tests {
         let signing_key = SigningKey::from_bytes(&[0xCCu8; 32]);
         let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
 
-        let caller_uri = "easynet:///r/realm/agent/test.replay-receipt";
-        let callee_uri = "easynet:///r/realm/hub";
+        let caller_ura = "easynet:///r/realm/agent/test.replay-receipt";
+        let callee_ura = "easynet:///r/realm/hub";
         let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(caller_uri, pub_key_b64)])
+            RealmTrustAnchor::from_entries(vec![backend_entry(caller_ura, pub_key_b64)])
                 .expect("anchor"),
         );
-        let facade = AdmissionFacade::new(trust, Some(callee_uri.to_string()));
+        let facade = AdmissionFacade::new(trust, Some(callee_ura.to_string()));
 
         let (req, _digest) = signed_request_with_nonce(
-            caller_uri,
-            callee_uri,
+            caller_ura,
+            callee_ura,
             "self.echo",
             b"{}",
             &signing_key,
@@ -1436,21 +1434,21 @@ mod tests {
     }
 
     /// PR-10 commit 4/N: Device URI-only-no-op path also emits a
-    /// receipt, with `reason = "unsigned_caller_uri_admitted"`.
+    /// receipt, with `reason = "unsigned_caller_ura_admitted"`.
     /// PR-8 will flip the Device arm strict and delete this
     /// annotation in a follow-up.
     #[test]
     fn device_uri_only_records_annotated_receipt() {
-        let caller_uri = "easynet:///r/realm/device/unsigned-device";
+        let caller_ura = "easynet:///r/realm/device/unsigned-device";
         let trust = Arc::new(
             RealmTrustAnchor::from_entries(vec![device_entry(
-                caller_uri,
+                caller_ura,
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             )])
             .expect("anchor"),
         );
         let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
-        let req = invoke_request(Some(envelope_with_caller(caller_uri)));
+        let req = invoke_request(Some(envelope_with_caller(caller_ura)));
         facade
             .verify_invoke(&req)
             .expect("device URI-only admitted");
@@ -1459,14 +1457,14 @@ mod tests {
         let recent = facade.receipt_store().snapshot_recent(1);
         let receipt = &recent[0];
         assert_eq!(receipt.receipt_type, "admitted");
-        assert_eq!(receipt.reason, "unsigned_caller_uri_admitted");
+        assert_eq!(receipt.reason, "unsigned_caller_ura_admitted");
         assert_eq!(
             receipt
                 .caller_binding
                 .as_ref()
                 .expect("caller_binding present")
-                .uri,
-            caller_uri
+                .ura,
+            caller_ura
         );
     }
 
@@ -1476,15 +1474,15 @@ mod tests {
         let pub_key = signing_key.verifying_key();
         let pub_key_b64 = BASE64_STANDARD.encode(pub_key.to_bytes());
 
-        let caller_uri = "easynet:///r/realm/agent/test.replay";
+        let caller_ura = "easynet:///r/realm/agent/test.replay";
         let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(caller_uri, pub_key_b64)])
+            RealmTrustAnchor::from_entries(vec![backend_entry(caller_ura, pub_key_b64)])
                 .expect("anchor"),
         );
         let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
 
         let (req, _) = signed_request_with_nonce(
-            caller_uri,
+            caller_ura,
             "easynet:///r/realm/hub",
             "self.echo",
             b"{}",
@@ -1510,15 +1508,15 @@ mod tests {
         let other_key = SigningKey::from_bytes(&[0x66u8; 32]);
         let other_pub_b64 = BASE64_STANDARD.encode(other_key.verifying_key().to_bytes());
 
-        let caller_uri = "easynet:///r/realm/agent/test.wrong-key";
+        let caller_ura = "easynet:///r/realm/agent/test.wrong-key";
         let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(caller_uri, other_pub_b64)])
+            RealmTrustAnchor::from_entries(vec![backend_entry(caller_ura, other_pub_b64)])
                 .expect("anchor"),
         );
         let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
 
         let (req, _) = signed_request_with_nonce(
-            caller_uri,
+            caller_ura,
             "easynet:///r/realm/hub",
             "self.echo",
             b"{}",
@@ -1564,15 +1562,15 @@ mod tests {
     fn invoke_stream_uses_same_pipeline() {
         let signing_key = SigningKey::from_bytes(&[0x88u8; 32]);
         let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
-        let caller_uri = "easynet:///r/realm/agent/test.streamer";
+        let caller_ura = "easynet:///r/realm/agent/test.streamer";
         let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(caller_uri, pub_key_b64)])
+            RealmTrustAnchor::from_entries(vec![backend_entry(caller_ura, pub_key_b64)])
                 .expect("anchor"),
         );
         let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
 
         let (req, _) = signed_request_with_nonce(
-            caller_uri,
+            caller_ura,
             "easynet:///r/realm/hub",
             "federation.subscribe_directory",
             b"{}",
@@ -1597,9 +1595,9 @@ mod tests {
         // listener split that PR-10 might introduce.
         let signing_key = SigningKey::from_bytes(&[0xAAu8; 32]);
         let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
-        let caller_uri = "easynet:///r/realm/agent/test.shared";
+        let caller_ura = "easynet:///r/realm/agent/test.shared";
         let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(caller_uri, pub_key_b64)])
+            RealmTrustAnchor::from_entries(vec![backend_entry(caller_ura, pub_key_b64)])
                 .expect("anchor"),
         );
 
@@ -1616,7 +1614,7 @@ mod tests {
         );
 
         let (req, _) = signed_request_with_nonce(
-            caller_uri,
+            caller_ura,
             "easynet:///r/realm/hub",
             "self.echo",
             b"{}",
@@ -1671,16 +1669,16 @@ mod tests {
     fn parse_realm_from_uri_accepts_hub_and_device_shapes() {
         assert_eq!(
             parse_realm_from_uri("easynet:///r/peer-realm/hub"),
-            Some("peer-realm")
+            Some("peer-realm".to_string())
         );
         assert_eq!(
             parse_realm_from_uri("easynet:///r/peer-realm/device/device-123"),
-            Some("peer-realm")
+            Some("peer-realm".to_string())
         );
     }
 
     #[test]
-    fn is_federated_caller_accepts_v414_hub_uri() {
+    fn is_federated_caller_accepts_v414_hub_ura() {
         let facade = AdmissionFacade::new(
             Arc::new(RealmTrustAnchor::default()),
             Some("easynet:///r/local-realm/hub".to_string()),
@@ -1702,13 +1700,13 @@ mod tests {
         // without crypto. PR-8 will flip this arm to strict — for
         // PR-7 ship, it preserves URI-only PR-1 semantics for
         // already-deployed devices.
-        let caller_uri = "easynet:///r/realm/device/device-A";
+        let caller_ura = "easynet:///r/realm/device/device-A";
         let facade = AdmissionFacade::new(
-            device_anchor(caller_uri),
+            device_anchor(caller_ura),
             Some("easynet:///r/realm/hub".to_string()),
         );
         // Bare envelope, no signature — the kind kernel.rs emits today.
-        let req = invoke_request(Some(envelope_with_caller(caller_uri)));
+        let req = invoke_request(Some(envelope_with_caller(caller_ura)));
         facade
             .verify_invoke(&req)
             .expect("device path admits unsigned envelope under DEC-013");
@@ -1724,12 +1722,12 @@ mod tests {
         // device path is no-op so repeated identical envelopes admit
         // every time. Once PR-8 lands and devices sign, this test
         // flips its assertion (call 2 must reject as replay).
-        let caller_uri = "easynet:///r/realm/device/device-B";
+        let caller_ura = "easynet:///r/realm/device/device-B";
         let facade = AdmissionFacade::new(
-            device_anchor(caller_uri),
+            device_anchor(caller_ura),
             Some("easynet:///r/realm/hub".to_string()),
         );
-        let req = invoke_request(Some(envelope_with_caller(caller_uri)));
+        let req = invoke_request(Some(envelope_with_caller(caller_ura)));
         for _ in 0..3 {
             facade.verify_invoke(&req).expect("each device call admits");
         }
@@ -1740,18 +1738,18 @@ mod tests {
     fn device_role_uses_strict_path_when_signature_is_present() {
         let signing_key = SigningKey::from_bytes(&[0xAB_u8; 32]);
         let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
-        let caller_uri = "easynet:///r/realm/device/device-signed";
+        let caller_ura = "easynet:///r/realm/device/device-signed";
         let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![device_entry(caller_uri, pub_key_b64)])
+            RealmTrustAnchor::from_entries(vec![device_entry(caller_ura, pub_key_b64)])
                 .expect("anchor"),
         );
         let facade = AdmissionFacade::new(trust, Some("easynet:///r/realm/hub".to_string()));
 
         let (req, _) = signed_request_with_nonce(
-            caller_uri,
-            caller_uri,
-            // Wire-pinned legacy until EasyNet-Axon ships
-            // device.session acceptance (RFC-001 v4.1.6).
+            caller_ura,
+            caller_ura,
+            // Wire-pinned self-session spelling until EasyNet-Axon
+            // ships device.session acceptance (RFC-001 v4.1.6).
             "<self>.session",
             b"",
             &signing_key,
