@@ -369,6 +369,8 @@ fn list_abilities_handler(
                 by_name.insert(public_name, descriptor);
             }
         }
+
+        synthesize_hot_hosted_agent_descriptors(&mut by_name, registry, &local);
     }
 
     let mut merged: Vec<Value> = by_name
@@ -400,6 +402,68 @@ fn list_abilities_handler(
     }
 
     Ok(json!({ "abilities": merged }))
+}
+
+fn synthesize_hot_hosted_agent_descriptors(
+    by_name: &mut std::collections::BTreeMap<String, AbilityDescriptor>,
+    registry: &LocalAbilityRegistry,
+    local: &crate::persistence::local_agents::LocalAgentsFile,
+) {
+    use crate::runtime::ability_descriptor::Visibility;
+
+    let Ok(agents) = crate::registry::agents::load_agents() else {
+        return;
+    };
+    let host_node_id = crate::persistence::config::load_credentials()
+        .ok()
+        .map(|c| c.node_id.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    for (agent_name, entry) in agents.agents {
+        let Some(owner_ura) =
+            crate::persistence::local_agents::lookup_hosted_uri(local, "llm", &agent_name)
+        else {
+            continue;
+        };
+        if crate::ura::parse_ura(&owner_ura)
+            .map(|u| u.kind != crate::ura::URAKind::Agent)
+            .unwrap_or(true)
+        {
+            continue;
+        }
+
+        for spec in crate::runtime::abilities::abilities_for(&agent_name, &entry) {
+            let public_name = crate::ura::public_ability_name_for_owner(&owner_ura, spec.name());
+            if public_name.is_empty() || by_name.contains_key(&public_name) {
+                continue;
+            }
+            let Ok(mut descriptor) =
+                AbilityDescriptor::new(public_name.clone(), &owner_ura, Visibility::Scoped)
+            else {
+                continue;
+            };
+            descriptor = descriptor
+                .with_description(spec.description())
+                .with_input_schema(spec.parameters().clone())
+                .with_hints(crate::runtime::agents::discovery_hints_for(
+                    registry,
+                    spec.name(),
+                ))
+                .with_source(format!("agent:{agent_name}"))
+                .with_metadata_entry("runtime", entry.agent_type.to_string())
+                .with_metadata_entry("agent_type", entry.agent_type.to_string())
+                .with_metadata_entry("base_runtime", entry.agent_type.to_string());
+            if let Some(model) = entry.model.as_ref() {
+                descriptor = descriptor
+                    .with_metadata_entry("model", model.clone())
+                    .with_metadata_entry("base_model", model.clone());
+            }
+            if let Some(node_id) = host_node_id.as_ref() {
+                descriptor = descriptor.with_metadata_entry("host_node_id", node_id.clone());
+            }
+            by_name.insert(public_name, descriptor);
+        }
+    }
 }
 
 // ── Discovery surfaces ────────────────────────────────────────
@@ -681,6 +745,74 @@ mod tests {
             legacy_desc.contains("no manifest schema"),
             "abilities registered without a manifest keep the fallback description, \
              got: {legacy_desc:?}"
+        );
+    }
+
+    #[test]
+    fn list_abilities_includes_hot_added_hosted_agent_from_local_agents_ura() {
+        use crate::persistence::config::{save_credentials, Credentials};
+        use crate::persistence::local_agents::{save, upsert_hosted_agent, LocalAgentsFile};
+        use crate::registry::agents::{save_agents, AgentEntry, AgentRegistry, AgentType};
+        use std::sync::OnceLock;
+
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        save_credentials(&Credentials {
+            node_id: "dev-1".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "axon://hub.test:50051".to_string(),
+            tenant_id: "test-realm".to_string(),
+            ..Default::default()
+        })
+        .expect("seed credentials");
+
+        let mut local = LocalAgentsFile {
+            host_device_agent_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
+            hosted_agents: Vec::new(),
+        };
+        upsert_hosted_agent(
+            &mut local,
+            "llm",
+            "alice",
+            "easynet:///r/test-realm/agent/user-1.alice",
+        );
+        save(&local).expect("seed local-agents.json");
+
+        let mut agents = AgentRegistry::default();
+        agents.agents.insert(
+            "alice".to_string(),
+            AgentEntry::new(AgentType::ClaudeCode, Some("sonnet".to_string())),
+        );
+        save_agents(&agents).expect("seed agents.json");
+
+        let mut reg = LocalAbilityRegistry::new();
+        let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
+        handle
+            .set(Arc::new(LocalAbilityRegistry::new()))
+            .expect("set empty live registry");
+
+        register(&mut reg, Vec::new, handle, Some("user-1".to_string()));
+        let handler = reg.get_rpc(ABILITY_LIST_ABILITIES).unwrap();
+        let resp = handler(json!({})).unwrap();
+        let abilities = resp["abilities"].as_array().unwrap();
+        let chat = abilities
+            .iter()
+            .find(|a| a["name"] == "chat")
+            .expect("hot-added hosted agent chat must appear in meta.list_abilities");
+
+        assert_eq!(
+            chat["owner_agent_ura"],
+            "easynet:///r/test-realm/agent/user-1.alice"
+        );
+        assert_eq!(chat["metadata"]["host_node_id"], "dev-1");
+        assert_eq!(chat["metadata"]["runtime"], "claude-code");
+        assert_eq!(chat["metadata"]["model"], "sonnet");
+        assert_eq!(
+            chat["description"],
+            crate::core::ability_spec::default_chat_manifest().description()
+        );
+        assert!(
+            chat["schema_summary"]["input"]["properties"]["prompt"].is_object(),
+            "chat descriptor must carry the manifest input schema: {chat}"
         );
     }
 
