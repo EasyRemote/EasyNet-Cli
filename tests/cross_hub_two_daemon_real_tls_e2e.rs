@@ -183,13 +183,13 @@ tls_key_pem = {key:?}
 /// the schema-B `origin_tenant_id` / `hub_uri` / `tls_ca_pem_path`
 /// fields so `lookup_peer_hub` admits the dial gate.
 fn realm_trust_body(peers: &[(String, String, String, PathBuf)]) -> String {
-    // (agent_uri, origin_tenant_id, hub_uri, ca_path)
+    // (agent_ura, origin_tenant_id, hub_uri, ca_path)
     let mut body = String::new();
-    for (i, (agent_uri, origin_tenant_id, hub_uri, ca_path)) in peers.iter().enumerate() {
+    for (i, (agent_ura, origin_tenant_id, hub_uri, ca_path)) in peers.iter().enumerate() {
         body.push_str(&format!(
             r#"
 [[trusted_agent]]
-agent_uri = {agent_uri:?}
+agent_ura = {agent_ura:?}
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "hub"
 added_at_unix_ms = {ts}
@@ -212,7 +212,7 @@ async fn spawn_daemon(
     label: &'static str,
     realm: &str,
     listen_tcp_port: u16,
-    cross_hub_peers: Vec<(String, String, String)>, // (peer_agent_uri, peer_tenant, peer_hub_uri)
+    cross_hub_peers: Vec<(String, String, String)>, // (peer_agent_ura, peer_tenant, peer_hub_uri)
 ) -> DaemonHarness {
     let home = tempfile::tempdir().expect("daemon home tempdir");
     let easynet_dir = home.path().join(".easynet");
@@ -253,14 +253,14 @@ async fn spawn_daemon(
     let realm_trust_path = easynet_dir.join("realm-trust.toml");
     let realm_trust_peers: Vec<(String, String, String, PathBuf)> = cross_hub_peers
         .iter()
-        .map(|(agent_uri, tenant, hub_uri)| {
+        .map(|(agent_ura, tenant, hub_uri)| {
             // The peer's cert path was passed in by the caller via
             // the cross_hub_peers tuple — but the tuple shape doesn't
             // carry it. Default to a sentinel that the caller then
             // overwrites by writing realm-trust.toml directly. We'll
             // refactor below.
             (
-                agent_uri.clone(),
+                agent_ura.clone(),
                 tenant.clone(),
                 hub_uri.clone(),
                 PathBuf::from("/dev/null"),
@@ -294,7 +294,7 @@ async fn spawn_daemon(
 /// other's cert path.
 fn rewrite_realm_trust(
     home: &Path,
-    peers: &[(String, String, String, PathBuf)], // (agent_uri, tenant, hub_uri, ca_path)
+    peers: &[(String, String, String, PathBuf)], // (agent_ura, tenant, hub_uri, ca_path)
 ) -> std::io::Result<()> {
     let path = home.join(".easynet").join("realm-trust.toml");
     std::fs::write(path, realm_trust_body(peers))
@@ -414,7 +414,7 @@ async fn cross_hub_two_daemon_real_tls_round_trip() {
     // serde derive is `Deserialize` only (it's a wire-input shape
     // for the daemon), so tests construct the JSON literal.
     let request_args = format!(
-        r#"{{"target_uri":"{}","inner_envelope_b64":"AAAA"}}"#,
+        r#"{{"target_ura":"{}","inner_envelope_b64":"AAAA"}}"#,
         target_b_uri
     )
     .into_bytes();
@@ -422,7 +422,7 @@ async fn cross_hub_two_daemon_real_tls_round_trip() {
     let request = InvokeRequest {
         envelope: Some(Envelope {
             caller: Some(AgentIdentity {
-                uri: agent_a_uri.clone(),
+                ura: agent_a_uri.clone(),
                 ..AgentIdentity::default()
             }),
             ..Envelope::default()

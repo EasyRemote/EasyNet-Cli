@@ -428,12 +428,15 @@ fn build_session_request_up_chunk(
     args: &[u8],
 ) -> crate::pb::axon::v1::BinaryChunk {
     use crate::pb::axon::v1::BinaryChunk;
-    use crate::services::axon_serve::invoke_remote_initiator::SessionDispatch;
+    use crate::services::axon_serve::invoke_remote_initiator::{
+        SessionContentEnvelope, SessionDispatch,
+    };
 
     let dispatch = SessionDispatch::Request {
         call_id,
         ability: ability.to_string(),
         args: args.to_vec(),
+        args_content_envelope: SessionContentEnvelope::plaintext_json(),
     };
     // serde encoding of an owned-fields enum cannot fail here;
     // the unwrap is justified by the typed enum domain.

@@ -91,7 +91,7 @@ impl FederationClient for InProcessStreamingForwarder {
         let request = InvokeServerStreamRequest {
             envelope: Some(easynet_cli::pb::axon::v1::Envelope {
                 caller: Some(easynet_cli::pb::axon::v1::AgentIdentity {
-                    uri: self.peer_loopback_uri.clone(),
+                    ura: self.peer_loopback_uri.clone(),
                     profile: "easynet-strict-v2".to_string(),
                 }),
                 ..Default::default()
@@ -169,11 +169,11 @@ async fn streaming_chain_propagates_presence_event_to_peer_cell() {
     // the in-process forwarder delivers it to daemon B's
     // supervisor, the §2.4 chokepoint stamps origin_realm, the
     // cell publishes.
-    let target_uri = "easynet:///r/realm-a/device/device-X";
+    let target_ura = "easynet:///r/realm-a/device/device-X";
     let (tx, _rx) = tokio::sync::mpsc::channel::<
         Result<easynet_cli::services::presence_registry::DispatchFrame, tonic::Status>,
     >(8);
-    daemon_a_presence.insert(target_uri.to_string(), tx);
+    daemon_a_presence.insert(target_ura.to_string(), tx);
 
     // ── Assert: daemon B's cell shows the entry within a
     // bounded window. The data-plane round-trip is in-process
@@ -183,7 +183,7 @@ async fn streaming_chain_propagates_presence_event_to_peer_cell() {
     for _ in 0..40 {
         let snap = daemon_b_directory.snapshot();
         if let Some(view) = snap.get("realm-a") {
-            if let Some(entry) = view.lookup(target_uri) {
+            if let Some(entry) = view.lookup(target_ura) {
                 assert_eq!(
                     entry.origin_realm.as_deref(),
                     Some("realm-a"),
@@ -243,16 +243,16 @@ async fn streaming_chain_propagates_presence_remove() {
     });
 
     // Insert a device on A; wait for B's cell to reflect.
-    let target_uri = "easynet:///r/realm-a/device/disappearing";
+    let target_ura = "easynet:///r/realm-a/device/disappearing";
     let (tx, _rx) = tokio::sync::mpsc::channel::<
         Result<easynet_cli::services::presence_registry::DispatchFrame, tonic::Status>,
     >(8);
-    daemon_a_presence.insert(target_uri.to_string(), tx);
+    daemon_a_presence.insert(target_ura.to_string(), tx);
     for _ in 0..40 {
         let snap = daemon_b_directory.snapshot();
         if snap
             .get("realm-a")
-            .and_then(|v| v.lookup(target_uri))
+            .and_then(|v| v.lookup(target_ura))
             .is_some()
         {
             break;
@@ -263,7 +263,7 @@ async fn streaming_chain_propagates_presence_remove() {
     // Remove on A → Remove frame propagates to B → entry
     // disappears from B's view.
     daemon_a_presence.remove(
-        target_uri,
+        target_ura,
         easynet_cli::services::presence_registry::OfflineReason::AdminRevoked,
     );
     let mut removed = false;
@@ -271,7 +271,7 @@ async fn streaming_chain_propagates_presence_remove() {
         let snap = daemon_b_directory.snapshot();
         if snap
             .get("realm-a")
-            .and_then(|v| v.lookup(target_uri))
+            .and_then(|v| v.lookup(target_ura))
             .is_none()
         {
             removed = true;

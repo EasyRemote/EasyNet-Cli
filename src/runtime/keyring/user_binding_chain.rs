@@ -67,7 +67,7 @@ pub struct UserBindingToken {
     pub source_realm: String,
     /// User URI on the source realm, in the canonical form
     /// `easynet:///r/<source_realm>/user/<user-id>`.
-    pub source_user_uri: String,
+    pub source_user_ura: String,
     /// Source user's Ed25519 verifying-key bytes. Carried inline
     /// so the consuming realm doesn't need to round-trip
     /// `federation.resolve_key` separately for the user URI; the
@@ -106,7 +106,7 @@ impl UserBindingToken {
     #[must_use]
     pub fn new_unsigned(
         source_realm: impl Into<String>,
-        source_user_uri: impl Into<String>,
+        source_user_ura: impl Into<String>,
         source_user_pubkey: [u8; ED25519_PUBKEY_LEN],
         target_realm: impl Into<String>,
         issued_at_ms: u64,
@@ -114,7 +114,7 @@ impl UserBindingToken {
     ) -> Self {
         Self {
             source_realm: source_realm.into(),
-            source_user_uri: source_user_uri.into(),
+            source_user_ura: source_user_ura.into(),
             source_user_pubkey: source_user_pubkey.to_vec(),
             target_realm: target_realm.into(),
             issued_at_ms,
@@ -236,7 +236,7 @@ impl std::error::Error for UserBindingError {}
 /// ```text
 ///   "easynet/user-binding/v1\n"        (24-byte ASCII domain tag)
 /// + u32(source_realm.len())  || source_realm bytes
-/// + u32(source_user_uri.len())  || source_user_uri bytes
+/// + u32(source_user_ura.len())  || source_user_ura bytes
 /// + source_user_pubkey                 (32 bytes)
 /// + u32(target_realm.len())  || target_realm bytes
 /// + u64(issued_at_ms, big-endian)      (8 bytes)
@@ -255,7 +255,7 @@ pub fn canonical_user_binding_bytes(token: &UserBindingToken) -> Vec<u8> {
             + 4
             + token.source_realm.len()
             + 4
-            + token.source_user_uri.len()
+            + token.source_user_ura.len()
             + ED25519_PUBKEY_LEN
             + 4
             + token.target_realm.len()
@@ -264,7 +264,7 @@ pub fn canonical_user_binding_bytes(token: &UserBindingToken) -> Vec<u8> {
     );
     out.extend_from_slice(DOMAIN_TAG);
     write_lp_string(&mut out, &token.source_realm);
-    write_lp_string(&mut out, &token.source_user_uri);
+    write_lp_string(&mut out, &token.source_user_ura);
     // Length-prefix pubkey + nonce too — we want canonical bytes
     // to remain unambiguous if (defensively) a malformed token
     // shows up with wrong-length fields. This makes

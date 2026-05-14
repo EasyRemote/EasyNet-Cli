@@ -50,13 +50,13 @@
 // # /etc/easynet/realm-trust.toml
 //
 // [[trusted_agent]]
-// agent_uri        = "easynet:///r/realm/hub"
+// agent_ura        = "easynet:///r/realm/hub"
 // public_key_b64   = "..."
 // role             = "backend"      # or "device" / "hub"
 // added_at_unix_ms = 1714492800000
 //
 // [[trusted_agent]]
-// agent_uri        = "easynet:///r/realm/device/laptop-1"
+// agent_ura        = "easynet:///r/realm/device/laptop-1"
 // public_key_b64   = "..."
 // role             = "device"
 // added_at_unix_ms = 1714492801234
@@ -97,6 +97,18 @@ pub enum TrustedAgentRole {
     /// commit 2/N below; PR-N2 fills in cross-realm admission key
     /// resolution against the same entry.
     Hub,
+    /// End-user signing as a first-class Caller. DEC-EU
+    /// (RFC-001 amendment "user-as-first-class-caller"): user
+    /// holds an Ed25519 keypair and signs mutating envelopes
+    /// directly instead of being a Subject under hub-as-Caller.
+    ///
+    /// DEC-EU step 1 (this commit): single-keypair-per-user.
+    /// Multi-device (a user logged in on browser + phone, each
+    /// with its own non-exportable keypair) is a known followup;
+    /// it requires either a per-device user URI suffix or a
+    /// multimap relaxation of Invariant 1. Both paths are RFC-001
+    /// amendments — see DEC-EU §multi-device.
+    User,
 }
 
 /// One entry in `realm-trust.toml`. Public so the admission gate
@@ -117,7 +129,7 @@ pub struct TrustedAgent {
     /// - Backend => `easynet:///r/{realm}/hub`
     /// - Device  => `easynet:///r/{realm}/device/{device_id}`
     /// - Hub     => `easynet:///r/{realm}/hub`
-    pub agent_uri: String,
+    pub agent_ura: String,
     /// Ed25519 verifying key, base64-encoded (32 raw bytes →
     /// 44 chars with padding). Validated by the admission gate
     /// when the entry is consulted, not at load time.
@@ -132,7 +144,7 @@ pub struct TrustedAgent {
     /// only on `role = Hub` entries; the admission gate uses this
     /// to resolve `caller.uri.tenant() → peer hub URI` when an
     /// invoke targets a tenant outside the local realm. `None` on
-    /// Backend/Device entries and on legacy Hub entries written
+    /// Backend/Device entries and on schema-A Hub entries written
     /// before PR-N1; the dialer fail-closes when this is `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_tenant_id: Option<String>,
@@ -141,7 +153,7 @@ pub struct TrustedAgent {
     /// from_shared(hub_uri)` is the only place this string is
     /// parsed — keep it operator-pasteable, not a structured URI.
     /// `None` ⇒ peer is not dial-eligible (not a federation peer
-    /// or a legacy entry); the dialer surfaces `PeerNotTrusted`.
+    /// or a schema-A entry); the dialer surfaces `PeerNotTrusted`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hub_uri: Option<String>,
     /// **PR-N1 schema-B**. Filesystem path the cross-hub dialer
@@ -168,16 +180,29 @@ struct RawTrustAnchor {
 /// boot from the on-disk TOML; PR-7 wires SIGHUP-triggered reload
 /// against the same constructor.
 ///
-/// **Invariant 1 (URI uniqueness)**: each `agent_uri` appears at
-/// most once. A duplicate-URI file is a configuration error — we
-/// reject at load time so a typo never silently shadows an earlier
-/// entry. The pairing flow in PR-7 must enforce uniqueness on the
-/// write side.
+/// **Invariant 1 (singleton-URI uniqueness)**: each `agent_ura`
+/// with role Backend / Device / Hub appears at most once. A
+/// duplicate-URI file is a configuration error — we reject at
+/// load time so a typo never silently shadows an earlier entry.
+///
+/// **Invariant 1' (user multi-pubkey)**: DEC-EU lifts the strict
+/// URI-uniqueness rule for `role = "user"`. RFC-001 "identity ≠
+/// key" requires a user to retain the same identity URI across
+/// devices while each device holds its own non-exportable
+/// keypair. We therefore admit multiple `[[trusted_agent]]`
+/// blocks sharing one user URI, gated by a composite uniqueness
+/// rule: **(agent_ura, public_key_b64) is unique**. The pairing
+/// flow rejects re-registering the same pubkey under the same
+/// user URI; different pubkeys under the same user URI are the
+/// expected multi-device shape.
 ///
 /// **Invariant 2 (lookup is borrow)**: `lookup` returns a borrowed
 /// `&TrustedAgent` so call sites do not clone the whole entry per
 /// admission check. The admission gate copies only the public key
-/// when it needs to.
+/// when it needs to. User admission goes through
+/// [`lookup_user_by_pubkey`](#method.lookup_user_by_pubkey)
+/// because a bare URI lookup is ambiguous when a user has
+/// registered N devices.
 ///
 /// **Empty-fallback semantics**: a missing file maps to an empty
 /// `RealmTrustAnchor`. The dispatcher logs a WARN at boot when the
@@ -187,69 +212,82 @@ struct RawTrustAnchor {
 /// PR-7 + PR-10 land.
 #[derive(Debug, Default)]
 pub struct RealmTrustAnchor {
+    /// Hub / Backend / Device entries — single value per URI.
     by_uri: HashMap<String, TrustedAgent>,
+    /// User entries — DEC-EU multi-pubkey-per-URI. Each Vec is
+    /// kept short (a typical user has 2-5 devices); a linear
+    /// pubkey scan during admission is fine.
+    users: HashMap<String, Vec<TrustedAgent>>,
 }
 
-fn parse_legacy_bare_agent_uri(uri: &str) -> Option<(&str, &str)> {
-    let rest = uri.strip_prefix("easynet:///r/")?;
-    let (realm, after_realm) = rest.split_once('/')?;
-    let token = after_realm.strip_prefix("agent/")?;
-    if realm.is_empty() || token.is_empty() || token.contains('/') || token.contains('.') {
-        return None;
-    }
-    Some((realm, token))
+fn parse_bare_device_agent_alias(uri: &str) -> Option<(String, String)> {
+    crate::ura::bare_device_agent_alias_parts(uri)
 }
 
 fn canonical_uri_for_role(
-    agent_uri: &str,
+    agent_ura: &str,
     role: TrustedAgentRole,
 ) -> Result<String, RealmTrustError> {
-    if let Ok(parsed) = crate::uri::parse_ura(agent_uri) {
+    if let Ok(parsed) = crate::ura::parse_ura(agent_ura) {
         return match (role, parsed.kind) {
-            (TrustedAgentRole::Device, crate::uri::URAKind::Device) => Ok(agent_uri.to_string()),
-            (TrustedAgentRole::Backend | TrustedAgentRole::Hub, crate::uri::URAKind::Hub) => {
-                Ok(agent_uri.to_string())
+            (TrustedAgentRole::Device, crate::ura::URAKind::Device) => Ok(agent_ura.to_string()),
+            (TrustedAgentRole::Backend | TrustedAgentRole::Hub, crate::ura::URAKind::Hub) => {
+                Ok(agent_ura.to_string())
             }
+            (TrustedAgentRole::User, crate::ura::URAKind::User) => Ok(agent_ura.to_string()),
             (TrustedAgentRole::Device, kind) => Err(RealmTrustError::InvalidUriForRole {
-                agent_uri: agent_uri.to_string(),
+                agent_ura: agent_ura.to_string(),
                 role: "device".to_string(),
                 detail: format!("expected a canonical device URI, got {kind:?}"),
             }),
             (TrustedAgentRole::Backend, kind) => Err(RealmTrustError::InvalidUriForRole {
-                agent_uri: agent_uri.to_string(),
+                agent_ura: agent_ura.to_string(),
                 role: "backend".to_string(),
                 detail: format!("expected the realm hub URI, got {kind:?}"),
             }),
             (TrustedAgentRole::Hub, kind) => Err(RealmTrustError::InvalidUriForRole {
-                agent_uri: agent_uri.to_string(),
+                agent_ura: agent_ura.to_string(),
                 role: "hub".to_string(),
                 detail: format!("expected the peer hub URI, got {kind:?}"),
+            }),
+            (TrustedAgentRole::User, kind) => Err(RealmTrustError::InvalidUriForRole {
+                agent_ura: agent_ura.to_string(),
+                role: "user".to_string(),
+                detail: format!("expected a canonical user URI, got {kind:?}"),
             }),
         };
     }
 
-    let Some((realm, _token)) = parse_legacy_bare_agent_uri(agent_uri) else {
+    let Some((realm, token)) = parse_bare_device_agent_alias(agent_ura) else {
         return Err(RealmTrustError::InvalidUriForRole {
-            agent_uri: agent_uri.to_string(),
+            agent_ura: agent_ura.to_string(),
             role: match role {
                 TrustedAgentRole::Backend => "backend".to_string(),
                 TrustedAgentRole::Device => "device".to_string(),
                 TrustedAgentRole::Hub => "hub".to_string(),
+                TrustedAgentRole::User => "user".to_string(),
             },
-            detail: "URI is neither canonical nor the supported legacy bare-agent fallback"
+            detail: "URI is neither canonical nor the supported bare-device agent alias"
                 .to_string(),
         });
     };
     Ok(match role {
-        TrustedAgentRole::Device => {
-            crate::uri::device_uri(realm, crate::uri::strip_v1_agent_prefix(agent_uri).as_str())
+        TrustedAgentRole::Device => crate::ura::device_ura(&realm, &token),
+        TrustedAgentRole::Backend | TrustedAgentRole::Hub => crate::ura::hub_ura(&realm),
+        TrustedAgentRole::User => {
+            return Err(RealmTrustError::InvalidUriForRole {
+                agent_ura: agent_ura.to_string(),
+                role: "user".to_string(),
+                detail: "user role requires a canonical user URI; bare-device agent alias has no \
+                         user identity"
+                    .to_string(),
+            });
         }
-        TrustedAgentRole::Backend | TrustedAgentRole::Hub => crate::uri::hub_uri(realm),
     })
 }
 
 fn canonicalize_entry(mut entry: TrustedAgent) -> Result<TrustedAgent, RealmTrustError> {
-    entry.agent_uri = canonical_uri_for_role(&entry.agent_uri, entry.role)?;
+    entry.agent_ura = canonical_uri_for_role(&entry.agent_ura, entry.role)?;
     Ok(entry)
 }
 
@@ -284,16 +322,45 @@ impl RealmTrustAnchor {
     /// from in-memory entries during a write-and-reload cycle and
     /// tests can build small fixtures.
     pub(crate) fn from_entries(entries: Vec<TrustedAgent>) -> Result<Self, RealmTrustError> {
-        let mut by_uri = HashMap::with_capacity(entries.len());
+        let mut anchor = Self::default();
         for entry in entries {
             let entry = canonicalize_entry(entry)?;
-            if let Some(prior) = by_uri.insert(entry.agent_uri.clone(), entry.clone()) {
-                return Err(RealmTrustError::DuplicateUri {
-                    agent_uri: prior.agent_uri,
-                });
+            anchor.insert_canonicalized(entry)?;
+        }
+        Ok(anchor)
+    }
+
+    /// Insert an already-canonicalised entry. Splits the user
+    /// multi-pubkey path from the singleton-URI path so both
+    /// `from_entries` and `append_agent` go through the same
+    /// invariant check.
+    fn insert_canonicalized(&mut self, entry: TrustedAgent) -> Result<(), RealmTrustError> {
+        match entry.role {
+            TrustedAgentRole::User => {
+                let bucket = self.users.entry(entry.agent_ura.clone()).or_default();
+                // (URI, pubkey) composite uniqueness: same key
+                // registered twice under one user URI is operator
+                // error; different keys are the multi-device
+                // expected shape.
+                if bucket
+                    .iter()
+                    .any(|e| e.public_key_b64 == entry.public_key_b64)
+                {
+                    return Err(RealmTrustError::DuplicateUserPubkey {
+                        agent_ura: entry.agent_ura,
+                    });
+                }
+                bucket.push(entry);
+            }
+            TrustedAgentRole::Backend | TrustedAgentRole::Device | TrustedAgentRole::Hub => {
+                if let Some(prior) = self.by_uri.insert(entry.agent_ura.clone(), entry.clone()) {
+                    return Err(RealmTrustError::DuplicateUri {
+                        agent_ura: prior.agent_ura,
+                    });
+                }
             }
         }
-        Ok(Self { by_uri })
+        Ok(())
     }
 
     fn parse(raw: &str, path: &Path) -> Result<Self, RealmTrustError> {
@@ -305,19 +372,74 @@ impl RealmTrustAnchor {
         Self::from_entries(parsed.trusted_agent)
     }
 
-    /// Look up the trust entry for `agent_uri`. Returns `None` if
-    /// the URI is not in the trust set (admission gate rejects in
-    /// that case; this module is intentionally a pure data surface).
+    /// Look up the trust entry for an agent URI.
+    ///
+    /// For hub / backend / device URIs (1:1 mapping) this is the
+    /// authoritative resolution.
+    ///
+    /// For user URIs (1:N — DEC-EU multi-device) this returns the
+    /// FIRST registered pubkey in lex order. Callers that need to
+    /// verify against the exact pubkey the envelope presented must
+    /// use [`lookup_user_by_pubkey`](#method.lookup_user_by_pubkey)
+    /// instead. The single-value fallback exists so the existing
+    /// `KeyResolver` trait (which takes only `caller_ura`) keeps
+    /// working for the same-realm single-keypair common case; a
+    /// full multi-pubkey resolver extension is tracked under
+    /// DEC-EU §multi-realm.
     #[must_use]
-    pub fn lookup(&self, agent_uri: &str) -> Option<&TrustedAgent> {
-        self.by_uri.get(agent_uri).or_else(|| {
-            let canonical = crate::uri::canonicalize_presence_key(agent_uri);
-            if canonical == agent_uri {
-                None
-            } else {
-                self.by_uri.get(&canonical)
+    pub fn lookup(&self, agent_ura: &str) -> Option<&TrustedAgent> {
+        if let Some(entry) = self.by_uri.get(agent_ura) {
+            return Some(entry);
+        }
+        let canonical = crate::ura::canonicalize_presence_key(agent_ura);
+        if canonical != agent_ura {
+            if let Some(entry) = self.by_uri.get(&canonical) {
+                return Some(entry);
             }
+        }
+        // User bucket fallback. Pick the lex-smallest pubkey so the
+        // choice is deterministic across daemon restarts; the
+        // single-pubkey trait shape is the caller's constraint, not
+        // an ontological one.
+        self.users.get(agent_ura).and_then(|bucket| {
+            let mut sorted: Vec<&TrustedAgent> = bucket.iter().collect();
+            sorted.sort_by(|a, b| a.public_key_b64.cmp(&b.public_key_b64));
+            sorted.into_iter().next()
         })
+    }
+
+    /// DEC-EU: resolve a user envelope's caller against the
+    /// (URI, pubkey) composite key. Returns the matching trust
+    /// entry or `None` if either the URI is unknown or the
+    /// presented pubkey is not registered under that URI.
+    ///
+    /// `presented_pubkey_b64` is the public key the caller's
+    /// signature material claims to belong to; the admission
+    /// gate is responsible for separately verifying that the
+    /// signature is valid for that key. This method only answers
+    /// "is this (URI, key) pair in the trust set".
+    #[must_use]
+    pub fn lookup_user_by_pubkey(
+        &self,
+        user_ura: &str,
+        presented_pubkey_b64: &str,
+    ) -> Option<&TrustedAgent> {
+        let bucket = self.users.get(user_ura)?;
+        bucket
+            .iter()
+            .find(|e| e.public_key_b64 == presented_pubkey_b64)
+    }
+
+    /// All trust entries registered under a user URI, regardless
+    /// of pubkey. Used by audit / admin surfaces ("list alice's
+    /// registered devices"); admission MUST use
+    /// `lookup_user_by_pubkey` instead.
+    #[must_use]
+    pub fn lookup_user_all(&self, user_ura: &str) -> &[TrustedAgent] {
+        self.users
+            .get(user_ura)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     /// PR-N1 commit 2/N: cross-hub dialer peer lookup. Returns the
@@ -342,10 +464,12 @@ impl RealmTrustAnchor {
     }
 
     /// Number of trusted agents in the anchor. Used by the daemon
-    /// boot log and by PR-10 canary checklist verification.
+    /// boot log and by PR-10 canary checklist verification. Counts
+    /// every entry, including each user-pubkey row separately
+    /// (a user with 3 devices contributes 3 to `len()`).
     #[must_use]
     pub fn len(&self) -> usize {
-        self.by_uri.len()
+        self.by_uri.len() + self.users.values().map(Vec::len).sum::<usize>()
     }
 
     /// Whether the anchor is empty. Empty is allowed by PR-1
@@ -353,11 +477,11 @@ impl RealmTrustAnchor {
     /// verification.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.by_uri.is_empty()
+        self.by_uri.is_empty() && self.users.is_empty()
     }
 
     /// Append a single trusted agent entry. Per Invariant 1
-    /// (URI uniqueness) the same `agent_uri` cannot appear twice;
+    /// (URI uniqueness) the same `agent_ura` cannot appear twice;
     /// a duplicate returns `RealmTrustError::DuplicateUri` so the
     /// caller (PR-7's pairing flow) can surface a structured
     /// "device already paired" error.
@@ -370,24 +494,58 @@ impl RealmTrustAnchor {
     /// atomic-rename pair below addresses that).
     pub fn append_agent(&mut self, entry: TrustedAgent) -> Result<(), RealmTrustError> {
         let entry = canonicalize_entry(entry)?;
-        if self.by_uri.contains_key(&entry.agent_uri) {
-            return Err(RealmTrustError::DuplicateUri {
-                agent_uri: entry.agent_uri,
-            });
+        self.insert_canonicalized(entry)
+    }
+
+    /// DEC-EU §revocation. Remove the (user_ura, pubkey) entry from
+    /// the user bucket. Returns `Ok(true)` when an entry was
+    /// removed, `Ok(false)` when no matching row existed (idempotent
+    /// revoke for browsers that retry after a partial failure).
+    ///
+    /// Only user-role buckets are mutable through this API; removing
+    /// hub / backend / device entries requires a different surface
+    /// (operator-curated by hand), since those are realm-shaping
+    /// decisions, not user-managed credentials.
+    pub fn remove_user_pubkey(
+        &mut self,
+        user_ura: &str,
+        public_key_b64: &str,
+    ) -> Result<bool, RealmTrustError> {
+        // Canonicalise the URI the same way append_agent does so a
+        // caller that passes a bare-device agent alias gets the same
+        // resolution; for User this is a no-op today but is
+        // symmetric with the write path.
+        let canonical = canonical_uri_for_role(user_ura, TrustedAgentRole::User)?;
+        let bucket = match self.users.get_mut(&canonical) {
+            Some(b) => b,
+            None => return Ok(false),
+        };
+        let before = bucket.len();
+        bucket.retain(|e| e.public_key_b64 != public_key_b64);
+        let removed = bucket.len() != before;
+        if bucket.is_empty() {
+            self.users.remove(&canonical);
         }
-        self.by_uri.insert(entry.agent_uri.clone(), entry);
-        Ok(())
+        Ok(removed)
     }
 
     /// Snapshot of the trust set as a sorted slice. Sort order is
-    /// `agent_uri` lexicographic so [`save`](#method.save) writes
-    /// a stable file across restarts (a hash-map iteration order
-    /// would diff every save). Used by tests to assert content
-    /// without iterating the private `by_uri` map.
+    /// `(agent_ura, public_key_b64)` lexicographic so
+    /// [`save`](#method.save) writes a stable file across
+    /// restarts even when one user URI carries multiple pubkeys
+    /// (DEC-EU). A hash-map iteration order would diff every
+    /// save and defeat operator review.
     #[must_use]
     pub fn entries_sorted(&self) -> Vec<TrustedAgent> {
         let mut out: Vec<TrustedAgent> = self.by_uri.values().cloned().collect();
-        out.sort_by(|a, b| a.agent_uri.cmp(&b.agent_uri));
+        for bucket in self.users.values() {
+            out.extend(bucket.iter().cloned());
+        }
+        out.sort_by(|a, b| {
+            a.agent_ura
+                .cmp(&b.agent_ura)
+                .then_with(|| a.public_key_b64.cmp(&b.public_key_b64))
+        });
         out
     }
 
@@ -503,14 +661,21 @@ pub enum RealmTrustError {
     },
 
     #[error(
-        "realm trust anchor invariant 1 violated: agent_uri `{agent_uri}` appears more than \
+        "realm trust anchor invariant 1 violated: agent_ura `{agent_ura}` appears more than \
          once. PR-7 pairing-flow writes must enforce uniqueness."
     )]
-    DuplicateUri { agent_uri: String },
+    DuplicateUri { agent_ura: String },
 
-    #[error("trusted {role} URI `{agent_uri}` is invalid: {detail}")]
+    #[error(
+        "realm trust anchor invariant 1' violated: user `{agent_ura}` is already registered \
+         with this exact public key. Different pubkeys under one user URI are allowed (multi-\
+         device); the same pubkey twice is operator error."
+    )]
+    DuplicateUserPubkey { agent_ura: String },
+
+    #[error("trusted {role} URI `{agent_ura}` is invalid: {detail}")]
     InvalidUriForRole {
-        agent_uri: String,
+        agent_ura: String,
         role: String,
         detail: String,
     },
@@ -543,7 +708,7 @@ mod tests {
 
     fn entry(uri: &str) -> TrustedAgent {
         TrustedAgent {
-            agent_uri: uri.to_string(),
+            agent_ura: uri.to_string(),
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             role: TrustedAgentRole::Device,
             added_at_unix_ms: 1_714_492_800_000,
@@ -581,7 +746,7 @@ mod tests {
     fn single_entry_loads_and_lookups() {
         let toml_content = r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/realm/hub"
+agent_ura = "easynet:///r/realm/hub"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "backend"
 added_at_unix_ms = 1714492800000
@@ -600,13 +765,13 @@ added_at_unix_ms = 1714492800000
     fn multiple_entries_with_distinct_uris_load() {
         let toml_content = r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/realm/hub"
+agent_ura = "easynet:///r/realm/hub"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "backend"
 added_at_unix_ms = 1714492800000
 
 [[trusted_agent]]
-agent_uri = "easynet:///r/realm/device/laptop-1"
+agent_ura = "easynet:///r/realm/device/laptop-1"
 public_key_b64 = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="
 role = "device"
 added_at_unix_ms = 1714492801234
@@ -629,8 +794,8 @@ added_at_unix_ms = 1714492801234
             entry("easynet:///r/realm/device/n1"),
         ];
         match RealmTrustAnchor::from_entries(entries) {
-            Err(RealmTrustError::DuplicateUri { agent_uri }) => {
-                assert_eq!(agent_uri, "easynet:///r/realm/device/n1");
+            Err(RealmTrustError::DuplicateUri { agent_ura }) => {
+                assert_eq!(agent_ura, "easynet:///r/realm/device/n1");
             }
             other => panic!("expected DuplicateUri, got {other:?}"),
         }
@@ -649,7 +814,7 @@ added_at_unix_ms = 1714492801234
     fn unknown_role_value_is_rejected_at_parse() {
         let toml_content = r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/realm/device/n1"
+agent_ura = "easynet:///r/realm/device/n1"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "unknown"
 added_at_unix_ms = 1714492800000
@@ -693,8 +858,8 @@ added_at_unix_ms = 1714492800000
             .expect("first append Ok");
 
         match anchor.append_agent(entry("easynet:///r/realm/device/n1")) {
-            Err(RealmTrustError::DuplicateUri { agent_uri }) => {
-                assert_eq!(agent_uri, "easynet:///r/realm/device/n1");
+            Err(RealmTrustError::DuplicateUri { agent_ura }) => {
+                assert_eq!(agent_ura, "easynet:///r/realm/device/n1");
             }
             other => panic!("expected DuplicateUri, got {other:?}"),
         }
@@ -711,7 +876,7 @@ added_at_unix_ms = 1714492800000
         let mut anchor = RealmTrustAnchor::default();
         anchor
             .append_agent(TrustedAgent {
-                agent_uri: "easynet:///r/realm/hub".to_string(),
+                agent_ura: "easynet:///r/realm/hub".to_string(),
                 public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
                 role: TrustedAgentRole::Backend,
                 added_at_unix_ms: 1_714_492_800_000,
@@ -722,7 +887,7 @@ added_at_unix_ms = 1714492800000
             .expect("append backend");
         anchor
             .append_agent(TrustedAgent {
-                agent_uri: "easynet:///r/realm/device/laptop-1".to_string(),
+                agent_ura: "easynet:///r/realm/device/laptop-1".to_string(),
                 public_key_b64: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA=".to_string(),
                 role: TrustedAgentRole::Device,
                 added_at_unix_ms: 1_714_492_801_234,
@@ -773,7 +938,7 @@ added_at_unix_ms = 1714492800000
     fn save_produces_stable_byte_output_under_same_content() {
         // Append the same entries in different insertion orders;
         // saved bytes must be identical because entries_sorted()
-        // sorts on agent_uri. Operator diffing depends on this.
+        // sorts on agent_ura. Operator diffing depends on this.
         let dir = tempfile::tempdir().expect("tempdir");
         let path_a = dir.path().join("a.toml");
         let path_b = dir.path().join("b.toml");
@@ -827,7 +992,7 @@ added_at_unix_ms = 1714492800000
     // ── PR-N1 commit 2/N: schema-B federation peer lookup ─────
 
     #[test]
-    fn legacy_toml_without_schema_b_fields_loads() {
+    fn schema_a_toml_without_schema_b_fields_loads() {
         // A `realm-trust.toml` written by a PR-1..PR-7 daemon
         // does not carry `origin_tenant_id` / `hub_uri` /
         // `tls_ca_pem_path`. PR-N1 daemons must load it
@@ -836,17 +1001,17 @@ added_at_unix_ms = 1714492800000
         // default to `None`.
         let toml_content = r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/realm/hub"
+agent_ura = "easynet:///r/realm/hub"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "backend"
 added_at_unix_ms = 1714492800000
 "#;
         let file = write_temp(toml_content);
         let anchor = RealmTrustAnchor::load_or_empty(file.path())
-            .expect("legacy toml must load on a PR-N1 daemon");
+            .expect("schema-A toml must load on a PR-N1 daemon");
         let entry = anchor
             .lookup("easynet:///r/realm/hub")
-            .expect("legacy entry present");
+            .expect("schema-A entry present");
         assert_eq!(entry.origin_tenant_id, None);
         assert_eq!(entry.hub_uri, None);
         assert_eq!(entry.tls_ca_pem_path, None);
@@ -856,7 +1021,7 @@ added_at_unix_ms = 1714492800000
     fn schema_b_hub_entry_loads_with_all_three_fields() {
         let toml_content = r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/peer-realm/hub"
+agent_ura = "easynet:///r/peer-realm/hub"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "hub"
 added_at_unix_ms = 1714492800000
@@ -937,6 +1102,340 @@ tls_ca_pem_path = "/etc/easynet/peer-hub-ca.pem"
             .is_none());
     }
 
+    // ── DEC-EU: user-as-first-class-caller ────────────────────
+
+    #[test]
+    fn user_role_round_trips_through_toml() {
+        // The on-disk string MUST be lower-case "user" — Go-side
+        // dev-init-trust writes role = "user" for every registered
+        // user keypair. Asserts the serde lower-case rule and that
+        // canonical user URIs survive round-trip without
+        // canonicalisation rewriting them.
+        let toml_content = r#"
+[[trusted_agent]]
+agent_ura = "easynet:///r/realm/user/alice"
+public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+role = "user"
+added_at_unix_ms = 1714492800000
+"#;
+        let file = write_temp(toml_content);
+        let anchor = RealmTrustAnchor::load_or_empty(file.path()).expect("user role loads");
+        let entry = anchor
+            .lookup_user_by_pubkey(
+                "easynet:///r/realm/user/alice",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            )
+            .expect("user entry present");
+        assert_eq!(entry.role, TrustedAgentRole::User);
+        // Single-keypair fallback path: lookup() returns the
+        // user's only registered pubkey when no presented_pubkey
+        // can disambiguate. Multi-device test
+        // (user_multi_pubkey_lookup_returns_deterministic_first)
+        // covers the deterministic ordering invariant.
+        let any = anchor
+            .lookup("easynet:///r/realm/user/alice")
+            .expect("user single-keypair lookup returns the registered entry");
+        assert_eq!(any.role, TrustedAgentRole::User);
+    }
+
+    #[test]
+    fn user_role_with_hub_uri_is_rejected() {
+        // A user trust entry pointing at a hub URI is operator
+        // error; canonicalisation must refuse so it never lands
+        // in the trust set silently.
+        let bad = TrustedAgent {
+            agent_ura: "easynet:///r/realm/hub".to_string(),
+            public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            role: TrustedAgentRole::User,
+            added_at_unix_ms: 1_714_492_800_000,
+            origin_tenant_id: None,
+            hub_uri: None,
+            tls_ca_pem_path: None,
+        };
+        match RealmTrustAnchor::from_entries(vec![bad]) {
+            Err(RealmTrustError::InvalidUriForRole { role, .. }) => {
+                assert_eq!(role, "user");
+            }
+            other => panic!("expected InvalidUriForRole for user role, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn user_role_rejects_bare_device_agent_alias() {
+        // No alias lift for user URIs; any bare-device agent alias
+        // tagged role="user" is a typo.
+        let bad = TrustedAgent {
+            agent_ura: "easynet:///r/realm/agent/01ABC".to_string(),
+            public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            role: TrustedAgentRole::User,
+            added_at_unix_ms: 1_714_492_800_000,
+            origin_tenant_id: None,
+            hub_uri: None,
+            tls_ca_pem_path: None,
+        };
+        match RealmTrustAnchor::from_entries(vec![bad]) {
+            Err(RealmTrustError::InvalidUriForRole { role, detail, .. }) => {
+                assert_eq!(role, "user");
+                assert!(
+                    detail.contains("user-URI lift") || detail.contains("canonical"),
+                    "detail should explain the no-user-alias rule: {detail}",
+                );
+            }
+            other => panic!("expected InvalidUriForRole, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn user_multi_pubkey_under_same_uri_is_admitted() {
+        // DEC-EU §multi-device: one user URI, multiple pubkeys
+        // (one per device). Both entries must coexist in the
+        // trust set; lookup_user_by_pubkey selects by the
+        // presented key.
+        let pk_laptop = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        let pk_phone = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA=";
+        let alice = "easynet:///r/realm/user/alice";
+
+        let mut anchor = RealmTrustAnchor::default();
+        anchor
+            .append_agent(TrustedAgent {
+                agent_ura: alice.to_string(),
+                public_key_b64: pk_laptop.to_string(),
+                role: TrustedAgentRole::User,
+                added_at_unix_ms: 1_714_492_800_000,
+                origin_tenant_id: None,
+                hub_uri: None,
+                tls_ca_pem_path: None,
+            })
+            .expect("first user keypair");
+        anchor
+            .append_agent(TrustedAgent {
+                agent_ura: alice.to_string(),
+                public_key_b64: pk_phone.to_string(),
+                role: TrustedAgentRole::User,
+                added_at_unix_ms: 1_714_492_900_000,
+                origin_tenant_id: None,
+                hub_uri: None,
+                tls_ca_pem_path: None,
+            })
+            .expect("second user keypair");
+
+        assert_eq!(anchor.lookup_user_all(alice).len(), 2);
+        assert_eq!(anchor.len(), 2);
+
+        let laptop_entry = anchor
+            .lookup_user_by_pubkey(alice, pk_laptop)
+            .expect("laptop key resolves");
+        assert_eq!(laptop_entry.public_key_b64, pk_laptop);
+
+        let phone_entry = anchor
+            .lookup_user_by_pubkey(alice, pk_phone)
+            .expect("phone key resolves");
+        assert_eq!(phone_entry.public_key_b64, pk_phone);
+
+        assert!(anchor
+            .lookup_user_by_pubkey(alice, "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=")
+            .is_none());
+    }
+
+    #[test]
+    fn user_same_pubkey_twice_is_rejected() {
+        // Composite uniqueness: (URI, pubkey) is unique. The
+        // pairing flow's "device already paired" surface depends
+        // on this returning a structured error.
+        let alice = "easynet:///r/realm/user/alice";
+        let pk = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+        let mut anchor = RealmTrustAnchor::default();
+        anchor
+            .append_agent(TrustedAgent {
+                agent_ura: alice.to_string(),
+                public_key_b64: pk.to_string(),
+                role: TrustedAgentRole::User,
+                added_at_unix_ms: 1_714_492_800_000,
+                origin_tenant_id: None,
+                hub_uri: None,
+                tls_ca_pem_path: None,
+            })
+            .expect("first append");
+
+        match anchor.append_agent(TrustedAgent {
+            agent_ura: alice.to_string(),
+            public_key_b64: pk.to_string(),
+            role: TrustedAgentRole::User,
+            added_at_unix_ms: 1_714_492_900_000,
+            origin_tenant_id: None,
+            hub_uri: None,
+            tls_ca_pem_path: None,
+        }) {
+            Err(RealmTrustError::DuplicateUserPubkey { agent_ura }) => {
+                assert_eq!(agent_ura, alice);
+            }
+            other => panic!("expected DuplicateUserPubkey, got {other:?}"),
+        }
+
+        assert_eq!(anchor.lookup_user_all(alice).len(), 1);
+    }
+
+    #[test]
+    fn remove_user_pubkey_drops_only_the_named_key() {
+        let alice = "easynet:///r/realm/user/alice";
+        let pk_a = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        let pk_b = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA=";
+
+        let mut anchor = RealmTrustAnchor::default();
+        for pk in [pk_a, pk_b] {
+            anchor
+                .append_agent(TrustedAgent {
+                    agent_ura: alice.to_string(),
+                    public_key_b64: pk.to_string(),
+                    role: TrustedAgentRole::User,
+                    added_at_unix_ms: 1_714_492_800_000,
+                    origin_tenant_id: None,
+                    hub_uri: None,
+                    tls_ca_pem_path: None,
+                })
+                .expect("append");
+        }
+        assert_eq!(anchor.lookup_user_all(alice).len(), 2);
+
+        let removed = anchor.remove_user_pubkey(alice, pk_a).expect("remove pk_a");
+        assert!(removed);
+        assert_eq!(anchor.lookup_user_all(alice).len(), 1);
+        assert!(anchor.lookup_user_by_pubkey(alice, pk_a).is_none());
+        assert!(anchor.lookup_user_by_pubkey(alice, pk_b).is_some());
+    }
+
+    #[test]
+    fn remove_user_pubkey_collapses_bucket_when_last_key_revoked() {
+        let alice = "easynet:///r/realm/user/alice";
+        let pk = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        let mut anchor = RealmTrustAnchor::default();
+        anchor
+            .append_agent(TrustedAgent {
+                agent_ura: alice.to_string(),
+                public_key_b64: pk.to_string(),
+                role: TrustedAgentRole::User,
+                added_at_unix_ms: 1_714_492_800_000,
+                origin_tenant_id: None,
+                hub_uri: None,
+                tls_ca_pem_path: None,
+            })
+            .expect("append");
+        assert!(anchor.remove_user_pubkey(alice, pk).expect("remove"));
+        // Bucket gone; subsequent removes return Ok(false) instead
+        // of an error (idempotent retry contract).
+        assert!(!anchor.remove_user_pubkey(alice, pk).expect("re-remove"));
+        assert_eq!(anchor.lookup_user_all(alice).len(), 0);
+        assert!(anchor.is_empty());
+    }
+
+    #[test]
+    fn remove_user_pubkey_unknown_uri_is_noop() {
+        let mut anchor = RealmTrustAnchor::default();
+        let ok = anchor
+            .remove_user_pubkey("easynet:///r/realm/user/missing", "AAAA")
+            .expect("noop ok");
+        assert!(!ok);
+    }
+
+    #[test]
+    fn user_multi_pubkey_lookup_returns_deterministic_first() {
+        // KeyResolver trait takes only the URI; for multi-device
+        // users it gets the lex-smallest pubkey. Determinism is
+        // load-bearing — admission must give the same answer
+        // across restarts and across daemons.
+        let alice = "easynet:///r/realm/user/alice";
+        let pk_a = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        let pk_b = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA=";
+        let mut anchor = RealmTrustAnchor::default();
+        // Insert in reverse-lex order; lookup() must still return
+        // pk_a (the lex-smallest).
+        for pk in [pk_b, pk_a] {
+            anchor
+                .append_agent(TrustedAgent {
+                    agent_ura: alice.to_string(),
+                    public_key_b64: pk.to_string(),
+                    role: TrustedAgentRole::User,
+                    added_at_unix_ms: 1_714_000_000_000,
+                    origin_tenant_id: None,
+                    hub_uri: None,
+                    tls_ca_pem_path: None,
+                })
+                .expect("append");
+        }
+        let resolved = anchor.lookup(alice).expect("resolves");
+        assert_eq!(resolved.public_key_b64, pk_a);
+    }
+
+    #[test]
+    fn user_multi_pubkey_round_trips_through_save_load() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("realm-trust.toml");
+        let alice = "easynet:///r/realm/user/alice";
+        let pk_a = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        let pk_b = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA=";
+
+        let mut anchor = RealmTrustAnchor::default();
+        anchor
+            .append_agent(TrustedAgent {
+                agent_ura: alice.to_string(),
+                public_key_b64: pk_a.to_string(),
+                role: TrustedAgentRole::User,
+                added_at_unix_ms: 1_714_492_800_000,
+                origin_tenant_id: None,
+                hub_uri: None,
+                tls_ca_pem_path: None,
+            })
+            .expect("pk_a");
+        anchor
+            .append_agent(TrustedAgent {
+                agent_ura: alice.to_string(),
+                public_key_b64: pk_b.to_string(),
+                role: TrustedAgentRole::User,
+                added_at_unix_ms: 1_714_492_900_000,
+                origin_tenant_id: None,
+                hub_uri: None,
+                tls_ca_pem_path: None,
+            })
+            .expect("pk_b");
+
+        anchor.save(&path).expect("save");
+        let loaded = RealmTrustAnchor::try_load_strict(&path).expect("load");
+
+        assert_eq!(loaded.lookup_user_all(alice).len(), 2);
+        assert!(loaded.lookup_user_by_pubkey(alice, pk_a).is_some());
+        assert!(loaded.lookup_user_by_pubkey(alice, pk_b).is_some());
+    }
+
+    #[test]
+    fn user_role_save_load_round_trip() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("realm-trust.toml");
+
+        let mut anchor = RealmTrustAnchor::default();
+        anchor
+            .append_agent(TrustedAgent {
+                agent_ura: "easynet:///r/realm/user/alice".to_string(),
+                public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+                role: TrustedAgentRole::User,
+                added_at_unix_ms: 1_714_492_800_000,
+                origin_tenant_id: None,
+                hub_uri: None,
+                tls_ca_pem_path: None,
+            })
+            .expect("append user");
+        anchor.save(&path).expect("save Ok");
+
+        let loaded = RealmTrustAnchor::try_load_strict(&path).expect("load Ok");
+        let entry = loaded
+            .lookup_user_by_pubkey(
+                "easynet:///r/realm/user/alice",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            )
+            .expect("user present");
+        assert_eq!(entry.role, TrustedAgentRole::User);
+    }
+
     #[test]
     fn save_round_trips_schema_b_fields() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -945,7 +1444,7 @@ tls_ca_pem_path = "/etc/easynet/peer-hub-ca.pem"
         let mut anchor = RealmTrustAnchor::default();
         anchor
             .append_agent(TrustedAgent {
-                agent_uri: "easynet:///r/peer-realm/hub".to_string(),
+                agent_ura: "easynet:///r/peer-realm/hub".to_string(),
                 public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
                 role: TrustedAgentRole::Hub,
                 added_at_unix_ms: 1_714_492_800_000,

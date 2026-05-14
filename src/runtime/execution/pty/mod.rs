@@ -4,7 +4,7 @@
 // File: src/runtime/execution/pty/mod.rs
 //
 // Sub-service that owns every live PTY-hosted child process the
-// daemon spawns through `fleet.pty_session_create`. v1 surface is
+// daemon spawns through `device.terminal.create`. v1 surface is
 // minimal: create one, close one, look one up. The `_attach` ability
 // (C-M3c) borrows a session through `get` to wire the client's
 // InvokeBidi frames against the PTY master fd.
@@ -64,7 +64,7 @@ impl std::fmt::Display for PtySessionId {
 }
 
 /// Spec the create handler hands the service. Field shapes match the
-/// fleet.pty_session_create wire schema (see `pty_ability.rs`).
+/// device.terminal.create wire schema (see `pty_lifecycle_ability.rs`).
 #[derive(Debug, Clone)]
 pub struct PtyCreateSpec {
     /// Initial column count. Defaults to 80 when unset.
@@ -118,10 +118,8 @@ pub struct PtySession {
 }
 
 impl PtySession {
-    /// Resize the PTY. Plumbed for the future
-    /// `fleet.pty_session_resize` ability; today's create+close-only
-    /// surface doesn't expose it but the field is here so attach
-    /// (C-M3c) can wire SIGWINCH handling without touching this
+    /// Resize the PTY. Plumbed through `device.terminal.resize`;
+    /// attach can wire SIGWINCH handling without touching this
     /// struct.
     pub async fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()> {
         let m = self.master.lock().await;

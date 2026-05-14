@@ -160,7 +160,7 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             // it runs against is paired (the daemon's realm-trust
             // anchor knows about its own device URI but not about
             // the generic CLI placeholder). Pass-through to
-            // `invoke_via_federation_forward`'s `caller_uri`
+            // `invoke_via_federation_forward`'s `caller_ura`
             // surface; None there preserves the legacy default
             // for unattended fixture scripts that have no
             // credentials.json. (The pre-v4.1.5 fallback used
@@ -173,15 +173,15 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             // legacy `/agent/<node>` shape collapsed devices into
             // the agent namespace; v4.1.4 puts the daemon under the
             // `device` role with the same node-id tail.
-            let caller_uri = crate::persistence::config::load_credentials()
+            let caller_ura = crate::persistence::config::load_credentials()
                 .ok()
                 .filter(|c| !c.tenant_id.trim().is_empty() && !c.node_id.trim().is_empty())
-                .map(|c| crate::uri::device_uri(c.tenant_id.trim(), c.node_id.trim()));
+                .map(|c| crate::ura::device_ura(c.tenant_id.trim(), c.node_id.trim()));
             let value = crate::support::federation_invoke::invoke_via_federation_forward(
                 &invoke_args.ability,
                 arguments,
                 target,
-                caller_uri.as_deref(),
+                caller_ura.as_deref(),
             )?;
             (value, format!("federation.forward_invoke target={target}"))
         }

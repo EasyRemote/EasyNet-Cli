@@ -78,10 +78,11 @@ use tonic::{Request, Response, Status, Streaming};
 
 use crate::pb::axon::v1::invocation_server::Invocation;
 use crate::pb::axon::v1::{
-    invoke_bidi_down::Payload as DownPayload, invoke_bidi_up::Payload as UpPayload, AgentIdentity,
-    BidiControl, BinaryChunk, CallerSignature, Envelope, EnvelopeOpen, InvocationReceipt,
-    InvocationState, InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeResponse,
-    InvokeServerStreamRequest, InvokeStreamChunk, StreamDescriptor, SubjectIdentity,
+    causal_context, invoke_bidi_down::Payload as DownPayload, invoke_bidi_up::Payload as UpPayload,
+    AgentIdentity, BidiControl, BinaryChunk, CallerSignature, Envelope, EnvelopeOpen,
+    InvocationReceipt, InvocationState, InvokeBidiDown, InvokeBidiUp, InvokeRequest,
+    InvokeResponse, InvokeServerStreamRequest, InvokeStreamChunk, StreamDescriptor,
+    SubjectIdentity,
 };
 use crate::services::axon_serve::admission_facade::AdmissionFacade;
 use crate::services::axon_serve::federation_wrappers::{
@@ -94,12 +95,18 @@ use crate::services::axon_serve::federation_wrappers::{
     ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
 };
 use crate::services::axon_serve::invoke_remote_initiator::{
-    call_id_hex, InvokeRemoteDown, InvokeRemoteUp, RequestOutcome, SessionDispatch,
-    SessionRequestError, ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID,
+    call_id_hex, InvokeRemoteDown, InvokeRemoteUp, RequestOutcome, SessionContentEnvelope,
+    SessionDispatch, SessionRequestError, ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID,
+};
+use crate::services::axon_serve::list_user_pubkeys::{
+    handle as handle_list_user_pubkeys, ABILITY_SELF_LIST_USER_PUBKEYS,
 };
 use crate::services::axon_serve::register_device_pubkey::{
     handle as handle_register_device_pubkey, parse_realm_from_uri,
     ABILITY_SELF_REGISTER_DEVICE_PUBKEY,
+};
+use crate::services::axon_serve::revoke_user_pubkey::{
+    handle as handle_revoke_user_pubkey, ABILITY_SELF_REVOKE_USER_PUBKEY,
 };
 use crate::services::axon_serve::session_initiator::{SessionSigningSeed, ABILITY_SELF_SESSION};
 use crate::services::federated_peers_cell::SharedFederatedPeers;
@@ -188,7 +195,7 @@ pub struct DaemonInvocationService {
     pending: Option<Arc<PendingDispatchMap>>,
     /// Streaming correlation table for remote bidi bridges that
     /// need chunked replies instead of a single terminal payload.
-    /// Same-hub `fleet.file_transfer` is the first consumer.
+    /// Same-hub `device.fs.transfer` is the first consumer.
     pending_stream: Option<Arc<PendingStreamDispatchMap>>,
     /// `<self>.register_device_pubkey` handler context (PR-7
     /// commit 5/N). `None` until `with_register_pubkey(...)` wires
@@ -208,20 +215,20 @@ pub struct DaemonInvocationService {
     /// `federation.forward_invoke` peer-envelope signatures. When
     /// boot preloads the backend hub identity (or tests inject a
     /// fixture seed), the dispatcher signs without touching disk.
-    /// `None` preserves the legacy on-demand read of
+    /// `None` preserves the on-demand read of
     /// `~/.easynet-hub/<realm>/identity.json`.
     hub_signing_seed: Option<SessionSigningSeed>,
     /// **PR-N1 commit 3a/N**. Cross-hub federation client. `None`
     /// until `with_federation_client(...)` wires one; absence
     /// means `federation.forward_invoke` for cross-tenant targets
-    /// falls back to the legacy `target_online: false` shape (no
+    /// returns `target_offline` without dialing (no
     /// dial). Commit 3b/N rewrites the `forward_invoke` dispatcher
     /// to consume this field; commit 3a/N only plumbs it through.
     federation_client: Option<Arc<dyn FederationClient>>,
     /// **PR-N1 commit 3a/N → 10/N**. Operator-curated `tenant →
     /// hub_uri` cell per `DaemonConfig::federated_peers`. Empty
     /// map ⇒ no cross-tenant routing configured; the dispatcher
-    /// returns the legacy shape. Commit 10/N upgraded this from a
+    /// returns `target_offline`. Commit 10/N upgraded this from a
     /// boot-time `BTreeMap<String, String>` snapshot to the
     /// `SharedFederatedPeers` cell so SIGHUP-driven daemon-config
     /// reloads (operator editing `[daemon.federated_peers]`)
@@ -268,7 +275,7 @@ pub struct DaemonInvocationService {
         std::sync::Arc<crate::services::axon_serve::session_escalation::SessionEscalationHandle>,
     >,
     /// **PR-1 commit 7/9 (LB-56)**. Local ability dispatcher Arc.
-    /// When a `federation.forward_invoke` call's `target_uri` is
+    /// When a `federation.forward_invoke` call's `target_ura` is
     /// the daemon's OWN canonical URI (i.e. the peer hub is the
     /// target itself, not a device subscribed to its
     /// PresenceRegistry), the local-presence push misses by
@@ -286,6 +293,12 @@ pub struct DaemonInvocationService {
     /// `start_axon_serve_sidecar`'s already-threaded
     /// `Arc<AbilityDispatcher>`.
     local_dispatcher: Option<Arc<crate::runtime::ability_dispatch::AbilityDispatcher>>,
+    /// Workspace-scoped invocation ledger. Boot wires this to
+    /// `<billing_dir>/invocations.redb`; tests may inject a temp
+    /// ledger. The service writes complete unary invoke records
+    /// through the Axon SDK object rather than owning a local file
+    /// format.
+    invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
 }
 
 impl std::fmt::Debug for DaemonInvocationService {
@@ -314,6 +327,10 @@ impl std::fmt::Debug for DaemonInvocationService {
             .field(
                 "federated_bindings",
                 &self.federated_bindings.as_ref().map(|_| "<store>"),
+            )
+            .field(
+                "invocation_ledger",
+                &self.invocation_ledger.as_ref().map(|_| "<redb>"),
             )
             .finish()
     }
@@ -364,6 +381,7 @@ impl DaemonInvocationService {
             subscribe_v2_heartbeat_interval_ms: 30_000,
             escalation: None,
             local_dispatcher: None,
+            invocation_ledger: None,
         }
     }
 
@@ -379,7 +397,7 @@ impl DaemonInvocationService {
     #[must_use]
     pub fn with_pending(mut self, pending: Arc<PendingDispatchMap>) -> Self {
         // Spawn a presence-event watcher that fail-fasts every
-        // pending dispatch whose target_uri just went offline.
+        // pending dispatch whose target_ura just went offline.
         // Without this hook, `forward_invoke`'s `await_reply()`
         // blocks on the oneshot until the operator-side HTTP
         // request times out (~30s) for a target session that's
@@ -393,11 +411,11 @@ impl DaemonInvocationService {
             let mut events = watcher_presence.subscribe_events();
             loop {
                 match events.recv().await {
-                    Ok(PresenceEvent::Offline { uri, reason }) => {
-                        let cancelled = watcher_pending.cancel_for(&uri, "target_offline");
+                    Ok(PresenceEvent::Offline { ura, reason }) => {
+                        let cancelled = watcher_pending.cancel_for(&ura, "target_offline");
                         if cancelled > 0 {
                             eprintln!(
-                                "[axon-serve] presence-offline-cancel: target_uri={uri} \
+                                "[axon-serve] presence-offline-cancel: target_ura={ura} \
                                  reason={reason:?} cancelled={cancelled} pending dispatch(es)"
                             );
                         }
@@ -486,7 +504,7 @@ impl DaemonInvocationService {
 
     /// **PR-1 commit 7/9 (LB-56)**. Attach the daemon's process-
     /// wide `AbilityDispatcher` Arc. When set, a
-    /// `federation.forward_invoke` call whose `target_uri` is the
+    /// `federation.forward_invoke` call whose `target_ura` is the
     /// daemon's own URI falls through to local execution against
     /// the registered `LocalAbilityRegistry` instead of surfacing
     /// `target_offline`. See the field doc on `local_dispatcher`
@@ -501,9 +519,18 @@ impl DaemonInvocationService {
         self
     }
 
+    #[must_use]
+    pub fn with_invocation_ledger(
+        mut self,
+        ledger: Arc<easynet_axon::invocation::InvocationLedger>,
+    ) -> Self {
+        self.invocation_ledger = Some(ledger);
+        self
+    }
+
     /// **PR-N1 commit 3a/N**. Attach the cross-hub federation
-    /// client. Daemons booted without one fall back to the legacy
-    /// `target_online: false` shape for cross-tenant
+    /// client. Daemons booted without one return `target_offline`
+    /// for cross-tenant
     /// `federation.forward_invoke` calls. PR-N1 commit 3b/N
     /// rewrites the dispatcher to consume the client; commit
     /// 3a/N only stores it as a field so that rewrite has a stable
@@ -595,7 +622,7 @@ impl DaemonInvocationService {
         self
     }
 
-    /// Resolve whether `target_uri` names THIS daemon's own
+    /// Resolve whether `target_ura` names THIS daemon's own
     /// synchronous-execution surface.
     ///
     /// Three valid shapes per RFC-001 + RFC-006-C v0.1:
@@ -618,18 +645,18 @@ impl DaemonInvocationService {
     /// for any name starting `<agent>.`. This is O(n_abilities) but
     /// only fires on remote-arriving invocations and the table is
     /// small (tens of entries).
-    fn matches_self_target_uri(&self, target_uri: &str) -> bool {
+    fn matches_self_target_ura(&self, target_ura: &str) -> bool {
         if self
             .admission
             .daemon_uri()
-            .is_some_and(|daemon_uri| daemon_uri == target_uri)
+            .is_some_and(|daemon_uri| daemon_uri == target_ura)
         {
             return true;
         }
         if self
             .session_realm
             .as_deref()
-            .is_some_and(|realm| crate::uri::hub_uri(realm) == target_uri)
+            .is_some_and(|realm| crate::ura::hub_ura(realm) == target_ura)
         {
             return true;
         }
@@ -646,7 +673,7 @@ impl DaemonInvocationService {
         // resolved here — admission elsewhere ensures the caller has
         // a delegation proof bound to the user segment, so an
         // attacker cannot exploit the lenient agentID match.
-        if let Some((_user_seg, agent_seg)) = parse_agent_owner_pair_from_uri(target_uri) {
+        if let Some((_user_seg, agent_seg)) = parse_agent_owner_pair_from_uri(target_ura) {
             if let Some(dispatcher) = self.local_dispatcher.as_ref() {
                 let agent_dot = format!("{agent_seg}.");
                 let agent_dot_owned = format!(".{agent_seg}.");
@@ -665,45 +692,45 @@ impl DaemonInvocationService {
 
     /// Agent-aware presence resolution.
     ///
-    /// Tries `presence.lookup_tracked(target_uri)` first (works for
-    /// device-URI callees, the legacy shape). On miss, if the target
+    /// Tries `presence.lookup_tracked(target_ura)` first (works for
+    /// device-URI callees and canonical aliases). On miss, if the target
     /// is an agent URA `agent/<userID>.<agentID>`, consult the
     /// `AdvertisedAgentStore` populated by inbound
     /// `federation.advertise_agent` invocations: the device that
-    /// hosts that agent registered its host_uri linkage there.
-    /// Follow `host_uri` and re-lookup against PresenceRegistry.
+    /// hosts that agent registered its host_ura linkage there.
+    /// Follow `host_ura` and re-lookup against PresenceRegistry.
     ///
     /// This is the hub-side half of RFC-006-B v0.6 §URL: a chat-base
     /// or page.fetch invocation names the user's agent, and the hub
     /// must route that to whichever device is currently hosting the
-    /// agent. The advertise_agent → host_uri chain encodes that
+    /// agent. The advertise_agent → host_ura chain encodes that
     /// "currently hosting" linkage; PresenceRegistry encodes the
     /// "currently online" bit. AND of the two = "online host of this
     /// agent".
     fn lookup_target_with_agent_fallback(
         &self,
-        target_uri: &str,
+        target_ura: &str,
     ) -> Option<(
         crate::services::presence_registry::PresenceSessionId,
         DispatchSender,
     )> {
-        if let Some(slot) = self.presence.lookup_tracked(target_uri) {
+        if let Some(slot) = self.presence.lookup_tracked(target_ura) {
             return Some(slot);
         }
         // Only attempt the host-URI fallback for agent URAs; bare
         // device URIs that miss the registry are simply offline.
         if !matches!(
-            crate::uri::kind_from_ura(target_uri),
-            crate::uri::URAKind::Agent
+            crate::ura::kind_from_ura(target_ura),
+            crate::ura::URAKind::Agent
         ) {
             return None;
         }
-        let host_uri = self
+        let host_ura = self
             .advertised_agents
-            .get(target_uri)?
-            .host_uri()?
+            .get(target_ura)?
+            .host_ura()?
             .to_string();
-        self.presence.lookup_tracked(&host_uri)
+        self.presence.lookup_tracked(&host_ura)
     }
 }
 
@@ -727,10 +754,15 @@ impl Invocation for DaemonInvocationService {
         request: Request<InvokeRequest>,
     ) -> Result<Response<InvokeResponse>, Status> {
         let inner = request.into_inner();
-        self.admission.verify_invoke(&inner)?;
+        let started_unix_ms = now_unix_ms();
+        if let Err(err) = self.admission.verify_invoke(&inner) {
+            let result: Result<Response<InvokeResponse>, Status> = Err(err);
+            self.record_unary_invocation(&inner, started_unix_ms, &result);
+            return result;
+        }
         let function = inner.function_name.as_str();
 
-        match function {
+        let result = match function {
             ABILITY_FEDERATION_JOIN => self.dispatch_federation_join(&inner.arguments),
             ABILITY_FEDERATION_ADVERTISE_AGENT => {
                 self.dispatch_federation_advertise_agent(&inner.arguments)
@@ -772,12 +804,16 @@ impl Invocation for DaemonInvocationService {
             ABILITY_SELF_REGISTER_DEVICE_PUBKEY => {
                 self.dispatch_register_device_pubkey(&inner.arguments)
             }
+            ABILITY_SELF_REVOKE_USER_PUBKEY => self.dispatch_revoke_user_pubkey(&inner.arguments),
+            ABILITY_SELF_LIST_USER_PUBKEYS => self.dispatch_list_user_pubkeys(&inner.arguments),
             other => Err(Status::unimplemented(format!(
                 "easynet-daemon: ability `{other}` is not handled by the federation wrappers; \
                  LocalAbilityRegistry fallback wires in RFC-003 PR-1 commit 7/9 \
                  (see team-work/checklists/PR-1-checklist.md §5)"
             ))),
-        }
+        };
+        self.record_unary_invocation(&inner, started_unix_ms, &result);
+        result
     }
 
     type InvokeStreamStream = BoxedDownStream<InvokeStreamChunk>;
@@ -859,24 +895,23 @@ impl Invocation for DaemonInvocationService {
         match ability_name {
             ABILITY_INVOKE_REMOTE => self.dispatch_invoke_remote(envelope_open, up).await,
             ABILITY_SELF_SESSION => {
-                let caller_uri = envelope_open
+                let caller_ura = envelope_open
                     .envelope
                     .as_ref()
                     .and_then(|e| e.caller.as_ref())
-                    .map(|c| c.uri.clone())
+                    .map(|c| c.ura.clone())
                     .ok_or_else(|| {
                         Status::invalid_argument(
-                            "<self>.session: envelope.caller.uri is required \
+                            "<self>.session: envelope.caller.ura is required \
                              (already verified by admission gate; this is a defensive check)",
                         )
                     })?;
-                self.dispatch_self_session_accept(caller_uri, up).await
+                self.dispatch_self_session_accept(caller_ura, up).await
             }
             other
                 if matches!(
                     other,
-                    "fleet.session_attach"
-                        | crate::runtime::agents::pty_attach_ability::ABILITY_PTY_SESSION_ATTACH
+                    crate::runtime::agents::pty_attach_ability::ABILITY_PTY_SESSION_ATTACH
                         | crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER
                 ) =>
             {
@@ -894,14 +929,10 @@ impl Invocation for DaemonInvocationService {
                     ))
                 })?;
                 if other == crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER {
-                    if let Some(target_uri) = remote_bidi_target_uri(envelope_open) {
-                        if !self.matches_self_target_uri(&target_uri) {
+                    if let Some(target_ura) = remote_bidi_target_ura(envelope_open) {
+                        if !self.matches_self_target_ura(&target_ura) {
                             return self
-                                .dispatch_remote_file_transfer_bidi(
-                                    &target_uri,
-                                    envelope_open,
-                                    up,
-                                )
+                                .dispatch_remote_file_transfer_bidi(&target_ura, envelope_open, up)
                                 .await;
                         }
                     }
@@ -911,7 +942,7 @@ impl Invocation for DaemonInvocationService {
             }
             other => Err(Status::unimplemented(format!(
                 "easynet-daemon: InvokeBidi ability `{other}` is not yet wired; \
-                 only fleet.session_attach/fleet.pty_session_attach/fleet.file_transfer currently bridge \
+                 only device.terminal.attach/device.fs.transfer currently bridge \
                  through the LocalAbilityRegistry bidi fallback"
             ))),
         }
@@ -923,13 +954,13 @@ impl Invocation for DaemonInvocationService {
 /// any non-EnvelopeOpen first frame, since the axon protocol
 /// Extract the `(userID, agentID)` pair from an
 /// `agent/<userID>.<agentID>` URI. Returns `None` for any other role
-/// or for malformed URIs. Used by `matches_self_target_uri` to detect
+/// or for malformed URIs. Used by `matches_self_target_ura` to detect
 /// when a remote-arriving invocation names an agent that this daemon
 /// hosts (RFC-006-C v0.1 + RFC-006-B v0.6 §URL: callee on chat-base
 /// / page.fetch is the agent URA, not the device URA).
-fn parse_agent_owner_pair_from_uri(target_uri: &str) -> Option<(String, String)> {
-    let parsed = crate::uri::parse_ura(target_uri).ok()?;
-    if !matches!(parsed.kind, crate::uri::URAKind::Agent) {
+fn parse_agent_owner_pair_from_uri(target_ura: &str) -> Option<(String, String)> {
+    let parsed = crate::ura::parse_ura(target_ura).ok()?;
+    if !matches!(parsed.kind, crate::ura::URAKind::Agent) {
         return None;
     }
     if parsed.user_id.is_empty() || parsed.agent_id.is_empty() {
@@ -977,6 +1008,32 @@ fn validate_bidi_stream_ordering(streams: &[StreamDescriptor]) -> Result<(), Sta
 }
 
 impl DaemonInvocationService {
+    fn record_unary_invocation(
+        &self,
+        request: &InvokeRequest,
+        started_unix_ms: i64,
+        result: &Result<Response<InvokeResponse>, Status>,
+    ) {
+        let Some(ledger) = self.invocation_ledger.as_ref() else {
+            return;
+        };
+        let completed_unix_ms = now_unix_ms();
+        let record =
+            match build_unary_ledger_record(request, started_unix_ms, completed_unix_ms, result) {
+                Ok(record) => record,
+                Err(err) => {
+                    eprintln!("[axon-serve] invocation ledger record skipped: {err}");
+                    return;
+                }
+            };
+        if let Err(err) = ledger.put(&record) {
+            eprintln!(
+                "[axon-serve] invocation ledger write failed for {}: {err}",
+                record.invocation_ura
+            );
+        }
+    }
+
     fn dispatch_federation_join(
         &self,
         arguments: &[u8],
@@ -1054,6 +1111,55 @@ impl DaemonInvocationService {
         }))
     }
 
+    /// DEC-EU §revocation. Same trust-write ctx the register ability
+    /// uses; the revoke surface only mutates user-role entries.
+    fn dispatch_revoke_user_pubkey(
+        &self,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let ctx = self.register_pubkey.as_ref().ok_or_else(|| {
+            Status::failed_precondition(
+                "<self>.revoke_user_pubkey: this daemon was booted without the trust-write \
+                 surface (use `with_register_pubkey(...)` at boot to enable).",
+            )
+        })?;
+        let body = handle_revoke_user_pubkey(
+            arguments,
+            &ctx.daemon_realm,
+            &ctx.trust_anchor_path,
+            &ctx.cell,
+        )?;
+        Ok(Response::new(InvokeResponse {
+            result: body,
+            result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            state: InvocationState::Completed as i32,
+            ..InvokeResponse::default()
+        }))
+    }
+
+    /// DEC-EU §multi-host-list. Read-only inventory of user-role
+    /// pubkeys. Uses the same cell as register/revoke so list
+    /// results always agree with the in-memory authoritative state
+    /// admission consults.
+    fn dispatch_list_user_pubkeys(
+        &self,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let ctx = self.register_pubkey.as_ref().ok_or_else(|| {
+            Status::failed_precondition(
+                "<self>.list_user_pubkeys: this daemon was booted without the trust \
+                 surface; no listing available.",
+            )
+        })?;
+        let body = handle_list_user_pubkeys(arguments, &ctx.cell)?;
+        Ok(Response::new(InvokeResponse {
+            result: body,
+            result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            state: InvocationState::Completed as i32,
+            ..InvokeResponse::default()
+        }))
+    }
+
     fn dispatch_federation_resolve(
         &self,
         arguments: &[u8],
@@ -1079,7 +1185,7 @@ impl DaemonInvocationService {
     /// this hub's trust set" from a network or admission
     /// failure (which arrive as `unavailable` /
     /// `permission_denied`). The resolver then maps both into
-    /// `unknown_agent_uri` for INV-4 fail-closed admission, but
+    /// `unknown_agent_ura` for INV-4 fail-closed admission, but
     /// the wire-level distinction is useful for operator audit
     /// and matches the rest of the federation.* surface where
     /// `not_found` means "no entry" and `failed_precondition`
@@ -1093,8 +1199,8 @@ impl DaemonInvocationService {
         match federation_wrappers::handle_resolve_key(&request, &trust_anchor) {
             Some(response) => wrap_json_response(&response),
             None => Err(Status::not_found(format!(
-                "federation.resolve_key: agent_uri `{}` not in this hub's trust set",
-                request.agent_uri
+                "federation.resolve_key: agent_ura `{}` not in this hub's trust set",
+                request.agent_ura
             ))),
         }
     }
@@ -1103,7 +1209,7 @@ impl DaemonInvocationService {
     /// directory lookup dispatch. Reads the daemon-wide
     /// `SharedFederatedDirectoryView` cell snapshot, fans out
     /// across federated peers per spec §3.2 (lex tie-break,
-    /// dedupe by agent_uri), returns matching `DirectoryEntry`
+    /// dedupe by agent_ura), returns matching `DirectoryEntry`
     /// list.
     ///
     /// When the request carries a `local_user_id` AND the
@@ -1167,17 +1273,17 @@ impl DaemonInvocationService {
     ) -> Result<Response<InvokeResponse>, Status> {
         // Spec §3.5 admission filter — caller must be a Hub-role
         // peer (or the daemon itself).
-        let caller_uri = caller_envelope
+        let caller_ura = caller_envelope
             .and_then(|env| env.caller.as_ref())
-            .map(|c| c.uri.as_str())
+            .map(|c| c.ura.as_str())
             .ok_or_else(|| {
                 Status::invalid_argument(
-                    "federation.list_user_devices: missing caller envelope.caller.uri",
+                    "federation.list_user_devices: missing caller envelope.caller.ura",
                 )
             })?;
 
         let trust_anchor = self.admission.trust_anchor_snapshot();
-        let is_hub_role = trust_anchor.lookup(caller_uri).is_some_and(|entry| {
+        let is_hub_role = trust_anchor.lookup(caller_ura).is_some_and(|entry| {
             matches!(
                 entry.role,
                 crate::services::realm_trust_anchor::TrustedAgentRole::Hub
@@ -1186,10 +1292,10 @@ impl DaemonInvocationService {
         let is_loopback = self
             .admission
             .daemon_uri()
-            .is_some_and(|self_uri| self_uri == caller_uri);
+            .is_some_and(|self_uri| self_uri == caller_ura);
         if !(is_hub_role || is_loopback) {
             return Err(Status::permission_denied(format!(
-                "federation.list_user_devices: caller `{caller_uri}` is not a hub-role peer; \
+                "federation.list_user_devices: caller `{caller_ura}` is not a hub-role peer; \
                  only trusted hubs and the daemon itself may enumerate user devices"
             )));
         }
@@ -1204,17 +1310,17 @@ impl DaemonInvocationService {
         caller_envelope: Option<&Envelope>,
         ability_name: &str,
     ) -> Result<(), Status> {
-        let caller_uri = caller_envelope
+        let caller_ura = caller_envelope
             .and_then(|env| env.caller.as_ref())
-            .map(|c| c.uri.as_str())
+            .map(|c| c.ura.as_str())
             .ok_or_else(|| {
                 Status::invalid_argument(format!(
-                    "{ability_name}: missing caller envelope.caller.uri"
+                    "{ability_name}: missing caller envelope.caller.ura"
                 ))
             })?;
 
         let trust_anchor = self.admission.trust_anchor_snapshot();
-        let is_backend_role = trust_anchor.lookup(caller_uri).is_some_and(|entry| {
+        let is_backend_role = trust_anchor.lookup(caller_ura).is_some_and(|entry| {
             matches!(
                 entry.role,
                 crate::services::realm_trust_anchor::TrustedAgentRole::Backend
@@ -1223,10 +1329,10 @@ impl DaemonInvocationService {
         let is_loopback = self
             .admission
             .daemon_uri()
-            .is_some_and(|self_uri| self_uri == caller_uri);
+            .is_some_and(|self_uri| self_uri == caller_ura);
         if !(is_backend_role || is_loopback) {
             return Err(Status::permission_denied(format!(
-                "{ability_name}: caller `{caller_uri}` is not the local backend; \
+                "{ability_name}: caller `{caller_ura}` is not the local backend; \
                  only the backend and daemon loopback may proxy peer calls"
             )));
         }
@@ -1310,9 +1416,9 @@ impl DaemonInvocationService {
             let mut peer_request = InvokeRequest {
                 envelope: Some(build_peer_envelope(
                     caller_envelope,
-                    &peer_entry.agent_uri,
+                    &peer_entry.agent_ura,
                     local_realm,
-                )),
+                )?),
                 function_name: ABILITY_FEDERATION_LIST_USER_DEVICES.to_string(),
                 arguments: inner_arguments.clone(),
                 ..InvokeRequest::default()
@@ -1362,7 +1468,7 @@ impl DaemonInvocationService {
                 .as_deref()
                 .unwrap_or("")
                 .cmp(b.hub_endpoint.as_deref().unwrap_or(""))
-                .then_with(|| a.agent_uri.cmp(&b.agent_uri))
+                .then_with(|| a.agent_ura.cmp(&b.agent_ura))
         });
 
         wrap_json_response(&federation_wrappers::ProxyListUserDevicesResponse { devices })
@@ -1397,7 +1503,7 @@ impl DaemonInvocationService {
         }
 
         let inner_arguments = serde_json::to_vec(&federation_wrappers::ResolveRequest {
-            uri_prefix: request.uri_prefix,
+            ura_prefix: request.ura_prefix,
             include_abilities: request.include_abilities,
             filter: None,
         })
@@ -1419,9 +1525,9 @@ impl DaemonInvocationService {
             let mut peer_request = InvokeRequest {
                 envelope: Some(build_peer_envelope(
                     caller_envelope,
-                    &peer_entry.agent_uri,
+                    &peer_entry.agent_ura,
                     local_realm,
-                )),
+                )?),
                 function_name: ABILITY_FEDERATION_RESOLVE.to_string(),
                 arguments: inner_arguments.clone(),
                 ..InvokeRequest::default()
@@ -1458,7 +1564,7 @@ impl DaemonInvocationService {
                 Ok(agents) => {
                     for agent in agents {
                         merged
-                            .entry(agent.uri.clone())
+                            .entry(agent.ura.clone())
                             .and_modify(|existing| {
                                 if existing.host_node_id.is_none() && agent.host_node_id.is_some() {
                                     existing.host_node_id = agent.host_node_id.clone();
@@ -1497,7 +1603,7 @@ impl DaemonInvocationService {
     /// **PR-N1 commit 3b/N rewrite.** Tenant-aware
     /// `federation.forward_invoke` dispatch:
     ///
-    /// 1. Parse `target_uri` to extract its tenant component.
+    /// 1. Parse `target_ura` to extract its tenant component.
     /// 2. **Local-tenant fast path**: when the tenant matches
     ///    `self.session_realm` (or no realm context is wired —
     ///    test daemons), push the inner-envelope frame down the
@@ -1517,15 +1623,15 @@ impl DaemonInvocationService {
     ///    hit by the wire shape.
     /// 4. **Cross-tenant fall-through**: missing federation
     ///    client OR missing peer entry OR malformed target URI
-    ///    all surface as `target_online: false`. Legacy callers
-    ///    treat that as "target offline" and fall through to
+    ///    all surface as `target_online: false`. Callers
+    ///    treat that as "target offline" and apply
     ///    their own retry policy.
     ///
     /// What this commit does NOT carry yet:
     /// - AXIOM mapping rewrite (caller=self_hub, callee=
     ///   target_hub, subject=original_caller). The peer's local
     ///   presence registry resolves the inner envelope's
-    ///   target_uri directly today; cross-realm admission key
+    ///   target_ura directly today; cross-realm admission key
     ///   resolution is PR-N2's job. PR-N1 commit 3b/N forwards
     ///   the request unchanged.
     /// - Envelope re-sign with `daemon_identity.signing_seed`.
@@ -1552,31 +1658,30 @@ impl DaemonInvocationService {
 
         let mut request: federation_wrappers::ForwardInvokeRequest = parse_json_args(arguments)?;
 
-        // Postel-boundary: peer hubs from pre-v4.1.4 builds may
-        // ship a `/agent/<bare-uuid>` target URI (the v1/v2
-        // device-as-agent shape). Coerce to the canonical
+        // Postel-boundary: peer hubs may ship a `/agent/<bare-uuid>`
+        // target URI (the device-as-agent alias). Coerce to the canonical
         // `/device/<uuid>` form once here so every downstream
         // use — local-presence lookup, peer-dial envelope, audit
         // log line — sees the same canonical key. Real
         // `/agent/<user>.<agent>` URIs and all v4.1.4-canonical
         // shapes pass through unchanged.
-        request.target_uri = crate::uri::canonicalize_presence_key(&request.target_uri);
+        request.target_ura = crate::ura::canonicalize_presence_key(&request.target_ura);
 
-        let target_tenant = parse_tenant_from_uri(&request.target_uri);
+        let target_tenant = parse_tenant_from_uri(&request.target_ura);
         let local_tenant = self.session_realm.as_deref();
 
-        let is_local_tenant = match (target_tenant, local_tenant) {
+        let is_local_tenant = match (target_tenant.as_deref(), local_tenant) {
             (Some(target), Some(local)) => target == local,
             // Daemon has no realm context wired (smoke-test
             // build) — preserve PR-1 staging behavior and treat
             // every target as local.
             (_, None) => true,
-            // Malformed target URI — fall through to legacy
-            // shape so a typo never accidentally hits the
+            // Malformed target URI — fall through to the local
+            // target-offline shape so a typo never accidentally hits the
             // cross-hub path.
             (None, Some(_)) => true,
         };
-        let has_local_presence = self.presence.lookup(&request.target_uri).is_some();
+        let has_local_presence = self.presence.lookup(&request.target_ura).is_some();
 
         // Observable trace for operators debugging answer-sheet /
         // demo runs — proves which dispatch arm fired without
@@ -1587,9 +1692,9 @@ impl DaemonInvocationService {
         // be a hub-served one (e.g. federation.heartbeat).
         eprintln!(
             "[axon-serve] federation.forward_invoke dispatch: \
-             target_uri={} target_tenant={:?} local_tenant={:?} \
+             target_ura={} target_tenant={:?} local_tenant={:?} \
              is_local_tenant={} has_local_presence={}",
-            request.target_uri, target_tenant, local_tenant, is_local_tenant, has_local_presence,
+            request.target_ura, target_tenant, local_tenant, is_local_tenant, has_local_presence,
         );
 
         // Decode the inner payload up front. The
@@ -1640,7 +1745,7 @@ impl DaemonInvocationService {
         // always have one; test fixtures with `make_service()`
         // do not, preserving their target_offline expectation).
         if let Some(local_dispatcher) = self.local_dispatcher.as_ref() {
-            if self.matches_self_target_uri(&request.target_uri) {
+            if self.matches_self_target_ura(&request.target_ura) {
                 return self.dispatch_self_targeted_forward_invoke(
                     local_dispatcher,
                     &inner_payload,
@@ -1690,9 +1795,9 @@ impl DaemonInvocationService {
                         if !peers_snapshot.is_empty() {
                             let peer_envelope = build_peer_envelope(
                                 caller_envelope,
-                                &request.target_uri,
+                                &request.target_ura,
                                 self.session_realm.as_deref(),
-                            );
+                            )?;
                             // **LB-57 §一 Option A wire shape**.
                             // Re-wrap the call as another
                             // `federation.forward_invoke` for the peer
@@ -1710,7 +1815,7 @@ impl DaemonInvocationService {
                             // tenant fan-out + cross-tenant dial
                             // semantics the demo C9 chain requires.
                             let nested = federation_wrappers::ForwardInvokeRequest {
-                                target_uri: request.target_uri.clone(),
+                                target_ura: request.target_ura.clone(),
                                 inner_envelope_b64: request.inner_envelope_b64.clone(),
                                 causal_context_bytes: request.causal_context_bytes.clone(),
                                 forward_deadline_ms: request.forward_deadline_ms,
@@ -1774,7 +1879,7 @@ impl DaemonInvocationService {
                                         self.admission.receipt_store().record(
                                             build_forward_receipt(
                                                 &correlation_call_id,
-                                                &request.target_uri,
+                                                &request.target_ura,
                                                 caller_envelope,
                                                 Some(&peer_body.result_bytes),
                                             ),
@@ -1800,7 +1905,7 @@ impl DaemonInvocationService {
                     // real target_offline. result_digest = None.
                     self.admission.receipt_store().record(build_forward_receipt(
                         &correlation_call_id,
-                        &request.target_uri,
+                        &request.target_ura,
                         caller_envelope,
                         None,
                     ));
@@ -1843,11 +1948,11 @@ impl DaemonInvocationService {
                         if !peers_snapshot.is_empty() {
                             let peer_envelope = build_peer_envelope(
                                 caller_envelope,
-                                &request.target_uri,
+                                &request.target_ura,
                                 self.session_realm.as_deref(),
-                            );
+                            )?;
                             let nested = federation_wrappers::ForwardInvokeRequest {
-                                target_uri: request.target_uri.clone(),
+                                target_ura: request.target_ura.clone(),
                                 inner_envelope_b64: request.inner_envelope_b64.clone(),
                                 causal_context_bytes: request.causal_context_bytes.clone(),
                                 forward_deadline_ms: request.forward_deadline_ms,
@@ -1901,7 +2006,7 @@ impl DaemonInvocationService {
                                         self.admission.receipt_store().record(
                                             build_forward_receipt(
                                                 &correlation_call_id,
-                                                &request.target_uri,
+                                                &request.target_ura,
                                                 caller_envelope,
                                                 Some(&peer_body.result_bytes),
                                             ),
@@ -1925,7 +2030,7 @@ impl DaemonInvocationService {
                     }
                     self.admission.receipt_store().record(build_forward_receipt(
                         &correlation_call_id,
-                        &request.target_uri,
+                        &request.target_ura,
                         caller_envelope,
                         None,
                     ));
@@ -1938,14 +2043,14 @@ impl DaemonInvocationService {
         // Cross-tenant path. Missing federation client OR
         // missing peer entry both surface as
         // `failed_precondition(target_offline)` per DEC-N4 §2.1
-        // — the legacy "Ok with target_online:false" shape is
+        // — the older "Ok with target_online:false" shape is
         // gone. DEC-N5 §1 still requires a caller-hub
         // ForwardReceipt with `result_digest = None` for every
         // target_offline outcome.
         let record_offline_receipt = || {
             self.admission.receipt_store().record(build_forward_receipt(
                 &correlation_call_id,
-                &request.target_uri,
+                &request.target_ura,
                 caller_envelope,
                 None,
             ));
@@ -1971,7 +2076,7 @@ impl DaemonInvocationService {
         // The snapshot is one `RwLock::read()` + `Arc::clone`
         // (cheap; mirrors the admission gate's per-call pattern).
         let peers_snapshot = self.federated_peers.snapshot();
-        let Some(target_hub_uri) = peers_snapshot.get(target_tenant) else {
+        let Some(target_hub_uri) = peers_snapshot.get(&target_tenant) else {
             record_offline_receipt();
             return Err(Status::failed_precondition(
                 federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
@@ -1988,15 +2093,15 @@ impl DaemonInvocationService {
         // unimplemented surface. The original caller envelope
         // is attached so the peer's admission gate sees the
         // user's identity; PR-N2's FederatedKeyResolver lifts
-        // the realm-strict limitation that the legacy
-        // bare-inner-ability shape relied on.
+        // the realm-strict limitation that the bare-inner-ability
+        // shape relied on.
         let peer_envelope = build_peer_envelope(
             caller_envelope,
-            &request.target_uri,
+            &request.target_ura,
             self.session_realm.as_deref(),
-        );
+        )?;
         let nested = federation_wrappers::ForwardInvokeRequest {
-            target_uri: request.target_uri.clone(),
+            target_ura: request.target_ura.clone(),
             inner_envelope_b64: request.inner_envelope_b64.clone(),
             causal_context_bytes: request.causal_context_bytes.clone(),
             forward_deadline_ms: request.forward_deadline_ms,
@@ -2060,8 +2165,8 @@ impl DaemonInvocationService {
                     };
                 eprintln!(
                     "[axon-serve] federation.forward_invoke cross-tenant arm \
-                     OK: target_uri={} target_hub_uri={} result_bytes_len={}",
-                    request.target_uri,
+                     OK: target_ura={} target_hub_uri={} result_bytes_len={}",
+                    request.target_ura,
                     target_hub_uri,
                     peer_body.result_bytes.len(),
                 );
@@ -2070,7 +2175,7 @@ impl DaemonInvocationService {
                 // matching the digest the caller will see.
                 self.admission.receipt_store().record(build_forward_receipt(
                     &correlation_call_id,
-                    &request.target_uri,
+                    &request.target_ura,
                     caller_envelope,
                     Some(&peer_body.result_bytes),
                 ));
@@ -2091,8 +2196,8 @@ impl DaemonInvocationService {
                 // by hand.
                 eprintln!(
                     "[axon-serve] federation.forward_invoke peer dial \
-                     failed: target_uri={} target_hub_uri={} err={err}",
-                    request.target_uri, target_hub_uri,
+                     failed: target_ura={} target_hub_uri={} err={err}",
+                    request.target_ura, target_hub_uri,
                 );
                 record_offline_receipt();
                 Err(Status::failed_precondition(
@@ -2104,11 +2209,11 @@ impl DaemonInvocationService {
 
     /// Reverse-channel push for `federation.forward_invoke`.
     ///
-    /// Looks up `request.target_uri` in the presence registry
+    /// Looks up `request.target_ura` in the presence registry
     /// and pushes a `BinaryChunk` containing the inner-envelope
     /// bytes down the target's `<self>.session`
     /// `DispatchSender`. Per DEC-N4 §2.1 the wire shape gives up
-    /// the legacy `target_online: bool` distinction in favour of:
+    /// the `target_online: bool` distinction in favour of:
     ///
     /// - `Ok(())` — frame queued for delivery; the caller wraps
     ///   that in `ForwardInvokeResponse { result_bytes: empty,
@@ -2161,7 +2266,7 @@ impl DaemonInvocationService {
         })?;
         let (session_id, sender) = self
             .presence
-            .lookup_tracked(&request.target_uri)
+            .lookup_tracked(&request.target_ura)
             .ok_or_else(|| {
                 Status::failed_precondition(
                     federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
@@ -2173,26 +2278,27 @@ impl DaemonInvocationService {
         // than a no-op (race-free correlation, same contract as
         // `dispatch_invoke_remote`).
         //
-        // Use `register_pending_for(target_uri)` so the daemon's
+        // Use `register_pending_for(target_ura)` so the daemon's
         // presence-offline watcher (`with_pending` ctor hook) can
         // fail-fast this entry the moment `<self>.session` for
-        // `request.target_uri` drops mid-call — without this the
+        // `request.target_ura` drops mid-call — without this the
         // `await_reply()` below blocks on the oneshot until the
         // operator-side HTTP timeout fires.
-        let handle = pending.register_pending_for(&request.target_uri);
+        let handle = pending.register_pending_for(&request.target_ura);
         let call_id = handle.call_id();
 
         let dispatch_frame = build_invoke_remote_dispatch_frame(
             call_id,
             &inner_payload.ability,
             &inner_payload.args_bytes,
+            SessionContentEnvelope::plaintext_json(),
         )?;
 
         match sender.try_send(Ok(dispatch_frame)) {
             Ok(()) => {}
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                 self.presence.remove_if_session(
-                    &request.target_uri,
+                    &request.target_ura,
                     session_id,
                     crate::services::presence_registry::OfflineReason::SendFailed,
                 );
@@ -2202,7 +2308,7 @@ impl DaemonInvocationService {
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                 self.presence.remove_if_session(
-                    &request.target_uri,
+                    &request.target_ura,
                     session_id,
                     crate::services::presence_registry::OfflineReason::StreamClosed,
                 );
@@ -2213,9 +2319,9 @@ impl DaemonInvocationService {
         }
 
         eprintln!(
-            "[axon-serve] forward_invoke local-presence dispatch: target_uri={} \
+            "[axon-serve] forward_invoke local-presence dispatch: target_ura={} \
              ability={} call_id={} (waiting for SessionDispatch::Result)",
-            request.target_uri, inner_payload.ability, call_id,
+            request.target_ura, inner_payload.ability, call_id,
         );
 
         // Await the matching Result frame.
@@ -2223,7 +2329,7 @@ impl DaemonInvocationService {
             Status::unavailable(format!(
                 "federation.forward_invoke: target `{}` session disconnected before \
                  reply (call_id={call_id})",
-                request.target_uri,
+                request.target_ura,
             ))
         })?;
 
@@ -2237,8 +2343,8 @@ impl DaemonInvocationService {
         // per round-trip).
         eprintln!(
             "[axon-serve] forward_invoke local-presence dispatch: \
-             target_uri={} ability={} call_id={} → result_bytes={} error={:?}",
-            request.target_uri,
+             target_ura={} ability={} call_id={} → result_bytes={} error={:?}",
+            request.target_ura,
             inner_payload.ability,
             call_id,
             result_bytes.len(),
@@ -2247,7 +2353,7 @@ impl DaemonInvocationService {
         if let Some(err) = error {
             return Err(Status::failed_precondition(format!(
                 "federation.forward_invoke: target `{}` ability `{}` failed: {err}",
-                request.target_uri, inner_payload.ability,
+                request.target_ura, inner_payload.ability,
             )));
         }
 
@@ -2256,7 +2362,7 @@ impl DaemonInvocationService {
         // inline.
         self.admission.receipt_store().record(build_forward_receipt(
             correlation_call_id,
-            &request.target_uri,
+            &request.target_ura,
             caller_envelope,
             Some(&result_bytes),
         ));
@@ -2271,7 +2377,7 @@ impl DaemonInvocationService {
     /// **PR-1 commit 7/9 (LB-56)**. Synchronous self-targeted
     /// `federation.forward_invoke` dispatch.
     ///
-    /// Caller has confirmed `target_uri == admission.daemon_uri()`
+    /// Caller has confirmed `target_ura == admission.daemon_uri()`
     /// AND `local_dispatcher.is_some()`. We resolve the inner
     /// ability against the daemon's `LocalAbilityRegistry` (via
     /// the `AbilityDispatcher::execute_rpc` path), encode the
@@ -2324,9 +2430,9 @@ impl DaemonInvocationService {
         };
 
         eprintln!(
-            "[axon-serve] forward_invoke self-target dispatch: target_uri={} ability={} \
+            "[axon-serve] forward_invoke self-target dispatch: target_ura={} ability={} \
              call_id={}",
-            request.target_uri, inner_payload.ability, correlation_call_id,
+            request.target_ura, inner_payload.ability, correlation_call_id,
         );
 
         let result_value = local_dispatcher.execute_rpc(target).map_err(|err| {
@@ -2348,7 +2454,7 @@ impl DaemonInvocationService {
         // needed because the bytes are already known.
         self.admission.receipt_store().record(build_forward_receipt(
             correlation_call_id,
-            &request.target_uri,
+            &request.target_ura,
             caller_envelope,
             Some(&result_bytes),
         ));
@@ -2368,7 +2474,7 @@ impl DaemonInvocationService {
     /// result on a one-shot down stream. This fires in two
     /// scenarios:
     ///
-    ///   1. Host-mode dev rig: backend invokes a fleet.* ability
+    ///   1. Host-mode dev rig: backend invokes a device.* ability
     ///      against the local device daemon's own URI. The
     ///      daemon's PresenceRegistry self-presence seed
     ///      (boot.rs) makes the target findable; this shortcut
@@ -2411,9 +2517,10 @@ impl DaemonInvocationService {
             })?
         };
 
+        let dispatch_ability = agent_scoped_registry_ability(subject_device, ability);
         let target = InvocationTarget {
             scope: TargetScope::Local,
-            ability: ability.to_string(),
+            ability: dispatch_ability.clone(),
             normalized_args,
             call_mode: CallMode::Rpc,
             subject: None,
@@ -2446,13 +2553,13 @@ impl DaemonInvocationService {
                 })?
                 .map_err(|err| {
                     Status::failed_precondition(format!(
-                "<self>.invoke_remote: self-targeted dispatch of ability `{ability}` failed: {err}"
+                "<self>.invoke_remote: self-targeted dispatch of ability `{dispatch_ability}` failed: {err}"
             ))
                 })?;
 
         let payload = serde_json::to_vec(&result_value).map_err(|err| {
             Status::internal(format!(
-                "<self>.invoke_remote: encode self-targeted result for ability `{ability}`: {err}"
+                "<self>.invoke_remote: encode self-targeted result for ability `{dispatch_ability}`: {err}"
             ))
         })?;
 
@@ -2475,19 +2582,19 @@ impl DaemonInvocationService {
 
     async fn dispatch_remote_file_transfer_bidi(
         &self,
-        target_uri: &str,
+        target_ura: &str,
         envelope_open: &EnvelopeOpen,
         mut up: Streaming<InvokeBidiUp>,
     ) -> Result<Response<<Self as Invocation>::InvokeBidiStream>, Status> {
         let pending = self.pending_stream.as_ref().ok_or_else(|| {
             Status::failed_precondition(
-                "InvokeBidi fleet.file_transfer: daemon was constructed without a \
+                "InvokeBidi device.fs.transfer: daemon was constructed without a \
                  PendingStreamDispatchMap; boot must call with_pending_stream(...) \
                  to enable remote file_transfer bridging",
             )
         })?;
         let (session_id, sender) = self
-            .lookup_target_with_agent_fallback(target_uri)
+            .lookup_target_with_agent_fallback(target_ura)
             .ok_or_else(|| {
                 Status::failed_precondition(
                     federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
@@ -2507,7 +2614,7 @@ impl DaemonInvocationService {
             Ok(()) => {}
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                 self.presence.remove_if_session(
-                    target_uri,
+                    target_ura,
                     session_id,
                     crate::services::presence_registry::OfflineReason::SendFailed,
                 );
@@ -2517,7 +2624,7 @@ impl DaemonInvocationService {
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                 self.presence.remove_if_session(
-                    target_uri,
+                    target_ura,
                     session_id,
                     crate::services::presence_registry::OfflineReason::StreamClosed,
                 );
@@ -2528,8 +2635,8 @@ impl DaemonInvocationService {
         }
 
         eprintln!(
-            "[axon-serve] InvokeBidi remote file_transfer bridge: target_uri={} call_id={}",
-            target_uri, call_id,
+            "[axon-serve] InvokeBidi remote file_transfer bridge: target_ura={} call_id={}",
+            target_ura, call_id,
         );
 
         let (down_tx, down_rx) = tokio::sync::mpsc::channel::<Result<InvokeBidiDown, Status>>(16);
@@ -2579,7 +2686,7 @@ impl DaemonInvocationService {
             }
         });
 
-        let target_uri_owned = target_uri.to_string();
+        let target_ura_owned = target_ura.to_string();
         let presence_for_up = Arc::clone(&self.presence);
         let pending_for_up = Arc::clone(pending);
         tokio::spawn(async move {
@@ -2642,7 +2749,7 @@ impl DaemonInvocationService {
                     Ok(()) => {}
                     Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                         presence_for_up.remove_if_session(
-                            &target_uri_owned,
+                            &target_ura_owned,
                             session_id,
                             crate::services::presence_registry::OfflineReason::SendFailed,
                         );
@@ -2662,7 +2769,7 @@ impl DaemonInvocationService {
                     }
                     Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                         presence_for_up.remove_if_session(
-                            &target_uri_owned,
+                            &target_ura_owned,
                             session_id,
                             crate::services::presence_registry::OfflineReason::StreamClosed,
                         );
@@ -2699,7 +2806,7 @@ impl DaemonInvocationService {
     }
 
     /// PTY-attach bidi fallback: dispatch the locally-registered
-    /// `fleet.session_attach` / `fleet.pty_session_attach` handler
+    /// `device.terminal.attach` / `device.terminal.attach` handler
     /// through the in-process `AbilityDispatcher` and bridge its
     /// `BidiSource` (two `mpsc<Value>` channels) onto the gRPC
     /// `InvokeBidi` up/down streams.
@@ -2748,7 +2855,7 @@ impl DaemonInvocationService {
                 .envelope
                 .as_ref()
                 .and_then(|env| env.subject.as_ref())
-                .map(|subject| subject.uri.clone())
+                .map(|subject| subject.ura.clone())
                 .filter(|uri| !uri.is_empty()),
         };
 
@@ -3157,14 +3264,15 @@ impl DaemonInvocationService {
             subject_device,
             ability,
             args,
+            args_content_envelope,
         } = request;
 
-        // Postel-boundary: peer hubs running pre-v4.1.4 builds may
-        // pass a `/agent/<bare-uuid>` device URI; coerce to the
+        // Postel-boundary: peer hubs may pass a `/agent/<bare-uuid>`
+        // device alias; coerce to the
         // canonical `/device/<uuid>` shape before the registry
         // lookup. New clients always emit canonical; this is
-        // strictly migration-window compat.
-        let subject_device = crate::uri::canonicalize_presence_key(&subject_device);
+        // transitional compatibility.
+        let subject_device = crate::ura::canonicalize_presence_key(&subject_device);
 
         // **Self-targeted invoke_remote shortcut**.
         //
@@ -3183,11 +3291,11 @@ impl DaemonInvocationService {
         // `dispatch_federation_forward_invoke`'s top arm.
         //
         // Production hub-mode (DaemonMode::Both / Hub) reaches this
-        // branch only when caller_uri == its own hub URI invoking
+        // branch only when caller_ura == its own hub URI invoking
         // back to itself, which is also the right behaviour:
         // hub-self ability dispatch goes inline.
         if let Some(local_dispatcher) = self.local_dispatcher.as_ref() {
-            if self.matches_self_target_uri(&subject_device) {
+            if self.matches_self_target_ura(&subject_device) {
                 return self
                     .dispatch_self_targeted_invoke_remote(
                         local_dispatcher,
@@ -3226,7 +3334,13 @@ impl DaemonInvocationService {
         let handle = pending.register_pending_for(&subject_device);
         let call_id = handle.call_id();
 
-        let dispatch_frame = build_invoke_remote_dispatch_frame(call_id, &ability, &args)?;
+        let dispatch_ability = agent_scoped_registry_ability(&subject_device, &ability);
+        let dispatch_frame = build_invoke_remote_dispatch_frame(
+            call_id,
+            &dispatch_ability,
+            &args,
+            args_content_envelope,
+        )?;
         match target_sender.try_send(Ok(dispatch_frame)) {
             Ok(()) => {}
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
@@ -3325,11 +3439,11 @@ impl DaemonInvocationService {
     ///    pushed into `tx` back to the device
     async fn dispatch_self_session_accept(
         &self,
-        caller_uri: String,
+        caller_ura: String,
         up: Streaming<InvokeBidiUp>,
     ) -> Result<Response<<Self as Invocation>::InvokeBidiStream>, Status> {
         validate_session_realm(
-            &caller_uri,
+            &caller_ura,
             self.session_realm.as_deref(),
             &self.admission.trust_anchor_snapshot(),
         )?;
@@ -3341,9 +3455,9 @@ impl DaemonInvocationService {
         // arriving from `<self>.invoke_remote` immediately can find this
         // sender. The PresenceRegistry handles displacement (Offline +
         // Online emission ordering) under the hood.
-        let registration = self.presence.insert_tracked(caller_uri.clone(), down_tx);
+        let registration = self.presence.insert_tracked(caller_ura.clone(), down_tx);
         eprintln!(
-            "[axon-serve] <self>.session admitted: caller={caller_uri} displaced_prior={}",
+            "[axon-serve] <self>.session admitted: caller={caller_ura} displaced_prior={}",
             registration.displaced.is_some()
         );
 
@@ -3354,7 +3468,7 @@ impl DaemonInvocationService {
         let presence_for_drain = Arc::clone(&self.presence);
         let pending_for_drain = self.pending.clone();
         let pending_stream_for_drain = self.pending_stream.clone();
-        let caller_uri_for_drain = caller_uri.clone();
+        let caller_ura_for_drain = caller_ura.clone();
         // PR-N6 C3: drain task needs a service handle so inbound
         // `Request` frames can route into the same dispatch arms
         // the unary `Invoke` RPC uses (forward_invoke today; other
@@ -3364,7 +3478,7 @@ impl DaemonInvocationService {
         tokio::spawn(async move {
             drain_session_up_stream(
                 up,
-                caller_uri_for_drain,
+                caller_ura_for_drain,
                 registration.session_id,
                 presence_for_drain,
                 pending_for_drain,
@@ -3942,10 +4056,10 @@ fn emit_session_request_resolution_marker(
         serde_json::from_slice(args).ok();
     let target_tenant = request
         .as_ref()
-        .and_then(|r| parse_tenant_from_uri(&r.target_uri));
+        .and_then(|r| parse_tenant_from_uri(&r.target_ura));
     let has_local_presence = request
         .as_ref()
-        .map(|r| presence.lookup(&r.target_uri).is_some())
+        .map(|r| presence.lookup(&r.target_ura).is_some())
         .unwrap_or(false);
 
     let is_local = has_local_presence
@@ -4047,13 +4161,13 @@ fn build_session_request_result_frame(
 /// the symmetric race.
 fn push_session_request_result(
     presence: &Arc<PresenceRegistry>,
-    caller_uri: &str,
+    caller_ura: &str,
     id_hex: &str,
     frame: crate::services::presence_registry::DispatchFrame,
 ) {
-    let Some((session_id, sender)) = presence.lookup_tracked(caller_uri) else {
+    let Some((session_id, sender)) = presence.lookup_tracked(caller_ura) else {
         eprintln!(
-            "[session-accept] device {caller_uri} no longer in presence registry; \
+            "[session-accept] device {caller_ura} no longer in presence registry; \
              dropping RequestResult call_id={id_hex} (device disconnected mid-dispatch)"
         );
         return;
@@ -4061,16 +4175,16 @@ fn push_session_request_result(
     match sender.try_send(Ok(frame)) {
         Ok(()) => {}
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-            let _ = presence.remove_if_session(caller_uri, session_id, OfflineReason::SendFailed);
+            let _ = presence.remove_if_session(caller_ura, session_id, OfflineReason::SendFailed);
             eprintln!(
-                "[session-accept] failed to push RequestResult call_id={id_hex} to {caller_uri}: \
+                "[session-accept] failed to push RequestResult call_id={id_hex} to {caller_ura}: \
                  channel full; removed device with OfflineReason::SendFailed"
             );
         }
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-            let _ = presence.remove_if_session(caller_uri, session_id, OfflineReason::StreamClosed);
+            let _ = presence.remove_if_session(caller_ura, session_id, OfflineReason::StreamClosed);
             eprintln!(
-                "[session-accept] failed to push RequestResult call_id={id_hex} to {caller_uri}: \
+                "[session-accept] failed to push RequestResult call_id={id_hex} to {caller_ura}: \
                  device down-channel closed; removed from presence registry"
             );
         }
@@ -4089,7 +4203,7 @@ fn push_session_request_result(
 /// future `lookup` calls see it as offline immediately.
 async fn drain_session_up_stream(
     mut up: Streaming<InvokeBidiUp>,
-    caller_uri: String,
+    caller_ura: String,
     session_id: crate::services::presence_registry::PresenceSessionId,
     presence: Arc<PresenceRegistry>,
     pending: Option<Arc<PendingDispatchMap>>,
@@ -4120,7 +4234,7 @@ async fn drain_session_up_stream(
                     src = err.source();
                 }
                 eprintln!(
-                    "[session-accept] up-stream error for {caller_uri}: {chain}; \
+                    "[session-accept] up-stream error for {caller_ura}: {chain}; \
                      code={:?}; removing from registry",
                     status.code()
                 );
@@ -4131,7 +4245,7 @@ async fn drain_session_up_stream(
 
         if frame.sequence != expected_up_sequence {
             eprintln!(
-                "[session-accept] {caller_uri} violated {REASON_BIDI_FRAME_SEQUENCE}: \
+                "[session-accept] {caller_ura} violated {REASON_BIDI_FRAME_SEQUENCE}: \
                  expected up sequence {expected_up_sequence}, got {}; removing from registry",
                 frame.sequence
             );
@@ -4153,7 +4267,7 @@ async fn drain_session_up_stream(
             }
             Some(UpPayload::EnvelopeOpen(_)) => {
                 eprintln!(
-                    "[session-accept] {caller_uri} sent unexpected EnvelopeOpen after frame 0; \
+                    "[session-accept] {caller_ura} sent unexpected EnvelopeOpen after frame 0; \
                      ignoring"
                 );
                 continue;
@@ -4168,7 +4282,7 @@ async fn drain_session_up_stream(
             Ok(d) => d,
             Err(err) => {
                 eprintln!(
-                    "[session-accept] {caller_uri} sent malformed SessionDispatch JSON: {err}; \
+                    "[session-accept] {caller_ura} sent malformed SessionDispatch JSON: {err}; \
                      ignoring frame"
                 );
                 continue;
@@ -4193,7 +4307,7 @@ async fn drain_session_up_stream(
                     if !completed {
                         let Some(pending) = pending.as_ref() else {
                             eprintln!(
-                                "[session-accept] {caller_uri} sent terminal Result for call_id={call_id} but \
+                                "[session-accept] {caller_ura} sent terminal Result for call_id={call_id} but \
                                  daemon was constructed without PendingDispatchMap; ignoring"
                             );
                             continue;
@@ -4202,14 +4316,14 @@ async fn drain_session_up_stream(
                     }
                     if !completed {
                         eprintln!(
-                            "[session-accept] {caller_uri} sent terminal Result for call_id={call_id} but \
+                            "[session-accept] {caller_ura} sent terminal Result for call_id={call_id} but \
                              no pending entry matched (caller may have cancelled); silent no-op"
                         );
                     }
                 } else {
                     let Some(pending_stream) = pending_stream.as_ref() else {
                         eprintln!(
-                            "[session-accept] {caller_uri} sent streaming Result chunk for call_id={call_id} but \
+                            "[session-accept] {caller_ura} sent streaming Result chunk for call_id={call_id} but \
                              daemon was constructed without PendingStreamDispatchMap; ignoring"
                         );
                         continue;
@@ -4217,7 +4331,7 @@ async fn drain_session_up_stream(
                     let completed = pending_stream.push_chunk(call_id, payload).await;
                     if !completed {
                         eprintln!(
-                            "[session-accept] {caller_uri} sent streaming Result chunk for call_id={call_id} but \
+                            "[session-accept] {caller_ura} sent streaming Result chunk for call_id={call_id} but \
                              no pending stream entry matched; silent no-op"
                         );
                     }
@@ -4227,7 +4341,7 @@ async fn drain_session_up_stream(
                 // A device sending a Dispatch up its own session
                 // makes no sense — Dispatch is hub→device only.
                 eprintln!(
-                    "[session-accept] {caller_uri} sent unexpected Dispatch frame \
+                    "[session-accept] {caller_ura} sent unexpected Dispatch frame \
                      (call_id={call_id}); ignoring"
                 );
             }
@@ -4235,13 +4349,13 @@ async fn drain_session_up_stream(
                 call_id, ability, ..
             } => {
                 eprintln!(
-                    "[session-accept] {caller_uri} sent unexpected BidiOpen frame \
+                    "[session-accept] {caller_ura} sent unexpected BidiOpen frame \
                      (call_id={call_id} ability={ability}); ignoring"
                 );
             }
             SessionDispatch::BidiInput { call_id, eof, .. } => {
                 eprintln!(
-                    "[session-accept] {caller_uri} sent unexpected BidiInput frame \
+                    "[session-accept] {caller_ura} sent unexpected BidiInput frame \
                      (call_id={call_id} eof={eof}); ignoring"
                 );
             }
@@ -4249,6 +4363,7 @@ async fn drain_session_up_stream(
                 call_id,
                 ability,
                 args,
+                args_content_envelope,
             } => {
                 // PR-N6 C3: device → hub forward_invoke escalation.
                 // The device emits this when its CLI's
@@ -4274,15 +4389,50 @@ async fn drain_session_up_stream(
                 // Request gets its own short-lived task.
                 let service_for_request = service.clone();
                 let presence_for_reply = Arc::clone(&presence);
-                let caller_uri_for_reply = caller_uri.clone();
+                let caller_ura_for_reply = caller_ura.clone();
                 tokio::spawn(async move {
-                    let outcome = service_for_request
-                        .dispatch_session_request(&ability, &args)
-                        .await;
+                    let outcome = if args_content_envelope.is_encrypted() {
+                        RequestOutcome::Err {
+                            error: SessionRequestError::PermissionDenied {
+                                reason: format!(
+                                    "<self>.session: Request ability `{ability}` received encrypted args \
+                                     but no hub-side request decryptor is wired"
+                                ),
+                            },
+                        }
+                    } else if !args_content_envelope.content_type.is_empty()
+                        && args_content_envelope.content_type != "application/json"
+                    {
+                        RequestOutcome::Err {
+                            error: SessionRequestError::PermissionDenied {
+                                reason: format!(
+                                    "<self>.session: Request ability `{ability}` received unsupported \
+                                     args content_type {:?}",
+                                    args_content_envelope.content_type
+                                ),
+                            },
+                        }
+                    } else if !args_content_envelope.encoding.is_empty()
+                        && args_content_envelope.encoding != "identity"
+                    {
+                        RequestOutcome::Err {
+                            error: SessionRequestError::PermissionDenied {
+                                reason: format!(
+                                    "<self>.session: Request ability `{ability}` received unsupported \
+                                     args encoding {:?}",
+                                    args_content_envelope.encoding
+                                ),
+                            },
+                        }
+                    } else {
+                        service_for_request
+                            .dispatch_session_request(&ability, &args)
+                            .await
+                    };
                     let frame = build_session_request_result_frame(call_id, outcome);
                     push_session_request_result(
                         &presence_for_reply,
-                        &caller_uri_for_reply,
+                        &caller_ura_for_reply,
                         &id_hex,
                         frame,
                     );
@@ -4293,7 +4443,7 @@ async fn drain_session_up_stream(
                 // sending one up its own session is malformed.
                 let id_hex = call_id_hex(&call_id);
                 eprintln!(
-                    "[session-accept] {caller_uri} sent unexpected RequestResult frame \
+                    "[session-accept] {caller_ura} sent unexpected RequestResult frame \
                      (call_id={id_hex}); ignoring"
                 );
             }
@@ -4301,16 +4451,16 @@ async fn drain_session_up_stream(
     }
 
     if presence
-        .remove_if_session(&caller_uri, session_id, close_reason)
+        .remove_if_session(&caller_ura, session_id, close_reason)
         .is_some()
     {
         eprintln!(
-            "[session-accept] {caller_uri} session ended ({:?}); removed from registry",
+            "[session-accept] {caller_ura} session ended ({:?}); removed from registry",
             close_reason
         );
     } else {
         eprintln!(
-            "[session-accept] {caller_uri} session ended ({:?}); newer session already replaced registry entry",
+            "[session-accept] {caller_ura} session ended ({:?}); newer session already replaced registry entry",
             close_reason
         );
     }
@@ -4333,7 +4483,7 @@ async fn drain_session_up_stream(
 /// `<self>.session` admission too. Unblocks the cross-hub
 /// same-tenant directive that LB-49 surfaced.
 fn validate_session_realm(
-    caller_uri: &str,
+    caller_ura: &str,
     session_realm: Option<&str>,
     trust_anchor: &RealmTrustAnchor,
 ) -> Result<(), Status> {
@@ -4341,9 +4491,9 @@ fn validate_session_realm(
         return Ok(());
     };
 
-    let caller_realm = parse_realm_from_uri(caller_uri).ok_or_else(|| {
+    let caller_realm = parse_realm_from_uri(caller_ura).ok_or_else(|| {
         Status::invalid_argument(format!(
-            "<self>.session: caller URI `{caller_uri}` does not match the canonical \
+            "<self>.session: caller URI `{caller_ura}` does not match the canonical \
              `easynet:///r/{{realm}}/...` shape"
         ))
     })?;
@@ -4357,12 +4507,12 @@ fn validate_session_realm(
     // exercised on frame 0, so a hit means the caller's pubkey
     // signed the bidi's frame-0 envelope and the operator has
     // explicitly listed this URI under realm-trust.toml.
-    if trust_anchor.lookup(caller_uri).is_some() {
+    if trust_anchor.lookup(caller_ura).is_some() {
         return Ok(());
     }
 
     Err(Status::permission_denied(format!(
-        "<self>.session: caller `{caller_uri}` from realm `{caller_realm}` is \
+        "<self>.session: caller `{caller_ura}` from realm `{caller_realm}` is \
          not in this hub's realm `{daemon_realm}` and not present in the \
          realm trust anchor as a federated identity; cross-realm session \
          requires either same-realm or an explicit `[[trusted_agent]]` entry"
@@ -4380,10 +4530,10 @@ fn validate_session_realm(
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum PresenceEventDelta {
     Online {
-        canonical_agent_uri: String,
+        membership_ura: String,
     },
     Offline {
-        canonical_agent_uri: String,
+        membership_ura: String,
         reason: &'static str,
     },
 }
@@ -4392,11 +4542,11 @@ impl From<crate::services::presence_registry::PresenceEvent> for PresenceEventDe
     fn from(event: crate::services::presence_registry::PresenceEvent) -> Self {
         use crate::services::presence_registry::{OfflineReason, PresenceEvent};
         match event {
-            PresenceEvent::Online { uri } => Self::Online {
-                canonical_agent_uri: uri,
+            PresenceEvent::Online { ura } => Self::Online {
+                membership_ura: ura,
             },
-            PresenceEvent::Offline { uri, reason } => Self::Offline {
-                canonical_agent_uri: uri,
+            PresenceEvent::Offline { ura, reason } => Self::Offline {
+                membership_ura: ura,
                 reason: match reason {
                     OfflineReason::StreamClosed => "stream_closed",
                     OfflineReason::StreamReset => "stream_reset",
@@ -4503,104 +4653,65 @@ pub(crate) fn decode_inner_payload(b64: &str) -> Result<InnerPayload, Status> {
     })
 }
 
-/// **PR-N1 commit 11/N**. Build the envelope the cross-hub
-/// dialer attaches to the rebuilt peer `InvokeRequest`. The
-/// peer daemon's admission gate compares the envelope's caller
-/// URI against its local `realm-trust.toml`, so the choice is:
+/// Build the strict envelope the cross-hub dialer attaches to the
+/// rebuilt peer `InvokeRequest`.
 ///
-/// - When the original CLI call carried an envelope (the
-///   typical case via `support::federation_invoke`), forward
-///   that envelope verbatim. The peer's admission accepts it
-///   iff the caller URI is in the peer's trust set — for the
-///   PR-N1 same-account same-tenant scope the backend tenant
-///   fix (`0af7c0e`) ensures both daemons store the same
-///   `(tenant_id, agent_uri, public_key)` triple, so
-///   forward-as-is is the right answer.
-/// - When the original call has no envelope (test fixtures or
-///   internal paths that pre-existed PR-N1), synthesize a
-///   minimal envelope with `caller.uri = target_uri`. Peer
-///   admission will reject this on the strict path (no
-///   signature) but the URI-only Device arm under DEC-013 will
-///   admit. The peer-side `target_online` fast-path then runs
-///   against its presence registry as before.
-///
-/// PR-N2 will replace this verbatim-forward with an AXIOM
-/// mapping rewrite (`caller = self_hub`, `callee = target_hub`,
-/// `subject = original_caller`) plus a daemon-identity
-/// signature so cross-realm peers can verify the call without
-/// shared trust set.
+/// This is a new hub-to-hub invocation, not a verbatim re-send:
+/// `caller = local hub`, `callee = target hub`, and `subject =
+/// original caller` when present. Every URI must parse through the
+/// canonical URA parser before the peer request is sent.
 pub(crate) fn build_peer_envelope(
     caller_envelope: Option<&Envelope>,
-    target_uri: &str,
+    target_ura: &str,
     local_realm: Option<&str>,
-) -> Envelope {
+) -> Result<Envelope, Status> {
     use rand::RngCore as _;
 
     let mut forwarded = caller_envelope.cloned().unwrap_or_default();
-    let peer_hub_uri = parse_tenant_from_uri(target_uri).map(crate::uri::hub_uri);
+    let peer_hub_uri = parse_tenant_from_uri(target_ura)
+        .map(|realm| crate::ura::hub_ura(&realm))
+        .ok_or_else(|| {
+            Status::invalid_argument(format!("target_ura is not a valid URA: {target_ura}"))
+        })?;
 
+    let caller_ura = local_realm
+        .map(crate::ura::hub_ura)
+        .or_else(|| {
+            forwarded
+                .caller
+                .as_ref()
+                .map(|caller| caller.ura.trim().to_string())
+                .filter(|uri| !uri.is_empty())
+        })
+        .ok_or_else(|| Status::invalid_argument("peer envelope missing caller URA"))?;
+    crate::ura::parse_ura(&caller_ura).map_err(|err| {
+        Status::invalid_argument(format!("peer envelope caller URI is invalid: {err}"))
+    })?;
+    crate::ura::parse_ura(&peer_hub_uri).map_err(|err| {
+        Status::invalid_argument(format!("peer envelope callee URI is invalid: {err}"))
+    })?;
+    let subject_ura = caller_envelope
+        .and_then(|env| env.caller.as_ref())
+        .map(|caller| caller.ura.trim().to_string())
+        .filter(|uri| !uri.is_empty())
+        .unwrap_or_else(|| peer_hub_uri.clone());
+    crate::ura::parse_ura(&subject_ura).map_err(|err| {
+        Status::invalid_argument(format!("peer envelope subject URI is invalid: {err}"))
+    })?;
+
+    let profile = crate::services::axon_serve::DEFAULT_URA_PROFILE.to_string();
     forwarded.caller = Some(AgentIdentity {
-        uri: local_realm
-            .map(crate::uri::hub_uri)
-            .or_else(|| {
-                forwarded
-                    .caller
-                    .as_ref()
-                    .map(|caller| caller.uri.trim().to_string())
-                    .filter(|uri| !uri.is_empty())
-            })
-            .unwrap_or_else(|| target_uri.to_string()),
-        ..AgentIdentity::default()
+        ura: caller_ura,
+        profile: profile.clone(),
     });
-
-    if let Some(peer_hub_uri) = peer_hub_uri.clone() {
-        forwarded.callee = Some(AgentIdentity {
-            uri: peer_hub_uri.clone(),
-            ..AgentIdentity::default()
-        });
-        if forwarded
-            .subject
-            .as_ref()
-            .map(|subject| subject.uri.trim().is_empty())
-            .unwrap_or(true)
-        {
-            forwarded.subject = Some(SubjectIdentity {
-                uri: caller_envelope
-                    .and_then(|env| env.caller.as_ref())
-                    .map(|caller| caller.uri.trim().to_string())
-                    .filter(|uri| !uri.is_empty())
-                    .unwrap_or(peer_hub_uri),
-                ..SubjectIdentity::default()
-            });
-        }
-    } else {
-        if forwarded
-            .callee
-            .as_ref()
-            .map(|callee| callee.uri.trim().is_empty())
-            .unwrap_or(true)
-        {
-            forwarded.callee = Some(AgentIdentity {
-                uri: target_uri.to_string(),
-                ..AgentIdentity::default()
-            });
-        }
-        if forwarded
-            .subject
-            .as_ref()
-            .map(|subject| subject.uri.trim().is_empty())
-            .unwrap_or(true)
-        {
-            forwarded.subject = Some(SubjectIdentity {
-                uri: caller_envelope
-                    .and_then(|env| env.caller.as_ref())
-                    .map(|caller| caller.uri.trim().to_string())
-                    .filter(|uri| !uri.is_empty())
-                    .unwrap_or_else(|| target_uri.to_string()),
-                ..SubjectIdentity::default()
-            });
-        }
-    }
+    forwarded.callee = Some(AgentIdentity {
+        ura: peer_hub_uri,
+        profile: profile.clone(),
+    });
+    forwarded.subject = Some(SubjectIdentity {
+        ura: subject_ura,
+        profile,
+    });
 
     if forwarded.invocation_nonce.len() != 16 {
         let mut nonce = vec![0u8; 16];
@@ -4608,7 +4719,7 @@ pub(crate) fn build_peer_envelope(
         forwarded.invocation_nonce = nonce;
     }
 
-    forwarded
+    Ok(forwarded)
 }
 
 fn sign_peer_request_envelope(
@@ -4624,33 +4735,33 @@ fn sign_peer_request_envelope(
 
     use easynet_axon::invocation::axiom::{
         canonical_invocation_bytes, AgentIdentity as AxiomAgentIdentity, CausalContext,
-        InvocationEnvelope, SubjectIdentity as AxiomSubjectIdentity, UriProfile,
+        InvocationEnvelope, SubjectIdentity as AxiomSubjectIdentity, UraProfile,
     };
     use ed25519_dalek::{Signer as _, SigningKey};
     use sha2::{Digest, Sha256};
 
     envelope.causal_context = None;
 
-    let caller_uri = envelope
+    let caller_ura = envelope
         .caller
         .as_ref()
-        .map(|caller| caller.uri.trim())
+        .map(|caller| caller.ura.trim())
         .filter(|uri| !uri.is_empty())
         .ok_or_else(|| {
             Status::internal("cross-hub forward_invoke signing: caller URI missing after rewrite")
         })?;
-    let callee_uri = envelope
+    let callee_ura = envelope
         .callee
         .as_ref()
-        .map(|callee| callee.uri.trim())
+        .map(|callee| callee.ura.trim())
         .filter(|uri| !uri.is_empty())
         .ok_or_else(|| {
             Status::internal("cross-hub forward_invoke signing: callee URI missing after rewrite")
         })?;
-    let subject_uri = envelope
+    let subject_ura = envelope
         .subject
         .as_ref()
-        .map(|subject| subject.uri.trim())
+        .map(|subject| subject.ura.trim())
         .filter(|uri| !uri.is_empty())
         .ok_or_else(|| {
             Status::internal("cross-hub forward_invoke signing: subject URI missing after rewrite")
@@ -4696,9 +4807,9 @@ fn sign_peer_request_envelope(
     };
     let signing_key = SigningKey::from_bytes(&hub_seed);
     let axiom_envelope = InvocationEnvelope {
-        caller: AxiomAgentIdentity::new(caller_uri, UriProfile::EasynetStrictV2),
-        callee: AxiomAgentIdentity::new(callee_uri, UriProfile::EasynetStrictV2),
-        subject: AxiomSubjectIdentity::new(subject_uri, UriProfile::EasynetStrictV2),
+        caller: AxiomAgentIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
+        callee: AxiomAgentIdentity::new(callee_ura, UraProfile::EasynetStrictV2),
+        subject: AxiomSubjectIdentity::new(subject_ura, UraProfile::EasynetStrictV2),
         ability: ability.to_string(),
         args_digest,
         invocation_nonce,
@@ -4721,7 +4832,7 @@ fn sign_peer_request_envelope(
 /// ```json
 /// {
 ///   "private_key_seed_hex": "<64-hex>",
-///   "agent_uri": "easynet:///r/<realm>/hub",
+///   "agent_ura": "easynet:///r/<realm>/hub",
 ///   "created_at_unix_ms": <int>
 /// }
 /// ```
@@ -4825,11 +4936,11 @@ const FORWARD_RECEIPT_DIGEST_CONTENT_TYPE: &str = "application/octet-stream;sha2
 ///   the target_offline path (encodes `result_digest = None`).
 /// - `caller_binding` / `callee_binding` — caller is the original
 ///   envelope's caller (or a synthetic fallback equal to
-///   target_uri); callee is the target_uri.
+///   target_ura); callee is the target_ura.
 /// - `state = Completed` — terminal receipt for audit filters.
 fn build_forward_receipt(
     target_call_id: &str,
-    target_uri: &str,
+    target_ura: &str,
     caller_envelope: Option<&Envelope>,
     result_bytes: Option<&[u8]>,
 ) -> InvocationReceipt {
@@ -4846,12 +4957,12 @@ fn build_forward_receipt(
         .and_then(|env| env.caller.clone())
         .or_else(|| {
             Some(AgentIdentity {
-                uri: target_uri.to_string(),
+                ura: target_ura.to_string(),
                 ..AgentIdentity::default()
             })
         });
     let callee_binding = Some(AgentIdentity {
-        uri: target_uri.to_string(),
+        ura: target_ura.to_string(),
         ..AgentIdentity::default()
     });
     let payload_content_type = if payload.is_empty() {
@@ -4880,11 +4991,13 @@ fn build_invoke_remote_dispatch_frame(
     call_id: u64,
     ability: &str,
     args: &[u8],
+    args_content_envelope: SessionContentEnvelope,
 ) -> Result<DispatchFrame, Status> {
     let payload = SessionDispatch::Dispatch {
         call_id,
         ability: ability.to_string(),
         args: args.to_vec(),
+        args_content_envelope,
     };
     let bytes = serde_json::to_vec(&payload).map_err(|err| {
         Status::internal(format!(
@@ -4904,6 +5017,10 @@ fn build_invoke_remote_dispatch_frame(
     })
 }
 
+fn agent_scoped_registry_ability(target_ura: &str, ability: &str) -> String {
+    crate::ura::agent_scoped_registry_ability(target_ura, ability)
+}
+
 fn build_remote_bidi_open_dispatch_frame(
     call_id: u64,
     ability: &str,
@@ -4913,6 +5030,7 @@ fn build_remote_bidi_open_dispatch_frame(
         call_id,
         ability: ability.to_string(),
         args: args.to_vec(),
+        args_content_envelope: SessionContentEnvelope::plaintext_json(),
     };
     let bytes = serde_json::to_vec(&payload).map_err(|err| {
         Status::internal(format!(
@@ -4955,14 +5073,14 @@ fn build_remote_bidi_input_dispatch_frame(
     }
 }
 
-fn remote_bidi_target_uri(envelope_open: &EnvelopeOpen) -> Option<String> {
+fn remote_bidi_target_ura(envelope_open: &EnvelopeOpen) -> Option<String> {
     let callee = envelope_open
         .envelope
         .as_ref()
         .and_then(|env| env.callee.as_ref())
-        .map(|callee| callee.uri.trim())
+        .map(|callee| callee.ura.trim())
         .filter(|uri| !uri.is_empty())?;
-    Some(crate::uri::canonicalize_presence_key(callee))
+    Some(crate::ura::canonicalize_presence_key(callee))
 }
 
 /// Build the terminal `InvokeBidiDown` frame the
@@ -4994,6 +5112,259 @@ fn parse_json_args<T: serde::de::DeserializeOwned>(arguments: &[u8]) -> Result<T
             "federation wrapper: failed to decode JSON arguments: {err}"
         ))
     })
+}
+
+fn build_unary_ledger_record(
+    request: &InvokeRequest,
+    started_unix_ms: i64,
+    completed_unix_ms: i64,
+    result: &Result<Response<InvokeResponse>, Status>,
+) -> Result<easynet_axon::invocation::InvocationLedgerRecord, anyhow::Error> {
+    let envelope = request.envelope.as_ref();
+    let caller_ura = envelope
+        .and_then(|env| env.caller.as_ref())
+        .map(|identity| identity.ura.clone())
+        .filter(|uri| !uri.trim().is_empty())
+        .unwrap_or_else(|| crate::ura::hub_ura("localhost"));
+    let realm = parse_tenant_from_uri(&caller_ura).unwrap_or_else(|| "localhost".to_string());
+    let callee_ura = envelope
+        .and_then(|env| env.callee.as_ref())
+        .map(|identity| identity.ura.clone())
+        .filter(|uri| !uri.trim().is_empty())
+        .unwrap_or_else(|| crate::ura::hub_ura(&realm));
+    let subject_ura = envelope
+        .and_then(|env| env.subject.as_ref())
+        .map(|identity| identity.ura.clone())
+        .filter(|uri| !uri.trim().is_empty())
+        .unwrap_or_else(|| caller_ura.clone());
+    let request_id = envelope
+        .map(|env| env.request_id.clone())
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or_else(|| format!("req-{}", short_hash(request.function_name.as_bytes())));
+    let trace_id = envelope.map(|env| env.trace_id.clone()).unwrap_or_default();
+    let span_id = envelope.map(|env| env.span_id.clone()).unwrap_or_default();
+    let invocation_ura =
+        invocation_resource_ura(&realm, &request_id, &subject_ura, &callee_ura, &caller_ura)?;
+    let elapsed_ms = completed_unix_ms.saturating_sub(started_unix_ms) as u64;
+
+    let mut builder = easynet_axon::invocation::InvocationLedgerRecordBuilder::new()
+        .invocation_ura(invocation_ura)
+        .request_id(request_id)
+        .trace_id(trace_id)
+        .span_id(span_id)
+        .caller_ura(caller_ura)
+        .callee_ura(callee_ura)
+        .subject_ura(subject_ura)
+        .ability_ura(ability_ura_for_name(&realm, &request.function_name))
+        .ability_name(request.function_name.clone())
+        .started_unix_ms(started_unix_ms)
+        .completed_unix_ms(completed_unix_ms)
+        .elapsed_ms(elapsed_ms)
+        .causal_links(causal_links_from_envelope(envelope))
+        .args(easynet_axon::invocation::LedgerEventPayload::digest(
+            "application/octet-stream",
+            &request.arguments,
+        ));
+
+    match result {
+        Ok(response) => {
+            let body = response.get_ref();
+            let state = if body.state == InvocationState::Completed as i32 {
+                "completed"
+            } else if body.state == InvocationState::Failed as i32 {
+                "failed"
+            } else {
+                "unknown"
+            };
+            builder = builder.state(state.to_string()).result(
+                easynet_axon::invocation::LedgerEventPayload::digest(
+                    body.result_content_type.clone(),
+                    &body.result,
+                ),
+            );
+        }
+        Err(status) => {
+            let code = format!("{:?}", status.code()).to_ascii_lowercase();
+            let retryable = matches!(
+                status.code(),
+                tonic::Code::Unavailable
+                    | tonic::Code::ResourceExhausted
+                    | tonic::Code::DeadlineExceeded
+            );
+            let error = easynet_axon::invocation::LedgerErrorRecord {
+                source: "daemon_invocation_service".to_string(),
+                code: code.clone(),
+                message: status.message().to_string(),
+                retryable,
+                context: std::collections::BTreeMap::from([(
+                    "ability_name".to_string(),
+                    request.function_name.clone(),
+                )]),
+            };
+            builder = builder
+                .state("failed".to_string())
+                .error(error.clone())
+                .diagnostics(vec![easynet_axon::invocation::LedgerDiagnosticRecord {
+                    timestamp_unix_ms: completed_unix_ms,
+                    level: "error".to_string(),
+                    source: error.source,
+                    code,
+                    message: error.message,
+                    retryable,
+                    payload: None,
+                }]);
+        }
+    }
+
+    Ok(builder.build()?)
+}
+
+fn causal_links_from_envelope(
+    envelope: Option<&Envelope>,
+) -> Vec<easynet_axon::invocation::InvocationCausalLink> {
+    let Some(form) = envelope
+        .and_then(|env| env.causal_context.as_ref())
+        .and_then(|ctx| ctx.form.as_ref())
+    else {
+        return Vec::new();
+    };
+    match form {
+        causal_context::Form::None(_) => Vec::new(),
+        causal_context::Form::Scalar(receipt) => {
+            vec![causal_link_from_receipt_ref(receipt, "causal")]
+        }
+        causal_context::Form::List(list) => list
+            .prior
+            .iter()
+            .map(|receipt| causal_link_from_receipt_ref(receipt, "causal_join"))
+            .collect(),
+        causal_context::Form::Merkle(root) => {
+            vec![easynet_axon::invocation::InvocationCausalLink {
+                source_invocation_ura: None,
+                source_receipt_ura: root.proof_ura.clone(),
+                source_receipt_hash: hex::encode(&root.root),
+                relation: "causal_merkle".to_string(),
+            }]
+        }
+    }
+}
+
+fn causal_link_from_receipt_ref(
+    receipt: &crate::pb::axon::v1::ReceiptRef,
+    relation: &str,
+) -> easynet_axon::invocation::InvocationCausalLink {
+    easynet_axon::invocation::InvocationCausalLink {
+        source_invocation_ura: invocation_ura_from_receipt_ura(&receipt.receipt_ura),
+        source_receipt_ura: receipt.receipt_ura.clone(),
+        source_receipt_hash: hex::encode(&receipt.receipt_hash),
+        relation: relation.to_string(),
+    }
+}
+
+fn invocation_ura_from_receipt_ura(receipt_ura: &str) -> Option<String> {
+    receipt_ura
+        .rsplit_once("/receipt/")
+        .map(|(invocation_ura, _)| invocation_ura.to_string())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InvocationResourceOwner {
+    owner_id: String,
+    path_prefix: String,
+}
+
+fn invocation_resource_ura(
+    realm: &str,
+    request_id: &str,
+    subject_ura: &str,
+    callee_ura: &str,
+    caller_ura: &str,
+) -> Result<String, anyhow::Error> {
+    let owner = invocation_resource_owner_from_ura(subject_ura)
+        .or_else(|| invocation_resource_owner_from_ura(callee_ura))
+        .or_else(|| invocation_resource_owner_from_ura(caller_ura))
+        .or_else(local_invocation_resource_owner)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "cannot derive invocation resource owner from subject/callee/caller/local device URA"
+            )
+        })?;
+    let request_segment = safe_resource_path_segment(request_id);
+    let path = if owner.path_prefix.is_empty() {
+        request_segment
+    } else {
+        format!("{}/{}", owner.path_prefix, request_segment)
+    };
+    Ok(crate::ura::resource_dot_ura(realm, &owner.owner_id, &path))
+}
+
+fn invocation_resource_owner_from_ura(ura: &str) -> Option<InvocationResourceOwner> {
+    let parsed = crate::ura::parse_ura(ura).ok()?;
+    match parsed.kind {
+        crate::ura::URAKind::User => Some(InvocationResourceOwner {
+            owner_id: format!("{}.invocations", parsed.user_id),
+            path_prefix: String::new(),
+        }),
+        crate::ura::URAKind::Agent => Some(InvocationResourceOwner {
+            owner_id: format!("{}.invocations", parsed.user_id),
+            path_prefix: format!("agents/{}/invocations", parsed.agent_id),
+        }),
+        crate::ura::URAKind::Device => Some(InvocationResourceOwner {
+            owner_id: format!("device.{}", parsed.device_id),
+            path_prefix: "invocations".to_string(),
+        }),
+        _ => None,
+    }
+}
+
+fn local_invocation_resource_owner() -> Option<InvocationResourceOwner> {
+    let local = crate::persistence::local_agents::load().ok()?;
+    invocation_resource_owner_from_ura(&local.host_device_agent_ura)
+}
+
+fn safe_resource_path_segment(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let mut out = String::with_capacity(trimmed.len());
+    for ch in trimmed.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+            out.push(ch);
+        } else {
+            out.push('-');
+        }
+    }
+    let out = out.trim_matches('-').to_string();
+    if out.is_empty() {
+        return format!("request-{}", short_hash(raw.as_bytes()));
+    }
+    if out == trimmed {
+        out
+    } else {
+        format!("{}-{}", out, short_hash(raw.as_bytes()))
+    }
+}
+
+fn ability_ura_for_name(realm: &str, ability_name: &str) -> String {
+    if ability_name.split_once('.').is_some() {
+        crate::ura::hub_ability_ura(realm, ability_name)
+    } else {
+        crate::ura::ability_ura(realm, "hub", "runtime", ability_name)
+    }
+}
+
+fn now_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn short_hash(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let full = hex::encode(hasher.finalize());
+    full[..16].to_string()
 }
 
 /// Encode a typed federation response into `InvokeResponse.result`
@@ -5032,23 +5403,10 @@ fn wrap_json_response<T: serde::Serialize>(
 ///
 /// Pure function so it composes well into the cross-tenant
 /// routing branch landing in commit 3b/N: the dispatcher reads
-/// `request.target_uri`, calls `parse_tenant_from_uri`, and
-/// looks the tenant up in `federated_peers` to obtain a hub
-/// URI. The function deliberately does not allocate — it returns
-/// a `&str` borrowed from the input.
-pub(crate) fn parse_tenant_from_uri(uri: &str) -> Option<&str> {
-    // Expected shape: `easynet:///r/<tenant>/...`. We reject
-    // anything that does not start with `easynet:///r/` so a typo
-    // URL is not silently accepted as `tenant = ""`.
-    let after_scheme = uri.strip_prefix("easynet:///r/")?;
-    // The first path component up to the next `/` is the tenant.
-    // An empty first component (the URI starts `easynet:///r//...`)
-    // is a malformed URI and rejected.
-    let tenant_end = after_scheme.find('/').unwrap_or(after_scheme.len());
-    if tenant_end == 0 {
-        return None;
-    }
-    Some(&after_scheme[..tenant_end])
+/// `request.target_ura`, calls `parse_tenant_from_uri`, and
+/// looks the tenant up in `federated_peers` to obtain a hub URI.
+pub(crate) fn parse_tenant_from_uri(ura: &str) -> Option<String> {
+    crate::ura::parse_ura(ura).ok().map(|parsed| parsed.realm)
 }
 
 #[cfg(test)]
@@ -5061,8 +5419,8 @@ mod tests {
     /// Test helper daemon URI — admitted by the test admission
     /// facade via the loopback bypass. Tests that exercise
     /// admission rejection construct a different facade.
-    // URI v4.1.4: daemons are devices, not agents. The legacy
-    // `agent/<bare-id>` shape is rewritten to `device/<id>` by
+    // URI v4.1.4: daemons are devices, not agents. The
+    // `agent/<bare-id>` device alias is rewritten to `device/<id>` by
     // `canonicalize_presence_key` at the forward_invoke
     // entry point — fixtures must use the canonical shape so
     // self-target equality holds without going through the
@@ -5082,7 +5440,7 @@ mod tests {
     fn test_envelope() -> Envelope {
         Envelope {
             caller: Some(AgentIdentity {
-                uri: TEST_DAEMON_URI.to_string(),
+                ura: TEST_DAEMON_URI.to_string(),
                 ..AgentIdentity::default()
             }),
             ..Envelope::default()
@@ -5110,12 +5468,12 @@ mod tests {
         let resp = svc
             .invoke(invoke_request(
                 ABILITY_FEDERATION_JOIN,
-                r#"{"canonical_agent_uri":"easynet:///r/realm/device/n1","realm":"realm"}"#,
+                r#"{"membership_ura":"easynet:///r/realm/device/n1","realm":"realm"}"#,
             ))
             .await
             .expect("dispatch returns Ok");
         let body: federation_wrappers::JoinResponse = parse_response_body(resp);
-        assert_eq!(body.canonical_agent_uri, "easynet:///r/realm/device/n1");
+        assert_eq!(body.membership_ura, "easynet:///r/realm/device/n1");
         assert_eq!(body.realm, "realm");
         assert_eq!(body.join_receipt_hash.len(), 64);
     }
@@ -5126,7 +5484,7 @@ mod tests {
         let resp = svc
             .invoke(invoke_request(
                 ABILITY_FEDERATION_ADVERTISE_AGENT,
-                r#"{"agent_uri":"easynet:///r/realm/device/n1"}"#,
+                r#"{"agent_ura":"easynet:///r/realm/device/n1"}"#,
             ))
             .await
             .expect("dispatch returns Ok");
@@ -5141,7 +5499,7 @@ mod tests {
         let resp = svc
             .invoke(invoke_request(
                 ABILITY_FEDERATION_HEARTBEAT,
-                r#"{"agent_uri":"easynet:///r/realm/device/n1"}"#,
+                r#"{"agent_ura":"easynet:///r/realm/device/n1"}"#,
             ))
             .await
             .expect("dispatch returns Ok");
@@ -5159,6 +5517,106 @@ mod tests {
             .expect("dispatch returns Ok");
         let body: federation_wrappers::ResolveResponse = parse_response_body(resp);
         assert!(body.agents.is_empty());
+    }
+
+    #[tokio::test]
+    async fn invoke_writes_success_record_to_invocation_ledger() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ledger = Arc::new(
+            easynet_axon::invocation::InvocationLedger::open(
+                temp.path().join("billing").join("invocations.redb"),
+            )
+            .expect("ledger"),
+        );
+        let svc = make_service().with_invocation_ledger(Arc::clone(&ledger));
+
+        svc.invoke(invoke_request(ABILITY_FEDERATION_RESOLVE, "{}"))
+            .await
+            .expect("dispatch returns Ok");
+
+        let records = ledger.list_all().expect("ledger list");
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        assert_eq!(record.caller_ura, TEST_DAEMON_URI);
+        let expected_prefix =
+            crate::ura::resource_dot_ura("test-realm", "device.test-daemon", "invocations/");
+        assert!(record.invocation_ura.starts_with(&expected_prefix));
+        assert!(!record.invocation_ura.contains("/resource/invocation."));
+        assert_eq!(record.ability_name, ABILITY_FEDERATION_RESOLVE);
+        assert_eq!(
+            record.ability_ura,
+            "easynet:///r/test-realm/ability/hub.federation.resolve"
+        );
+        assert_eq!(record.state, "completed");
+        assert!(matches!(
+            record.args,
+            easynet_axon::invocation::LedgerEventPayload::Digest { .. }
+        ));
+        assert!(record.result.is_some());
+    }
+
+    #[tokio::test]
+    async fn invoke_writes_error_record_to_invocation_ledger() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ledger = Arc::new(
+            easynet_axon::invocation::InvocationLedger::open(
+                temp.path().join("billing").join("invocations.redb"),
+            )
+            .expect("ledger"),
+        );
+        let svc = make_service().with_invocation_ledger(Arc::clone(&ledger));
+
+        let err = svc
+            .invoke(invoke_request("unknown.ability", "{}"))
+            .await
+            .expect_err("unknown ability returns status");
+        assert_eq!(err.code(), tonic::Code::Unimplemented);
+
+        let records = ledger.list_all().expect("ledger list");
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        let expected_prefix =
+            crate::ura::resource_dot_ura("test-realm", "device.test-daemon", "invocations/");
+        assert!(record.invocation_ura.starts_with(&expected_prefix));
+        assert!(!record.invocation_ura.contains("/resource/invocation."));
+        assert_eq!(record.state, "failed");
+        assert_eq!(record.ability_name, "unknown.ability");
+        assert_eq!(
+            record.error.as_ref().map(|err| err.code.as_str()),
+            Some("unimplemented")
+        );
+    }
+
+    #[test]
+    fn invocation_resource_ura_is_owned_by_subject_user_when_present() {
+        let ura = invocation_resource_ura(
+            "test-realm",
+            "req-1",
+            &crate::ura::user_ura("test-realm", "alice"),
+            &crate::ura::device_ura("test-realm", "callee-device"),
+            &crate::ura::device_ura("test-realm", "caller-device"),
+        )
+        .expect("resource ura");
+        assert_eq!(
+            ura,
+            "easynet:///r/test-realm/resource/alice.invocations/req-1"
+        );
+    }
+
+    #[test]
+    fn invocation_resource_ura_maps_agent_to_user_owned_namespace() {
+        let ura = invocation_resource_ura(
+            "test-realm",
+            "req/with spaces",
+            &crate::ura::agent_ura("test-realm", "alice", "frontend"),
+            &crate::ura::device_ura("test-realm", "callee-device"),
+            &crate::ura::device_ura("test-realm", "caller-device"),
+        )
+        .expect("resource ura");
+        assert!(ura.starts_with(
+            "easynet:///r/test-realm/resource/alice.invocations/agents/frontend/invocations/req-with-spaces-"
+        ));
+        assert!(!ura.contains("/resource/invocation."));
     }
 
     #[tokio::test]
@@ -5193,7 +5651,7 @@ mod tests {
         let mut peer_view = DirectoryView::new("realm-b".to_string());
         peer_view.apply_frame(&DirectoryEvent::Snapshot {
             entries: vec![DirectoryEntry {
-                agent_uri: "easynet:///r/realm-b/device/peer-device".to_string(),
+                agent_ura: "easynet:///r/realm-b/device/peer-device".to_string(),
                 node_id: "peer-1".to_string(),
                 display_name: Some("silan-phone".to_string()),
                 status: "active".to_string(),
@@ -5214,7 +5672,7 @@ mod tests {
         let body: federation_wrappers::DiscoverResponse = parse_response_body(resp);
         assert_eq!(body.entries.len(), 1);
         assert_eq!(
-            body.entries[0].agent_uri,
+            body.entries[0].agent_ura,
             "easynet:///r/realm-b/device/peer-device"
         );
         assert_eq!(
@@ -5236,7 +5694,7 @@ mod tests {
         peer_view.apply_frame(&DirectoryEvent::Snapshot {
             entries: vec![
                 DirectoryEntry {
-                    agent_uri: "easynet:///r/realm-b/device/match".to_string(),
+                    agent_ura: "easynet:///r/realm-b/device/match".to_string(),
                     node_id: "n1".to_string(),
                     display_name: None,
                     status: "active".to_string(),
@@ -5245,7 +5703,7 @@ mod tests {
                     last_seen_unix_ms: None,
                 },
                 DirectoryEntry {
-                    agent_uri: "easynet:///r/realm-b/device/other".to_string(),
+                    agent_ura: "easynet:///r/realm-b/device/other".to_string(),
                     node_id: "n2".to_string(),
                     display_name: None,
                     status: "active".to_string(),
@@ -5263,14 +5721,14 @@ mod tests {
         let resp = svc
             .invoke(invoke_request(
                 ABILITY_FEDERATION_DISCOVER,
-                r#"{"agent_uri":"easynet:///r/realm-b/device/match"}"#,
+                r#"{"agent_ura":"easynet:///r/realm-b/device/match"}"#,
             ))
             .await
             .expect("dispatch returns Ok");
         let body: federation_wrappers::DiscoverResponse = parse_response_body(resp);
         assert_eq!(body.entries.len(), 1);
         assert_eq!(
-            body.entries[0].agent_uri,
+            body.entries[0].agent_ura,
             "easynet:///r/realm-b/device/match"
         );
     }
@@ -5292,7 +5750,7 @@ mod tests {
         let mut realm_c = DirectoryView::new("realm-c".to_string());
         realm_c.apply_frame(&DirectoryEvent::Snapshot {
             entries: vec![DirectoryEntry {
-                agent_uri: "easynet:///r/realm-c/user/unbound".to_string(),
+                agent_ura: "easynet:///r/realm-c/user/unbound".to_string(),
                 node_id: "n".to_string(),
                 display_name: None,
                 status: "active".to_string(),
@@ -5339,7 +5797,7 @@ mod tests {
         let mut realm_c = DirectoryView::new("realm-c".to_string());
         realm_c.apply_frame(&DirectoryEvent::Snapshot {
             entries: vec![DirectoryEntry {
-                agent_uri: "easynet:///r/realm-c/user/u".to_string(),
+                agent_ura: "easynet:///r/realm-c/user/u".to_string(),
                 node_id: "n".to_string(),
                 display_name: None,
                 status: "active".to_string(),
@@ -5382,7 +5840,7 @@ mod tests {
         let mut realm_a = DirectoryView::new("realm-a".to_string());
         realm_a.apply_frame(&DirectoryEvent::Snapshot {
             entries: vec![DirectoryEntry {
-                agent_uri: "easynet:///r/realm-a/user/bound-user".to_string(),
+                agent_ura: "easynet:///r/realm-a/user/bound-user".to_string(),
                 node_id: "n".to_string(),
                 display_name: None,
                 status: "active".to_string(),
@@ -5400,7 +5858,7 @@ mod tests {
             .record_binding(
                 FederatedUserBinding {
                     source_realm: "realm-a".to_string(),
-                    source_user_uri: "easynet:///r/realm-a/user/bound-user".to_string(),
+                    source_user_ura: "easynet:///r/realm-a/user/bound-user".to_string(),
                     source_user_pubkey_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
                         .to_string(),
                     local_user_id: "user-on-b".to_string(),
@@ -5425,7 +5883,7 @@ mod tests {
         let body: federation_wrappers::DiscoverResponse = parse_response_body(resp);
         assert_eq!(body.entries.len(), 1);
         assert_eq!(
-            body.entries[0].agent_uri,
+            body.entries[0].agent_ura,
             "easynet:///r/realm-a/user/bound-user"
         );
     }
@@ -5463,8 +5921,9 @@ mod tests {
             .expect("loopback caller admitted");
         let body: federation_wrappers::ListUserDevicesResponse = parse_response_body(resp);
         assert_eq!(body.devices.len(), 2);
+        let expected_prefix = crate::ura::realm_device_prefix("tenant-x");
         for entry in &body.devices {
-            assert!(entry.agent_uri.starts_with("easynet:///r/tenant-x/device/"));
+            assert!(entry.agent_ura.starts_with(&expected_prefix));
         }
     }
 
@@ -5486,11 +5945,11 @@ mod tests {
             RealmTrustAnchor, TrustedAgent, TrustedAgentRole,
         };
 
-        let device_caller_uri = "easynet:///r/realm-b/device/device-not-hub";
+        let device_caller_ura = "easynet:///r/realm-b/device/device-not-hub";
         let mut anchor_inner = RealmTrustAnchor::default();
         anchor_inner
             .append_agent(TrustedAgent {
-                agent_uri: device_caller_uri.to_string(),
+                agent_ura: device_caller_ura.to_string(),
                 public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
                 role: TrustedAgentRole::Device,
                 added_at_unix_ms: 1_700_000_000_000,
@@ -5505,7 +5964,7 @@ mod tests {
 
         let envelope = Envelope {
             caller: Some(crate::pb::axon::v1::AgentIdentity {
-                uri: device_caller_uri.to_string(),
+                ura: device_caller_ura.to_string(),
                 profile: "easynet-strict-v2".to_string(),
             }),
             ..Envelope::default()
@@ -5523,7 +5982,7 @@ mod tests {
             .expect_err("device-role caller must be rejected by N3-5 filter");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
         assert!(
-            err.message().contains(device_caller_uri),
+            err.message().contains(device_caller_ura),
             "rejection message must surface the caller URI; got: {}",
             err.message()
         );
@@ -5537,10 +5996,10 @@ mod tests {
         };
 
         let peer_hub_url = "https://peer-hub.example:50443";
-        let peer_hub_uri = crate::uri::hub_uri("peer-realm");
+        let peer_hub_uri = crate::ura::hub_ura("peer-realm");
         let anchor = Arc::new(
             RealmTrustAnchor::from_entries(vec![TrustedAgent {
-                agent_uri: peer_hub_uri.clone(),
+                agent_ura: peer_hub_uri.clone(),
                 public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
                 role: TrustedAgentRole::Hub,
                 added_at_unix_ms: 1_700_000_000_000,
@@ -5554,7 +6013,7 @@ mod tests {
         let canned = InvokeResponse {
             result: br#"{
                 "devices":[{
-                    "agent_uri":"easynet:///r/user-tenant/device/dev-peer",
+                    "agent_ura":"easynet:///r/user-tenant/device/dev-peer",
                     "node_id":"dev-peer",
                     "status":"active"
                 }]
@@ -5583,7 +6042,7 @@ mod tests {
         let body: federation_wrappers::ProxyListUserDevicesResponse = parse_response_body(resp);
         assert_eq!(body.devices.len(), 1);
         let device = &body.devices[0];
-        assert_eq!(device.agent_uri, "easynet:///r/user-tenant/device/dev-peer");
+        assert_eq!(device.agent_ura, "easynet:///r/user-tenant/device/dev-peer");
         assert_eq!(device.origin_realm.as_deref(), Some("peer-realm"));
         assert_eq!(device.hub_endpoint.as_deref(), Some(peer_hub_url));
 
@@ -5609,12 +6068,12 @@ mod tests {
         };
 
         let caller_signing_key = SigningKey::from_bytes(&[0x22; 32]);
-        let caller_uri = crate::uri::hub_uri("peer-realm");
+        let caller_ura = crate::ura::hub_ura("peer-realm");
         let caller_pubkey_b64 =
             BASE64_STANDARD.encode(caller_signing_key.verifying_key().to_bytes());
         let anchor = Arc::new(
             RealmTrustAnchor::from_entries(vec![TrustedAgent {
-                agent_uri: caller_uri.clone(),
+                agent_ura: caller_ura.clone(),
                 public_key_b64: caller_pubkey_b64,
                 role: TrustedAgentRole::Hub,
                 added_at_unix_ms: 1_700_000_000_000,
@@ -5632,15 +6091,15 @@ mod tests {
             br#"{"tenant_id":"user-tenant","peer_hub_urls":["https://peer-hub.example:50443"]}"#;
         let mut envelope = Envelope {
             caller: Some(AgentIdentity {
-                uri: caller_uri.clone(),
+                ura: caller_ura.clone(),
                 profile: "easynet-strict-v2".to_string(),
             }),
             callee: Some(AgentIdentity {
-                uri: crate::uri::hub_uri("local-realm"),
+                ura: crate::ura::hub_ura("local-realm"),
                 profile: "easynet-strict-v2".to_string(),
             }),
             subject: Some(SubjectIdentity {
-                uri: "easynet:///r/local-realm/user/alice".to_string(),
+                ura: "easynet:///r/local-realm/user/alice".to_string(),
                 profile: "easynet-strict-v2".to_string(),
             }),
             invocation_nonce: vec![7; 16],
@@ -5666,7 +6125,7 @@ mod tests {
             .expect_err("hub-role caller must be rejected by proxy filter");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
         assert!(
-            err.message().contains(&caller_uri),
+            err.message().contains(&caller_ura),
             "rejection message must surface the caller URI; got: {}",
             err.message()
         );
@@ -5679,10 +6138,10 @@ mod tests {
         };
 
         let peer_hub_url = "https://peer-hub.example:50443";
-        let peer_hub_uri = crate::uri::hub_uri("peer-realm");
+        let peer_hub_uri = crate::ura::hub_ura("peer-realm");
         let anchor = Arc::new(
             RealmTrustAnchor::from_entries(vec![TrustedAgent {
-                agent_uri: peer_hub_uri,
+                agent_ura: peer_hub_uri,
                 public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
                 role: TrustedAgentRole::Hub,
                 added_at_unix_ms: 1_700_000_000_000,
@@ -5717,7 +6176,7 @@ mod tests {
                 ABILITY_FEDERATION_PROXY_RESOLVE,
                 r#"{
                     "peer_hub_urls":["https://peer-hub.example:50443"],
-                    "uri_prefix":"easynet:///r/local-realm/agent/alice.",
+                    "ura_prefix":"easynet:///r/local-realm/agent/alice.",
                     "include_abilities":true
                 }"#,
             ))
@@ -5726,7 +6185,7 @@ mod tests {
         let body: federation_wrappers::ResolveResponse = parse_response_body(resp);
         assert_eq!(body.agents.len(), 1);
         assert_eq!(
-            body.agents[0].uri,
+            body.agents[0].ura,
             "easynet:///r/local-realm/agent/alice.remote"
         );
 
@@ -5737,7 +6196,7 @@ mod tests {
         let peer_args: federation_wrappers::ResolveRequest =
             serde_json::from_slice(&calls[0].1.arguments).expect("peer args decode");
         assert_eq!(
-            peer_args.uri_prefix.as_deref(),
+            peer_args.ura_prefix.as_deref(),
             Some("easynet:///r/local-realm/agent/alice.")
         );
         assert!(peer_args.include_abilities);
@@ -5753,7 +6212,7 @@ mod tests {
             RealmTrustAnchor, TrustedAgent, TrustedAgentRole,
         };
         let entry = TrustedAgent {
-            agent_uri: "easynet:///r/realm-a/device/n1".to_string(),
+            agent_ura: "easynet:///r/realm-a/device/n1".to_string(),
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             role: TrustedAgentRole::Device,
             added_at_unix_ms: 1_700_000_000_000,
@@ -5768,7 +6227,7 @@ mod tests {
         let resp = svc
             .invoke(invoke_request(
                 ABILITY_FEDERATION_RESOLVE_KEY,
-                r#"{"agent_uri":"easynet:///r/realm-a/device/n1"}"#,
+                r#"{"agent_ura":"easynet:///r/realm-a/device/n1"}"#,
             ))
             .await
             .expect("dispatch returns Ok");
@@ -5788,7 +6247,7 @@ mod tests {
         let err = svc
             .invoke(invoke_request(
                 ABILITY_FEDERATION_RESOLVE_KEY,
-                r#"{"agent_uri":"easynet:///r/realm-a/device/missing"}"#,
+                r#"{"agent_ura":"easynet:///r/realm-a/device/missing"}"#,
             ))
             .await
             .expect_err("miss must surface Status::not_found");
@@ -5807,7 +6266,7 @@ mod tests {
         let resp = svc
             .invoke(invoke_request(
                 ABILITY_FEDERATION_REVOKE,
-                r#"{"target_uri":"easynet:///r/realm/device/missing"}"#,
+                r#"{"target_ura":"easynet:///r/realm/device/missing"}"#,
             ))
             .await
             .expect("dispatch returns Ok");
@@ -5829,7 +6288,7 @@ mod tests {
         let err = svc
             .invoke(invoke_request(
                 ABILITY_FEDERATION_FORWARD_INVOKE,
-                r#"{"target_uri":"easynet:///r/realm/device/missing","inner_envelope_b64":""}"#,
+                r#"{"target_ura":"easynet:///r/realm/device/missing","inner_envelope_b64":""}"#,
             ))
             .await
             .expect_err("empty inner_envelope_b64 must be rejected");
@@ -5937,7 +6396,7 @@ mod tests {
         let delta: serde_json::Value = serde_json::from_slice(&second.payload).expect("decodes");
         assert_eq!(delta.get("kind").and_then(|v| v.as_str()), Some("online"));
         assert_eq!(
-            delta.get("canonical_agent_uri").and_then(|v| v.as_str()),
+            delta.get("membership_ura").and_then(|v| v.as_str()),
             Some("easynet:///r/test-realm/device/n1"),
         );
 
@@ -6008,7 +6467,7 @@ mod tests {
             serde_json::from_slice(&second.payload).expect("decodes DirectoryEvent");
         match evt2 {
             DirectoryEvent::Upsert { entry } => {
-                assert_eq!(entry.agent_uri, "easynet:///r/test-realm/device/n1");
+                assert_eq!(entry.agent_ura, "easynet:///r/test-realm/device/n1");
                 assert_eq!(entry.status, "active");
                 assert_eq!(entry.origin_realm, None);
             }
@@ -6028,8 +6487,8 @@ mod tests {
         let evt3: DirectoryEvent =
             serde_json::from_slice(&third.payload).expect("decodes DirectoryEvent");
         match evt3 {
-            DirectoryEvent::Remove { agent_uri, reason } => {
-                assert_eq!(agent_uri, "easynet:///r/test-realm/device/n1");
+            DirectoryEvent::Remove { agent_ura, reason } => {
+                assert_eq!(agent_ura, "easynet:///r/test-realm/device/n1");
                 assert_eq!(reason, "admin_revoked");
             }
             other => panic!("expected Remove; got {other:?}"),
@@ -6142,13 +6601,13 @@ mod tests {
             .invoke(Request::new(InvokeRequest {
                 envelope: Some(Envelope {
                     caller: Some(AgentIdentity {
-                        uri: "easynet:///r/realm/agent/test.external".to_string(),
+                        ura: "easynet:///r/realm/agent/test.external".to_string(),
                         ..AgentIdentity::default()
                     }),
                     ..Envelope::default()
                 }),
                 function_name: ABILITY_FEDERATION_HEARTBEAT.to_string(),
-                arguments: br#"{"agent_uri":"easynet:///r/realm/agent/test.external"}"#.to_vec(),
+                arguments: br#"{"agent_ura":"easynet:///r/realm/agent/test.external"}"#.to_vec(),
                 ..InvokeRequest::default()
             }))
             .await
@@ -6177,7 +6636,7 @@ mod tests {
             .invoke_stream(Request::new(InvokeServerStreamRequest {
                 envelope: Some(Envelope {
                     caller: Some(AgentIdentity {
-                        uri: "easynet:///r/realm/agent/test.external".to_string(),
+                        ura: "easynet:///r/realm/agent/test.external".to_string(),
                         ..AgentIdentity::default()
                     }),
                     ..Envelope::default()
@@ -6557,7 +7016,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_session_realm_accepts_same_realm_device_uri() {
+    fn validate_session_realm_accepts_same_realm_device_ura() {
         let anchor = RealmTrustAnchor::default();
         validate_session_realm(
             "easynet:///r/realm-a/device/device-1",
@@ -6593,7 +7052,7 @@ mod tests {
         // existing FederatedKeyResolver hit; closes LB-49.
         use crate::services::realm_trust_anchor::{TrustedAgent, TrustedAgentRole};
         let entry = TrustedAgent {
-            agent_uri: "easynet:///r/realm-b/device/device-1".to_string(),
+            agent_ura: "easynet:///r/realm-b/device/device-1".to_string(),
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             role: TrustedAgentRole::Device,
             added_at_unix_ms: 1_777_640_000_000,
@@ -6621,7 +7080,13 @@ mod tests {
 
     #[test]
     fn build_invoke_remote_dispatch_frame_carries_session_dispatch_json() {
-        let frame = build_invoke_remote_dispatch_frame(42, "echo", b"hello").expect("built");
+        let frame = build_invoke_remote_dispatch_frame(
+            42,
+            "echo",
+            b"hello",
+            SessionContentEnvelope::plaintext_json(),
+        )
+        .expect("built");
         let payload = match frame.frame.payload.expect("frame has payload") {
             DownPayload::BinaryChunk(chunk) => chunk,
             _ => panic!("expected BinaryChunk"),
@@ -6634,10 +7099,12 @@ mod tests {
                 call_id,
                 ability,
                 args,
+                args_content_envelope,
             } => {
                 assert_eq!(call_id, 42);
                 assert_eq!(ability, "echo");
                 assert_eq!(args, b"hello");
+                assert_eq!(args_content_envelope.content_type, "application/json");
             }
             _ => panic!("expected Dispatch variant"),
         }
@@ -6671,6 +7138,7 @@ mod tests {
             subject_device: "easynet:///r/realm/device/dev-B".into(),
             ability: "echo".into(),
             args: b"hi".to_vec(),
+            args_content_envelope: SessionContentEnvelope::plaintext_json(),
         })
         .unwrap();
         // Decoding as the wrong type must fail.
@@ -6713,25 +7181,25 @@ mod tests {
     fn parse_tenant_from_uri_extracts_tenant_component() {
         assert_eq!(
             parse_tenant_from_uri("easynet:///r/realm-a/device/laptop-1"),
-            Some("realm-a")
+            Some("realm-a".to_string())
         );
         assert_eq!(
             parse_tenant_from_uri("easynet:///r/realm-a/device/device-1"),
-            Some("realm-a")
+            Some("realm-a".to_string())
         );
         assert_eq!(
             parse_tenant_from_uri("easynet:///r/peer-realm/hub"),
-            Some("peer-realm")
+            Some("peer-realm".to_string())
         );
     }
 
     #[test]
-    fn parse_tenant_from_uri_handles_uri_with_extra_path_segments() {
-        // Tenant extraction is path-agnostic beyond the leading
-        // `easynet:///r/<tenant>/...` prefix.
+    fn parse_tenant_from_uri_rejects_noncanonical_extra_path_segments() {
+        // Tenant extraction goes through the canonical URA parser, so
+        // malformed alias path tails no longer slip through.
         assert_eq!(
             parse_tenant_from_uri("easynet:///r/realm-a/agent/n1/skill/foo"),
-            Some("realm-a")
+            None
         );
     }
 
@@ -6748,6 +7216,49 @@ mod tests {
         // miss the federated_peers map and surface as
         // "tenant unknown" instead of "URI malformed".
         assert_eq!(parse_tenant_from_uri("easynet:///r//device/n1"), None);
+    }
+
+    #[test]
+    fn build_peer_envelope_maps_to_hub_tuple_with_profile() {
+        let caller_envelope = Envelope {
+            caller: Some(AgentIdentity {
+                ura: "easynet:///r/local/device/dev-a".to_string(),
+                ..AgentIdentity::default()
+            }),
+            ..Envelope::default()
+        };
+        let env = build_peer_envelope(
+            Some(&caller_envelope),
+            "easynet:///r/peer/device/dev-b",
+            Some("local"),
+        )
+        .unwrap();
+
+        let caller = env.caller.unwrap();
+        let callee = env.callee.unwrap();
+        let subject = env.subject.unwrap();
+        assert_eq!(caller.ura, "easynet:///r/local/hub");
+        assert_eq!(callee.ura, "easynet:///r/peer/hub");
+        assert_eq!(subject.ura, "easynet:///r/local/device/dev-a");
+        assert_eq!(
+            caller.profile,
+            crate::services::axon_serve::DEFAULT_URA_PROFILE
+        );
+        assert_eq!(
+            callee.profile,
+            crate::services::axon_serve::DEFAULT_URA_PROFILE
+        );
+        assert_eq!(
+            subject.profile,
+            crate::services::axon_serve::DEFAULT_URA_PROFILE
+        );
+        assert_eq!(env.invocation_nonce.len(), 16);
+    }
+
+    #[test]
+    fn build_peer_envelope_rejects_bad_target_ura() {
+        let err = build_peer_envelope(None, "agent://dev-b", Some("local")).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
     }
 
     #[test]
@@ -6848,7 +7359,7 @@ mod tests {
         }
     }
 
-    fn forward_invoke_args(target_uri: &str) -> Vec<u8> {
+    fn forward_invoke_args(target_ura: &str) -> Vec<u8> {
         // Test fixture: a base64-encoded JSON `{ability, args,
         // call_id}` payload that mirrors what `support::
         // federation_invoke::invoke_via_federation_forward`
@@ -6857,7 +7368,7 @@ mod tests {
         // `peer_request` carries the real inner ability + args;
         // C1a / DEC-N4 §2.1 added the required `call_id` field
         // for response correlation.
-        forward_invoke_args_for_ability(target_uri, "observe.health", serde_json::json!({}))
+        forward_invoke_args_for_ability(target_ura, "observe.health", serde_json::json!({}))
     }
 
     /// Parameterised sibling of `forward_invoke_args` for tests
@@ -6865,7 +7376,7 @@ mod tests {
     /// (e.g. PR-1 commit 7/9 self-target dispatch tests against
     /// `fs.read`).
     fn forward_invoke_args_for_ability(
-        target_uri: &str,
+        target_ura: &str,
         ability: &str,
         args: serde_json::Value,
     ) -> Vec<u8> {
@@ -6876,7 +7387,7 @@ mod tests {
             "call_id": "test-call-id-1",
         });
         let inner_b64 = STANDARD.encode(serde_json::to_vec(&inner).unwrap());
-        format!(r#"{{"target_uri":"{target_uri}","inner_envelope_b64":"{inner_b64}"}}"#)
+        format!(r#"{{"target_ura":"{target_ura}","inner_envelope_b64":"{inner_b64}"}}"#)
             .into_bytes()
     }
 
@@ -6885,7 +7396,7 @@ mod tests {
     #[tokio::test]
     async fn forward_invoke_self_target_runs_locally_via_local_dispatcher() {
         // PR-1 commit 7/9 acceptance: when an inbound
-        // `federation.forward_invoke` call's `target_uri` matches
+        // `federation.forward_invoke` call's `target_ura` matches
         // THIS daemon's own canonical URI AND a local
         // AbilityDispatcher is wired, the dispatcher MUST execute
         // the inner ability locally (no presence push, no
@@ -6894,7 +7405,7 @@ mod tests {
         //
         // This is the LB-56 §〇 production flow: hub-A → hub-B
         // cross-hub dial → hub-B receives forward_invoke with
-        // target_uri = hub-B's own URI (peer hub IS the target,
+        // target_ura = hub-B's own URI (peer hub IS the target,
         // not a device on its bidi). Without this fall-through
         // the call surfaces target_offline because hub-B does
         // not register its own URI in its PresenceRegistry.
@@ -6998,7 +7509,7 @@ mod tests {
             .dispatch_federation_forward_invoke(
                 None,
                 &forward_invoke_args_for_ability(
-                    &crate::uri::hub_uri("test-realm"),
+                    &crate::ura::hub_ura("test-realm"),
                     "demo.echo",
                     serde_json::json!({"k": "hub"}),
                 ),
@@ -7039,7 +7550,7 @@ mod tests {
         let err = svc
             .dispatch_federation_forward_invoke(None, &forward_invoke_args(TEST_DAEMON_URI))
             .await
-            .expect_err("no local_dispatcher ⇒ legacy target_offline");
+            .expect_err("no local_dispatcher ⇒ target_offline");
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
         assert_eq!(
             err.message(),
@@ -7048,10 +7559,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forward_invoke_self_target_does_not_intercept_other_target_uris() {
+    async fn forward_invoke_self_target_does_not_intercept_other_target_uras() {
         // Guard: the self-target arm must ONLY fire when
-        // `target_uri == admission.daemon_uri()`. A different
-        // target_uri (a real device URI in the same realm) goes
+        // `target_ura == admission.daemon_uri()`. A different
+        // target_ura (a real device URI in the same realm) goes
         // through the existing presence-push path and surfaces
         // target_offline when the device is not subscribed —
         // unchanged by the fall-through.
@@ -7073,7 +7584,7 @@ mod tests {
                 &forward_invoke_args("easynet:///r/test-realm/device/some-other-device"),
             )
             .await
-            .expect_err("non-self target ⇒ legacy presence-push path ⇒ target_offline");
+            .expect_err("non-self target ⇒ presence-push path ⇒ target_offline");
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
         assert_eq!(
             err.message(),
@@ -7083,7 +7594,7 @@ mod tests {
 
     #[tokio::test]
     async fn forward_invoke_local_tenant_takes_fast_path() {
-        // C1a / DEC-N4 §2.1: when `target_uri` tenant matches
+        // C1a / DEC-N4 §2.1: when `target_ura` tenant matches
         // the daemon's own realm, the local presence-registry
         // path runs. With no presence entry inserted, the
         // dispatcher surfaces `Status::failed_precondition`
@@ -7125,7 +7636,7 @@ mod tests {
     async fn forward_invoke_cross_tenant_with_no_client_returns_target_offline() {
         // C1a / DEC-N4 §2.1: cross-tenant target + no federation
         // client wired ⇒ `Status::failed_precondition` with the
-        // wire-stable `target_offline` reason. The legacy
+        // wire-stable `target_offline` reason. The older
         // "Ok with target_online:false" shape is gone.
         let svc = make_service().with_session_realm("test-realm");
 
@@ -7210,8 +7721,8 @@ mod tests {
             .with_federation_client(recorder.clone() as Arc<dyn FederationClient>)
             .with_federated_peers(peers);
 
-        let target_uri = "easynet:///r/peer-realm/device/peer-target";
-        let args = forward_invoke_args(target_uri);
+        let target_ura = "easynet:///r/peer-realm/device/peer-target";
+        let args = forward_invoke_args(target_ura);
         let resp = svc
             .dispatch_federation_forward_invoke(None, &args)
             .await
@@ -7243,7 +7754,7 @@ mod tests {
              wrapper, NOT the bare inner ability name"
         );
         // The peer_request body is a serialized
-        // ForwardInvokeRequest carrying the SAME target_uri +
+        // ForwardInvokeRequest carrying the SAME target_ura +
         // inner_envelope_b64 the caller hub received, so the
         // peer's `dispatch_federation_forward_invoke` re-runs
         // its own routing (local-presence / same-tenant fan-out
@@ -7251,14 +7762,14 @@ mod tests {
         let nested: federation_wrappers::ForwardInvokeRequest =
             serde_json::from_slice(&calls[0].1.arguments)
                 .expect("peer arguments decode as nested ForwardInvokeRequest");
-        assert_eq!(nested.target_uri, target_uri);
+        assert_eq!(nested.target_ura, target_ura);
         assert!(
             !nested.inner_envelope_b64.is_empty(),
             "nested wrapper carries the original inner_envelope_b64 verbatim"
         );
         // When the original request carries no caller envelope, the
         // caller hub must still present its own hub URI to the peer.
-        // Using `target_uri` here makes the peer believe the target
+        // Using `target_ura` here makes the peer believe the target
         // device itself initiated the call, which fails trust-anchor
         // admission and opens the circuit breaker.
         let peer_envelope = calls[0].1.envelope.as_ref().expect("envelope present");
@@ -7266,12 +7777,12 @@ mod tests {
             .caller
             .as_ref()
             .expect("caller identity present");
-        assert_eq!(peer_caller.uri, crate::uri::hub_uri("test-realm"));
+        assert_eq!(peer_caller.ura, crate::ura::hub_ura("test-realm"));
         let peer_callee = peer_envelope
             .callee
             .as_ref()
             .expect("callee identity present");
-        assert_eq!(peer_callee.uri, crate::uri::hub_uri("peer-realm"));
+        assert_eq!(peer_callee.ura, crate::ura::hub_ura("peer-realm"));
         let caller_signature = peer_envelope
             .caller_signature
             .as_ref()
@@ -7333,8 +7844,8 @@ mod tests {
             .with_federation_client(recorder.clone() as Arc<dyn FederationClient>)
             .with_federated_peers(peers);
 
-        let target_uri = "easynet:///r/peer-realm/device/peer-target";
-        svc.dispatch_federation_forward_invoke(None, &forward_invoke_args(target_uri))
+        let target_ura = "easynet:///r/peer-realm/device/peer-target";
+        svc.dispatch_federation_forward_invoke(None, &forward_invoke_args(target_ura))
             .await
             .expect("cross-tenant wrapper build succeeds");
 
@@ -7345,11 +7856,11 @@ mod tests {
             .envelope
             .as_ref()
             .expect("peer request envelope present");
-        let caller_uri = peer_envelope
+        let caller_ura = peer_envelope
             .caller
             .as_ref()
             .expect("caller present")
-            .uri
+            .ura
             .clone();
 
         let caller_signing_key = SigningKey::from_bytes(&[0x11; 32]);
@@ -7358,7 +7869,7 @@ mod tests {
         let peer_anchor = Arc::new(
             RealmTrustAnchor::from_entries(vec![
                 crate::services::realm_trust_anchor::TrustedAgent {
-                    agent_uri: caller_uri,
+                    agent_ura: caller_ura,
                     public_key_b64: caller_pubkey_b64,
                     role: crate::services::realm_trust_anchor::TrustedAgentRole::Hub,
                     added_at_unix_ms: 1_714_492_800_000,
@@ -7370,7 +7881,7 @@ mod tests {
             .expect("peer hub trust anchor"),
         );
         let peer_admission =
-            AdmissionFacade::new(peer_anchor, Some(crate::uri::hub_uri("peer-realm")));
+            AdmissionFacade::new(peer_anchor, Some(crate::ura::hub_ura("peer-realm")));
 
         peer_admission
             .verify_invoke(&peer_request)
@@ -7412,9 +7923,9 @@ mod tests {
         let store_before = svc.admission.receipt_store().len();
         assert_eq!(store_before, 0, "empty store at test start");
 
-        let target_uri = "easynet:///r/peer-realm/device/peer-target";
+        let target_ura = "easynet:///r/peer-realm/device/peer-target";
         let _resp = svc
-            .dispatch_federation_forward_invoke(None, &forward_invoke_args(target_uri))
+            .dispatch_federation_forward_invoke(None, &forward_invoke_args(target_ura))
             .await
             .expect("cross-tenant Ok");
 
@@ -7439,7 +7950,7 @@ mod tests {
             "content type identifies the payload as a SHA-256 digest"
         );
         let callee = receipt.callee_binding.as_ref().expect("callee_binding set");
-        assert_eq!(callee.uri, target_uri);
+        assert_eq!(callee.ura, target_ura);
     }
 
     #[tokio::test]
@@ -7532,7 +8043,7 @@ mod tests {
 
         // Daemon B's trust anchor: pre-populated with daemon A
         // as a Backend-role entry so daemon B's admission gate
-        // admits a request whose envelope.caller.uri is daemon
+        // admits a request whose envelope.caller.ura is daemon
         // A's URI. URI-only no-op admission today (Backend role
         // skips the strict signature path? — no, Backend goes
         // strict. Use Device for URI-only no-op so the e2e
@@ -7541,7 +8052,7 @@ mod tests {
         // pass URI-only — exactly what we need for the in-
         // process e2e under PR-N1.
         let daemon_a_in_b_trust = vec![crate::services::realm_trust_anchor::TrustedAgent {
-            agent_uri: DAEMON_A_URI.to_string(),
+            agent_ura: DAEMON_A_URI.to_string(),
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             role: crate::services::realm_trust_anchor::TrustedAgentRole::Device,
             added_at_unix_ms: 1_714_492_800_000,
@@ -7615,7 +8126,7 @@ mod tests {
         // Daemon A: empty presence registry; cross-tenant target
         // routes via the InProcessPeerClient → daemon B. We
         // forward the envelope verbatim from the test request so
-        // daemon B sees `envelope.caller.uri = DAEMON_A_URI` and
+        // daemon B sees `envelope.caller.ura = DAEMON_A_URI` and
         // resolves the URI-only Device admission against the
         // pre-staged trust entry above.
         let daemon_a_admission = AdmissionFacade::new(
@@ -7647,13 +8158,13 @@ mod tests {
         // against.
         //
         // base64({"ability":"federation.heartbeat","args":{
-        //   "canonical_agent_uri":"easynet:///r/realm-b/device/target-device-b",
+        //   "membership_ura":"easynet:///r/realm-b/device/target-device-b",
         //   "ts_ms":0
         // }})
         let inner_payload = serde_json::json!({
             "ability": "federation.heartbeat",
             "args": {
-                "agent_uri": TARGET_DEVICE_URI,
+                "agent_ura": TARGET_DEVICE_URI,
             },
             "call_id": "e2e-call-id-1",
         });
@@ -7662,7 +8173,7 @@ mod tests {
             STANDARD.encode(serde_json::to_vec(&inner_payload).unwrap())
         };
         let forward_args = format!(
-            r#"{{"target_uri":"{}","inner_envelope_b64":"{}"}}"#,
+            r#"{{"target_ura":"{}","inner_envelope_b64":"{}"}}"#,
             TARGET_DEVICE_URI, inner_b64
         );
         let req = Request::new(InvokeRequest {
@@ -7736,10 +8247,10 @@ mod tests {
         }
     }
 
-    fn test_envelope_with_uri(uri: &str) -> Envelope {
+    fn test_envelope_with_uri(ura: &str) -> Envelope {
         Envelope {
             caller: Some(AgentIdentity {
-                uri: uri.to_string(),
+                ura: ura.to_string(),
                 ..AgentIdentity::default()
             }),
             ..Envelope::default()
@@ -7807,7 +8318,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_session_request_forward_invoke_local_presence_hits_fast_path() {
         // **LB-57 Option A acceptance** (same-hub): when the
-        // inbound Request's target_uri tenant matches the hub's
+        // inbound Request's target_ura tenant matches the hub's
         // local realm AND the target device is subscribed in
         // this hub's PresenceRegistry, the dispatcher MUST:
         //   1. Push a `SessionDispatch::Dispatch` frame down
@@ -7825,12 +8336,12 @@ mod tests {
         let svc = make_service()
             .with_session_realm("test-realm")
             .with_pending(Arc::new(PendingDispatchMap::new()));
-        let target_uri = "easynet:///r/test-realm/device/local-target";
+        let target_ura = "easynet:///r/test-realm/device/local-target";
 
         let (tx, mut rx) = tokio::sync::mpsc::channel::<
             Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
         >(4);
-        svc.presence.insert(target_uri.to_string(), tx);
+        svc.presence.insert(target_ura.to_string(), tx);
 
         let pending = svc.pending.clone().expect("pending wired above");
 
@@ -7873,7 +8384,7 @@ mod tests {
         let outcome = svc
             .dispatch_session_request(
                 ABILITY_FEDERATION_FORWARD_INVOKE,
-                &forward_invoke_args(target_uri),
+                &forward_invoke_args(target_ura),
             )
             .await;
 
@@ -8156,12 +8667,12 @@ mod tests {
         let svc = make_service()
             .with_session_realm("easynet-platform")
             .with_pending(Arc::new(PendingDispatchMap::new()));
-        let target_uri = "easynet:///r/user-realm/device/present-device";
+        let target_ura = "easynet:///r/user-realm/device/present-device";
 
         let (tx, mut rx) = tokio::sync::mpsc::channel::<
             Result<crate::services::presence_registry::DispatchFrame, tonic::Status>,
         >(4);
-        svc.presence.insert(target_uri.to_string(), tx);
+        svc.presence.insert(target_ura.to_string(), tx);
 
         let pending = svc.pending.clone().expect("pending wired above");
         let pending_for_fake = Arc::clone(&pending);
@@ -8193,7 +8704,7 @@ mod tests {
         let outcome = svc
             .dispatch_session_request(
                 ABILITY_FEDERATION_FORWARD_INVOKE,
-                &forward_invoke_args(target_uri),
+                &forward_invoke_args(target_ura),
             )
             .await;
         fake_device.await.expect("fake device task joins");
@@ -8277,17 +8788,17 @@ mod tests {
         // reverse channel, and (3) awaits the matching
         // `SessionDispatch::Result` via the PendingDispatchMap
         // before returning. The device's response bytes flow
-        // through inline as `result_bytes`, not the legacy
+        // through inline as `result_bytes`, not the earlier
         // empty-bytes "delivery accepted" shape.
         // URI v4.1.4: device target lives under `device/<id>`, not
         // `agent/<id>`. The forward_invoke entry point coerces
-        // legacy shapes via `canonicalize_presence_key`; fixtures
+        // device aliases via `canonicalize_presence_key`; fixtures
         // must register presence under the canonical key so
         // self-equality holds without going through the coercer.
-        let target_uri = "easynet:///r/test-realm/device/dev-B";
+        let target_ura = "easynet:///r/test-realm/device/dev-B";
         let presence = std::sync::Arc::new(PresenceRegistry::new());
         let (target_tx, mut target_rx): (DispatchSender, _) = mpsc::channel(8);
-        presence.insert(target_uri.to_string(), target_tx);
+        presence.insert(target_ura.to_string(), target_tx);
         let admission = AdmissionFacade::new(
             std::sync::Arc::new(RealmTrustAnchor::default()),
             Some(TEST_DAEMON_URI.to_string()),
@@ -8359,6 +8870,7 @@ mod tests {
                     call_id,
                     ability,
                     args,
+                    ..
                 } = dispatch
                 {
                     let outcome = hub_for_task.dispatch_session_request(&ability, &args).await;
@@ -8383,7 +8895,7 @@ mod tests {
         let outcome = device_handle
             .escalate(
                 ABILITY_FEDERATION_FORWARD_INVOKE.to_string(),
-                forward_invoke_args(target_uri),
+                forward_invoke_args(target_ura),
             )
             .await;
         match outcome {
@@ -8445,11 +8957,11 @@ mod tests {
 
         let presence = Arc::new(PresenceRegistry::new());
         let mut events = presence.subscribe_events();
-        let caller_uri = "easynet:///r/test-realm/device/device-a";
+        let caller_ura = "easynet:///r/test-realm/device/device-a";
         let (tx, _rx) = mpsc::channel(1);
-        presence.insert(caller_uri.to_string(), tx.clone());
+        presence.insert(caller_ura.to_string(), tx.clone());
         match events.recv().await.expect("online event") {
-            PresenceEvent::Online { uri } => assert_eq!(uri, caller_uri),
+            PresenceEvent::Online { ura } => assert_eq!(ura, caller_ura),
             other => panic!("expected online event, got {other:?}"),
         }
 
@@ -8463,7 +8975,7 @@ mod tests {
 
         push_session_request_result(
             &presence,
-            caller_uri,
+            caller_ura,
             "abcd",
             build_session_request_result_frame(
                 [0x22; 16],
@@ -8474,12 +8986,12 @@ mod tests {
         );
 
         assert!(
-            presence.lookup_tracked(caller_uri).is_none(),
+            presence.lookup_tracked(caller_ura).is_none(),
             "slow device must be evicted from presence on RequestResult backpressure"
         );
         match events.recv().await.expect("offline event") {
-            PresenceEvent::Offline { uri, reason } => {
-                assert_eq!(uri, caller_uri);
+            PresenceEvent::Offline { ura, reason } => {
+                assert_eq!(ura, caller_ura);
                 assert_eq!(reason, OfflineReason::SendFailed);
             }
             other => panic!("expected offline event, got {other:?}"),

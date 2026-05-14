@@ -29,12 +29,12 @@ use dashmap::DashMap;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AdvertisedAgentSigningAuthority {
     SelfSigned,
-    HostedBy { host_uri: String },
+    HostedBy { host_ura: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdvertisedAgentRecord {
-    pub agent_uri: String,
+    pub agent_ura: String,
     pub public_key_hex: String,
     pub host_node_id: Option<String>,
     pub signing_authority: AdvertisedAgentSigningAuthority,
@@ -42,10 +42,10 @@ pub struct AdvertisedAgentRecord {
 
 impl AdvertisedAgentRecord {
     #[must_use]
-    pub fn host_uri(&self) -> Option<&str> {
+    pub fn host_ura(&self) -> Option<&str> {
         match &self.signing_authority {
             AdvertisedAgentSigningAuthority::SelfSigned => None,
-            AdvertisedAgentSigningAuthority::HostedBy { host_uri } => Some(host_uri.as_str()),
+            AdvertisedAgentSigningAuthority::HostedBy { host_ura } => Some(host_ura.as_str()),
         }
     }
 }
@@ -61,15 +61,15 @@ impl AdvertisedAgentStore {
     }
 
     pub fn upsert(&self, record: AdvertisedAgentRecord) -> Option<AdvertisedAgentRecord> {
-        self.inner.insert(record.agent_uri.clone(), record)
+        self.inner.insert(record.agent_ura.clone(), record)
     }
 
-    pub fn get(&self, agent_uri: &str) -> Option<AdvertisedAgentRecord> {
-        self.inner.get(agent_uri).map(|entry| entry.clone())
+    pub fn get(&self, agent_ura: &str) -> Option<AdvertisedAgentRecord> {
+        self.inner.get(agent_ura).map(|entry| entry.clone())
     }
 
-    pub fn remove(&self, agent_uri: &str) -> Option<AdvertisedAgentRecord> {
-        self.inner.remove(agent_uri).map(|(_, record)| record)
+    pub fn remove(&self, agent_ura: &str) -> Option<AdvertisedAgentRecord> {
+        self.inner.remove(agent_ura).map(|(_, record)| record)
     }
 
     #[must_use]
@@ -96,22 +96,22 @@ mod tests {
     fn upsert_and_get_round_trip() {
         let store = AdvertisedAgentStore::new();
         let record = AdvertisedAgentRecord {
-            agent_uri: "easynet:///r/realm/agent/user.alice".into(),
+            agent_ura: "easynet:///r/realm/agent/user.alice".into(),
             public_key_hex: String::new(),
             host_node_id: Some("dev-1".into()),
             signing_authority: AdvertisedAgentSigningAuthority::HostedBy {
-                host_uri: "easynet:///r/realm/device/dev-1".into(),
+                host_ura: "easynet:///r/realm/device/dev-1".into(),
             },
         };
         assert!(store.upsert(record.clone()).is_none());
-        assert_eq!(store.get(&record.agent_uri), Some(record));
+        assert_eq!(store.get(&record.agent_ura), Some(record));
     }
 
     #[test]
     fn remove_deletes_row() {
         let store = AdvertisedAgentStore::new();
         let record = AdvertisedAgentRecord {
-            agent_uri: "uri".into(),
+            agent_ura: "uri".into(),
             public_key_hex: String::new(),
             host_node_id: None,
             signing_authority: AdvertisedAgentSigningAuthority::SelfSigned,

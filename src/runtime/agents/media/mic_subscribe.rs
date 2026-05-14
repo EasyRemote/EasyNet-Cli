@@ -330,7 +330,7 @@ fn handler(
     }
     let subject = env.subject.as_ref().ok_or_else(|| {
         anyhow::anyhow!(
-            "{ABILITY_MIC_SUBSCRIBE}: subject required (resource_uri of a \
+            "{ABILITY_MIC_SUBSCRIBE}: subject required (resource_ura of a \
              mic); reason={REASON_SUBJECT_REQUIRED}"
         )
     })?;

@@ -49,7 +49,7 @@
 //       "federated_peers": {"<tenant>": "<hub_uri>", ...},
 //       "trusted_hubs": [
 //         {
-//           "agent_uri": "...",
+//           "agent_ura": "...",
 //           "origin_tenant_id": "...",
 //           "hub_uri": "...",
 //           "tls_ca_pem_path": "..."
@@ -109,7 +109,7 @@ struct PeersOutput {
 
 #[derive(Debug, Serialize)]
 struct TrustedHubEntry {
-    agent_uri: String,
+    agent_ura: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     origin_tenant_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -157,7 +157,7 @@ fn print_plain(federated_peers: &BTreeMap<String, String>, trusted_hubs: &[Trust
         );
     } else {
         for hub in trusted_hubs {
-            output::detail("agent_uri", &hub.agent_uri);
+            output::detail("agent_ura", &hub.agent_ura);
             if let Some(t) = &hub.origin_tenant_id {
                 output::detail("  origin_tenant_id", t);
             }
@@ -223,8 +223,8 @@ fn read_trusted_hubs() -> anyhow::Result<Vec<TrustedHubEntry>> {
                 continue;
             }
             let entry = TrustedHubEntry {
-                agent_uri: table
-                    .get("agent_uri")
+                agent_ura: table
+                    .get("agent_ura")
                     .and_then(|i| i.as_str())
                     .unwrap_or("")
                     .to_string(),
@@ -292,8 +292,8 @@ mod tests {
                     continue;
                 }
                 out.push(TrustedHubEntry {
-                    agent_uri: table
-                        .get("agent_uri")
+                    agent_ura: table
+                        .get("agent_ura")
                         .and_then(|i| i.as_str())
                         .unwrap_or("")
                         .to_string(),
@@ -353,19 +353,19 @@ realm = "r1"
     fn realm_trust_filters_to_hub_role_only() {
         let raw = r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/realm/hub"
+agent_ura = "easynet:///r/realm/hub"
 public_key_b64 = "AAAA"
 role = "backend"
 added_at_unix_ms = 1700000000000
 
 [[trusted_agent]]
-agent_uri = "easynet:///r/realm/device/laptop"
+agent_ura = "easynet:///r/realm/device/laptop"
 public_key_b64 = "BBBB"
 role = "device"
 added_at_unix_ms = 1700000000001
 
 [[trusted_agent]]
-agent_uri = "easynet:///r/peer-realm/hub"
+agent_ura = "easynet:///r/peer-realm/hub"
 public_key_b64 = "CCCC"
 role = "hub"
 added_at_unix_ms = 1700000000002
@@ -375,7 +375,7 @@ tls_ca_pem_path = "/etc/easynet/peer-ca.pem"
 "#;
         let hubs = parse_trusted_hubs_from(raw);
         assert_eq!(hubs.len(), 1);
-        assert_eq!(hubs[0].agent_uri, "easynet:///r/peer-realm/hub");
+        assert_eq!(hubs[0].agent_ura, "easynet:///r/peer-realm/hub");
         assert_eq!(hubs[0].origin_tenant_id.as_deref(), Some("peer-realm"));
         assert_eq!(
             hubs[0].hub_uri.as_deref(),
@@ -391,7 +391,7 @@ tls_ca_pem_path = "/etc/easynet/peer-ca.pem"
     fn realm_trust_with_no_hub_entries_yields_empty_list() {
         let raw = r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/realm/hub"
+agent_ura = "easynet:///r/realm/hub"
 public_key_b64 = "AAAA"
 role = "backend"
 added_at_unix_ms = 1700000000000
@@ -409,7 +409,7 @@ added_at_unix_ms = 1700000000000
         // the missing fields (or remove the entry).
         let raw = r#"
 [[trusted_agent]]
-agent_uri = "easynet:///r/peer-realm/hub"
+agent_ura = "easynet:///r/peer-realm/hub"
 public_key_b64 = "CCCC"
 role = "hub"
 added_at_unix_ms = 1700000000002

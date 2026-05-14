@@ -98,7 +98,7 @@ pub enum OutgoingFrame {
     /// `request_id`.
     ///
     /// `receipt_header` is the §A12 / §1.3 staging shape carrying
-    /// `callee_agent_uri` / `signer_agent_uri` / signing model.
+    /// `callee_agent_ura` / `signer_agent_ura` / signing model.
     /// Optional on the wire so older Clients that don't decode it
     /// tolerate the addition; present whenever the dispatch path
     /// can determine which Agent owned the ability (P4.8c onwards).
@@ -265,7 +265,7 @@ mod tests {
         // already commits to.
         let f = IncomingFrame::OpenBidi {
             session_id: "s-1".into(),
-            ability: "fleet.session_attach".into(),
+            ability: "device.terminal.attach".into(),
             args: serde_json::json!({"node":"01DEV"}),
         };
         let s = serde_json::to_string(&f).unwrap();
@@ -279,7 +279,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(session_id, "s-1");
-                assert_eq!(ability, "fleet.session_attach");
+                assert_eq!(ability, "device.terminal.attach");
             }
             _ => panic!("expected OpenBidi after round-trip"),
         }

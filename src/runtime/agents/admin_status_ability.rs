@@ -4,7 +4,7 @@
 // File: src/runtime/agents/admin_status_ability.rs
 //
 // Per §18: input `{}`, body `{status, components[]}`. Sibling of
-// observe.health (one-line liveness probe) and observe.network_health
+// device.observe.health (one-line liveness probe) and device.observe.network_health
 // (network-side posture). admin.status is the operator-facing
 // component view: each subsystem's name + a coarse state, plus the
 // daemon's build version. The intent is "what would I show on a
@@ -67,7 +67,7 @@ where
 
 fn handler(ability_count_provider: &Arc<dyn Fn() -> usize + Send + Sync>) -> anyhow::Result<Value> {
     let local = crate::persistence::local_agents::load().unwrap_or_default();
-    let joined = !local.host_device_agent_uri.is_empty();
+    let joined = !local.host_device_agent_ura.is_empty();
     let ability_count = ability_count_provider();
     let hosted_count = local.hosted_agents.len();
 

@@ -413,6 +413,10 @@ pub enum Command {
     #[command(display_order = 42)]
     Federation(groups::federation::FederationArgs),
 
+    /// Invocation audit — list records, show one record, inspect traces.
+    #[command(display_order = 43)]
+    Invocation(groups::invocation::InvocationArgs),
+
     // ── Maintenance (50-59) ──────────────────────────────────────────────
     /// Update, check version, or uninstall EasyNet CLI.
     #[command(name = "self", display_order = 50)]
@@ -447,6 +451,7 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         Command::Runtime(args) => groups::runtime::run(args),
         Command::Mcp(args) => groups::mcp::run(args),
         Command::Federation(args) => groups::federation::run(args),
+        Command::Invocation(args) => groups::invocation::run(args),
         Command::Call(args) => groups::call::run(args),
 
         // Cross-cutting

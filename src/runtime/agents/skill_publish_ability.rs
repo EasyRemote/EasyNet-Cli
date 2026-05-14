@@ -1,25 +1,22 @@
-// EasyNet CLI — skill.publish + skill.unpublish + skill.list (root meta-abilities)
+// EasyNet CLI — device.skill.* root meta-abilities
 // =====================================================================================
 //
 // File: src/runtime/agents/skill_publish_ability.rs
 // Description: Root meta-abilities that let a curator session
 //              (spawned by `mission.think`) materialise a new skill
 //              into a registered agent's skills/ directory, delete
-//              an existing one, or list the agent's skills. Sibling
-//              of `ability_publish_ability`; the two surfaces are
-//              the two sinks the judge picks between when its
+//              an existing one, list the agent's skills, or inspect
+//              the skill package's files. Sibling of
+//              `ability_publish_ability`; the two surfaces are the
+//              two sinks the judge picks between when its
 //              `value_kind` field is `"ability"` vs `"skill"`.
 //
-// Why a separate `skill.list` here vs the existing `fleet.list_abilities`?
-// -----------------------------------------------------------------------
-// `fleet.list_abilities` already returns `InstalledSkill` rows for
-// the operator-facing skills page (it is named `list_abilities`
-// for legacy reasons; it really lists installed skills). We do
-// NOT add a redundant `skill.list` that re-implements that walk;
-// instead, this module's `skill.list` is a thin facade that
-// delegates to `fleet.list_abilities`'s same on-disk walk so the
-// curator's "did I just publish that?" check goes through the
-// same source of truth as the Skills page.
+// Skill inventory
+// ---------------
+// `device.skill.list` is the canonical installed-skill inventory
+// surface. Public/network-visible ability descriptors live under
+// `device.meta.list_abilities`; private skill packages live under
+// `device.skill.*`.
 //
 // Skill on-disk layout (mirrors `easynet skill install`)
 // ------------------------------------------------------
@@ -56,7 +53,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::{json, Value};
@@ -69,8 +66,16 @@ use crate::runtime::ability_dispatch::OwnerKind;
 pub const ABILITY_PUBLISH: &str = "device.skill.publish";
 /// Wire name: `skill.unpublish`. Curator + operator both call it.
 pub const ABILITY_UNPUBLISH: &str = "device.skill.unpublish";
-/// Wire name: `skill.list`. Thin facade over `fleet.list_abilities`.
+/// Wire name: `skill.list`.
 pub const ABILITY_LIST: &str = "device.skill.list";
+/// Wire name: `skill.tree`. Returns a bounded file tree for a skill package.
+pub const ABILITY_TREE: &str = "device.skill.tree";
+/// Wire name: `skill.read_file`. Reads one UTF-8 file inside a skill package.
+pub const ABILITY_READ_FILE: &str = "device.skill.read_file";
+/// Wire name: `skill.write_file`. Writes one UTF-8 file inside a skill package.
+pub const ABILITY_WRITE_FILE: &str = "device.skill.write_file";
+
+const MAX_SKILL_FILE_BYTES: u64 = 1024 * 1024;
 
 pub fn register(reg: &mut LocalAbilityRegistry) {
     reg.register_rpc_with_owner(
@@ -87,6 +92,21 @@ pub fn register(reg: &mut LocalAbilityRegistry) {
         "device.skill.list",
         OwnerKind::Device,
         Arc::new(list_handler),
+    );
+    reg.register_rpc_with_owner(
+        "device.skill.tree",
+        OwnerKind::Device,
+        Arc::new(tree_handler),
+    );
+    reg.register_rpc_with_owner(
+        "device.skill.read_file",
+        OwnerKind::Device,
+        Arc::new(read_file_handler),
+    );
+    reg.register_rpc_with_owner(
+        "device.skill.write_file",
+        OwnerKind::Device,
+        Arc::new(write_file_handler),
     );
 }
 
@@ -153,14 +173,13 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
         subpath: None,
     };
     let installed_at = chrono::Utc::now().to_rfc3339();
-    // Strip the `sha256:` prefix for the on-disk install.json —
-    // legacy InstallRecord.content_hash carries a bare hex string
-    // (matching what `fleet.list_abilities` already emits to the
-    // backend / frontend). The wire envelope below keeps the
-    // prefix because callers benefit from algorithm tagging.
+    // Strip the `sha256:` prefix for the on-disk install.json.
+    // The wire envelope below keeps the prefix because callers
+    // benefit from algorithm tagging.
     let bare_hash = hash.strip_prefix("sha256:").unwrap_or(&hash).to_string();
     let record = crate::facade::cli::skill::InstallRecord {
         name: skill_name.clone(),
+        description: crate::facade::cli::skill::skill_description_from_dir(&skill_dir),
         agent_id: owner_id.clone(),
         source,
         skill_tree_hash: bare_hash,
@@ -231,7 +250,13 @@ fn unpublish_handler(args: Value) -> anyhow::Result<Value> {
     let logged_hash = std::fs::read_to_string(&install_path)
         .ok()
         .and_then(|t| serde_json::from_str::<crate::facade::cli::skill::InstallRecord>(&t).ok())
-        .map(|r| format!("sha256:{}", r.skill_tree_hash))
+        .map(|r| {
+            if r.skill_tree_hash.starts_with("sha256:") {
+                r.skill_tree_hash
+            } else {
+                format!("sha256:{}", r.skill_tree_hash)
+            }
+        })
         .unwrap_or_else(|| "unknown".to_string());
 
     std::fs::remove_dir_all(&skill_dir).map_err(|e| {
@@ -255,33 +280,140 @@ fn unpublish_handler(args: Value) -> anyhow::Result<Value> {
     }))
 }
 
-/// `skill.list` — thin facade over `fleet.list_abilities`.
+/// `skill.list` — installed skill inventory.
 ///
 /// Args:
 /// ```json
 /// { "owner_agent_id": "<agent name>"? }
 /// ```
-/// (When absent, all agents' skills are listed — same shape
-/// `fleet.list_abilities` accepts.)
+/// (When absent, all agents' skills are listed.)
 ///
-/// Returns: same `{ "items": [InstalledSkill, ...] }` shape as
-/// `fleet.list_abilities`. We delegate directly so backend and
-/// curator see byte-identical rows.
+/// Returns: `{ "items": [InstalledSkill, ...] }`.
 fn list_handler(args: Value) -> anyhow::Result<Value> {
-    // Re-shape: skill.list takes `owner_agent_id`; fleet.list_abilities
-    // takes `agent_id` (legacy name). Translate so the curator's
-    // ergonomic name passes through to the canonical handler
-    // without forcing the curator to remember the legacy field.
-    let translated = match args {
-        Value::Object(mut map) => {
-            if let Some(v) = map.remove("owner_agent_id") {
-                map.insert("agent_id".to_string(), v);
-            }
-            Value::Object(map)
-        }
-        other => other,
-    };
-    crate::runtime::agents::skill_ability::list_handler_for_args(translated)
+    crate::runtime::agents::skill_ability::list_handler_for_args(args)
+}
+
+/// `skill.tree` — list files inside one installed skill package.
+///
+/// Args:
+/// ```json
+/// {
+///   "owner_agent_id": "<agent name>",
+///   "skill_name": "<slug>",
+///   "resource_ura": "easynet:///r/<realm>/resource/agent.<user>.<agent>/skill/<slug>"
+/// }
+/// ```
+fn tree_handler(args: Value) -> anyhow::Result<Value> {
+    let (owner_id, skill_name) = parse_owner_skill_args(&args, "skill.tree")?;
+    validate_skill_name(&skill_name)?;
+    let resource_ura = package_resource_ura_from_args(&args, "skill.tree", &skill_name)?;
+    let skill_dir = resolve_skill_dir(&owner_id, &skill_name, "skill.tree")?;
+    let mut entries = Vec::new();
+    collect_skill_tree_entries(&skill_dir, &skill_dir, &mut entries)?;
+    annotate_skill_file_resource_uras(&resource_ura, &mut entries);
+    entries.sort_by(|a, b| {
+        let ap = a["path"].as_str().unwrap_or("");
+        let bp = b["path"].as_str().unwrap_or("");
+        ap.cmp(bp)
+    });
+    let mut receipt = json!({
+        "ok": true,
+        "owner_agent_id": owner_id,
+        "skill_name": skill_name,
+        "root": skill_dir.display().to_string(),
+        "files": entries,
+    });
+    receipt["resource_ura"] = json!(resource_ura);
+    Ok(receipt)
+}
+
+/// `skill.read_file` — read a UTF-8 file inside one installed skill package.
+fn read_file_handler(args: Value) -> anyhow::Result<Value> {
+    let (owner_id, skill_name, rel_path) = parse_skill_file_args(&args, "skill.read_file", false)?;
+    validate_skill_name(&skill_name)?;
+    let package_ura = package_resource_ura_from_args(&args, "skill.read_file", &skill_name)?;
+    let skill_dir = resolve_skill_dir(&owner_id, &skill_name, "skill.read_file")?;
+    let rel = validate_skill_relative_path(&rel_path, false)?;
+    let full = skill_dir.join(&rel);
+    ensure_resolved_inside(&skill_dir, &full, "skill.read_file")?;
+    let meta = std::fs::metadata(&full)
+        .map_err(|e| anyhow::anyhow!("skill.read_file: metadata {}: {e}", full.display()))?;
+    if !meta.is_file() {
+        anyhow::bail!("skill.read_file: {} is not a file", rel.display());
+    }
+    if meta.len() > MAX_SKILL_FILE_BYTES {
+        anyhow::bail!(
+            "skill.read_file: {} is {} bytes; cap is {} bytes",
+            rel.display(),
+            meta.len(),
+            MAX_SKILL_FILE_BYTES
+        );
+    }
+    let bytes = std::fs::read(&full)
+        .map_err(|e| anyhow::anyhow!("skill.read_file: read {}: {e}", full.display()))?;
+    let content = String::from_utf8(bytes).map_err(|_| {
+        anyhow::anyhow!(
+            "skill.read_file: {} is not valid UTF-8; binary skill files are not editable here",
+            rel.display()
+        )
+    })?;
+    let rel_wire = rel.to_string_lossy().to_string();
+    let mut receipt = json!({
+        "ok": true,
+        "owner_agent_id": owner_id,
+        "skill_name": skill_name,
+        "path": rel_wire,
+        "content": content,
+        "encoding": "utf-8",
+        "size_bytes": meta.len(),
+    });
+    receipt["resource_ura"] = json!(skill_file_resource_ura(&package_ura, &rel_wire));
+    Ok(receipt)
+}
+
+/// `skill.write_file` — write a UTF-8 file inside one installed skill package.
+fn write_file_handler(args: Value) -> anyhow::Result<Value> {
+    let (owner_id, skill_name, rel_path) = parse_skill_file_args(&args, "skill.write_file", true)?;
+    validate_skill_name(&skill_name)?;
+    let package_ura = package_resource_ura_from_args(&args, "skill.write_file", &skill_name)?;
+    let obj = args
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("skill.write_file: args must be a JSON object"))?;
+    let content = obj
+        .get("content")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("skill.write_file: missing `content` string"))?;
+    if content.as_bytes().len() as u64 > MAX_SKILL_FILE_BYTES {
+        anyhow::bail!(
+            "skill.write_file: content is {} bytes; cap is {} bytes",
+            content.as_bytes().len(),
+            MAX_SKILL_FILE_BYTES
+        );
+    }
+
+    let skill_dir = resolve_skill_dir(&owner_id, &skill_name, "skill.write_file")?;
+    let rel = validate_skill_relative_path(&rel_path, true)?;
+    let full = skill_dir.join(&rel);
+    ensure_resolved_inside(&skill_dir, &full, "skill.write_file")?;
+    if let Some(parent) = full.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            anyhow::anyhow!("skill.write_file: create parent {}: {e}", parent.display())
+        })?;
+    }
+    crate::persistence::config::atomic_write(&full, content.as_bytes())
+        .map_err(|e| anyhow::anyhow!("skill.write_file: write {}: {e}", full.display()))?;
+    let hash = refresh_install_record_hash(&skill_dir)?;
+    let rel_wire = rel.to_string_lossy().to_string();
+    let mut receipt = json!({
+        "ok": true,
+        "owner_agent_id": owner_id,
+        "skill_name": skill_name,
+        "path": rel_wire,
+        "size_bytes": content.as_bytes().len() as u64,
+        "content_hash": hash,
+    });
+    receipt["resource_ura"] = json!(skill_file_resource_ura(&package_ura, &rel_wire));
+    Ok(receipt)
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────
@@ -324,6 +456,78 @@ fn parse_publish_args(args: &Value) -> anyhow::Result<(String, String, String, O
     Ok((owner, name, body, run_id))
 }
 
+fn package_resource_ura_from_args(
+    args: &Value,
+    verb: &str,
+    skill_name: &str,
+) -> anyhow::Result<String> {
+    let uri = args
+        .as_object()
+        .and_then(|obj| obj.get("resource_ura"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("{verb}: missing/empty `resource_ura`"))?;
+
+    let parsed = crate::ura::parse_ura(uri)
+        .map_err(|e| anyhow::anyhow!("{verb}: invalid resource_ura {uri:?}: {e}"))?;
+    if parsed.kind != crate::ura::URAKind::Resource {
+        anyhow::bail!(
+            "{verb}: resource_ura must be a resource URA, got {}",
+            parsed.kind
+        );
+    }
+    if parsed.namespace.is_some() || !parsed.user_id.starts_with("agent.") {
+        anyhow::bail!("{verb}: resource_ura must identify an agent skill package, got {uri:?}");
+    }
+    let expected_path = format!("skill/{skill_name}");
+    if parsed.path.trim_end_matches('/') != expected_path {
+        anyhow::bail!(
+            "{verb}: resource_ura path must be {expected_path:?}, got {:?}",
+            parsed.path
+        );
+    }
+    Ok(uri.trim_end_matches('/').to_string())
+}
+
+fn skill_file_resource_ura(package_ura: &str, rel_path: &str) -> String {
+    let base = package_ura.trim().trim_end_matches('/');
+    let clean = rel_path.trim_start_matches('/');
+    if clean.is_empty() {
+        return base.to_string();
+    }
+    let Ok(parsed) = crate::ura::parse_ura(base) else {
+        return base.to_string();
+    };
+    if parsed.kind != crate::ura::URAKind::Resource {
+        return base.to_string();
+    }
+    let child_path = if parsed.path.is_empty() {
+        format!("file/{clean}")
+    } else {
+        format!("{}/file/{clean}", parsed.path.trim_end_matches('/'))
+    };
+    crate::ura::resource_dot_ura(&parsed.realm, &parsed.user_id, &child_path)
+}
+
+fn annotate_skill_file_resource_uras(package_ura: &str, entries: &mut [Value]) {
+    for entry in entries {
+        let Some(path) = entry
+            .get("path")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        if let Some(obj) = entry.as_object_mut() {
+            obj.insert(
+                "resource_ura".to_string(),
+                json!(skill_file_resource_ura(package_ura, &path)),
+            );
+        }
+    }
+}
+
 fn parse_unpublish_args(args: &Value) -> anyhow::Result<(String, String)> {
     let obj = args
         .as_object()
@@ -343,6 +547,49 @@ fn parse_unpublish_args(args: &Value) -> anyhow::Result<(String, String)> {
         .ok_or_else(|| anyhow::anyhow!("skill.unpublish: missing/empty `skill_name`"))?
         .to_string();
     Ok((owner, name))
+}
+
+fn parse_owner_skill_args(args: &Value, verb: &str) -> anyhow::Result<(String, String)> {
+    let obj = args
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("{verb}: args must be a JSON object"))?;
+    let owner = obj
+        .get("owner_agent_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("{verb}: missing/empty `owner_agent_id`"))?
+        .to_string();
+    let name = obj
+        .get("skill_name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("{verb}: missing/empty `skill_name`"))?
+        .to_string();
+    Ok((owner, name))
+}
+
+fn parse_skill_file_args(
+    args: &Value,
+    verb: &str,
+    allow_create: bool,
+) -> anyhow::Result<(String, String, String)> {
+    let (owner, name) = parse_owner_skill_args(args, verb)?;
+    let obj = args
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("{verb}: args must be a JSON object"))?;
+    let path = obj
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("{verb}: missing/empty `path`"))?
+        .to_string();
+    if !allow_create && path.ends_with('/') {
+        anyhow::bail!("{verb}: `path` must point to a file, got directory-like path {path:?}");
+    }
+    Ok((owner, name, path))
 }
 
 /// Resolve the owner agent's root path AND its runtime type. Needed
@@ -402,6 +649,43 @@ fn skills_dir_for(root: &std::path::Path, agent_type: agents::AgentType) -> Path
     }
 }
 
+fn skill_dir_candidates_for(
+    root: &Path,
+    agent_type: agents::AgentType,
+    skill_name: &str,
+) -> Vec<PathBuf> {
+    let mut candidates = match agent_type {
+        agents::AgentType::ClaudeCode => vec![
+            root.join(".claude").join("skills").join(skill_name),
+            root.join("skills").join(skill_name),
+        ],
+        agents::AgentType::Codex | agents::AgentType::CodexAppServer => {
+            vec![root.join("skills").join(skill_name)]
+        }
+    };
+    if let Some(global_dir) =
+        crate::facade::cli::skill::global_skill_dir_for(agent_type, skill_name)
+    {
+        if !candidates.iter().any(|candidate| candidate == &global_dir) {
+            candidates.push(global_dir);
+        }
+    }
+    candidates
+}
+
+fn resolve_skill_dir(owner_id: &str, skill_name: &str, verb: &str) -> anyhow::Result<PathBuf> {
+    let (owner_root, agent_type) = resolve_owner_root_and_type(owner_id)?;
+    for candidate in skill_dir_candidates_for(&owner_root, agent_type, skill_name) {
+        if candidate.is_dir() {
+            return Ok(candidate);
+        }
+    }
+    anyhow::bail!(
+        "{verb}: no skill named {skill_name:?} for agent {owner_id:?} under {}",
+        owner_root.display()
+    )
+}
+
 /// Refuse skill names that would escape the skills/ directory or
 /// trip OS-specific filename restrictions. The allow-list mirrors
 /// what existing `easynet skill install` accepts: ASCII alnum plus
@@ -426,6 +710,174 @@ fn validate_skill_name(name: &str) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn validate_skill_relative_path(path: &str, allow_new_file: bool) -> anyhow::Result<PathBuf> {
+    let candidate = Path::new(path);
+    if candidate.is_absolute() {
+        anyhow::bail!("skill file path must be relative, got {path:?}");
+    }
+    let mut clean = PathBuf::new();
+    for component in candidate.components() {
+        match component {
+            Component::Normal(part) => clean.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                anyhow::bail!("skill file path {path:?} escapes the skill directory")
+            }
+        }
+    }
+    if clean.as_os_str().is_empty() {
+        anyhow::bail!("skill file path must not be empty");
+    }
+    if clean.components().next().and_then(|c| match c {
+        Component::Normal(s) => Some(s == ".easynet"),
+        _ => None,
+    }) == Some(true)
+    {
+        anyhow::bail!("skill file path {path:?} targets EasyNet metadata, not skill source");
+    }
+    if !allow_new_file && clean.to_string_lossy().ends_with('/') {
+        anyhow::bail!("skill file path must point to a file");
+    }
+    Ok(clean)
+}
+
+fn ensure_resolved_inside(root: &Path, path: &Path, verb: &str) -> anyhow::Result<()> {
+    let root_canon = root
+        .canonicalize()
+        .map_err(|e| anyhow::anyhow!("{verb}: canonicalize {}: {e}", root.display()))?;
+    let parent = if path.exists() {
+        path
+    } else {
+        path.parent()
+            .ok_or_else(|| anyhow::anyhow!("{verb}: path has no parent: {}", path.display()))?
+    };
+    let parent_canon = parent
+        .canonicalize()
+        .or_else(|_| {
+            if let Some(existing) = parent.ancestors().find(|p| p.exists()) {
+                existing.canonicalize()
+            } else {
+                parent.canonicalize()
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("{verb}: canonicalize {}: {e}", parent.display()))?;
+    if !parent_canon.starts_with(&root_canon) {
+        anyhow::bail!(
+            "{verb}: {} resolves outside skill directory {}",
+            path.display(),
+            root.display()
+        );
+    }
+    Ok(())
+}
+
+fn collect_skill_tree_entries(root: &Path, dir: &Path, out: &mut Vec<Value>) -> anyhow::Result<()> {
+    let mut children: Vec<_> = std::fs::read_dir(dir)
+        .map_err(|e| anyhow::anyhow!("skill.tree: read_dir {}: {e}", dir.display()))?
+        .flatten()
+        .collect();
+    children.sort_by_key(|entry| entry.path());
+    for entry in children {
+        let path = entry.path();
+        let rel = path.strip_prefix(root).unwrap_or(&path);
+        if rel.components().next().and_then(|c| match c {
+            Component::Normal(s) => Some(s == ".easynet"),
+            _ => None,
+        }) == Some(true)
+        {
+            continue;
+        }
+        let rel_str = rel.to_string_lossy();
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("skill.tree: skipping {}: {e}", path.display());
+                continue;
+            }
+        };
+        if meta.is_dir() {
+            out.push(json!({
+                "path": rel_str,
+                "type": "dir",
+                "size_bytes": 0,
+            }));
+            collect_skill_tree_entries(root, &path, out)?;
+        } else if meta.is_file() {
+            out.push(json!({
+                "path": rel_str,
+                "type": "file",
+                "size_bytes": meta.len(),
+            }));
+        }
+    }
+    Ok(())
+}
+
+fn refresh_install_record_hash(skill_dir: &Path) -> anyhow::Result<String> {
+    let hash = hash_skill_tree(skill_dir)?;
+    let record_path = skill_dir.join(".easynet").join("install.json");
+    if record_path.exists() {
+        let mut record = crate::facade::cli::skill::read_install_record(&record_path)?;
+        record.skill_tree_hash = hash.clone();
+        record.size_bytes = skill_tree_size_bytes(skill_dir)?;
+        let body = serde_json::to_string_pretty(&record)
+            .map_err(|e| anyhow::anyhow!("skill.write_file: serialise install.json: {e}"))?;
+        crate::persistence::config::atomic_write(&record_path, body.as_bytes()).map_err(|e| {
+            anyhow::anyhow!("skill.write_file: write {}: {e}", record_path.display())
+        })?;
+    }
+    Ok(hash)
+}
+
+fn hash_skill_tree(root: &Path) -> anyhow::Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut files = Vec::new();
+    collect_hash_files(root, root, &mut files)?;
+    files.sort();
+    let mut h = Sha256::new();
+    for rel in files {
+        h.update(rel.to_string_lossy().as_bytes());
+        h.update([0u8]);
+        let full = root.join(&rel);
+        let bytes = std::fs::read(&full)?;
+        h.update((bytes.len() as u64).to_be_bytes());
+        h.update(bytes);
+    }
+    Ok(format!("sha256:{:x}", h.finalize()))
+}
+
+fn collect_hash_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let rel = path.strip_prefix(root).unwrap_or(&path);
+        if rel.components().next().and_then(|c| match c {
+            Component::Normal(s) => Some(s == ".easynet"),
+            _ => None,
+        }) == Some(true)
+        {
+            continue;
+        }
+        let meta = entry.metadata()?;
+        if meta.is_dir() {
+            collect_hash_files(root, &path, out)?;
+        } else if meta.is_file() {
+            out.push(rel.to_path_buf());
+        }
+    }
+    Ok(())
+}
+
+fn skill_tree_size_bytes(root: &Path) -> anyhow::Result<u64> {
+    let mut files = Vec::new();
+    collect_hash_files(root, root, &mut files)?;
+    let mut total = 0;
+    for rel in files {
+        total += std::fs::metadata(root.join(rel))?.len();
+    }
+    Ok(total)
 }
 
 fn content_hash(body: &str) -> String {
@@ -475,8 +927,73 @@ pub fn list_input_schema() -> Value {
             "owner_agent_id": {
                 "type": "string",
                 "description": "Optional. Filter to skills owned by this agent. Absent = all agents."
+            },
+            "agent_ura": {
+                "type": "string",
+                "description": "Canonical owner agent URA used by the daemon to return authoritative skill resource_ura values."
             }
-        }
+        },
+        "additionalProperties": false
+    })
+}
+
+pub fn tree_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["owner_agent_id", "skill_name", "resource_ura"],
+        "properties": {
+            "owner_agent_id": {"type": "string"},
+            "skill_name": {"type": "string"},
+            "resource_ura": {
+                "type": "string",
+                "description": "Canonical skill package resource URA returned by device.skill.list."
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+pub fn read_file_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["owner_agent_id", "skill_name", "resource_ura", "path"],
+        "properties": {
+            "owner_agent_id": {"type": "string"},
+            "skill_name": {"type": "string"},
+            "resource_ura": {
+                "type": "string",
+                "description": "Canonical skill package resource URA returned by device.skill.list."
+            },
+            "path": {
+                "type": "string",
+                "description": "Relative file path inside the skill directory, for example SKILL.md."
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+pub fn write_file_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["owner_agent_id", "skill_name", "resource_ura", "path", "content"],
+        "properties": {
+            "owner_agent_id": {"type": "string"},
+            "skill_name": {"type": "string"},
+            "resource_ura": {
+                "type": "string",
+                "description": "Canonical skill package resource URA returned by device.skill.list."
+            },
+            "path": {
+                "type": "string",
+                "description": "Relative file path inside the skill directory, for example SKILL.md."
+            },
+            "content": {
+                "type": "string",
+                "description": "UTF-8 file content. Maximum 1 MiB."
+            }
+        },
+        "additionalProperties": false
     })
 }
 
@@ -492,8 +1009,23 @@ pub fn unpublish_description() -> &'static str {
 }
 
 pub fn list_description() -> &'static str {
-    "List skills installed for an agent (or all agents). Thin facade over \
-     fleet.list_abilities; returns the same InstalledSkill row shape."
+    "List skills installed for an agent (or all agents). Canonical skill inventory \
+     surface; returns InstalledSkill rows."
+}
+
+pub fn tree_description() -> &'static str {
+    "List the file tree for one installed skill package. The lookup is constrained to \
+     the selected agent's visible skill directories and returns relative paths plus file sizes."
+}
+
+pub fn read_file_description() -> &'static str {
+    "Read one UTF-8 file from an installed skill package. The path is relative to the \
+     skill directory and traversal outside that directory is rejected."
+}
+
+pub fn write_file_description() -> &'static str {
+    "Write one UTF-8 file inside an installed skill package. The path is relative to \
+     the skill directory, traversal is rejected, and install metadata is rehashed."
 }
 
 #[cfg(test)]
@@ -633,5 +1165,180 @@ mod tests {
             found,
             "list_handler must surface the just-published skill: {res}"
         );
+        let row = items
+            .iter()
+            .find(|item| item["name"] == "found-me")
+            .unwrap();
+        assert_eq!(row["description"], "content");
+    }
+
+    #[test]
+    fn skill_file_resource_ura_extends_resource_via_axon_builder() {
+        let package_ura =
+            "easynet:///r/localhost/resource/agent.dev.frontend-engineer/skill/alive-video";
+        assert_eq!(
+            skill_file_resource_ura(package_ura, "/docs/SKILL.md"),
+            "easynet:///r/localhost/resource/agent.dev.frontend-engineer/skill/alive-video/file/docs/SKILL.md",
+        );
+    }
+
+    #[test]
+    fn tree_and_read_file_are_scoped_to_skill_dir() {
+        let g = HomeGuard::new();
+        let name = materialise_agent("tree-read", &g);
+        let resource_ura = test_skill_resource_ura(&name, "inspectable");
+        let published = publish_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "inspectable",
+            "skill_md": "# Inspectable\nBody",
+        }))
+        .unwrap();
+        let dir = PathBuf::from(published["skill_dir"].as_str().unwrap());
+        let notes_dir = dir.join("notes");
+        std::fs::create_dir_all(&notes_dir).unwrap();
+        crate::persistence::config::atomic_write(&notes_dir.join("guide.md"), b"guide").unwrap();
+
+        let tree = tree_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "inspectable",
+            "resource_ura": resource_ura,
+        }))
+        .expect("tree ok");
+        let files = tree["files"].as_array().unwrap();
+        assert!(files
+            .iter()
+            .any(|f| f["path"] == "SKILL.md" && f["type"] == "file"));
+        assert!(files
+            .iter()
+            .any(|f| f["path"] == "notes/guide.md" && f["type"] == "file"));
+        assert!(!files.iter().any(|f| f["path"] == ".easynet/install.json"));
+
+        let read = read_file_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "inspectable",
+            "resource_ura": resource_ura,
+            "path": "notes/guide.md",
+        }))
+        .expect("read ok");
+        assert_eq!(read["content"], "guide");
+    }
+
+    #[test]
+    fn tree_and_read_file_resolve_global_pool_skill_returned_by_list() {
+        let g = HomeGuard::new();
+        let name = materialise_agent("global-tree-read", &g);
+        let skill_dir = crate::persistence::config::home_dir()
+            .join(".claude")
+            .join("skills")
+            .join("alive-video");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        crate::persistence::config::atomic_write(
+            &skill_dir.join("SKILL.md"),
+            b"---\nname: alive-video\ndescription: Alive Video\n---\n# Alive Video\n",
+        )
+        .unwrap();
+        crate::persistence::config::atomic_write(&skill_dir.join("guide.md"), b"global guide")
+            .unwrap();
+
+        let listed = list_handler(json!({"owner_agent_id": name})).expect("list ok");
+        assert!(
+            listed["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["name"] == "alive-video"),
+            "list must surface the global skill before tree/read can address it: {listed}"
+        );
+        let row = listed["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["name"] == "alive-video")
+            .unwrap();
+        assert_eq!(row["description"], "Alive Video");
+
+        let resource_ura = test_skill_resource_ura(&name, "alive-video");
+        let tree = tree_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "alive-video",
+            "resource_ura": resource_ura,
+        }))
+        .expect("tree resolves global skill");
+        assert!(tree["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["path"] == "guide.md" && f["type"] == "file"));
+
+        let read = read_file_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "alive-video",
+            "resource_ura": resource_ura,
+            "path": "guide.md",
+        }))
+        .expect("read resolves global skill");
+        assert_eq!(read["content"], "global guide");
+    }
+
+    #[test]
+    fn write_file_updates_content_and_rejects_traversal() {
+        let g = HomeGuard::new();
+        let name = materialise_agent("write", &g);
+        let resource_ura = test_skill_resource_ura(&name, "editable");
+        let published = publish_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "editable",
+            "skill_md": "old",
+        }))
+        .unwrap();
+        let before_hash = published["content_hash"].as_str().unwrap().to_string();
+
+        let write = write_file_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "editable",
+            "resource_ura": resource_ura,
+            "path": "SKILL.md",
+            "content": "new body",
+        }))
+        .expect("write ok");
+        assert_eq!(write["ok"], true);
+        assert_ne!(write["content_hash"].as_str().unwrap(), before_hash);
+
+        let read = read_file_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "editable",
+            "resource_ura": resource_ura,
+            "path": "SKILL.md",
+        }))
+        .expect("read ok");
+        assert_eq!(read["content"], "new body");
+
+        let err = write_file_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "editable",
+            "resource_ura": resource_ura,
+            "path": "../escape.md",
+            "content": "nope",
+        }))
+        .unwrap_err();
+        assert!(format!("{err}").contains("escapes"));
+
+        let err = write_file_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "editable",
+            "resource_ura": resource_ura,
+            "path": ".easynet/install.json",
+            "content": "{}",
+        }))
+        .unwrap_err();
+        assert!(format!("{err}").contains("metadata"));
+    }
+
+    fn test_skill_resource_ura(owner: &str, skill: &str) -> String {
+        crate::ura::resource_dot_ura(
+            "localhost",
+            &format!("agent.dev.{owner}"),
+            &format!("skill/{skill}"),
+        )
     }
 }

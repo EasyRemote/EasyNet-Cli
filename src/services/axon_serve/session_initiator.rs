@@ -62,8 +62,8 @@
 // ---------------
 // When boot supplies a deterministic per-device Ed25519 seed, frame 0
 // is signed over the same canonical invocation bytes the admission gate
-// verifies. Sparse legacy credentials that only carry `agent_uri` still
-// degrade to the unsigned PR-1/PR-2 behaviour so older tests and
+// verifies. Sparse credentials that only carry `agent_ura` still
+// degrade to the unsigned PR-1/PR-2 behaviour so transition tests and
 // partially-migrated devices do not fail hard during boot.
 //
 // What this commit does NOT do
@@ -89,7 +89,7 @@ use std::time::Duration;
 
 use easynet_axon::invocation::axiom::{
     canonical_invocation_bytes, AgentIdentity as AxiomAgentIdentity, CausalContext,
-    InvocationEnvelope, SubjectIdentity as AxiomSubjectIdentity, UriProfile,
+    InvocationEnvelope, SubjectIdentity as AxiomSubjectIdentity, UraProfile,
 };
 use ed25519_dalek::{Signer as _, SigningKey};
 use futures::Stream;
@@ -113,7 +113,7 @@ use crate::pb::axon::v1::{
 /// `EnvelopeOpen.target.ability_name`.
 ///
 /// **Wire-pinned** — the production hub at `easynet.run` only
-/// accepts the legacy `<self>.session` literal today. The M4
+/// accepts the `<self>.session` literal today. The M4
 /// canonical rename to `device.session` is held until EasyNet-Axon
 /// (the hub-side gRPC dispatcher) ships matching dual-name
 /// acceptance. EasyNet-Cli's M1 dual-aliasing answers both names
@@ -196,7 +196,7 @@ const REASON_BIDI_DOWN_SEQUENCE: &str = "AXON_BIDI_DOWN_SEQUENCE";
 /// Default URI profile used when the session frame carries a signed
 /// envelope. Empty profile fields canonicalise to the same value, but
 /// populating the string keeps the wire explicit and easier to inspect.
-const DEFAULT_URI_PROFILE: &str = "easynet-strict-v2";
+const DEFAULT_URA_PROFILE: &str = "easynet-strict-v2";
 
 /// Optional deterministic Ed25519 seed used to sign frame 0.
 pub type SessionSigningSeed = [u8; 32];
@@ -305,7 +305,7 @@ struct SessionUpHeartbeatTask {
 }
 
 impl SessionUpHeartbeatTask {
-    fn spawn(sender: SessionUpSender, hub_endpoint: String, caller_uri: String) -> Self {
+    fn spawn(sender: SessionUpSender, hub_endpoint: String, caller_ura: String) -> Self {
         let handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(SESSION_UP_HEARTBEAT_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -316,7 +316,7 @@ impl SessionUpHeartbeatTask {
                 interval.tick().await;
                 if let Err(err) = sender.send_control(BidiControl::default()).await {
                     eprintln!(
-                        "[session] up-heartbeat send failed for `{caller_uri}` on `{hub_endpoint}`: {err}; stopping heartbeat task"
+                        "[session] up-heartbeat send failed for `{caller_ura}` on `{hub_endpoint}`: {err}; stopping heartbeat task"
                     );
                     break;
                 }
@@ -337,7 +337,7 @@ impl Drop for SessionUpHeartbeatTask {
 /// down-stream (returns `Ok(())`) or a transport error occurs
 /// (returns `Err(...)`).
 ///
-/// `caller_uri` is the device's canonical URI per spec §5.1
+/// `caller_ura` is the device's canonical URI per spec §5.1
 /// (`easynet:///r/{tenant_id}/agent/{node_id}`). PR-1 staging
 /// admits a missing `caller_signature` if the URI is in the
 /// hub's realm trust anchor (or matches the hub's own URI for
@@ -354,7 +354,7 @@ impl Drop for SessionUpHeartbeatTask {
 /// `hub_uri` matches `hub_endpoint`.
 pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
     hub_endpoint: String,
-    caller_uri: String,
+    caller_ura: String,
     signing_seed: Option<SessionSigningSeed>,
     hub_ca_pem_path: Option<&Path>,
     dispatcher: Arc<D>,
@@ -365,7 +365,7 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
 ) -> Result<(), SessionError> {
     dial_and_run_session_with_idle_timeout(
         hub_endpoint,
-        caller_uri,
+        caller_ura,
         signing_seed,
         hub_ca_pem_path,
         dispatcher,
@@ -378,7 +378,7 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
 
 async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     hub_endpoint: String,
-    caller_uri: String,
+    caller_ura: String,
     signing_seed: Option<SessionSigningSeed>,
     hub_ca_pem_path: Option<&Path>,
     dispatcher: Arc<D>,
@@ -491,8 +491,8 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     // authoritative health gate — if join didn't take, the bidi
     // still surfaces the underlying error and the supervisor's
     // reconnect loop retries everything.
-    eprintln!("[session] sending federation.join prelude as {caller_uri} against {hub_endpoint}");
-    match send_federation_join_prelude(&mut client, &caller_uri).await {
+    eprintln!("[session] sending federation.join prelude as {caller_ura} against {hub_endpoint}");
+    match send_federation_join_prelude(&mut client, &caller_ura).await {
         Ok(()) => eprintln!("[session] federation.join prelude OK; proceeding to <self>.session"),
         Err(err) => eprintln!(
             "[session] federation.join prelude soft-failed (code={:?}, msg={:?}); \
@@ -522,7 +522,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
             ability_catalog.len()
         );
         if let Err(err) =
-            send_advertise_abilities_prelude(&mut client, &caller_uri, ability_catalog).await
+            send_advertise_abilities_prelude(&mut client, &caller_ura, ability_catalog).await
         {
             eprintln!(
                 "[session] advertise_abilities prelude soft-failed (code={:?}, msg={:?}); \
@@ -551,14 +551,12 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         // daemon hosts agent `<owner>` (skip hub-rooted `01HUB.*`
         // and the placeholder `<self>.*` shapes). Each unique
         // `<owner>` is advertised once as
-        // `agent/<owner>.<owner>` HostedBy <caller_uri>; the user-
+        // `agent/<owner>.<owner>` HostedBy <caller_ura>; the user-
         // segment of the agent URA matches the daemon's owner
         // convention (EASYNET_PAGES_USER for pages, agent_name
         // for chat-base).
-        let realm = caller_uri
-            .strip_prefix("easynet:///r/")
-            .and_then(|s| s.split_once('/'))
-            .map(|(r, _)| r.to_string())
+        let realm = crate::ura::parse_ura(&caller_ura)
+            .map(|parsed| parsed.realm)
             .unwrap_or_default();
         // user_segment resolution order (most authoritative first):
         //   1. EASYNET_PAGES_USER env — explicit operator override,
@@ -583,7 +581,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         // System / hub-tier namespaces that must never be mistaken
         // for sub-agent identities when we synthesise the per-device
         // agent roster for the hub. These are device-internal verbs
-        // (`fs.read`, `fleet.list_nodes`, `voice.create_call`, …) or
+        // (`fs.read`, `device.node.list`, `voice.create_call`, …) or
         // hub-rooted verbs (`01HUB.openai.chat_completions`); their
         // ability-name first segment is a *namespace*, not an agent
         // name, and the federation directory rejects them as agent
@@ -597,17 +595,17 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         // system ability in the catalogue is canonical
         // (`device.*` / `hub.*`); the prelude scanner only needs
         // to recognise those two heads to skip them. The 24-element
-        // legacy-namespace skip list collapsed to two structural
+        // retired namespace skip list collapsed to two structural
         // entries plus `<self>` (still needed because the wire-
         // pinned trio `<self>.session` / `<self>.invoke_remote` /
-        // `<self>.register_device_pubkey` remains on legacy until
+        // `<self>.register_device_pubkey` remains on the self-alias until
         // M4 ships in lockstep with EasyNet-Axon — see
         // `docs/open-questions/deprecate-self-alias-in-ability-names.md`).
         //
-        // The previous structure kept the closed legacy set as
+        // The previous structure kept the closed retired-name set as
         // defense-in-depth in case a stale call site emitted a
-        // legacy-named ability into the catalogue. Post-M3 the
-        // registry physically rejects legacy registrations
+        // retired-name ability into the catalogue. Post-M3 the
+        // registry physically rejects retired registrations
         // (`register_*_aliased` deleted), so the defense is
         // redundant and dropping it removes the maintenance
         // hazard of "remember to update the list when adding a
@@ -616,7 +614,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         // advertise. Two sources, in priority order:
         //
         //   1. `local-agents.json` (authoritative). Each row
-        //      already carries the canonical agent_uri minted at
+        //      already carries the canonical agent_ura minted at
         //      `easynet agent add` time (post-RFC-001 v4.1.7 the
         //      mint is `<profile>-<name>` so the URA tail is
         //      operator-meaningful: `consent-default-0`,
@@ -643,8 +641,8 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         // by going to the source of truth.
         #[derive(Debug, Clone)]
         struct AdvertiseEntry {
-            agent_uri: String,
-            /// The agent_uri's tail (`<user>.<agent_id>` after
+            agent_ura: String,
+            /// The agent_ura's tail (`<user>.<agent_id>` after
             /// `agent/`), used purely for log lines + the
             /// pages/files user-scoped marker check.
             short_label: String,
@@ -656,27 +654,27 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         // Source 1: local-agents.json hosted_agents.
         let local_agents_file = crate::persistence::local_agents::load().unwrap_or_default();
         for hosted in &local_agents_file.hosted_agents {
-            if hosted.agent_uri.is_empty() {
+            if hosted.agent_ura.is_empty() {
                 continue;
             }
             // Reject pre-join placeholder URAs (`<unjoined>`).
             // Bootstrap repairs these on the next pass once the
             // realm + user_id land in credentials; advertising
             // them now would just push junk into the directory.
-            if hosted.agent_uri.contains("<unjoined>") {
+            if hosted.agent_ura.contains("<unjoined>") {
                 continue;
             }
-            if !seen.insert(hosted.agent_uri.clone()) {
+            if !seen.insert(hosted.agent_ura.clone()) {
                 continue;
             }
             // Derive short_label from the URA tail for log lines.
-            let short_label = crate::uri::parse_ura(&hosted.agent_uri)
+            let short_label = crate::ura::parse_ura(&hosted.agent_ura)
                 .ok()
-                .filter(|p| p.kind == crate::uri::URAKind::Agent)
+                .filter(|p| p.kind == crate::ura::URAKind::Agent)
                 .map(|p| format!("{}.{}", p.user_id, p.agent_id))
-                .unwrap_or_else(|| hosted.agent_uri.clone());
+                .unwrap_or_else(|| hosted.agent_ura.clone());
             entries.push(AdvertiseEntry {
-                agent_uri: hosted.agent_uri.clone(),
+                agent_ura: hosted.agent_ura.clone(),
                 short_label,
             });
         }
@@ -690,10 +688,10 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         // `target_offline`.
         if !realm.is_empty() && !user_segment.is_empty() && user_segment != "self" {
             for synthetic in ["pages", "files"] {
-                let uri = format!("easynet:///r/{realm}/agent/{user_segment}.{synthetic}");
+                let uri = crate::ura::agent_ura(&realm, &user_segment, synthetic);
                 if seen.insert(uri.clone()) {
                     entries.push(AdvertiseEntry {
-                        agent_uri: uri,
+                        agent_ura: uri,
                         short_label: format!("{user_segment}.{synthetic}"),
                     });
                 }
@@ -711,9 +709,9 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
             // device's hosted-agent list — so files / pages /
             // dynamically-added LLM agents would silently vanish
             // from the device view.
-            let caller_node_id = crate::uri::parse_ura(&caller_uri)
+            let caller_node_id = crate::ura::parse_ura(&caller_ura)
                 .ok()
-                .filter(|p| p.kind == crate::uri::URAKind::Device)
+                .filter(|p| p.kind == crate::ura::URAKind::Device)
                 .map(|p| p.device_id);
             eprintln!(
                 "[session] sending federation.advertise_agent prelude for {} agent(s) \
@@ -739,7 +737,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
             // that as "not bound to a specific device" and lists
             // them at the user level. forward_invoke against
             // `agent/<user>.{pages,files}` still resolves correctly
-            // because the hub keeps the agent_uri → host_uri
+            // because the hub keeps the agent_ura → host_ura
             // mapping in `AdvertisedAgentStore`, independent of
             // the directory's `host_node_id`.
             //
@@ -754,9 +752,9 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
                 // pages/files synthetic. Read the agent_id off
                 // the URA so renames in the synthesis source
                 // don't drift away from this check.
-                let agent_id = crate::uri::parse_ura(&entry.agent_uri)
+                let agent_id = crate::ura::parse_ura(&entry.agent_ura)
                     .ok()
-                    .filter(|p| p.kind == crate::uri::URAKind::Agent)
+                    .filter(|p| p.kind == crate::ura::URAKind::Agent)
                     .map(|p| p.agent_id)
                     .unwrap_or_default();
                 let host_for_advertise = if USER_SCOPED_AGENT_IDS.contains(&agent_id.as_str()) {
@@ -766,8 +764,8 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
                 };
                 if let Err(err) = send_advertise_agent_prelude(
                     &mut client,
-                    &caller_uri,
-                    &entry.agent_uri,
+                    &caller_ura,
+                    &entry.agent_ura,
                     host_for_advertise,
                 )
                 .await
@@ -775,7 +773,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
                     eprintln!(
                         "[session] advertise_agent {} prelude soft-failed \
                          (code={:?}, msg={:?})",
-                        entry.agent_uri,
+                        entry.agent_ura,
                         err.code(),
                         err.message(),
                     );
@@ -795,7 +793,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     // `<self>.session`. When boot resolved a deterministic device
     // seed from credentials we sign the canonical bytes here; older
     // sparse fixtures still degrade to the unsigned PR-2 shape.
-    let frame0 = build_session_envelope_open_with_seed(&caller_uri, signing_seed);
+    let frame0 = build_session_envelope_open_with_seed(&caller_ura, signing_seed);
     up_tx
         .send(frame0)
         .await
@@ -814,7 +812,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     let mut down_stream = response.into_inner();
     let dispatcher = dispatcher;
     eprintln!(
-        "[session] bidi opened against `{hub_endpoint}` as {caller_uri}; awaiting down-stream frames"
+        "[session] bidi opened against `{hub_endpoint}` as {caller_ura}; awaiting down-stream frames"
     );
 
     // PR-N6 C4: publish the active up sender so the device-mode
@@ -829,7 +827,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     let _up_heartbeat = SessionUpHeartbeatTask::spawn(
         outbound_tx.clone(),
         hub_endpoint.clone(),
-        caller_uri.clone(),
+        caller_ura.clone(),
     );
     let mut expected_down_sequence = 0_u64;
 
@@ -913,7 +911,7 @@ impl Drop for OutboxGuard {
 /// rather than an owned `PathBuf`.
 pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
     hub_endpoint: String,
-    caller_uri: String,
+    caller_ura: String,
     signing_seed: Option<SessionSigningSeed>,
     hub_ca_pem_path: Option<PathBuf>,
     dispatcher: Arc<D>,
@@ -930,7 +928,7 @@ pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
             }
             result = dial_and_run_session(
                 hub_endpoint.clone(),
-                caller_uri.clone(),
+                caller_ura.clone(),
                 signing_seed,
                 hub_ca_pem_path.as_deref(),
                 Arc::clone(&dispatcher),
@@ -993,45 +991,32 @@ fn next_backoff(current: Duration) -> Duration {
 /// the right status and the supervisor backs off.
 async fn send_federation_join_prelude(
     client: &mut crate::pb::axon::v1::invocation_client::InvocationClient<Channel>,
-    caller_uri: &str,
+    caller_ura: &str,
 ) -> Result<(), tonic::Status> {
-    use crate::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
-
     // Wire shape mirrors `federation_wrappers::JoinRequest`:
     // axon-runtime's deserializer is strict (Deserialize derive,
     // no #[serde(default)] on either field) and rejects payloads
-    // whose top-level keys differ from `canonical_agent_uri` /
-    // `realm`. Sending `agent_uri` / `tenant_id` (the field names
+    // whose top-level keys differ from `membership_ura` /
+    // `realm`. Sending `agent_ura` / `tenant_id` (the field names
     // used by the local daemon's other federation.* requests)
     // earns InvalidArgument — verified in PR-1 §5 schema-compat
     // tests and observed in dev as
     //   `failed to decode JSON arguments: missing field
-    //    canonical_agent_uri`
-    let realm = caller_uri
-        .strip_prefix("easynet:///r/")
-        .and_then(|rest| rest.split_once('/'))
-        .map(|(realm, _)| realm.to_string())
+    //    membership_ura`
+    let realm = crate::ura::parse_ura(caller_ura)
+        .map(|parsed| parsed.realm)
         .unwrap_or_default();
 
     let body = serde_json::json!({
-        "canonical_agent_uri": caller_uri,
+        "membership_ura": caller_ura,
         "realm": realm,
     });
     let arguments = serde_json::to_vec(&body)
         .map_err(|e| tonic::Status::internal(format!("federation.join prelude serialize: {e}")))?;
 
-    let request = InvokeRequest {
-        envelope: Some(Envelope {
-            caller: Some(AgentIdentity {
-                uri: caller_uri.to_string(),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }),
-        function_name: "federation.join".to_string(),
-        arguments,
-        ..Default::default()
-    };
+    let request = crate::services::axon_serve::ProtoEnvelope::caller_only(caller_ura)
+        .and_then(|env| env.invoke_request("federation.join", arguments))
+        .map_err(|e| tonic::Status::invalid_argument(format!("federation.join prelude: {e}")))?;
 
     match client.invoke(request).await {
         Ok(reply) => {
@@ -1041,7 +1026,7 @@ async fn send_federation_join_prelude(
             // currently advertises. Failures here are
             // best-effort — a malformed body or absent fields
             // (talking to a v4.1.6 hub) leaves the store empty,
-            // which is the correct legacy behavior.
+            // which is the correct transitional behavior.
             let body_bytes = reply.into_inner().result;
             if !body_bytes.is_empty() {
                 if let Ok(body) = serde_json::from_slice::<
@@ -1088,19 +1073,17 @@ async fn send_federation_join_prelude(
 /// future projection wants them; v1 advertises just enough to
 /// surface the catalog rows.
 /// Session-prelude variant of `federation.advertise_agent`. The
-/// device tells the hub "I host agent `<agent_uri>`"; the hub
-/// upserts an `AdvertisedAgentRecord { agent_uri, host_uri }` so
+/// device tells the hub "I host agent `<agent_ura>`"; the hub
+/// upserts an `AdvertisedAgentRecord { agent_ura, host_ura }` so
 /// later inbound invocations addressed to that agent URA resolve
 /// to this device's bidi sender via
 /// `lookup_target_with_agent_fallback`.
 async fn send_advertise_agent_prelude(
     client: &mut crate::pb::axon::v1::invocation_client::InvocationClient<Channel>,
-    caller_uri: &str,
-    agent_uri: &str,
+    caller_ura: &str,
+    agent_ura: &str,
     host_node_id: Option<&str>,
 ) -> Result<(), tonic::Status> {
-    use crate::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
-
     // `host_node_id` is the device's bare uuid (extracted from
     // the caller URA). The hub stores it on the directory record
     // so RFC-002 §5.2 forward_invoke knows which UDS-bound
@@ -1109,10 +1092,10 @@ async fn send_advertise_agent_prelude(
     // — without which DeviceDetailPage's hosted-agent filter
     // silently drops the agent from the device view.
     let mut body = serde_json::json!({
-        "agent_uri": agent_uri,
+        "agent_ura": agent_ura,
         "signing_authority": {
             "kind": "hosted_by",
-            "host_uri": caller_uri,
+            "host_ura": caller_ura,
         },
     });
     if let Some(node_id) = host_node_id {
@@ -1127,29 +1110,20 @@ async fn send_advertise_agent_prelude(
         tonic::Status::internal(format!("federation.advertise_agent prelude serialize: {e}"))
     })?;
 
-    let request = InvokeRequest {
-        envelope: Some(Envelope {
-            caller: Some(AgentIdentity {
-                uri: caller_uri.to_string(),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }),
-        function_name: "federation.advertise_agent".to_string(),
-        arguments,
-        ..Default::default()
-    };
+    let request = crate::services::axon_serve::ProtoEnvelope::caller_only(caller_ura)
+        .and_then(|env| env.invoke_request("federation.advertise_agent", arguments))
+        .map_err(|e| {
+            tonic::Status::invalid_argument(format!("federation.advertise_agent prelude: {e}"))
+        })?;
 
     client.invoke(request).await.map(|_| ())
 }
 
 async fn send_advertise_abilities_prelude(
     client: &mut crate::pb::axon::v1::invocation_client::InvocationClient<Channel>,
-    caller_uri: &str,
+    caller_ura: &str,
     ability_names: &[String],
 ) -> Result<(), tonic::Status> {
-    use crate::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
-
     let abilities: Vec<serde_json::Value> = ability_names
         .iter()
         .map(|name| {
@@ -1161,7 +1135,7 @@ async fn send_advertise_abilities_prelude(
         .collect();
 
     let body = serde_json::json!({
-        "agent_uri": caller_uri,
+        "agent_ura": caller_ura,
         "abilities": abilities,
     });
     let arguments = serde_json::to_vec(&body).map_err(|e| {
@@ -1170,18 +1144,11 @@ async fn send_advertise_abilities_prelude(
         ))
     })?;
 
-    let request = InvokeRequest {
-        envelope: Some(Envelope {
-            caller: Some(AgentIdentity {
-                uri: caller_uri.to_string(),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }),
-        function_name: "federation.advertise_abilities".to_string(),
-        arguments,
-        ..Default::default()
-    };
+    let request = crate::services::axon_serve::ProtoEnvelope::caller_only(caller_ura)
+        .and_then(|env| env.invoke_request("federation.advertise_abilities", arguments))
+        .map_err(|e| {
+            tonic::Status::invalid_argument(format!("federation.advertise_abilities prelude: {e}"))
+        })?;
 
     client.invoke(request).await.map(|_| ())
 }
@@ -1192,15 +1159,15 @@ async fn send_advertise_abilities_prelude(
 /// so the integration test in PR-3 commit 3/3 can drive a mock
 /// device through the same shape.
 #[must_use]
-pub fn build_session_envelope_open(caller_uri: &str) -> InvokeBidiUp {
-    build_session_envelope_open_with_seed(caller_uri, None)
+pub fn build_session_envelope_open(caller_ura: &str) -> InvokeBidiUp {
+    build_session_envelope_open_with_seed(caller_ura, None)
 }
 
 /// Build the frame-0 `EnvelopeOpen`, optionally signing it when a
 /// deterministic device seed is available.
 #[must_use]
 pub fn build_session_envelope_open_with_seed(
-    caller_uri: &str,
+    caller_ura: &str,
     signing_seed: Option<SessionSigningSeed>,
 ) -> InvokeBidiUp {
     let initial_args = Vec::new();
@@ -1208,20 +1175,20 @@ pub fn build_session_envelope_open_with_seed(
 
     let mut envelope = Envelope {
         caller: Some(AgentIdentity {
-            uri: caller_uri.to_string(),
-            profile: DEFAULT_URI_PROFILE.to_string(),
+            ura: caller_ura.to_string(),
+            profile: DEFAULT_URA_PROFILE.to_string(),
         }),
         // `<self>.session` is the device presenting its own long-
         // lived reverse channel; callee + subject both point at the
         // caller device so the signed tuple is stable and self-
         // describing even before a future hub-URI contract lands.
         callee: Some(AgentIdentity {
-            uri: caller_uri.to_string(),
-            profile: DEFAULT_URI_PROFILE.to_string(),
+            ura: caller_ura.to_string(),
+            profile: DEFAULT_URA_PROFILE.to_string(),
         }),
         subject: Some(SubjectIdentity {
-            uri: caller_uri.to_string(),
-            profile: DEFAULT_URI_PROFILE.to_string(),
+            ura: caller_ura.to_string(),
+            profile: DEFAULT_URA_PROFILE.to_string(),
         }),
         ..Envelope::default()
     };
@@ -1233,9 +1200,9 @@ pub fn build_session_envelope_open_with_seed(
         envelope.invocation_nonce = nonce.to_vec();
 
         let axiom_env = InvocationEnvelope {
-            caller: AxiomAgentIdentity::new(caller_uri, UriProfile::EasynetStrictV2),
-            callee: AxiomAgentIdentity::new(caller_uri, UriProfile::EasynetStrictV2),
-            subject: AxiomSubjectIdentity::new(caller_uri, UriProfile::EasynetStrictV2),
+            caller: AxiomAgentIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
+            callee: AxiomAgentIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
+            subject: AxiomSubjectIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
             ability: ABILITY_SELF_SESSION.to_string(),
             args_digest,
             invocation_nonce: nonce,
@@ -1523,7 +1490,7 @@ mod tests {
     }
 
     #[test]
-    fn build_session_envelope_open_carries_caller_uri_and_ability_name() {
+    fn build_session_envelope_open_carries_caller_ura_and_ability_name() {
         let frame = build_session_envelope_open("easynet:///r/realm/device/n1");
         let UpPayload::EnvelopeOpen(eo) = frame.payload.expect("payload") else {
             panic!("frame 0 must be EnvelopeOpen");
@@ -1539,7 +1506,7 @@ mod tests {
             eo.envelope
                 .as_ref()
                 .and_then(|e| e.caller.as_ref())
-                .map(|a| a.uri.as_str())
+                .map(|a| a.ura.as_str())
                 .unwrap_or(""),
             "easynet:///r/realm/device/n1",
         );
@@ -1579,7 +1546,7 @@ mod tests {
             envelope
                 .subject
                 .as_ref()
-                .map(|s| s.uri.as_str())
+                .map(|s| s.ura.as_str())
                 .unwrap_or(""),
             "easynet:///r/realm/device/n1",
         );

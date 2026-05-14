@@ -1,4 +1,4 @@
-// EasyNet CLI — fleet.pty_session_{create,close} ability handlers
+// EasyNet CLI — device.terminal.{create,close} ability handlers
 // =================================================================
 //
 // File: src/runtime/agents/pty_lifecycle_ability.rs
@@ -6,11 +6,11 @@
 // Per RFC §18 + the C-M3a/b/c plan, PTY-hosted sessions are exposed
 // through three abilities:
 //
-//   * fleet.pty_session_create  (this file, RPC) — open a PTY,
+//   * device.terminal.create  (this file, RPC) — open a PTY,
 //                                spawn a child, return session_id
-//   * fleet.pty_session_close   (this file, RPC) — kill the child,
+//   * device.terminal.close   (this file, RPC) — kill the child,
 //                                drop the session row
-//   * fleet.pty_session_attach  (C-M3c, BIDI)    — wire stdin/stdout
+//   * device.terminal.attach  (C-M3c, BIDI)    — wire stdin/stdout
 //                                between the IPC bidi pipe and the
 //                                PTY master fd; the InvokeBidi
 //                                machinery from C-M3a is the
@@ -40,8 +40,8 @@ use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::execution::pty::{PtyCreateSpec, PtyService, PtySessionId};
 
-pub const ABILITY_PTY_SESSION_CREATE: &str = "device.fleet.pty_session_create";
-pub const ABILITY_PTY_SESSION_CLOSE: &str = "device.fleet.pty_session_close";
+pub const ABILITY_PTY_SESSION_CREATE: &str = "device.terminal.create";
+pub const ABILITY_PTY_SESSION_CLOSE: &str = "device.terminal.close";
 
 /// Description published by the dispatcher's `description_for`
 /// arm. Mirrors AXIOM Tier 2.5 §"Baseline Locomotion / pty"
@@ -49,8 +49,8 @@ pub const ABILITY_PTY_SESSION_CLOSE: &str = "device.fleet.pty_session_close";
 /// here as in `meta.list_abilities`.
 pub fn description_create() -> &'static str {
     "Create an interactive PTY session and return its opaque \
-     session_id. Pair with fleet.pty_session_attach (data plane) \
-     and fleet.pty_session_close (lifecycle teardown). Part of \
+     session_id. Pair with device.terminal.attach (data plane) \
+     and device.terminal.close (lifecycle teardown). Part of \
      the baseline-locomotion-v1 profile."
 }
 
@@ -61,7 +61,7 @@ pub fn description_close() -> &'static str {
      gone sessions."
 }
 
-/// JSON Schema for fleet.pty_session_create input. All fields
+/// JSON Schema for device.terminal.create input. All fields
 /// optional; the service fills VT100 defaults (80×24, no env,
 /// host shell).
 pub fn input_schema_create() -> Value {
@@ -110,34 +110,19 @@ pub fn register(
     pty: Arc<PtyService>,
     io: Option<crate::runtime::agents::pty_io_ability::PtyIoService>,
 ) {
-    // Two name families register the same handler — see
-    // `pty_io_ability::register` for the rationale (host-mode
-    // backend's PTYDriver dispatches under the axon-runtime
-    // `fleet.session_*` prefix; CLI subcommands and stdio MCP
-    // use the canonical `fleet.pty_session_*` names).
     use crate::runtime::ability_dispatch::LocalRpcHandler;
     let svc_for_create = Arc::clone(&pty);
     let create_h: LocalRpcHandler =
         Arc::new(move |args: Value| create_handler(&svc_for_create, args));
-    reg.register_rpc_with_owner(
-        "device.fleet.pty_session_create",
-        OwnerKind::Device,
-        Arc::clone(&create_h),
-    );
-    reg.register_rpc_with_owner("device.fleet.session_create", OwnerKind::Device, create_h);
+    reg.register_rpc_with_owner("device.terminal.create", OwnerKind::Device, create_h);
 
     let pty_for_close = pty;
     let close_h: LocalRpcHandler =
         Arc::new(move |args: Value| close_handler(&pty_for_close, io.as_ref(), args));
-    reg.register_rpc_with_owner(
-        "device.fleet.pty_session_close",
-        OwnerKind::Device,
-        Arc::clone(&close_h),
-    );
-    reg.register_rpc_with_owner("device.fleet.session_close", OwnerKind::Device, close_h);
+    reg.register_rpc_with_owner("device.terminal.close", OwnerKind::Device, close_h);
 }
 
-/// `fleet.pty_session_create` handler.
+/// `device.terminal.create` handler.
 ///
 /// Args: `{ cols?, rows?, command?, command_args?, cwd?, env? }`.
 /// All fields optional; the service fills defaults.
@@ -152,7 +137,7 @@ fn create_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<Value> {
     Ok(json!({ "session_id": id.as_str() }))
 }
 
-/// `fleet.pty_session_close` handler.
+/// `device.terminal.close` handler.
 ///
 /// Args: `{ session_id }`.
 ///
@@ -282,8 +267,8 @@ pub fn create_input_schema() -> Value {
 
 pub fn create_description() -> &'static str {
     "Open a new PTY-hosted child session. Returns the session_id \
-     callers hand to fleet.pty_session_attach (bidi) and \
-     fleet.pty_session_close (close+reap)."
+     callers hand to device.terminal.attach (bidi) and \
+     device.terminal.close (close+reap)."
 }
 
 pub fn close_input_schema() -> Value {

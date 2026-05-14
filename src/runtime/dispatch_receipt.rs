@@ -70,14 +70,14 @@ pub fn header_for_ability(
     file: &LocalAgentsFile,
     llm_sub_agent_name: Option<&str>,
 ) -> Option<HostedAgentReceiptHeader> {
-    let host_uri = file.host_device_agent_uri.as_str();
-    if host_uri.is_empty() {
+    let host_ura = file.host_device_agent_ura.as_str();
+    if host_ura.is_empty() {
         return None;
     }
 
     if device::owns(ability_name) {
         // Self-signed: the device-profile dispatched its own ability.
-        return HostedAgentReceiptHeader::new_selfsigned(host_uri).ok();
+        return HostedAgentReceiptHeader::new_selfsigned(host_ura).ok();
     }
 
     // Special-case `<agent>.chat`: the wire ability name embeds the
@@ -86,9 +86,9 @@ pub fn header_for_ability(
     // prefixes only. We recognise the shape here so chat dispatch
     // attaches a header to the right LLM-profile URA.
     if let Some((agent, "chat")) = ability_name.split_once('.') {
-        let callee_uri = lookup_hosted_uri(file, "llm", agent)?;
+        let callee_ura = lookup_hosted_uri(file, "llm", agent)?;
         let attestation_placeholder = b"P5-pending".to_vec();
-        return HostedAgentReceiptHeader::new_hosted(callee_uri, host_uri, attestation_placeholder)
+        return HostedAgentReceiptHeader::new_hosted(callee_ura, host_ura, attestation_placeholder)
             .ok();
     }
 
@@ -113,13 +113,13 @@ pub fn header_for_ability(
         return None;
     };
 
-    let callee_uri = lookup_hosted_uri(file, profile_key, name)?;
+    let callee_ura = lookup_hosted_uri(file, profile_key, name)?;
     // host_attestation is the staging-mode placeholder until P5
     // signing lands. Empty would fail the constructor's invariant
     // check, so we use a single-byte sentinel that flags "P5 not
     // yet wired" without breaking the schema.
     let attestation_placeholder = b"P5-pending".to_vec();
-    HostedAgentReceiptHeader::new_hosted(callee_uri, host_uri, attestation_placeholder).ok()
+    HostedAgentReceiptHeader::new_hosted(callee_ura, host_ura, attestation_placeholder).ok()
 }
 
 #[cfg(test)]
@@ -130,7 +130,7 @@ mod tests {
 
     fn file_with(host: &str) -> LocalAgentsFile {
         LocalAgentsFile {
-            host_device_agent_uri: host.into(),
+            host_device_agent_ura: host.into(),
             hosted_agents: Vec::new(),
         }
     }
@@ -140,8 +140,8 @@ mod tests {
         let file = file_with("easynet:///r/acme/device/01DEV");
         let h = header_for_ability("device.observe.health", &file, None)
             .expect("device ability must produce a header");
-        assert_eq!(h.callee_agent_uri, "easynet:///r/acme/device/01DEV");
-        assert_eq!(h.signer_agent_uri, "easynet:///r/acme/device/01DEV");
+        assert_eq!(h.callee_agent_ura, "easynet:///r/acme/device/01DEV");
+        assert_eq!(h.signer_agent_ura, "easynet:///r/acme/device/01DEV");
         assert_eq!(h.model, SigningModel::Selfsigned);
     }
 
@@ -156,14 +156,14 @@ mod tests {
         );
         let h = header_for_ability("device.consent.subscribe", &file, None)
             .expect("consent ability must produce a header");
-        assert_eq!(h.callee_agent_uri, "easynet:///r/acme/agent/u1.01CON");
-        assert_eq!(h.signer_agent_uri, "easynet:///r/acme/device/01DEV");
+        assert_eq!(h.callee_agent_ura, "easynet:///r/acme/agent/u1.01CON");
+        assert_eq!(h.signer_agent_ura, "easynet:///r/acme/device/01DEV");
         match &h.model {
             SigningModel::HostedBy {
-                host_uri,
+                host_ura,
                 host_attestation,
             } => {
-                assert_eq!(host_uri, "easynet:///r/acme/device/01DEV");
+                assert_eq!(host_ura, "easynet:///r/acme/device/01DEV");
                 assert!(!host_attestation.is_empty());
             }
             _ => panic!("expected HostedBy"),
@@ -198,7 +198,7 @@ mod tests {
         let h = header_for_ability("conversation.send", &file, Some("claude"))
             .expect("named LLM ability must produce a header");
         assert_eq!(
-            h.callee_agent_uri,
+            h.callee_agent_ura,
             "easynet:///r/acme/agent/u1.01LLM-claude"
         );
     }
@@ -214,7 +214,7 @@ mod tests {
         );
         let h = header_for_ability("skill.alive-video", &file, Some("claude"))
             .expect("skill.* with sub_agent must produce a header");
-        assert_eq!(h.callee_agent_uri, "easynet:///r/acme/agent/u1.01LLM");
+        assert_eq!(h.callee_agent_ura, "easynet:///r/acme/agent/u1.01LLM");
     }
 
     #[test]
@@ -228,12 +228,12 @@ mod tests {
         );
         let h = header_for_ability("device.mcp.bridge.list_tools", &file, None)
             .expect("mcp.bridge ability must produce a header");
-        assert_eq!(h.callee_agent_uri, "easynet:///r/acme/agent/u1.01MCP");
-        assert_eq!(h.signer_agent_uri, "easynet:///r/acme/device/01DEV");
+        assert_eq!(h.callee_agent_ura, "easynet:///r/acme/agent/u1.01MCP");
+        assert_eq!(h.signer_agent_ura, "easynet:///r/acme/device/01DEV");
     }
 
     #[test]
-    fn empty_host_uri_yields_none_for_every_ability() {
+    fn empty_host_ura_yields_none_for_every_ability() {
         // Pre-join state: the dispatcher should not emit headers
         // because the host URA itself is unknown.
         let file = file_with("");
@@ -242,7 +242,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_dot_chat_routes_to_llm_sub_agent_uri() {
+    fn agent_dot_chat_routes_to_llm_sub_agent_ura() {
         // The wire shape `<agent>.chat` embeds the sub-agent name.
         // The header builder special-cases this so chat dispatch
         // doesn't need out-of-band sub-agent context.
@@ -255,8 +255,8 @@ mod tests {
         );
         let h = header_for_ability("claude.chat", &file, None)
             .expect("`<agent>.chat` must produce a header without sub_agent param");
-        assert_eq!(h.callee_agent_uri, "easynet:///r/acme/agent/u1.01LLM");
-        assert_eq!(h.signer_agent_uri, "easynet:///r/acme/device/01DEV");
+        assert_eq!(h.callee_agent_ura, "easynet:///r/acme/agent/u1.01LLM");
+        assert_eq!(h.signer_agent_ura, "easynet:///r/acme/device/01DEV");
     }
 
     #[test]

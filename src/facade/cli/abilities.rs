@@ -58,7 +58,7 @@ use serde_json::Value;
 
 use crate::support::local_invoke::invoke_local_ability;
 use crate::support::output::{self, OutputFormat};
-use crate::uri::{parse_ura, URAKind};
+use crate::ura::{parse_ura, URAKind};
 
 #[derive(Debug, Args)]
 pub struct AbilitiesArgs {
@@ -149,7 +149,7 @@ pub fn run(args: AbilitiesArgs) -> anyhow::Result<()> {
 /// line, not in the per-row identity columns.
 fn extract_columns(entry: &Value) -> (String, String, String, String) {
     let owner_uri = entry
-        .get("owner_agent_uri")
+        .get("owner_agent_ura")
         .and_then(Value::as_str)
         .unwrap_or("");
     let parsed = parse_ura(owner_uri).ok();
@@ -246,7 +246,7 @@ impl GroupKey {
 
 fn group_for(entry: &Value) -> GroupKey {
     let owner_uri = entry
-        .get("owner_agent_uri")
+        .get("owner_agent_ura")
         .and_then(Value::as_str)
         .unwrap_or("");
     match parse_ura(owner_uri) {
@@ -410,15 +410,15 @@ fn fetch_remote_catalogue(node: &str) -> anyhow::Result<Vec<Value>> {
 
 #[cfg(feature = "axon-pb")]
 fn invoke_remote_easynet_discover(node: &str) -> anyhow::Result<Value> {
-    let target_uri = crate::support::remote_device::resolve_target_device_uri(node)?;
-    let caller_uri = crate::support::remote_device::caller_device_uri_from_credentials();
+    let target_ura = crate::support::remote_device::resolve_target_device_ura(node)?;
+    let caller_ura = crate::support::remote_device::caller_device_uri_from_credentials();
     crate::support::federation_invoke::invoke_via_federation_forward(
         "device.meta.list_abilities",
         serde_json::json!({}),
-        &target_uri,
-        caller_uri.as_deref(),
+        &target_ura,
+        caller_ura.as_deref(),
     )
-    .with_context(|| format!("forward easynet.discover to target={target_uri}"))
+    .with_context(|| format!("forward easynet.discover to target={target_ura}"))
 }
 
 #[cfg(not(feature = "axon-pb"))]
@@ -735,19 +735,19 @@ mod tests {
         // change that loses or merges a bucket trips this test.
         let hub = json!({
             "name": "hub.openai.chat_completions",
-            "owner_agent_uri": "easynet:///r/easynet.run/hub",
+            "owner_agent_ura": "easynet:///r/easynet.run/hub",
         });
         let agent = json!({
             "name": "alice.codex.chat",
-            "owner_agent_uri": "easynet:///r/easynet.run/agent/alice.codex",
+            "owner_agent_ura": "easynet:///r/easynet.run/agent/alice.codex",
         });
         let user = json!({
             "name": "alice.api_key.create",
-            "owner_agent_uri": "easynet:///r/easynet.run/user/alice",
+            "owner_agent_ura": "easynet:///r/easynet.run/user/alice",
         });
         let device = json!({
             "name": "device.fs.read",
-            "owner_agent_uri":
+            "owner_agent_ura":
                 "easynet:///r/easynet.run/device/00000000-0000-0000-0000-000000000001",
         });
         assert!(matches!(group_for(&hub), GroupKey::Hub(_)));
@@ -760,7 +760,7 @@ mod tests {
     fn group_for_emits_other_for_unparseable_owner_uri() {
         let bad = json!({
             "name": "stray.thing",
-            "owner_agent_uri": "not-a-ura",
+            "owner_agent_ura": "not-a-ura",
         });
         assert!(matches!(group_for(&bad), GroupKey::Other));
     }

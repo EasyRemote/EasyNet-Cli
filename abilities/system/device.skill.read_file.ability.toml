@@ -1,0 +1,22 @@
+schema_version = "1"
+name = "device.skill.read_file"
+description = "Read one UTF-8 file from an installed skill package. The path is relative to the skill directory and traversal outside that directory is rejected."
+
+[input_schema]
+type = "object"
+required = ["owner_agent_id", "skill_name", "resource_ura", "path"]
+additionalProperties = false
+
+[input_schema.properties.owner_agent_id]
+type = "string"
+
+[input_schema.properties.path]
+type = "string"
+description = "Relative file path inside the skill directory, for example SKILL.md."
+
+[input_schema.properties.resource_ura]
+type = "string"
+description = "Canonical skill package resource URA returned by device.skill.list."
+
+[input_schema.properties.skill_name]
+type = "string"

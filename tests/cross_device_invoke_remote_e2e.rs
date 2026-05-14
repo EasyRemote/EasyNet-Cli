@@ -60,7 +60,8 @@ use easynet_cli::runtime::gateway::NoopGateway;
 use easynet_cli::services::axon_serve::admission_facade::AdmissionFacade;
 use easynet_cli::services::axon_serve::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::services::axon_serve::invoke_remote_initiator::{
-    InvokeRemoteUp, SessionDispatch, ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID,
+    InvokeRemoteUp, SessionContentEnvelope, SessionDispatch, ABILITY_INVOKE_REMOTE,
+    INVOKE_REMOTE_STREAM_ID,
 };
 use easynet_cli::services::axon_serve::local_ability_dispatcher::LocalAbilityDispatcher;
 use easynet_cli::services::axon_serve::session_initiator::{
@@ -161,13 +162,13 @@ async fn start_in_process_hub() -> TestHub {
     let trust_toml = format!(
         r#"
 [[trusted_agent]]
-agent_uri = "{DEVICE_A_URI}"
+agent_ura = "{DEVICE_A_URI}"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "device"
 added_at_unix_ms = 0
 
 [[trusted_agent]]
-agent_uri = "{DEVICE_B_URI}"
+agent_ura = "{DEVICE_B_URI}"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "device"
 added_at_unix_ms = 0
@@ -230,11 +231,11 @@ async fn connect_to_hub(socket_path: &std::path::Path) -> Channel {
         .expect("connect to hub")
 }
 
-fn subscribe_directory_request(caller_uri: &str) -> Request<InvokeServerStreamRequest> {
+fn subscribe_directory_request(caller_ura: &str) -> Request<InvokeServerStreamRequest> {
     Request::new(InvokeServerStreamRequest {
         envelope: Some(Envelope {
             caller: Some(AgentIdentity {
-                uri: caller_uri.to_string(),
+                ura: caller_ura.to_string(),
                 ..AgentIdentity::default()
             }),
             ..Envelope::default()
@@ -288,7 +289,7 @@ impl Drop for DeviceSession {
     }
 }
 
-async fn open_device_session(channel: Channel, caller_uri: &str) -> DeviceSession {
+async fn open_device_session(channel: Channel, caller_ura: &str) -> DeviceSession {
     let mut client = InvocationClient::new(channel);
 
     // Build a frame-0 EnvelopeOpen identifying this device.
@@ -297,7 +298,7 @@ async fn open_device_session(channel: Channel, caller_uri: &str) -> DeviceSessio
         payload: Some(UpPayload::EnvelopeOpen(EnvelopeOpen {
             envelope: Some(Envelope {
                 caller: Some(AgentIdentity {
-                    uri: caller_uri.to_string(),
+                    ura: caller_ura.to_string(),
                     ..AgentIdentity::default()
                 }),
                 ..Envelope::default()
@@ -345,7 +346,7 @@ async fn open_device_session(channel: Channel, caller_uri: &str) -> DeviceSessio
 /// frames (e.g. SessionDispatch::Dispatch arriving for device B).
 async fn open_device_session_with_drain(
     channel: Channel,
-    caller_uri: &str,
+    caller_ura: &str,
 ) -> (DeviceSession, mpsc::Receiver<InvokeBidiDown>) {
     let mut client = InvocationClient::new(channel);
 
@@ -354,7 +355,7 @@ async fn open_device_session_with_drain(
         payload: Some(UpPayload::EnvelopeOpen(EnvelopeOpen {
             envelope: Some(Envelope {
                 caller: Some(AgentIdentity {
-                    uri: caller_uri.to_string(),
+                    ura: caller_ura.to_string(),
                     ..AgentIdentity::default()
                 }),
                 ..Envelope::default()
@@ -502,7 +503,7 @@ async fn session_graceful_close_emits_stream_closed_offline() {
             .expect("online event arrives within bound")
             .expect("online event is delivered")
         {
-            PresenceEvent::Online { uri } => assert_eq!(uri, DEVICE_A_URI),
+            PresenceEvent::Online { ura } => assert_eq!(ura, DEVICE_A_URI),
             other => panic!("expected Online event, got {other:?}"),
         }
 
@@ -513,8 +514,8 @@ async fn session_graceful_close_emits_stream_closed_offline() {
             .expect("offline event arrives within bound")
             .expect("offline event is delivered")
         {
-            PresenceEvent::Offline { uri, reason } => {
-                assert_eq!(uri, DEVICE_A_URI);
+            PresenceEvent::Offline { ura, reason } => {
+                assert_eq!(ura, DEVICE_A_URI);
                 assert_eq!(reason, OfflineReason::StreamClosed);
             }
             other => panic!("expected Offline(StreamClosed), got {other:?}"),
@@ -544,7 +545,7 @@ async fn session_duplicate_open_emits_displacement_transition() {
             .expect("initial online event arrives within bound")
             .expect("initial online event is delivered")
         {
-            PresenceEvent::Online { uri } => assert_eq!(uri, DEVICE_A_URI),
+            PresenceEvent::Online { ura } => assert_eq!(ura, DEVICE_A_URI),
             other => panic!("expected initial Online event, got {other:?}"),
         }
 
@@ -557,8 +558,8 @@ async fn session_duplicate_open_emits_displacement_transition() {
             .expect("displacement offline arrives within bound")
             .expect("displacement offline is delivered")
         {
-            PresenceEvent::Offline { uri, reason } => {
-                assert_eq!(uri, DEVICE_A_URI);
+            PresenceEvent::Offline { ura, reason } => {
+                assert_eq!(ura, DEVICE_A_URI);
                 assert_eq!(reason, OfflineReason::StreamClosed);
             }
             other => panic!("expected displacement Offline(StreamClosed), got {other:?}"),
@@ -569,7 +570,7 @@ async fn session_duplicate_open_emits_displacement_transition() {
             .expect("replacement online arrives within bound")
             .expect("replacement online is delivered")
         {
-            PresenceEvent::Online { uri } => assert_eq!(uri, DEVICE_A_URI),
+            PresenceEvent::Online { ura } => assert_eq!(ura, DEVICE_A_URI),
             other => panic!("expected replacement Online event, got {other:?}"),
         }
 
@@ -633,7 +634,7 @@ async fn subscribe_directory_stream_tracks_real_session_online_and_offline() {
         );
         assert_eq!(
             online_json
-                .get("canonical_agent_uri")
+                .get("canonical_agent_ura")
                 .and_then(|v| v.as_str()),
             Some(DEVICE_B_URI)
         );
@@ -653,7 +654,7 @@ async fn subscribe_directory_stream_tracks_real_session_online_and_offline() {
         );
         assert_eq!(
             offline_json
-                .get("canonical_agent_uri")
+                .get("canonical_agent_ura")
                 .and_then(|v| v.as_str()),
             Some(DEVICE_B_URI)
         );
@@ -707,6 +708,7 @@ async fn run_round_trip() {
             call_id,
             ability,
             args: _,
+            ..
         } = dispatch
         else {
             panic!("device B expected Dispatch variant");
@@ -741,6 +743,7 @@ async fn run_round_trip() {
         subject_device: DEVICE_B_URI.to_string(),
         ability: "test.echo".to_string(),
         args: b"args-from-A".to_vec(),
+        args_content_envelope: SessionContentEnvelope::plaintext_json(),
     };
     let initial_args = serde_json::to_vec(&invoke_remote_request).expect("encode request");
 
@@ -749,7 +752,7 @@ async fn run_round_trip() {
         payload: Some(UpPayload::EnvelopeOpen(EnvelopeOpen {
             envelope: Some(Envelope {
                 caller: Some(AgentIdentity {
-                    uri: DEVICE_A_URI.to_string(),
+                    ura: DEVICE_A_URI.to_string(),
                     ..AgentIdentity::default()
                 }),
                 ..Envelope::default()
@@ -859,6 +862,7 @@ async fn run_round_trip_via_local_dispatcher() {
         subject_device: DEVICE_B_URI.to_string(),
         ability: "test.echo".to_string(),
         args: br#"{"echo":"args-from-A"}"#.to_vec(),
+        args_content_envelope: SessionContentEnvelope::plaintext_json(),
     };
     let initial_args = serde_json::to_vec(&invoke_remote_request).expect("encode request");
 
@@ -867,7 +871,7 @@ async fn run_round_trip_via_local_dispatcher() {
         payload: Some(UpPayload::EnvelopeOpen(EnvelopeOpen {
             envelope: Some(Envelope {
                 caller: Some(AgentIdentity {
-                    uri: DEVICE_A_URI.to_string(),
+                    ura: DEVICE_A_URI.to_string(),
                     ..AgentIdentity::default()
                 }),
                 ..Envelope::default()

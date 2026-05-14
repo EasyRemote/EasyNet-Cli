@@ -55,9 +55,9 @@ pub struct BootstrapPlan {
     /// so the first post-join save can repair it.
     pub user_id: String,
     /// Device-profile URA from credentials.json. Empty pre-join.
-    /// When non-empty, `local-agents.json::host_device_agent_uri`
+    /// When non-empty, `local-agents.json::host_device_agent_ura`
     /// is set to this on save.
-    pub host_device_uri: String,
+    pub host_device_ura: String,
     /// Whether each hosted profile should have a URA minted +
     /// advertised. Mirrors `[profiles]` config booleans.
     pub consent: bool,
@@ -74,6 +74,7 @@ pub struct BootstrapPlan {
 pub struct LlmSubAgent {
     pub name: String,
     pub agent_type_display: String,
+    pub model: Option<String>,
 }
 
 /// One outcome row from `bootstrap_local_agents`. Useful for
@@ -83,7 +84,7 @@ pub struct LlmSubAgent {
 pub struct BootstrapOutcome {
     pub profile: String,
     pub name: String,
-    pub agent_uri: String,
+    pub agent_ura: String,
     /// `true` when this row was already in `local-agents.json`
     /// from a previous boot; `false` when freshly minted.
     pub reused: bool,
@@ -92,7 +93,7 @@ pub struct BootstrapOutcome {
 /// URI minter trait. Production callers pass `UlidMinter`; tests
 /// pass deterministic minters that emit predictable strings so
 /// assertions don't depend on real ULID generation.
-pub trait UriMinter {
+pub trait UraMinter {
     /// Produce a fresh canonical URA suffix (the part after
     /// `easynet:///r/<realm>/agent/`). Must be unique across all
     /// past calls in this process.
@@ -162,7 +163,7 @@ pub trait UriMinter {
 /// stripping is needed.
 pub struct UuidMinter;
 
-impl UriMinter for UuidMinter {
+impl UraMinter for UuidMinter {
     fn mint_id(&self, profile: &str, name: &str) -> String {
         if profile == "llm" {
             name.to_string()
@@ -174,17 +175,17 @@ impl UriMinter for UuidMinter {
 
 /// Walk the plan, mint URAs for any missing entries, persist,
 /// and return the per-row outcomes. Pure-function except for
-/// the persistence layer — accepts a `UriMinter` so tests can
+/// the persistence layer — accepts a `UraMinter` so tests can
 /// drive deterministic IDs.
-pub fn bootstrap_local_agents<M: UriMinter>(
+pub fn bootstrap_local_agents<M: UraMinter>(
     plan: &BootstrapPlan,
     file: &mut LocalAgentsFile,
     minter: &M,
 ) -> Vec<BootstrapOutcome> {
     // Update host URI before any minting so upserts record the
     // correct `signing_authority`.
-    if !plan.host_device_uri.is_empty() {
-        file.host_device_agent_uri = plan.host_device_uri.clone();
+    if !plan.host_device_ura.is_empty() {
+        file.host_device_agent_ura = plan.host_device_ura.clone();
     }
     // Drop orphan hosted-agent rows whose URI is structurally
     // malformed under v4.1.5 §A.URA-3 (agent tail must be
@@ -209,7 +210,7 @@ pub fn bootstrap_local_agents<M: UriMinter>(
     if !plan.realm.is_empty() && !plan.user_id.is_empty() {
         let referenced = plan_referenced_keys(plan);
         file.hosted_agents.retain(|e| {
-            if is_canonical_agent_uri(&e.agent_uri) {
+            if is_agent_ura(&e.agent_ura) {
                 return true;
             }
             referenced.contains(&(e.profile.clone(), e.name.clone()))
@@ -221,7 +222,7 @@ pub fn bootstrap_local_agents<M: UriMinter>(
             .hosted_agents
             .iter()
             .find(|e| e.profile == profile && e.name == name)
-            .map(|e| e.agent_uri.clone());
+            .map(|e| e.agent_ura.clone());
         let (uri, reused) = match existing {
             Some(existing_uri)
                 if needs_repair(&existing_uri, &plan.realm, &plan.user_id)
@@ -240,7 +241,7 @@ pub fn bootstrap_local_agents<M: UriMinter>(
                 // it elsewhere) and otherwise mint a fresh one.
                 let agent_id = extract_agent_id_tail(&existing_uri)
                     .unwrap_or_else(|| minter.mint_id(profile, name));
-                let repaired = crate::uri::agent_uri(&plan.realm, &plan.user_id, &agent_id);
+                let repaired = crate::ura::agent_ura(&plan.realm, &plan.user_id, &agent_id);
                 upsert_hosted_agent(file, profile, name, &repaired);
                 (repaired, false)
             }
@@ -262,7 +263,7 @@ pub fn bootstrap_local_agents<M: UriMinter>(
                 } else {
                     plan.user_id.as_str()
                 };
-                let uri = crate::uri::agent_uri(realm, user_id, &id);
+                let uri = crate::ura::agent_ura(realm, user_id, &id);
                 upsert_hosted_agent(file, profile, name, &uri);
                 (uri, false)
             }
@@ -270,7 +271,7 @@ pub fn bootstrap_local_agents<M: UriMinter>(
         outcomes.push(BootstrapOutcome {
             profile: profile.to_string(),
             name: name.to_string(),
-            agent_uri: uri,
+            agent_ura: uri,
             reused,
         });
     };
@@ -312,7 +313,7 @@ pub fn outcomes_for_profile<'a>(
 pub fn hosted_uris(file: &LocalAgentsFile) -> Vec<(String, String, String)> {
     file.hosted_agents
         .iter()
-        .map(|e: &HostedAgentEntry| (e.profile.clone(), e.name.clone(), e.agent_uri.clone()))
+        .map(|e: &HostedAgentEntry| (e.profile.clone(), e.name.clone(), e.agent_ura.clone()))
         .collect()
 }
 
@@ -323,10 +324,10 @@ pub fn hosted_uris(file: &LocalAgentsFile) -> Vec<(String, String, String)> {
 /// surface it as a named predicate so callers reading the
 /// bootstrap logic can match it against the prose ("structurally
 /// valid agent URA").
-fn is_canonical_agent_uri(uri: &str) -> bool {
+fn is_agent_ura(uri: &str) -> bool {
     matches!(
-        crate::uri::parse_ura(uri).map(|p| p.kind),
-        Ok(crate::uri::URAKind::Agent)
+        crate::ura::parse_ura(uri).map(|p| p.kind),
+        Ok(crate::ura::URAKind::Agent)
     )
 }
 
@@ -342,10 +343,10 @@ fn is_canonical_agent_uri(uri: &str) -> bool {
 /// always trip the realm/user mismatch arm because the literal
 /// strings `<unjoined>` cannot be the real realm or user_id.
 fn needs_repair(uri: &str, realm: &str, user_id: &str) -> bool {
-    let Ok(parsed) = crate::uri::parse_ura(uri) else {
+    let Ok(parsed) = crate::ura::parse_ura(uri) else {
         return true;
     };
-    if parsed.kind != crate::uri::URAKind::Agent {
+    if parsed.kind != crate::ura::URAKind::Agent {
         return true;
     }
     parsed.realm != realm || parsed.user_id != user_id
@@ -378,13 +379,13 @@ fn plan_referenced_keys(plan: &BootstrapPlan) -> std::collections::HashSet<(Stri
 /// malformed remainder.
 ///
 /// Strict-parser rule (silan's `feedback_no_legacy_ura`): every URI
-/// parse goes through `crate::uri::parse_ura`. Hand-rolled
+/// parse goes through `crate::ura::parse_ura`. Hand-rolled
 /// `split("/agent/")` would silently accept legacy `r/<scope>/reg/agent.<id>`
 /// URNs and other non-v4.1.5 shapes, defeating the canonical-shape
 /// invariant the rest of the codebase has been clamped to.
 fn extract_agent_id_tail(uri: &str) -> Option<String> {
-    let parsed = crate::uri::parse_ura(uri).ok()?;
-    if parsed.kind != crate::uri::URAKind::Agent {
+    let parsed = crate::ura::parse_ura(uri).ok()?;
+    if parsed.kind != crate::ura::URAKind::Agent {
         return None;
     }
     if parsed.agent_id.is_empty() {
@@ -411,7 +412,7 @@ mod tests {
         }
     }
 
-    impl UriMinter for CountingMinter {
+    impl UraMinter for CountingMinter {
         fn mint_id(&self, profile: &str, name: &str) -> String {
             let n = self.seq.get();
             self.seq.set(n + 1);
@@ -423,7 +424,7 @@ mod tests {
         BootstrapPlan {
             realm: "acme".into(),
             user_id: "u1".into(),
-            host_device_uri: "easynet:///r/acme/device/01DEV".into(),
+            host_device_ura: "easynet:///r/acme/device/01DEV".into(),
             consent,
             policy,
             mcp,
@@ -432,6 +433,7 @@ mod tests {
                 .map(|(n, t)| LlmSubAgent {
                     name: (*n).into(),
                     agent_type_display: (*t).into(),
+                    model: None,
                 })
                 .collect(),
         }
@@ -454,14 +456,11 @@ mod tests {
             // v4.1.4: hosted-agent URA is user-anchored
             // (`r/<realm>/agent/<user>.<id>`). plan_with seeds
             // user_id="u1".
-            assert!(
-                o.agent_uri.starts_with("easynet:///r/acme/agent/u1."),
-                "expected user-anchored agent URA, got {:?}",
-                o.agent_uri
-            );
+            let expected_prefix = format!("{}u1.", crate::ura::realm_agent_prefix("acme"));
+            assert!(o.agent_ura.starts_with(&expected_prefix));
         }
         // The daemon's own self-URI uses the device segment.
-        assert_eq!(file.host_device_agent_uri, "easynet:///r/acme/device/01DEV");
+        assert_eq!(file.host_device_agent_ura, "easynet:///r/acme/device/01DEV");
         assert_eq!(file.hosted_agents.len(), 4);
     }
 
@@ -471,14 +470,14 @@ mod tests {
         let mut file = LocalAgentsFile::default();
         let minter = CountingMinter::new();
         let first = bootstrap_local_agents(&plan, &mut file, &minter);
-        let consent_uri_v1 = first[0].agent_uri.clone();
+        let consent_uri_v1 = first[0].agent_ura.clone();
 
         // Same plan, same file — every outcome must report reused=true
         // and the URI must match exactly.
         let second = bootstrap_local_agents(&plan, &mut file, &minter);
         assert_eq!(second.len(), 1);
         assert!(second[0].reused);
-        assert_eq!(second[0].agent_uri, consent_uri_v1);
+        assert_eq!(second[0].agent_ura, consent_uri_v1);
         assert_eq!(file.hosted_agents.len(), 1, "must not duplicate rows");
     }
 
@@ -506,11 +505,11 @@ mod tests {
         // the file sees what's wrong.
         let mut plan = plan_with(true, false, false, &[]);
         plan.realm = String::new();
-        plan.host_device_uri = String::new();
+        plan.host_device_ura = String::new();
         let mut file = LocalAgentsFile::default();
         let outcomes = bootstrap_local_agents(&plan, &mut file, &CountingMinter::new());
-        assert!(outcomes[0].agent_uri.contains("<unjoined>"));
-        assert!(file.host_device_agent_uri.is_empty());
+        assert!(outcomes[0].agent_ura.contains("<unjoined>"));
+        assert!(file.host_device_agent_ura.is_empty());
     }
 
     #[test]
@@ -577,24 +576,24 @@ mod tests {
         let mut file = LocalAgentsFile::default();
         let mut plan = plan_with(true, false, false, &[]);
         plan.realm = String::new();
-        plan.host_device_uri = String::new();
+        plan.host_device_ura = String::new();
         let _ = bootstrap_local_agents(&plan, &mut file, &CountingMinter::new());
-        assert!(file.host_device_agent_uri.is_empty());
+        assert!(file.host_device_agent_ura.is_empty());
 
         // Post-join: realm + host URI now known. Re-run bootstrap.
         plan.realm = "acme".into();
         // URI v4.1.4: host device URA uses the `/device/` role
         // segment (Phase 2F) — the legacy `/agent/01DEV` collapsed
         // every profile under one role.
-        plan.host_device_uri = "easynet:///r/acme/device/01DEV".into();
+        plan.host_device_ura = "easynet:///r/acme/device/01DEV".into();
         let _ = bootstrap_local_agents(&plan, &mut file, &CountingMinter::new());
-        assert_eq!(file.host_device_agent_uri, "easynet:///r/acme/device/01DEV");
+        assert_eq!(file.host_device_agent_ura, "easynet:///r/acme/device/01DEV");
     }
 
     // ── extract_agent_id_tail: strict v4.1.5 parser only ─────────
 
     #[test]
-    fn extract_agent_id_tail_returns_id_for_canonical_agent_uri() {
+    fn extract_agent_id_tail_returns_id_for_agent_ura() {
         let uri = "easynet:///r/acme/agent/alice.claude";
         assert_eq!(extract_agent_id_tail(uri), Some("claude".into()));
     }
@@ -620,7 +619,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_agent_id_tail_rejects_device_uri() {
+    fn extract_agent_id_tail_rejects_device_ura() {
         // device URA has no agent_id slot; reject so the caller
         // mints a fresh one rather than embedding a malformed tail.
         let uri = "easynet:///r/acme/device/01DEV";
@@ -637,7 +636,7 @@ mod tests {
     // ── repair / prune of malformed legacy rows ────────────────────
 
     #[test]
-    fn malformed_agent_uri_referenced_by_plan_is_repaired() {
+    fn malformed_agent_ura_referenced_by_plan_is_repaired() {
         // Legacy daemon persisted `easynet:///r/acme/agent/consent-default-0`
         // — tail collapsed into one bare segment, fails v4.1.5
         // §A.URA-3. Today's plan still owns `(consent, default)`,
@@ -647,7 +646,7 @@ mod tests {
             hosted_agents: vec![HostedAgentEntry {
                 profile: "consent".into(),
                 name: "default".into(),
-                agent_uri: "easynet:///r/acme/agent/consent-default-0".into(),
+                agent_ura: "easynet:///r/acme/agent/consent-default-0".into(),
                 signing_authority: String::new(),
                 first_seen_at: String::new(),
             }],
@@ -657,21 +656,16 @@ mod tests {
         let outcomes = bootstrap_local_agents(&plan, &mut file, &CountingMinter::new());
         assert_eq!(outcomes.len(), 1);
         assert!(!outcomes[0].reused, "malformed row must NOT be reused");
+        let expected_prefix = format!("{}u1.", crate::ura::realm_agent_prefix("acme"));
+        assert!(outcomes[0].agent_ura.starts_with(&expected_prefix));
         assert!(
-            outcomes[0]
-                .agent_uri
-                .starts_with("easynet:///r/acme/agent/u1."),
-            "expected canonical user-anchored URA, got {:?}",
-            outcomes[0].agent_uri
-        );
-        assert!(
-            crate::uri::parse_ura(&outcomes[0].agent_uri).is_ok(),
+            crate::ura::parse_ura(&outcomes[0].agent_ura).is_ok(),
             "repaired URA must parse strictly"
         );
     }
 
     #[test]
-    fn malformed_agent_uri_orphan_row_is_pruned_post_join() {
+    fn malformed_agent_ura_orphan_row_is_pruned_post_join() {
         // Legacy stale row from a previous pairing — different
         // realm, malformed shape, NOT referenced by the current
         // plan. It is dead data: drop on first post-join boot.
@@ -680,14 +674,14 @@ mod tests {
                 HostedAgentEntry {
                     profile: "llm".into(),
                     name: "old-agent".into(),
-                    agent_uri: "easynet:///r/old-realm/agent/old-tail".into(),
+                    agent_ura: "easynet:///r/old-realm/agent/old-tail".into(),
                     signing_authority: String::new(),
                     first_seen_at: String::new(),
                 },
                 HostedAgentEntry {
                     profile: "consent".into(),
                     name: "default".into(),
-                    agent_uri: "easynet:///r/acme/agent/u1.consent-keep".into(),
+                    agent_ura: "easynet:///r/acme/agent/u1.consent-keep".into(),
                     signing_authority: String::new(),
                     first_seen_at: String::new(),
                 },
@@ -722,7 +716,7 @@ mod tests {
             hosted_agents: vec![HostedAgentEntry {
                 profile: "llm".into(),
                 name: "old-agent".into(),
-                agent_uri: "easynet:///r/old-realm/agent/old-tail".into(),
+                agent_ura: "easynet:///r/old-realm/agent/old-tail".into(),
                 signing_authority: String::new(),
                 first_seen_at: String::new(),
             }],
@@ -731,7 +725,7 @@ mod tests {
         let mut plan = plan_with(false, false, false, &[]);
         plan.realm = String::new();
         plan.user_id = String::new();
-        plan.host_device_uri = String::new();
+        plan.host_device_ura = String::new();
         let _ = bootstrap_local_agents(&plan, &mut file, &CountingMinter::new());
         assert_eq!(file.hosted_agents.len(), 1, "pre-join must not prune");
     }
@@ -747,7 +741,7 @@ mod tests {
             hosted_agents: vec![HostedAgentEntry {
                 profile: "llm".into(),
                 name: "claude".into(),
-                agent_uri: "easynet:///r/old/agent/old-user.a-keep-me".into(),
+                agent_ura: "easynet:///r/old/agent/old-user.a-keep-me".into(),
                 signing_authority: String::new(),
                 first_seen_at: String::new(),
             }],
@@ -759,36 +753,32 @@ mod tests {
         assert!(!outcomes[0].reused);
         // agent_id tail is preserved (operators may have referenced it).
         assert_eq!(
-            outcomes[0].agent_uri,
+            outcomes[0].agent_ura,
             "easynet:///r/acme/agent/u1.a-keep-me"
         );
     }
 
-    // ── helpers: is_canonical_agent_uri / needs_repair ─────────────
+    // ── helpers: is_agent_ura / needs_repair ─────────────
 
     #[test]
-    fn is_canonical_agent_uri_accepts_v4_1_5_agent_shape() {
-        assert!(is_canonical_agent_uri(
-            "easynet:///r/acme/agent/alice.claude"
-        ));
+    fn is_agent_ura_accepts_v4_1_5_agent_shape() {
+        assert!(is_agent_ura("easynet:///r/acme/agent/alice.claude"));
     }
 
     #[test]
-    fn is_canonical_agent_uri_rejects_collapsed_tail() {
+    fn is_agent_ura_rejects_collapsed_tail() {
         // The bug shape: tail with no `.` separator. Pre-v4.1.5
         // daemons emitted this and it has been silently reused
         // across boots.
-        assert!(!is_canonical_agent_uri(
-            "easynet:///r/acme/agent/consent-default-0"
-        ));
+        assert!(!is_agent_ura("easynet:///r/acme/agent/consent-default-0"));
     }
 
     #[test]
-    fn is_canonical_agent_uri_rejects_non_agent_kinds() {
-        assert!(!is_canonical_agent_uri("easynet:///r/acme/device/01DEV"));
-        assert!(!is_canonical_agent_uri("easynet:///r/acme/hub"));
-        assert!(!is_canonical_agent_uri("agent://self"));
-        assert!(!is_canonical_agent_uri(""));
+    fn is_agent_ura_rejects_non_agent_kinds() {
+        assert!(!is_agent_ura("easynet:///r/acme/device/01DEV"));
+        assert!(!is_agent_ura("easynet:///r/acme/hub"));
+        assert!(!is_agent_ura("agent://self"));
+        assert!(!is_agent_ura(""));
     }
 
     #[test]

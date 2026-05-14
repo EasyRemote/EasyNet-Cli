@@ -166,7 +166,7 @@ impl Kernel {
     /// Permission admission gate. Asks the broker; emits a
     /// `permission_pending` event before the call and a
     /// `permission_decided` event after, so a Client subscribed to
-    /// fleet.attach_session for this invocation_id sees admission
+    /// device.session.attach for this invocation_id sees admission
     /// was gated even when the broker auto-allows.
     ///
     /// AllowAllBroker returns immediately. SubscriberBroker
@@ -352,7 +352,7 @@ impl Kernel {
 /// RFC-001 P2.2: previously `!ability.starts_with("system.")`. After
 /// the system.* namespace was retired (per restatement-mapping), the
 /// non-gating set becomes the device-host abilities (federation.*,
-/// fleet.*, observe.*, admin.*, meta.*, consent.*, policy.*, schedule.*,
+/// device.*, observe.*, admin.*, meta.*, consent.*, policy.*, schedule.*,
 /// loop.*, discuss.*) plus everything else that runs in-host without
 /// per-call operator approval. The gating rule is therefore inverted:
 /// only `<agent>.<verb>` shapes (where <agent> is the canonical name
@@ -362,7 +362,7 @@ impl Kernel {
 fn should_gate(ability: &str) -> bool {
     const NON_GATING_PREFIXES: &[&str] = &[
         "federation.",
-        "fleet.",
+        "device.",
         "observe.",
         "admin.",
         "meta.",
@@ -414,6 +414,7 @@ impl KernelApi for Kernel {
         //      special-case any one of them.
         //   4. Terminal — emit `invoke_terminal`, mark the session
         //      ended, return the Receipt.
+        invocation.validate()?;
         let id = invocation_id_of(&invocation);
         let session_id = SessionId::new(id.clone());
         // The session's `agent` field is for observability only —
@@ -591,11 +592,13 @@ mod tests {
         // The v1 stub must at minimum return a Receipt whose
         // invocation_id matches `invocation_id_of(&inv)`.
         let k = Kernel::new(Arc::new(NoopGateway));
+        let caller = crate::ura::device_ura("localhost", "a");
+        let callee = crate::ura::device_ura("localhost", "b");
         let inv = Invocation {
-            caller: "easynet://nodes/a".into(),
-            callee: "easynet://nodes/b".into(),
+            caller,
+            callee: callee.clone(),
             ability: "observe.health".into(),
-            subject: "easynet://nodes/b".into(),
+            subject: callee,
             nonce_hex: "aa".repeat(16),
             causal_context: CausalContext::Null,
             args: json!({}),
@@ -624,7 +627,7 @@ mod tests {
         // rather than discovering it via a permission-prompt incident.
         assert!(should_gate("alice.exec"));
         // system.* must never gate.
-        assert!(!should_gate("fleet.attach_session"));
+        assert!(!should_gate("device.session.attach"));
         assert!(!should_gate("observe.health"));
         assert!(!should_gate("consent.subscribe"));
     }
@@ -674,11 +677,12 @@ mod tests {
         // blocks waiting for the decision.
         let k_clone = Arc::clone(&k);
         let invoke_task = tokio::task::spawn_blocking(move || {
+            let device_uri = crate::ura::device_ura("localhost", "a");
             let inv = Invocation {
-                caller: "easynet://nodes/a".into(),
-                callee: "easynet://nodes/a".into(),
+                caller: device_uri.clone(),
+                callee: device_uri.clone(),
                 ability: "ghost-agent.chat".into(),
-                subject: "easynet://nodes/a".into(),
+                subject: device_uri,
                 nonce_hex: "11".repeat(16),
                 causal_context: CausalContext::Null,
                 args: json!({"prompt": "do the thing"}),
@@ -728,11 +732,12 @@ mod tests {
         ));
         k.set_dispatcher(dispatcher);
         let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let device_uri = crate::ura::device_ura("localhost", "a");
         let inv = Invocation {
-            caller: "easynet://nodes/a".into(),
-            callee: "easynet://nodes/a".into(),
+            caller: device_uri.clone(),
+            callee: device_uri.clone(),
             ability: "ghost-agent.chat".into(),
-            subject: "easynet://nodes/a".into(),
+            subject: device_uri,
             nonce_hex: "00".repeat(16),
             causal_context: CausalContext::Null,
             args: json!({"prompt": "hi"}),
@@ -760,11 +765,12 @@ mod tests {
         // Kernel directly know the safe shape to expect.
         let k = Kernel::new(Arc::new(NoopGateway));
         let _g = crate::facade::cli::test_support::HomeGuard::new();
+        let device_uri = crate::ura::device_ura("localhost", "a");
         let inv = Invocation {
-            caller: "easynet://nodes/a".into(),
-            callee: "easynet://nodes/a".into(),
+            caller: device_uri.clone(),
+            callee: device_uri.clone(),
             ability: "alice.chat".into(),
-            subject: "easynet://nodes/a".into(),
+            subject: device_uri,
             nonce_hex: "ff".repeat(16),
             causal_context: CausalContext::Null,
             args: json!({"prompt": "hi"}),
@@ -772,5 +778,22 @@ mod tests {
         };
         let r = k.invoke(inv).unwrap();
         assert!(matches!(r.terminal, TerminalState::Succeeded));
+    }
+
+    #[test]
+    fn invoke_rejects_malformed_invocation_ura_before_admission() {
+        let k = Kernel::new(Arc::new(NoopGateway));
+        let inv = Invocation {
+            caller: "easynet://nodes/a".into(),
+            callee: crate::ura::device_ura("localhost", "a"),
+            ability: "alice.chat".into(),
+            subject: crate::ura::device_ura("localhost", "a"),
+            nonce_hex: "ff".repeat(16),
+            causal_context: CausalContext::Null,
+            args: json!({"prompt": "hi"}),
+            caller_signature: None,
+        };
+        let err = k.invoke(inv).unwrap_err();
+        assert!(format!("{err}").contains("caller URA is invalid"));
     }
 }

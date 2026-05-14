@@ -199,6 +199,7 @@ impl AbilityProxy {
             Arc::new(crate::runtime::execution::discuss::DiscussService::new()),
             Arc::new(crate::runtime::execution::schedule::ScheduleService::new()),
             Arc::new(crate::runtime::execution::loop_instance::LoopService::new()),
+            None,
             &agents,
             Arc::new(Vec::new()),
             crate::runtime::agents::PagesIdentity::default(),
@@ -1054,7 +1055,6 @@ fn sub_agent_name_from_ability(ability: &str) -> Option<String> {
     // Filter out protocol-owned namespaces — those resolve to the
     // device or hosted profile, not to a per-agent LLM URA.
     let protocol_namespaces = [
-        "fleet",
         "observe",
         "admin",
         "schedule",
@@ -1248,14 +1248,14 @@ mod tests {
 
     #[test]
     fn subscribe_to_session_attach_returns_terminal_at_minimum() {
-        // The fleet.attach_session handler is registered as a stream
+        // The device.session.attach handler is registered as a stream
         // handler. With no active session, v1 emits zero data Frames
         // and exactly one Terminal — pin that the proxy threads the
         // Terminal through.
         let p = proxy_with_live_registry();
         let frames = p.handle(IncomingFrame::Subscribe {
             subscription_id: "sub-1".into(),
-            ability: "device.fleet.attach_session".into(),
+            ability: "device.session.attach".into(),
             args: json!({"session_id": "no-such-session"}),
         });
         // Last frame must be Terminal regardless of how many Frame
@@ -1296,9 +1296,9 @@ mod tests {
     }
 
     #[test]
-    fn observe_health_attaches_selfsigned_header_when_host_uri_known() {
+    fn observe_health_attaches_selfsigned_header_when_host_ura_known() {
         let mut file = crate::persistence::local_agents::LocalAgentsFile::default();
-        file.host_device_agent_uri = "easynet:///r/acme/device/01DEV".into();
+        file.host_device_agent_ura = "easynet:///r/acme/device/01DEV".into();
         let p = proxy_with_local_agents(file);
         let frames = p.handle(IncomingFrame::Invoke {
             request_id: "req-receipt-1".into(),
@@ -1311,8 +1311,8 @@ mod tests {
                 receipt_header: Some(h),
                 ..
             } => {
-                assert_eq!(h.callee_agent_uri, "easynet:///r/acme/device/01DEV");
-                assert_eq!(h.signer_agent_uri, "easynet:///r/acme/device/01DEV");
+                assert_eq!(h.callee_agent_ura, "easynet:///r/acme/device/01DEV");
+                assert_eq!(h.signer_agent_ura, "easynet:///r/acme/device/01DEV");
                 assert!(h.is_self_signed());
             }
             OutgoingFrame::Result {
@@ -1332,7 +1332,7 @@ mod tests {
         // would silently accept an attestation-less receipt.
         use crate::runtime::hosted_receipt::SigningModel;
         let mut file = crate::persistence::local_agents::LocalAgentsFile::default();
-        file.host_device_agent_uri = "easynet:///r/acme/device/01DEV".into();
+        file.host_device_agent_ura = "easynet:///r/acme/device/01DEV".into();
         crate::persistence::local_agents::upsert_hosted_agent(
             &mut file,
             "consent",
@@ -1377,19 +1377,19 @@ mod tests {
             other => panic!("expected Result or Error, got {other:?}"),
         };
         assert_eq!(
-            header.callee_agent_uri, "easynet:///r/acme/agent/u1.01CON",
+            header.callee_agent_ura, "easynet:///r/acme/agent/u1.01CON",
             "callee must be the consent-profile URA from local-agents.json"
         );
         assert_eq!(
-            header.signer_agent_uri, "easynet:///r/acme/device/01DEV",
+            header.signer_agent_ura, "easynet:///r/acme/device/01DEV",
             "signer must be the host device-profile URA"
         );
         match header.model {
             SigningModel::HostedBy {
-                host_uri,
+                host_ura,
                 host_attestation,
             } => {
-                assert_eq!(host_uri, "easynet:///r/acme/device/01DEV");
+                assert_eq!(host_ura, "easynet:///r/acme/device/01DEV");
                 assert!(!host_attestation.is_empty());
             }
             SigningModel::Selfsigned => panic!(

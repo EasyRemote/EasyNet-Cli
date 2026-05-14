@@ -1,10 +1,10 @@
-// EasyNet CLI — observe.network_health ability handler
+// EasyNet CLI — device.observe.network_health ability handler
 // =======================================================
 //
 // File: src/runtime/agents/network_health_ability.rs
 //
 // Per §18: input `{}`, body `{links[], latency, ...}`. Sibling of
-// observe.health (which is a unary smoke probe — does the ability
+// device.observe.health (which is a unary smoke probe — does the ability
 // pipeline answer at all). network_health surfaces the *network*
 // posture: who do we believe we're joined to, what hosted Agents are
 // alive locally, is dendrite reachable.
@@ -33,7 +33,7 @@
 //
 //   * local daemon liveness (the handler itself),
 //   * one federation.resolve,
-//   * at most one direct observe.health probe per discovered
+//   * at most one direct device.observe.health probe per discovered
 //     device-profile Agent.
 //
 // That is enough to answer the CLI-facing question "is this daemon
@@ -63,13 +63,13 @@ pub fn register(reg: &mut LocalAbilityRegistry) {
 
 fn handler() -> anyhow::Result<Value> {
     let local = crate::persistence::local_agents::load().unwrap_or_default();
-    let view = federation_probe::collect_fleet_view();
+    let view = federation_probe::collect_device_view();
     let self_node = view.nodes.iter().find(|n| n.is_self);
     let joined =
-        self_node.map(|n| n.paired).unwrap_or(false) || !local.host_device_agent_uri.is_empty();
-    let host_uri: Value = if !local.host_device_agent_uri.is_empty() {
-        Value::String(local.host_device_agent_uri.clone())
-    } else if let Some(uri) = self_node.and_then(|n| n.agent_uri.clone()) {
+        self_node.map(|n| n.paired).unwrap_or(false) || !local.host_device_agent_ura.is_empty();
+    let host_ura: Value = if !local.host_device_agent_ura.is_empty() {
+        Value::String(local.host_device_agent_ura.clone())
+    } else if let Some(uri) = self_node.and_then(|n| n.agent_ura.clone()) {
         Value::String(uri)
     } else {
         Value::Null
@@ -97,7 +97,7 @@ fn handler() -> anyhow::Result<Value> {
     }));
     for node in view.nodes.iter().filter(|n| !n.is_self) {
         links.push(json!({
-            "target": node.agent_uri.clone(),
+            "target": node.agent_ura.clone(),
             "node_id": node.node_id.clone(),
             "status": node.probe_status.clone(),
             "state": node.state.clone(),
@@ -113,7 +113,7 @@ fn handler() -> anyhow::Result<Value> {
 
     Ok(json!({
         "joined": joined,
-        "host_device_uri": host_uri,
+        "host_device_uri": host_ura,
         "hosted_agent_count": local.hosted_agents.len(),
         "peer_count": peer_count,
         "links": Value::Array(links),
@@ -135,7 +135,7 @@ pub fn input_schema() -> Value {
 
 pub fn description() -> &'static str {
     "Report the daemon's live network posture: local daemon reachability, \
-     realm-directory reachability, and direct observe.health probe status \
+     realm-directory reachability, and direct device.observe.health probe status \
      for each discovered peer device."
 }
 

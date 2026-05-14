@@ -1,4 +1,4 @@
-// EasyNet CLI — fleet.skill_install / skill_remove / skill_upgrade
+// EasyNet CLI — device.skill.install / skill_remove / skill_upgrade
 // =================================================================
 //
 // File: src/runtime/agents/skill_install_ability.rs
@@ -63,9 +63,9 @@ use crate::facade::cli::skill::{install_skill, remove_skill, upgrade_skill};
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 
 use crate::runtime::ability_dispatch::OwnerKind;
-pub const ABILITY_INSTALL: &str = "device.fleet.skill_install";
-pub const ABILITY_REMOVE: &str = "device.fleet.skill_remove";
-pub const ABILITY_UPGRADE: &str = "device.fleet.skill_upgrade";
+pub const ABILITY_INSTALL: &str = "device.skill.install";
+pub const ABILITY_REMOVE: &str = "device.skill.remove";
+pub const ABILITY_UPGRADE: &str = "device.skill.upgrade";
 
 /// Register all three skill-management abilities on the registry.
 /// Stateless: no service handle because the helpers read the agent
@@ -74,28 +74,28 @@ pub const ABILITY_UPGRADE: &str = "device.fleet.skill_upgrade";
 /// daemon restart).
 pub fn register(reg: &mut LocalAbilityRegistry) {
     reg.register_rpc_with_owner(
-        "device.fleet.skill_install",
+        "device.skill.install",
         OwnerKind::Device,
         Arc::new(install_handler),
     );
     reg.register_rpc_with_owner(
-        "device.fleet.skill_remove",
+        "device.skill.remove",
         OwnerKind::Device,
         Arc::new(remove_handler),
     );
     reg.register_rpc_with_owner(
-        "device.fleet.skill_upgrade",
+        "device.skill.upgrade",
         OwnerKind::Device,
         Arc::new(upgrade_handler),
     );
 }
 
-/// `fleet.skill_install` handler.
+/// `device.skill.install` handler.
 ///
 /// Args: `{ "source": "github:owner/repo[@ref][:subpath]",
 ///          "agent": "<name>",
 ///          "pin": "<ref>"? }`
-/// Returns: `{ "ok": true, "record": InstallRecord }`
+/// Returns: `{ "ok": true, "record": InstallRecord + { resource_ura } }`
 fn install_handler(args: Value) -> anyhow::Result<Value> {
     let source = args
         .get("source")
@@ -106,12 +106,13 @@ fn install_handler(args: Value) -> anyhow::Result<Value> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("`agent` is required"))?;
     let pin = args.get("pin").and_then(Value::as_str);
+    let agent_ura = args.get("agent_ura").and_then(Value::as_str);
 
     let record = install_skill(source, agent, pin)?;
-    Ok(json!({ "ok": true, "record": record }))
+    Ok(json!({ "ok": true, "record": record_with_resource_ura(record, agent_ura) }))
 }
 
-/// `fleet.skill_remove` handler.
+/// `device.skill.remove` handler.
 ///
 /// Args: `{ "name": "<skill-name>", "agent": "<agent-name>" }`
 /// Returns: `{ "ok": true, "name": "...", "agent": "..." }`
@@ -124,16 +125,21 @@ fn remove_handler(args: Value) -> anyhow::Result<Value> {
         .get("agent")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("`agent` is required"))?;
+    let agent_ura = args.get("agent_ura").and_then(Value::as_str);
 
     remove_skill(name, agent)?;
-    Ok(json!({
+    let mut receipt = json!({
         "ok": true,
         "name": name,
         "agent": agent,
-    }))
+    });
+    if let Some(uri) = agent_ura.and_then(|agent_ura| skill_resource_ura(agent_ura, name)) {
+        receipt["resource_ura"] = json!(uri);
+    }
+    Ok(receipt)
 }
 
-/// `fleet.skill_upgrade` handler.
+/// `device.skill.upgrade` handler.
 ///
 /// Args: `{ "name": "<skill-name>",
 ///          "agent": "<agent-name>",
@@ -149,9 +155,35 @@ fn upgrade_handler(args: Value) -> anyhow::Result<Value> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("`agent` is required"))?;
     let to = args.get("to").and_then(Value::as_str);
+    let agent_ura = args.get("agent_ura").and_then(Value::as_str);
 
     let record = upgrade_skill(name, agent, to)?;
-    Ok(json!({ "ok": true, "record": record }))
+    Ok(json!({ "ok": true, "record": record_with_resource_ura(record, agent_ura) }))
+}
+
+fn record_with_resource_ura(
+    record: crate::facade::cli::skill::InstallRecord,
+    agent_ura: Option<&str>,
+) -> Value {
+    let mut value = serde_json::to_value(&record).unwrap_or(Value::Null);
+    if let Some(uri) = agent_ura.and_then(|agent_ura| skill_resource_ura(agent_ura, &record.name)) {
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("resource_ura".to_string(), json!(uri));
+        }
+    }
+    value
+}
+
+fn skill_resource_ura(agent_ura: &str, skill_name: &str) -> Option<String> {
+    let parsed = crate::ura::parse_ura(agent_ura).ok()?;
+    if parsed.kind != crate::ura::URAKind::Agent {
+        return None;
+    }
+    Some(crate::ura::resource_dot_ura(
+        &parsed.realm,
+        &format!("agent.{}.{}", parsed.user_id, parsed.agent_id),
+        &format!("skill/{skill_name}"),
+    ))
 }
 
 // ── Discovery surfaces (input schemas + descriptions) ─────────────
@@ -167,6 +199,10 @@ pub fn install_input_schema() -> Value {
             "agent": {
                 "type": "string",
                 "description": "Agent name that will own this skill"
+            },
+            "agent_ura": {
+                "type": "string",
+                "description": "Canonical agent URA for the owning agent; used to derive returned resource_ura."
             },
             "pin": {
                 "type": "string",
@@ -184,6 +220,7 @@ pub fn remove_input_schema() -> Value {
         "properties": {
             "name": {"type": "string", "description": "Skill name as installed under <agent-root>/skills/<name>/"},
             "agent": {"type": "string", "description": "Agent that owns the skill"},
+            "agent_ura": {"type": "string", "description": "Canonical agent URA for audit context."},
         },
         "required": ["name", "agent"],
         "additionalProperties": false,
@@ -196,6 +233,10 @@ pub fn upgrade_input_schema() -> Value {
         "properties": {
             "name": {"type": "string", "description": "Skill name to upgrade"},
             "agent": {"type": "string", "description": "Agent that owns the skill"},
+            "agent_ura": {
+                "type": "string",
+                "description": "Canonical agent URA for the owning agent; used to derive returned resource_ura."
+            },
             "to": {
                 "type": "string",
                 "description": "Target ref (tag/SHA/branch). Omit for upstream HEAD."

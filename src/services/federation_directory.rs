@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 /// **Spec v2 §2.1**. Schema-B fields (`origin_realm`,
 /// `hub_endpoint`, `last_seen_unix_ms`) ride `#[serde(default)]`
 /// so a legacy reader (PR-N1 commit 8/N consumer that only knows
-/// `agent_uri`/`node_id`/`display_name`/`status`) deserialises
+/// `agent_ura`/`node_id`/`display_name`/`status`) deserialises
 /// new bytes unchanged. New readers project the optional fields
 /// when present.
 ///
@@ -70,11 +70,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DirectoryEntry {
     /// Canonical device URI. The JSON field name stays
-    /// `agent_uri` for wire compatibility with older readers, but
+    /// `agent_ura` for wire compatibility with older readers, but
     /// the value carried here is the device-target a caller can
     /// route `federation.forward_invoke` against:
     /// `easynet:///r/<realm>/device/<id>` in v4.1.4+.
-    pub agent_uri: String,
+    pub agent_ura: String,
     /// Stable node id within the realm. Matches the device's
     /// `credentials.json::node_id`.
     pub node_id: String,
@@ -118,17 +118,17 @@ pub struct DirectoryEntry {
 /// `node_id` is parsed from the URI tail. Canonical v4.1.4 device
 /// URIs use `/device/<node>`. Non-canonical URIs (which should not
 /// appear in the registry, but defensive handling matters) get
-/// `node_id = agent_uri.clone()` so downstream consumers always
+/// `node_id = agent_ura.clone()` so downstream consumers always
 /// have a non-empty key.
 #[cfg(feature = "axon-pb")]
 #[must_use]
-pub fn presence_uri_to_directory_entry(agent_uri: &str, is_active: bool) -> DirectoryEntry {
-    let node_id = match crate::uri::parse_ura(agent_uri) {
-        Ok(parsed) if parsed.kind == crate::uri::URAKind::Device => parsed.device_id,
-        _ => agent_uri.to_string(),
+pub fn presence_uri_to_directory_entry(agent_ura: &str, is_active: bool) -> DirectoryEntry {
+    let node_id = match crate::ura::parse_ura(agent_ura) {
+        Ok(parsed) if parsed.kind == crate::ura::URAKind::Device => parsed.device_id,
+        _ => agent_ura.to_string(),
     };
     DirectoryEntry {
-        agent_uri: agent_uri.to_string(),
+        agent_ura: agent_ura.to_string(),
         node_id,
         display_name: None,
         status: if is_active { "active" } else { "stale" }.to_string(),
@@ -155,10 +155,10 @@ pub fn presence_event_to_directory_event(
 ) -> DirectoryEvent {
     use crate::services::presence_registry::{OfflineReason, PresenceEvent};
     match event {
-        PresenceEvent::Online { uri } => DirectoryEvent::Upsert {
-            entry: presence_uri_to_directory_entry(uri, true),
+        PresenceEvent::Online { ura } => DirectoryEvent::Upsert {
+            entry: presence_uri_to_directory_entry(ura, true),
         },
-        PresenceEvent::Offline { uri, reason } => {
+        PresenceEvent::Offline { ura, reason } => {
             let reason_str = match reason {
                 OfflineReason::StreamClosed => "stream_closed",
                 OfflineReason::StreamReset => "stream_reset",
@@ -166,7 +166,7 @@ pub fn presence_event_to_directory_event(
                 OfflineReason::AdminRevoked => "admin_revoked",
             };
             DirectoryEvent::Remove {
-                agent_uri: uri.clone(),
+                agent_ura: ura.clone(),
                 reason: reason_str.to_string(),
             }
         }
@@ -201,7 +201,7 @@ pub enum DirectoryEvent {
     /// Incremental: one entry added or status-changed.
     Upsert { entry: DirectoryEntry },
     /// Incremental: entry removed.
-    Remove { agent_uri: String, reason: String },
+    Remove { agent_ura: String, reason: String },
     /// Keepalive. Sender emits every 30s when no other frame
     /// has been emitted in window.
     Heartbeat { sent_at_unix_ms: i64 },
@@ -378,7 +378,7 @@ impl Default for SubscriberFsm {
 
 // ── DirectoryView (PR-N3 N3-3) ─────────────────────────────────────
 
-/// A peer hub's directory projection, keyed by agent_uri so
+/// A peer hub's directory projection, keyed by agent_ura so
 /// consumers can look up by URI in O(log n).
 ///
 /// The receiving daemon's RemoteDirectoryClient owns one per
@@ -395,7 +395,7 @@ impl Default for SubscriberFsm {
 pub struct DirectoryView {
     /// Realm of the peer this view represents.
     pub peer_realm: String,
-    /// agent_uri → entry. BTreeMap for deterministic iteration
+    /// agent_ura → entry. BTreeMap for deterministic iteration
     /// when projecting into a snapshot for consumers.
     pub entries: BTreeMap<String, DirectoryEntry>,
 }
@@ -411,8 +411,8 @@ impl DirectoryView {
 
     /// Lookup an entry by URI. `None` ⇔ not in this peer's view.
     #[must_use]
-    pub fn lookup(&self, agent_uri: &str) -> Option<&DirectoryEntry> {
-        self.entries.get(agent_uri)
+    pub fn lookup(&self, agent_ura: &str) -> Option<&DirectoryEntry> {
+        self.entries.get(agent_ura)
     }
 
     /// **§2.4 origin_realm rewrite chokepoint.** Apply an
@@ -430,15 +430,15 @@ impl DirectoryView {
                 self.entries.clear();
                 for raw in entries {
                     let entry = self.rewrite_origin(raw.clone());
-                    self.entries.insert(entry.agent_uri.clone(), entry);
+                    self.entries.insert(entry.agent_ura.clone(), entry);
                 }
             }
             DirectoryEvent::Upsert { entry } => {
                 let entry = self.rewrite_origin(entry.clone());
-                self.entries.insert(entry.agent_uri.clone(), entry);
+                self.entries.insert(entry.agent_ura.clone(), entry);
             }
-            DirectoryEvent::Remove { agent_uri, .. } => {
-                self.entries.remove(agent_uri);
+            DirectoryEvent::Remove { agent_ura, .. } => {
+                self.entries.remove(agent_ura);
             }
             DirectoryEvent::Heartbeat { .. } => {
                 // Keepalive is content-free for the view; the
@@ -593,7 +593,7 @@ impl Default for SharedFederatedDirectoryView {
 ///   same URI appeared on multiple peers it would indicate a
 ///   misconfiguration anyway (each device has exactly one
 ///   origin hub by construction).
-/// - Dedupe by `agent_uri` is implicit because we return on
+/// - Dedupe by `agent_ura` is implicit because we return on
 ///   first hit.
 ///
 /// Returns `None` when no peer has the URI. The caller (e.g. the
@@ -624,7 +624,7 @@ pub fn lookup_in_federated_view(
 /// `origin_realm` per §2.4.
 ///
 /// Iteration order: peers in lex order on `peer_realm`, entries
-/// in lex order on `agent_uri` (BTreeMap value iteration). Stable
+/// in lex order on `agent_ura` (BTreeMap value iteration). Stable
 /// across invocations on the same snapshot so the CLI prints
 /// in a deterministic order.
 #[must_use]
@@ -719,7 +719,7 @@ pub async fn poll_once(
         // the cross-realm CallerBinding from PR-N5 audit chain).
         let envelope = daemon_uri.map(|uri| Envelope {
             caller: Some(PbAgentIdentity {
-                uri: uri.to_string(),
+                ura: uri.to_string(),
                 profile: "easynet-strict-v2".to_string(),
             }),
             ..Envelope::default()
@@ -918,7 +918,7 @@ impl RemoteDirectoryClient {
 pub async fn run_per_peer_supervisor(
     peer_realm: String,
     peer_hub_uri: String,
-    caller_uri: String,
+    caller_ura: String,
     federation_client: std::sync::Arc<dyn crate::services::federation_client::FederationClient>,
     cell: SharedFederatedDirectoryView,
     cancel: tokio::sync::oneshot::Receiver<()>,
@@ -928,7 +928,7 @@ pub async fn run_per_peer_supervisor(
     run_per_peer_supervisor_with_idle_timeout(
         peer_realm,
         peer_hub_uri,
-        caller_uri,
+        caller_ura,
         federation_client,
         cell,
         cancel,
@@ -1009,7 +1009,7 @@ where
 pub async fn run_per_peer_supervisor_with_idle_timeout(
     peer_realm: String,
     peer_hub_uri: String,
-    caller_uri: String,
+    caller_ura: String,
     federation_client: std::sync::Arc<dyn crate::services::federation_client::FederationClient>,
     cell: SharedFederatedDirectoryView,
     mut cancel: tokio::sync::oneshot::Receiver<()>,
@@ -1042,26 +1042,26 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
         let mut nonce = vec![0u8; 16];
         rand::rngs::OsRng.fill_bytes(&mut nonce);
         // URI v4.1.4: peer hub is the realm-singleton; no sub-id tail.
-        let peer_uri_for_envelope = crate::uri::hub_uri(&peer_realm);
+        let peer_uri_for_envelope = crate::ura::hub_ura(&peer_realm);
         // v4.1.5 §A.URA-7 — `subject ∈ {user, device, resource}`.
         // Pre-fix this site set `subject = peer_uri_for_envelope` (the
         // peer hub URI), which violates the constraint (hub is not a
         // legal subject kind). The natural legal subject for "this
         // daemon subscribes to peer hub's directory" is the local
-        // daemon's own device URA (which equals `caller_uri`); peer
+        // daemon's own device URA (which equals `caller_ura`); peer
         // admission's strict 4-step verify still cross-checks the
         // signature against the trust anchor entry for this device.
         let envelope = Envelope {
             caller: Some(AgentIdentity {
-                uri: caller_uri.clone(),
+                ura: caller_ura.clone(),
                 ..AgentIdentity::default()
             }),
             callee: Some(AgentIdentity {
-                uri: peer_uri_for_envelope,
+                ura: peer_uri_for_envelope,
                 ..AgentIdentity::default()
             }),
             subject: Some(SubjectIdentity {
-                uri: caller_uri.clone(),
+                ura: caller_ura.clone(),
                 ..SubjectIdentity::default()
             }),
             invocation_nonce: nonce,
@@ -1299,7 +1299,7 @@ mod tests {
         // the wire. Legacy emit drops the schema-B fields
         // entirely; new emit includes them.
         r#"{
-            "agent_uri": "easynet:///r/realm-a/device/device-A",
+            "agent_ura": "easynet:///r/realm-a/device/device-A",
             "node_id": "node-1",
             "display_name": "silan-laptop",
             "status": "active"
@@ -1308,7 +1308,7 @@ mod tests {
 
     fn full_entry_json() -> &'static str {
         r#"{
-            "agent_uri": "easynet:///r/realm-a/device/device-A",
+            "agent_ura": "easynet:///r/realm-a/device/device-A",
             "node_id": "node-1",
             "display_name": "silan-laptop",
             "status": "active",
@@ -1324,7 +1324,7 @@ mod tests {
         // round-trips without errors and the new optional
         // fields surface as None / None / None.
         let entry: DirectoryEntry = serde_json::from_str(legacy_entry_json()).expect("deserialise");
-        assert_eq!(entry.agent_uri, "easynet:///r/realm-a/device/device-A");
+        assert_eq!(entry.agent_ura, "easynet:///r/realm-a/device/device-A");
         assert_eq!(entry.node_id, "node-1");
         assert_eq!(entry.display_name.as_deref(), Some("silan-laptop"));
         assert_eq!(entry.status, "active");
@@ -1349,7 +1349,7 @@ mod tests {
         // string match to stay byte-format-tolerant.
         let bytes = serde_json::to_vec(&entry).expect("serialise");
         let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("re-parse");
-        assert_eq!(parsed["agent_uri"], "easynet:///r/realm-a/device/device-A");
+        assert_eq!(parsed["agent_ura"], "easynet:///r/realm-a/device/device-A");
         assert_eq!(parsed["origin_realm"], "realm-a");
         assert_eq!(parsed["hub_endpoint"], "https://hub-a.example:50443");
         assert_eq!(parsed["last_seen_unix_ms"], 1_714_492_800_000_i64);
@@ -1363,7 +1363,7 @@ mod tests {
         // identically interpretable as "field absent" by the
         // schema-B convention.
         let local = DirectoryEntry {
-            agent_uri: "easynet:///r/realm-a/device/local-1".to_string(),
+            agent_ura: "easynet:///r/realm-a/device/local-1".to_string(),
             node_id: "local-1".to_string(),
             display_name: None,
             status: "active".to_string(),
@@ -1382,7 +1382,7 @@ mod tests {
 
     fn sample_entry() -> DirectoryEntry {
         DirectoryEntry {
-            agent_uri: "easynet:///r/realm-a/device/device-A".to_string(),
+            agent_ura: "easynet:///r/realm-a/device/device-A".to_string(),
             node_id: "node-1".to_string(),
             display_name: Some("silan-laptop".to_string()),
             status: "active".to_string(),
@@ -1400,7 +1400,7 @@ mod tests {
         let bytes = serde_json::to_vec(&evt).expect("serialise snapshot");
         let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("re-parse");
         assert_eq!(parsed["type"], "snapshot");
-        assert_eq!(parsed["entries"][0]["agent_uri"], sample_entry().agent_uri);
+        assert_eq!(parsed["entries"][0]["agent_ura"], sample_entry().agent_ura);
     }
 
     #[test]
@@ -1413,7 +1413,7 @@ mod tests {
         assert_eq!(upsert["type"], "upsert");
 
         let remove_bytes = serde_json::to_vec(&DirectoryEvent::Remove {
-            agent_uri: "easynet:///r/realm-a/device/dropped".to_string(),
+            agent_ura: "easynet:///r/realm-a/device/dropped".to_string(),
             reason: "shutdown".to_string(),
         })
         .unwrap();
@@ -1505,7 +1505,7 @@ mod tests {
                 entry: sample_entry(),
             },
             DirectoryEvent::Remove {
-                agent_uri: "easynet:///r/realm-a/device/x".to_string(),
+                agent_ura: "easynet:///r/realm-a/device/x".to_string(),
                 reason: "drop".to_string(),
             },
             DirectoryEvent::Heartbeat {
@@ -1598,7 +1598,7 @@ mod tests {
         // trips for testing receivers that compare entries to
         // detect changes between subscribe-stream snapshots.
         let original = DirectoryEntry {
-            agent_uri: "easynet:///r/realm-b/device/peer-device".to_string(),
+            agent_ura: "easynet:///r/realm-b/device/peer-device".to_string(),
             node_id: "peer-1".to_string(),
             display_name: Some("silan-phone".to_string()),
             status: "stale".to_string(),
@@ -1615,7 +1615,7 @@ mod tests {
 
     fn entry_with_claimed_origin(uri: &str, claimed: Option<&str>) -> DirectoryEntry {
         DirectoryEntry {
-            agent_uri: uri.to_string(),
+            agent_ura: uri.to_string(),
             node_id: "n".to_string(),
             display_name: None,
             status: "active".to_string(),
@@ -1693,7 +1693,7 @@ mod tests {
             .lookup("easynet:///r/realm-b/device/peer-device")
             .is_some());
         view.apply_frame(&DirectoryEvent::Remove {
-            agent_uri: "easynet:///r/realm-b/device/peer-device".to_string(),
+            agent_ura: "easynet:///r/realm-b/device/peer-device".to_string(),
             reason: "shutdown".to_string(),
         });
         assert!(view
@@ -2511,7 +2511,7 @@ mod tests {
                 entry: entry_with_claimed_origin("easynet:///r/realm-b/device/added", None),
             },
             DirectoryEvent::Remove {
-                agent_uri: "easynet:///r/realm-b/device/initial".to_string(),
+                agent_ura: "easynet:///r/realm-b/device/initial".to_string(),
                 reason: "stream_closed".to_string(),
             },
         ];
@@ -2729,7 +2729,7 @@ mod tests {
         let cell = populated_cell_with_two_peers();
         let entry =
             lookup_in_federated_view(&cell, "easynet:///r/realm-b/device/device-X").expect("hit");
-        assert_eq!(entry.agent_uri, "easynet:///r/realm-b/device/device-X");
+        assert_eq!(entry.agent_ura, "easynet:///r/realm-b/device/device-X");
         assert_eq!(entry.origin_realm.as_deref(), Some("realm-b"));
     }
 
@@ -2772,9 +2772,9 @@ mod tests {
         // realm-b is iterated before realm-c by BTreeMap key
         // order; within each realm there's only one entry so
         // the inner order is moot.
-        assert_eq!(entries[0].agent_uri, "easynet:///r/realm-b/device/device-X");
+        assert_eq!(entries[0].agent_ura, "easynet:///r/realm-b/device/device-X");
         assert_eq!(entries[0].origin_realm.as_deref(), Some("realm-b"));
-        assert_eq!(entries[1].agent_uri, "easynet:///r/realm-c/device/device-Y");
+        assert_eq!(entries[1].agent_ura, "easynet:///r/realm-c/device/device-Y");
         assert_eq!(entries[1].origin_realm.as_deref(), Some("realm-c"));
     }
 
@@ -2795,7 +2795,7 @@ mod tests {
         fn presence_uri_to_directory_entry_extracts_node_id_from_canonical_shape() {
             let entry =
                 presence_uri_to_directory_entry("easynet:///r/realm-a/device/device-X", true);
-            assert_eq!(entry.agent_uri, "easynet:///r/realm-a/device/device-X");
+            assert_eq!(entry.agent_ura, "easynet:///r/realm-a/device/device-X");
             assert_eq!(entry.node_id, "device-X");
             assert_eq!(entry.status, "active");
             // Local hub speaks for own realm; chokepoint stamps
@@ -2817,7 +2817,7 @@ mod tests {
         fn presence_uri_to_directory_entry_treats_legacy_agent_shape_as_non_canonical() {
             let entry =
                 presence_uri_to_directory_entry("easynet:///r/realm-a/agent/device-X", true);
-            assert_eq!(entry.agent_uri, "easynet:///r/realm-a/agent/device-X");
+            assert_eq!(entry.agent_ura, "easynet:///r/realm-a/agent/device-X");
             assert_eq!(entry.node_id, "easynet:///r/realm-a/agent/device-X");
         }
 
@@ -2828,17 +2828,17 @@ mod tests {
             // anyway so downstream code never sees an empty key.
             let entry = presence_uri_to_directory_entry("not-canonical", true);
             assert_eq!(entry.node_id, "not-canonical");
-            assert_eq!(entry.agent_uri, "not-canonical");
+            assert_eq!(entry.agent_ura, "not-canonical");
         }
 
         #[test]
         fn presence_event_online_projects_to_upsert_with_active_status() {
             let evt = presence_event_to_directory_event(&PresenceEvent::Online {
-                uri: "easynet:///r/realm-a/device/x".to_string(),
+                ura: "easynet:///r/realm-a/device/x".to_string(),
             });
             match evt {
                 DirectoryEvent::Upsert { entry } => {
-                    assert_eq!(entry.agent_uri, "easynet:///r/realm-a/device/x");
+                    assert_eq!(entry.agent_ura, "easynet:///r/realm-a/device/x");
                     assert_eq!(entry.status, "active");
                 }
                 _ => panic!("expected Upsert; got {evt:?}"),
@@ -2855,12 +2855,12 @@ mod tests {
             ];
             for (reason, expected_str) in cases {
                 let evt = presence_event_to_directory_event(&PresenceEvent::Offline {
-                    uri: "easynet:///r/realm-a/device/x".to_string(),
+                    ura: "easynet:///r/realm-a/device/x".to_string(),
                     reason,
                 });
                 match evt {
-                    DirectoryEvent::Remove { agent_uri, reason } => {
-                        assert_eq!(agent_uri, "easynet:///r/realm-a/device/x");
+                    DirectoryEvent::Remove { agent_ura, reason } => {
+                        assert_eq!(agent_ura, "easynet:///r/realm-a/device/x");
                         assert_eq!(reason, expected_str);
                     }
                     other => panic!("expected Remove for {reason:?}; got {other:?}"),

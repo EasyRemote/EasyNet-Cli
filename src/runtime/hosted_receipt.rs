@@ -13,12 +13,12 @@
 // --------------------------------
 //
 //   HostedAgentReceiptHeader {
-//     callee_agent_uri:  "easynet:///r/<realm>/agent/<hosted-id>",
-//     signer_agent_uri:  "easynet:///r/<realm>/agent/<host-id>",
+//     callee_agent_ura:  "easynet:///r/<realm>/agent/<hosted-id>",
+//     signer_agent_ura:  "easynet:///r/<realm>/agent/<host-id>",
 //     host_attestation:  signed assertion that signer hosts callee
 //   }
 //
-// `callee_agent_uri == signer_agent_uri` for self-signed Agents
+// `callee_agent_ura == signer_agent_ura` for self-signed Agents
 // (§1.3 Model A — hub, backend, device-profile). They differ for
 // hosted Agents (§1.3 Model B — every CLI-spawned Agent).
 //
@@ -59,9 +59,9 @@ pub enum SigningModel {
     /// carries both the apparent callee and the actual signer.
     HostedBy {
         /// Canonical URA of the hosting device-profile Agent.
-        host_uri: String,
+        host_ura: String,
         /// Signed assertion (issued by the hub during
-        /// `federation.advertise_agent`) that `host_uri` hosts
+        /// `federation.advertise_agent`) that `host_ura` hosts
         /// the callee. Carried opaquely; the verifier checks
         /// against the hub's recorded directory entry.
         host_attestation: Vec<u8>,
@@ -77,11 +77,11 @@ pub struct HostedAgentReceiptHeader {
     /// The Agent the caller targeted — `target.callee` in the
     /// envelope. For a `claude.skill.alive-video` invoke against
     /// the daemon, this is the LLM-profile Agent's URA.
-    pub callee_agent_uri: String,
+    pub callee_agent_ura: String,
     /// Whose private key actually produced the signature. For
-    /// Selfsigned, equal to `callee_agent_uri`. For HostedBy,
-    /// equal to `host_uri`.
-    pub signer_agent_uri: String,
+    /// Selfsigned, equal to `callee_agent_ura`. For HostedBy,
+    /// equal to `host_ura`.
+    pub signer_agent_ura: String,
     pub model: SigningModel,
 }
 
@@ -91,23 +91,23 @@ pub enum HostedReceiptError {
     EmptySigner,
     EmptyHostUri,
     EmptyAttestation,
-    /// HostedBy declared but `signer_agent_uri != host_uri` — would
+    /// HostedBy declared but `signer_agent_ura != host_ura` — would
     /// produce an inconsistent receipt the verifier could not check.
     SignerNotHost,
-    /// Selfsigned declared but `signer_agent_uri != callee_agent_uri`.
+    /// Selfsigned declared but `signer_agent_ura != callee_agent_ura`.
     SignerNotCallee,
 }
 
 impl std::fmt::Display for HostedReceiptError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let msg = match self {
-            HostedReceiptError::EmptyCallee => "callee_agent_uri must not be empty",
-            HostedReceiptError::EmptySigner => "signer_agent_uri must not be empty",
-            HostedReceiptError::EmptyHostUri => "HostedBy.host_uri must not be empty",
+            HostedReceiptError::EmptyCallee => "callee_agent_ura must not be empty",
+            HostedReceiptError::EmptySigner => "signer_agent_ura must not be empty",
+            HostedReceiptError::EmptyHostUri => "HostedBy.host_ura must not be empty",
             HostedReceiptError::EmptyAttestation => "HostedBy.host_attestation must not be empty",
-            HostedReceiptError::SignerNotHost => "HostedBy: signer_agent_uri must equal host_uri",
+            HostedReceiptError::SignerNotHost => "HostedBy: signer_agent_ura must equal host_ura",
             HostedReceiptError::SignerNotCallee => {
-                "Selfsigned: signer_agent_uri must equal callee_agent_uri"
+                "Selfsigned: signer_agent_ura must equal callee_agent_ura"
             }
         };
         f.write_str(msg)
@@ -120,14 +120,14 @@ impl HostedAgentReceiptHeader {
     /// Construct a Self-signed receipt header. callee == signer
     /// is enforced by the constructor — pass one URA in, get a
     /// header that records the same URA on both sides.
-    pub fn new_selfsigned(agent_uri: impl Into<String>) -> Result<Self, HostedReceiptError> {
-        let agent_uri = agent_uri.into();
-        if agent_uri.trim().is_empty() {
+    pub fn new_selfsigned(agent_ura: impl Into<String>) -> Result<Self, HostedReceiptError> {
+        let agent_ura = agent_ura.into();
+        if agent_ura.trim().is_empty() {
             return Err(HostedReceiptError::EmptyCallee);
         }
         Ok(Self {
-            callee_agent_uri: agent_uri.clone(),
-            signer_agent_uri: agent_uri,
+            callee_agent_ura: agent_ura.clone(),
+            signer_agent_ura: agent_ura,
             model: SigningModel::Selfsigned,
         })
     }
@@ -138,26 +138,26 @@ impl HostedAgentReceiptHeader {
     /// shipping one would silently degrade to "trust the daemon",
     /// which is exactly what §A12 forbids.
     pub fn new_hosted(
-        callee_agent_uri: impl Into<String>,
-        host_uri: impl Into<String>,
+        callee_agent_ura: impl Into<String>,
+        host_ura: impl Into<String>,
         host_attestation: Vec<u8>,
     ) -> Result<Self, HostedReceiptError> {
-        let callee_agent_uri = callee_agent_uri.into();
-        let host_uri = host_uri.into();
-        if callee_agent_uri.trim().is_empty() {
+        let callee_agent_ura = callee_agent_ura.into();
+        let host_ura = host_ura.into();
+        if callee_agent_ura.trim().is_empty() {
             return Err(HostedReceiptError::EmptyCallee);
         }
-        if host_uri.trim().is_empty() {
+        if host_ura.trim().is_empty() {
             return Err(HostedReceiptError::EmptyHostUri);
         }
         if host_attestation.is_empty() {
             return Err(HostedReceiptError::EmptyAttestation);
         }
         Ok(Self {
-            callee_agent_uri,
-            signer_agent_uri: host_uri.clone(),
+            callee_agent_ura,
+            signer_agent_ura: host_ura.clone(),
             model: SigningModel::HostedBy {
-                host_uri,
+                host_ura,
                 host_attestation,
             },
         })
@@ -174,29 +174,29 @@ impl HostedAgentReceiptHeader {
     /// serde. Use at trust boundaries (e.g. a daemon parsing a
     /// receipt from another daemon's relay) before acting on it.
     pub fn validate(&self) -> Result<(), HostedReceiptError> {
-        if self.callee_agent_uri.trim().is_empty() {
+        if self.callee_agent_ura.trim().is_empty() {
             return Err(HostedReceiptError::EmptyCallee);
         }
-        if self.signer_agent_uri.trim().is_empty() {
+        if self.signer_agent_ura.trim().is_empty() {
             return Err(HostedReceiptError::EmptySigner);
         }
         match &self.model {
             SigningModel::Selfsigned => {
-                if self.signer_agent_uri != self.callee_agent_uri {
+                if self.signer_agent_ura != self.callee_agent_ura {
                     return Err(HostedReceiptError::SignerNotCallee);
                 }
             }
             SigningModel::HostedBy {
-                host_uri,
+                host_ura,
                 host_attestation,
             } => {
-                if host_uri.trim().is_empty() {
+                if host_ura.trim().is_empty() {
                     return Err(HostedReceiptError::EmptyHostUri);
                 }
                 if host_attestation.is_empty() {
                     return Err(HostedReceiptError::EmptyAttestation);
                 }
-                if &self.signer_agent_uri != host_uri {
+                if &self.signer_agent_ura != host_ura {
                     return Err(HostedReceiptError::SignerNotHost);
                 }
             }
@@ -223,8 +223,8 @@ mod tests {
         // `agent/01HUB` shape has been retired.
         let uri = "easynet:///r/acme/hub";
         let h = HostedAgentReceiptHeader::new_selfsigned(uri).unwrap();
-        assert_eq!(h.callee_agent_uri, uri);
-        assert_eq!(h.signer_agent_uri, uri);
+        assert_eq!(h.callee_agent_ura, uri);
+        assert_eq!(h.signer_agent_ura, uri);
         assert_eq!(h.model, SigningModel::Selfsigned);
         assert!(h.is_self_signed());
     }
@@ -252,15 +252,15 @@ mod tests {
         let host = "easynet:///r/acme/device/01DEV";
         let attestation = vec![0xDE, 0xAD, 0xBE, 0xEF];
         let h = HostedAgentReceiptHeader::new_hosted(callee, host, attestation.clone()).unwrap();
-        assert_eq!(h.callee_agent_uri, callee);
-        assert_eq!(h.signer_agent_uri, host);
+        assert_eq!(h.callee_agent_ura, callee);
+        assert_eq!(h.signer_agent_ura, host);
         assert!(!h.is_self_signed());
         match &h.model {
             SigningModel::HostedBy {
-                host_uri,
+                host_ura,
                 host_attestation,
             } => {
-                assert_eq!(host_uri, host);
+                assert_eq!(host_ura, host);
                 assert_eq!(host_attestation, &attestation);
             }
             _ => panic!("expected HostedBy"),
@@ -268,13 +268,13 @@ mod tests {
     }
 
     #[test]
-    fn validate_catches_post_serde_tampering_with_signer_uri() {
+    fn validate_catches_post_serde_tampering_with_signer_ura() {
         // A peer daemon hands us a Selfsigned-tagged receipt whose
         // signer doesn't match callee — must reject before we trust
         // the body.
         let bad = HostedAgentReceiptHeader {
-            callee_agent_uri: "easynet:///r/acme/agent/u1.01A".into(),
-            signer_agent_uri: "easynet:///r/acme/agent/u1.01B".into(),
+            callee_agent_ura: "easynet:///r/acme/agent/u1.01A".into(),
+            signer_agent_ura: "easynet:///r/acme/agent/u1.01B".into(),
             model: SigningModel::Selfsigned,
         };
         assert_eq!(
@@ -284,12 +284,12 @@ mod tests {
     }
 
     #[test]
-    fn validate_catches_hosted_with_signer_not_equal_to_host_uri() {
+    fn validate_catches_hosted_with_signer_not_equal_to_host_ura() {
         let bad = HostedAgentReceiptHeader {
-            callee_agent_uri: "easynet:///r/acme/agent/u1.01LLM".into(),
-            signer_agent_uri: "easynet:///r/acme/agent/u1.01OTHER".into(),
+            callee_agent_ura: "easynet:///r/acme/agent/u1.01LLM".into(),
+            signer_agent_ura: "easynet:///r/acme/agent/u1.01OTHER".into(),
             model: SigningModel::HostedBy {
-                host_uri: "easynet:///r/acme/device/01DEV".into(),
+                host_ura: "easynet:///r/acme/device/01DEV".into(),
                 host_attestation: vec![1],
             },
         };

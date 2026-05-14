@@ -68,15 +68,15 @@ use crate::pb::axon::v1::invocation_client::InvocationClient;
 #[cfg(test)]
 use crate::pb::axon::v1::BinaryChunk;
 use crate::pb::axon::v1::{
-    invoke_bidi_up::Payload as UpPayload, EnvelopeOpen, InvocationTarget, InvokeBidiUp,
-    StreamDescriptor,
+    invoke_bidi_up::Payload as UpPayload, ContentEnvelope, EnvelopeOpen, InvocationTarget,
+    InvokeBidiUp, StreamDescriptor,
 };
 
 /// Daemon-side ability name this initiator targets. The daemon's
 /// `InvokeBidi` dispatcher routes on
 /// `EnvelopeOpen.target.ability_name`.
 ///
-/// **Wire-pinned** — held on the legacy `<self>.invoke_remote`
+/// **Wire-pinned** — held on the `<self>.invoke_remote` transport
 /// literal until the production hub (EasyNet-Axon) ships matching
 /// dual-name acceptance. EasyNet/backend's `AbilityInvokeRemote`
 /// const tracks this string verbatim. M4 of the system-namespace
@@ -98,6 +98,36 @@ const REASON_BIDI_DOWN_SEQUENCE: &str = "AXON_BIDI_DOWN_SEQUENCE";
 /// fit in 1 frame.
 const UP_CHANNEL_CAPACITY: usize = 8;
 
+/// JSON-serializable content contract for inner invoke_remote
+/// arguments. We intentionally do not embed the prost-generated
+/// `ContentEnvelope` here because SessionDispatch is serde JSON,
+/// while prost messages are the gRPC frame contract. The field
+/// names mirror axon.v1.ContentEnvelope.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionContentEnvelope {
+    pub content_type: String,
+    pub encoding: String,
+    pub schema_ura: String,
+    pub encryption: i32,
+    pub key_id: String,
+}
+
+impl SessionContentEnvelope {
+    pub fn plaintext_json() -> Self {
+        Self {
+            content_type: "application/json".to_string(),
+            encoding: "identity".to_string(),
+            schema_ura: String::new(),
+            encryption: 0,
+            key_id: String::new(),
+        }
+    }
+
+    pub fn is_encrypted(&self) -> bool {
+        self.encryption != 0
+    }
+}
+
 /// Frame-0 payload shape — what JSON gets serialised into
 /// `EnvelopeOpen.initial_args`. Public so PR-3 commit 3/3's hub-side
 /// handler imports the same type for deserialisation, guaranteeing
@@ -115,6 +145,8 @@ pub enum InvokeRemoteUp {
         /// Opaque payload bytes the remote ability consumes. The
         /// invoke_remote initiator and handler do not interpret these.
         args: Vec<u8>,
+        /// Content contract for `args`.
+        args_content_envelope: SessionContentEnvelope,
     },
 }
 
@@ -176,18 +208,20 @@ pub enum SessionDispatch {
         call_id: u64,
         ability: String,
         args: Vec<u8>,
+        args_content_envelope: SessionContentEnvelope,
     },
     /// Hub → target device. Open one long-lived local bidi handler
     /// on the target and bind it to `call_id`. Used by the
-    /// same-hub `fleet.file_transfer` bridge: the hub forwards the
+    /// same-hub `device.fs.transfer` bridge: the hub forwards the
     /// backend's InvokeBidi open to the device's local
-    /// `fleet.file_transfer` ability, then streams caller input via
+    /// `device.fs.transfer` ability, then streams caller input via
     /// `BidiInput` and target output back via non-terminal
     /// `Result` frames.
     BidiOpen {
         call_id: u64,
         ability: String,
         args: Vec<u8>,
+        args_content_envelope: SessionContentEnvelope,
     },
     /// Hub → target device. One incremental input frame for a
     /// previously-opened remote bidi session. `payload` carries raw
@@ -226,6 +260,7 @@ pub enum SessionDispatch {
         call_id: [u8; 16],
         ability: String,
         args: Vec<u8>,
+        args_content_envelope: SessionContentEnvelope,
     },
     /// Hub → device. Reverse direction of `Request`. The hub
     /// resolved the target via its PresenceRegistry (same-tenant
@@ -313,6 +348,7 @@ pub async fn invoke_remote(
         subject_device,
         ability,
         args,
+        args_content_envelope: SessionContentEnvelope::plaintext_json(),
     };
     let initial_args = serde_json::to_vec(&request)
         .map_err(|err| Status::internal(format!("encode invoke_remote request: {err}")))?;
@@ -366,6 +402,11 @@ fn build_envelope_open_frame(initial_args: &[u8]) -> InvokeBidiUp {
             ordering: "STRICT".to_string(),
         }],
         metadata: Default::default(),
+        content_envelope: Some(ContentEnvelope {
+            content_type: "application/json".to_string(),
+            encoding: "identity".to_string(),
+            ..ContentEnvelope::default()
+        }),
     };
     InvokeBidiUp {
         sequence: 0,
@@ -501,6 +542,7 @@ mod tests {
             subject_device: "easynet:///r/realm/device/dev-B".into(),
             ability: "echo".into(),
             args: b"hi".to_vec(),
+            args_content_envelope: SessionContentEnvelope::plaintext_json(),
         })
         .unwrap();
         let frame = build_envelope_open_frame(&request_json);
@@ -520,6 +562,12 @@ mod tests {
         assert_eq!(envelope_open.streams[0].stream_id, INVOKE_REMOTE_STREAM_ID);
         assert_eq!(envelope_open.streams[0].content_type, "application/json");
         assert_eq!(envelope_open.args_content_type, "application/json");
+        let content = envelope_open
+            .content_envelope
+            .as_ref()
+            .expect("EnvelopeOpen content envelope");
+        assert_eq!(content.content_type, "application/json");
+        assert_eq!(content.encoding, "identity");
         assert_eq!(envelope_open.initial_args, request_json);
     }
 
@@ -529,6 +577,7 @@ mod tests {
             subject_device: "easynet:///r/realm/device/dev-X".into(),
             ability: "fs.read".into(),
             args: vec![1, 2, 3, 255],
+            args_content_envelope: SessionContentEnvelope::plaintext_json(),
         };
         let bytes = serde_json::to_vec(&original).unwrap();
         let recovered: InvokeRemoteUp = serde_json::from_slice(&bytes).unwrap();
@@ -786,6 +835,7 @@ mod tests {
             call_id: [0xab; 16],
             ability: "fs.read".into(),
             args: br#"{"path":"/etc/hosts"}"#.to_vec(),
+            args_content_envelope: SessionContentEnvelope::plaintext_json(),
         };
         let bytes = serde_json::to_vec(&original).expect("encode");
         let recovered: SessionDispatch = serde_json::from_slice(&bytes).expect("decode");
@@ -850,6 +900,7 @@ mod tests {
             call_id: [0; 16],
             ability: "x".into(),
             args: vec![],
+            args_content_envelope: SessionContentEnvelope::plaintext_json(),
         };
         let json = serde_json::to_string(&req).expect("encode");
         assert!(

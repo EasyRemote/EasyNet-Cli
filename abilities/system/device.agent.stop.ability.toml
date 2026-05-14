@@ -1,0 +1,12 @@
+schema_version = "1"
+name = "device.agent.stop"
+description = "Remove an LLM sub-agent registry row. Accepts either the agent name or its canonical URA. Idempotent: ack=false when the row didn't exist. Workspace files are deliberately NOT deleted — use `easynet agent remove --purge` for that."
+
+[input_schema]
+type = "object"
+required = ["name_or_uri"]
+additionalProperties = false
+
+[input_schema.properties.name_or_uri]
+type = "string"
+minLength = 1

@@ -298,7 +298,7 @@ pub fn load_agents() -> anyhow::Result<AgentRegistry> {
     // Rationale for doing this on read (rather than in a dedicated
     // `easynet migrate` command):
     //
-    //   * The fleet of call sites that read the registry is wide
+    //   * The set of call sites that read the registry is wide
     //     (every CLI command that touches an agent). Demanding a
     //     separate migration run would leave a failure mode where
     //     post-upgrade CLI invocations behave inconsistently until

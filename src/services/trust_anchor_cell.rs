@@ -138,7 +138,7 @@ mod tests {
 
     fn agent(uri: &str) -> TrustedAgent {
         TrustedAgent {
-            agent_uri: uri.to_string(),
+            agent_ura: uri.to_string(),
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             role: TrustedAgentRole::Backend,
             added_at_unix_ms: 1_714_492_800_000,

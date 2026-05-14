@@ -114,16 +114,16 @@ fn decode_exec_stream(result: &Value, field: &str) -> Vec<u8> {
 
 #[cfg(feature = "axon-pb")]
 fn invoke_remote_process_exec(node: &str, payload: Value) -> anyhow::Result<Value> {
-    let target_uri = crate::support::remote_device::resolve_target_device_uri(node)?;
-    let caller_uri = crate::support::remote_device::caller_device_uri_from_credentials();
+    let target_ura = crate::support::remote_device::resolve_target_device_ura(node)?;
+    let caller_ura = crate::support::remote_device::caller_device_uri_from_credentials();
     crate::support::federation_invoke::invoke_via_federation_forward(
         "process.exec",
         payload,
-        &target_uri,
-        caller_uri.as_deref(),
+        &target_ura,
+        caller_ura.as_deref(),
     )
     .with_context(|| {
-        format!("invoke process.exec via federation.forward_invoke target={target_uri}")
+        format!("invoke process.exec via federation.forward_invoke target={target_ura}")
     })
 }
 

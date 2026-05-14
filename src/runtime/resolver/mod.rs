@@ -194,8 +194,8 @@ pub fn resolve(tenant_id: &str, cfg: &ResolverConfig) -> TenantResolution {
 /// remains on `TenantResolution` as informational metadata for the
 /// federation layer's hub-discovery decision but does NOT appear in
 /// any URI.
-pub fn canonical_device_uri(node_id: &str, resolution: &TenantResolution) -> String {
-    format!("easynet:///r/{}/device/{}", resolution.tenant_id, node_id)
+pub fn canonical_device_ura(node_id: &str, resolution: &TenantResolution) -> String {
+    crate::ura::device_ura(&resolution.tenant_id, node_id)
 }
 
 #[cfg(test)]
@@ -267,11 +267,11 @@ mod tests {
         let local = resolve("silan.localhost", &cfg());
         let net = resolve("silan.easynet", &cfg());
         assert_eq!(
-            canonical_device_uri("01HABC", &local),
+            canonical_device_ura("01HABC", &local),
             "easynet:///r/silan.localhost/device/01HABC"
         );
         assert_eq!(
-            canonical_device_uri("01HABC", &net),
+            canonical_device_ura("01HABC", &net),
             "easynet:///r/silan.easynet/device/01HABC"
         );
     }

@@ -53,16 +53,16 @@ fn boot_realm_a_daemon() -> (Arc<KeyringHandle>, String, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("realm_a_keyring.json");
     let h = Arc::new(KeyringHandle::open_or_create(path, "passphrase-a").unwrap());
-    let user_uri = "easynet:///r/realm-a/user/user-c".to_string();
-    h.set_device_subject(user_uri.clone()).unwrap();
+    let user_ura = "easynet:///r/realm-a/user/user-c".to_string();
+    h.set_device_subject(user_ura.clone()).unwrap();
     handle_create(&h, json!({"purpose": "agent_signing"})).unwrap();
-    (h, user_uri, dir)
+    (h, user_ura, dir)
 }
 
 #[test]
 fn full_round_trip_realm_a_issues_realm_b_consumes_resolver_finds() {
     // ── Realm A: issue token ──
-    let (a_keyring, source_user_uri, _a_dir) = boot_realm_a_daemon();
+    let (a_keyring, source_user_ura, _a_dir) = boot_realm_a_daemon();
     let issued_at_ms: u64 = 1_714_500_000_000;
 
     let token_resp = handle_federate_user_identity_token(
@@ -75,7 +75,7 @@ fn full_round_trip_realm_a_issues_realm_b_consumes_resolver_finds() {
     .expect("realm A issues token");
     assert_eq!(token_resp["transport_hint"], json!("jwt-custom-claim"));
     let token_json = token_resp["token"].clone();
-    assert_eq!(token_json["source_user_uri"], json!(source_user_uri));
+    assert_eq!(token_json["source_user_ura"], json!(source_user_ura));
     assert_eq!(token_json["target_realm"], json!("realm-b"));
 
     // ── Token bytes cross the realm boundary (in-process: just
@@ -102,7 +102,7 @@ fn full_round_trip_realm_a_issues_realm_b_consumes_resolver_finds() {
 
     // ── Resolver: realm B can now look up the bound user ──
     let resolver = FederatedUserResolver::new("realm-b", bindings.clone());
-    let outcome = resolver.resolve_user(&source_user_uri);
+    let outcome = resolver.resolve_user(&source_user_ura);
     assert_eq!(
         outcome,
         FederatedUserOutcome::BoundLocalUser(local_user_id_on_b.clone())
@@ -122,7 +122,7 @@ fn full_round_trip_realm_a_issues_realm_b_consumes_resolver_finds() {
 fn replay_attempt_after_successful_consume_rejected() {
     // Same flow as above, but try to consume the SAME token
     // twice. Second attempt must reject with replay detected.
-    let (a_keyring, _source_user_uri, _a_dir) = boot_realm_a_daemon();
+    let (a_keyring, _source_user_ura, _a_dir) = boot_realm_a_daemon();
     let issued_at_ms: u64 = 1_714_500_000_000;
     let token_resp = handle_federate_user_identity_token(
         &a_keyring,
@@ -156,7 +156,7 @@ fn token_for_wrong_realm_rejected_at_target_check() {
     // Realm A issues a token targeting realm B; realm C tries
     // to consume — must reject at target_realm check before
     // any expensive crypto runs.
-    let (a_keyring, _source_user_uri, _a_dir) = boot_realm_a_daemon();
+    let (a_keyring, _source_user_ura, _a_dir) = boot_realm_a_daemon();
     let token_resp = handle_federate_user_identity_token(
         &a_keyring,
         json!({
@@ -188,7 +188,7 @@ fn binding_persists_across_resolver_construction() {
     // Once written to the store, the binding survives
     // constructing a fresh resolver — readers don't need to be
     // alive at consume time.
-    let (a_keyring, source_user_uri, _a_dir) = boot_realm_a_daemon();
+    let (a_keyring, source_user_ura, _a_dir) = boot_realm_a_daemon();
     let issued_at_ms: u64 = 1_714_500_000_000;
     let token = handle_federate_user_identity_token(
         &a_keyring,
@@ -214,6 +214,6 @@ fn binding_persists_across_resolver_construction() {
 
     // Construct the resolver AFTER the consume.
     let resolver = FederatedUserResolver::new("realm-b", bindings);
-    let outcome = resolver.resolve_user(&source_user_uri);
+    let outcome = resolver.resolve_user(&source_user_ura);
     assert!(matches!(outcome, FederatedUserOutcome::BoundLocalUser(_)));
 }

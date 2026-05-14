@@ -31,10 +31,10 @@
 //
 // What "real" means here
 // ----------------------
-// * For pure / observable abilities (observe.health, meta.*),
+// * For pure / observable abilities (device.observe.health, meta.*),
 //   real == we read fields from the response and check they
 //   reflect the live registry / runtime.
-// * For HOME-bound persistence (admin.status, fleet.*_agent),
+// * For HOME-bound persistence (admin.status, device.* _agent),
 //   real == HomeGuard provides a fresh ~/.easynet/, the call
 //   creates / lists / deletes against that empty state.
 // * For services with Arc handles (DiscussService, etc.), real
@@ -82,17 +82,44 @@ fn registry_with_temp_home() -> (
 ) {
     let guard = crate::facade::cli::test_support::HomeGuard::new();
     // build_registry_for_daemon does the agent-registry load that
-    // some abilities need (fleet.list_agents, chat-per-agent etc).
+    // some abilities need (device.agent.list, chat-per-agent etc).
     let reg = build_registry_for_daemon(
         Arc::new(crate::runtime::execution::session::SessionService::new()),
         Arc::new(crate::runtime::execution::permission::PermissionService::new()),
         Arc::new(crate::runtime::execution::discuss::DiscussService::new()),
         Arc::new(crate::runtime::execution::schedule::ScheduleService::new()),
         Arc::new(crate::runtime::execution::loop_instance::LoopService::new()),
+        None,
         Some(Arc::new(Vec::new())),
         crate::runtime::agents::PagesIdentity::default(),
     );
     (reg, guard)
+}
+
+fn materialise_skill_fixture(
+    tag: &str,
+    skill_name: &str,
+    body: &str,
+) -> (String, std::path::PathBuf) {
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let owner = format!("real-skill-{tag}-{pid}-{nanos}");
+    let root = crate::persistence::config::agents_root().join(&owner);
+    let skill_dir = root.join("skills").join(skill_name);
+    std::fs::create_dir_all(&skill_dir).expect("create skill fixture dir");
+    crate::persistence::config::atomic_write(&skill_dir.join("SKILL.md"), body.as_bytes())
+        .expect("write skill fixture body");
+
+    let mut registry = crate::registry::agents::load_agents().unwrap_or_default();
+    let mut entry =
+        crate::registry::agents::AgentEntry::new(crate::registry::agents::AgentType::Codex, None);
+    entry.root_path = Some(root);
+    registry.agents.insert(owner.clone(), entry);
+    crate::registry::agents::save_agents(&registry).expect("save skill fixture agent");
+    (owner, skill_dir)
 }
 
 fn dispatcher_for(reg: Arc<LocalAbilityRegistry>) -> AbilityDispatcher {
@@ -136,9 +163,12 @@ fn real_observe_health_returns_ok_and_timestamp() {
     // the contract is "non-empty, observable response".
     assert!(
         resp.get("ts").is_some() || resp.get("ok").is_some() || resp.is_object(),
-        "observe.health response unexpected: {resp}"
+        "device.observe.health response unexpected: {resp}"
     );
-    assert!(resp.is_object(), "observe.health must return an object");
+    assert!(
+        resp.is_object(),
+        "device.observe.health must return an object"
+    );
 }
 
 #[test]
@@ -154,6 +184,55 @@ fn real_observe_network_health_describes_the_node() {
     let body = resp.as_object().expect("object");
     assert!(body.contains_key("schema") || body.contains_key("view"));
     assert!(body.contains_key("links") || body.contains_key("joined"));
+}
+
+#[test]
+fn real_invocation_history_list_returns_records_array() {
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target(
+            "device.invocation.history.list",
+            json!({ "limit": 5 }),
+        ))
+        .expect("device.invocation.history.list");
+    let body = resp.as_object().expect("object");
+    assert!(
+        body.get("records").and_then(Value::as_array).is_some(),
+        "history list must return records array: {resp}"
+    );
+}
+
+#[test]
+fn real_invocation_history_get_accepts_request_id() {
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target(
+            "device.invocation.history.get",
+            json!({ "key": { "request_id": "missing-real-invoke-request" } }),
+        ))
+        .expect("device.invocation.history.get");
+    let body = resp.as_object().expect("object");
+    assert!(
+        body.contains_key("record"),
+        "history get must return a record field even when absent: {resp}"
+    );
+}
+
+#[test]
+fn real_invocation_trace_get_returns_graph_shape() {
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target(
+            "device.invocation.trace.get",
+            json!({ "key": { "trace_id": "missing-real-invoke-trace" } }),
+        ))
+        .expect("device.invocation.trace.get");
+    let body = resp.as_object().expect("object");
+    assert!(
+        body.get("nodes").and_then(Value::as_array).is_some()
+            && body.get("edges").and_then(Value::as_array).is_some(),
+        "trace get must return graph arrays: {resp}"
+    );
 }
 
 #[test]
@@ -173,7 +252,7 @@ fn real_meta_list_abilities_returns_at_least_observe_health() {
         .expect("device.meta.list_abilities");
     let body = resp.as_object().expect("object");
     // The exact key depends on the handler — could be `abilities`
-    // or `tools` etc. Find any array and assert observe.health
+    // or `tools` etc. Find any array and assert device.observe.health
     // is in it.
     let mut found_observe = false;
     for (_k, v) in body {
@@ -195,7 +274,7 @@ fn real_meta_list_abilities_returns_at_least_observe_health() {
     }
     assert!(
         found_observe,
-        "meta.list_abilities must include observe.health: got {resp}"
+        "meta.list_abilities must include device.observe.health: got {resp}"
     );
 }
 
@@ -203,7 +282,7 @@ fn real_meta_list_abilities_returns_at_least_observe_health() {
 fn real_meta_list_abilities_returns_observe_health() {
     // `device.meta.list_abilities` is the canonical introspection
     // ability. Pin the body's shape: at least one array containing
-    // `observe.health` — a regression that broke the descriptor
+    // `device.observe.health` — a regression that broke the descriptor
     // merge or registered the wrong handler trips here.
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
@@ -230,7 +309,7 @@ fn real_meta_list_abilities_returns_observe_health() {
     }
     assert!(
         found,
-        "device.meta.list_abilities must include observe.health: got {resp}"
+        "device.meta.list_abilities must include device.observe.health: got {resp}"
     );
 }
 
@@ -308,105 +387,102 @@ fn real_mission_cancel_returns_an_error_for_an_unknown_run_id() {
     );
 }
 
-// ── fleet.* device + ability operations ─────────────────────────
+// ── device.*  device + ability operations ─────────────────────────
 //
 // Eight abilities backing every CLI device + ability subcommand
 // (`device list/show/remove`, `ability deploy/uninstall/exec`,
 // daemon lifecycle hooks). Per-handler unit tests live alongside
-// `fleet_ops_ability` itself; the tests below are the integration
+// `device_ops_ability` itself; the tests below are the integration
 // layer — dispatch each one through the real dispatcher to prove
 // the registration site + name + arg shape line up.
 
 #[test]
-fn real_fleet_list_nodes_returns_local_view_envelope() {
+fn real_device_node_list_returns_local_view_envelope() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.fleet.list_nodes", json!({})))
-        .expect("device.fleet.list_nodes");
+        .execute_rpc(target("device.node.list", json!({})))
+        .expect("device.node.list");
     let nodes = resp.get("nodes").and_then(Value::as_array).unwrap();
     assert!(
         nodes.iter().any(|n| n.get("is_self") == Some(&json!(true))),
-        "fleet.list_nodes must include the local device entry: {resp}"
+        "device.node.list must include the local device entry: {resp}"
     );
 }
 
 #[test]
-fn real_fleet_describe_node_local_returns_self_envelope() {
+fn real_device_node_describe_via_invoke_helper_returns_self_envelope() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
         .execute_rpc(target(
-            "device.fleet.describe_node",
+            "device.node.describe",
             json!({ "node_id": "local" }),
         ))
-        .expect("fleet.describe_node local");
+        .expect("device.node.describe local");
     assert_eq!(resp.get("is_self"), Some(&json!(true)));
 }
 
 #[test]
-fn real_fleet_remove_node_refuses_to_remove_self() {
+fn real_device_node_remove_refuses_to_remove_self() {
     let (reg, _g) = registry_with_temp_home();
     let err = dispatcher_for(reg)
-        .execute_rpc(target(
-            "device.fleet.remove_node",
-            json!({ "node_id": "local" }),
-        ))
-        .expect_err("fleet.remove_node must refuse to remove self");
+        .execute_rpc(target("device.node.remove", json!({ "node_id": "local" })))
+        .expect_err("device.node.remove must refuse to remove self");
     assert!(format!("{err}").contains("device reset"));
 }
 
 #[test]
-fn real_fleet_deploy_ability_validates_path_argument() {
+fn real_device_ability_deploy_validates_path_argument() {
     let (reg, _g) = registry_with_temp_home();
     let err = dispatcher_for(reg)
-        .execute_rpc(target("device.fleet.deploy_ability", json!({})))
-        .expect_err("fleet.deploy_ability must require `path`");
+        .execute_rpc(target("device.ability.deploy", json!({})))
+        .expect_err("device.ability.deploy must require `path`");
     assert!(format!("{err}").contains("path"));
 }
 
 #[test]
-fn real_fleet_uninstall_ability_acknowledges_local_intent() {
+fn real_device_ability_uninstall_acknowledges_local_intent() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
         .execute_rpc(target(
-            "device.fleet.uninstall_ability",
+            "device.ability.uninstall",
             json!({ "ability_name": "claude.weather", "node_id": "local" }),
         ))
-        .expect("fleet.uninstall_ability local");
+        .expect("device.ability.uninstall local");
     assert_eq!(resp.get("state").and_then(Value::as_str), Some("REMOVED"));
 }
 
 #[test]
-fn real_fleet_exec_remote_local_runs_argv() {
+fn real_device_remote_exec_local_runs_argv() {
     // Use printf — POSIX, deterministic, available on macOS + Linux.
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
         .execute_rpc(target(
-            "device.fleet.exec_remote",
+            "device.remote.exec",
             json!({
                 "node_id": "local",
                 "command": ["printf", "%s", "ok"],
             }),
         ))
-        .expect("fleet.exec_remote local");
+        .expect("device.remote.exec local");
     assert_eq!(resp.get("stdout").and_then(Value::as_str), Some("ok"));
     assert_eq!(resp.get("exit_code"), Some(&json!(0)));
 }
 
 #[test]
-fn real_fleet_register_self_acknowledges_intent() {
+fn real_device_node_register_acknowledges_intent() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.fleet.register_self", json!({})))
-        .expect("device.fleet.register_self");
+        .execute_rpc(target("device.node.register", json!({})))
+        .expect("device.node.register");
     assert!(resp.get("state").is_some());
 }
 
 #[test]
-fn real_fleet_deregister_self_acknowledges_intent() {
+fn real_device_node_deregister_acknowledges_intent() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.fleet.deregister_self", json!({})))
-        .expect("device.fleet.deregister_self");
+        .execute_rpc(target("device.node.deregister", json!({})))
+        .expect("device.node.deregister");
     assert_eq!(
         resp.get("state").and_then(Value::as_str),
         Some("DEREGISTERED")
@@ -648,30 +724,6 @@ fn real_mission_discuss_round_rejects_zero_max_cycles() {
     ));
     let err = result.expect_err("zero max_cycles must fail");
     assert!(format!("{err}").contains("max_cycles"));
-}
-
-#[test]
-fn real_fleet_list_abilities_returns_items_array_under_temp_home() {
-    // NOTE: despite the name, fleet.list_abilities lists
-    // INSTALLED skills (per-agent `agent_skills/` pools), not
-    // the system ability catalog (use meta.list_abilities for
-    // that). With a fresh HOME and no agents/skills installed,
-    // the response is `{"items": []}`. We assert exactly that
-    // — a regression that returns no `items` key, or panics, is
-    // what this test catches.
-    let (reg, _g) = registry_with_temp_home();
-    let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.fleet.list_abilities", json!({})))
-        .expect("device.fleet.list_abilities");
-    let body = resp.as_object().expect("object");
-    let items = body
-        .get("items")
-        .and_then(Value::as_array)
-        .expect("`items` array in response");
-    // Empty under temp HOME is the expected case; we don't
-    // require it to be empty (a future fixture might pre-seed),
-    // we just require the field shape.
-    let _ = items.len();
 }
 
 #[test]
@@ -1274,40 +1326,40 @@ fn real_loop_cancel_routes_for_unknown_id() {
 }
 
 #[test]
-fn real_fleet_list_agents_returns_a_list_under_temp_home() {
+fn real_device_agent_list_returns_a_list_under_temp_home() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.fleet.list_agents", json!({})))
-        .expect("device.fleet.list_agents");
+        .execute_rpc(target("device.agent.list", json!({})))
+        .expect("device.agent.list");
     assert!(resp.is_object());
 }
 
 #[test]
-fn real_fleet_list_sessions_returns_empty_under_temp_home() {
+fn real_device_session_list_returns_empty_under_temp_home() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("device.fleet.list_sessions", json!({})))
-        .expect("device.fleet.list_sessions");
+        .execute_rpc(target("device.session.list", json!({})))
+        .expect("device.session.list");
     assert!(resp.is_object());
 }
 
 #[test]
-fn real_fleet_start_agent_then_stop_agent_round_trip() {
+fn real_device_agent_start_then_stop_agent_round_trip() {
     let (reg, _g) = registry_with_temp_home();
     let d = dispatcher_for(reg);
     let start = d
         .execute_rpc(target(
-            "device.fleet.start_agent",
+            "device.agent.start",
             json!({
                 "name": "smoke-test-agent",
                 "agent_type": "claude-code",
             }),
         ))
-        .expect("device.fleet.start_agent");
+        .expect("device.agent.start");
     assert!(start.is_object());
     // Stop it.
     let stop = d.execute_rpc(target(
-        "device.fleet.stop_agent",
+        "device.agent.stop",
         json!({"name_or_uri": "smoke-test-agent"}),
     ));
     match stop {
@@ -1315,18 +1367,18 @@ fn real_fleet_start_agent_then_stop_agent_round_trip() {
             // Idempotent ack=true expected.
             assert!(v.is_object());
         }
-        Err(e) => panic!("fleet.stop_agent unexpected: {e}"),
+        Err(e) => panic!("device.agent.stop unexpected: {e}"),
     }
 }
 
 #[test]
-fn real_fleet_skill_install_routes_with_realistic_source() {
+fn real_device_skill_install_routes_with_realistic_source() {
     let (reg, _g) = registry_with_temp_home();
     let d = dispatcher_for(reg);
     // A non-existent path is a realistic invalid input — handler
     // should reject with a structured error, not panic.
     let r = d.execute_rpc(target(
-        "device.fleet.skill_install",
+        "device.skill.install",
         json!({"source": "/tmp/no-such-skill.tgz"}),
     ));
     match r {
@@ -1338,11 +1390,11 @@ fn real_fleet_skill_install_routes_with_realistic_source() {
 }
 
 #[test]
-fn real_fleet_skill_remove_routes_for_unknown_name() {
+fn real_device_skill_remove_routes_for_unknown_name() {
     let (reg, _g) = registry_with_temp_home();
     let d = dispatcher_for(reg);
     let r = d.execute_rpc(target(
-        "device.fleet.skill_remove",
+        "device.skill.remove",
         json!({"name": "no-such-skill"}),
     ));
     match r {
@@ -1354,11 +1406,11 @@ fn real_fleet_skill_remove_routes_for_unknown_name() {
 }
 
 #[test]
-fn real_fleet_skill_upgrade_routes_for_unknown_name() {
+fn real_device_skill_upgrade_routes_for_unknown_name() {
     let (reg, _g) = registry_with_temp_home();
     let d = dispatcher_for(reg);
     let r = d.execute_rpc(target(
-        "device.fleet.skill_upgrade",
+        "device.skill.upgrade",
         json!({"name": "no-such-skill"}),
     ));
     match r {
@@ -1467,9 +1519,7 @@ fn real_mission_think_routes_with_missing_args() {
 
 #[test]
 fn real_skill_list_returns_items_array_under_temp_home() {
-    // Same shape as fleet.list_abilities (the underlying walk it
-    // delegates to). Empty under temp HOME but the field shape
-    // must hold.
+    // Empty under temp HOME but the field shape must hold.
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
         .execute_rpc(target("device.skill.list", json!({})))
@@ -1478,6 +1528,92 @@ fn real_skill_list_returns_items_array_under_temp_home() {
         resp.get("items").and_then(Value::as_array).is_some(),
         "skill.list must return an `items` array; got {resp}"
     );
+}
+
+#[test]
+fn real_skill_tree_lists_files_for_registered_agent_skill() {
+    let (reg, _g) = registry_with_temp_home();
+    let (owner, skill_dir) =
+        materialise_skill_fixture("tree", "inspectable", "# Inspectable\nBody");
+    let notes = skill_dir.join("notes");
+    std::fs::create_dir_all(&notes).expect("create notes dir");
+    crate::persistence::config::atomic_write(&notes.join("guide.md"), b"guide")
+        .expect("write guide");
+
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target(
+            "device.skill.tree",
+            json!({
+                "owner_agent_id": owner,
+                "skill_name": "inspectable",
+                "resource_ura": "easynet:///r/localhost/resource/agent.dev.tree/skill/inspectable",
+            }),
+        ))
+        .expect("device.skill.tree");
+    assert_eq!(
+        resp["resource_ura"],
+        "easynet:///r/localhost/resource/agent.dev.tree/skill/inspectable"
+    );
+    let files = resp["files"].as_array().expect("files array");
+    assert!(files
+        .iter()
+        .any(|f| f["path"] == "SKILL.md" && f["type"] == "file"));
+    assert!(files.iter().any(|f| {
+        f["path"] == "notes/guide.md"
+            && f["type"] == "file"
+            && f["resource_ura"]
+                == "easynet:///r/localhost/resource/agent.dev.tree/skill/inspectable/file/notes/guide.md"
+    }));
+}
+
+#[test]
+fn real_skill_read_file_returns_utf8_content() {
+    let (reg, _g) = registry_with_temp_home();
+    let (owner, _skill_dir) = materialise_skill_fixture("read", "readable", "# Readable\nBody");
+
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target(
+            "device.skill.read_file",
+            json!({
+                "owner_agent_id": owner,
+                "skill_name": "readable",
+                "resource_ura": "easynet:///r/localhost/resource/agent.dev.read/skill/readable",
+                "path": "SKILL.md",
+            }),
+        ))
+        .expect("device.skill.read_file");
+    assert_eq!(resp["content"], "# Readable\nBody");
+    assert_eq!(resp["encoding"], "utf-8");
+    assert_eq!(
+        resp["resource_ura"],
+        "easynet:///r/localhost/resource/agent.dev.read/skill/readable/file/SKILL.md"
+    );
+}
+
+#[test]
+fn real_skill_write_file_updates_skill_source() {
+    let (reg, _g) = registry_with_temp_home();
+    let (owner, skill_dir) = materialise_skill_fixture("write", "editable", "old body");
+
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target(
+            "device.skill.write_file",
+            json!({
+                "owner_agent_id": owner,
+                "skill_name": "editable",
+                "resource_ura": "easynet:///r/localhost/resource/agent.dev.write/skill/editable",
+                "path": "SKILL.md",
+                "content": "new body",
+            }),
+        ))
+        .expect("device.skill.write_file");
+    assert_eq!(resp["ok"], true);
+    assert_eq!(
+        resp["resource_ura"],
+        "easynet:///r/localhost/resource/agent.dev.write/skill/editable/file/SKILL.md"
+    );
+    let on_disk = std::fs::read_to_string(skill_dir.join("SKILL.md")).expect("read updated skill");
+    assert_eq!(on_disk, "new body");
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1834,16 +1970,13 @@ fn real_loop_subscribe_returns_a_stream_source() {
 }
 
 #[test]
-fn real_fleet_attach_session_returns_a_stream_source_for_unknown_id() {
+fn real_device_session_attach_returns_a_stream_source_for_unknown_id() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let svc = Arc::new(crate::runtime::execution::session::SessionService::new());
     let mut reg = LocalAbilityRegistry::new();
     super::session_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
-    let mut t = target(
-        "device.fleet.attach_session",
-        json!({"session_id": "no-such"}),
-    );
+    let mut t = target("device.session.attach", json!({"session_id": "no-such"}));
     t.call_mode = CallMode::Stream;
     let r = d.execute_stream(t);
     match r {
@@ -1855,7 +1988,7 @@ fn real_fleet_attach_session_returns_a_stream_source_for_unknown_id() {
 }
 
 #[test]
-fn real_fleet_pty_session_create_then_close_round_trip() {
+fn real_device_terminal_create_then_close_round_trip() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
     let mut reg = LocalAbilityRegistry::new();
@@ -1863,7 +1996,7 @@ fn real_fleet_pty_session_create_then_close_round_trip() {
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
-        .execute_rpc(target("device.fleet.pty_session_create", json!({})))
+        .execute_rpc(target("device.terminal.create", json!({})))
         .expect("pty_session_create");
     let session_id = create["session_id"]
         .as_str()
@@ -1873,14 +2006,14 @@ fn real_fleet_pty_session_create_then_close_round_trip() {
 
     let close = d
         .execute_rpc(target(
-            "device.fleet.pty_session_close",
+            "device.terminal.close",
             json!({"session_id": session_id}),
         ))
         .expect("pty_session_close");
     assert_eq!(close["ack"], json!(true));
 }
 
-// fleet.pty_session_input / _read / _resize are the unary-RPC
+// device.terminal.input / _read / _resize are the unary-RPC
 // data plane the EasyNet backend's PTYDriver invokes for the
 // production HTTP-session terminal flow. The structural guard
 // `every_published_ability_has_a_real_invoke_test` asserts each
@@ -1890,7 +2023,7 @@ fn real_fleet_pty_session_create_then_close_round_trip() {
 // while the session is live), so the registry walker that
 // scans this file's tokens picks up every ability name.
 #[test]
-fn real_fleet_pty_session_input_read_resize_round_trip() {
+fn real_device_terminal_input_read_resize_round_trip() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
     let io = super::pty_io_ability::PtyIoService::new();
@@ -1900,34 +2033,34 @@ fn real_fleet_pty_session_input_read_resize_round_trip() {
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
-        .execute_rpc(target("device.fleet.pty_session_create", json!({})))
+        .execute_rpc(target("device.terminal.create", json!({})))
         .expect("pty_session_create");
     let sid = create["session_id"].as_str().unwrap().to_string();
 
-    // fleet.pty_session_resize — exercise it before any I/O so
+    // device.terminal.resize — exercise it before any I/O so
     // the shell starts at the requested geometry.
     let resize = d
         .execute_rpc(target(
-            "device.fleet.pty_session_resize",
+            "device.terminal.resize",
             json!({"session_id": sid.clone(), "cols": 132, "rows": 50}),
         ))
         .expect("pty_session_resize");
     assert_eq!(resize["ack"], json!(true));
 
-    // fleet.pty_session_input — push a printf line that produces
+    // device.terminal.input — push a printf line that produces
     // a deterministic stdout marker.
     use base64::Engine;
     let input_b64 =
         base64::engine::general_purpose::STANDARD.encode(b"printf 'EASYNET_REAL_PTY_OK\\n'\n");
     let input = d
         .execute_rpc(target(
-            "device.fleet.pty_session_input",
+            "device.terminal.input",
             json!({"session_id": sid.clone(), "data": input_b64}),
         ))
         .expect("pty_session_input");
     assert_eq!(input["ack"], json!(true));
 
-    // fleet.pty_session_read — drain output up to a timeout
+    // device.terminal.read — drain output up to a timeout
     // until we see the marker. May take a couple of cycles
     // because the shell's prompt + echoed input land first.
     let mut accum = String::new();
@@ -1935,7 +2068,7 @@ fn real_fleet_pty_session_input_read_resize_round_trip() {
     while std::time::Instant::now() < deadline && !accum.contains("EASYNET_REAL_PTY_OK") {
         let resp = d
             .execute_rpc(target(
-                "device.fleet.pty_session_read",
+                "device.terminal.read",
                 json!({"session_id": sid.clone(), "timeout": 1.0}),
             ))
             .expect("pty_session_read");
@@ -1950,21 +2083,18 @@ fn real_fleet_pty_session_input_read_resize_round_trip() {
     }
     assert!(
         accum.contains("EASYNET_REAL_PTY_OK"),
-        "expected printf marker via fleet.pty_session_read; got {accum:?}"
+        "expected printf marker via device.terminal.read; got {accum:?}"
     );
 
     // Cleanup.
-    let _ = d.execute_rpc(target(
-        "device.fleet.pty_session_close",
-        json!({"session_id": sid}),
-    ));
+    let _ = d.execute_rpc(target("device.terminal.close", json!({"session_id": sid})));
 }
 
 // pty_session_attach spawns three tokio tasks (reader / writer /
 // exit-watcher) inside the bidi handler, so the test needs a
 // live runtime.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_fleet_pty_session_attach_returns_a_bidi_source() {
+async fn real_device_terminal_attach_returns_a_bidi_source() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
     let mut reg = LocalAbilityRegistry::new();
@@ -1973,31 +2103,25 @@ async fn real_fleet_pty_session_attach_returns_a_bidi_source() {
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
-        .execute_rpc(target("device.fleet.pty_session_create", json!({})))
+        .execute_rpc(target("device.terminal.create", json!({})))
         .expect("pty_session_create");
     let sid = create["session_id"].as_str().unwrap().to_string();
 
-    let mut t = target(
-        "device.fleet.pty_session_attach",
-        json!({"session_id": sid.clone()}),
-    );
+    let mut t = target("device.terminal.attach", json!({"session_id": sid.clone()}));
     t.call_mode = CallMode::Bidi;
     let _bidi = d.execute_bidi(t).expect("pty_session_attach bidi");
 
     // Cleanup.
-    let _ = d.execute_rpc(target(
-        "device.fleet.pty_session_close",
-        json!({"session_id": sid}),
-    ));
+    let _ = d.execute_rpc(target("device.terminal.close", json!({"session_id": sid})));
 }
 
-// fleet.file_transfer is a bidi ability — open it with mode=upload
+// device.fs.transfer is a bidi ability — open it with mode=upload
 // against a temp path, push a chunk + eof, drain the complete frame,
 // then verify the file landed with the right content. The
 // structural guard `every_published_ability_has_a_real_invoke_test`
 // requires a token-grep match for the ability name in this file.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_fleet_file_transfer_uploads_a_round_trip_through_dispatcher() {
+async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
     use base64::Engine;
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let mut reg = LocalAbilityRegistry::new();
@@ -2014,13 +2138,13 @@ async fn real_fleet_file_transfer_uploads_a_round_trip_through_dispatcher() {
     ));
 
     let mut t = target(
-        "device.fleet.file_transfer",
+        "device.fs.transfer",
         json!({"mode": "upload", "path": path.to_string_lossy()}),
     );
     t.call_mode = CallMode::Bidi;
     let bidi = d.execute_bidi(t).expect("file_transfer bidi");
 
-    let bytes = b"real-invoke-fleet-file-transfer";
+    let bytes = b"real-invoke-device-file-transfer";
     let chunk_b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
     bidi.to_client
         .send(json!({"type": "chunk", "data": chunk_b64}))
@@ -2045,7 +2169,7 @@ async fn real_fleet_file_transfer_uploads_a_round_trip_through_dispatcher() {
     }
     assert!(
         got_complete,
-        "expected `complete` frame from fleet.file_transfer"
+        "expected `complete` frame from device.fs.transfer"
     );
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
     let _ = std::fs::remove_file(&path);
@@ -2203,29 +2327,21 @@ fn real_meta_list_resources_returns_resources_array() {
 // ability in a quoted string so the coverage walker sees it.
 
 #[test]
-fn real_device_describe_returns_self_envelope() {
-    // `device.describe` is the joint-plan replacement for the
-    // self-arm of `fleet.describe_node`. It takes no arguments and
-    // always describes "this device". HomeGuard isolates the
-    // creds/runtime state so the unpaired-fallback path runs
-    // deterministically.
+fn real_device_node_describe_local_returns_self_envelope() {
     let _g = crate::facade::cli::test_support::HomeGuard::new();
-    let resp = invoke("device.describe", json!({}));
+    let resp = invoke("device.node.describe", json!({"node_id": "local"}));
     assert!(
         resp.get("node_id").is_some(),
-        "device.describe receipt must carry `node_id`; got {resp}"
+        "device.node.describe receipt must carry `node_id`; got {resp}"
     );
     assert_eq!(resp.get("is_self"), Some(&json!(true)));
 }
 
 #[test]
-fn real_fleet_session_create_close_round_trip_via_v2_alias() {
-    // `fleet.session_create` / `fleet.session_close` are the v2
-    // canonical names; `fleet.pty_session_*` stay registered as
-    // aliases during the rolling window. Coverage walker pins both
-    // namespaces — this test exercises the v2 names; the existing
-    // `real_fleet_pty_session_create_then_close_round_trip` exercises
-    // the legacy aliases.
+fn real_device_terminal_create_close_round_trip_via_v2_alias() {
+    // `device.terminal.create` / `device.terminal.close` are the v2
+    // canonical names. Coverage walker pins the current public
+    // namespace so an accidental reintroduction of old names fails.
     let _g = crate::facade::cli::test_support::HomeGuard::new();
     let pty = Arc::new(crate::runtime::execution::pty::PtyService::new());
     let mut reg = LocalAbilityRegistry::new();
@@ -2233,8 +2349,8 @@ fn real_fleet_session_create_close_round_trip_via_v2_alias() {
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
-        .execute_rpc(target("device.fleet.session_create", json!({})))
-        .expect("device.fleet.session_create");
+        .execute_rpc(target("device.terminal.create", json!({})))
+        .expect("device.terminal.create");
     let session_id = create["session_id"]
         .as_str()
         .expect("session_id in response")
@@ -2243,16 +2359,16 @@ fn real_fleet_session_create_close_round_trip_via_v2_alias() {
 
     let close = d
         .execute_rpc(target(
-            "device.fleet.session_close",
+            "device.terminal.close",
             json!({"session_id": session_id}),
         ))
-        .expect("device.fleet.session_close");
+        .expect("device.terminal.close");
     assert_eq!(close["ack"], json!(true));
 }
 
 #[test]
-fn real_fleet_session_input_read_resize_via_v2_alias() {
-    // Mirror of `real_fleet_pty_session_input_read_resize_round_trip`
+fn real_device_terminal_input_read_resize_via_v2_alias() {
+    // Mirror of `real_device_terminal_input_read_resize_round_trip`
     // exercising the v2 aliases. Same PTY service / IO service
     // wiring; same printf marker pattern.
     let _g = crate::facade::cli::test_support::HomeGuard::new();
@@ -2264,16 +2380,16 @@ fn real_fleet_session_input_read_resize_via_v2_alias() {
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
-        .execute_rpc(target("device.fleet.session_create", json!({})))
-        .expect("device.fleet.session_create");
+        .execute_rpc(target("device.terminal.create", json!({})))
+        .expect("device.terminal.create");
     let sid = create["session_id"].as_str().unwrap().to_string();
 
     let resize = d
         .execute_rpc(target(
-            "device.fleet.session_resize",
+            "device.terminal.resize",
             json!({"session_id": sid.clone(), "cols": 132, "rows": 50}),
         ))
-        .expect("device.fleet.session_resize");
+        .expect("device.terminal.resize");
     assert_eq!(resize["ack"], json!(true));
 
     use base64::Engine;
@@ -2281,10 +2397,10 @@ fn real_fleet_session_input_read_resize_via_v2_alias() {
         base64::engine::general_purpose::STANDARD.encode(b"printf 'EASYNET_V2_PTY_OK\\n'\n");
     let input = d
         .execute_rpc(target(
-            "device.fleet.session_input",
+            "device.terminal.input",
             json!({"session_id": sid.clone(), "data": input_b64}),
         ))
-        .expect("device.fleet.session_input");
+        .expect("device.terminal.input");
     assert_eq!(input["ack"], json!(true));
 
     let mut accum = String::new();
@@ -2292,10 +2408,10 @@ fn real_fleet_session_input_read_resize_via_v2_alias() {
     while std::time::Instant::now() < deadline && !accum.contains("EASYNET_V2_PTY_OK") {
         let resp = d
             .execute_rpc(target(
-                "device.fleet.session_read",
+                "device.terminal.read",
                 json!({"session_id": sid.clone(), "timeout": 1.0}),
             ))
-            .expect("device.fleet.session_read");
+            .expect("device.terminal.read");
         if let Some(b64) = resp["output"].as_str() {
             if !b64.is_empty() {
                 let raw = base64::engine::general_purpose::STANDARD
@@ -2312,9 +2428,9 @@ fn real_fleet_session_input_read_resize_via_v2_alias() {
 }
 
 #[test]
-fn real_fleet_session_attach_is_registered_as_bidi() {
-    // `fleet.session_attach` is the v2 alias of
-    // `fleet.pty_session_attach` — bidi-shape ability the data
+fn real_device_terminal_attach_is_registered_as_bidi() {
+    // `device.terminal.attach` is the v2 alias of
+    // `device.terminal.attach` — bidi-shape ability the data
     // plane uses. We just pin "the registry knows about it under
     // the v2 name" — full bidi round-trip coverage already lives
     // on the legacy alias's test.
@@ -2323,8 +2439,8 @@ fn real_fleet_session_attach_is_registered_as_bidi() {
     let mut reg = LocalAbilityRegistry::new();
     super::pty_attach_ability::register(&mut reg, pty);
     assert!(
-        reg.get_bidi("device.fleet.session_attach").is_some(),
-        "fleet.session_attach (v2 alias) must be registered as bidi"
+        reg.get_bidi("device.terminal.attach").is_some(),
+        "device.terminal.attach (v2 alias) must be registered as bidi"
     );
 }
 

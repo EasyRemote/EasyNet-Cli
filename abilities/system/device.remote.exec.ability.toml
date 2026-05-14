@@ -1,0 +1,19 @@
+schema_version = "1"
+name = "device.remote.exec"
+description = "Run a one-shot command on a node. Local target dispatches through std::process::Command (argv-only — no shell interpretation). Remote targets defer to the federation Invoke replacement."
+
+[input_schema]
+type = "object"
+required = ["node_id", "command"]
+additionalProperties = false
+
+[input_schema.properties.command]
+type = "array"
+items = { type = "string" }
+
+[input_schema.properties.node_id]
+type = "string"
+
+[input_schema.properties.timeout_ms]
+type = "integer"
+minimum = 0

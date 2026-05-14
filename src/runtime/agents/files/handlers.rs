@@ -167,9 +167,9 @@ pub fn handle_list(user: &str, realm: &str, root: &Path, _args: Value) -> anyhow
 /// the sha256-hex blob id.
 fn sha256_from_uri(uri: &str) -> anyhow::Result<String> {
     // easynet:///r/<realm>/resource/<u>.files/<sha256>
-    let parsed = crate::uri::parse_ura(uri)
+    let parsed = crate::ura::parse_ura(uri)
         .map_err(|e| anyhow::anyhow!("files: invalid URA `{uri}`: {e}"))?;
-    if !matches!(parsed.kind, crate::uri::URAKind::Resource) {
+    if !matches!(parsed.kind, crate::ura::URAKind::Resource) {
         anyhow::bail!("files: URA `{uri}` is not a resource URA");
     }
     let path = parsed.path.trim_start_matches('/');
@@ -235,7 +235,7 @@ mod tests {
         assert_eq!(sha.len(), 64);
         assert_eq!(
             put["uri"].as_str().unwrap(),
-            format!("easynet:///r/test.local/resource/alice.files/{sha}")
+            crate::ura::resource_dot_ura("test.local", "alice.files", sha)
         );
 
         let got = handle_get(root.path(), json!({ "sha256": sha })).unwrap();

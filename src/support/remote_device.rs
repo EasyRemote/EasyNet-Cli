@@ -43,7 +43,7 @@ pub(crate) fn caller_device_uri_from_credentials() -> Option<String> {
     crate::persistence::config::load_credentials()
         .ok()
         .filter(|creds| !creds.tenant_id.trim().is_empty() && !creds.node_id.trim().is_empty())
-        .map(|creds| crate::uri::device_uri(creds.tenant_id.trim(), creds.node_id.trim()))
+        .map(|creds| crate::ura::device_ura(creds.tenant_id.trim(), creds.node_id.trim()))
 }
 
 /// Resolve a CLI `node` argument into a canonical device URA.
@@ -54,7 +54,7 @@ pub(crate) fn caller_device_uri_from_credentials() -> Option<String> {
 ///    cross-hub devices preserve their real realm.
 /// 3. Only if the directory cannot answer do we fall back to wrapping
 ///    in the local realm from `credentials.json`.
-pub(crate) fn resolve_target_device_uri(node: &str) -> anyhow::Result<String> {
+pub(crate) fn resolve_target_device_ura(node: &str) -> anyhow::Result<String> {
     let local_tenant = crate::persistence::config::load_credentials()
         .ok()
         .and_then(|creds| {
@@ -81,14 +81,14 @@ where
     F: FnOnce(&str) -> Option<String>,
 {
     let trimmed = node.trim();
-    if trimmed.starts_with("easynet:///r/") {
+    if crate::ura::parse_ura(trimmed).is_ok() {
         return crate::support::federation_invoke::parse_node_uri(trimmed);
     }
     if let Some(uri) = lookup(trimmed) {
         return Ok(uri);
     }
     if let Some(local_tenant) = local_tenant.filter(|tenant| !tenant.is_empty()) {
-        return Ok(crate::uri::device_uri(local_tenant, trimmed));
+        return Ok(crate::ura::device_ura(local_tenant, trimmed));
     }
     Err(anyhow!(
         "cannot resolve node {trimmed:?}: federation.discover returned no match and \
@@ -105,7 +105,7 @@ fn lookup_node_uri_in_directory(node: &str) -> Option<String> {
     let entries = crate::support::federation_invoke::invoke_federation_discover(None, None).ok()?;
     for entry in entries {
         if entry.get("node_id").and_then(Value::as_str) == Some(node) {
-            if let Some(uri) = entry.get("agent_uri").and_then(Value::as_str) {
+            if let Some(uri) = entry.get("agent_ura").and_then(Value::as_str) {
                 return Some(uri.to_string());
             }
         }

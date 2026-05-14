@@ -17,9 +17,9 @@
 //
 // Wire contract
 // -------------
-// `AdvertiseAbilitiesRequest { agent_uri, abilities: Vec<Value> }`
+// `AdvertiseAbilitiesRequest { agent_ura, abilities: Vec<Value> }`
 // arrives at `dispatch_federation_advertise_abilities`. This store
-// upserts `(agent_uri, abilities)` into a DashMap; the resolve
+// upserts `(agent_ura, abilities)` into a DashMap; the resolve
 // dispatch reads it back and merges into `ResolveAgentSummary`'s
 // optional `abilities` field when the caller set
 // `include_abilities = true`.
@@ -70,23 +70,23 @@ impl AbilityCatalogStore {
 
     /// Upsert the abilities[] descriptor list for an agent. Re-call
     /// overwrites — last writer wins.
-    pub fn upsert(&self, agent_uri: String, abilities: Vec<Value>) {
+    pub fn upsert(&self, agent_ura: String, abilities: Vec<Value>) {
         if abilities.is_empty() {
             // Empty list is a legitimate advertise (an agent with
             // zero abilities). Store the empty Vec so resolve
             // returns `[]` instead of falling back to "no entry"
             // semantics — the difference matters for the
             // Frontend's empty-state vs unknown-state UI.
-            self.inner.insert(agent_uri, Vec::new());
+            self.inner.insert(agent_ura, Vec::new());
             return;
         }
-        self.inner.insert(agent_uri, abilities);
+        self.inner.insert(agent_ura, abilities);
     }
 
     /// Return the abilities[] for an agent, or `None` when no
     /// advertise has landed yet for that URI.
-    pub fn get(&self, agent_uri: &str) -> Option<Vec<Value>> {
-        self.inner.get(agent_uri).map(|entry| entry.clone())
+    pub fn get(&self, agent_ura: &str) -> Option<Vec<Value>> {
+        self.inner.get(agent_ura).map(|entry| entry.clone())
     }
 
     /// Total number of agent URIs with stored abilities. Used by

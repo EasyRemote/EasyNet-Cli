@@ -49,12 +49,12 @@ impl AbilityInvoker for RecordingInvoker {
     fn invoke_ability(
         &self,
         _tenant_id: &str,
-        resource_uri: &str,
+        resource_ura: &str,
         payload_json: Value,
     ) -> Result<Value, String> {
         self.calls
             .borrow_mut()
-            .push((resource_uri.to_string(), payload_json));
+            .push((resource_ura.to_string(), payload_json));
         Ok(serde_json::json!({"ack": true, "replaced_prior": false}))
     }
 }
@@ -100,11 +100,12 @@ fn main() -> anyhow::Result<()> {
                 .as_str()
                 .unwrap_or("claude-code")
                 .to_string(),
+            model: entry["model"].as_str().map(ToString::to_string),
         })
         .collect();
     let agent_names: Vec<&str> = llm_sub_agents.iter().map(|s| s.name.as_str()).collect();
     println!("realm            = {tenant_id}");
-    println!("host_device_uri  = {node_id}");
+    println!("host_device_ura  = {node_id}");
     println!("llm_sub_agents   = {agent_names:?}");
     println!();
 
@@ -113,7 +114,7 @@ fn main() -> anyhow::Result<()> {
         // Smoke test: synthetic user id; real boot reads from
         // creds.username (carries the user-uuid in v4.1.4).
         user_id: "smoke-user".to_string(),
-        host_device_uri: node_id.clone(),
+        host_device_ura: node_id.clone(),
         consent: true,
         policy: false,
         mcp: false,
@@ -133,9 +134,9 @@ fn main() -> anyhow::Result<()> {
     println!("-- advertise_agent --");
     for (uri, payload) in &calls {
         if uri.contains("federation.advertise_agent") {
-            let agent_uri = payload["agent_uri"].as_str().unwrap_or("?");
+            let agent_ura = payload["agent_ura"].as_str().unwrap_or("?");
             let auth = &payload["signing_authority"];
-            println!("  agent_uri = {agent_uri}");
+            println!("  agent_ura = {agent_ura}");
             println!("    signing_authority = {auth}");
         }
     }
@@ -144,7 +145,7 @@ fn main() -> anyhow::Result<()> {
     println!("-- advertise_abilities --");
     for (uri, payload) in &calls {
         if uri.contains("federation.advertise_abilities") {
-            let owner = payload["agent_uri"].as_str().unwrap_or("?");
+            let owner = payload["agent_ura"].as_str().unwrap_or("?");
             let abilities = payload["abilities"].as_array().cloned().unwrap_or_default();
             let names: Vec<&str> = abilities
                 .iter()
@@ -170,15 +171,15 @@ fn main() -> anyhow::Result<()> {
     for sub in &plan.llm_sub_agents {
         let agent_name = &sub.name;
         let expected_chat = format!("{agent_name}.chat");
-        let agent_uri = hosted
+        let agent_ura = hosted
             .iter()
             .find(|e| {
                 e["profile"].as_str() == Some("llm")
                     && e["name"].as_str() == Some(agent_name.as_str())
             })
-            .and_then(|e| e["agent_uri"].as_str().map(|s| s.to_string()));
+            .and_then(|e| e["agent_ura"].as_str().map(|s| s.to_string()));
 
-        let agent_uri = match agent_uri {
+        let agent_ura = match agent_ura {
             Some(u) => u,
             None => {
                 println!("  ❌ {agent_name}: no URA in local-agents.json (bootstrap mint failed?)");
@@ -189,7 +190,7 @@ fn main() -> anyhow::Result<()> {
 
         let found = calls.iter().any(|(uri, payload)| {
             uri.contains("federation.advertise_abilities")
-                && payload["agent_uri"].as_str() == Some(agent_uri.as_str())
+                && payload["agent_ura"].as_str() == Some(agent_ura.as_str())
                 && payload["abilities"]
                     .as_array()
                     .map(|arr| {
@@ -201,10 +202,10 @@ fn main() -> anyhow::Result<()> {
 
         if found {
             println!(
-                "  ✓ {agent_name}: advertise_abilities owner={agent_uri} contains {expected_chat}"
+                "  ✓ {agent_name}: advertise_abilities owner={agent_ura} contains {expected_chat}"
             );
         } else {
-            println!("  ❌ {agent_name}: did NOT find {expected_chat} under owner={agent_uri}");
+            println!("  ❌ {agent_name}: did NOT find {expected_chat} under owner={agent_ura}");
             all_pass = false;
         }
     }

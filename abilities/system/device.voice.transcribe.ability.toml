@@ -1,6 +1,6 @@
 schema_version = "1"
 name = "device.voice.transcribe"
-description = "Stream audio in, receive transcription text out. True bidi: caller pushes audio BinaryChunk UP, callee returns text BinaryChunk (or structured JSON) DOWN. Subject MUST be an ASR-model resource_uri."
+description = "Stream audio in, receive transcription text out. True bidi: caller pushes audio BinaryChunk UP, callee returns text BinaryChunk (or structured JSON) DOWN. Subject MUST be an ASR-model resource_ura."
 
 [input_schema]
 type = "object"

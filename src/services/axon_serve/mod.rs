@@ -60,17 +60,24 @@ pub mod daemon_invocation_service;
 #[cfg(feature = "axon-pb")]
 pub mod federated_key_resolver;
 pub mod federation_wrappers;
+pub mod invocation_wire;
 pub mod invoke_remote_initiator;
+pub mod list_user_pubkeys;
 pub mod local_ability_dispatcher;
+pub mod pinned_user_key_resolver;
 pub mod register_device_pubkey;
+pub mod revoke_user_pubkey;
 pub mod session_escalation;
 pub mod session_initiator;
 
 pub use admission_facade::AdmissionFacade;
 pub use boot::start_axon_serve_sidecar;
 pub use daemon_invocation_service::DaemonInvocationService;
+pub use invocation_wire::{ProtoEnvelope, DEFAULT_URA_PROFILE};
 pub use invoke_remote_initiator::{
     invoke_remote, InvokeRemoteDown, InvokeRemoteFrame, InvokeRemoteUp, SessionDispatch,
     ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID,
 };
+pub use list_user_pubkeys::ABILITY_SELF_LIST_USER_PUBKEYS;
 pub use register_device_pubkey::ABILITY_SELF_REGISTER_DEVICE_PUBKEY;
+pub use revoke_user_pubkey::ABILITY_SELF_REVOKE_USER_PUBKEY;

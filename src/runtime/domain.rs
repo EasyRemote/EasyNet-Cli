@@ -97,7 +97,7 @@ impl TenantId {
 /// A live agent run. v1 equivalent of the handle the existing
 /// `runtime::session::Session` already owns; the domain object here
 /// is the public face that KernelApi hands to a subscriber (or to
-/// PR-ATTACH's `fleet.attach_session` ability handler).
+/// `device.session.attach` ability handler).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: SessionId,

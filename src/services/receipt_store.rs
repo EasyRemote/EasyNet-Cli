@@ -145,10 +145,10 @@ impl Default for SharedReceiptStore {
 /// During and after the migration window, persisted receipts
 /// carry `function_name` strings spanning two eras:
 ///
-///   * **Legacy** (`fs.read`, `fleet.list_nodes`, `01HUB.openai.*`,
+///   * **Legacy** (`fs.read`, `device.node.list`, `01HUB.openai.*`,
 ///     `voice.create_call`, …): receipts written by daemons before
 ///     the M2 catalogue cutover.
-///   * **Canonical** (`device.fs.read`, `device.fleet.list_nodes`,
+///   * **Canonical** (`device.fs.read`, `device.node.list`,
 ///     `hub.openai.*`, `device.voice.create_call`, …): receipts
 ///     written after M2.
 ///
@@ -191,9 +191,9 @@ pub fn function_name_canonical(legacy_or_canonical: &str) -> String {
     // gets rewritten. Anything else (per-agent, per-user, third-
     // party) passes through.
     const DEVICE_LEGACY_HEADS: &[&str] = &[
-        "fs", "http", "shell", "process", "fleet", "observe", "admin", "easynet", "meta",
-        "mission", "schedule", "loop", "discuss", "mcp", "a2a", "policy", "ability", "camera",
-        "mic", "screen", "speaker", "voice", "skill", "consent",
+        "fs", "http", "shell", "process", "observe", "admin", "easynet", "meta", "mission",
+        "schedule", "loop", "discuss", "mcp", "a2a", "policy", "ability", "camera", "mic",
+        "screen", "speaker", "voice", "skill", "consent",
     ];
     if DEVICE_LEGACY_HEADS.contains(&head) {
         return format!("device.{name}");
@@ -302,8 +302,8 @@ mod tests {
         // for the inverse: deletion of a head.
         assert_eq!(function_name_canonical("fs.read"), "device.fs.read");
         assert_eq!(
-            function_name_canonical("fleet.list_nodes"),
-            "device.fleet.list_nodes"
+            function_name_canonical("device.node.list"),
+            "device.node.list"
         );
         assert_eq!(
             function_name_canonical("voice.create_call"),

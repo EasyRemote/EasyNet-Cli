@@ -25,7 +25,7 @@
 // {
 //   "resources": [
 //     {
-//       "resource_uri":  "easynet:///r/<realm>/resource/<id>",
+//       "resource_ura":  "easynet:///r/<realm>/resource/<id>",
 //       "owner_agent":   "easynet:///r/<realm>/agent/<id>",
 //       "type":          "mic" | "camera" | "display" | "application" |
 //                        "window" | "speaker" | "voice" | "asr_model",
@@ -169,7 +169,7 @@ pub struct ResourcesFile {
 pub struct ResourceEntry {
     /// Canonical resource URA, shape
     /// `easynet:///r/<realm>/resource/<id>` per RFC-005 v3.2.
-    pub resource_uri: String,
+    pub resource_ura: String,
     /// Owner Agent's URA. Empty at first-boot (no host URA known
     /// yet); patched on next save once `local-agents.json` knows
     /// the device URA. Empty in pre-join state mirrors the
@@ -186,7 +186,7 @@ pub struct ResourceEntry {
     pub binding: ResourceBinding,
     /// Stable platform identifier the next boot will see. Used as
     /// the dedup key per **INV-RESOURCE-ULID-STABLE**: same
-    /// `hardware_id` → same `resource_uri` across restarts.
+    /// `hardware_id` → same `resource_ura` across restarts.
     /// Examples:
     ///   - macOS audio:   `cpal::Device::name()` (stable across
     ///                    boots; opaque to us)
@@ -203,7 +203,7 @@ pub struct ResourceEntry {
     /// Human-readable label. NOT used for routing; only for
     /// `meta.list_resources` UX. Free-form, may change between
     /// boots (e.g. user renamed display in System Preferences)
-    /// without affecting `resource_uri`.
+    /// without affecting `resource_ura`.
     #[serde(default)]
     pub display_name: String,
     /// Open-ended bag for codec hints, capabilities, max-
@@ -265,12 +265,12 @@ pub fn save(file: &ResourcesFile) -> anyhow::Result<()> {
 /// Realm comes from credentials; id is the per-resource ULID/UUID
 /// minted on first sight. Centralised so every consumer (upsert,
 /// tests, future federation.advertise hook) agrees on the shape.
-pub fn build_resource_uri(realm: &str, resource_id: &str) -> String {
+pub fn build_resource_ura(realm: &str, resource_id: &str) -> String {
     // URI v2: resource_id is opaque tail; this convenience helper
     // takes a pre-composed `<kind>.<id>` value and just slots it in
     // — keeps backward-compat with existing callers that don't
     // know about the kind+id split.
-    format!("{}{}/resource/{}", "easynet:///r/", realm, resource_id)
+    crate::ura::resource_dot_ura(realm, resource_id, "")
 }
 
 /// Look up an entry by `hardware_id`. Returns the existing URA when
@@ -285,22 +285,22 @@ pub fn lookup_by_hardware_id<'a>(
 
 /// Look up an entry by its full resource URA. Used by media
 /// handlers to map subject → entry at invocation time.
-pub fn lookup_by_uri<'a>(file: &'a ResourcesFile, resource_uri: &str) -> Option<&'a ResourceEntry> {
+pub fn lookup_by_uri<'a>(file: &'a ResourcesFile, resource_ura: &str) -> Option<&'a ResourceEntry> {
     file.resources
         .iter()
-        .find(|e| e.resource_uri == resource_uri)
+        .find(|e| e.resource_ura == resource_ura)
 }
 
 /// Insert or update a resource entry keyed on `hardware_id`.
 ///
-/// Returns the resulting `resource_uri`:
+/// Returns the resulting `resource_ura`:
 /// - if `hardware_id` already exists in the file, returns its
 ///   existing URA (URA does NOT change — INV-RESOURCE-ULID-STABLE).
 ///   Mutates `display_name` / `metadata` / `owner_agent` so a
 ///   renamed device or post-join host URA propagates without
 ///   orphaning the URA.
 /// - else mints a fresh UUIDv4-based id, builds a new URA via
-///   `build_resource_uri(realm, ...)`, appends the entry, and
+///   `build_resource_ura(realm, ...)`, appends the entry, and
 ///   returns the new URA.
 ///
 /// `kind` and `binding` on a hardware_id MUST not change between
@@ -320,12 +320,12 @@ pub fn upsert_resource(file: &mut ResourcesFile, spec: ResourceUpsert<'_>) -> St
         entry.owner_agent = spec.owner_agent.to_string();
         entry.display_name = spec.display_name.to_string();
         entry.metadata = spec.metadata;
-        return entry.resource_uri.clone();
+        return entry.resource_ura.clone();
     }
     let id = uuid::Uuid::new_v4().simple().to_string();
-    let resource_uri = build_resource_uri(spec.realm, &id);
+    let resource_ura = build_resource_ura(spec.realm, &id);
     file.resources.push(ResourceEntry {
-        resource_uri: resource_uri.clone(),
+        resource_ura: resource_ura.clone(),
         owner_agent: spec.owner_agent.to_string(),
         kind: spec.kind,
         binding: spec.binding,
@@ -334,7 +334,7 @@ pub fn upsert_resource(file: &mut ResourcesFile, spec: ResourceUpsert<'_>) -> St
         metadata: spec.metadata,
         first_seen_at: now,
     });
-    resource_uri
+    resource_ura
 }
 
 /// Filtered view of all entries whose `kind` is in `types`. When
@@ -389,9 +389,9 @@ mod tests {
     }
 
     #[test]
-    fn build_resource_uri_uses_canonical_shape() {
+    fn build_resource_ura_uses_canonical_shape() {
         assert_eq!(
-            build_resource_uri("acme", "01ABC"),
+            build_resource_ura("acme", "01ABC"),
             "easynet:///r/acme/resource/01ABC"
         );
     }
@@ -411,7 +411,7 @@ mod tests {
                 )
             },
         );
-        assert!(uri.starts_with("easynet:///r/acme/resource/"));
+        assert!(uri.starts_with(&crate::ura::realm_resource_prefix("acme")));
         assert_eq!(f.resources.len(), 1);
         assert_eq!(f.resources[0].kind, ResourceType::Mic);
         assert_eq!(f.resources[0].hardware_id, "BuiltInMic-AAPL-0001");
@@ -422,7 +422,7 @@ mod tests {
     #[test]
     fn upsert_returns_stable_uri_across_calls_for_same_hardware_id() {
         // INV-RESOURCE-ULID-STABLE: re-scanning the same hardware
-        // MUST surface the same resource_uri. Without this, every
+        // MUST surface the same resource_ura. Without this, every
         // reboot orphans every prior receipt referencing that
         // resource.
         let mut f = empty();
@@ -443,7 +443,7 @@ mod tests {
         );
         assert_eq!(uri1, uri2, "same hardware_id MUST yield same URA");
         assert_eq!(f.resources.len(), 1, "no duplicate entry");
-        // display_name + metadata mutated; resource_uri stable.
+        // display_name + metadata mutated; resource_ura stable.
         assert_eq!(f.resources[0].display_name, "Logitech C920 (Renamed)");
         assert_eq!(f.resources[0].metadata["max_fps"], 30);
     }

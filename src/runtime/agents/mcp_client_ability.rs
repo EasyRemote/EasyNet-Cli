@@ -7,7 +7,7 @@
 // (C-M9a / C-M9a-ii) is INBOUND — external MCP clients see EasyNet
 // as a server. mcp.client.* is the symmetric direction: EasyNet as
 // a client, talking to other MCP servers (the operator's existing
-// MCP fleet, e.g. context7, filesystem MCP, etc.) so their tools
+// MCP servers, e.g. context7, filesystem MCP, etc.) so their tools
 // become callable through the same in-process Invoke pipeline
 // every other ability uses.
 //

@@ -13,7 +13,7 @@
 // The previous four stages (empty rejection, dangerous patterns,
 // AST parse, security catalogue) reject things that are
 // dangerous *regardless of caller*. This stage encodes
-// caller-specific policy: a fleet operator might allow `git
+// caller-specific policy: a device operator might allow `git
 // status` and `git diff` but deny `git push`; they might allow
 // `npm install` only with a fixed registry URL flag.
 //

@@ -10,7 +10,7 @@
 //   * `runtime::abilities::AgentAbilitySpec` — per-agent on-disk
 //     manifest shape, used for chat / skill manifests.
 //   * `runtime::agents::SystemAbilityMetadata` — in-memory shape
-//     for built-in abilities (observe.health, fleet.*, …).
+//     for built-in abilities (device.observe.*, device.agent.*, …).
 //
 // Both pre-date RFC-001 and lack visibility/scope. AbilityDescriptor
 // supersedes them at the protocol-facing edge: anything that goes to
@@ -32,7 +32,7 @@
 // Per the plan §1.6 schema:
 //
 //   AbilityDescriptor {
-//     name, owner_agent_uri, visibility, scope_subjects[],
+//     name, owner_agent_ura, visibility, scope_subjects[],
 //     scope_agents[], source, schema_summary{input,
 //     output_receipt_body}, hints{read_only, destructive,
 //     idempotent, streaming_only, bidi_only}
@@ -60,7 +60,7 @@ pub enum Visibility {
     Public,
     /// Returned only when both axes match: subject ∈ scope_subjects
     /// (or scope_subjects empty/Any) AND caller ∈ scope_agents (or
-    /// scope_agents empty/Any). Default for `fleet.*`, `consent.*`,
+    /// scope_agents empty/Any). Default for `device.*`, `consent.*`,
     /// most `meta.*`. Per [P8] also default for `conversation.*`.
     Scoped,
     /// Returned only when caller is the owner Agent's signing
@@ -230,9 +230,10 @@ pub struct AbilitySchemaSummary {
 /// hosting profile module (P4.2); never mutated after construction.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AbilityDescriptor {
-    /// Fully-qualified ability name, e.g. `fleet.list_agents`,
-    /// `skill.alive-video`. Per `AgentAbilitySpec::new` validation,
-    /// must contain at least one `.` (no namespace = no descriptor).
+    /// Callable ability name. Device and hub abilities use a
+    /// namespaced name such as `device.agent.list`; agent-owned
+    /// abilities use the local verb that is scoped by
+    /// `owner_agent_ura`, such as `chat`.
     pub name: String,
     /// Canonical URA of the entity that publishes this ability — the
     /// `callee` in any Invoke targeting this name. Per AXON-RFC-001
@@ -242,17 +243,17 @@ pub struct AbilityDescriptor {
     ///   * `agent/<user-uuid>.<agent-id>` — hosted user agent
     ///     (consent / policy / mcp / llm sub-agent abilities).
     ///   * `device/<device-uuid>`         — device-built-ins
-    ///     (`shell.run`, `fs.read`, `fleet.list_*`, …).
+    ///     (`shell.run`, `fs.read`, `device.agent.list`, …).
     ///   * `hub`                          — hub-published abilities
     ///     (`federation.advertise_*`, `voice.list_calls`, …).
     ///
-    /// Field name kept as `owner_agent_uri` for wire-compat with
+    /// Field name kept as `owner_agent_ura` for wire-compat with
     /// every existing daemon. §A.URA-5's "agent owns the ability"
     /// rule applies to ABILITY URIs (`/ability/<...>`-shaped) — it
     /// does not constrain who may publish a descriptor for a
     /// device-built-in or hub-built-in verb. A device publishing
     /// `shell.run` is the canonical pattern, not a violation.
-    pub owner_agent_uri: String,
+    pub owner_agent_ura: String,
     pub visibility: Visibility,
     pub scope_subjects: ScopeRule,
     pub scope_agents: ScopeRule,
@@ -297,7 +298,7 @@ impl std::fmt::Display for DescriptorError {
                 write!(f, "ability name must use the `<namespace>.<verb>` shape")
             }
             DescriptorError::EmptyOwner => {
-                write!(f, "owner_agent_uri must not be empty")
+                write!(f, "owner_agent_ura must not be empty")
             }
         }
     }
@@ -313,23 +314,28 @@ impl AbilityDescriptor {
     /// call site cannot ship a malformed descriptor.
     pub fn new(
         name: impl Into<String>,
-        owner_agent_uri: impl Into<String>,
+        owner_agent_ura: impl Into<String>,
         visibility: Visibility,
     ) -> Result<Self, DescriptorError> {
         let name = name.into();
-        let owner_agent_uri = owner_agent_uri.into();
+        let owner_agent_ura = owner_agent_ura.into();
         if name.trim().is_empty() {
             return Err(DescriptorError::EmptyName);
         }
-        if !name.contains('.') {
-            return Err(DescriptorError::UnnamespacedName);
-        }
-        if owner_agent_uri.trim().is_empty() {
+        if owner_agent_ura.trim().is_empty() {
             return Err(DescriptorError::EmptyOwner);
+        }
+        if !name.contains('.') {
+            let agent_owned = crate::ura::parse_ura(&owner_agent_ura)
+                .map(|parsed| parsed.kind == crate::ura::URAKind::Agent)
+                .unwrap_or(false);
+            if !agent_owned {
+                return Err(DescriptorError::UnnamespacedName);
+            }
         }
         Ok(Self {
             name,
-            owner_agent_uri,
+            owner_agent_ura,
             visibility,
             // Sensible defaults for SCOPED's two axes: any caller
             // from any subject. Builders narrow as needed.
@@ -393,11 +399,11 @@ impl AbilityDescriptor {
     /// response for the given caller + subject.
     ///
     /// Centralised so a future caller cannot drift the rule.
-    pub fn is_visible_to(&self, caller_uri: &str, subject_uri: &str) -> bool {
+    pub fn is_visible_to(&self, caller_ura: &str, subject_ura: &str) -> bool {
         match self.visibility {
             Visibility::Public => true,
             Visibility::Scoped => {
-                self.scope_subjects.admits(subject_uri) && self.scope_agents.admits(caller_uri)
+                self.scope_subjects.admits(subject_ura) && self.scope_agents.admits(caller_ura)
             }
             Visibility::Private => {
                 // Owner's own signing authority can list — that's
@@ -406,7 +412,7 @@ impl AbilityDescriptor {
                 // wires hosted vs self-signed signaling, we accept
                 // exact owner match, which is the conservative case
                 // (host=owner for self-signed Agents).
-                caller_uri == self.owner_agent_uri || subject_uri == self.owner_agent_uri
+                caller_ura == self.owner_agent_ura || subject_ura == self.owner_agent_ura
             }
         }
     }
@@ -496,7 +502,7 @@ mod tests {
         let backend = "easynet:///r/acme/hub";
         let operator = "easynet:///r/acme/user/alice";
         let d = must(
-            "fleet.list_agents",
+            "device.agent.list",
             "easynet:///r/acme/device/dev-1",
             Visibility::Scoped,
         )
@@ -531,7 +537,7 @@ mod tests {
         // let attacker URAs masquerade as authorised ones by
         // sharing a prefix.
         let d = must(
-            "fleet.list_agents",
+            "device.agent.list",
             "easynet:///r/acme/hub",
             Visibility::Scoped,
         )
@@ -550,7 +556,7 @@ mod tests {
         metadata.insert("agent_type".into(), "claude-code".into());
         let d = AbilityDescriptor {
             name: "skill.alive-video".into(),
-            owner_agent_uri: "easynet:///r/acme/agent/alice.claude".into(),
+            owner_agent_ura: "easynet:///r/acme/agent/alice.claude".into(),
             visibility: Visibility::Scoped,
             scope_subjects: ScopeRule::OnlyMatching(vec!["operator".into()]),
             scope_agents: ScopeRule::Any,

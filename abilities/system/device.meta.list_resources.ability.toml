@@ -1,6 +1,6 @@
 schema_version = "1"
 name = "device.meta.list_resources"
-description = "List physical and logical resources held by this Agent (mics, cameras, displays, applications, windows, speakers, voice profiles, ASR models). Each entry's `resource_uri` is the canonical subject for media abilities (mic.subscribe, camera.snapshot, ...). Optional `types` filter narrows the result."
+description = "List physical and logical resources held by this Agent (mics, cameras, displays, applications, windows, speakers, voice profiles, ASR models). Each entry's `resource_ura` is the canonical subject for media abilities (mic.subscribe, camera.snapshot, ...). Optional `types` filter narrows the result."
 
 [input_schema]
 type = "object"

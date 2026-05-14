@@ -28,7 +28,7 @@
 //     point the daemon-boot path and `easynet agent add` both
 //     call.
 //   * `unpublish_abilities_via_revoke(invoker, tenant, realm,
-//     agent_uri)` revokes one Agent's directory entry — used by
+//     agent_ura)` revokes one Agent's directory entry — used by
 //     `easynet agent remove`. Maps to `federation.revoke` per
 //     plan §18.
 //
@@ -39,7 +39,7 @@ use crate::persistence::local_agents::{self, LocalAgentsFile};
 use crate::runtime::advertise::{self, AbilityInvoker, AdvertiseOutcome};
 use crate::runtime::agents::profiles::{
     self as profiles_mod,
-    bootstrap::{self, BootstrapOutcome, BootstrapPlan, UriMinter, UuidMinter},
+    bootstrap::{self, BootstrapOutcome, BootstrapPlan, UraMinter, UuidMinter},
 };
 use serde_json::Value;
 
@@ -52,7 +52,7 @@ pub struct PublishOutcome {
     /// Canonical URA the advertise call targeted. Empty when
     /// bootstrap returned no rows (operator hasn't enabled any
     /// hosted profiles).
-    pub agent_uri: String,
+    pub agent_ura: String,
     /// Free-form descriptor of which Agent this row corresponds to,
     /// e.g. `device`, `consent/default`, `llm/claude`. Used for
     /// log lines, not for protocol decisions.
@@ -89,7 +89,7 @@ pub fn republish_abilities_via_advertise<I: AbilityInvoker>(
 
 /// Same as `republish_abilities_via_advertise` but accepts a
 /// custom URI minter. Used by tests with a deterministic minter.
-pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
+pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
     invoker: &I,
     tenant_id: &str,
     plan: &BootstrapPlan,
@@ -102,7 +102,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
         Ok(f) => f,
         Err(e) => {
             outcomes.push(PublishOutcome {
-                agent_uri: String::new(),
+                agent_ura: String::new(),
                 label: "local-agents.json".into(),
                 result: Err(format!("read failed; using empty file: {e}")),
             });
@@ -112,20 +112,20 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
     let bootstrap_outcomes = bootstrap::bootstrap_local_agents(plan, &mut file, minter);
     if let Err(e) = local_agents::save(&file) {
         outcomes.push(PublishOutcome {
-            agent_uri: String::new(),
+            agent_ura: String::new(),
             label: "local-agents.json".into(),
             result: Err(format!("save failed: {e}")),
         });
         // Continue — in-memory state still allows advertise to run.
     }
 
-    if plan.realm.is_empty() || plan.host_device_uri.is_empty() {
+    if plan.realm.is_empty() || plan.host_device_ura.is_empty() {
         // Pre-join: nothing to advertise yet (the hub-profile that
         // would receive the call doesn't know us). The bootstrap
         // file has been persisted with `<unjoined>` placeholders;
         // a post-join boot will retry.
         outcomes.push(PublishOutcome {
-            agent_uri: String::new(),
+            agent_ura: String::new(),
             label: "skipped".into(),
             result: Err("daemon not yet joined to a realm; advertise deferred".into()),
         });
@@ -136,13 +136,13 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
     // RFC-002: pass host_node_id so federation.forward_invoke can
     // route inbound forward requests to this daemon's local-tool
     // dispatch surface. Falls back to the legacy node-less form
-    // when host_device_uri lacks an `/agent/<id>` suffix.
-    let host_node_id = host_node_id_from_uri(&plan.host_device_uri);
+    // when host_device_ura lacks an `/agent/<id>` suffix.
+    let host_node_id = host_node_id_from_uri(&plan.host_device_ura);
     let device_outcome = advertise::advertise_self_signed_device_with_host_node(
         invoker,
         tenant_id,
         &plan.realm,
-        &plan.host_device_uri,
+        &plan.host_device_ura,
         // P5 supplies the actual public_key_hex; P4.8a ships an
         // empty placeholder so the advertise wire shape stays
         // stable. The hub still records the URA + status.
@@ -162,7 +162,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
     let llm_uris: Vec<(String, String)> = bootstrap_outcomes
         .iter()
         .filter(|o| o.profile == "llm")
-        .map(|o| (o.name.clone(), o.agent_uri.clone()))
+        .map(|o| (o.name.clone(), o.agent_ura.clone()))
         .collect();
 
     // Step 4: advertise each hosted Agent (HostedBy, Model B).
@@ -171,8 +171,8 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
             invoker,
             tenant_id,
             &plan.realm,
-            &o.agent_uri,
-            &plan.host_device_uri,
+            &o.agent_ura,
+            &plan.host_device_ura,
             host_node_id.clone(),
         );
         outcomes.push(advertise_outcome_to_publish_outcome(
@@ -185,7 +185,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
     // profiles aggregator so each Agent's descriptor list is
     // computed once from the live registry.
     let mut descriptors = profiles_mod::all_descriptors_for_host(
-        &plan.host_device_uri,
+        &plan.host_device_ura,
         consent_uri.as_deref(),
         policy_uri.as_deref(),
         mcp_uri.as_deref(),
@@ -198,6 +198,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
                 .insert("host_node_id".into(), host_node_id.clone());
         }
     }
+    stamp_llm_agent_metadata(&mut descriptors, plan, &llm_uris);
 
     // Step 5b: advertise the abilities OWNED by each user-installed
     // agent (e.g. `alice.chat` and any per-agent verbs declared in
@@ -247,11 +248,18 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
                             if let Some(host_node_id) = host_node_id.as_ref() {
                                 d = d.with_metadata_entry("host_node_id", host_node_id.clone());
                             }
+                            d = d.with_metadata_entry("runtime", entry.agent_type.to_string());
+                            d = d.with_metadata_entry("agent_type", entry.agent_type.to_string());
+                            d = d.with_metadata_entry("base_runtime", entry.agent_type.to_string());
+                            if let Some(model) = entry.model.as_ref() {
+                                d = d.with_metadata_entry("model", model.clone());
+                                d = d.with_metadata_entry("base_model", model.clone());
+                            }
                             descriptors.push(d);
                         }
                         Err(e) => {
                             outcomes.push(PublishOutcome {
-                                agent_uri: owner_uri.clone(),
+                                agent_ura: owner_uri.clone(),
                                 label: format!("agent-ability/{}", spec.name()),
                                 result: Err(format!("descriptor build failed: {e}")),
                             });
@@ -262,7 +270,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
         }
         Err(e) => {
             outcomes.push(PublishOutcome {
-                agent_uri: String::new(),
+                agent_ura: String::new(),
                 label: "user-agent-abilities".into(),
                 result: Err(format!(
                     "load agent registry failed; per-agent abilities not advertised this cycle: {e}"
@@ -275,7 +283,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
     let mut by_owner: std::collections::HashMap<String, Vec<_>> = std::collections::HashMap::new();
     for d in descriptors {
         by_owner
-            .entry(d.owner_agent_uri.clone())
+            .entry(d.owner_agent_ura.clone())
             .or_default()
             .push(d);
     }
@@ -283,7 +291,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UriMinter>(
         let result =
             advertise::advertise_abilities(invoker, tenant_id, &plan.realm, &owner_uri, &abilities);
         outcomes.push(PublishOutcome {
-            agent_uri: owner_uri.clone(),
+            agent_ura: owner_uri.clone(),
             label: format!("abilities/{}", abilities.len()),
             result: result.map(|_| ()),
         });
@@ -349,12 +357,12 @@ pub fn register_local_tools_via_runtime<I: AbilityInvoker>(
 
     // Runtime admin calls share the same canonical hub-owned ability
     // model as federation.*.
-    let resource_uri = runtime_admin_resource_uri(realm, tenant_id, "runtime.register_local_tool");
+    let resource_ura = runtime_admin_resource_ura(realm, tenant_id, "runtime.register_local_tool");
     for name in names {
         let args = build_register_args(tenant_id, node_id, &name, dispatch_endpoint);
-        let result = invoker.invoke_ability(tenant_id, &resource_uri, args);
+        let result = invoker.invoke_ability(tenant_id, &resource_ura, args);
         outcomes.push(PublishOutcome {
-            agent_uri: format!("local:{node_id}"),
+            agent_ura: format!("local:{node_id}"),
             label: format!("runtime/register/{name}"),
             result: result.map(|_| ()),
         });
@@ -418,8 +426,8 @@ pub fn bootstrap_self_identity_via_runtime<I: AbilityInvoker>(
     // `runtime.bootstrap_self_identity` appends a NEW key under the
     // existing node when the (node_id, public_key) tuple is novel,
     // so the second call doesn't overwrite the first.
-    let resource_uri =
-        runtime_admin_resource_uri(realm, tenant_id, "runtime.bootstrap_self_identity");
+    let resource_ura =
+        runtime_admin_resource_ura(realm, tenant_id, "runtime.bootstrap_self_identity");
     let agent_key_b64 = derive_owner_public_key_b64(tenant_id, node_id);
     let agent_args = serde_json::json!({
         "tenant_id": tenant_id,
@@ -428,10 +436,10 @@ pub fn bootstrap_self_identity_via_runtime<I: AbilityInvoker>(
         "display_name": "",
         "public_key_b64": agent_key_b64,
     });
-    let agent_result = invoker.invoke_ability(tenant_id, &resource_uri, agent_args);
+    let agent_result = invoker.invoke_ability(tenant_id, &resource_ura, agent_args);
     if let Err(e) = agent_result {
         return PublishOutcome {
-            agent_uri: format!("local:{node_id}"),
+            agent_ura: format!("local:{node_id}"),
             label: "runtime/bootstrap_self_identity".into(),
             result: Err(e),
         };
@@ -446,10 +454,10 @@ pub fn bootstrap_self_identity_via_runtime<I: AbilityInvoker>(
             "display_name": "",
             "public_key_b64": hub_key_b64,
         });
-        let hub_result = invoker.invoke_ability(tenant_id, &resource_uri, hub_args);
+        let hub_result = invoker.invoke_ability(tenant_id, &resource_ura, hub_args);
         if let Err(e) = hub_result {
             return PublishOutcome {
-                agent_uri: format!("local:{node_id}"),
+                agent_ura: format!("local:{node_id}"),
                 label: "runtime/bootstrap_self_identity_hub".into(),
                 result: Err(e),
             };
@@ -457,7 +465,7 @@ pub fn bootstrap_self_identity_via_runtime<I: AbilityInvoker>(
     }
 
     PublishOutcome {
-        agent_uri: format!("local:{node_id}"),
+        agent_ura: format!("local:{node_id}"),
         label: "runtime/bootstrap_self_identity".into(),
         result: Ok(()),
     }
@@ -525,8 +533,8 @@ fn host_node_id_from_uri(uri: &str) -> Option<String> {
     // Legacy `reg/{device,agent}.<id>?tenant_id=<t>` shapes are rejected
     // per memory `feedback_no_legacy_ura.md` (strict v4.1.5 only;
     // route every URI parse through `parse_ura`).
-    let parsed = crate::uri::parse_ura(uri).ok()?;
-    if parsed.kind == crate::uri::URAKind::Device && !parsed.device_id.is_empty() {
+    let parsed = crate::ura::parse_ura(uri).ok()?;
+    if parsed.kind == crate::ura::URAKind::Device && !parsed.device_id.is_empty() {
         return Some(parsed.device_id);
     }
     None
@@ -621,19 +629,19 @@ pub fn unpublish_abilities_via_revoke<I: AbilityInvoker>(
     invoker: &I,
     tenant_id: &str,
     realm: &str,
-    agent_uri: &str,
+    agent_ura: &str,
     reason: &str,
 ) -> PublishOutcome {
-    let resource_uri = crate::runtime::advertise::revoke_resource_uri(realm, tenant_id);
+    let resource_ura = crate::runtime::advertise::revoke_resource_ura(realm, tenant_id);
     let payload = serde_json::json!({
-        "agent_uri": agent_uri,
+        "agent_ura": agent_ura,
         "reason": reason,
     });
     let result = invoker
-        .invoke_ability(tenant_id, &resource_uri, payload)
+        .invoke_ability(tenant_id, &resource_ura, payload)
         .map(|_| ());
     PublishOutcome {
-        agent_uri: agent_uri.into(),
+        agent_ura: agent_ura.into(),
         label: "revoke".into(),
         result,
     }
@@ -644,7 +652,7 @@ fn advertise_outcome_to_publish_outcome(
     label: String,
 ) -> PublishOutcome {
     PublishOutcome {
-        agent_uri: outcome.agent_uri,
+        agent_ura: outcome.agent_ura,
         label,
         result: outcome.result.map(|_receipt| ()),
     }
@@ -654,12 +662,44 @@ fn first_uri(outcomes: &[BootstrapOutcome], profile: &str, name: &str) -> Option
     outcomes
         .iter()
         .find(|o| o.profile == profile && o.name == name)
-        .map(|o| o.agent_uri.clone())
+        .map(|o| o.agent_ura.clone())
 }
 
-fn runtime_admin_resource_uri(realm: &str, tenant_id: &str, ability_name: &str) -> String {
+fn stamp_llm_agent_metadata(
+    descriptors: &mut [crate::runtime::ability_descriptor::AbilityDescriptor],
+    plan: &BootstrapPlan,
+    llm_uris: &[(String, String)],
+) {
+    for sub in &plan.llm_sub_agents {
+        let Some((_, owner_uri)) = llm_uris.iter().find(|(name, _)| name == &sub.name) else {
+            continue;
+        };
+        for descriptor in descriptors
+            .iter_mut()
+            .filter(|d| d.owner_agent_ura == *owner_uri)
+        {
+            descriptor
+                .metadata
+                .insert("runtime".into(), sub.agent_type_display.clone());
+            descriptor
+                .metadata
+                .insert("agent_type".into(), sub.agent_type_display.clone());
+            descriptor
+                .metadata
+                .insert("base_runtime".into(), sub.agent_type_display.clone());
+            if let Some(model) = sub.model.as_ref() {
+                descriptor.metadata.insert("model".into(), model.clone());
+                descriptor
+                    .metadata
+                    .insert("base_model".into(), model.clone());
+            }
+        }
+    }
+}
+
+fn runtime_admin_resource_ura(realm: &str, tenant_id: &str, ability_name: &str) -> String {
     let _ = tenant_id;
-    crate::uri::hub_ability_uri(realm, ability_name)
+    crate::ura::hub_ability_ura(realm, ability_name)
 }
 
 #[cfg(test)]
@@ -693,12 +733,12 @@ mod tests {
         fn invoke_ability(
             &self,
             _tenant_id: &str,
-            resource_uri: &str,
+            resource_ura: &str,
             payload_json: Value,
         ) -> Result<Value, String> {
             self.calls
                 .borrow_mut()
-                .push((resource_uri.to_string(), payload_json));
+                .push((resource_ura.to_string(), payload_json));
             Ok(self.reply.clone())
         }
     }
@@ -717,7 +757,7 @@ mod tests {
             Self(std::cell::Cell::new(0))
         }
     }
-    impl UriMinter for CountingMinter {
+    impl UraMinter for CountingMinter {
         fn mint_id(&self, profile: &str, name: &str) -> String {
             let n = self.0.get();
             self.0.set(n + 1);
@@ -733,13 +773,14 @@ mod tests {
         BootstrapPlan {
             realm: realm.into(),
             user_id: "test-user".into(),
-            host_device_uri: host.into(),
+            host_device_ura: host.into(),
             consent: true,
             policy: false,
             mcp: false,
             llm_sub_agents: vec![LlmSubAgent {
                 name: "claude".into(),
                 agent_type_display: "claude-code".into(),
+                model: Some("sonnet".into()),
             }],
         }
     }
@@ -880,7 +921,7 @@ mod tests {
             "alice".to_string(),
             crate::registry::agents::AgentEntry::new(
                 crate::registry::agents::AgentType::ClaudeCode,
-                None,
+                Some("sonnet".into()),
             ),
         );
         crate::registry::agents::save_agents(&reg).expect("save alice into registry");
@@ -890,13 +931,14 @@ mod tests {
         let plan = BootstrapPlan {
             realm: "acme".into(),
             user_id: "alice".into(),
-            host_device_uri: "easynet:///r/acme/device/01DEV".into(),
+            host_device_ura: "easynet:///r/acme/device/01DEV".into(),
             consent: false,
             policy: false,
             mcp: false,
             llm_sub_agents: vec![LlmSubAgent {
                 name: "alice".into(),
                 agent_type_display: "claude-code".into(),
+                model: Some("sonnet".into()),
             }],
         };
         let invoker = CountingInvoker::new(good_reply());
@@ -909,10 +951,10 @@ mod tests {
             .iter()
             .find(|e| e.profile == "llm" && e.name == "alice")
             .expect("bootstrap must have minted a URA for alice")
-            .agent_uri;
+            .agent_ura;
 
         // Find the advertise_abilities call whose payload's
-        // `agent_uri` is alice's URA, and assert `alice.chat`
+        // `agent_ura` is alice's URA, and assert `alice.chat`
         // appears in its abilities list. The daemon may pack
         // multiple abilities per call; we scan, not require the
         // first match.
@@ -921,7 +963,7 @@ mod tests {
             .iter()
             .find(|(u, p)| {
                 u.contains("federation.advertise_abilities")
-                    && p["agent_uri"].as_str() == Some(alice_uri.as_str())
+                    && p["agent_ura"].as_str() == Some(alice_uri.as_str())
             })
             .unwrap_or_else(|| {
                 panic!(
@@ -941,12 +983,28 @@ mod tests {
             names.iter().any(|n| *n == "alice.chat"),
             "alice.chat must appear in advertised abilities for {alice_uri:?}; got names = {names:?}"
         );
+        for ability_name in ["device.skill.list", "alice.chat"] {
+            let descriptor = abilities
+                .iter()
+                .find(|a| a["name"].as_str() == Some(ability_name))
+                .unwrap_or_else(|| panic!("{ability_name} descriptor must be advertised"));
+            assert_eq!(
+                descriptor["metadata"]["runtime"].as_str(),
+                Some("claude-code"),
+                "{ability_name} must carry base runtime metadata"
+            );
+            assert_eq!(
+                descriptor["metadata"]["model"].as_str(),
+                Some("sonnet"),
+                "{ability_name} must carry base model metadata"
+            );
+        }
 
         // Sanity: outcomes carry one row per advertise_abilities
         // group; alice's row must be Ok.
         let alice_row = outcomes
             .iter()
-            .find(|o| o.agent_uri == *alice_uri && o.label.starts_with("abilities/"))
+            .find(|o| o.agent_ura == *alice_uri && o.label.starts_with("abilities/"))
             .expect("alice's abilities-advertise outcome row must exist");
         assert!(
             alice_row.result.is_ok(),
@@ -967,20 +1025,21 @@ mod tests {
             "alice".into(),
             crate::registry::agents::AgentEntry::new(
                 crate::registry::agents::AgentType::ClaudeCode,
-                None,
+                Some("sonnet".into()),
             ),
         );
         crate::registry::agents::save_agents(&reg).unwrap();
         let plan = BootstrapPlan {
             realm: "acme".into(),
             user_id: "alice".into(),
-            host_device_uri: "easynet:///r/acme/device/01DEV".into(),
+            host_device_ura: "easynet:///r/acme/device/01DEV".into(),
             consent: false,
             policy: false,
             mcp: false,
             llm_sub_agents: vec![LlmSubAgent {
                 name: "alice".into(),
                 agent_type_display: "claude-code".into(),
+                model: Some("sonnet".into()),
             }],
         };
         let invoker = CountingInvoker::new(good_reply());
@@ -996,7 +1055,7 @@ mod tests {
             .iter()
             .find(|(u, p)| {
                 u.contains("federation.advertise_abilities")
-                    && p["agent_uri"].as_str() == Some("easynet:///r/acme/device/01DEV")
+                    && p["agent_ura"].as_str() == Some("easynet:///r/acme/device/01DEV")
             })
             .expect("device-owner advertise_abilities call must still exist");
         let abilities = device_advert.1["abilities"]
@@ -1013,7 +1072,7 @@ mod tests {
     }
 
     #[test]
-    fn unpublish_targets_federation_revoke_resource_uri() {
+    fn unpublish_targets_federation_revoke_resource_ura() {
         let invoker = CountingInvoker::new(good_reply());
         let outcome = unpublish_abilities_via_revoke(
             &invoker,
@@ -1029,7 +1088,7 @@ mod tests {
             calls[0].0,
             "easynet:///r/acme/ability/hub.federation.revoke"
         );
-        assert_eq!(calls[0].1["agent_uri"], "easynet:///r/acme/device/01OLD");
+        assert_eq!(calls[0].1["agent_ura"], "easynet:///r/acme/device/01OLD");
         assert_eq!(calls[0].1["reason"], "operator removed");
     }
 
@@ -1044,7 +1103,7 @@ mod tests {
         let consent_call = calls.iter().find(|(u, p)| {
             u.contains("federation.advertise_agent")
                 && p["signing_authority"]["kind"] == "hosted_by"
-                && p["agent_uri"].as_str().unwrap().contains("consent-default")
+                && p["agent_ura"].as_str().unwrap().contains("consent-default")
         });
         assert!(
             consent_call.is_some(),
@@ -1056,7 +1115,7 @@ mod tests {
         // landed with stable URAs.
         let file_back = local_agents::load().expect("load after save must succeed");
         assert_eq!(
-            file_back.host_device_agent_uri,
+            file_back.host_device_agent_ura,
             "easynet:///r/acme/device/01DEV"
         );
         let consent_row = file_back
@@ -1064,13 +1123,13 @@ mod tests {
             .iter()
             .find(|e| e.profile == "consent" && e.name == "default")
             .expect("consent/default row must be persisted");
-        assert!(consent_row.agent_uri.contains("consent-default"));
+        assert!(consent_row.agent_ura.contains("consent-default"));
         let llm_row = file_back
             .hosted_agents
             .iter()
             .find(|e| e.profile == "llm" && e.name == "claude")
             .expect("llm/claude row must be persisted");
-        assert!(llm_row.agent_uri.contains("llm-claude"));
+        assert!(llm_row.agent_ura.contains("llm-claude"));
     }
 
     #[test]
@@ -1085,9 +1144,9 @@ mod tests {
             .find_map(|(u, p)| {
                 if u.contains("federation.advertise_agent")
                     && p["signing_authority"]["kind"] == "hosted_by"
-                    && p["agent_uri"].as_str().unwrap().contains("consent-default")
+                    && p["agent_ura"].as_str().unwrap().contains("consent-default")
                 {
-                    p["agent_uri"].as_str().map(|s| s.to_string())
+                    p["agent_ura"].as_str().map(|s| s.to_string())
                 } else {
                     None
                 }
@@ -1105,9 +1164,9 @@ mod tests {
             .find_map(|(u, p)| {
                 if u.contains("federation.advertise_agent")
                     && p["signing_authority"]["kind"] == "hosted_by"
-                    && p["agent_uri"].as_str().unwrap().contains("consent-default")
+                    && p["agent_ura"].as_str().unwrap().contains("consent-default")
                 {
-                    p["agent_uri"].as_str().map(|s| s.to_string())
+                    p["agent_ura"].as_str().map(|s| s.to_string())
                 } else {
                     None
                 }

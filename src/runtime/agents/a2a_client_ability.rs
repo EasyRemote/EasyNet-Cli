@@ -107,7 +107,7 @@ fn send_task_handler(args: Value) -> anyhow::Result<Value> {
 
     #[cfg(feature = "axon-pb")]
     {
-        let target_uri = if target_node.starts_with("easynet:///r/") {
+        let target_ura = if crate::ura::parse_ura(target_node.trim()).is_ok() {
             match crate::support::federation_invoke::parse_node_uri(&target_node) {
                 Ok(uri) => uri,
                 Err(e) => return Ok(error_response(&format!("parse target_node_uri: {e}"))),
@@ -118,7 +118,7 @@ fn send_task_handler(args: Value) -> anyhow::Result<Value> {
             // a structured error so the caller knows to pass a URA.
             match crate::persistence::config::load_credentials() {
                 Ok(c) if !c.tenant_id.trim().is_empty() => {
-                    crate::uri::device_uri(&c.tenant_id, target_node.trim())
+                    crate::ura::device_ura(&c.tenant_id, target_node.trim())
                 }
                 _ => {
                     return Ok(error_response(
@@ -130,15 +130,15 @@ fn send_task_handler(args: Value) -> anyhow::Result<Value> {
             }
         };
 
-        let caller_uri = crate::persistence::config::load_credentials()
+        let caller_ura = crate::persistence::config::load_credentials()
             .ok()
             .filter(|c| !c.tenant_id.trim().is_empty() && !c.node_id.trim().is_empty())
-            .map(|c| crate::uri::device_uri(c.tenant_id.trim(), c.node_id.trim()));
+            .map(|c| crate::ura::device_ura(c.tenant_id.trim(), c.node_id.trim()));
         match crate::support::federation_invoke::invoke_via_federation_forward(
             &ability,
             task_args,
-            &target_uri,
-            caller_uri.as_deref(),
+            &target_ura,
+            caller_ura.as_deref(),
         ) {
             Ok(value) => Ok(json!({ "ok": true, "result": value })),
             Err(e) => Ok(error_response(&format!("{e}"))),

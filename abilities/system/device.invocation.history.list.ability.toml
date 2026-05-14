@@ -1,0 +1,54 @@
+schema_version = "1"
+name = "device.invocation.history.list"
+description = "List recent invocation ledger records for this device using Axon query objects. Returns complete URAs from the persisted envelope plus digest/sealed payload metadata for audit and billing."
+
+[input_schema]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties.limit]
+type = "integer"
+minimum = 1
+maximum = 500
+
+[input_schema.properties.key]
+type = "object"
+additionalProperties = false
+minProperties = 1
+maxProperties = 1
+
+[input_schema.properties.key.properties.ura]
+type = "string"
+description = "Invocation URA."
+
+[input_schema.properties.key.properties.request_id]
+type = "string"
+
+[input_schema.properties.key.properties.trace_id]
+type = "string"
+
+[input_schema.properties.filter]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties.filter.properties.caller]
+type = "string"
+description = "Caller URA."
+
+[input_schema.properties.filter.properties.callee]
+type = "string"
+description = "Callee URA."
+
+[input_schema.properties.filter.properties.subject]
+description = "One subject URA or an array of subject URAs."
+oneOf = [{ type = "string" }, { type = "array", items = { type = "string" }, minItems = 1, uniqueItems = true }]
+
+[input_schema.properties.filter.properties.ability]
+type = "string"
+description = "Ability name or ability URA."
+
+[input_schema.properties.filter.properties.state]
+type = "string"
+
+[input_schema.properties.filter.properties.trace_id]
+type = "string"

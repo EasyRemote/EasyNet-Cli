@@ -54,14 +54,14 @@ pub fn owns(ability_name: &str) -> bool {
 /// SCOPED per §18 — local MCP clients only for bridge.*; the daemon
 /// itself + selected internal callers for client.*. P4.7 narrows.
 pub fn descriptors_for(
-    owner_agent_uri: &str,
+    owner_agent_ura: &str,
 ) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
     use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
     crate::runtime::agents::published_abilities()
         .into_iter()
         .filter(|m| owns(&m.name))
         .map(|m| {
-            AbilityDescriptor::new(m.name.clone(), owner_agent_uri, Visibility::Scoped)
+            AbilityDescriptor::new(m.name.clone(), owner_agent_ura, Visibility::Scoped)
                 .expect("registry-derived names satisfy descriptor invariants")
                 .with_input_schema(m.input_schema.clone())
                 .with_hints(m.hints.clone())
@@ -494,7 +494,7 @@ mod tests {
     #[test]
     fn owns_rejects_other_profiles_and_bare_mcp() {
         assert!(!owns("device.mcp.evaluate")); // not in either bridge/client subset
-        assert!(!owns("device.fleet.list_abilities"));
+        assert!(!owns("device.skill.list"));
         assert!(!owns("device.consent.subscribe"));
     }
 
@@ -508,8 +508,8 @@ mod tests {
 
     #[test]
     fn tool_spec_from_descriptor_emits_mcp_shape() {
-        let spec = tool_spec_from_descriptor(&d("device.fleet.list_agents"));
-        assert_eq!(spec["name"], "device.fleet.list_agents");
+        let spec = tool_spec_from_descriptor(&d("device.agent.list"));
+        assert_eq!(spec["name"], "device.agent.list");
         // The MCP description is the human blurb from the registry,
         // NOT the provenance string. Pre-fix this asserted the
         // opposite — bug pinned upside-down. Updated when the
@@ -579,13 +579,13 @@ mod tests {
 
     #[test]
     fn tool_specs_lists_every_descriptor_passed_at_construction() {
-        let descs = vec![d("device.observe.health"), d("device.fleet.list_agents")];
+        let descs = vec![d("device.observe.health"), d("device.agent.list")];
         let p = InvokeMcpProvider::new(RecordingInvoker::new(Ok(serde_json::json!({}))), descs);
         let specs = p.tool_specs();
         assert_eq!(specs.len(), 2);
         let names: Vec<&str> = specs.iter().map(|s| s["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"device.observe.health"));
-        assert!(names.contains(&"device.fleet.list_agents"));
+        assert!(names.contains(&"device.agent.list"));
     }
 
     #[test]
@@ -637,7 +637,7 @@ mod tests {
         let invoker = RecordingInvoker::new(Ok(serde_json::json!({})));
         let p = InvokeMcpProvider::new(
             invoker,
-            vec![d("device.observe.health"), d("device.fleet.list_agents")],
+            vec![d("device.observe.health"), d("device.agent.list")],
         );
         assert_eq!(p.descriptor_count(), 2);
     }
@@ -750,7 +750,7 @@ mod tests {
             .provider
             .descriptors
             .iter()
-            .map(|d| d.owner_agent_uri.clone())
+            .map(|d| d.owner_agent_ura.clone())
             .collect();
         assert!(
             owners.contains("self"),
@@ -759,12 +759,12 @@ mod tests {
     }
 
     #[test]
-    fn build_stdio_server_anchors_descriptors_on_persisted_host_uri_when_present() {
+    fn build_stdio_server_anchors_descriptors_on_persisted_host_ura_when_present() {
         let _h = crate::facade::cli::test_support::HomeGuard::new();
         // Pre-populate local-agents.json with a host URI; build_stdio_server
         // must pick it up.
         let mut file = crate::persistence::local_agents::LocalAgentsFile::default();
-        file.host_device_agent_uri = "easynet:///r/acme/device/01DEV".into();
+        file.host_device_agent_ura = "easynet:///r/acme/device/01DEV".into();
         crate::persistence::local_agents::save(&file).unwrap();
 
         let cfg = StdioServerConfig {
@@ -777,7 +777,7 @@ mod tests {
             .provider
             .descriptors
             .iter()
-            .map(|d| d.owner_agent_uri.clone())
+            .map(|d| d.owner_agent_ura.clone())
             .collect();
         assert!(
             owners.contains("easynet:///r/acme/device/01DEV"),

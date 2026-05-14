@@ -1,10 +1,10 @@
-// EasyNet CLI — fleet.pty_session_attach (C-M3c, BIDI)
+// EasyNet CLI — device.terminal.attach (C-M3c, BIDI)
 // =======================================================
 //
 // File: src/runtime/agents/pty_attach_ability.rs
 //
 // Bidi handler that wires one InvokeBidi session to one previously-
-// opened PTY (created via fleet.pty_session_create, C-M3b). The
+// opened PTY (created via device.terminal.create, C-M3b). The
 // transport gives us two mpsc::Sender/Receiver halves; the handler
 // glues them to the PTY master fd's blocking reader + writer.
 //
@@ -84,18 +84,18 @@ use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::ability_dispatch::{BidiSource, LocalAbilityRegistry, BIDI_CHANNEL_BOUND};
 use crate::runtime::execution::pty::{PtyService, PtySessionId};
 
-pub const ABILITY_PTY_SESSION_ATTACH: &str = "device.fleet.pty_session_attach";
+pub const ABILITY_PTY_SESSION_ATTACH: &str = "device.terminal.attach";
 
 /// Description published by the dispatcher's `description_for`
-/// arm. Sibling of fleet.pty_session_create / close — those are
+/// arm. Sibling of device.terminal.create / close — those are
 /// the control plane, this is the data plane.
 pub fn description() -> &'static str {
     "Attach to an existing PTY session over InvokeBidi: pump \
      stdin from the wire to the PTY master, stream stdout / \
      stderr back as base64-encoded `stdout` frames, surface \
      child exit as a final `exit` frame. Pair with \
-     fleet.pty_session_create (open the session) and \
-     fleet.pty_session_close (terminate it). Part of the \
+     device.terminal.create (open the session) and \
+     device.terminal.close (terminate it). Part of the \
      baseline-locomotion-v1 profile (AXIOM Tier 2.5)."
 }
 
@@ -130,20 +130,10 @@ const EXIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis
 
 pub fn register(reg: &mut LocalAbilityRegistry, pty: Arc<PtyService>) {
     use crate::runtime::ability_dispatch::LocalBidiHandler;
-    // Two name families register the same handler — see
-    // `pty_io_ability::register` for the rationale (host-mode
-    // backend's WS terminal handler dispatches under the
-    // axon-runtime `fleet.session_*` prefix; CLI subcommands and
-    // stdio MCP use the canonical `fleet.pty_session_*` names).
     let pty_for_attach = Arc::clone(&pty);
     let handler: LocalBidiHandler =
         Arc::new(move |args: Value| attach_handler(&pty_for_attach, args));
-    reg.register_bidi_with_owner(
-        "device.fleet.pty_session_attach",
-        OwnerKind::Device,
-        Arc::clone(&handler),
-    );
-    reg.register_bidi_with_owner("device.fleet.session_attach", OwnerKind::Device, handler);
+    reg.register_bidi_with_owner("device.terminal.attach", OwnerKind::Device, handler);
 }
 
 fn attach_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<BidiSource> {
@@ -410,7 +400,7 @@ pub fn attach_input_schema() -> Value {
 
 pub fn attach_description() -> &'static str {
     "Attach an InvokeBidi session to a previously-opened PTY \
-     (created via fleet.pty_session_create). Client→handler frames: \
+     (created via device.terminal.create). Client→handler frames: \
      {type:\"stdin\",data:b64} or {type:\"resize\",cols,rows}. \
      Handler→client frames: {type:\"stdout\",data:b64} and a final \
      {type:\"exit\",status} when the child terminates."
@@ -466,7 +456,7 @@ mod tests {
             "attach must register as a BIDI handler, not RPC/Stream"
         );
         assert!(
-            reg.get_bidi("device.fleet.session_attach").is_some(),
+            reg.get_bidi("device.terminal.attach").is_some(),
             "attach must also publish the canonical runtime alias used by backend WS terminal"
         );
     }

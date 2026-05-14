@@ -25,7 +25,7 @@
 // v1 scope
 // --------
 // `LocalAbility` registry is keyed by full ability name
-// (`observe.health`, future `fleet.attach_session`, etc.). The
+// (`observe.health`, future `device.session.attach`, etc.). The
 // remote path delegates to `GatewayApi::invoke_remote_ability`
 // which already exists. Streaming abilities (`subscribe`-mode
 // invocations) follow in PR-ATTACH/PR-PERM/PR-DISCUSS/PR-LOOP;
@@ -249,7 +249,7 @@ pub type LocalFallbackResolver = Arc<dyn Fn(&str) -> Option<LocalRpcHandler> + S
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OwnerKind {
     /// Hosted by THIS device's daemon directly. Examples (terminal
-    /// state): `device.fs.read`, `device.fleet.list_nodes`,
+    /// state): `device.fs.read`, `device.node.list`,
     /// `device.keyring.sign`, `device.session`, `device.invoke_remote`.
     Device,
     /// Hosted by the realm hub (federation-tier). Examples (terminal
@@ -516,7 +516,7 @@ impl LocalAbilityRegistry {
     /// Register an envelope-aware RPC handler. Used by abilities
     /// that need access to the AXIOM 7-tuple `subject` (per
     /// **INV-SUBJECT-ENVELOPE**) — typically media abilities
-    /// resolving a `subject = resource_uri` to a local resource
+    /// resolving a `subject = resource_ura` to a local resource
     /// table entry. The handler closure signature is
     /// `Fn(EnvelopeContext, Value) -> Result<Value>`; the dispatcher
     /// passes the resolved `InvocationTarget.subject` in the
@@ -1190,12 +1190,12 @@ mod tests {
         // Pin the round-trip so a typo (e.g. inserting into
         // `self.stream` instead of `self.bidi`) trips a test.
         let mut reg = LocalAbilityRegistry::new();
-        assert!(reg.get_bidi("fleet.session_attach").is_none());
-        reg.register_bidi("fleet.session_attach", trivial_bidi_handler());
-        assert!(reg.get_bidi("fleet.session_attach").is_some());
+        assert!(reg.get_bidi("device.terminal.attach").is_none());
+        reg.register_bidi("device.terminal.attach", trivial_bidi_handler());
+        assert!(reg.get_bidi("device.terminal.attach").is_some());
         // Negative: not visible on the other call modes.
-        assert!(reg.get_rpc("fleet.session_attach").is_none());
-        assert!(reg.get_stream("fleet.session_attach").is_none());
+        assert!(reg.get_rpc("device.terminal.attach").is_none());
+        assert!(reg.get_stream("device.terminal.attach").is_none());
     }
 
     #[test]
@@ -1210,11 +1210,11 @@ mod tests {
             "permission.subscribe",
             Arc::new(|_| Ok(StreamSource::Snapshot(vec![]))),
         );
-        reg.register_bidi("fleet.session_attach", trivial_bidi_handler());
+        reg.register_bidi("device.terminal.attach", trivial_bidi_handler());
         assert_eq!(
             reg.list_abilities(),
             vec![
-                "fleet.session_attach",
+                "device.terminal.attach",
                 "observe.health",
                 "permission.subscribe",
             ],
@@ -1246,7 +1246,7 @@ mod tests {
         // A handler that owns its own loop reading from_client and
         // echoing into to_client. Spawned inside the closure per §D2.
         reg.register_bidi(
-            "fleet.echo",
+            "device.test.echo",
             Arc::new(|_args: Value| {
                 let (client_to_handler_tx, mut client_to_handler_rx) =
                     mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
@@ -1273,7 +1273,7 @@ mod tests {
         let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
         let target = InvocationTarget {
             scope: TargetScope::Local,
-            ability: "fleet.echo".into(),
+            ability: "device.test.echo".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Bidi,
             subject: None,
@@ -1302,14 +1302,17 @@ mod tests {
         let dispatcher = AbilityDispatcher::new(empty_registry(), Arc::new(NoopGateway::new()));
         let target = InvocationTarget {
             scope: TargetScope::Local,
-            ability: "fleet.session_attach".into(),
+            ability: "device.terminal.attach".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Bidi,
             subject: None,
         };
         let err = dispatcher.execute_bidi(target).unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.contains("fleet.session_attach"), "names ability: {msg}");
+        assert!(
+            msg.contains("device.terminal.attach"),
+            "names ability: {msg}"
+        );
         assert!(msg.contains("bidi"), "indicates bidi mode: {msg}");
     }
 
@@ -1324,13 +1327,13 @@ mod tests {
         // swallowed by a generic dispatcher message.
         let mut reg = LocalAbilityRegistry::new();
         reg.register_bidi(
-            "fleet.bad",
+            "device.test.bad",
             Arc::new(|_| anyhow::bail!("intentional handler failure: precondition foo missing")),
         );
         let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
         let target = InvocationTarget {
             scope: TargetScope::Local,
-            ability: "fleet.bad".into(),
+            ability: "device.test.bad".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Bidi,
             subject: None,
@@ -1350,7 +1353,7 @@ mod tests {
             scope: TargetScope::Remote {
                 node: NodeId::new("01PEER"),
             },
-            ability: "fleet.session_attach".into(),
+            ability: "device.terminal.attach".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Bidi,
             subject: None,

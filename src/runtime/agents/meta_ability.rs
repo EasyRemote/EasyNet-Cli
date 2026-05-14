@@ -117,12 +117,12 @@ fn describe_handler(
     // as uri:"self" so a caller still sees a well-formed describe
     // response — they can re-poll after the daemon completes join.
     let local = crate::persistence::local_agents::load().unwrap_or_default();
-    let host_uri = if local.host_device_agent_uri.is_empty() {
+    let host_ura = if local.host_device_agent_ura.is_empty() {
         "self".to_string()
     } else {
-        local.host_device_agent_uri.clone()
+        local.host_device_agent_ura.clone()
     };
-    let signing_authority = if local.host_device_agent_uri.is_empty() {
+    let signing_authority = if local.host_device_agent_ura.is_empty() {
         "unprovisioned" // pre-join: no key bound yet
     } else {
         "self" // device-profile is Model A (own keypair)
@@ -130,7 +130,7 @@ fn describe_handler(
 
     // abilities_summary = count + per-namespace count. The breakdown
     // is what makes the response useful to a caller deciding whether
-    // to fetch the full catalogue: "12 abilities, 4 in fleet.* and
+    // to fetch the full catalogue: "12 abilities, 4 in device.* and
     // 3 in consent.*" tells you what the device actually does.
     //
     // M0 note: the `split_once('.')` here is intentional and is NOT
@@ -153,7 +153,7 @@ fn describe_handler(
     }
 
     Ok(json!({
-        "uri": host_uri,
+        "uri": host_ura,
         "identity_summary": {
             "signing_authority": signing_authority,
         },
@@ -232,9 +232,9 @@ fn list_abilities_handler(
         //
         //   * `OwnerKind::Hub`   → realm hub URA, derived from
         //                          `credentials.tenant_id` via
-        //                          `crate::uri::hub_uri`.
+        //                          `crate::ura::hub_ura`.
         //   * `OwnerKind::Device` → host device URA, read from
-        //                          `local-agents.json::host_device_agent_uri`.
+        //                          `local-agents.json::host_device_agent_ura`.
         //   * `OwnerKind::Agent(id)` → agent URA, composed from the
         //                          realm + canonical user-id +
         //                          the agent_id captured at register
@@ -262,12 +262,12 @@ fn list_abilities_handler(
             .map(|c| c.tenant_id.trim().to_string())
             .filter(|s| !s.is_empty());
         let local = crate::persistence::local_agents::load().unwrap_or_default();
-        let device_owner_uri = if local.host_device_agent_uri.is_empty() {
+        let device_owner_uri = if local.host_device_agent_ura.is_empty() {
             None
         } else {
-            Some(local.host_device_agent_uri.clone())
+            Some(local.host_device_agent_ura.clone())
         };
-        let hub_owner_uri = realm.as_deref().map(crate::uri::hub_uri);
+        let hub_owner_uri = realm.as_deref().map(crate::ura::hub_ura);
         // user-segment used for `OwnerKind::Agent(...)` resolution.
         // Captured at registration time from the same
         // `PagesIdentity` the registry build used, so the synth
@@ -305,12 +305,12 @@ fn list_abilities_handler(
                 }
                 Some(crate::runtime::ability_dispatch::OwnerKind::Agent(agent_id)) => {
                     match (realm.as_deref(), user_segment.as_deref()) {
-                        (Some(r), Some(u)) => Some(crate::uri::agent_uri(r, u, agent_id)),
+                        (Some(r), Some(u)) => Some(crate::ura::agent_ura(r, u, agent_id)),
                         _ => None,
                     }
                 }
                 Some(crate::runtime::ability_dispatch::OwnerKind::User(user_id)) => {
-                    realm.as_deref().map(|r| crate::uri::user_uri(r, user_id))
+                    realm.as_deref().map(|r| crate::ura::user_ura(r, user_id))
                 }
                 None => {
                     // No owner metadata recorded — the registration
@@ -327,6 +327,10 @@ fn list_abilities_handler(
             let Some(owner) = owner_string.as_deref() else {
                 continue;
             };
+            let public_name = crate::ura::public_ability_name_for_owner(owner, &name);
+            if by_name.contains_key(&public_name) {
+                continue;
+            }
             let transport_hints = crate::runtime::agents::discovery_hints_for(&registry, &name);
             // Synthesised descriptor. When the registration site
             // landed an `AbilityManifest` via `register_*_with_spec`
@@ -340,7 +344,7 @@ fn list_abilities_handler(
             // register site to `_with_spec`), fall back to the
             // name-only stub the synth has emitted since the
             // 2026-05-05 owner-aware refactor.
-            if let Ok(d) = AbilityDescriptor::new(name.clone(), owner, Visibility::Scoped) {
+            if let Ok(d) = AbilityDescriptor::new(public_name.clone(), owner, Visibility::Scoped) {
                 let descriptor = match registry.manifest_for(&name) {
                     Some(manifest) => {
                         let mut d = d
@@ -362,9 +366,11 @@ fn list_abilities_handler(
                         .with_hints(transport_hints)
                         .with_source("registry"),
                 };
-                by_name.insert(name.clone(), descriptor);
+                by_name.insert(public_name, descriptor);
             }
         }
+
+        synthesize_hot_hosted_agent_descriptors(&mut by_name, registry, &local);
     }
 
     let mut merged: Vec<Value> = by_name
@@ -396,6 +402,68 @@ fn list_abilities_handler(
     }
 
     Ok(json!({ "abilities": merged }))
+}
+
+fn synthesize_hot_hosted_agent_descriptors(
+    by_name: &mut std::collections::BTreeMap<String, AbilityDescriptor>,
+    registry: &LocalAbilityRegistry,
+    local: &crate::persistence::local_agents::LocalAgentsFile,
+) {
+    use crate::runtime::ability_descriptor::Visibility;
+
+    let Ok(agents) = crate::registry::agents::load_agents() else {
+        return;
+    };
+    let host_node_id = crate::persistence::config::load_credentials()
+        .ok()
+        .map(|c| c.node_id.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    for (agent_name, entry) in agents.agents {
+        let Some(owner_ura) =
+            crate::persistence::local_agents::lookup_hosted_uri(local, "llm", &agent_name)
+        else {
+            continue;
+        };
+        if crate::ura::parse_ura(&owner_ura)
+            .map(|u| u.kind != crate::ura::URAKind::Agent)
+            .unwrap_or(true)
+        {
+            continue;
+        }
+
+        for spec in crate::runtime::abilities::abilities_for(&agent_name, &entry) {
+            let public_name = crate::ura::public_ability_name_for_owner(&owner_ura, spec.name());
+            if public_name.is_empty() || by_name.contains_key(&public_name) {
+                continue;
+            }
+            let Ok(mut descriptor) =
+                AbilityDescriptor::new(public_name.clone(), &owner_ura, Visibility::Scoped)
+            else {
+                continue;
+            };
+            descriptor = descriptor
+                .with_description(spec.description())
+                .with_input_schema(spec.parameters().clone())
+                .with_hints(crate::runtime::agents::discovery_hints_for(
+                    registry,
+                    spec.name(),
+                ))
+                .with_source(format!("agent:{agent_name}"))
+                .with_metadata_entry("runtime", entry.agent_type.to_string())
+                .with_metadata_entry("agent_type", entry.agent_type.to_string())
+                .with_metadata_entry("base_runtime", entry.agent_type.to_string());
+            if let Some(model) = entry.model.as_ref() {
+                descriptor = descriptor
+                    .with_metadata_entry("model", model.clone())
+                    .with_metadata_entry("base_model", model.clone());
+            }
+            if let Some(node_id) = host_node_id.as_ref() {
+                descriptor = descriptor.with_metadata_entry("host_node_id", node_id.clone());
+            }
+            by_name.insert(public_name, descriptor);
+        }
+    }
 }
 
 // ── Discovery surfaces ────────────────────────────────────────
@@ -475,7 +543,7 @@ mod tests {
         let mut reg = LocalAbilityRegistry::new();
         register(
             &mut reg,
-            || vec![d("device.observe.health"), d("device.fleet.list_agents")],
+            || vec![d("device.observe.health"), d("device.agent.list")],
             empty_registry_handle(),
             None,
         );
@@ -490,7 +558,7 @@ mod tests {
             .filter_map(|a| a["name"].as_str())
             .collect();
         assert!(names.contains(&"device.observe.health"));
-        assert!(names.contains(&"device.fleet.list_agents"));
+        assert!(names.contains(&"device.agent.list"));
     }
 
     #[test]
@@ -629,8 +697,8 @@ mod tests {
 
         let chat = abilities
             .iter()
-            .find(|a| a["name"] == "alice.chat")
-            .expect("alice.chat must surface from the live registry");
+            .find(|a| a["name"] == "chat")
+            .expect("agent-owned chat must surface as the local verb");
         // Description must be the manifest's description, not the
         // generic "no manifest schema" stub.
         let desc = chat["description"].as_str().unwrap_or_default();
@@ -658,8 +726,8 @@ mod tests {
 
         let subscribe = abilities
             .iter()
-            .find(|a| a["name"] == "alice.subscribe")
-            .expect("alice.subscribe must surface from the live registry");
+            .find(|a| a["name"] == "subscribe")
+            .expect("agent-owned subscribe must surface as the local verb");
         assert_eq!(
             subscribe["hints"]["streaming_only"],
             json!(true),
@@ -668,8 +736,8 @@ mod tests {
 
         let legacy = abilities
             .iter()
-            .find(|a| a["name"] == "alice.legacy")
-            .expect("alice.legacy must surface from the live registry");
+            .find(|a| a["name"] == "legacy")
+            .expect("agent-owned fallback ability must surface as the local verb");
         // Legacy register path leaves the input schema empty —
         // synth falls back to the name-only stub.
         let legacy_desc = legacy["description"].as_str().unwrap_or_default();
@@ -681,6 +749,74 @@ mod tests {
     }
 
     #[test]
+    fn list_abilities_includes_hot_added_hosted_agent_from_local_agents_ura() {
+        use crate::persistence::config::{save_credentials, Credentials};
+        use crate::persistence::local_agents::{save, upsert_hosted_agent, LocalAgentsFile};
+        use crate::registry::agents::{save_agents, AgentEntry, AgentRegistry, AgentType};
+        use std::sync::OnceLock;
+
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        save_credentials(&Credentials {
+            node_id: "dev-1".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "axon://hub.test:50051".to_string(),
+            tenant_id: "test-realm".to_string(),
+            ..Default::default()
+        })
+        .expect("seed credentials");
+
+        let mut local = LocalAgentsFile {
+            host_device_agent_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
+            hosted_agents: Vec::new(),
+        };
+        upsert_hosted_agent(
+            &mut local,
+            "llm",
+            "alice",
+            "easynet:///r/test-realm/agent/user-1.alice",
+        );
+        save(&local).expect("seed local-agents.json");
+
+        let mut agents = AgentRegistry::default();
+        agents.agents.insert(
+            "alice".to_string(),
+            AgentEntry::new(AgentType::ClaudeCode, Some("sonnet".to_string())),
+        );
+        save_agents(&agents).expect("seed agents.json");
+
+        let mut reg = LocalAbilityRegistry::new();
+        let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
+        handle
+            .set(Arc::new(LocalAbilityRegistry::new()))
+            .expect("set empty live registry");
+
+        register(&mut reg, Vec::new, handle, Some("user-1".to_string()));
+        let handler = reg.get_rpc(ABILITY_LIST_ABILITIES).unwrap();
+        let resp = handler(json!({})).unwrap();
+        let abilities = resp["abilities"].as_array().unwrap();
+        let chat = abilities
+            .iter()
+            .find(|a| a["name"] == "chat")
+            .expect("hot-added hosted agent chat must appear in meta.list_abilities");
+
+        assert_eq!(
+            chat["owner_agent_ura"],
+            "easynet:///r/test-realm/agent/user-1.alice"
+        );
+        assert_eq!(chat["metadata"]["host_node_id"], "dev-1");
+        assert_eq!(chat["metadata"]["runtime"], "claude-code");
+        assert_eq!(chat["metadata"]["model"], "sonnet");
+        assert_eq!(
+            chat["description"],
+            crate::core::ability_spec::default_chat_manifest().description()
+        );
+        assert!(
+            chat["schema_summary"]["input"]["properties"]["prompt"].is_object(),
+            "chat descriptor must carry the manifest input schema: {chat}"
+        );
+    }
+
+    #[test]
     fn describe_buckets_abilities_by_namespace() {
         let mut reg = LocalAbilityRegistry::new();
         register(
@@ -688,8 +824,8 @@ mod tests {
             || {
                 vec![
                     d("device.observe.health"),
-                    d("device.fleet.list_agents"),
-                    d("device.fleet.list_sessions"),
+                    d("device.agent.list"),
+                    d("device.session.list"),
                     d("device.consent.subscribe"),
                 ]
             },
@@ -704,9 +840,9 @@ mod tests {
             .unwrap();
         // Post-M3 every system verb is partitioned under `device.*`,
         // so the namespace summary buckets all 4 under "device".
-        // The split into fleet / observe / consent is preserved as
-        // the SECOND dotted segment but `by_namespace` keys on the
-        // first segment by spec.
+        // Device-hosted verbs are grouped under the first segment by
+        // spec, so the second segment remains only a functional family
+        // hint such as agent, observe, session, or skill.
         assert_eq!(by_ns["device"], 4);
     }
 

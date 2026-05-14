@@ -58,7 +58,7 @@ pub struct ApiKeyEntry {
     /// Full sha256(token) hex — what we compare against on auth.
     pub token_hash: String,
     /// User URA the bearer authenticates as.
-    pub user_uri: String,
+    pub user_ura: String,
     pub label: Option<String>,
     pub created_at: u64,
     pub revoked_at: Option<u64>,
@@ -120,7 +120,7 @@ fn now_secs() -> u64 {
 }
 
 fn realm() -> String {
-    std::env::var("EASYNET_PAGES_REALM").unwrap_or_else(|_| crate::uri::REALM_EASYNET.to_string())
+    std::env::var("EASYNET_PAGES_REALM").unwrap_or_else(|_| crate::ura::REALM_EASYNET.to_string())
 }
 
 /// Mint a fresh API key. Returns the bearer token ONCE — the
@@ -139,7 +139,7 @@ pub fn handle_create(user: &str, args: Value) -> anyhow::Result<Value> {
     let entry = ApiKeyEntry {
         id_prefix: id[..12].to_string(),
         token_hash: hash_token(&token),
-        user_uri: format!("easynet:///r/{realm}/user/{user}", realm = realm()),
+        user_ura: crate::ura::user_ura(&realm(), user),
         label: label.clone(),
         created_at: now_secs(),
         revoked_at: None,
@@ -157,17 +157,14 @@ pub fn handle_create(user: &str, args: Value) -> anyhow::Result<Value> {
         // operator-visible listing only; the URA must carry the
         // full unguessable id so revocation by URA cannot collide
         // and so the URA itself functions as the capability.
-        format!(
-            "easynet:///r/{realm}/resource/api_key.{id}",
-            realm = realm(),
-        )
+        crate::ura::resource_dot_ura(&realm(), &format!("api_key.{id}"), "")
     };
 
     Ok(json!({
         "token":          token,                          // ONLY returned here
         "key_uri":        key_uri,
         "id_prefix":      entry.id_prefix,
-        "user_uri":       entry.user_uri,
+        "user_ura":       entry.user_ura,
         "label":          entry.label,
         "created_at":     entry.created_at,
         "warning":        "Save the token now. It is the only time we will show it.",
@@ -177,11 +174,11 @@ pub fn handle_create(user: &str, args: Value) -> anyhow::Result<Value> {
 /// List keys (without exposing tokens).
 pub fn handle_list(user: &str, _args: Value) -> anyhow::Result<Value> {
     let store = load_store();
-    let user_uri = format!("easynet:///r/{realm}/user/{user}", realm = realm());
+    let user_ura = crate::ura::user_ura(&realm(), user);
     let mine: Vec<_> = store
         .keys
         .iter()
-        .filter(|k| k.user_uri == user_uri)
+        .filter(|k| k.user_ura == user_ura)
         .map(|k| {
             json!({
                 "id_prefix":     k.id_prefix,
@@ -202,13 +199,13 @@ pub fn handle_revoke(user: &str, args: Value) -> anyhow::Result<Value> {
         .get("id_prefix")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("missing id_prefix"))?;
-    let user_uri = format!("easynet:///r/{realm}/user/{user}", realm = realm());
+    let user_ura = crate::ura::user_ura(&realm(), user);
 
     let _guard = STORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let mut store = load_store();
     let mut found = false;
     for k in store.keys.iter_mut() {
-        if k.id_prefix == id_prefix && k.user_uri == user_uri {
+        if k.id_prefix == id_prefix && k.user_ura == user_ura {
             if k.revoked_at.is_some() {
                 anyhow::bail!("key {id_prefix} already revoked");
             }
@@ -236,11 +233,11 @@ pub fn resolve_token(token: &str) -> anyhow::Result<(String, String)> {
                 anyhow::bail!("api key revoked");
             }
             k.last_used_at = Some(now_secs());
-            let user_uri = k.user_uri.clone();
+            let user_ura = k.user_ura.clone();
             let id_prefix = k.id_prefix.clone();
             // best-effort save (last_used update); failure is non-fatal
             let _ = save_store(&store);
-            return Ok((user_uri, id_prefix));
+            return Ok((user_ura, id_prefix));
         }
     }
     anyhow::bail!("api key not recognized");

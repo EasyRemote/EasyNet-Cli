@@ -106,9 +106,9 @@ impl<'a> HeartbeatTransport for ReconnectingHeartbeat<'a> {
         // failure (its standard contract), so an abilty-level
         // hub rejection still propagates here while a transient
         // dropped connection self-heals.
-        let device_uri = crate::uri::device_uri(&tenant, &node_id);
+        let device_uri = crate::ura::device_ura(&tenant, &node_id);
         self.bridge.with_bridge(|br| {
-            let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+            let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(
                 br,
                 device_uri.clone(),
             );
@@ -270,13 +270,13 @@ fn next_heartbeat_state<E: std::fmt::Display>(
 fn build_reregister_hook(tenant: String, node_id: String, _hostname: String) -> ReconnectHook {
     use std::rc::Rc;
     Rc::new(move |bridge: &DendriteBridge| -> AxonResult<()> {
-        let device_uri = crate::uri::device_uri(&tenant, &node_id);
-        let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+        let device_uri = crate::ura::device_ura(&tenant, &node_id);
+        let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(
             bridge,
             device_uri.clone(),
         );
         let args = crate::runtime::federation_client::AdvertiseAgentArgs {
-            agent_uri: device_uri.clone(),
+            agent_ura: device_uri.clone(),
             public_key_hex: String::new(),
             signing_authority:
                 crate::runtime::federation_client::AdvertisedSigningAuthority::SelfSigned,
@@ -349,9 +349,9 @@ pub fn run_daemon() -> anyhow::Result<()> {
     // logical scope.
     let realm = tenant.clone();
     let bootstrap_outcome = reconnecting.with_bridge(|br| {
-        let device_uri = crate::uri::device_uri(&tenant, &node_id);
+        let device_uri = crate::ura::device_ura(&tenant, &node_id);
         let invoker =
-            crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(br, device_uri);
+            crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(br, device_uri);
         let outcome = crate::runtime::publish::bootstrap_self_identity_via_runtime(
             &invoker, &tenant, &realm, &node_id,
         );
@@ -384,9 +384,9 @@ pub fn run_daemon() -> anyhow::Result<()> {
     // reconnecting bridge so a transient drop right before
     // shutdown still reaches the hub via one auto-reconnect.
     let reason = outcome.reason();
-    let device_uri = crate::uri::device_uri(&tenant, &node_id);
+    let device_uri = crate::ura::device_ura(&tenant, &node_id);
     let revoked = reconnecting.with_bridge(|br| {
-        let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_uri(
+        let invoker = crate::runtime::advertise::BridgeAbilityInvoker::with_caller_ura(
             br,
             device_uri.clone(),
         );
@@ -660,7 +660,7 @@ mod tests {
 
     #[test]
     fn loop_exits_on_node_specific_rejection() {
-        // Admin removes one node from a fleet. Only the affected node's
+        // Admin removes one node from a device set. Only the affected node's
         // daemon must exit; other nodes see their own id missing from the
         // rejected list and continue.
         let shutdown = ShutdownSignal::new();

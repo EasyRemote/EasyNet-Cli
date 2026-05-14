@@ -35,7 +35,7 @@ use super::user_binding_chain::{
     USER_BINDING_FRESHNESS_MS, USER_BINDING_NONCE_LEN,
 };
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
-use crate::uri::{parse_ura, URAKind};
+use crate::ura::{parse_ura, URAKind};
 
 fn b64_encode(bytes: &[u8]) -> String {
     use base64::engine::general_purpose::STANDARD;
@@ -157,7 +157,7 @@ pub fn handle_sign(handle: &KeyringHandle, args: Value) -> Result<Value> {
 /// **PR-N4 commit 2/N**. `device.keyring.federate_user_identity_token`
 /// ability handler. Realm A's daemon raises a `UserBindingToken`
 /// destined for `target_realm` (= the realm B the user wants to be
-/// recognised on). The token's `source_realm` + `source_user_uri`
+/// recognised on). The token's `source_realm` + `source_user_ura`
 /// are taken from the daemon's bound device-subject; the
 /// `source_user_pubkey` is the daemon's `agent_signing` entry's
 /// public key under the RFC-002 single-key model. The token is
@@ -189,15 +189,15 @@ pub fn handle_federate_user_identity_token(handle: &KeyringHandle, args: Value) 
     // key (purpose=agent_signing) is the daemon's own backend
     // identity, and that's the same key the consuming realm
     // resolves via FederatedKeyResolver / federation.resolve_key.
-    let source_user_uri = handle.device_subject().ok_or_else(|| {
+    let source_user_ura = handle.device_subject().ok_or_else(|| {
         anyhow!(
             "daemon has no bound device-subject; \
              call device.keyring.bind_subject before raising user binding tokens"
         )
     })?;
-    let source_realm = parse_realm_from_user_uri(&source_user_uri).ok_or_else(|| {
+    let source_realm = parse_realm_from_user_ura(&source_user_ura).ok_or_else(|| {
         anyhow!(
-            "device-subject {source_user_uri:?} is not a canonical \
+            "device-subject {source_user_ura:?} is not a canonical \
              easynet:///r/<realm>/user/<id> URI"
         )
     })?;
@@ -241,7 +241,7 @@ pub fn handle_federate_user_identity_token(handle: &KeyringHandle, args: Value) 
 
     let mut token = UserBindingToken::new_unsigned(
         source_realm.to_string(),
-        source_user_uri.clone(),
+        source_user_ura.clone(),
         source_user_pubkey,
         target_realm,
         issued_at_ms,
@@ -262,7 +262,7 @@ pub fn handle_federate_user_identity_token(handle: &KeyringHandle, args: Value) 
 /// malformed or non-user shape. Inlined here rather than imported from
 /// `services::axon_serve` to keep the keyring layer free of an
 /// `axon-pb` feature dependency.
-fn parse_realm_from_user_uri(uri: &str) -> Option<String> {
+fn parse_realm_from_user_ura(uri: &str) -> Option<String> {
     let parsed = parse_ura(uri).ok()?;
     (parsed.kind == URAKind::User).then_some(parsed.realm)
 }
@@ -273,7 +273,7 @@ fn parse_realm_from_user_uri(uri: &str) -> Option<String> {
 /// issued by realm A. On success, a `FederatedUserBinding` row
 /// is written to the daemon's federated bindings store —
 /// subsequent cross-realm discovery / device-listing surfaces
-/// can then match `(source_realm, source_user_uri) →
+/// can then match `(source_realm, source_user_ura) →
 /// local_user_id` to filter the user's devices across realms.
 ///
 /// Four-check verify chain per spec §commit 3/N (in evaluation
@@ -307,7 +307,7 @@ fn parse_realm_from_user_uri(uri: &str) -> Option<String> {
 /// returns: {
 ///   "binding_recorded": true,
 ///   "source_realm": "<realm-a>",
-///   "source_user_uri": "<...>",
+///   "source_user_ura": "<...>",
 ///   "local_user_id": "<...>",
 /// }
 /// ```
@@ -378,7 +378,7 @@ pub fn handle_consume_federate_user_token(
     // All checks passed — record.
     let binding = FederatedUserBinding {
         source_realm: token.source_realm.clone(),
-        source_user_uri: token.source_user_uri.clone(),
+        source_user_ura: token.source_user_ura.clone(),
         source_user_pubkey_b64: b64_encode(&token.source_user_pubkey),
         local_user_id: local_user_id.clone(),
         bound_at_unix_ms: i64::try_from(now_ms).unwrap_or(i64::MAX),
@@ -388,7 +388,7 @@ pub fn handle_consume_federate_user_token(
     Ok(json!({
         "binding_recorded": true,
         "source_realm":     token.source_realm,
-        "source_user_uri":  token.source_user_uri,
+        "source_user_ura":  token.source_user_ura,
         "local_user_id":    local_user_id,
     }))
 }
@@ -681,7 +681,7 @@ mod tests {
         let token = &resp["token"];
         assert_eq!(token["source_realm"], json!("realm-a"));
         assert_eq!(
-            token["source_user_uri"],
+            token["source_user_ura"],
             json!("easynet:///r/realm-a/user/user-c")
         );
         assert_eq!(token["target_realm"], json!("realm-b"));

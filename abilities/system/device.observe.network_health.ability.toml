@@ -1,6 +1,6 @@
 schema_version = "1"
 name = "device.observe.network_health"
-description = "Report the daemon's live network posture: local daemon reachability, realm-directory reachability, and direct observe.health probe status for each discovered peer device."
+description = "Report the daemon's live network posture: local daemon reachability, realm-directory reachability, and direct device.observe.health probe status for each discovered peer device."
 
 [input_schema]
 type = "object"

@@ -814,7 +814,7 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
     }
 
-    /// Stream-mode round-trip against `fleet.attach_session` with an
+    /// Stream-mode round-trip against `device.session.attach` with an
     /// unknown session id. The handler returns a `Snapshot::Snapshot`
     /// with zero history frames; the daemon side must (a) emit a
     /// snapshot envelope (frames=[]) — actually skipped because we
@@ -843,7 +843,7 @@ mod tests {
         let mut client = UnixStream::connect(&socket_path).await.unwrap();
         let req_value = json!({
             "mode": "stream",
-            "tool_name": "device.fleet.attach_session",
+            "tool_name": "device.session.attach",
             "function_name": "",
             "arguments_b64": base64::engine::general_purpose::STANDARD
                 .encode(b"{\"session_id\":\"nonexistent\"}"),

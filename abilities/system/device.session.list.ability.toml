@@ -1,0 +1,10 @@
+schema_version = "1"
+name = "device.session.list"
+description = "List sessions known to this daemon. Default returns active and recently-terminated runs; pass `include_terminated: false` to filter to active only."
+
+[input_schema]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties.include_terminated]
+type = "boolean"

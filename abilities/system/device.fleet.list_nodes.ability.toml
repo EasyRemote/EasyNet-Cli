@@ -1,7 +1,0 @@
-schema_version = "1"
-name = "device.fleet.list_nodes"
-description = "List device nodes visible from this daemon. The handler resolves the realm directory through federation.resolve and then directly probes each discovered device-profile Agent with observe.health, so callers can distinguish a local-only view, a directory-only view, and a directly reachable peer."
-
-[input_schema]
-type = "object"
-additionalProperties = false

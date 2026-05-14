@@ -89,7 +89,7 @@ fn inputs<'a>(creds: &'a Credentials, keyring: &'a Arc<KeyringHandle>) -> Federa
 }
 
 /// Recording invoker that emulates a hub's `federation.forward_invoke`
-/// behaviour. Captures the `(resource_uri, payload_json)` pair the
+/// behaviour. Captures the `(resource_ura, payload_json)` pair the
 /// CLI sends, asserts shape invariants, then synthesizes the
 /// production-shaped receipt envelope so `forward_invoke`'s
 /// unwrapping code runs unchanged.
@@ -120,7 +120,7 @@ impl AbilityInvoker for HubFake {
     fn invoke_ability(
         &self,
         tenant_id: &str,
-        resource_uri: &str,
+        resource_ura: &str,
         payload_json: Value,
     ) -> Result<Value, String> {
         // Pin the invariants the CLI's `forward_invoke` depends on.
@@ -129,8 +129,8 @@ impl AbilityInvoker for HubFake {
             "tenant_id must be set for forward_invoke calls"
         );
         assert!(
-            resource_uri.contains("federation.forward_invoke"),
-            "BridgeForwardInvoker must target federation.forward_invoke; got {resource_uri}"
+            resource_ura.contains("federation.forward_invoke"),
+            "BridgeForwardInvoker must target federation.forward_invoke; got {resource_ura}"
         );
 
         // Run the user-supplied handler over the encoded args, then
@@ -149,7 +149,7 @@ impl AbilityInvoker for HubFake {
 
         self.captures
             .borrow_mut()
-            .push((resource_uri.to_string(), payload_json.clone()));
+            .push((resource_ura.to_string(), payload_json.clone()));
 
         // Return the production wire envelope:
         //   `BridgeAbilityInvoker.ability_call_raw` → `{result_json:
@@ -185,12 +185,12 @@ fn forward_invoke_carries_args_byte_identical_through_cli_pipeline() {
         json!({"echoed": reversed, "from": "pi"})
     });
 
-    let target_uri = "easynet:///r/silan.localhost/device/pi-rasp";
+    let target_ura = "easynet:///r/silan.localhost/device/pi-rasp";
     let receipt = forward_invoke(
         &hub,
         "silan.localhost",
         "silan.localhost",
-        target_uri,
+        target_ura,
         "chat.echo",
         &json!({"message": "hello federation"}),
     )
@@ -213,7 +213,7 @@ fn forward_invoke_carries_args_byte_identical_through_cli_pipeline() {
         uri == "easynet:///r/silan.localhost/ability/hub.federation.forward_invoke",
         "URI shape: {uri}"
     );
-    assert_eq!(payload["target_uri"], target_uri);
+    assert_eq!(payload["target_ura"], target_ura);
     assert_eq!(payload["ability_name"], "chat.echo");
     // `function_name` is `skip_serializing_if = String::is_empty` in
     // ForwardInvokeArgs, so an empty value is omitted from the JSON

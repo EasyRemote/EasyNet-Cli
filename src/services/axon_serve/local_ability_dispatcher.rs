@@ -48,7 +48,9 @@ use crate::pb::axon::v1::InvokeBidiUp;
 use crate::pb::axon::v1::{BinaryChunk, InvokeBidiDown};
 use crate::runtime::ability_dispatch::AbilityDispatcher;
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
-use crate::services::axon_serve::invoke_remote_initiator::{call_id_hex, SessionDispatch};
+use crate::services::axon_serve::invoke_remote_initiator::{
+    call_id_hex, SessionContentEnvelope, SessionDispatch,
+};
 use crate::services::axon_serve::session_initiator::{
     SessionDispatchError, SessionFrameDispatcher, SessionUpSender, SESSION_STREAM_ID,
 };
@@ -77,7 +79,7 @@ pub struct LocalAbilityDispatcher {
     escalation_correlation:
         Option<Arc<crate::services::axon_serve::session_escalation::EscalationCorrelation>>,
     /// Active same-hub remote bidi sessions keyed by dispatcher
-    /// call_id. Today this is only used for `fleet.file_transfer`:
+    /// call_id. Today this is only used for `device.fs.transfer`:
     /// hub opens the local bidi on the device, then subsequent
     /// `SessionDispatch::BidiInput` frames route through this table.
     remote_bidi_sessions: Arc<Mutex<HashMap<u64, mpsc::Sender<Value>>>>,
@@ -175,6 +177,32 @@ impl LocalAbilityDispatcher {
         }
     }
 
+    fn validate_session_args_content(
+        ability: &str,
+        content: &SessionContentEnvelope,
+    ) -> Result<(), String> {
+        if content.is_encrypted() {
+            return Err(format!(
+                "<self>.session: ability `{ability}` received encrypted args \
+                 (encryption={}, key_id={:?}) but no session decryptor is wired",
+                content.encryption, content.key_id
+            ));
+        }
+        if !content.content_type.is_empty() && content.content_type != "application/json" {
+            return Err(format!(
+                "<self>.session: ability `{ability}` received unsupported args content_type {:?}",
+                content.content_type
+            ));
+        }
+        if !content.encoding.is_empty() && content.encoding != "identity" {
+            return Err(format!(
+                "<self>.session: ability `{ability}` received unsupported args encoding {:?}",
+                content.encoding
+            ));
+        }
+        Ok(())
+    }
+
     fn map_remote_file_transfer_output(
         call_id: u64,
         value: &Value,
@@ -250,6 +278,7 @@ impl LocalAbilityDispatcher {
         call_id: u64,
         ability: &str,
         args: Vec<u8>,
+        args_content_envelope: SessionContentEnvelope,
         outbound: &SessionUpSender,
     ) -> Result<(), SessionDispatchError> {
         if ability != crate::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER {
@@ -259,6 +288,14 @@ impl LocalAbilityDispatcher {
                     call_id,
                     format!("remote bidi ability `{ability}` is not wired on <self>.session"),
                 ),
+            )
+            .await;
+        }
+
+        if let Err(reason) = Self::validate_session_args_content(ability, &args_content_envelope) {
+            return Self::send_dispatch_up(
+                outbound,
+                &Self::file_transfer_terminal_error(call_id, reason),
             )
             .await;
         }
@@ -469,23 +506,25 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
         // so a down-stream Result is meaningless; ignore
         // (matches prior staging behaviour). `Request` frames
         // are device → hub and never appear here.
-        let (call_id, ability, args) = match dispatch {
+        let (call_id, ability, args, args_content_envelope) = match dispatch {
             SessionDispatch::Dispatch {
                 call_id,
                 ability,
                 args,
+                args_content_envelope,
             } => {
                 eprintln!(
                     "[local-ability-dispatcher] received Dispatch frame \
                      call_id={call_id} ability={ability} args_bytes={}",
                     args.len()
                 );
-                (call_id, ability, args)
+                (call_id, ability, args, args_content_envelope)
             }
             SessionDispatch::BidiOpen {
                 call_id,
                 ability,
                 args,
+                args_content_envelope,
             } => {
                 eprintln!(
                     "[local-ability-dispatcher] received BidiOpen frame \
@@ -493,7 +532,13 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
                     args.len()
                 );
                 return self
-                    .open_remote_file_transfer_bidi(call_id, &ability, args, outbound)
+                    .open_remote_file_transfer_bidi(
+                        call_id,
+                        &ability,
+                        args,
+                        args_content_envelope,
+                        outbound,
+                    )
                     .await;
             }
             SessionDispatch::BidiInput {
@@ -535,75 +580,86 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
             }
         };
 
-        let result = match serde_json::from_slice::<serde_json::Value>(&args) {
-            Ok(normalized_args) => {
-                // LB-60 Gap 5a: execute_local_rpc invokes ability
-                // handlers on the calling thread; AXIOM Tier 2.5
-                // handlers like process.exec / shell.run wrap an
-                // async `execute()` call in `Handle::current().
-                // block_on()` on the assumption that the
-                // ability registry's `register_rpc` runs them
-                // inside `tokio::task::spawn_blocking`. That
-                // invariant holds for direct CLI invocations,
-                // but the cross-hub forward_invoke path (LB-57
-                // Option A) drives `handle_down` from a tokio
-                // worker thread — `block_on` from there panics
-                // ("Cannot start a runtime from within a
-                // runtime"). Wrapping here keeps every handler
-                // on the blocking pool regardless of the
-                // dispatch entrypoint without changing the
-                // handler API.
-                let dispatcher = Arc::clone(&self.dispatcher);
-                let ability_for_blocking = ability.clone();
-                let join = tokio::task::spawn_blocking(move || {
-                    Self::execute_local_rpc_blocking(
-                        &dispatcher,
-                        &ability_for_blocking,
-                        normalized_args,
-                    )
-                })
-                .await;
-                match join {
-                    Ok(Ok(value)) => Ok(value),
-                    Ok(Err(err)) => Err(err),
-                    Err(join_err) if join_err.is_panic() => {
-                        // LB-60 Gap 5b: handler panic must surface
-                        // as a typed Result error frame instead of
-                        // tearing down the session bidi. Stringify
-                        // the panic so downstream operators can
-                        // grep the cause.
-                        let panic_msg = match join_err.try_into_panic() {
-                            Ok(payload) => panic_payload_to_string(payload),
-                            Err(_) => "panic payload not recoverable".to_string(),
-                        };
-                        Ok(SessionDispatch::Result {
+        let result = if let Err(reason) =
+            Self::validate_session_args_content(&ability, &args_content_envelope)
+        {
+            Ok(SessionDispatch::Result {
+                call_id,
+                payload: Vec::new(),
+                terminal: true,
+                error: Some(reason),
+            })
+        } else {
+            match serde_json::from_slice::<serde_json::Value>(&args) {
+                Ok(normalized_args) => {
+                    // LB-60 Gap 5a: execute_local_rpc invokes ability
+                    // handlers on the calling thread; AXIOM Tier 2.5
+                    // handlers like process.exec / shell.run wrap an
+                    // async `execute()` call in `Handle::current().
+                    // block_on()` on the assumption that the
+                    // ability registry's `register_rpc` runs them
+                    // inside `tokio::task::spawn_blocking`. That
+                    // invariant holds for direct CLI invocations,
+                    // but the cross-hub forward_invoke path (LB-57
+                    // Option A) drives `handle_down` from a tokio
+                    // worker thread — `block_on` from there panics
+                    // ("Cannot start a runtime from within a
+                    // runtime"). Wrapping here keeps every handler
+                    // on the blocking pool regardless of the
+                    // dispatch entrypoint without changing the
+                    // handler API.
+                    let dispatcher = Arc::clone(&self.dispatcher);
+                    let ability_for_blocking = ability.clone();
+                    let join = tokio::task::spawn_blocking(move || {
+                        Self::execute_local_rpc_blocking(
+                            &dispatcher,
+                            &ability_for_blocking,
+                            normalized_args,
+                        )
+                    })
+                    .await;
+                    match join {
+                        Ok(Ok(value)) => Ok(value),
+                        Ok(Err(err)) => Err(err),
+                        Err(join_err) if join_err.is_panic() => {
+                            // LB-60 Gap 5b: handler panic must surface
+                            // as a typed Result error frame instead of
+                            // tearing down the session bidi. Stringify
+                            // the panic so downstream operators can
+                            // grep the cause.
+                            let panic_msg = match join_err.try_into_panic() {
+                                Ok(payload) => panic_payload_to_string(payload),
+                                Err(_) => "panic payload not recoverable".to_string(),
+                            };
+                            Ok(SessionDispatch::Result {
+                                call_id,
+                                payload: Vec::new(),
+                                terminal: true,
+                                error: Some(format!(
+                                    "<self>.session: ability `{ability}` panicked: {panic_msg}"
+                                )),
+                            })
+                        }
+                        Err(join_err) => Ok(SessionDispatch::Result {
                             call_id,
                             payload: Vec::new(),
                             terminal: true,
                             error: Some(format!(
-                                "<self>.session: ability `{ability}` panicked: {panic_msg}"
-                            )),
-                        })
-                    }
-                    Err(join_err) => Ok(SessionDispatch::Result {
-                        call_id,
-                        payload: Vec::new(),
-                        terminal: true,
-                        error: Some(format!(
-                            "<self>.session: ability `{ability}` execution task \
+                                "<self>.session: ability `{ability}` execution task \
                              cancelled or aborted: {join_err}"
-                        )),
-                    }),
+                            )),
+                        }),
+                    }
                 }
+                Err(err) => Ok(SessionDispatch::Result {
+                    call_id,
+                    payload: Vec::new(),
+                    terminal: true,
+                    error: Some(format!(
+                        "<self>.session: ability `{ability}` received non-JSON args bytes: {err}"
+                    )),
+                }),
             }
-            Err(err) => Ok(SessionDispatch::Result {
-                call_id,
-                payload: Vec::new(),
-                terminal: true,
-                error: Some(format!(
-                    "<self>.session: ability `{ability}` received non-JSON args bytes: {err}"
-                )),
-            }),
         }?;
 
         let result = match result {
@@ -704,6 +760,7 @@ mod tests {
             call_id,
             ability: ability.to_string(),
             args,
+            args_content_envelope: SessionContentEnvelope::plaintext_json(),
         };
         let payload = serde_json::to_vec(&dispatch).expect("encode dispatch");
         InvokeBidiDown {
@@ -938,6 +995,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn encrypted_dispatch_args_fail_closed_without_local_decryptor() {
+        let disp = LocalAbilityDispatcher::new(build_dispatcher());
+        let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
+        let session_tx = SessionUpSender::new(tx);
+
+        disp.handle_down(
+            session_frame(SessionDispatch::Dispatch {
+                call_id: 19,
+                ability: "test.echo".to_string(),
+                args: b"ciphertext".to_vec(),
+                args_content_envelope: SessionContentEnvelope {
+                    content_type: "application/json".to_string(),
+                    encoding: "identity".to_string(),
+                    schema_ura: String::new(),
+                    encryption: 1,
+                    key_id: "session-key-1".to_string(),
+                },
+            }),
+            &session_tx,
+        )
+        .await
+        .expect("unsupported encrypted args become terminal result");
+
+        let reply = rx.recv().await.expect("reply produced");
+        let chunk = match reply.payload {
+            Some(UpPayload::BinaryChunk(c)) => c,
+            other => panic!("expected BinaryChunk reply, got: {other:?}"),
+        };
+        let parsed: SessionDispatch = serde_json::from_slice(&chunk.data).expect("Result decodes");
+        match parsed {
+            SessionDispatch::Result {
+                call_id,
+                terminal,
+                error,
+                payload,
+            } => {
+                assert_eq!(call_id, 19);
+                assert!(terminal);
+                assert!(payload.is_empty());
+                let err = error.expect("encrypted dispatch must fail closed");
+                assert!(err.contains("encrypted args"));
+                assert!(
+                    !err.contains("non-JSON"),
+                    "encrypted bytes must not be parsed as plaintext JSON"
+                );
+            }
+            other => panic!("expected SessionDispatch::Result, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn down_stream_result_frame_is_ignored() {
         // SessionDispatch::Result on the down stream is a wire
         // mistake (Results flow up, not down). The dispatcher
@@ -1039,6 +1147,7 @@ mod tests {
             Arc::new(DiscussService::new()),
             Arc::new(ScheduleService::new()),
             Arc::new(LoopService::new()),
+            None,
             &Default::default(),
             Arc::new(Vec::new()),
             crate::runtime::agents::PagesIdentity::default(),
@@ -1125,6 +1234,7 @@ mod tests {
                     "path": target.to_string_lossy(),
                 }))
                 .expect("encode args"),
+                args_content_envelope: SessionContentEnvelope::plaintext_json(),
             }),
             &session_tx,
         )
@@ -1204,6 +1314,7 @@ mod tests {
                     "path": target.to_string_lossy(),
                 }))
                 .expect("encode args"),
+                args_content_envelope: SessionContentEnvelope::plaintext_json(),
             }),
             &session_tx,
         )

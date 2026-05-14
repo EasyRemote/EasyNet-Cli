@@ -73,7 +73,7 @@ pub trait ScreenSnapshotBackend: Send + Sync {
 // ── XcapBackend (real) ───────────────────────────────────────
 
 /// xcap-backed real backend. v1 captures the primary monitor
-/// regardless of which `display` resource_uri was passed — the
+/// regardless of which `display` resource_ura was passed — the
 /// daemon's first-boot scan mints one `display` entry per
 /// physical monitor and the dispatcher routes by URA, but the
 /// platform layer doesn't yet plumb monitor IDs through (xcap
@@ -223,7 +223,7 @@ fn handler(
     }
     let subject = env.subject.as_ref().ok_or_else(|| {
         anyhow::anyhow!(
-            "{ABILITY_SCREEN_SNAPSHOT}: subject required (resource_uri of \
+            "{ABILITY_SCREEN_SNAPSHOT}: subject required (resource_ura of \
              a display/application/window); reason={REASON_SUBJECT_REQUIRED}"
         )
     })?;

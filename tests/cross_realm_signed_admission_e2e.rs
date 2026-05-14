@@ -28,7 +28,7 @@
 //      federation client is an in-process forwarder into daemon A,
 //      and whose `federated_peers = {realm-a → "in-process-A"}`.
 //   4. Test signs an envelope for ability `self.echo` with caller =
-//      device-A's URI, callee = daemon B's URI.
+//      device-A's URA, callee = daemon B's URA.
 //   5. Test calls `daemon_b.invoke(signed_request)`.
 //   6. Daemon B's admission gate runs strict path → FederatedKey-
 //      Resolver:
@@ -68,7 +68,7 @@ use sha2::{Digest, Sha256};
 
 use easynet_axon::invocation::axiom::{
     canonical_invocation_bytes, AgentIdentity as AxiomAgentIdentity, CausalContext,
-    InvocationEnvelope, SubjectIdentity, UriProfile,
+    InvocationEnvelope, SubjectIdentity, UraProfile,
 };
 use easynet_cli::pb::axon::v1::invocation_server::Invocation;
 use easynet_cli::pb::axon::v1::{
@@ -89,15 +89,15 @@ use easynet_cli::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, 
 ///
 /// The test wires daemon A as the forwarding target and registers
 /// the resulting client under `federated_peers["realm-a"] =
-/// "in-process-A"`. The hub URI string is opaque to the resolver
+/// "in-process-A"`. The hub URA string is opaque to the resolver
 /// (it just looks for the key); the forwarder ignores it because
 /// there's only one peer in the test fixture.
 ///
-/// The forwarder also stamps daemon A's loopback URI as the request
+/// The forwarder also stamps daemon A's loopback URA as the request
 /// envelope's caller. Production cross-hub dialling sends a signed
 /// envelope from one hub's identity to another (PR-N5 territory);
 /// in-process here we use loopback bypass — daemon A's admission
-/// recognises its own URI as `caller.uri` and skips the membership
+/// recognises its own URA as `caller.ura` and skips the membership
 /// gate, exactly the same fast-path operators see when a daemon
 /// dispatches an ability against itself.
 struct InProcessForwarder {
@@ -112,20 +112,20 @@ impl FederationClient for InProcessForwarder {
         _target_hub: &HubUri,
         mut request: InvokeRequest,
     ) -> Result<InvokeResponse, FederationClientError> {
-        // Stamp loopback: daemon A admits its own URI without
+        // Stamp loopback: daemon A admits its own URA without
         // running the strict pipeline, so the resolve_key lookup
         // proceeds straight to the trust-anchor read.
         let loopback_envelope = Envelope {
             caller: Some(PbAgentIdentity {
-                uri: self.peer_loopback_uri.clone(),
+                ura: self.peer_loopback_uri.clone(),
                 profile: "easynet-strict-v2".to_string(),
             }),
             callee: Some(PbAgentIdentity {
-                uri: self.peer_loopback_uri.clone(),
+                ura: self.peer_loopback_uri.clone(),
                 profile: "easynet-strict-v2".to_string(),
             }),
             subject: Some(PbSubjectIdentity {
-                uri: self.peer_loopback_uri.clone(),
+                ura: self.peer_loopback_uri.clone(),
                 profile: "easynet-strict-v2".to_string(),
             }),
             ..Envelope::default()
@@ -144,8 +144,8 @@ impl FederationClient for InProcessForwarder {
 }
 
 /// Build a signed `InvokeRequest` where:
-/// - caller URI is `caller_uri`
-/// - callee/subject URI is `callee_uri`
+/// - caller URA is `caller_ura`
+/// - callee/subject URA is `callee_ura`
 /// - ability is `ability`, args is `args`
 /// - the envelope's `caller_signature` is a real Ed25519 signature
 ///   over the canonical invocation bytes computed by axon's encoder
@@ -153,8 +153,8 @@ impl FederationClient for InProcessForwarder {
 /// Mirrors the production CLI bridge's signing path so admission
 /// verifies against bytes the test really signed.
 fn signed_request(
-    caller_uri: &str,
-    callee_uri: &str,
+    caller_ura: &str,
+    callee_ura: &str,
     ability: &str,
     args: &[u8],
     signing_key: &SigningKey,
@@ -165,9 +165,9 @@ fn signed_request(
     let args_digest: [u8; 32] = hasher.finalize().into();
 
     let axiom_env = InvocationEnvelope {
-        caller: AxiomAgentIdentity::new(caller_uri, UriProfile::EasynetStrictV2),
-        callee: AxiomAgentIdentity::new(callee_uri, UriProfile::EasynetStrictV2),
-        subject: SubjectIdentity::new(callee_uri, UriProfile::EasynetStrictV2),
+        caller: AxiomAgentIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
+        callee: AxiomAgentIdentity::new(callee_ura, UraProfile::EasynetStrictV2),
+        subject: SubjectIdentity::new(callee_ura, UraProfile::EasynetStrictV2),
         ability: ability.to_string(),
         args_digest,
         invocation_nonce: nonce,
@@ -178,15 +178,15 @@ fn signed_request(
 
     let envelope = Envelope {
         caller: Some(PbAgentIdentity {
-            uri: caller_uri.to_string(),
+            ura: caller_ura.to_string(),
             profile: "easynet-strict-v2".to_string(),
         }),
         callee: Some(PbAgentIdentity {
-            uri: callee_uri.to_string(),
+            ura: callee_ura.to_string(),
             profile: "easynet-strict-v2".to_string(),
         }),
         subject: Some(PbSubjectIdentity {
-            uri: callee_uri.to_string(),
+            ura: callee_ura.to_string(),
             profile: "easynet-strict-v2".to_string(),
         }),
         invocation_nonce: nonce.to_vec(),
@@ -210,9 +210,9 @@ fn signed_request(
 async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
     const REALM_A: &str = "realm-a";
     const REALM_B: &str = "realm-b";
-    const DEVICE_A_URI: &str = "easynet:///r/realm-a/device/device-A";
-    const DAEMON_B_URI: &str = "easynet:///r/realm-b/hub";
-    const PEER_HUB_URI: &str = "in-process-A";
+    const DEVICE_A_URA: &str = "easynet:///r/realm-a/device/device-A";
+    const DAEMON_B_URA: &str = "easynet:///r/realm-b/hub";
+    const PEER_HUB_URA: &str = "in-process-A";
 
     // ── Mint device-A's signing key ─────────────────────────────
     let device_a_key = SigningKey::from_bytes(&[0xA1u8; 32]);
@@ -222,7 +222,7 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
     let mut daemon_a_anchor_inner = RealmTrustAnchor::default();
     daemon_a_anchor_inner
         .append_agent(TrustedAgent {
-            agent_uri: DEVICE_A_URI.to_string(),
+            agent_ura: DEVICE_A_URA.to_string(),
             public_key_b64: device_a_pubkey_b64.clone(),
             role: TrustedAgentRole::Device,
             added_at_unix_ms: 1_714_492_800_000,
@@ -244,19 +244,19 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
     // ── Daemon B: empty trust + federated_peers → daemon A ──
     // Build the in-process forwarder, register it as B's
     // FederationClient, and stamp `federated_peers[realm-a] →
-    // PEER_HUB_URI` so the FederatedKeyResolver routes there for
+    // PEER_HUB_URA` so the FederatedKeyResolver routes there for
     // any caller in realm-a.
     let federation_client: Arc<dyn FederationClient> = Arc::new(InProcessForwarder {
         peer: Arc::clone(&daemon_a),
         peer_loopback_uri: "easynet:///r/realm-a/hub".to_string(),
     });
     let mut peers = std::collections::BTreeMap::new();
-    peers.insert(REALM_A.to_string(), PEER_HUB_URI.to_string());
+    peers.insert(REALM_A.to_string(), PEER_HUB_URA.to_string());
     let peers_cell = SharedFederatedPeers::new(peers);
 
     let daemon_b_admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
-        Some(DAEMON_B_URI.to_string()),
+        Some(DAEMON_B_URA.to_string()),
     )
     .with_federation(Arc::clone(&federation_client), peers_cell.clone());
     let daemon_b = DaemonInvocationService::new(
@@ -277,8 +277,8 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
     // success signal (admission succeeded; dispatch then fails for
     // an unrelated reason).
     let signed = signed_request(
-        DEVICE_A_URI,
-        DAEMON_B_URI,
+        DEVICE_A_URA,
+        DAEMON_B_URA,
         "self.echo",
         b"{}",
         &device_a_key,
@@ -328,13 +328,13 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
             .collect::<Vec<_>>()
     );
     let receipt = admitted[0];
-    let caller_uri = receipt
+    let caller_ura = receipt
         .caller_binding
         .as_ref()
         .expect("caller_binding present")
-        .uri
+        .ura
         .clone();
-    assert_eq!(caller_uri, DEVICE_A_URI);
+    assert_eq!(caller_ura, DEVICE_A_URA);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -342,11 +342,11 @@ async fn cross_realm_caller_with_no_federated_peer_entry_rejected() {
     // Counter-test: same shape as above but `federated_peers` is
     // empty. The FederatedKeyResolver must NOT dial (operator did
     // not opt into resolving realm-a). Admission rejects with
-    // `caller_signature_invalid` (the wire surface for "URI not
+    // `caller_signature_invalid` (the wire surface for "URA not
     // trusted").
     const REALM_B: &str = "realm-b";
-    const DEVICE_A_URI: &str = "easynet:///r/realm-a/device/device-A";
-    const DAEMON_B_URI: &str = "easynet:///r/realm-b/hub";
+    const DEVICE_A_URA: &str = "easynet:///r/realm-a/device/device-A";
+    const DAEMON_B_URA: &str = "easynet:///r/realm-b/hub";
 
     let device_a_key = SigningKey::from_bytes(&[0xB2u8; 32]);
 
@@ -371,7 +371,7 @@ async fn cross_realm_caller_with_no_federated_peer_entry_rejected() {
 
     let daemon_b_admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
-        Some(DAEMON_B_URI.to_string()),
+        Some(DAEMON_B_URA.to_string()),
     )
     .with_federation(federation_client, peers_cell);
     let daemon_b =
@@ -379,8 +379,8 @@ async fn cross_realm_caller_with_no_federated_peer_entry_rejected() {
             .with_session_realm(REALM_B);
 
     let signed = signed_request(
-        DEVICE_A_URI,
-        DAEMON_B_URI,
+        DEVICE_A_URA,
+        DAEMON_B_URA,
         "self.echo",
         b"{}",
         &device_a_key,
@@ -391,9 +391,9 @@ async fn cross_realm_caller_with_no_federated_peer_entry_rejected() {
         .invoke(tonic::Request::new(signed))
         .await
         .expect_err("must reject — no federated peer entry");
-    // The wire-stable reject reason for "URI not trusted" rolls up
+    // The wire-stable reject reason for "URA not trusted" rolls up
     // to `PermissionDenied` (the trust anchor membership gate)
-    // when the URI is missing locally and the resolver collapses to
+    // when the URA is missing locally and the resolver collapses to
     // local-only. INV-4 fail-closed by construction.
     assert_eq!(err.code(), tonic::Code::PermissionDenied);
 }
