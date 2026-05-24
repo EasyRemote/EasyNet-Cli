@@ -14,9 +14,10 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use console::style;
 use serde_json::Value;
+use std::time::Duration;
 
 use crate::core::agent_spec::{AgentSpec, RuntimeKind};
 use crate::facade::cli::mission_runs::{self, MissionRunOpts};
@@ -49,6 +50,8 @@ pub enum AgentAction {
     Prune(PruneArgs),
     /// List the abilities declared under `<agent-root>/abilities/`.
     Abilities(AbilitiesArgs),
+    /// Bind configured upstream MCP tools into one agent.
+    Mcp(McpArgs),
     /// Update fields of a registered agent in place. Currently
     /// supports `--model`. Mutates `agent.toml` + the registry
     /// row atomically; preserves label, abilities, skills, runs.
@@ -209,6 +212,96 @@ pub struct AbilitiesArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct McpArgs {
+    #[command(subcommand)]
+    pub action: McpAction,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum McpAction {
+    /// Add upstream MCP tools as deterministic abilities on an agent.
+    Add(McpAddArgs),
+}
+
+/// CLI adapter for [`crate::core::ability_spec::CostKind`].
+///
+/// **Why a separate enum.** `CostKind` lives in `core/`, which is the
+/// zero-dependency ontology layer — it must not pull in `clap`. So we
+/// mirror the four variants here as a clap-native `ValueEnum` and
+/// convert with `into_core()`. The two enums must stay in lockstep;
+/// `cost_kind_arg_round_trips_to_core_cost_kind` pins that invariant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CostKindArg {
+    Free,
+    ExternalMetered,
+    LlmMetered,
+    Unknown,
+}
+
+impl CostKindArg {
+    fn into_core(self) -> crate::core::ability_spec::CostKind {
+        use crate::core::ability_spec::CostKind;
+        match self {
+            CostKindArg::Free => CostKind::Free,
+            CostKindArg::ExternalMetered => CostKind::ExternalMetered,
+            CostKindArg::LlmMetered => CostKind::LlmMetered,
+            CostKindArg::Unknown => CostKind::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct McpAddArgs {
+    /// Registered agent name that will own the generated abilities.
+    pub name: String,
+    /// Optional upstream MCP server name from mcp_clients.json. Omit
+    /// to bind tools from every configured server.
+    #[arg(long)]
+    pub server: Option<String>,
+    /// Optional upstream tool name. Repeat to bind a subset. Omit to
+    /// bind every tool reported by the selected server(s).
+    #[arg(long = "tool")]
+    pub tools: Vec<String>,
+    /// Optional prefix for generated ability verbs. The default
+    /// produces names like `mcp_wikipedia__search`.
+    #[arg(long, default_value = "mcp")]
+    pub prefix: String,
+    /// Path to mcp_clients.json. Defaults to
+    /// `$EASYNET_HOME/mcp_clients.json` or `~/.easynet/mcp_clients.json`.
+    #[arg(long)]
+    pub config: Option<std::path::PathBuf>,
+    /// Print the manifests that would be written without touching
+    /// the agent workspace.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Replace an existing generated manifest when the target path
+    /// already exists.
+    #[arg(long)]
+    pub overwrite: bool,
+    /// Continue binding tools from other servers when one upstream
+    /// fails tools/list.
+    #[arg(long)]
+    pub skip_unreachable: bool,
+    /// Optional explicit cost bucket for every generated manifest.
+    /// When omitted the manifest is written without a `[cost]` table,
+    /// and the runtime's per-exec inference applies (`unknown` for
+    /// MCP-backed tools, per the honesty rule). Pass this when the
+    /// operator knows the upstream's real billing surface, so that
+    /// discovery / MCP descriptions stamp the truth rather than the
+    /// `cost not declared` placeholder.
+    #[arg(long, value_enum)]
+    pub cost_kind: Option<CostKindArg>,
+    /// Free-form human label that accompanies `--cost-kind`. Only
+    /// honoured when `--cost-kind` is also set; carrying a label
+    /// without a kind would write a half-formed `[cost]` table that
+    /// `AbilityManifest::validate` rejects. Example:
+    /// `--cost-kind external-metered --cost-label "Google Maps API
+    /// — $5 per 1000 requests"`.
+    #[arg(long, requires = "cost_kind")]
+    pub cost_label: Option<String>,
+}
+
+#[derive(Debug, Args)]
 pub struct SetArgs {
     /// Registered agent name (from `easynet agent list`).
     pub name: String,
@@ -249,6 +342,7 @@ pub fn run(args: AgentArgs) -> anyhow::Result<()> {
         AgentAction::Doctor(a) => run_doctor(a),
         AgentAction::Prune(a) => run_prune(a),
         AgentAction::Abilities(a) => run_abilities(a),
+        AgentAction::Mcp(a) => run_mcp(a),
         AgentAction::Set(a) => run_set(a),
         AgentAction::Publish(a) => run_publish(a),
         AgentAction::Refresh => run_refresh(),
@@ -2170,6 +2264,518 @@ fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn run_mcp(args: McpArgs) -> anyhow::Result<()> {
+    match args.action {
+        McpAction::Add(a) => run_mcp_add(a),
+    }
+}
+
+/// Top-level CLI entry. Each phase is delegated to a small,
+/// independently testable helper so this function reads as the
+/// product flow:
+///
+///   1. resolve the target agent + MCP config
+///   2. plan the manifests that should exist (no filesystem writes)
+///   3. validate the user's `--tool` selection against the plan
+///   4. materialise / dry-run the plans + render the operator summary
+fn run_mcp_add(args: McpAddArgs) -> anyhow::Result<()> {
+    let dir = open_registered_agent(&args.name)?;
+    let config_path = args.config.clone().unwrap_or_else(
+        crate::runtime::execution::mcp_client::McpClientService::default_config_path,
+    );
+    let svc = crate::runtime::execution::mcp_client::McpClientService::from_path(&config_path)?;
+
+    let declared_cost = build_cost_meta(args.cost_kind, args.cost_label.as_deref())?;
+    let plan = plan_mcp_additions(
+        &svc,
+        &config_path,
+        args.server.as_deref(),
+        &args.tools,
+        &args.prefix,
+        args.skip_unreachable,
+        declared_cost.as_ref(),
+    )?;
+    assert_tools_filter_satisfied(&args.tools, &plan.planned)?;
+
+    if plan.planned.is_empty() {
+        report_empty_plan(&plan.list_failures);
+        return Ok(());
+    }
+
+    let outcome = write_mcp_additions(&dir, &plan.planned, args.overwrite, args.dry_run)?;
+    report_write_outcome(&args.name, &dir, &plan, &outcome, args.dry_run);
+    Ok(())
+}
+
+/// Result of phase (2): the manifests we'd write and the per-upstream
+/// `tools/list` failures we tolerated via `--skip-unreachable`.
+#[derive(Debug, Default)]
+struct McpAdditionPlan {
+    planned: Vec<McpAbilityPlan>,
+    list_failures: Vec<String>,
+}
+
+/// Result of phase (4): per-plan disposition. `written` counts new
+/// files created; `skipped` counts plans whose target already held
+/// the same `(server, tool)` binding (idempotent re-runs).
+#[derive(Debug, Default)]
+struct McpAdditionOutcome {
+    written: usize,
+    skipped: usize,
+}
+
+/// Build the manifest plan for one `easynet agent mcp add` invocation.
+///
+/// Pure-ish: the only side effect is talking to `svc` (which itself
+/// reads the operator's `mcp_clients.json` config). No filesystem
+/// writes happen here — that's phase (4).
+/// Build the `CostMeta` value the manifest writer will stamp on every
+/// generated ability, or `None` when the operator did not pass
+/// `--cost-kind`. Folds the two flags into one structure here so the
+/// downstream pipeline only has to consider "declared / not declared",
+/// not the cartesian product.
+fn build_cost_meta(
+    cost_kind: Option<CostKindArg>,
+    cost_label: Option<&str>,
+) -> anyhow::Result<Option<crate::core::ability_spec::CostMeta>> {
+    use crate::core::ability_spec::CostMeta;
+    let Some(kind) = cost_kind else {
+        return Ok(None);
+    };
+    // Trimmed-empty labels are forbidden by `CostMeta::validate`, but
+    // the CLI surface lets a user pass `--cost-label ""` (or just
+    // whitespace) — translate that into "omitted" so it round-trips
+    // through validation rather than failing at write time.
+    let label = cost_label
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string);
+    let meta = CostMeta {
+        kind: kind.into_core(),
+        label,
+    };
+    Ok(Some(meta))
+}
+
+fn plan_mcp_additions(
+    svc: &crate::runtime::execution::mcp_client::McpClientService,
+    config_path: &std::path::Path,
+    server_filter: Option<&str>,
+    tool_filter: &[String],
+    prefix: &str,
+    skip_unreachable: bool,
+    declared_cost: Option<&crate::core::ability_spec::CostMeta>,
+) -> anyhow::Result<McpAdditionPlan> {
+    let selected_servers = select_mcp_servers(svc, server_filter)?;
+    if selected_servers.is_empty() {
+        anyhow::bail!(
+            "no MCP servers configured in {}; populate the file with at least one server entry first",
+            config_path.display()
+        );
+    }
+
+    let mut plan = McpAdditionPlan::default();
+    for server in selected_servers {
+        let listing = match mcp_rpc_blocking_timeout(
+            svc,
+            &server,
+            "tools/list",
+            serde_json::json!({}),
+            mcp_tools_list_timeout(),
+        ) {
+            Ok(v) => v,
+            Err(e) if skip_unreachable => {
+                plan.list_failures.push(format!("{server}: {e}"));
+                continue;
+            }
+            Err(e) => anyhow::bail!("{server}: tools/list failed: {e}"),
+        };
+        let tools = listing
+            .get("tools")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                anyhow::anyhow!("{server}: tools/list response missing `tools` array")
+            })?;
+        for tool in tools {
+            let Some(upstream_tool) = tool.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            if !tool_filter.is_empty() && !tool_filter.iter().any(|t| t == upstream_tool) {
+                continue;
+            }
+            let input_schema = normalize_mcp_input_schema(tool.get("inputSchema").cloned());
+            let description = tool
+                .get("description")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("Call MCP tool `{upstream_tool}` on `{server}`."));
+            let verb = generated_mcp_ability_name(prefix, &server, upstream_tool);
+            plan.planned.push(McpAbilityPlan {
+                server: server.clone(),
+                tool: upstream_tool.to_string(),
+                verb,
+                description,
+                input_schema,
+                cost: declared_cost.cloned(),
+            });
+        }
+    }
+    Ok(plan)
+}
+
+/// Phase (3): every `--tool` the operator named must resolve into
+/// the plan. Missing tools indicate a typo or a misaligned upstream
+/// catalogue; failing loud here beats silently materialising fewer
+/// abilities than the operator asked for.
+fn assert_tools_filter_satisfied(
+    tool_filter: &[String],
+    planned: &[McpAbilityPlan],
+) -> anyhow::Result<()> {
+    if tool_filter.is_empty() {
+        return Ok(());
+    }
+    let found: std::collections::BTreeSet<&str> = planned.iter().map(|p| p.tool.as_str()).collect();
+    let missing: Vec<&str> = tool_filter
+        .iter()
+        .map(String::as_str)
+        .filter(|tool| !found.contains(tool))
+        .collect();
+    if !missing.is_empty() {
+        anyhow::bail!(
+            "requested MCP tool(s) not found in selected server set: {}",
+            missing.join(", ")
+        );
+    }
+    Ok(())
+}
+
+/// Phase (4): turn each plan into a manifest TOML and either print
+/// it (dry-run) or atomically write it to the agent's abilities
+/// directory. Returns the materialisation outcome so the caller can
+/// render the operator summary.
+fn write_mcp_additions(
+    dir: &AgentDirectory,
+    planned: &[McpAbilityPlan],
+    overwrite: bool,
+    dry_run: bool,
+) -> anyhow::Result<McpAdditionOutcome> {
+    if !dry_run {
+        std::fs::create_dir_all(dir.abilities_dir()).map_err(|e| {
+            anyhow::anyhow!(
+                "create abilities directory {}: {e}",
+                dir.abilities_dir().display()
+            )
+        })?;
+    }
+
+    let mut outcome = McpAdditionOutcome::default();
+    for plan in planned {
+        let manifest = mcp_manifest_for(plan)?;
+        let body = manifest.to_toml_string()?;
+        let path = dir
+            .abilities_dir()
+            .join(format!("{}.ability.toml", manifest.name()));
+
+        if path.exists() && !overwrite {
+            let existing = std::fs::read_to_string(&path).ok();
+            if existing.as_deref().and_then(existing_mcp_binding).as_ref()
+                == Some(&(plan.server.clone(), plan.tool.clone()))
+            {
+                outcome.skipped += 1;
+                continue;
+            }
+            anyhow::bail!(
+                "refusing to overwrite existing ability manifest {}; pass --overwrite to replace it",
+                path.display()
+            );
+        }
+
+        if dry_run {
+            println!("--- {}", path.display());
+            print!("{body}");
+        } else {
+            config::atomic_write(&path, body.as_bytes())
+                .map_err(|e| anyhow::anyhow!("write {}: {e}", path.display()))?;
+            outcome.written += 1;
+        }
+    }
+    Ok(outcome)
+}
+
+/// Operator summary when no plans were produced (either the filter
+/// matched nothing or every upstream was unreachable under
+/// `--skip-unreachable`).
+fn report_empty_plan(list_failures: &[String]) {
+    if list_failures.is_empty() {
+        output::info("No MCP tools matched the requested selection.");
+    } else {
+        output::warn("No MCP tools were bound; every selected upstream failed tools/list.");
+        for failure in list_failures {
+            output::warn(failure);
+        }
+    }
+}
+
+/// Operator summary for a non-empty plan; mirrors the shape of the
+/// other `easynet agent …` subcommands (success line + key/value
+/// detail lines + trailing warnings for partial failures).
+fn report_write_outcome(
+    agent_name: &str,
+    dir: &AgentDirectory,
+    plan: &McpAdditionPlan,
+    outcome: &McpAdditionOutcome,
+    dry_run: bool,
+) {
+    if dry_run {
+        output::success(&format!(
+            "dry-run: {} MCP ability manifest(s) would be written for agent '{}'",
+            plan.planned.len(),
+            agent_name
+        ));
+    } else {
+        output::success(&format!(
+            "added {} MCP ability manifest(s) to agent '{}'",
+            outcome.written, agent_name
+        ));
+        if outcome.skipped > 0 {
+            output::detail(
+                "skipped",
+                &format!("{} existing identical binding(s)", outcome.skipped),
+            );
+        }
+        output::detail("root", &dir.abilities_dir().display().to_string());
+        output::info(
+            "A running daemon can invoke these through the dynamic agent fallback immediately; restart or refresh catalogue surfaces if a UI needs to list them.",
+        );
+    }
+    for failure in &plan.list_failures {
+        output::warn(failure);
+    }
+}
+
+#[derive(Debug, Clone)]
+struct McpAbilityPlan {
+    server: String,
+    tool: String,
+    verb: String,
+    description: String,
+    input_schema: Value,
+    /// Operator-declared cost meta, forwarded verbatim from
+    /// `--cost-kind`/`--cost-label`. `None` writes a manifest with no
+    /// `[cost]` table; the runtime falls back to the per-exec
+    /// inference at metadata-emit time.
+    cost: Option<crate::core::ability_spec::CostMeta>,
+}
+
+fn select_mcp_servers(
+    svc: &crate::runtime::execution::mcp_client::McpClientService,
+    server: Option<&str>,
+) -> anyhow::Result<Vec<String>> {
+    mcp_block_on(async {
+        let names = svc.server_names().await;
+        match server {
+            Some(wanted) => {
+                if names.iter().any(|n| n == wanted) {
+                    Ok(vec![wanted.to_string()])
+                } else {
+                    anyhow::bail!(
+                        "MCP server {wanted:?} not found in configured servers: {}",
+                        names.join(", ")
+                    )
+                }
+            }
+            None => Ok(names),
+        }
+    })
+}
+
+fn mcp_rpc_blocking_timeout(
+    svc: &crate::runtime::execution::mcp_client::McpClientService,
+    server: &str,
+    method: &str,
+    params: Value,
+    timeout: Duration,
+) -> anyhow::Result<Value> {
+    mcp_block_on(async move {
+        match tokio::time::timeout(timeout, svc.rpc(server, method, params)).await {
+            Ok(result) => result,
+            Err(_) => anyhow::bail!("{method} timed out after {}s", timeout.as_secs()),
+        }
+    })
+}
+
+fn mcp_tools_list_timeout() -> Duration {
+    let secs = std::env::var("EASYNET_MCP_TOOLS_LIST_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(20);
+    Duration::from_secs(secs)
+}
+
+fn mcp_block_on<F, T>(fut: F) -> anyhow::Result<T>
+where
+    F: std::future::Future<Output = anyhow::Result<T>>,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(_handle) => Ok(tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(fut)
+        })?),
+        Err(_) => {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| anyhow::anyhow!("build mcp cli runtime: {e}"))?;
+            rt.block_on(fut)
+        }
+    }
+}
+
+fn normalize_mcp_input_schema(schema: Option<Value>) -> Value {
+    match schema {
+        Some(v @ Value::Object(_)) => toml_safe_json_value(v),
+        Some(v) => serde_json::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "x-easynet-originalInputSchema": toml_safe_json_value(v),
+        }),
+        None => serde_json::json!({
+            "type": "object",
+            "additionalProperties": true,
+        }),
+    }
+}
+
+fn toml_safe_json_value(value: Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let safe = map
+                .into_iter()
+                .filter_map(|(k, v)| {
+                    if v.is_null() {
+                        None
+                    } else {
+                        Some((k, toml_safe_json_value(v)))
+                    }
+                })
+                .collect();
+            Value::Object(safe)
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(|v| {
+                    if v.is_null() {
+                        Value::String("null".into())
+                    } else {
+                        toml_safe_json_value(v)
+                    }
+                })
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+fn mcp_manifest_for(
+    plan: &McpAbilityPlan,
+) -> anyhow::Result<crate::core::ability_spec::AbilityManifest> {
+    use crate::core::ability_spec::{AbilityExec, AbilityManifest, McpExec};
+    let mut manifest = AbilityManifest::new(
+        plan.verb.clone(),
+        plan.description.clone(),
+        plan.input_schema.clone(),
+    )?
+    .with_exec(AbilityExec::Mcp(McpExec {
+        server: plan.server.clone(),
+        tool: plan.tool.clone(),
+    }))?
+    .with_output_schema(serde_json::json!({
+        "type": "object",
+        "properties": {
+            "content": {"type": "array"},
+            "isError": {"type": "boolean"}
+        },
+        "required": ["content"],
+        "additionalProperties": true
+    }))?;
+    if let Some(cost) = &plan.cost {
+        manifest = manifest.with_cost(cost.clone())?;
+    }
+    Ok(manifest)
+}
+
+fn existing_mcp_binding(body: &str) -> Option<(String, String)> {
+    use crate::core::ability_spec::AbilityExec;
+    let manifest = crate::core::ability_spec::AbilityManifest::from_toml_str(body).ok()?;
+    match manifest.exec()? {
+        AbilityExec::Mcp(exec) => Some((exec.server.clone(), exec.tool.clone())),
+        _ => None,
+    }
+}
+
+fn generated_mcp_ability_name(prefix: &str, server: &str, tool: &str) -> String {
+    let prefix_slug = slug_segment(prefix);
+    let server_slug = slug_segment(server);
+    let tool_slug = slug_segment(tool);
+    let base = if prefix_slug.is_empty() {
+        format!("{server_slug}__{tool_slug}")
+    } else {
+        format!("{prefix_slug}_{server_slug}__{tool_slug}")
+    };
+    // "Empty after slugify" means either the formatted string is
+    // literally empty OR it slugifies to nothing but separators
+    // (e.g. `"__"` from server=tool="…"). The hash fallback
+    // guarantees a deterministic, distinct ability name in both
+    // cases. We hash the RAW upstream identifiers (not the slugs)
+    // so that two upstream pairs that slugify to the same empty
+    // shape still receive distinct hashes — without this the test
+    // pair `("...", "///")` vs `("***", "===")` would collide on
+    // the empty-slug `":"` hash input.
+    let is_only_separators = !base.is_empty() && base.chars().all(|c| c == '_' || c == '-');
+    if base.is_empty() || is_only_separators {
+        format!("mcp_{}", short_hex(format!("{server}:{tool}").as_bytes()))
+    } else {
+        base
+    }
+}
+
+fn slug_segment(raw: &str) -> String {
+    let mut out = String::new();
+    let mut last_was_sep = false;
+    for ch in raw.chars() {
+        let mapped = if ch.is_ascii_alphanumeric() {
+            Some(ch.to_ascii_lowercase())
+        } else if ch == '_' || ch == '-' {
+            Some(ch)
+        } else {
+            Some('_')
+        };
+        if let Some(c) = mapped {
+            if c == '_' || c == '-' {
+                if !last_was_sep && !out.is_empty() {
+                    out.push('_');
+                    last_was_sep = true;
+                }
+            } else {
+                out.push(c);
+                last_was_sep = false;
+            }
+        }
+    }
+    while out.ends_with('_') || out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
+fn short_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(bytes);
+    digest[..4].iter().map(|b| format!("{b:02x}")).collect()
+}
+
 fn run_publish(args: PublishArgs) -> anyhow::Result<()> {
     if !args.dry_run {
         // Live publishing is gated until the cross-repo publish
@@ -2552,6 +3158,133 @@ mod tests {
             model: model.map(str::to_string),
             label: None,
         }
+    }
+
+    #[cfg(unix)]
+    fn write_cli_mcp_echo_server(dir: &std::path::Path) -> std::path::PathBuf {
+        let script = dir.join("echo_mcp.sh");
+        fs::write(
+            &script,
+            r#"#!/bin/sh
+exec python3 -u -c '
+import sys, json
+def read_msg():
+    headers = {}
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        line = line.decode().strip()
+        if not line:
+            break
+        name, value = line.split(":", 1)
+        headers[name.lower()] = value.strip()
+    body = sys.stdin.buffer.read(int(headers["content-length"]))
+    return json.loads(body)
+def write_msg(resp):
+    body = json.dumps(resp).encode()
+    sys.stdout.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+    sys.stdout.buffer.flush()
+while True:
+    req = read_msg()
+    if req is None:
+        break
+    rid = req.get("id")
+    method = req.get("method")
+    if method == "initialize":
+        result = {"protocolVersion": "2024-11-05", "capabilities": {}, "serverInfo": {"name": "echo", "version": "0"}}
+    elif method == "tools/list":
+        result = {"tools": [
+            {"name": "echo-text", "description": "Echo text through MCP", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}}}
+        ]}
+    else:
+        result = {"content": [{"type": "text", "text": "ok"}], "isError": False}
+    write_msg({"jsonrpc": "2.0", "id": rid, "result": result})
+'
+"#,
+        )
+        .expect("write echo mcp");
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod");
+        script
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_mcp_add_writes_mcp_exec_manifest_for_agent() {
+        let _home = HomeGuard::new();
+        run_add(add_args("codex", "codex", None)).expect("agent add");
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let server = write_cli_mcp_echo_server(tmp.path());
+        let mcp_dir = crate::persistence::config::state_dir();
+        fs::create_dir_all(&mcp_dir).expect("state dir");
+        let config_path = mcp_dir.join("mcp_clients.json");
+        fs::write(
+            &config_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "servers": [{
+                    "name": "Echo Server",
+                    "command": server.display().to_string(),
+                    "args": [],
+                    "stdio_framing": "content-length"
+                }]
+            }))
+            .unwrap(),
+        )
+        .expect("write mcp config");
+
+        run_mcp_add(McpAddArgs {
+            name: "codex".into(),
+            server: Some("Echo Server".into()),
+            tools: vec![],
+            prefix: "mcp".into(),
+            config: Some(config_path),
+            dry_run: false,
+            overwrite: false,
+            skip_unreachable: false,
+            cost_kind: None,
+            cost_label: None,
+        })
+        .expect("mcp add");
+
+        let manifest_path = crate::persistence::config::agents_root()
+            .join("codex")
+            .join("abilities")
+            .join("mcp_echo_server__echo_text.ability.toml");
+        let body = fs::read_to_string(&manifest_path).expect("manifest written");
+        let manifest =
+            crate::core::ability_spec::AbilityManifest::from_toml_str(&body).expect("parse");
+        assert_eq!(manifest.name(), "mcp_echo_server__echo_text");
+        match manifest.exec().expect("exec") {
+            crate::core::ability_spec::AbilityExec::Mcp(exec) => {
+                assert_eq!(exec.server, "Echo Server");
+                assert_eq!(exec.tool, "echo-text");
+            }
+            other => panic!("expected mcp exec, got {other:?}"),
+        }
+        assert_eq!(
+            manifest.input_schema()["properties"]["text"]["type"],
+            serde_json::Value::String("string".into())
+        );
+    }
+
+    #[test]
+    fn normalize_mcp_input_schema_removes_toml_unsupported_nulls() {
+        let normalized = normalize_mcp_input_schema(Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "q": {"type": ["string", null], "default": null}
+            }
+        })));
+        let manifest = crate::core::ability_spec::AbilityManifest::new(
+            "mcp_null_schema",
+            "schema with upstream nulls",
+            normalized,
+        )
+        .expect("schema should validate");
+        manifest
+            .to_toml_string()
+            .expect("normalized schema should serialize to TOML");
     }
 
     #[test]
@@ -3240,6 +3973,304 @@ tls_ca_pem_path = "/tmp/home-ca.pem"
         assert!(
             msg.contains("agent.toml") || msg.contains("already"),
             "error must name the conflict; got {msg}"
+        );
+    }
+
+    // ── mcp add helpers ────────────────────────────────────────────────
+
+    #[test]
+    fn generated_mcp_ability_name_is_slug_safe_and_deterministic() {
+        // Prefix + server + tool slugify independently and join with
+        // the dotted-verb convention (single `_` between prefix and
+        // server, double `__` between server and tool — operators
+        // grep the double underscore to identify the tool half).
+        // Note: `slug_segment` collapses `-` to `_` along with other
+        // non-alnum punctuation, so `geocode-address` lands as
+        // `geocode_address` rather than retaining the hyphen.
+        let name = generated_mcp_ability_name("mcp", "Google Maps", "geocode-address");
+        assert_eq!(name, "mcp_google_maps__geocode_address");
+    }
+
+    #[test]
+    fn generated_mcp_ability_name_collapses_runs_of_punctuation() {
+        // Internal slug runs collapse to a single separator so the
+        // emitted ability name remains a legal verb (no `__` runs
+        // sneaking in from messy upstream names).
+        let name = generated_mcp_ability_name("MCP", "google//maps", "geo  code");
+        assert_eq!(name, "mcp_google_maps__geo_code");
+    }
+
+    #[test]
+    fn generated_mcp_ability_name_falls_back_to_hash_when_slug_empty() {
+        // Upstream pair that slugifies to nothing (e.g. all
+        // non-alphanumeric) must still produce a stable, unique
+        // ability name so collisions surface as different bindings.
+        let a = generated_mcp_ability_name("", "...", "///");
+        let b = generated_mcp_ability_name("", "***", "===");
+        assert!(a.starts_with("mcp_"), "fallback prefix: {a}");
+        assert!(b.starts_with("mcp_"), "fallback prefix: {b}");
+        assert_ne!(a, b, "distinct upstream pairs must hash to distinct names");
+        // Determinism: same input → same output.
+        let a2 = generated_mcp_ability_name("", "...", "///");
+        assert_eq!(a, a2);
+    }
+
+    #[test]
+    fn generated_mcp_ability_name_empty_prefix_drops_leading_separator() {
+        // `--prefix=""` should produce `<server>__<tool>` without a
+        // leading underscore — operators use the empty prefix when
+        // they manage their own naming scheme.
+        let name = generated_mcp_ability_name("", "echo", "ping");
+        assert_eq!(name, "echo__ping");
+    }
+
+    #[test]
+    fn existing_mcp_binding_extracts_server_and_tool() {
+        // A round-tripped manifest must let an idempotent re-run
+        // recognise the prior binding so we skip rewriting it.
+        let plan = McpAbilityPlan {
+            server: "echo".into(),
+            tool: "ping".into(),
+            verb: "mcp_echo__ping".into(),
+            description: "Echo ping.".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+            cost: None,
+        };
+        let body = mcp_manifest_for(&plan).unwrap().to_toml_string().unwrap();
+        let binding = existing_mcp_binding(&body).expect("manifest declares an mcp binding");
+        assert_eq!(binding, ("echo".to_string(), "ping".to_string()));
+    }
+
+    #[test]
+    fn existing_mcp_binding_returns_none_for_non_mcp_exec() {
+        // A manifest without an `mcp` exec block is the operator's
+        // own file — must NOT be treated as "matching binding" and
+        // overwritten by the idempotent skip path.
+        let manifest_toml = r#"
+schema_version = "1"
+name = "ping"
+description = "Operator-authored manifest."
+
+[input_schema]
+type = "object"
+"#;
+        assert_eq!(existing_mcp_binding(manifest_toml), None);
+    }
+
+    #[test]
+    fn existing_mcp_binding_returns_none_for_malformed_toml() {
+        // Don't panic on garbage on disk; the caller will then fall
+        // through to the "refuse to overwrite without --overwrite"
+        // branch, which is the safer disposition.
+        assert_eq!(existing_mcp_binding("this is not valid toml @@@"), None);
+    }
+
+    #[test]
+    fn mcp_manifest_for_emits_mcp_exec_with_pinned_server_tool() {
+        use crate::core::ability_spec::{AbilityExec, AbilityManifest};
+        let plan = McpAbilityPlan {
+            server: "echo".into(),
+            tool: "ping".into(),
+            verb: "mcp_echo__ping".into(),
+            description: "Echo ping.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {"text": {"type": "string"}}
+            }),
+            cost: None,
+        };
+        let manifest = mcp_manifest_for(&plan).unwrap();
+        assert_eq!(manifest.name(), "mcp_echo__ping");
+        assert_eq!(manifest.description(), "Echo ping.");
+        match manifest.exec() {
+            Some(AbilityExec::Mcp(exec)) => {
+                assert_eq!(exec.server, "echo");
+                assert_eq!(exec.tool, "ping");
+            }
+            other => panic!("expected Mcp exec, got {other:?}"),
+        }
+        // Round-trip through TOML must preserve the binding so
+        // existing_mcp_binding can read it back.
+        let body = manifest.to_toml_string().unwrap();
+        let reparsed = AbilityManifest::from_toml_str(&body).unwrap();
+        assert_eq!(reparsed.name(), "mcp_echo__ping");
+    }
+
+    #[test]
+    fn assert_tools_filter_satisfied_passes_when_every_request_resolved() {
+        let planned = vec![
+            McpAbilityPlan {
+                server: "s".into(),
+                tool: "a".into(),
+                verb: "_".into(),
+                description: String::new(),
+                input_schema: serde_json::json!({}),
+                cost: None,
+            },
+            McpAbilityPlan {
+                server: "s".into(),
+                tool: "b".into(),
+                verb: "_".into(),
+                description: String::new(),
+                input_schema: serde_json::json!({}),
+                cost: None,
+            },
+        ];
+        assert_tools_filter_satisfied(&["a".into(), "b".into()], &planned).unwrap();
+    }
+
+    #[test]
+    fn assert_tools_filter_satisfied_empty_filter_is_unconditional_ok() {
+        assert_tools_filter_satisfied(&[], &[]).unwrap();
+    }
+
+    #[test]
+    fn assert_tools_filter_satisfied_lists_every_missing_tool() {
+        let planned = vec![McpAbilityPlan {
+            server: "s".into(),
+            tool: "a".into(),
+            verb: "_".into(),
+            description: String::new(),
+            input_schema: serde_json::json!({}),
+            cost: None,
+        }];
+        let err =
+            assert_tools_filter_satisfied(&["a".into(), "missing-1".into(), "missing-2".into()], &planned)
+                .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("missing-1"), "msg should name missing-1: {msg}");
+        assert!(msg.contains("missing-2"), "msg should name missing-2: {msg}");
+        assert!(
+            !msg.contains(" a,") && !msg.ends_with(" a"),
+            "msg should not list resolved tools as missing: {msg}"
+        );
+    }
+
+    // ── cost flags ──────────────────────────────────────────────────────
+
+    #[test]
+    fn cost_kind_arg_round_trips_to_core_cost_kind() {
+        // Pins the CLI ↔ core enum lockstep documented on
+        // `CostKindArg`. If a future variant lands on
+        // `core::ability_spec::CostKind` and someone forgets the
+        // mirror, this test fails loud instead of leaving operators
+        // with an unreachable flag.
+        use crate::core::ability_spec::CostKind;
+        assert_eq!(CostKindArg::Free.into_core(), CostKind::Free);
+        assert_eq!(CostKindArg::ExternalMetered.into_core(), CostKind::ExternalMetered);
+        assert_eq!(CostKindArg::LlmMetered.into_core(), CostKind::LlmMetered);
+        assert_eq!(CostKindArg::Unknown.into_core(), CostKind::Unknown);
+    }
+
+    #[test]
+    fn build_cost_meta_returns_none_when_kind_absent() {
+        // No `--cost-kind` → no `[cost]` table on disk. A bare
+        // `--cost-label` without a kind is rejected at clap parse time
+        // by `requires = "cost_kind"`, so the helper does not need to
+        // re-defend against that case; we just confirm the None path.
+        assert!(build_cost_meta(None, None).unwrap().is_none());
+        assert!(build_cost_meta(None, Some("ignored")).unwrap().is_none());
+    }
+
+    #[test]
+    fn build_cost_meta_normalises_blank_label_to_none() {
+        // CLI users can technically pass `--cost-label ""` or just
+        // whitespace; the manifest validator would reject an empty
+        // label outright. Treat empty-ish input as "label omitted" so
+        // the kind still lands without dragging a useless blank
+        // string onto disk.
+        use crate::core::ability_spec::CostKind;
+        let meta = build_cost_meta(Some(CostKindArg::ExternalMetered), Some("   "))
+            .unwrap()
+            .expect("kind set => meta present");
+        assert_eq!(meta.kind, CostKind::ExternalMetered);
+        assert!(meta.label.is_none());
+    }
+
+    #[test]
+    fn build_cost_meta_carries_kind_and_trimmed_label() {
+        use crate::core::ability_spec::CostKind;
+        let meta = build_cost_meta(
+            Some(CostKindArg::ExternalMetered),
+            Some("  Google Maps API — $5 per 1000 requests  "),
+        )
+        .unwrap()
+        .expect("kind set => meta present");
+        assert_eq!(meta.kind, CostKind::ExternalMetered);
+        // We keep the inner spacing verbatim; only outer whitespace
+        // is normalised so a label written with deliberate alignment
+        // (rare, but plausible) survives.
+        assert_eq!(
+            meta.label.as_deref(),
+            Some("Google Maps API — $5 per 1000 requests")
+        );
+    }
+
+    #[test]
+    fn mcp_manifest_for_stamps_declared_cost_on_disk() {
+        // Operator passed `--cost-kind external-metered --cost-label
+        // "Google Maps geocoding — $5/1000"`. The generated TOML must
+        // carry that `[cost]` table verbatim, and re-parsing it must
+        // surface the same `CostMeta` — that is what `profiles::mcp`
+        // reads to stop reporting `cost: unknown` on this row.
+        use crate::core::ability_spec::{AbilityManifest, CostKind, CostMeta};
+        let plan = McpAbilityPlan {
+            server: "Google Maps MCP".into(),
+            tool: "geocode-address".into(),
+            verb: "mcp_google_maps_mcp__geocode_address".into(),
+            description: "Geocode an address via Google Maps.".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+            cost: Some(CostMeta {
+                kind: CostKind::ExternalMetered,
+                label: Some("Google Maps geocoding — $5/1000 requests".into()),
+            }),
+        };
+        let manifest = mcp_manifest_for(&plan).unwrap();
+        let cost = manifest
+            .cost()
+            .expect("declared cost must survive manifest build");
+        assert_eq!(cost.kind, CostKind::ExternalMetered);
+        assert_eq!(
+            cost.label.as_deref(),
+            Some("Google Maps geocoding — $5/1000 requests")
+        );
+        // Round-trip through TOML — `agent mcp add` writes via
+        // `to_toml_string`; reading happens via `from_toml_str` at
+        // the next daemon boot. Any drift between the two surfaces
+        // here as a deserialise failure or label mismatch.
+        let body = manifest.to_toml_string().unwrap();
+        assert!(
+            body.contains("[cost]") && body.contains("external_metered"),
+            "manifest TOML must contain a [cost] table with kind = external_metered, got:\n{body}"
+        );
+        let reparsed = AbilityManifest::from_toml_str(&body).unwrap();
+        let reparsed_cost = reparsed.cost().expect("cost survives round-trip");
+        assert_eq!(reparsed_cost.kind, CostKind::ExternalMetered);
+        assert_eq!(
+            reparsed_cost.label.as_deref(),
+            Some("Google Maps geocoding — $5/1000 requests")
+        );
+    }
+
+    #[test]
+    fn mcp_manifest_for_without_cost_writes_no_cost_table() {
+        // Default — no `--cost-kind` — keeps the on-disk manifest free
+        // of any `[cost]` section so the runtime applies its
+        // honesty-rule inference (`unknown` for MCP-backed tools).
+        // We pin this to prevent a future regression where someone
+        // "helpfully" stamps a default cost into every generated file.
+        let plan = McpAbilityPlan {
+            server: "echo".into(),
+            tool: "ping".into(),
+            verb: "mcp_echo__ping".into(),
+            description: "Echo ping.".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+            cost: None,
+        };
+        let body = mcp_manifest_for(&plan).unwrap().to_toml_string().unwrap();
+        assert!(
+            !body.contains("[cost]"),
+            "expected no [cost] table when --cost-kind omitted; got:\n{body}"
         );
     }
 }
