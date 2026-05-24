@@ -476,6 +476,19 @@ impl Scope {
     }
 }
 
+/// Wire-accepted spellings for the `scope` argument, in the order
+/// they should appear in the JSON-Schema `enum`. The list is the
+/// single source of truth for both [`parse_scope`] (the runtime
+/// acceptor) and [`input_schema`] (the contract the LLM sees) —
+/// adding a new spelling means editing this array and the match in
+/// `parse_scope`; the [`scope_enum_matches_parser_acceptance`] test
+/// catches any drift between the two.
+///
+/// `easynet` is retained as a back-compat alias for `user` per
+/// RFC-002 §5. Listed last so new callers prefer `user` /
+/// `public` over the historical name.
+const ACCEPTED_SCOPE_LITERALS: &[&str] = &["self", "device", "user", "public", "easynet"];
+
 fn parse_scope(args: &Value) -> anyhow::Result<Scope> {
     let raw = args.get("scope").and_then(Value::as_str).unwrap_or("self");
     match raw {
@@ -490,8 +503,8 @@ fn parse_scope(args: &Value) -> anyhow::Result<Scope> {
         "easynet" | "user" => Ok(Scope::User),
         "public" => Ok(Scope::Public),
         other => anyhow::bail!(
-            "discover: scope = {other:?} is not one of \"self\", \"device\", \
-             \"user\" / \"easynet\", or \"public\""
+            "discover: scope = {other:?} is not one of {:?}",
+            ACCEPTED_SCOPE_LITERALS,
         ),
     }
 }
@@ -776,22 +789,37 @@ fn error_envelope(code: &str, message: &str, scope: Scope, query: Option<&str>) 
 // ── Discovery surfaces ────────────────────────────────────────
 
 pub fn input_schema() -> Value {
+    // Build the `enum` array from the single source of truth so the
+    // schema the LLM sees can never drift from what `parse_scope`
+    // actually accepts. The parity is pinned by the
+    // `scope_enum_matches_parser_acceptance` test below.
+    let scope_enum: Vec<Value> = ACCEPTED_SCOPE_LITERALS
+        .iter()
+        .map(|s| Value::String((*s).to_string()))
+        .collect();
     json!({
         "type": "object",
         "properties": {
             "scope": {
                 "type": "string",
-                "enum": ["self", "device", "easynet"],
+                "enum": scope_enum,
                 "default": "self",
-                "description": "How far to search. self = my own abilities. \
-                                device = abilities published by other agents \
+                "description": "How far to search. \
+                                `self` = my own abilities. \
+                                `device` = abilities published by other agents \
                                 on this device with visibility >= device. \
-                                easynet = published to the EasyNet federation \
-                                (calls federation.resolve against the realm's \
-                                hub; returns federation_not_joined when the \
-                                daemon hasn't run `device join`, or \
+                                `user` = the calling tenant's federation view, \
+                                across every device the user has joined to the \
+                                same realm; calls federation.resolve against \
+                                the realm hub. `public` = cross-tenant catalog \
+                                — every agent the hub advertises, regardless \
+                                of tenant; opt-in for explicit cross-user \
+                                discovery. `easynet` is retained as a \
+                                back-compat alias for `user` (RFC-002 §5). \
+                                Federation tiers return federation_not_joined \
+                                when the daemon hasn't run `device join`, or \
                                 federation_unavailable when the hub call \
-                                fails — both as typed envelopes, not Err)."
+                                fails — both as typed envelopes, not Err."
             },
             "query": {
                 "type": "string",
@@ -825,11 +853,12 @@ pub fn manifest() -> AbilityManifest {
 }
 
 pub fn description() -> &'static str {
-    "Walk the discovery ladder (self → device → easynet) and return \
-     ranked candidates matching the optional query. Tier 3 \
-     (scope=\"easynet\") dials the realm hub via federation.resolve \
-     and projects the receipt into the same Candidate envelope as \
-     the local tiers; failures surface as typed envelopes \
+    "Walk the discovery ladder (self → device → user → public) and \
+     return ranked candidates matching the optional query. The \
+     federation tiers (`user` / `public`, plus the back-compat alias \
+     `easynet` for `user`) dial the realm hub via federation.resolve \
+     and project the receipt into the same Candidate envelope as the \
+     local tiers; failures surface as typed envelopes \
      ({code: \"federation_not_joined\"} / \"federation_unavailable\") \
      so callers fall through gracefully. Use this BEFORE telling the \
      user you can't do something — another ability on the device or \
@@ -918,6 +947,75 @@ mod tests {
         let h = reg.get_rpc("claude.discover").unwrap();
         let err = h(json!({"scope": "galaxy"})).unwrap_err();
         assert!(format!("{err}").contains("scope"));
+    }
+
+    /// **Schema/parser parity pin**.
+    ///
+    /// The contract the LLM sees (`input_schema()["properties"]["scope"]
+    /// ["enum"]`) must list exactly the spellings that `parse_scope`
+    /// accepts. Any drift between the two is a P0 product bug — the
+    /// LLM either thinks an accepted spelling is illegal (false
+    /// rejection) or tries a spelling the runtime will reject (false
+    /// confidence). The parity is sourced from
+    /// [`ACCEPTED_SCOPE_LITERALS`]; this test pins both directions.
+    #[test]
+    fn scope_enum_matches_parser_acceptance() {
+        // Direction 1: every literal the schema advertises must
+        // round-trip through parse_scope without error. Catches a
+        // schema that lists a spelling the parser does not handle.
+        let schema = input_schema();
+        let enum_arr = schema["properties"]["scope"]["enum"]
+            .as_array()
+            .expect("scope.enum must be an array");
+        assert!(
+            !enum_arr.is_empty(),
+            "scope.enum must not be empty — the schema would forbid every value"
+        );
+        for v in enum_arr {
+            let s = v.as_str().expect("scope.enum entries must be strings");
+            parse_scope(&json!({"scope": s})).unwrap_or_else(|e| {
+                panic!(
+                    "schema advertises scope = {s:?} but parse_scope rejected it: {e}"
+                )
+            });
+        }
+
+        // Direction 2: every spelling parse_scope accepts must
+        // appear in the schema enum. The source-of-truth list is
+        // ACCEPTED_SCOPE_LITERALS; comparing against it catches the
+        // failure mode where someone adds a parse_scope match arm
+        // but forgets to extend the literal list (so the LLM never
+        // learns the new spelling exists).
+        let enum_set: std::collections::BTreeSet<&str> = enum_arr
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        let literal_set: std::collections::BTreeSet<&str> =
+            ACCEPTED_SCOPE_LITERALS.iter().copied().collect();
+        assert_eq!(
+            enum_set, literal_set,
+            "input_schema scope.enum must equal ACCEPTED_SCOPE_LITERALS — any \
+             new scope literal must be added to both the parse_scope match \
+             arms and the constant"
+        );
+    }
+
+    /// Pin the user-visible description so a future schema edit that
+    /// drops `user` / `public` from the description text (but keeps
+    /// them in the enum) is caught — the LLM reads the description
+    /// to pick a scope, not just the enum array.
+    #[test]
+    fn scope_description_names_user_and_public_tiers() {
+        let schema = input_schema();
+        let desc = schema["properties"]["scope"]["description"]
+            .as_str()
+            .expect("scope.description must be a string");
+        for required_token in ["`self`", "`device`", "`user`", "`public`", "`easynet`"] {
+            assert!(
+                desc.contains(required_token),
+                "scope.description must mention {required_token}; got: {desc}"
+            );
+        }
     }
 
     #[test]
