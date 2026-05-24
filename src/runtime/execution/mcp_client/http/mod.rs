@@ -1,84 +1,111 @@
 // EasyNet CLI — Streamable HTTP transport for outbound MCP
 // =========================================================
 //
-// File: src/runtime/execution/mcp_client/streamable_http_client.rs
+// File: src/runtime/execution/mcp_client/http/mod.rs
 //
-// Per MCP spec 2025-06-18 §"Streamable HTTP" transport. Sibling
-// of the stdio transport already in this module.
+// Per MCP spec 2025-06-18 §"Streamable HTTP" transport. Sibling of
+// the stdio transport in `mcp_client/mod.rs`.
 //
-// What this module implements
-// ---------------------------
+// Module layout
+// -------------
+// The transport was originally a single 2100+-line file; it is now
+// split into focused submodules so each concern can be read and
+// reviewed in isolation:
 //
-//   * POST JSON-RPC requests to the MCP endpoint (round-1).
-//   * Initialize handshake — captures the optional `Mcp-Session-Id`
-//     response header per §"Session Management" and threads it
-//     into every subsequent request (round-1).
-//   * Threads the `MCP-Protocol-Version` header on subsequent
-//     requests per §"Protocol Version Header" (round-1).
-//   * Accepts `Content-Type: application/json` and
-//     `Content-Type: text/event-stream` (SSE) responses (round-1).
-//     SSE frames carry the terminal JSON-RPC response and any
-//     mid-call `notifications/*` interleavings.
-//   * **TLS** for `https://` URLs via rustls — Mozilla roots by
-//     default; per-server CA bundle override; per-server
-//     server-name SNI override; a double-gated
-//     insecure_skip_verify (config flag AND env var, for closed
-//     test environments only) (round-2).
+//   mod.rs        — [`HttpConnection`] (this file): connection
+//                   lifecycle, `initialize`, `rpc`/`rpc_with_sink`,
+//                   POST + SSE response decoding, the GET listener
+//                   spawner (delegates to `listener::listener_loop`),
+//                   and the in-process integration tests.
+//   listener.rs   — Long-lived GET listener (`listener_loop`,
+//                   `listener_connect_and_pump`) per spec
+//                   §"Listening for Messages from the Server" plus
+//                   the reconnect-backoff constants.
+//   sse.rs        — SSE wire parsing (`parse_sse_body`,
+//                   `parse_one_sse_event`, `find_event_terminator`).
+//   tls.rs        — rustls connector building, `InsecureCertVerifier`,
+//                   `AsyncStream` marker trait.
+//   auth.rs       — `apply_auth_headers` for the four `AuthSpec`
+//                   variants (none / Bearer / BearerEnv / Headers).
+//   hyper_io.rs   — `HyperTokioIo`, the hyper-rt ↔ tokio-IO shim.
+//
+// Public surface
+// --------------
+// Only [`HttpConnection`] is exported. Everything else is
+// `pub(super)` so call sites in this crate go through the
+// connection type rather than poking into transport internals.
+//
+// What this transport implements (round-1 + round-2)
+// --------------------------------------------------
+//   * POST JSON-RPC requests with `Content-Type: application/json`
+//     and `Content-Type: text/event-stream` response decoding;
+//     intervening `notifications/*` frames are routed to a caller-
+//     supplied [`NotificationSink`].
+//   * Initialize handshake captures the optional `Mcp-Session-Id`
+//     header and threads it on every subsequent request, plus
+//     `MCP-Protocol-Version` per §"Protocol Version Header".
+//   * **TLS** via rustls — Mozilla roots by default; per-server CA
+//     bundle override; per-server SNI override; double-gated
+//     `insecure_skip_verify` (config flag AND env var).
 //   * **Authentication** — Bearer / BearerEnv / arbitrary header
-//     map. Applied to every outgoing POST and to the GET listener
-//     reconnect path (round-2).
-//   * **Implicit GET / SSE listener channel** per spec §"Listening
-//     for Messages from the Server" — a long-lived background task
-//     opens GET on the same endpoint and routes server-initiated
-//     notifications through the same sink contract used by the
-//     stdio listener (round-2).
-//   * **Last-Event-Id resumption** per spec §"Resumability and
-//     Retries". Every SSE frame's `id:` is recorded; on reconnect
-//     the listener replays the latest Last-Event-Id so the server
-//     resumes the stream from the last acknowledged event. The
-//     `retry:` field controls reconnect backoff (round-2).
+//     map. Applied to every POST and to the GET listener.
+//   * **Implicit GET / SSE listener channel** per §"Listening for
+//     Messages from the Server" — long-lived background task,
+//     routes server-initiated notifications, reconnects with
+//     exponential backoff capped at 30s, honours server-supplied
+//     `retry:` hint.
+//   * **Last-Event-Id resumption** per §"Resumability and Retries":
+//     every SSE frame's `id:` is recorded, the listener replays the
+//     latest id on reconnect.
 //
-// What this module still does NOT implement
-// -----------------------------------------
-//
-//   * Outbound HTTP/2. We use HTTP/1.1 (`hyper::client::conn::http1`).
-//     Streamable HTTP servers MUST support HTTP/1.1 per the spec, so
-//     this is acceptable; HTTP/2 is a future perf optimisation.
+// Not yet implemented (out of round-2 scope, documented for the
+// next maintainer):
+//   * Outbound HTTP/2. We use HTTP/1.1; spec MANDATES servers
+//     support HTTP/1.1 so this is acceptable. HTTP/2 is a future
+//     perf optimisation.
 //   * OAuth refresh flows. `AuthSpec::BearerEnv` covers the
-//     "rotate token externally" case; richer OAuth belongs behind
-//     a sidecar that converts to one of our AuthSpec variants.
-//
-// Design notes
-// ------------
-//
-// We use raw `hyper` (no `reqwest`, no `hyper-util` outside the
-// existing axon-pb feature gate) so this module pulls no new
-// crate-graph weight beyond `hyper`'s `client` feature. The
-// connection is established per-request — MCP's POST-per-message
-// shape means we don't keep an HTTP/1.1 keep-alive pool open
-// inside this client. If profiling later shows this is a hot
-// path, a pool fits inside `HttpConnection`.
+//     "rotate token externally" case; richer OAuth belongs behind a
+//     sidecar.
+//   * End-to-end HTTPS round-trip against an in-process rustls
+//     server. The TLS connector is unit-tested (see `tls.rs`) but
+//     a full TLS-wire e2e needs an in-process server with a
+//     self-signed cert via `rcgen`; lands as
+//     `tests/streamable_http_tls_e2e.rs` in a follow-up.
+//   * GET listener e2e against a mock server emitting interleaved
+//     server-initiated notifications. The unit tests cover the
+//     parse path; the integration test would pin reconnect +
+//     `Last-Event-Id` replay end-to-end.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper::client::conn::http1;
-use hyper::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
+use hyper::header::{ACCEPT, CONTENT_TYPE};
 use hyper::{Request, Uri};
 use serde_json::{json, Value};
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
-use super::{AuthSpec, McpServerSpec, NotificationSink, ObservedNotification, TlsSpec};
+use super::{McpServerSpec, NotificationSink, ObservedNotification};
+
+mod auth;
+mod hyper_io;
+mod listener;
+mod sse;
+mod tls;
+
+use auth::apply_auth_headers;
+use hyper_io::HyperTokioIo;
+use listener::listener_loop;
+use sse::parse_sse_body;
+use tls::{build_tls_connector, AsyncStream};
 
 /// Local "discard everything" sink for the plain `rpc()` path that
 /// does not surface notifications. Mirrors the stdio transport's
@@ -93,18 +120,21 @@ impl NotificationSink for DiscardSink {
 /// handshake and stamps into the `MCP-Protocol-Version` header on
 /// subsequent requests. Matches the stdio transport's claim above
 /// to keep one client identity across transports.
-const PROTOCOL_VERSION: &str = "2025-06-18";
+pub(super) const PROTOCOL_VERSION: &str = "2025-06-18";
 
 /// Header per MCP spec 2025-06-18 §"Session Management".
-const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
+pub(super) const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
 
 /// Header per MCP spec 2025-06-18 §"Protocol Version Header".
-const HEADER_PROTOCOL_VERSION: &str = "MCP-Protocol-Version";
+pub(super) const HEADER_PROTOCOL_VERSION: &str = "MCP-Protocol-Version";
 
 /// Default timeout for any single HTTP round-trip. A real MCP
 /// server should respond in milliseconds; if it takes longer than
 /// 30s we want to fail loudly rather than wedge the caller.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+// GET listener reconnect constants live in the `listener` submodule
+// alongside the loop that consumes them.
 
 /// One live HTTP MCP connection — captured session state, an
 /// optional cached TLS connector for HTTPS endpoints, and the
@@ -139,23 +169,34 @@ pub struct HttpConnection {
     /// also updates it whenever a response frame carries an id.
     last_event_id: Arc<RwLock<Option<String>>>,
     /// Handle to the background GET-listener task, if one has been
-    /// spawned. Some after `spawn_listener` runs; the Drop impl
-    /// aborts it so a closed HttpConnection does not leak a task.
-    listener_handle: Mutex<Option<JoinHandle<()>>>,
+    /// spawned. `Some(_)` after `spawn_listener` runs; the `Drop`
+    /// impl aborts it so a closed `HttpConnection` does not leak a
+    /// task.
+    ///
+    /// Backed by `std::sync::Mutex` rather than `tokio::sync::Mutex`
+    /// so the `Drop` impl can `lock()` directly (no `try_lock`
+    /// fallback, no theoretical leak window): the only writer is
+    /// `spawn_listener`, whose critical section is a tiny synchronous
+    /// swap that never crosses an `.await` while holding the guard.
+    /// Using a sync mutex here keeps `Drop` infallible without
+    /// pulling in `parking_lot`.
+    listener_handle: StdMutex<Option<JoinHandle<()>>>,
 }
 
 impl Drop for HttpConnection {
     fn drop(&mut self) {
-        // Best-effort: the listener task is detached the moment we
-        // exit this scope. Mutex::blocking_lock would panic in an
-        // async context, so we read the inner Option via
-        // try_lock and live with the (impossible-in-practice)
-        // contention case — the spawn site only ever takes the
-        // lock briefly to swap a Some in.
-        if let Ok(mut guard) = self.listener_handle.try_lock() {
-            if let Some(h) = guard.take() {
-                h.abort();
-            }
+        // `std::sync::Mutex::lock` only returns Err on poison; a
+        // poisoned mutex still hands back the inner data (`into_inner`
+        // on the error) so we can abort the listener regardless.
+        // Using `lock()` here (rather than the previous `try_lock`)
+        // eliminates the theoretical leak window that existed when
+        // `Drop` raced the `spawn_listener` writer for the lock.
+        let mut guard = match self.listener_handle.lock() {
+            Ok(g) => g,
+            Err(poison) => poison.into_inner(),
+        };
+        if let Some(h) = guard.take() {
+            h.abort();
         }
     }
 }
@@ -208,7 +249,7 @@ impl HttpConnection {
             spec: Arc::new(spec.clone()),
             tls_connector,
             last_event_id: Arc::new(RwLock::new(None)),
-            listener_handle: Mutex::new(None),
+            listener_handle: StdMutex::new(None),
         };
 
         // First POST: initialize. No session id yet — the server
@@ -298,7 +339,7 @@ impl HttpConnection {
             "params": params,
         }))?;
         let (response_body, _new_session) = self
-            .do_post_with_sink(request_body, true, sink)
+            .do_post(request_body, true, sink)
             .await
             .with_context(|| format!("MCP HTTP rpc method `{method}`"))?;
         // Per spec, the server MAY rotate the session id mid-
@@ -318,7 +359,7 @@ impl HttpConnection {
     /// `Content-Type: text/event-stream` (SSE stream). Any
     /// intervening JSON-RPC notifications in an SSE stream are
     /// silently dropped on this path — callers that need them must
-    /// use `do_post_with_sink` instead.
+    /// thread a sink through `rpc_with_sink` → `do_post`.
     async fn post_and_extract_session(
         &self,
         body: Vec<u8>,
@@ -333,20 +374,6 @@ impl HttpConnection {
     async fn post_raw_no_session_capture(&self, body: Vec<u8>) -> anyhow::Result<()> {
         let _ = self.do_post(body, false, &mut DiscardSink).await?;
         Ok(())
-    }
-
-    /// POST and route any SSE-interleaved `notifications/*` frames
-    /// through `sink` before returning the final JSON-RPC response
-    /// body. The unary `application/json` path returns the body
-    /// verbatim — no sink invocation, since the spec does not allow
-    /// notifications on that content type.
-    async fn do_post_with_sink(
-        &self,
-        body: Vec<u8>,
-        capture_session: bool,
-        sink: &mut dyn NotificationSink,
-    ) -> anyhow::Result<(Vec<u8>, Option<String>)> {
-        self.do_post(body, capture_session, sink).await
     }
 
     /// Core HTTP one-shot. Establishes a fresh TCP (or TLS-over-TCP)
@@ -417,9 +444,9 @@ impl HttpConnection {
                     .await
                     .context("hyper HTTP/1.1 handshake")?;
             // Drive the connection in the background until it
-            // completes. Aborted explicitly after the response
-            // is consumed so we don't leak the task on the slow
-            // path where the server holds the connection open.
+            // completes. Aborted explicitly after the response is
+            // consumed so we don't leak the task on the slow path
+            // where the server holds the connection open.
             let driver_handle = tokio::spawn(async move {
                 if let Err(e) = conn_driver.await {
                     let _ = e;
@@ -484,9 +511,7 @@ impl HttpConnection {
             driver_handle.abort();
 
             // Spec §"Sending Messages" #4: notifications/responses
-            // posted to the server receive 202 with no body. Our
-            // notifications path (post_raw_no_session_capture)
-            // accepts that.
+            // posted to the server receive 202 with no body.
             if !capture_session && status.as_u16() == 202 {
                 return Ok::<_, anyhow::Error>((body_bytes, session));
             }
@@ -507,16 +532,9 @@ impl HttpConnection {
                 );
             }
             if content_type.starts_with("text/event-stream") {
-                // Per MCP spec 2025-06-18 §"Sending Messages" #5-6:
-                // when the server returns SSE, the stream contains a
-                // terminal JSON-RPC response matching the request id.
-                // The stream MAY also interleave JSON-RPC
-                // notifications (`notifications/progress`,
-                // `notifications/tools/list_changed`,
-                // `notifications/message`, …) BEFORE the response —
-                // those are routed through `sink` here so callers
-                // that asked for progress get the same shape they
-                // would over stdio.
+                // SSE — possibly with interleaved notifications.
+                // See `sse::parse_sse_body` for the wire-shape
+                // contract.
                 let parsed = parse_sse_body(&body_bytes).with_context(|| {
                     "MCP HTTP SSE response did not contain a matching JSON-RPC response"
                 })?;
@@ -554,7 +572,15 @@ impl HttpConnection {
     where
         F: Fn() -> Box<dyn NotificationSink + Send> + Send + Sync + 'static,
     {
-        let mut guard = self.listener_handle.lock().await;
+        // `std::sync::Mutex` — the critical section is a synchronous
+        // swap that never crosses `.await` while the guard is held
+        // (we drop the guard before returning). Pairs with the
+        // `Drop` impl's `lock()` to eliminate the previous
+        // `try_lock` leak window.
+        let mut guard = self
+            .listener_handle
+            .lock()
+            .expect("listener_handle mutex poisoned");
         if guard.is_some() {
             return Ok(());
         }
@@ -588,653 +614,17 @@ impl HttpConnection {
     }
 }
 
-/// Parsed SSE body, split into the spec-relevant pieces an HTTP
-/// MCP caller needs: the JSON-RPC response (mandatory) and any
-/// intervening JSON-RPC notifications (optional, may be empty).
-///
-/// Why both as `Vec<u8>` / `Value` mixed:
-///   - The response is returned to the calling `rpc()` as raw bytes
-///     so the existing JSON-parse path downstream stays unchanged.
-///   - Notifications are pre-parsed into `ObservedNotification` so
-///     the sink-routing code does not re-parse on the hot path.
-#[derive(Debug)]
-struct SseParseResult {
-    /// JSON-RPC response body (bytes). The LAST `data:` event whose
-    /// payload looks like a JSON-RPC response (`id` + `result`/`error`).
-    /// MCP spec REQUIRES a stream to terminate with such a frame; if
-    /// none was seen the parse fails.
-    response: Vec<u8>,
-    /// Every JSON-RPC notification (`{jsonrpc, method, params}` with
-    /// no `id`) seen in the stream, in arrival order. Empty when the
-    /// upstream did not emit progress.
-    notifications: Vec<ObservedNotification>,
-    /// Latest `id:` field observed across the parsed stream, if any.
-    /// Threaded back into `HttpConnection.last_event_id` so a
-    /// subsequent reconnect (POST or GET listener) can replay it
-    /// via the `Last-Event-Id` header per spec §"Resumability
-    /// and Retries".
-    last_event_id: Option<String>,
-}
-
-/// Parse an SSE-encoded MCP response body. Splits intervening
-/// `notifications/*` frames from the final JSON-RPC response.
-///
-/// SSE wire format per [HTML Living Standard §Server-sent events]:
-///   * Each event is a block of `field: value\n` lines.
-///   * Events are separated by a blank line (`\n\n`).
-///   * `data:` lines within one event are joined by `\n`.
-///   * Comment lines start with `:` and are ignored.
-///   * `id:`, `event:`, `retry:` fields exist but MCP does not use
-///     them for response framing; we accept and ignore them so a
-///     spec-compliant server that emits them does not break parsing.
-///
-/// Notification routing: every JSON object with a `"method"` field
-/// and no `"id"` is captured as an `ObservedNotification`. Per MCP
-/// 2025-06-18 §"Streamable HTTP" the server MAY interleave
-/// `notifications/progress`, `notifications/tools/list_changed`,
-/// `notifications/message`, etc. before the final response frame —
-/// they are now first-class output of this parser rather than being
-/// silently dropped.
-fn parse_sse_body(body: &[u8]) -> anyhow::Result<SseParseResult> {
-    let text = std::str::from_utf8(body).context("SSE body is not valid UTF-8")?;
-    let mut last_response: Option<Vec<u8>> = None;
-    let mut notifications: Vec<ObservedNotification> = Vec::new();
-    // Per HTML living spec §"event stream model" the `id:` field is
-    // **stream-level**: once an event with an id arrives, the user
-    // agent's "last event id" is that value for every subsequent
-    // reconnect attempt, even if later events have no id of their
-    // own. We mirror that — record the latest id we see, regardless
-    // of frame kind. Round-2 `Last-Event-Id` replay reads this.
-    let mut last_event_id: Option<String> = None;
-
-    // Split on blank-line separators (LF/CRLF agnostic). Normalise
-    // CRLF → LF first to keep the splitter simple. The SSE spec says
-    // a blank line is a line containing only the line terminator.
-    let normalised = text.replace("\r\n", "\n");
-    for block in normalised.split("\n\n") {
-        let mut data_chunks: Vec<&str> = Vec::new();
-        for line in block.lines() {
-            // Comments — `:` followed by anything (including nothing,
-            // which is a heartbeat). Per spec, ignore.
-            if line.starts_with(':') {
-                continue;
-            }
-            // SSE field syntax: `field`, `field: value`, or
-            // `field:value`. We consume `data` for payloads and
-            // `id` for resumption; `event:` and `retry:` are still
-            // spec-legal but MCP-irrelevant here. (`retry:` is
-            // honoured by the listener loop, not the parser.)
-            let (field, value) = match line.split_once(':') {
-                Some((f, v)) => (f, v.strip_prefix(' ').unwrap_or(v)),
-                None => (line, ""),
-            };
-            if field == "data" {
-                data_chunks.push(value);
-            } else if field == "id" {
-                // Per spec, an empty id resets to "no last event id".
-                last_event_id = if value.is_empty() {
-                    None
-                } else {
-                    Some(value.to_string())
-                };
-            }
-        }
-        if data_chunks.is_empty() {
-            continue;
-        }
-        let payload = data_chunks.join("\n");
-        // Per SSE, non-JSON `data:` lines are spec-legal but MCP
-        // never produces them — skip silently.
-        let parsed: Value = match serde_json::from_str(&payload) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        // JSON-RPC response: has `id` AND (`result` or `error`).
-        if parsed.get("id").is_some()
-            && (parsed.get("result").is_some() || parsed.get("error").is_some())
-        {
-            last_response = Some(payload.into_bytes());
-            continue;
-        }
-
-        // JSON-RPC notification: has `method` AND no `id`.
-        // The `params` field is optional in JSON-RPC; when absent we
-        // surface a JSON `null` so the sink contract is uniform.
-        if parsed.get("id").is_none() {
-            if let Some(method) = parsed.get("method").and_then(Value::as_str) {
-                notifications.push(ObservedNotification {
-                    method: method.to_string(),
-                    params: parsed.get("params").cloned().unwrap_or(Value::Null),
-                });
-            }
-        }
-    }
-
-    let response = last_response.ok_or_else(|| {
-        anyhow!(
-            "SSE body had no JSON-RPC response frame (body len = {}, notifications observed = {})",
-            body.len(),
-            notifications.len()
-        )
-    })?;
-    Ok(SseParseResult {
-        response,
-        notifications,
-        last_event_id,
-    })
-}
-
-// ─── Round-2: TLS + auth helpers ────────────────────────────────
-
-/// Marker trait so `HyperTokioIo` can wrap either a plain
-/// `TcpStream` or a `tokio_rustls::client::TlsStream<TcpStream>`.
-/// Both already satisfy `AsyncRead + AsyncWrite + Unpin + Send`,
-/// so this is a pure type alias with no behaviour.
-trait AsyncStream: AsyncRead + AsyncWrite + Unpin + Send {}
-impl<T: AsyncRead + AsyncWrite + Unpin + Send> AsyncStream for T {}
-
-/// Build a rustls TLS connector for one MCP server. Mozilla roots
-/// from `webpki-roots` are the default trust source; an operator
-/// can append a private CA via `TlsSpec.ca_bundle` (PEM file). The
-/// double-gated `insecure_skip_verify` path is rejected unless the
-/// daemon was started with `EASYNET_ALLOW_INSECURE_TLS=1`, so an
-/// attacker who can only write the config file cannot silently
-/// downgrade TLS verification.
-fn build_tls_connector(
-    spec: &TlsSpec,
-    server_label: &str,
-) -> anyhow::Result<tokio_rustls::TlsConnector> {
-    use rustls::pki_types::CertificateDer;
-    use rustls::{ClientConfig, RootCertStore};
-
-    let mut roots = RootCertStore::empty();
-    // webpki-roots ships Mozilla's CA list as a const slice of
-    // `TrustAnchor`s. Calling `extend` here adds every public CA
-    // that browsers trust by default.
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-
-    if let Some(ca_path) = spec.ca_bundle.as_deref() {
-        let raw = std::fs::read(ca_path)
-            .with_context(|| format!("read CA bundle `{}`", ca_path.display()))?;
-        let mut cursor = std::io::Cursor::new(raw);
-        let mut added = 0usize;
-        for cert in rustls_pemfile::certs(&mut cursor) {
-            let cert: CertificateDer<'_> = cert.with_context(|| {
-                format!("parse certificate in CA bundle `{}`", ca_path.display())
-            })?;
-            roots
-                .add(cert)
-                .with_context(|| format!("trust CA from `{}`", ca_path.display()))?;
-            added += 1;
-        }
-        if added == 0 {
-            anyhow::bail!(
-                "MCP server `{server_label}`: tls.ca_bundle `{}` contained no \
-                 valid CERTIFICATE PEM blocks",
-                ca_path.display()
-            );
-        }
-    }
-
-    let config = if spec.insecure_skip_verify {
-        if std::env::var("EASYNET_ALLOW_INSECURE_TLS").ok().as_deref() != Some("1") {
-            anyhow::bail!(
-                "MCP server `{server_label}`: tls.insecure_skip_verify requested \
-                 but daemon was not started with EASYNET_ALLOW_INSECURE_TLS=1. \
-                 Refusing to disable certificate verification."
-            );
-        }
-        eprintln!(
-            "[easynet warn] MCP server `{server_label}`: TLS verification disabled \
-             (tls.insecure_skip_verify=true). DO NOT use this outside closed test \
-             environments."
-        );
-        ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(InsecureCertVerifier))
-            .with_no_client_auth()
-    } else {
-        ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth()
-    };
-
-    Ok(tokio_rustls::TlsConnector::from(Arc::new(config)))
-}
-
-/// **DANGER**: accepts any server certificate, of any name, signed
-/// by anyone (including expired or self-signed). Only used when
-/// `TlsSpec.insecure_skip_verify` is true AND the daemon was
-/// started with `EASYNET_ALLOW_INSECURE_TLS=1`.
-#[derive(Debug)]
-struct InsecureCertVerifier;
-
-impl rustls::client::danger::ServerCertVerifier for InsecureCertVerifier {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &rustls::pki_types::CertificateDer<'_>,
-        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
-        _server_name: &rustls::pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        // Accept every scheme rustls supports. We've already
-        // promised not to verify anything, so the set just has to
-        // cover whatever a server might pick.
-        vec![
-            rustls::SignatureScheme::RSA_PKCS1_SHA256,
-            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
-            rustls::SignatureScheme::RSA_PSS_SHA256,
-            rustls::SignatureScheme::ED25519,
-            rustls::SignatureScheme::RSA_PKCS1_SHA384,
-            rustls::SignatureScheme::RSA_PKCS1_SHA512,
-            rustls::SignatureScheme::RSA_PSS_SHA384,
-            rustls::SignatureScheme::RSA_PSS_SHA512,
-        ]
-    }
-}
-
-/// Apply the per-server auth credentials to an outgoing request
-/// builder. Called from both the POST path and the GET listener
-/// reconnect path so a single config entry covers every direction.
-fn apply_auth_headers(
-    mut req_builder: hyper::http::request::Builder,
-    auth: Option<&AuthSpec>,
-) -> anyhow::Result<hyper::http::request::Builder> {
-    let Some(auth) = auth else {
-        return Ok(req_builder);
-    };
-    match auth {
-        AuthSpec::Bearer { token } => {
-            req_builder = req_builder.header(AUTHORIZATION, format!("Bearer {token}"));
-        }
-        AuthSpec::BearerEnv { env } => {
-            let token = std::env::var(env).with_context(|| {
-                format!(
-                    "AuthSpec::BearerEnv references env var `{env}` which is not set; \
-                     the daemon must inherit it or the operator must export it"
-                )
-            })?;
-            req_builder = req_builder.header(AUTHORIZATION, format!("Bearer {token}"));
-        }
-        AuthSpec::Headers { headers } => {
-            for (name, value) in headers {
-                req_builder = req_builder.header(name.as_str(), value.as_str());
-            }
-        }
-    }
-    Ok(req_builder)
-}
-
-/// Backoff cap for the GET listener reconnect loop. The SSE `retry:`
-/// field, when emitted by a server, overrides this for the next
-/// reconnect; otherwise we cap exponential backoff here so a
-/// permanently-broken server doesn't burn battery on retry storms.
-const LISTENER_RECONNECT_CAP: Duration = Duration::from_secs(30);
-/// Initial reconnect delay; doubles on each consecutive failure up
-/// to `LISTENER_RECONNECT_CAP`.
-const LISTENER_RECONNECT_INITIAL: Duration = Duration::from_millis(500);
-
-/// Long-lived GET listener loop. Opens a `GET` on the MCP endpoint
-/// with `Accept: text/event-stream` (per spec §"Listening for
-/// Messages from the Server"), streams the response, parses SSE
-/// frames as they arrive, routes notifications to the sink, and
-/// reconnects on transport failure with the latest `Last-Event-Id`.
-async fn listener_loop(
-    base_url: String,
-    endpoint: String,
-    session_id: Option<String>,
-    spec: Arc<McpServerSpec>,
-    tls: Option<Arc<tokio_rustls::TlsConnector>>,
-    last_event_id: Arc<RwLock<Option<String>>>,
-    sink_factory: Arc<dyn Fn() -> Box<dyn NotificationSink + Send> + Send + Sync>,
-) {
-    let mut delay = LISTENER_RECONNECT_INITIAL;
-    loop {
-        match listener_connect_and_pump(
-            &base_url,
-            &endpoint,
-            session_id.as_deref(),
-            &spec,
-            tls.as_deref(),
-            &last_event_id,
-            sink_factory.as_ref(),
-        )
-        .await
-        {
-            Ok(server_retry_hint) => {
-                // Server closed the stream gracefully. Honour any
-                // `retry:` hint observed in this connection, else
-                // reset to initial — a clean close is not a
-                // failure mode and the server is welcome to start
-                // a fresh stream immediately.
-                delay = server_retry_hint.unwrap_or(LISTENER_RECONNECT_INITIAL);
-            }
-            Err(_e) => {
-                // Connection error. Exponential backoff capped at
-                // LISTENER_RECONNECT_CAP. We don't log the error
-                // — a misconfigured upstream would spam stderr;
-                // observability hooks are a future thing.
-                delay = (delay * 2).min(LISTENER_RECONNECT_CAP);
-            }
-        }
-        tokio::time::sleep(delay).await;
-    }
-}
-
-/// One iteration of the listener loop: connect, read until close.
-/// Returns `Ok(retry_hint)` on a clean close, `Err` on transport
-/// failure. The retry hint is the most recent `retry:` field
-/// observed on the wire (in ms), if any.
-async fn listener_connect_and_pump(
-    base_url: &str,
-    endpoint: &str,
-    session_id: Option<&str>,
-    spec: &McpServerSpec,
-    tls: Option<&tokio_rustls::TlsConnector>,
-    last_event_id: &Arc<RwLock<Option<String>>>,
-    sink_factory: &(dyn Fn() -> Box<dyn NotificationSink + Send> + Send + Sync),
-) -> anyhow::Result<Option<Duration>> {
-    let target_uri: Uri = format!("{base_url}{endpoint}")
-        .parse()
-        .with_context(|| format!("invalid MCP URL: {base_url}{endpoint}"))?;
-    let host = target_uri
-        .host()
-        .ok_or_else(|| anyhow!("MCP URL missing host"))?
-        .to_string();
-    let port = target_uri
-        .port_u16()
-        .unwrap_or(if tls.is_some() { 443 } else { 80 });
-    let path = target_uri
-        .path_and_query()
-        .map(|p| p.as_str().to_string())
-        .unwrap_or_else(|| "/".to_string());
-
-    let tcp = TcpStream::connect((host.as_str(), port))
-        .await
-        .with_context(|| format!("listener TCP connect to {host}:{port}"))?;
-    let io: Box<dyn AsyncStream> = match tls {
-        Some(connector) => {
-            let sni = spec
-                .tls
-                .server_name
-                .clone()
-                .unwrap_or_else(|| host.clone());
-            let server_name = sni
-                .clone()
-                .try_into()
-                .map_err(|_| anyhow!("invalid TLS server_name `{sni}`"))?;
-            let tls_stream = connector
-                .connect(server_name, tcp)
-                .await
-                .context("listener TLS handshake")?;
-            Box::new(tls_stream)
-        }
-        None => Box::new(tcp),
-    };
-    let (mut sender, conn_driver) = http1::handshake::<_, Full<Bytes>>(HyperTokioIo::new(io))
-        .await
-        .context("listener HTTP/1.1 handshake")?;
-    let driver = tokio::spawn(async move {
-        let _ = conn_driver.await;
-    });
-
-    let mut req_builder = Request::builder()
-        .method("GET")
-        .uri(&path)
-        .header("host", format!("{host}:{port}"))
-        .header(ACCEPT, "text/event-stream")
-        .header(HEADER_PROTOCOL_VERSION, PROTOCOL_VERSION);
-    if let Some(sid) = session_id {
-        req_builder = req_builder.header(HEADER_SESSION_ID, sid);
-    }
-    if let Some(id) = last_event_id.read().await.clone() {
-        req_builder = req_builder.header("Last-Event-ID", id);
-    }
-    req_builder = apply_auth_headers(req_builder, spec.auth.as_ref())
-        .with_context(|| format!("MCP server `{}`: listener auth header", spec.name))?;
-    let req = req_builder
-        .body(Full::new(Bytes::new()))
-        .context("build listener request")?;
-
-    let resp = sender
-        .send_request(req)
-        .await
-        .context("listener send_request")?;
-    let status = resp.status();
-    // Per spec §"Listening for Messages from the Server", servers
-    // that do not offer a server-initiated stream return 405. That
-    // is a clean refusal; treat it as "no listener channel here"
-    // and don't keep reconnecting.
-    if status.as_u16() == 405 {
-        driver.abort();
-        // Sleep a long time to effectively park this listener —
-        // the loop will keep waking up but the server keeps
-        // saying no, so the cap above protects us from a hot
-        // loop. Returning Ok keeps the outer loop alive in case
-        // the operator later enables the listener server-side.
-        return Ok(Some(LISTENER_RECONNECT_CAP));
-    }
-    if !status.is_success() {
-        driver.abort();
-        bail!("listener got non-success status {status}");
-    }
-
-    // Stream the body chunk-by-chunk, accumulating into a buffer
-    // and splitting on the SSE `\n\n` event terminator. We do NOT
-    // collect the whole body — the GET listener is by design a
-    // long-lived stream.
-    let mut body = resp.into_body();
-    let mut buffer: Vec<u8> = Vec::with_capacity(4096);
-    let mut server_retry_hint: Option<Duration> = None;
-    while let Some(frame_res) = body.frame().await {
-        let frame = frame_res.context("listener body frame")?;
-        if let Some(chunk) = frame.data_ref() {
-            buffer.extend_from_slice(chunk);
-            // Drain every complete event in the buffer (a complete
-            // event is bytes-up-to-and-including the first `\n\n`).
-            while let Some((idx, terminator_len)) = find_event_terminator(&buffer) {
-                let event_bytes: Vec<u8> = buffer.drain(..idx).collect();
-                // Consume the terminator too.
-                buffer.drain(..terminator_len);
-                let parsed =
-                    parse_one_sse_event(&event_bytes).context("listener SSE event parse")?;
-                if let Some(id) = parsed.id {
-                    *last_event_id.write().await = Some(id);
-                }
-                if let Some(retry_ms) = parsed.retry_ms {
-                    server_retry_hint = Some(Duration::from_millis(retry_ms));
-                }
-                for note in parsed.notifications {
-                    let mut sink = sink_factory();
-                    sink.observe(note);
-                }
-                // Listener stream MAY contain JSON-RPC responses too
-                // (response to a client-side request the server is
-                // streaming back). v1 ignores those — round-3 if it
-                // matters. We don't surface them as notifications
-                // because they'd violate the sink contract.
-            }
-        }
-    }
-    driver.abort();
-    Ok(server_retry_hint)
-}
-
-/// Find the byte index where the first complete SSE event ends.
-/// Returns (event_body_end, terminator_len) — `buffer[..idx]` is
-/// the event body and the next `terminator_len` bytes are the
-/// separator to be discarded. Looks for `\r\n\r\n` first so the
-/// CRLF form isn't truncated to a bare `\n\n` match.
-fn find_event_terminator(buf: &[u8]) -> Option<(usize, usize)> {
-    let lf_lf = buf.windows(2).position(|w| w == b"\n\n");
-    let crlf_crlf = buf.windows(4).position(|w| w == b"\r\n\r\n");
-    match (lf_lf, crlf_crlf) {
-        (Some(a), Some(b)) if b <= a => Some((b, 4)),
-        (Some(a), _) => Some((a, 2)),
-        (None, Some(b)) => Some((b, 4)),
-        (None, None) => None,
-    }
-}
-
-#[derive(Debug, Default)]
-struct ParsedSseEvent {
-    notifications: Vec<ObservedNotification>,
-    id: Option<String>,
-    retry_ms: Option<u64>,
-}
-
-/// Parse one SSE event's bytes into the listener's view. Stricter
-/// than `parse_sse_body` — listener events are never JSON-RPC
-/// responses (those return through POST), so anything with an
-/// `id` JSON field is silently dropped. Only `notifications/*`
-/// frames flow to the sink.
-fn parse_one_sse_event(event_bytes: &[u8]) -> anyhow::Result<ParsedSseEvent> {
-    let text = std::str::from_utf8(event_bytes).context("SSE event not valid UTF-8")?;
-    let normalised = text.replace("\r\n", "\n");
-    let mut parsed = ParsedSseEvent::default();
-    let mut data_chunks: Vec<&str> = Vec::new();
-    for line in normalised.lines() {
-        if line.starts_with(':') {
-            continue;
-        }
-        let (field, value) = match line.split_once(':') {
-            Some((f, v)) => (f, v.strip_prefix(' ').unwrap_or(v)),
-            None => (line, ""),
-        };
-        match field {
-            "data" => data_chunks.push(value),
-            "id" => {
-                parsed.id = if value.is_empty() {
-                    None
-                } else {
-                    Some(value.to_string())
-                };
-            }
-            "retry" => {
-                if let Ok(ms) = value.parse::<u64>() {
-                    parsed.retry_ms = Some(ms);
-                }
-            }
-            _ => {}
-        }
-    }
-    if data_chunks.is_empty() {
-        return Ok(parsed);
-    }
-    let payload = data_chunks.join("\n");
-    let value: Value = match serde_json::from_str(&payload) {
-        Ok(v) => v,
-        Err(_) => return Ok(parsed),
-    };
-    if value.get("id").is_none() {
-        if let Some(method) = value.get("method").and_then(Value::as_str) {
-            parsed.notifications.push(ObservedNotification {
-                method: method.to_string(),
-                params: value.get("params").cloned().unwrap_or(Value::Null),
-            });
-        }
-    }
-    Ok(parsed)
-}
-
-// Silence "unused" for Pin import — we use it transitively
-// through the AsyncRead/Write impls below but the compiler can't
-// tell from the where-clauses alone in some configurations.
-#[allow(dead_code)]
-type _Pin<T> = Pin<T>;
-
 // ───────────────────────────────────────────────────────────────
-
-/// Minimal hyper IO adapter for tokio TcpStream — hyper 1.x
-/// expects its own IO trait; tokio's AsyncRead/AsyncWrite needs a
-/// thin shim. This is what `hyper-util` provides; we inline a
-/// minimal version to avoid pulling hyper-util into the non-
-/// axon-pb build path.
-struct HyperTokioIo<T> {
-    inner: T,
-}
-
-impl<T> HyperTokioIo<T> {
-    fn new(inner: T) -> Self {
-        Self { inner }
-    }
-}
-
-impl<T: tokio::io::AsyncRead + Unpin> hyper::rt::Read for HyperTokioIo<T> {
-    fn poll_read(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        mut buf: hyper::rt::ReadBufCursor<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        // SAFETY: the unfilled portion of the cursor is mut-borrowed
-        // and we only write into it via tokio's ReadBuf, which only
-        // writes initialised bytes — we then call advance() with
-        // exactly the count tokio reports as filled. Standard
-        // pattern from hyper-util::rt::TokioIo.
-        let n = unsafe {
-            let mut tbuf = tokio::io::ReadBuf::uninit(buf.as_mut());
-            match std::pin::Pin::new(&mut self.inner).poll_read(cx, &mut tbuf) {
-                std::task::Poll::Ready(Ok(())) => tbuf.filled().len(),
-                other => return other,
-            }
-        };
-        unsafe {
-            buf.advance(n);
-        }
-        std::task::Poll::Ready(Ok(()))
-    }
-}
-
-impl<T: tokio::io::AsyncWrite + Unpin> hyper::rt::Write for HyperTokioIo<T> {
-    fn poll_write(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<std::io::Result<usize>> {
-        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
-    }
-    fn poll_flush(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
-    }
-    fn poll_shutdown(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
-    }
-}
+// Integration tests — drive a real in-process hyper server.
+// SSE-parser, TLS-build, and auth-header unit tests live next to
+// their implementations in the sse / tls / auth submodules; tests
+// here cover the HttpConnection end-to-end wire shape.
+// ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::execution::mcp_client::McpServerSpec;
     use http_body_util::Full as RespFull;
     use hyper::body::Incoming;
     use hyper::server::conn::http1::Builder as ServerBuilder;
@@ -1355,11 +745,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn rpc_threads_session_id_header_on_subsequent_calls() {
-        // The server checks for the Mcp-Session-Id header on
-        // tools/list and refuses if absent — proves the client
-        // is actually threading the captured session id.
         use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
         let session_seen_on_tools_list = Arc::new(AtomicBool::new(false));
         let session_flag = session_seen_on_tools_list.clone();
 
@@ -1392,7 +778,8 @@ mod tests {
                                 .unwrap_or_default();
                             let parsed: Value =
                                 serde_json::from_slice(&body).unwrap_or(Value::Null);
-                            let method = parsed.get("method").and_then(Value::as_str).unwrap_or("");
+                            let method =
+                                parsed.get("method").and_then(Value::as_str).unwrap_or("");
                             let id = parsed.get("id").cloned().unwrap_or(Value::Null);
                             let (status, body_val) = match method {
                                 "initialize" => (
@@ -1460,10 +847,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn server_returning_sse_without_response_frame_errs_explicit() {
-        // Post-B5 behaviour: SSE is parsed; if the body has NO
-        // JSON-RPC response frame at all (only non-MCP data), we
-        // fail with a message naming the actual issue rather than
-        // pretending the response was OK.
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr: SocketAddr = listener.local_addr().unwrap();
         let url = format!("http://127.0.0.1:{}", addr.port());
@@ -1501,8 +884,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn server_returning_sse_with_response_frame_round_trips() {
-        // B5 success path: server returns SSE with a JSON-RPC
-        // response data event. Client extracts it as the response.
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr: SocketAddr = listener.local_addr().unwrap();
         let url = format!("http://127.0.0.1:{}", addr.port());
@@ -1524,8 +905,6 @@ mod tests {
                             .unwrap_or_default();
                         let parsed: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
                         let id = parsed.get("id").cloned().unwrap_or(Value::Null);
-                        // SSE body: one notification (skipped) +
-                        // one response (parsed).
                         let sse = format!(
                             "data: {{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{{\"progress\":0.5}}}}\n\n\
                              data: {{\"jsonrpc\":\"2.0\",\"id\":{id_str},\"result\":{{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{{}},\"serverInfo\":{{\"name\":\"sse-srv\",\"version\":\"0\"}}}}}}\n\n",
@@ -1553,9 +932,7 @@ mod tests {
     }
 
     /// Captures observed notifications so tests can assert the sink
-    /// receives them in arrival order. Mirrors the stdio transport's
-    /// test sink shape so both transports look the same in test
-    /// fixtures.
+    /// receives them in arrival order.
     struct CollectSink {
         seen: std::sync::Arc<std::sync::Mutex<Vec<ObservedNotification>>>,
     }
@@ -1567,11 +944,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn rpc_with_sink_routes_sse_progress_notifications() {
-        // End-to-end SSE progress contract: server emits two
-        // `notifications/progress` frames followed by the terminal
-        // response. `rpc_with_sink` must (a) return the terminal
-        // result verbatim, and (b) deliver every progress frame to
-        // the sink in order.
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr: SocketAddr = listener.local_addr().unwrap();
         let url = format!("http://127.0.0.1:{}", addr.port());
@@ -1621,10 +993,6 @@ mod tests {
                                     .unwrap(),
                             ),
                             "tools/call" => {
-                                // SSE response: two progress notes
-                                // then terminal result. Mirrors the
-                                // shape mcp-bench's tool servers use
-                                // when emitting progress.
                                 let id_str = serde_json::to_string(&id).unwrap();
                                 let sse = format!(
                                     "data: {{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{{\"progressToken\":\"abc\",\"progress\":0.3,\"message\":\"warming\"}}}}\n\n\
@@ -1664,10 +1032,8 @@ mod tests {
             )
             .await
             .expect("tools/call must succeed");
-        // Terminal response is the MCP tools/call shape.
         assert_eq!(result["content"][0]["text"], "done");
         assert_eq!(result["isError"], false);
-        // Both progress notifications surfaced to the sink, in order.
         let notes = seen.lock().unwrap().clone();
         assert_eq!(notes.len(), 2, "expected 2 progress notes, got: {notes:?}");
         assert_eq!(notes[0].method, "notifications/progress");
@@ -1679,10 +1045,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn rpc_without_sink_still_works_when_server_emits_progress() {
-        // Backwards-compatible path: callers using the plain `rpc()`
-        // must keep working even if the server interleaves
-        // notifications. The notifications are silently discarded
-        // (DiscardSink), the terminal response is returned verbatim.
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr: SocketAddr = listener.local_addr().unwrap();
         let url = format!("http://127.0.0.1:{}", addr.port());
@@ -1753,127 +1115,11 @@ mod tests {
 
         let spec = http_spec(&url);
         let mut conn = HttpConnection::initialize(&spec).await.expect("init OK");
-        // Plain rpc — no sink wired. The notification is consumed by
-        // DiscardSink internally; the response still comes through.
         let result = conn
             .rpc("tools/list", json!({}))
             .await
             .expect("plain rpc still works on SSE response with notifications");
         assert!(result.get("tools").is_some());
-    }
-
-    #[test]
-    fn parse_sse_body_picks_last_response_and_captures_notifications() {
-        let body = b"data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progress\":0.1}}\n\n\
-                     data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"ok\":true}}\n\n";
-        let parsed = parse_sse_body(body).expect("must find response");
-        let v: Value = serde_json::from_slice(&parsed.response).unwrap();
-        assert_eq!(v["id"], 7);
-        assert_eq!(v["result"]["ok"], true);
-        // The intervening progress notification is now first-class
-        // output, not silently dropped.
-        assert_eq!(parsed.notifications.len(), 1);
-        assert_eq!(parsed.notifications[0].method, "notifications/progress");
-        assert_eq!(parsed.notifications[0].params["progress"], 0.1);
-    }
-
-    #[test]
-    fn parse_sse_body_captures_every_notification_in_order() {
-        // Multiple progress frames followed by the terminal response.
-        // The sink routing contract is "in arrival order"; pin it.
-        let body = b"data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progress\":0.25,\"message\":\"step1\"}}\n\n\
-                     data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progress\":0.75,\"message\":\"step2\"}}\n\n\
-                     data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{\"level\":\"info\"}}\n\n\
-                     data: {\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{\"done\":true}}\n\n";
-        let parsed = parse_sse_body(body).expect("must find response");
-        assert_eq!(parsed.notifications.len(), 3);
-        assert_eq!(parsed.notifications[0].params["progress"], 0.25);
-        assert_eq!(parsed.notifications[0].params["message"], "step1");
-        assert_eq!(parsed.notifications[1].params["progress"], 0.75);
-        assert_eq!(parsed.notifications[2].method, "notifications/message");
-        let v: Value = serde_json::from_slice(&parsed.response).unwrap();
-        assert_eq!(v["result"]["done"], true);
-    }
-
-    #[test]
-    fn parse_sse_body_handles_multiline_data_events() {
-        // SSE allows multiple data: lines per event, joined by \n.
-        let body = b"data: {\"jsonrpc\":\"2.0\",\n\
-                     data: \"id\":1,\n\
-                     data: \"result\":{}}\n\n";
-        let parsed = parse_sse_body(body).expect("multiline data must parse");
-        let v: Value = serde_json::from_slice(&parsed.response).unwrap();
-        assert_eq!(v["id"], 1);
-        assert!(parsed.notifications.is_empty());
-    }
-
-    #[test]
-    fn parse_sse_body_handles_crlf_line_endings() {
-        let body = b"data: {\"jsonrpc\":\"2.0\",\"id\":5,\"result\":{}}\r\n\r\n";
-        let parsed = parse_sse_body(body).expect("CRLF must work");
-        let v: Value = serde_json::from_slice(&parsed.response).unwrap();
-        assert_eq!(v["id"], 5);
-    }
-
-    #[test]
-    fn parse_sse_body_ignores_comments_and_non_data_fields() {
-        let body = b": this is a comment\n\
-                     event: ignored\n\
-                     id: 42\n\
-                     retry: 3000\n\
-                     data: {\"jsonrpc\":\"2.0\",\"id\":3,\"result\":\"x\"}\n\n";
-        let parsed = parse_sse_body(body).expect("must find response");
-        let v: Value = serde_json::from_slice(&parsed.response).unwrap();
-        assert_eq!(v["id"], 3);
-        assert_eq!(v["result"], "x");
-        // `event:`, `id:`, `retry:`, comments — none surface as
-        // notifications. Pin that contract explicitly so a future
-        // change that starts mis-classifying them fails loud.
-        assert!(parsed.notifications.is_empty());
-    }
-
-    #[test]
-    fn parse_sse_body_errors_when_only_notifications_seen() {
-        // The MCP spec requires the stream to terminate with a
-        // response frame matching the request id. A stream of pure
-        // notifications is therefore malformed — the caller's
-        // `rpc()` MUST fail loud, not return a phantom `null`.
-        let body = b"data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progress\":0.5}}\n\n\
-                     data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{}}\n\n";
-        let err = parse_sse_body(body).unwrap_err();
-        let msg = format!("{err}");
-        assert!(
-            msg.contains("no JSON-RPC response frame"),
-            "error must be explicit; got: {msg}"
-        );
-        assert!(
-            msg.contains("notifications observed = 2"),
-            "error must surface notification count for debugging; got: {msg}"
-        );
-    }
-
-    #[test]
-    fn parse_sse_body_skips_non_json_data_events() {
-        // Spec allows non-JSON `data:` events; MCP never sends them
-        // but we must not crash on receipt.
-        let body = b"data: hello world\n\n\
-                     data: {\"jsonrpc\":\"2.0\",\"id\":11,\"result\":42}\n\n";
-        let parsed = parse_sse_body(body).expect("non-JSON skipped, response found");
-        let v: Value = serde_json::from_slice(&parsed.response).unwrap();
-        assert_eq!(v["result"], 42);
-    }
-
-    #[test]
-    fn parse_sse_body_ignores_data_event_with_neither_id_nor_method() {
-        // A `data:` payload that's valid JSON but is neither a
-        // request, response, nor notification (e.g. an array or a
-        // bare object) must not surface as either output kind.
-        let body = b"data: [1, 2, 3]\n\n\
-                     data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"ok\"}\n\n";
-        let parsed = parse_sse_body(body).expect("response found");
-        assert!(parsed.notifications.is_empty());
-        let v: Value = serde_json::from_slice(&parsed.response).unwrap();
-        assert_eq!(v["result"], "ok");
     }
 
     #[tokio::test]
@@ -1892,8 +1138,8 @@ mod tests {
     async fn https_url_builds_tls_connector_at_initialize() {
         // Round-2: HTTPS no longer rejects at initialize. The
         // initialize handshake still fails because no real server
-        // exists at example.com:443 doing MCP, but the failure
-        // mode is "connect/handshake" not "HTTPS unsupported".
+        // exists at 127.0.0.1:1 doing MCP, but the failure mode is
+        // "connect/handshake" not "HTTPS unsupported".
         let spec = McpServerSpec {
             name: "tls".into(),
             transport: "http".into(),
@@ -1906,102 +1152,6 @@ mod tests {
             !msg.to_lowercase().contains("not yet supported"),
             "HTTPS must no longer be rejected as unsupported; got: {msg}"
         );
-    }
-
-    #[test]
-    fn auth_bearer_appends_authorization_header() {
-        let spec = McpServerSpec {
-            name: "auth".into(),
-            transport: "http".into(),
-            url: Some("http://127.0.0.1:1".into()),
-            auth: Some(AuthSpec::Bearer {
-                token: "abc.def.ghi".into(),
-            }),
-            ..Default::default()
-        };
-        let req = Request::builder().method("POST").uri("/mcp");
-        let req = apply_auth_headers(req, spec.auth.as_ref()).unwrap();
-        let built = req.body(()).unwrap();
-        let header = built
-            .headers()
-            .get(AUTHORIZATION)
-            .expect("auth header set")
-            .to_str()
-            .unwrap();
-        assert_eq!(header, "Bearer abc.def.ghi");
-    }
-
-    #[test]
-    fn auth_bearer_env_reads_from_environment() {
-        let key = "EASYNET_MCP_TEST_BEARER";
-        std::env::set_var(key, "env-sourced-token");
-        let req = Request::builder().method("POST").uri("/mcp");
-        let req = apply_auth_headers(
-            req,
-            Some(&AuthSpec::BearerEnv { env: key.into() }),
-        )
-        .unwrap();
-        let built = req.body(()).unwrap();
-        assert_eq!(
-            built
-                .headers()
-                .get(AUTHORIZATION)
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            "Bearer env-sourced-token"
-        );
-        std::env::remove_var(key);
-    }
-
-    #[test]
-    fn auth_bearer_env_missing_var_fails_with_clear_message() {
-        // Picked an unlikely-to-collide name so this test is
-        // hermetic regardless of CI env shape.
-        let req = Request::builder().method("POST").uri("/mcp");
-        let err = apply_auth_headers(
-            req,
-            Some(&AuthSpec::BearerEnv {
-                env: "EASYNET_DEFINITELY_UNSET_xyz123".into(),
-            }),
-        )
-        .unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("EASYNET_DEFINITELY_UNSET_xyz123") && msg.contains("not set"),
-            "BearerEnv missing-var error must name the var; got: {msg}"
-        );
-    }
-
-    #[test]
-    fn auth_headers_map_injects_arbitrary_pairs() {
-        let mut h = std::collections::HashMap::new();
-        h.insert("X-Api-Key".to_string(), "sk-1234".to_string());
-        h.insert("MCP-Tenant-Id".to_string(), "acme-prod".to_string());
-        let req = Request::builder().method("POST").uri("/mcp");
-        let req = apply_auth_headers(req, Some(&AuthSpec::Headers { headers: h })).unwrap();
-        let built = req.body(()).unwrap();
-        assert_eq!(
-            built.headers().get("X-Api-Key").unwrap().to_str().unwrap(),
-            "sk-1234"
-        );
-        assert_eq!(
-            built
-                .headers()
-                .get("MCP-Tenant-Id")
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            "acme-prod"
-        );
-    }
-
-    #[test]
-    fn no_auth_leaves_request_unchanged() {
-        let req = Request::builder().method("POST").uri("/mcp");
-        let req = apply_auth_headers(req, None).unwrap();
-        let built = req.body(()).unwrap();
-        assert!(built.headers().get(AUTHORIZATION).is_none());
     }
 
     #[test]
@@ -2029,6 +1179,7 @@ mod tests {
 
     #[test]
     fn tls_spec_round_trips_through_serde() {
+        use crate::runtime::execution::mcp_client::{AuthSpec, TlsSpec};
         let mut headers = std::collections::HashMap::new();
         headers.insert("X-K".into(), "V".into());
         let spec = McpServerSpec {
@@ -2049,29 +1200,8 @@ mod tests {
     }
 
     #[test]
-    fn insecure_skip_verify_without_env_fails_build() {
-        // Must run with the env var unset; if some other test
-        // accidentally left it set, the test would mis-pass. Force
-        // it unset for the duration of this test.
-        std::env::remove_var("EASYNET_ALLOW_INSECURE_TLS");
-        let tls = TlsSpec {
-            ca_bundle: None,
-            server_name: None,
-            insecure_skip_verify: true,
-        };
-        let err = match build_tls_connector(&tls, "test-server") {
-            Ok(_) => panic!("expected double-gate refusal, got Ok"),
-            Err(e) => e,
-        };
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("EASYNET_ALLOW_INSECURE_TLS"),
-            "double-gate error must mention the env var; got: {msg}"
-        );
-    }
-
-    #[test]
     fn validate_rejects_https_options_on_plain_http() {
+        use crate::runtime::execution::mcp_client::TlsSpec;
         let spec = McpServerSpec {
             name: "mismatch".into(),
             transport: "http".into(),
@@ -2085,49 +1215,5 @@ mod tests {
         };
         let err = spec.validate().unwrap_err();
         assert!(format!("{err}").contains("insecure_skip_verify"));
-    }
-
-    // SSE parser fixture: confirm the round-2 parser surfaces the
-    // last observed `id:` field even when only notifications carry
-    // it. This is what feeds the `Last-Event-Id` replay path.
-    #[test]
-    fn sse_parser_records_last_event_id_across_frames() {
-        let body = "id: 42\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progress\":0.1}}\n\nid: 43\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n";
-        let parsed = parse_sse_body(body.as_bytes()).unwrap();
-        assert_eq!(parsed.last_event_id.as_deref(), Some("43"));
-        assert_eq!(parsed.notifications.len(), 1);
-    }
-
-    #[test]
-    fn sse_parser_resets_last_event_id_on_empty_id_field() {
-        let body = "id: 99\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":null}\n\nid: \ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n";
-        let parsed = parse_sse_body(body.as_bytes()).unwrap();
-        // Per HTML spec, `id:` with empty value resets to "no
-        // last event id".
-        assert!(parsed.last_event_id.is_none());
-    }
-
-    #[test]
-    fn find_event_terminator_handles_both_line_endings() {
-        assert_eq!(find_event_terminator(b"abc\n\nrest"), Some((3, 2)));
-        assert_eq!(find_event_terminator(b"abc\r\n\r\nrest"), Some((3, 4)));
-        assert_eq!(find_event_terminator(b"no-terminator-here"), None);
-    }
-
-    #[test]
-    fn parse_one_sse_event_picks_up_retry_field() {
-        let event = b"retry: 1500\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{}}";
-        let parsed = parse_one_sse_event(event).unwrap();
-        assert_eq!(parsed.retry_ms, Some(1500));
-        assert_eq!(parsed.notifications.len(), 1);
-    }
-
-    #[test]
-    fn parse_one_sse_event_drops_json_rpc_responses() {
-        let event = b"data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}";
-        let parsed = parse_one_sse_event(event).unwrap();
-        // Listener events are NOT response carriers; they
-        // surface as zero notifications.
-        assert!(parsed.notifications.is_empty());
     }
 }

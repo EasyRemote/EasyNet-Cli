@@ -559,7 +559,7 @@ struct McpServerRow {
     /// negotiated protocol version, both of which the spec REQUIRES
     /// on every subsequent request. Only populated when
     /// `spec.transport == "http"`.
-    http_conn: Option<streamable_http_client::HttpConnection>,
+    http_conn: Option<http::HttpConnection>,
 }
 
 /// Process-wide outbound MCP client registry. Cloneable handle.
@@ -695,8 +695,7 @@ impl McpClientService {
             }
             "http" => {
                 if row.http_conn.is_none() {
-                    let conn =
-                        streamable_http_client::HttpConnection::initialize(&row.spec).await?;
+                    let conn = http::HttpConnection::initialize(&row.spec).await?;
                     row.http_conn = Some(conn);
                 }
                 let conn = row.http_conn.as_mut().expect("http_conn just set");
@@ -716,9 +715,11 @@ impl McpClientService {
     /// §"Progress") and the caller wants to surface progress to
     /// its own consumer.
     ///
-    /// HTTP transport currently flattens notifications (the v1
-    /// streamable_http_client doesn't read SSE yet — that's plan
-    /// slice B5). Stdio transport fully implements the sink path.
+    /// HTTP transport routes intervening `notifications/*` frames
+    /// out of the SSE response stream into `sink` before returning
+    /// the terminal JSON-RPC response; see [`http::HttpConnection::
+    /// rpc_with_sink`]. Stdio transport mirrors the same contract
+    /// via [`McpConnection::rpc_with_sink`].
     pub async fn rpc_with_progress(
         &self,
         name: &str,
@@ -790,8 +791,7 @@ impl McpClientService {
                 // return plain `application/json` (no notifications)
                 // still work — the sink is simply never invoked.
                 if row.http_conn.is_none() {
-                    let conn =
-                        streamable_http_client::HttpConnection::initialize(&row.spec).await?;
+                    let conn = http::HttpConnection::initialize(&row.spec).await?;
                     row.http_conn = Some(conn);
                 }
                 let conn = row.http_conn.as_mut().expect("http_conn just set");
@@ -841,7 +841,11 @@ impl McpClientService {
 /// Streamable HTTP transport for outbound MCP. Per MCP 2025-06-18
 /// §"Streamable HTTP". Lives in its own submodule so the stdio
 /// implementation above stays readable.
-pub mod streamable_http_client;
+///
+/// Public surface is [`http::HttpConnection`]; internal helpers
+/// (TLS connector, auth header injection, SSE parsers, hyper IO
+/// shim) are `pub(super)` inside that module.
+pub mod http;
 
 impl std::fmt::Debug for McpClientService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1481,10 +1485,10 @@ while True:
     /// route both frames to the sink and return the response
     /// verbatim.
     ///
-    /// Why this lives at the service level rather than the
-    /// streamable_http_client level: the lower layer's test pins
-    /// `HttpConnection::rpc_with_sink` in isolation; this one pins
-    /// the end-to-end seam — `McpClientService::rpc_with_progress`
+    /// Why this lives at the service level rather than the `http`
+    /// submodule: the lower layer's tests pin
+    /// `http::HttpConnection::rpc_with_sink` in isolation; this one
+    /// pins the end-to-end seam — `McpClientService::rpc_with_progress`
     /// dispatching to the HTTP branch and threading the sink
     /// through — which is the API every caller (reflective
     /// registry, MCP-bench round-1, bridge progress projection)
@@ -1502,10 +1506,10 @@ while True:
         use std::net::SocketAddr;
         use tokio::net::TcpListener;
 
-        // Inline minimal hyper IO adapter — identical to the one in
-        // the streamable_http_client tests. Inlined here so this
-        // module's test doesn't have to reach across a private
-        // submodule.
+        // Inline minimal hyper IO adapter — identical in shape to
+        // `http::hyper_io::HyperTokioIo`. Inlined here so this
+        // module's test doesn't have to reach across a `pub(super)`
+        // boundary into the `http` submodule.
         struct ServerIo<T>(T);
         impl<T: tokio::io::AsyncRead + Unpin> hyper::rt::Read for ServerIo<T> {
             fn poll_read(
