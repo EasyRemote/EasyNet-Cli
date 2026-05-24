@@ -93,15 +93,22 @@ pub(super) async fn listener_loop(
             }
             Err(e) => {
                 // Connection error. Exponential backoff capped at
-                // LISTENER_RECONNECT_CAP. The doubled delay is
-                // computed first so the emitted next-delay matches
-                // the sleep that follows.
+                // LISTENER_RECONNECT_CAP. SRE pipelines grep
+                // `kind=listener_reconnect` to surface a
+                // permanently-broken upstream rather than letting it
+                // retry-storm silently. The doubled delay is computed
+                // first so the emitted `next_delay_ms` matches the
+                // sleep that follows.
                 delay = (delay * 2).min(LISTENER_RECONNECT_CAP);
                 let server_label = spec.name.as_str();
+                let err_msg = format!("{e:#}");
                 let next_delay_ms = delay.as_millis() as u64;
-                eprintln!(
-                    "[mcp-http-client] listener reconnect for `{server_label}`: \
-                     {e:#}; next attempt in {next_delay_ms} ms"
+                crate::op_event!(
+                    component = mcp_http_client,
+                    kind = listener_reconnect,
+                    server = server_label,
+                    next_delay_ms = next_delay_ms,
+                    error = err_msg,
                 );
             }
         }

@@ -483,10 +483,13 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
         // dispatcher, distinct from a stalled supervisor or a
         // transport hang. Without this we cannot tell from logs
         // alone whether the bidi delivered a frame at all.
-        eprintln!(
-            "[local-ability-dispatcher] handle_down: BinaryChunk stream_id={} data_bytes={}",
-            chunk.stream_id,
-            chunk.data.len()
+        let stream_id = chunk.stream_id;
+        let data_bytes = chunk.data.len();
+        crate::op_event!(
+            component = local_ability_dispatcher,
+            kind = handle_down_binary_chunk,
+            stream_id = stream_id,
+            data_bytes = data_bytes,
         );
 
         let dispatch: SessionDispatch = serde_json::from_slice(&chunk.data).map_err(|err| {
@@ -513,10 +516,13 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
                 args,
                 args_content_envelope,
             } => {
-                eprintln!(
-                    "[local-ability-dispatcher] received Dispatch frame \
-                     call_id={call_id} ability={ability} args_bytes={}",
-                    args.len()
+                let args_bytes = args.len();
+                crate::op_event!(
+                    component = local_ability_dispatcher,
+                    kind = received_dispatch_frame,
+                    call_id = call_id,
+                    ability = ability,
+                    args_bytes = args_bytes,
                 );
                 (call_id, ability, args, args_content_envelope)
             }
@@ -526,10 +532,14 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
                 args,
                 args_content_envelope,
             } => {
-                eprintln!(
-                    "[local-ability-dispatcher] received BidiOpen frame \
-                     call_id={call_id} ability={ability} args_bytes={}",
-                    args.len()
+                let args_bytes = args.len();
+                let ability_log = ability.clone();
+                crate::op_event!(
+                    component = local_ability_dispatcher,
+                    kind = received_bidi_open_frame,
+                    call_id = call_id,
+                    ability = ability_log,
+                    args_bytes = args_bytes,
                 );
                 return self
                     .open_remote_file_transfer_bidi(
@@ -555,22 +565,24 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
                     let id_hex = call_id_hex(&call_id);
                     let fired = correlation.complete(call_id, outcome);
                     if !fired {
-                        eprintln!(
-                            "[local-ability-dispatcher] inbound RequestResult \
-                             call_id={id_hex} did not match a pending entry; \
-                             dropping (caller may have timed out, or hub double-replied)"
+                        crate::op_event!(
+                            component = local_ability_dispatcher,
+                            kind = request_result_orphan,
+                            call_id = id_hex,
+                            message = "no pending entry matched; dropping (caller may have timed out, or hub double-replied)",
                         );
                     } else {
-                        eprintln!(
-                            "[local-ability-dispatcher] inbound RequestResult \
-                             call_id={id_hex} matched pending entry; completed"
+                        crate::op_event!(
+                            component = local_ability_dispatcher,
+                            kind = request_result_completed,
+                            call_id = id_hex,
                         );
                     }
                 } else {
-                    eprintln!(
-                        "[local-ability-dispatcher] inbound RequestResult on a \
-                         hub-mode daemon (no escalation_correlation wired); \
-                         ignoring"
+                    crate::op_event!(
+                        component = local_ability_dispatcher,
+                        kind = request_result_dropped_hub_mode,
+                        message = "inbound RequestResult on a hub-mode daemon (no escalation_correlation wired); ignoring",
                     );
                 }
                 return Ok(());
@@ -698,9 +710,11 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
         })?;
 
         let payload_len = payload.len();
-        eprintln!(
-            "[local-ability-dispatcher] sending Result frame up bidi: \
-             call_id={call_id} payload_bytes={payload_len}"
+        crate::op_event!(
+            component = local_ability_dispatcher,
+            kind = sending_result_frame_up_bidi,
+            call_id = call_id,
+            payload_bytes = payload_len,
         );
 
         let send_result = outbound
@@ -713,12 +727,17 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
             .map_err(|_| SessionDispatchError::Other("outbound channel closed".to_string()));
 
         if send_result.is_err() {
-            eprintln!(
-                "[local-ability-dispatcher] FAILED to send Result frame up bidi for call_id={call_id} — outbound channel closed"
+            crate::op_event!(
+                component = local_ability_dispatcher,
+                kind = result_frame_send_failed,
+                call_id = call_id,
+                reason = "outbound_channel_closed",
             );
         } else {
-            eprintln!(
-                "[local-ability-dispatcher] Result frame sent up bidi successfully for call_id={call_id}"
+            crate::op_event!(
+                component = local_ability_dispatcher,
+                kind = result_frame_sent_up_bidi,
+                call_id = call_id,
             );
         }
 

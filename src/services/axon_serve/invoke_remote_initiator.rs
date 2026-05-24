@@ -308,12 +308,12 @@ pub enum SessionRequestError {
 }
 
 /// Render a 16-byte `Request` / `RequestResult` `call_id` as a
-/// 32-character lowercase hex string for log-marker output.
-/// Used by the locked log lines in PR-N6 spec §"Locked log
-/// markers" (`[session-accept] received Request frame call_id=…`,
-/// `[axon-serve] forward_invoke escalated up <self>.session bidi:
-/// call_id=…`). Operator-facing: hex round-trips through any
-/// terminal without escaping.
+/// 32-character lowercase hex string for op-event output. Stamped
+/// into `kind = session_accept_request_frame` and the
+/// `forward_invoke_escalated_up_session_bidi` event so SRE can
+/// correlate hub-side dispatch with the device-side bidi stream
+/// the call rode out on. Operator-facing: hex round-trips through
+/// any terminal without escaping.
 #[must_use]
 pub fn call_id_hex(call_id: &[u8; 16]) -> String {
     let mut out = String::with_capacity(32);

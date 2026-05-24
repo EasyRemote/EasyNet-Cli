@@ -86,10 +86,16 @@ pub(super) fn build_tls_connector(
                  Refusing to disable certificate verification."
             );
         }
-        eprintln!(
-            "[easynet warn] MCP server `{server_label}`: TLS verification disabled \
-             (tls.insecure_skip_verify=true). DO NOT use this outside closed test \
-             environments."
+        // Security audit trail. SRE pipelines can grep
+        // `kind=tls_insecure` to alert on any host where
+        // insecure_skip_verify has been enabled.
+        crate::op_event!(
+            component = mcp_http_client,
+            kind = tls_insecure,
+            server = server_label,
+            level = "warn",
+            message = "TLS certificate verification disabled via tls.insecure_skip_verify=true; \
+                      DO NOT use outside closed test environments",
         );
         ClientConfig::builder()
             .dangerous()

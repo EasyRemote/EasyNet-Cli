@@ -1106,18 +1106,23 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
                                 // reconnect with backoff.
                             }
                             ConsumeOutcome::ProtocolViolation(reason) => {
-                                eprintln!(
-                                    "[federation_directory] subscribe_directory_v2 \
-                                     protocol violation from peer realm={peer_realm:?}: \
-                                     {reason}; tearing down + reconnecting"
+                                let peer_realm_display = format!("{peer_realm:?}");
+                                crate::op_event!(
+                                    component = federation_directory,
+                                    kind = subscribe_directory_v2_protocol_violation,
+                                    peer_realm = peer_realm_display,
+                                    error = reason,
+                                    message = "tearing down + reconnecting",
                                 );
                             }
                             ConsumeOutcome::IdleTimeout => {
-                                eprintln!(
-                                    "[federation_directory] subscribe_directory_v2 \
-                                     idle timeout for peer realm={peer_realm:?} (no \
-                                     frame within {idle_timeout_ms} ms); \
-                                     reconnecting"
+                                let peer_realm_display = format!("{peer_realm:?}");
+                                crate::op_event!(
+                                    component = federation_directory,
+                                    kind = subscribe_directory_v2_idle_timeout,
+                                    peer_realm = peer_realm_display,
+                                    idle_timeout_ms = idle_timeout_ms,
+                                    message = "reconnecting",
                                 );
                             }
                         }
@@ -1151,10 +1156,16 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
                 client.mark_stale_and_publish(&cell);
             }
             Err(err) => {
-                eprintln!(
-                    "[federation_directory] subscribe_directory_v2 dial \
-                     to peer realm={peer_realm:?} hub={peer_hub_uri:?} \
-                     failed: {err}; backing off",
+                let peer_realm_display = format!("{peer_realm:?}");
+                let peer_hub_uri_display = format!("{peer_hub_uri:?}");
+                let err_msg = format!("{err}");
+                crate::op_event!(
+                    component = federation_directory,
+                    kind = subscribe_directory_v2_dial_failed,
+                    peer_realm = peer_realm_display,
+                    peer_hub_uri = peer_hub_uri_display,
+                    error = err_msg,
+                    message = "backing off",
                 );
                 let backoff_ms = client.on_dial_err();
                 tokio::select! {
@@ -1169,9 +1180,12 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
 
         // Stream-end backoff (post-Pumping disconnect).
         let backoff_ms = client.on_dial_err();
-        eprintln!(
-            "[federation_directory] subscribe_directory_v2 stream from \
-             peer realm={peer_realm:?} ended; reconnecting in {backoff_ms} ms",
+        let peer_realm_display = format!("{peer_realm:?}");
+        crate::op_event!(
+            component = federation_directory,
+            kind = subscribe_directory_v2_stream_ended_reconnecting,
+            peer_realm = peer_realm_display,
+            backoff_ms = backoff_ms,
         );
         tokio::select! {
             _ = tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)) => {}

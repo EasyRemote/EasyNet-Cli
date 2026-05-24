@@ -179,9 +179,12 @@ pub fn dispatch_endpoint_uri() -> String {
 pub async fn run(proxy: AbilityProxy) -> anyhow::Result<()> {
     let path = dispatch_socket_path();
     let listener = bind_socket(&path).await?;
-    eprintln!(
-        "[runtime-dispatch] listening at {} (Step 3 wire to axon-runtime)",
-        path.display()
+    let path_display = format!("{}", path.display());
+    crate::op_event!(
+        component = runtime_dispatch,
+        kind = listening,
+        path = path_display,
+        message = "Step 3 wire to axon-runtime",
     );
     accept_loop(listener, proxy).await
 }
@@ -246,11 +249,13 @@ async fn accept_loop(listener: DispatchListener, proxy: AbilityProxy) -> anyhow:
             let proxy = proxy.clone();
             tokio::spawn(async move {
                 if let Err(e) = serve_one(stream, proxy).await {
-                    // Per-connection failures never crash the loop. We
-                    // log via eprintln (mirrors server.rs); a future
-                    // structured-logging pass routes both modules
-                    // through `tracing`.
-                    eprintln!("[runtime-dispatch] connection error: {e:#}");
+                    // Per-connection failures never crash the loop.
+                    let err_msg = format!("{e:#}");
+                    crate::op_event!(
+                        component = runtime_dispatch,
+                        kind = connection_error,
+                        error = err_msg,
+                    );
                 }
             });
         },
@@ -260,7 +265,12 @@ async fn accept_loop(listener: DispatchListener, proxy: AbilityProxy) -> anyhow:
             let proxy = proxy.clone();
             tokio::spawn(async move {
                 if let Err(e) = serve_one(stream, proxy).await {
-                    eprintln!("[runtime-dispatch] connection error: {e:#}");
+                    let err_msg = format!("{e:#}");
+                    crate::op_event!(
+                        component = runtime_dispatch,
+                        kind = connection_error,
+                        error = err_msg,
+                    );
                 }
             });
         },

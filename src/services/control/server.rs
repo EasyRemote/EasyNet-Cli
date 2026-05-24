@@ -118,7 +118,12 @@ pub(crate) async fn accept_loop(
                         // but never fatal to the listener loop. We
                         // log via stderr; a future PR can route this
                         // through tracing.
-                        eprintln!("[control] connection ended with error: {e:#}");
+                        let err_msg = format!("{e:#}");
+                        crate::op_event!(
+                            component = control,
+                            kind = connection_ended_with_error,
+                            error = err_msg,
+                        );
                     }
                 });
             }
@@ -129,7 +134,12 @@ pub(crate) async fn accept_loop(
             let proxy = proxy.clone();
             tokio::spawn(async move {
                 if let Err(e) = serve_connection(stream, proxy).await {
-                    eprintln!("[control] connection ended with error: {e:#}");
+                    let err_msg = format!("{e:#}");
+                    crate::op_event!(
+                        component = control,
+                        kind = connection_ended_with_error,
+                        error = err_msg,
+                    );
                 }
             });
         },

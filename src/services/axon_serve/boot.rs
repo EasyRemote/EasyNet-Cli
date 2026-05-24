@@ -182,9 +182,14 @@ pub fn start_axon_serve_sidecar(
     let config = match DaemonConfig::load(&config_path) {
         Ok(cfg) => cfg,
         Err(err) => {
-            eprintln!(
-                "[axon-serve] no transport-plane config at {} ({err}); skipping gRPC listener",
-                config_path.display(),
+            let config_path_display = format!("{}", config_path.display());
+            let err_msg = format!("{err}");
+            crate::op_event!(
+                component = axon_serve,
+                kind = transport_plane_config_missing,
+                config_path = config_path_display,
+                error = err_msg,
+                message = "skipping gRPC listener",
             );
             return Ok(());
         }
@@ -276,10 +281,11 @@ pub fn start_axon_serve_sidecar(
             });
             let prior = presence.insert(uri.clone(), noop_tx);
             if prior.is_none() {
-                eprintln!(
-                    "[axon-serve] device-mode self-presence seeded for `{uri}` \
-                     (drain task holds receiver; \
-                      self-targeted invokes route through local AbilityDispatcher)"
+                crate::op_event!(
+                    component = axon_serve,
+                    kind = device_mode_self_presence_seeded,
+                    self_uri = uri,
+                    message = "drain task holds receiver; self-targeted invokes route through local AbilityDispatcher",
                 );
             }
         }
@@ -383,9 +389,13 @@ pub fn start_axon_serve_sidecar(
                 service = service.with_invocation_ledger(Arc::new(ledger));
             }
             Err(err) => {
-                eprintln!(
-                    "[axon-serve] invocation ledger disabled at {}: {err}",
-                    config.billing_dir().display()
+                let billing_dir_display = format!("{}", config.billing_dir().display());
+                let err_msg = format!("{err}");
+                crate::op_event!(
+                    component = axon_serve,
+                    kind = invocation_ledger_disabled,
+                    billing_dir = billing_dir_display,
+                    error = err_msg,
                 );
             }
         }
@@ -541,9 +551,11 @@ pub fn start_axon_serve_sidecar(
                 escalation_state,
             );
         } else {
-            eprintln!(
-                "[axon-serve] device-mode daemon missing either hub_endpoint or \
-                 credentials.json device identity; outbound `<self>.session` not started"
+            crate::op_event!(
+                component = axon_serve,
+                kind = device_mode_session_supervisor_not_started,
+                reason = "missing_hub_endpoint_or_device_identity",
+                message = "device-mode daemon missing either hub_endpoint or credentials.json device identity; outbound `<self>.session` not started",
             );
         }
     }
@@ -606,12 +618,16 @@ fn spawn_session_supervisor(
     } else {
         "forward_invoke escalation OFF"
     };
-    eprintln!(
-        "[axon-serve] device-mode dialing `<self>.session` against {hub_endpoint} as \
-         {}; {signing_state}; tls={ca_state}; {escalation_state_str}; \
-         LocalAbilityDispatcher will execute inbound SessionDispatch::Dispatch \
-         frames through the boot-threaded AbilityDispatcher Arc",
-        identity.caller_ura,
+    let caller_ura_display = identity.caller_ura.clone();
+    crate::op_event!(
+        component = axon_serve,
+        kind = device_mode_dialing_self_session,
+        hub_endpoint = hub_endpoint,
+        caller_ura = caller_ura_display,
+        signing_state = signing_state,
+        tls = ca_state,
+        escalation_state = escalation_state_str,
+        message = "LocalAbilityDispatcher will execute inbound SessionDispatch::Dispatch frames through the boot-threaded AbilityDispatcher Arc",
     );
     // Cancel oneshot held for the daemon process's lifetime — the
     // supervisor exits when the cancel sender drops, which happens
@@ -668,9 +684,14 @@ fn spawn_uds_listener(
         // process's stale daemon.sock does not block us.
         if let Err(err) = std::fs::remove_file(&uds_path) {
             if err.kind() != std::io::ErrorKind::NotFound {
-                eprintln!(
-                    "[axon-serve] failed to unlink stale UDS at {}: {err}; bind will likely fail",
-                    uds_path.display(),
+                let uds_path_display = format!("{}", uds_path.display());
+                let err_msg = format!("{err}");
+                crate::op_event!(
+                    component = axon_serve,
+                    kind = uds_unlink_failed,
+                    uds_path = uds_path_display,
+                    error = err_msg,
+                    message = "bind will likely fail",
                 );
             }
         }
@@ -694,16 +715,24 @@ fn spawn_uds_listener(
         if let Err(err) =
             std::fs::set_permissions(&uds_path, std::fs::Permissions::from_mode(0o600))
         {
-            eprintln!(
-                "[axon-serve] failed to chmod 0600 on {}: {err}; running with default umask perms",
-                uds_path.display(),
+            let uds_path_display = format!("{}", uds_path.display());
+            let err_msg = format!("{err}");
+            crate::op_event!(
+                component = axon_serve,
+                kind = uds_chmod_failed,
+                uds_path = uds_path_display,
+                error = err_msg,
+                message = "running with default umask perms",
             );
         }
     }
 
-    eprintln!(
-        "[axon-serve] gRPC InvocationServer listening on UDS {}",
-        uds_path.display()
+    let uds_path_display = format!("{}", uds_path.display());
+    crate::op_event!(
+        component = axon_serve,
+        kind = grpc_invocation_server_listening,
+        transport = "uds",
+        uds_path = uds_path_display,
     );
 
     let incoming = UnixListenerStream::new(listener);
@@ -724,7 +753,13 @@ fn spawn_uds_listener(
             .serve_with_incoming(incoming)
             .await;
         if let Err(err) = result {
-            eprintln!("[axon-serve] gRPC UDS server exited with error: {err:#}");
+            let err_msg = format!("{err:#}");
+            crate::op_event!(
+                component = axon_serve,
+                kind = grpc_server_exited_with_error,
+                transport = "uds",
+                error = err_msg,
+            );
         }
     });
 
@@ -745,9 +780,12 @@ fn spawn_uds_listener(
         anyhow::anyhow!("failed to bind axon_serve named pipe {}: {err}", pipe_name)
     })?;
 
-    eprintln!(
-        "[axon-serve] gRPC InvocationServer listening on named pipe {}",
-        pipe_name
+    let pipe_name_log = pipe_name.clone();
+    crate::op_event!(
+        component = axon_serve,
+        kind = grpc_invocation_server_listening,
+        transport = "named_pipe",
+        pipe_name = pipe_name_log,
     );
 
     let (tx, rx) = tokio::sync::mpsc::channel::<std::io::Result<NamedPipeGrpcIo>>(32);
@@ -781,7 +819,13 @@ fn spawn_uds_listener(
             .serve_with_incoming(incoming)
             .await;
         if let Err(err) = result {
-            eprintln!("[axon-serve] gRPC named-pipe server exited with error: {err:#}");
+            let err_msg = format!("{err:#}");
+            crate::op_event!(
+                component = axon_serve,
+                kind = grpc_server_exited_with_error,
+                transport = "named_pipe",
+                error = err_msg,
+            );
         }
     });
 
@@ -839,11 +883,16 @@ fn spawn_tcp_tls_listener(
     let identity = Identity::from_pem(&cert_pem, &key_pem);
     let tls_config = ServerTlsConfig::new().identity(identity);
 
-    eprintln!(
-        "[axon-serve] gRPC InvocationServer listening on TCP+TLS {} (cert={}, key={})",
-        listen_tcp,
-        cert_path.display(),
-        key_path.display()
+    let listen_tcp_display = format!("{listen_tcp}");
+    let cert_path_display = format!("{}", cert_path.display());
+    let key_path_display = format!("{}", key_path.display());
+    crate::op_event!(
+        component = axon_serve,
+        kind = grpc_invocation_server_listening,
+        transport = "tcp_tls",
+        listen_tcp = listen_tcp_display,
+        cert_pem = cert_path_display,
+        key_pem = key_path_display,
     );
 
     // Production-WAN h2 hardening on the public TCP+TLS listener:
@@ -878,7 +927,13 @@ fn spawn_tcp_tls_listener(
             .serve(listen_tcp)
             .await;
         if let Err(err) = result {
-            eprintln!("[axon-serve] gRPC TCP+TLS server exited with error: {err:#}");
+            let err_msg = format!("{err:#}");
+            crate::op_event!(
+                component = axon_serve,
+                kind = grpc_server_exited_with_error,
+                transport = "tcp_tls",
+                error = err_msg,
+            );
         }
     });
 
@@ -1025,9 +1080,13 @@ fn maybe_bootstrap_runtime_self_identity(identity: &DaemonIdentity) {
     let bridge = match state.connect_bridge() {
         Ok(bridge) => bridge,
         Err(err) => {
-            eprintln!(
-                "[axon-serve] runtime self-bootstrap skipped for `{node_id}`: \
-                 connect local runtime bridge: {err}"
+            let err_msg = format!("{err}");
+            crate::op_event!(
+                component = axon_serve,
+                kind = runtime_self_bootstrap_skipped,
+                node_id = node_id,
+                reason = "connect_local_runtime_bridge_failed",
+                error = err_msg,
             );
             return;
         }
@@ -1041,10 +1100,21 @@ fn maybe_bootstrap_runtime_self_identity(identity: &DaemonIdentity) {
     )
     .result
     {
-        Ok(()) => eprintln!(
-            "[axon-serve] runtime self-bootstrap registered trusted-key material for {node_id}"
-        ),
-        Err(msg) => eprintln!("[axon-serve] runtime self-bootstrap failed for {node_id}: {msg}"),
+        Ok(()) => {
+            crate::op_event!(
+                component = axon_serve,
+                kind = runtime_self_bootstrap_registered,
+                node_id = node_id,
+            );
+        }
+        Err(msg) => {
+            crate::op_event!(
+                component = axon_serve,
+                kind = runtime_self_bootstrap_failed,
+                node_id = node_id,
+                error = msg,
+            );
+        }
     }
 }
 
@@ -1072,7 +1142,12 @@ fn try_load_daemon_seed_from_keyring(self_uri: &str) -> Option<[u8; 32]> {
     let source = match MasterKeySource::from_env() {
         Ok(s) => s,
         Err(err) => {
-            eprintln!("[axon-serve] keyring: master key source: {err}");
+            let err_msg = format!("{err}");
+            crate::op_event!(
+                component = axon_serve,
+                kind = keyring_master_key_source_failed,
+                error = err_msg,
+            );
             return None;
         }
     };
@@ -1080,18 +1155,33 @@ fn try_load_daemon_seed_from_keyring(self_uri: &str) -> Option<[u8; 32]> {
         Ok(v) => v,
         Err(VaultError::NotFound(_)) => return None,
         Err(err) => {
-            eprintln!("[axon-serve] keyring: open failed: {err}");
+            let err_msg = format!("{err}");
+            crate::op_event!(
+                component = axon_serve,
+                kind = keyring_open_failed,
+                error = err_msg,
+            );
             return None;
         }
     };
     match vault.export_seed(self_uri) {
         Ok(seed) => {
-            eprintln!("[axon-serve] keyring: daemon seed for {self_uri} resolved from vault");
+            crate::op_event!(
+                component = axon_serve,
+                kind = keyring_daemon_seed_resolved,
+                self_uri = self_uri,
+            );
             Some(seed)
         }
         Err(VaultError::NotFound(_)) => None,
         Err(err) => {
-            eprintln!("[axon-serve] keyring: export_seed({self_uri}): {err}");
+            let err_msg = format!("{err}");
+            crate::op_event!(
+                component = axon_serve,
+                kind = keyring_export_seed_failed,
+                self_uri = self_uri,
+                error = err_msg,
+            );
             None
         }
     }
@@ -1195,26 +1285,34 @@ fn trust_anchor_path_from_env_or_default() -> PathBuf {
 fn load_trust_anchor_from(path: &Path) -> RealmTrustAnchor {
     match RealmTrustAnchor::load_or_empty(path) {
         Ok(anchor) => {
+            let path_display = format!("{}", path.display());
             if anchor.is_empty() {
-                eprintln!(
-                    "[axon-serve] realm trust anchor at {} is empty; admission gate will reject \
-                     every external caller until PR-7 pairing flow populates it",
-                    path.display(),
+                crate::op_event!(
+                    component = axon_serve,
+                    kind = realm_trust_anchor_empty,
+                    path = path_display,
+                    message = "admission gate will reject every external caller until PR-7 pairing flow populates it",
                 );
             } else {
-                eprintln!(
-                    "[axon-serve] realm trust anchor loaded with {} entries from {}",
-                    anchor.len(),
-                    path.display(),
+                let entry_count = anchor.len();
+                crate::op_event!(
+                    component = axon_serve,
+                    kind = realm_trust_anchor_loaded,
+                    path = path_display,
+                    entries = entry_count,
                 );
             }
             anchor
         }
         Err(err) => {
-            eprintln!(
-                "[axon-serve] failed to load realm trust anchor at {} ({err}); proceeding with \
-                 empty trust set",
-                path.display(),
+            let path_display = format!("{}", path.display());
+            let err_msg = format!("{err}");
+            crate::op_event!(
+                component = axon_serve,
+                kind = realm_trust_anchor_load_failed,
+                path = path_display,
+                error = err_msg,
+                message = "proceeding with empty trust set",
             );
             RealmTrustAnchor::default()
         }
@@ -1266,10 +1364,11 @@ fn maybe_seed_demo_presence(presence: &Arc<PresenceRegistry>) {
                 // discard
             }
         });
-        eprintln!(
-            "[axon-serve] EASYNET_DEMO_PRESENCE_SEED: registered no-op \
-             presence entry for `{seed_uri}` (test fixture; do not use \
-             in production)",
+        crate::op_event!(
+            component = axon_serve,
+            kind = demo_presence_seed_registered,
+            seed_uri = seed_uri,
+            message = "test fixture; do not use in production",
         );
     }
 }
@@ -1317,52 +1416,76 @@ fn spawn_unified_sighup_reload_task(
         let mut sighup = match signal(SignalKind::hangup()) {
             Ok(stream) => stream,
             Err(err) => {
-                eprintln!("[axon-serve] failed to install unified SIGHUP reload handler: {err}");
+                let err_msg = format!("{err}");
+                crate::op_event!(
+                    component = axon_serve,
+                    kind = sighup_reload_handler_install_failed,
+                    error = err_msg,
+                );
                 return;
             }
         };
 
         while sighup.recv().await.is_some() {
             // Step 1: trust anchor.
+            let trust_anchor_path_display = format!("{}", trust_anchor_path.display());
             match reload_trust_anchor_cell_from(&trust_anchor_path, &trust_anchor_cell) {
-                Ok(0) => eprintln!(
-                    "[axon-serve] SIGHUP step 1/3: trust anchor at {} is now empty",
-                    trust_anchor_path.display()
-                ),
-                Ok(len) => eprintln!(
-                    "[axon-serve] SIGHUP step 1/3: trust anchor at {} now has {} entries",
-                    trust_anchor_path.display(),
-                    len
-                ),
-                Err(err) => eprintln!(
-                    "[axon-serve] SIGHUP step 1/3 failed for {}: {err}; keeping previous trust set",
-                    trust_anchor_path.display()
-                ),
+                Ok(len) => {
+                    crate::op_event!(
+                        component = axon_serve,
+                        kind = sighup_trust_anchor_reloaded,
+                        step = "1/3",
+                        path = trust_anchor_path_display,
+                        entries = len,
+                    );
+                }
+                Err(err) => {
+                    let err_msg = format!("{err}");
+                    crate::op_event!(
+                        component = axon_serve,
+                        kind = sighup_trust_anchor_reload_failed,
+                        step = "1/3",
+                        path = trust_anchor_path_display,
+                        error = err_msg,
+                        message = "keeping previous trust set",
+                    );
+                }
             }
 
             // Step 2: daemon-config federated_peers.
+            let daemon_config_path_display = format!("{}", daemon_config_path.display());
             match reload_federated_peers_cell_from(&daemon_config_path, &federated_peers_cell) {
-                Ok(0) => eprintln!(
-                    "[axon-serve] SIGHUP step 2/3: daemon-config federated_peers at {} is now empty",
-                    daemon_config_path.display()
-                ),
-                Ok(len) => eprintln!(
-                    "[axon-serve] SIGHUP step 2/3: daemon-config federated_peers at {} now has {} entries",
-                    daemon_config_path.display(),
-                    len
-                ),
-                Err(err) => eprintln!(
-                    "[axon-serve] SIGHUP step 2/3 failed for {}: {err}; keeping previous federated_peers map",
-                    daemon_config_path.display()
-                ),
+                Ok(len) => {
+                    crate::op_event!(
+                        component = axon_serve,
+                        kind = sighup_federated_peers_reloaded,
+                        step = "2/3",
+                        path = daemon_config_path_display,
+                        entries = len,
+                    );
+                }
+                Err(err) => {
+                    let err_msg = format!("{err}");
+                    crate::op_event!(
+                        component = axon_serve,
+                        kind = sighup_federated_peers_reload_failed,
+                        step = "2/3",
+                        path = daemon_config_path_display,
+                        error = err_msg,
+                        message = "keeping previous federated_peers map",
+                    );
+                }
             }
 
             // Step 3: flush federated-key TTL cache so the next
             // admission re-resolves cross-realm pubkeys against
             // the freshly-loaded trust anchor + peer map.
             federated_key_cache.flush();
-            eprintln!(
-                "[axon-serve] SIGHUP step 3/3: federated-key cache flushed (cross-realm pubkeys will re-resolve on next admission)"
+            crate::op_event!(
+                component = axon_serve,
+                kind = sighup_federated_key_cache_flushed,
+                step = "3/3",
+                message = "cross-realm pubkeys will re-resolve on next admission",
             );
         }
     });
@@ -1437,7 +1560,14 @@ fn spawn_federated_directory_poll_task(
             )
             .await;
             for (realm, err) in &outcome.failed_peers {
-                eprintln!("[federation_directory] poll peer realm={realm:?} failed: {err}");
+                let realm_display = format!("{realm:?}");
+                let err_msg = format!("{err}");
+                crate::op_event!(
+                    component = federation_directory,
+                    kind = poll_peer_failed,
+                    peer_realm = realm_display,
+                    error = err_msg,
+                );
             }
         }
     });
@@ -1509,15 +1639,20 @@ fn spawn_federated_directory_streaming_supervisor(
                     },
                 );
             for realm in spawned {
-                eprintln!(
-                    "[federation_directory] streaming supervisor spawned for \
-                     peer realm={realm:?}",
+                let realm_display = format!("{realm:?}");
+                crate::op_event!(
+                    component = federation_directory,
+                    kind = streaming_supervisor_spawned,
+                    peer_realm = realm_display,
                 );
             }
             for realm in cancelled {
-                eprintln!(
-                    "[federation_directory] streaming supervisor cancelled \
-                     for peer realm={realm:?} (no longer in federated_peers)",
+                let realm_display = format!("{realm:?}");
+                crate::op_event!(
+                    component = federation_directory,
+                    kind = streaming_supervisor_cancelled,
+                    peer_realm = realm_display,
+                    reason = "no_longer_in_federated_peers",
                 );
             }
         }

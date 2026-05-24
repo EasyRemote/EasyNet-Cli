@@ -414,9 +414,13 @@ impl DaemonInvocationService {
                     Ok(PresenceEvent::Offline { ura, reason }) => {
                         let cancelled = watcher_pending.cancel_for(&ura, "target_offline");
                         if cancelled > 0 {
-                            eprintln!(
-                                "[axon-serve] presence-offline-cancel: target_ura={ura} \
-                                 reason={reason:?} cancelled={cancelled} pending dispatch(es)"
+                            let reason_display = format!("{reason:?}");
+                            crate::op_event!(
+                                component = axon_serve,
+                                kind = presence_offline_cancel,
+                                target_ura = ura,
+                                reason = reason_display,
+                                cancelled = cancelled,
                             );
                         }
                     }
@@ -1123,14 +1127,24 @@ impl DaemonInvocationService {
             match build_unary_ledger_record(request, started_unix_ms, completed_unix_ms, result) {
                 Ok(record) => record,
                 Err(err) => {
-                    eprintln!("[axon-serve] invocation ledger record skipped: {err}");
+                    let err_msg = format!("{err}");
+                    crate::op_event!(
+                        component = axon_serve,
+                        kind = ledger_record_skipped,
+                        shape = "unary",
+                        error = err_msg,
+                    );
                     return;
                 }
             };
         if let Err(err) = ledger.put(&record) {
-            eprintln!(
-                "[axon-serve] invocation ledger write failed for {}: {err}",
-                record.invocation_ura
+            let err_msg = format!("{err}");
+            crate::op_event!(
+                component = axon_serve,
+                kind = ledger_write_failed,
+                shape = "unary",
+                invocation_ura = record.invocation_ura,
+                error = err_msg,
             );
         }
     }
@@ -1500,16 +1514,18 @@ impl DaemonInvocationService {
         let mut fanout = FuturesUnordered::new();
         for peer_hub_url in peer_hub_urls {
             let Some(peer_entry) = trust_anchor.lookup_peer_hub(&peer_hub_url).cloned() else {
-                eprintln!(
-                    "[axon-serve] proxy_list_user_devices skipping untrusted peer hub {peer_hub_url}"
+                crate::op_event!(
+                    component = axon_serve,
+                    kind = proxy_list_user_devices_skip_untrusted_peer,
+                    peer_hub_url = peer_hub_url,
                 );
                 continue;
             };
             let Some(peer_realm) = peer_entry.origin_tenant_id.clone() else {
-                eprintln!(
-                    "[axon-serve] proxy_list_user_devices skipping peer hub {} with no \
-                     origin_tenant_id",
-                    peer_hub_url
+                crate::op_event!(
+                    component = axon_serve,
+                    kind = proxy_list_user_devices_skip_peer_missing_origin_tenant,
+                    peer_hub_url = peer_hub_url,
                 );
                 continue;
             };
@@ -1560,7 +1576,12 @@ impl DaemonInvocationService {
             match result {
                 Ok(mut entries) => devices.append(&mut entries),
                 Err(err) => {
-                    eprintln!("[axon-serve] {err}");
+                    let err_msg = format!("{err}");
+                    crate::op_event!(
+                        component = axon_serve,
+                        kind = proxy_list_user_devices_fanout_error,
+                        error = err_msg,
+                    );
                 }
             }
         }
@@ -1619,7 +1640,11 @@ impl DaemonInvocationService {
         let mut fanout = FuturesUnordered::new();
         for peer_hub_url in peer_hub_urls {
             let Some(peer_entry) = trust_anchor.lookup_peer_hub(&peer_hub_url).cloned() else {
-                eprintln!("[axon-serve] proxy_resolve skipping untrusted peer hub {peer_hub_url}");
+                crate::op_event!(
+                    component = axon_serve,
+                    kind = proxy_resolve_skip_untrusted_peer,
+                    peer_hub_url = peer_hub_url,
+                );
                 continue;
             };
             let client = Arc::clone(client);
@@ -1678,7 +1703,12 @@ impl DaemonInvocationService {
                     }
                 }
                 Err(err) => {
-                    eprintln!("[axon-serve] {err}");
+                    let err_msg = format!("{err}");
+                    crate::op_event!(
+                        component = axon_serve,
+                        kind = proxy_resolve_fanout_error,
+                        error = err_msg,
+                    );
                 }
             }
         }
@@ -1791,11 +1821,16 @@ impl DaemonInvocationService {
         // that distinguishes "took cross-tenant arm" from "took
         // local-presence arm" when the inner ability happens to
         // be a hub-served one (e.g. federation.heartbeat).
-        eprintln!(
-            "[axon-serve] federation.forward_invoke dispatch: \
-             target_ura={} target_tenant={:?} local_tenant={:?} \
-             is_local_tenant={} has_local_presence={}",
-            request.target_ura, target_tenant, local_tenant, is_local_tenant, has_local_presence,
+        let target_tenant_display = format!("{target_tenant:?}");
+        let local_tenant_display = format!("{local_tenant:?}");
+        crate::op_event!(
+            component = axon_serve,
+            kind = forward_invoke_dispatch,
+            target_ura = request.target_ura,
+            target_tenant = target_tenant_display,
+            local_tenant = local_tenant_display,
+            is_local_tenant = is_local_tenant,
+            has_local_presence = has_local_presence,
         );
 
         // Decode the inner payload up front. The
@@ -1963,12 +1998,13 @@ impl DaemonInvocationService {
                                             match serde_json::from_slice(&peer_response.result) {
                                                 Ok(body) => body,
                                                 Err(err) => {
-                                                    eprintln!(
-                                                        "[axon-serve] same-tenant \
-                                                         fan-out peer returned malformed \
-                                                         ForwardInvokeResponse JSON: \
-                                                         {err}; forwarding raw bytes \
-                                                         for forward-compat"
+                                                    let err_msg = format!("{err}");
+                                                    crate::op_event!(
+                                                        component = axon_serve,
+                                                        kind = forward_invoke_peer_response_malformed,
+                                                        scope = "same_tenant_fanout",
+                                                        error = err_msg,
+                                                        message = "forwarding raw bytes for forward-compat",
                                                     );
                                                     federation_wrappers::ForwardInvokeResponse {
                                                         result_bytes: peer_response.result.clone(),
@@ -1992,10 +2028,13 @@ impl DaemonInvocationService {
                                         return wrap_json_response(&response);
                                     }
                                     Err(err) => {
-                                        eprintln!(
-                                            "[axon-serve] same-tenant cross-hub miss \
-                                             on peer realm {peer_realm} hub {peer_hub_uri}: \
-                                             {err}"
+                                        let err_msg = format!("{err}");
+                                        crate::op_event!(
+                                            component = axon_serve,
+                                            kind = forward_invoke_same_tenant_cross_hub_miss,
+                                            peer_realm = peer_realm,
+                                            peer_hub_uri = peer_hub_uri,
+                                            error = err_msg,
                                         );
                                     }
                                 }
@@ -2090,12 +2129,13 @@ impl DaemonInvocationService {
                                             match serde_json::from_slice(&peer_response.result) {
                                                 Ok(body) => body,
                                                 Err(err) => {
-                                                    eprintln!(
-                                                        "[axon-serve] same-tenant \
-                                                         fan-out peer returned malformed \
-                                                         ForwardInvokeResponse JSON: \
-                                                         {err}; forwarding raw bytes \
-                                                         for forward-compat"
+                                                    let err_msg = format!("{err}");
+                                                    crate::op_event!(
+                                                        component = axon_serve,
+                                                        kind = forward_invoke_peer_response_malformed,
+                                                        scope = "same_tenant_fanout",
+                                                        error = err_msg,
+                                                        message = "forwarding raw bytes for forward-compat",
                                                     );
                                                     federation_wrappers::ForwardInvokeResponse {
                                                         result_bytes: peer_response.result.clone(),
@@ -2119,10 +2159,13 @@ impl DaemonInvocationService {
                                         return wrap_json_response(&response);
                                     }
                                     Err(err) => {
-                                        eprintln!(
-                                            "[axon-serve] same-tenant cross-hub miss \
-                                             on peer realm {peer_realm} hub {peer_hub_uri}: \
-                                             {err}"
+                                        let err_msg = format!("{err}");
+                                        crate::op_event!(
+                                            component = axon_serve,
+                                            kind = forward_invoke_same_tenant_cross_hub_miss,
+                                            peer_realm = peer_realm,
+                                            peer_hub_uri = peer_hub_uri,
+                                            error = err_msg,
                                         );
                                     }
                                 }
@@ -2249,10 +2292,13 @@ impl DaemonInvocationService {
                     match serde_json::from_slice(&peer_response.result) {
                         Ok(body) => body,
                         Err(err) => {
-                            eprintln!(
-                                "[axon-serve] cross-tenant peer returned malformed \
-                                 ForwardInvokeResponse JSON: {err}; \
-                                 forwarding raw bytes for forward-compat"
+                            let err_msg = format!("{err}");
+                            crate::op_event!(
+                                component = axon_serve,
+                                kind = forward_invoke_peer_response_malformed,
+                                scope = "cross_tenant",
+                                error = err_msg,
+                                message = "forwarding raw bytes for forward-compat",
                             );
                             // Defensive: if the peer is on an old
                             // wire-shape, hand its raw bytes through
@@ -2264,12 +2310,13 @@ impl DaemonInvocationService {
                             }
                         }
                     };
-                eprintln!(
-                    "[axon-serve] federation.forward_invoke cross-tenant arm \
-                     OK: target_ura={} target_hub_uri={} result_bytes_len={}",
-                    request.target_ura,
-                    target_hub_uri,
-                    peer_body.result_bytes.len(),
+                let result_bytes_len = peer_body.result_bytes.len();
+                crate::op_event!(
+                    component = axon_serve,
+                    kind = forward_invoke_cross_tenant_ok,
+                    target_ura = request.target_ura,
+                    target_hub_uri = target_hub_uri,
+                    result_bytes_len = result_bytes_len,
                 );
                 // DEC-N5 §1 dual-write — record digest over the
                 // unwrapped device bytes (not the peer wrapper),
@@ -2295,10 +2342,13 @@ impl DaemonInvocationService {
                 // demo / e2e setups can see why the cross-hub call
                 // failed without instrumenting the FederationClient
                 // by hand.
-                eprintln!(
-                    "[axon-serve] federation.forward_invoke peer dial \
-                     failed: target_ura={} target_hub_uri={} err={err}",
-                    request.target_ura, target_hub_uri,
+                let err_msg = format!("{err}");
+                crate::op_event!(
+                    component = axon_serve,
+                    kind = forward_invoke_peer_dial_failed,
+                    target_ura = request.target_ura,
+                    target_hub_uri = target_hub_uri,
+                    error = err_msg,
                 );
                 record_offline_receipt();
                 Err(Status::failed_precondition(
@@ -2419,10 +2469,12 @@ impl DaemonInvocationService {
             }
         }
 
-        eprintln!(
-            "[axon-serve] forward_invoke local-presence dispatch: target_ura={} \
-             ability={} call_id={} (waiting for SessionDispatch::Result)",
-            request.target_ura, inner_payload.ability, call_id,
+        crate::op_event!(
+            component = axon_serve,
+            kind = forward_invoke_local_presence_dispatch_awaiting_reply,
+            target_ura = request.target_ura,
+            ability = inner_payload.ability,
+            call_id = call_id,
         );
 
         // Await the matching Result frame.
@@ -2442,14 +2494,16 @@ impl DaemonInvocationService {
         // session-frame-correlation race is visible in the hub log
         // without having to attach a debugger. Cheap (one eprintln
         // per round-trip).
-        eprintln!(
-            "[axon-serve] forward_invoke local-presence dispatch: \
-             target_ura={} ability={} call_id={} → result_bytes={} error={:?}",
-            request.target_ura,
-            inner_payload.ability,
-            call_id,
-            result_bytes.len(),
-            error,
+        let result_bytes_len = result_bytes.len();
+        let error_display = format!("{error:?}");
+        crate::op_event!(
+            component = axon_serve,
+            kind = forward_invoke_local_presence_dispatch_result,
+            target_ura = request.target_ura,
+            ability = inner_payload.ability,
+            call_id = call_id,
+            result_bytes_len = result_bytes_len,
+            error = error_display,
         );
         if let Some(err) = error {
             return Err(Status::failed_precondition(format!(
@@ -2530,10 +2584,12 @@ impl DaemonInvocationService {
             subject: None,
         };
 
-        eprintln!(
-            "[axon-serve] forward_invoke self-target dispatch: target_ura={} ability={} \
-             call_id={}",
-            request.target_ura, inner_payload.ability, correlation_call_id,
+        crate::op_event!(
+            component = axon_serve,
+            kind = forward_invoke_self_target_dispatch,
+            target_ura = request.target_ura,
+            ability = inner_payload.ability,
+            call_id = correlation_call_id,
         );
 
         let result_value = local_dispatcher.execute_rpc(target).map_err(|err| {
@@ -2599,9 +2655,11 @@ impl DaemonInvocationService {
     ) -> Result<Response<<Self as Invocation>::InvokeBidiStream>, Status> {
         use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
-        eprintln!(
-            "[axon-serve] <self>.invoke_remote self-target dispatch: \
-             subject={subject_device} ability={ability}"
+        crate::op_event!(
+            component = axon_serve,
+            kind = invoke_remote_self_target_dispatch,
+            subject = subject_device,
+            ability = ability,
         );
 
         // args is the JSON-encoded inner-payload bytes (matches
@@ -2735,9 +2793,11 @@ impl DaemonInvocationService {
             }
         }
 
-        eprintln!(
-            "[axon-serve] InvokeBidi remote file_transfer bridge: target_ura={} call_id={}",
-            target_ura, call_id,
+        crate::op_event!(
+            component = axon_serve,
+            kind = invoke_bidi_remote_file_transfer_bridge,
+            target_ura = target_ura,
+            call_id = call_id,
         );
 
         let (down_tx, down_rx) = tokio::sync::mpsc::channel::<Result<InvokeBidiDown, Status>>(16);
@@ -2933,7 +2993,11 @@ impl DaemonInvocationService {
     ) -> Result<Response<<Self as Invocation>::InvokeBidiStream>, Status> {
         use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
-        eprintln!("[axon-serve] InvokeBidi local-dispatcher fallback: ability={ability}");
+        crate::op_event!(
+            component = axon_serve,
+            kind = invoke_bidi_local_dispatcher_fallback,
+            ability = ability,
+        );
 
         // Decode initial_args. Empty → empty object.
         let normalized_args: serde_json::Value = if envelope_open.initial_args.is_empty() {
@@ -3041,10 +3105,13 @@ impl DaemonInvocationService {
             while let Some(maybe_frame) = up.next().await {
                 let Ok(frame) = maybe_frame else { break };
                 if frame.sequence != expected_up_sequence {
-                    eprintln!(
-                        "[axon-serve] InvokeBidi local-dispatcher: violated \
-                         {REASON_BIDI_FRAME_SEQUENCE}; expected {expected_up_sequence}, got {}",
-                        frame.sequence
+                    let frame_sequence = frame.sequence;
+                    crate::op_event!(
+                        component = axon_serve,
+                        kind = invoke_bidi_frame_sequence_violated,
+                        reason = REASON_BIDI_FRAME_SEQUENCE,
+                        expected = expected_up_sequence,
+                        got = frame_sequence,
                     );
                     break;
                 }
@@ -3609,9 +3676,12 @@ impl DaemonInvocationService {
         // sender. The PresenceRegistry handles displacement (Offline +
         // Online emission ordering) under the hood.
         let registration = self.presence.insert_tracked(caller_ura.clone(), down_tx);
-        eprintln!(
-            "[axon-serve] <self>.session admitted: caller={caller_ura} displaced_prior={}",
-            registration.displaced.is_some()
+        let displaced_prior = registration.displaced.is_some();
+        crate::op_event!(
+            component = axon_serve,
+            kind = self_session_admitted,
+            caller = caller_ura,
+            displaced_prior = displaced_prior,
         );
 
         // Step 2: spawn the up-stream consumer. Reads device replies
@@ -3852,8 +3922,11 @@ fn map_local_bidi_handler_frame(
             }
             Some("warn") => {
                 if let Some(message) = value.get("message").and_then(|field| field.as_str()) {
-                    eprintln!(
-                        "[axon-serve] InvokeBidi local-dispatcher warning from PTY handler: {message}"
+                    crate::op_event!(
+                        component = axon_serve,
+                        kind = invoke_bidi_local_dispatcher_warning,
+                        handler = "pty",
+                        message = message,
                     );
                 }
                 LocalBidiHandlerFrame::Ignore
@@ -3927,8 +4000,11 @@ fn map_local_bidi_handler_frame(
             }
             Some("warn") => {
                 if let Some(message) = value.get("message").and_then(|field| field.as_str()) {
-                    eprintln!(
-                        "[axon-serve] InvokeBidi local-dispatcher warning from file_transfer handler: {message}"
+                    crate::op_event!(
+                        component = axon_serve,
+                        kind = invoke_bidi_local_dispatcher_warning,
+                        handler = "file_transfer",
+                        message = message,
                     );
                 }
                 LocalBidiHandlerFrame::Ignore
@@ -4222,9 +4298,17 @@ fn emit_session_request_resolution_marker(
         };
 
     if is_local {
-        eprintln!("[session-request] resolved target via local-fast-path");
+        crate::op_event!(
+            component = session_request,
+            kind = target_resolved,
+            path = "local_fast_path",
+        );
     } else {
-        eprintln!("[session-request] resolved target via cross-hub dial");
+        crate::op_event!(
+            component = session_request,
+            kind = target_resolved,
+            path = "cross_hub_dial",
+        );
     }
 }
 
@@ -4319,9 +4403,12 @@ fn push_session_request_result(
     frame: crate::services::presence_registry::DispatchFrame,
 ) {
     let Some((session_id, sender)) = presence.lookup_tracked(caller_ura) else {
-        eprintln!(
-            "[session-accept] device {caller_ura} no longer in presence registry; \
-             dropping RequestResult call_id={id_hex} (device disconnected mid-dispatch)"
+        crate::op_event!(
+            component = session_accept,
+            kind = request_result_drop_no_presence,
+            caller = caller_ura,
+            call_id = id_hex,
+            reason = "device_disconnected_mid_dispatch",
         );
         return;
     };
@@ -4329,16 +4416,24 @@ fn push_session_request_result(
         Ok(()) => {}
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
             let _ = presence.remove_if_session(caller_ura, session_id, OfflineReason::SendFailed);
-            eprintln!(
-                "[session-accept] failed to push RequestResult call_id={id_hex} to {caller_ura}: \
-                 channel full; removed device with OfflineReason::SendFailed"
+            crate::op_event!(
+                component = session_accept,
+                kind = request_result_push_failed,
+                caller = caller_ura,
+                call_id = id_hex,
+                reason = "channel_full",
+                offline_reason = "SendFailed",
             );
         }
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
             let _ = presence.remove_if_session(caller_ura, session_id, OfflineReason::StreamClosed);
-            eprintln!(
-                "[session-accept] failed to push RequestResult call_id={id_hex} to {caller_ura}: \
-                 device down-channel closed; removed from presence registry"
+            crate::op_event!(
+                component = session_accept,
+                kind = request_result_push_failed,
+                caller = caller_ura,
+                call_id = id_hex,
+                reason = "down_channel_closed",
+                offline_reason = "StreamClosed",
             );
         }
     }
@@ -4386,10 +4481,13 @@ async fn drain_session_up_stream(
                     chain.push_str(&format!(" ↳ {err}"));
                     src = err.source();
                 }
-                eprintln!(
-                    "[session-accept] up-stream error for {caller_ura}: {chain}; \
-                     code={:?}; removing from registry",
-                    status.code()
+                let status_code = format!("{:?}", status.code());
+                crate::op_event!(
+                    component = session_accept,
+                    kind = up_stream_error,
+                    caller = caller_ura,
+                    chain = chain,
+                    code = status_code,
                 );
                 close_reason = OfflineReason::StreamReset;
                 break;
@@ -4397,10 +4495,14 @@ async fn drain_session_up_stream(
         };
 
         if frame.sequence != expected_up_sequence {
-            eprintln!(
-                "[session-accept] {caller_ura} violated {REASON_BIDI_FRAME_SEQUENCE}: \
-                 expected up sequence {expected_up_sequence}, got {}; removing from registry",
-                frame.sequence
+            let frame_sequence = frame.sequence;
+            crate::op_event!(
+                component = session_accept,
+                kind = frame_sequence_violated,
+                caller = caller_ura,
+                reason = REASON_BIDI_FRAME_SEQUENCE,
+                expected = expected_up_sequence,
+                got = frame_sequence,
             );
             close_reason = OfflineReason::StreamReset;
             break;
@@ -4419,9 +4521,11 @@ async fn drain_session_up_stream(
                 continue;
             }
             Some(UpPayload::EnvelopeOpen(_)) => {
-                eprintln!(
-                    "[session-accept] {caller_ura} sent unexpected EnvelopeOpen after frame 0; \
-                     ignoring"
+                crate::op_event!(
+                    component = session_accept,
+                    kind = unexpected_frame_after_frame_0,
+                    caller = caller_ura,
+                    frame_kind = "EnvelopeOpen",
                 );
                 continue;
             }
@@ -4434,9 +4538,12 @@ async fn drain_session_up_stream(
         let dispatch: SessionDispatch = match serde_json::from_slice(&chunk.data) {
             Ok(d) => d,
             Err(err) => {
-                eprintln!(
-                    "[session-accept] {caller_ura} sent malformed SessionDispatch JSON: {err}; \
-                     ignoring frame"
+                let err_msg = format!("{err}");
+                crate::op_event!(
+                    component = session_accept,
+                    kind = malformed_session_dispatch,
+                    caller = caller_ura,
+                    error = err_msg,
                 );
                 continue;
             }
@@ -4459,33 +4566,42 @@ async fn drain_session_up_stream(
                     }
                     if !completed {
                         let Some(pending) = pending.as_ref() else {
-                            eprintln!(
-                                "[session-accept] {caller_ura} sent terminal Result for call_id={call_id} but \
-                                 daemon was constructed without PendingDispatchMap; ignoring"
+                            crate::op_event!(
+                                component = session_accept,
+                                kind = terminal_result_dropped_no_pending_map,
+                                caller = caller_ura,
+                                call_id = call_id,
                             );
                             continue;
                         };
                         completed = pending.complete(call_id, dispatch_result);
                     }
                     if !completed {
-                        eprintln!(
-                            "[session-accept] {caller_ura} sent terminal Result for call_id={call_id} but \
-                             no pending entry matched (caller may have cancelled); silent no-op"
+                        crate::op_event!(
+                            component = session_accept,
+                            kind = terminal_result_no_match,
+                            caller = caller_ura,
+                            call_id = call_id,
+                            note = "caller_may_have_cancelled",
                         );
                     }
                 } else {
                     let Some(pending_stream) = pending_stream.as_ref() else {
-                        eprintln!(
-                            "[session-accept] {caller_ura} sent streaming Result chunk for call_id={call_id} but \
-                             daemon was constructed without PendingStreamDispatchMap; ignoring"
+                        crate::op_event!(
+                            component = session_accept,
+                            kind = streaming_result_dropped_no_pending_stream_map,
+                            caller = caller_ura,
+                            call_id = call_id,
                         );
                         continue;
                     };
                     let completed = pending_stream.push_chunk(call_id, payload).await;
                     if !completed {
-                        eprintln!(
-                            "[session-accept] {caller_ura} sent streaming Result chunk for call_id={call_id} but \
-                             no pending stream entry matched; silent no-op"
+                        crate::op_event!(
+                            component = session_accept,
+                            kind = streaming_result_chunk_no_match,
+                            caller = caller_ura,
+                            call_id = call_id,
                         );
                     }
                 }
@@ -4493,23 +4609,34 @@ async fn drain_session_up_stream(
             SessionDispatch::Dispatch { call_id, .. } => {
                 // A device sending a Dispatch up its own session
                 // makes no sense — Dispatch is hub→device only.
-                eprintln!(
-                    "[session-accept] {caller_ura} sent unexpected Dispatch frame \
-                     (call_id={call_id}); ignoring"
+                crate::op_event!(
+                    component = session_accept,
+                    kind = unexpected_upstream_frame,
+                    caller = caller_ura,
+                    frame_kind = "Dispatch",
+                    call_id = call_id,
                 );
             }
             SessionDispatch::BidiOpen {
                 call_id, ability, ..
             } => {
-                eprintln!(
-                    "[session-accept] {caller_ura} sent unexpected BidiOpen frame \
-                     (call_id={call_id} ability={ability}); ignoring"
+                crate::op_event!(
+                    component = session_accept,
+                    kind = unexpected_upstream_frame,
+                    caller = caller_ura,
+                    frame_kind = "BidiOpen",
+                    call_id = call_id,
+                    ability = ability,
                 );
             }
             SessionDispatch::BidiInput { call_id, eof, .. } => {
-                eprintln!(
-                    "[session-accept] {caller_ura} sent unexpected BidiInput frame \
-                     (call_id={call_id} eof={eof}); ignoring"
+                crate::op_event!(
+                    component = session_accept,
+                    kind = unexpected_upstream_frame,
+                    caller = caller_ura,
+                    frame_kind = "BidiInput",
+                    call_id = call_id,
+                    eof = eof,
                 );
             }
             SessionDispatch::Request {
@@ -4527,12 +4654,24 @@ async fn drain_session_up_stream(
                 // does, then sends `RequestResult` back down the
                 // device's open `<self>.session` bidi.
                 //
-                // Spec-locked log marker per PR-N6
-                // §"Locked log markers". The demo orchestration
-                // script grep-asserts this verbatim.
+                // Operator log marker for the PR-N6 hub→device
+                // session-Request dispatch path. SRE pipelines grep
+                // `kind=session_accept_request_frame` to confirm a
+                // forward_invoke escalation actually landed on the
+                // hub-side accept loop rather than being answered
+                // from local presence. The PR-N6 "locked marker"
+                // comment that used to live here referenced a demo
+                // orchestration script that no longer grep-asserts
+                // the byte-exact form; the audit on 2026-05-25
+                // confirmed no remaining external dependency on the
+                // old `[session-accept] received Request frame`
+                // string, so we converged on the op_event shape.
                 let id_hex = call_id_hex(&call_id);
-                eprintln!(
-                    "[session-accept] received Request frame call_id={id_hex} ability={ability}"
+                crate::op_event!(
+                    component = axon_serve,
+                    kind = session_accept_request_frame,
+                    call_id = id_hex,
+                    ability = ability,
                 );
 
                 // Dispatch off the drain task so a slow inner
@@ -4595,26 +4734,36 @@ async fn drain_session_up_stream(
                 // RequestResult is hub → device only; a device
                 // sending one up its own session is malformed.
                 let id_hex = call_id_hex(&call_id);
-                eprintln!(
-                    "[session-accept] {caller_ura} sent unexpected RequestResult frame \
-                     (call_id={id_hex}); ignoring"
+                crate::op_event!(
+                    component = session_accept,
+                    kind = unexpected_upstream_frame,
+                    caller = caller_ura,
+                    frame_kind = "RequestResult",
+                    call_id = id_hex,
                 );
             }
         }
     }
 
+    let close_reason_display = format!("{close_reason:?}");
     if presence
         .remove_if_session(&caller_ura, session_id, close_reason)
         .is_some()
     {
-        eprintln!(
-            "[session-accept] {caller_ura} session ended ({:?}); removed from registry",
-            close_reason
+        crate::op_event!(
+            component = session_accept,
+            kind = session_ended,
+            caller = caller_ura,
+            close_reason = close_reason_display,
+            outcome = "removed_from_registry",
         );
     } else {
-        eprintln!(
-            "[session-accept] {caller_ura} session ended ({:?}); newer session already replaced registry entry",
-            close_reason
+        crate::op_event!(
+            component = session_accept,
+            kind = session_ended,
+            caller = caller_ura,
+            close_reason = close_reason_display,
+            outcome = "superseded_by_newer_session",
         );
     }
 }

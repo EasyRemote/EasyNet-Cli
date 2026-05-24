@@ -315,8 +315,14 @@ impl SessionUpHeartbeatTask {
             loop {
                 interval.tick().await;
                 if let Err(err) = sender.send_control(BidiControl::default()).await {
-                    eprintln!(
-                        "[session] up-heartbeat send failed for `{caller_ura}` on `{hub_endpoint}`: {err}; stopping heartbeat task"
+                    let err_msg = format!("{err}");
+                    crate::op_event!(
+                        component = session,
+                        kind = up_heartbeat_send_failed,
+                        caller_ura = caller_ura,
+                        hub_endpoint = hub_endpoint,
+                        error = err_msg,
+                        message = "stopping heartbeat task",
                     );
                     break;
                 }
@@ -491,15 +497,31 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     // authoritative health gate — if join didn't take, the bidi
     // still surfaces the underlying error and the supervisor's
     // reconnect loop retries everything.
-    eprintln!("[session] sending federation.join prelude as {caller_ura} against {hub_endpoint}");
+    crate::op_event!(
+        component = session,
+        kind = federation_join_prelude_sending,
+        caller_ura = caller_ura,
+        hub_endpoint = hub_endpoint,
+    );
     match send_federation_join_prelude(&mut client, &caller_ura).await {
-        Ok(()) => eprintln!("[session] federation.join prelude OK; proceeding to <self>.session"),
-        Err(err) => eprintln!(
-            "[session] federation.join prelude soft-failed (code={:?}, msg={:?}); \
-             proceeding to <self>.session — bidi will surface the error if join was required",
-            err.code(),
-            err.message(),
-        ),
+        Ok(()) => {
+            crate::op_event!(
+                component = session,
+                kind = federation_join_prelude_ok,
+                message = "proceeding to <self>.session",
+            );
+        }
+        Err(err) => {
+            let code_display = format!("{:?}", err.code());
+            let msg_display = format!("{:?}", err.message());
+            crate::op_event!(
+                component = session,
+                kind = federation_join_prelude_soft_failed,
+                code = code_display,
+                error = msg_display,
+                message = "proceeding to <self>.session — bidi will surface the error if join was required",
+            );
+        }
     }
 
     // Ability-catalog prelude (URA v4.1.4 dev unblock): publish
@@ -517,24 +539,29 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
     // supervisor calls `dial_and_run_session` per backoff), so a
     // transient hub outage self-heals on the next loop pass.
     if !ability_catalog.is_empty() {
-        eprintln!(
-            "[session] sending federation.advertise_abilities prelude with {} abilities",
-            ability_catalog.len()
+        let ability_count = ability_catalog.len();
+        crate::op_event!(
+            component = session,
+            kind = advertise_abilities_prelude_sending,
+            ability_count = ability_count,
         );
         if let Err(err) =
             send_advertise_abilities_prelude(&mut client, &caller_ura, ability_catalog).await
         {
-            eprintln!(
-                "[session] advertise_abilities prelude soft-failed (code={:?}, msg={:?}); \
-                 proceeding — Frontend `/api/v1/abilities` page will be empty for this device \
-                 until the next reconnect",
-                err.code(),
-                err.message(),
+            let code_display = format!("{:?}", err.code());
+            let msg_display = format!("{:?}", err.message());
+            crate::op_event!(
+                component = session,
+                kind = advertise_abilities_prelude_soft_failed,
+                code = code_display,
+                error = msg_display,
+                message = "proceeding — Frontend `/api/v1/abilities` page will be empty for this device until the next reconnect",
             );
         } else {
-            eprintln!(
-                "[session] advertise_abilities prelude OK ({} abilities)",
-                ability_catalog.len()
+            crate::op_event!(
+                component = session,
+                kind = advertise_abilities_prelude_ok,
+                ability_count = ability_count,
             );
         }
 
@@ -713,12 +740,17 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
                 .ok()
                 .filter(|p| p.kind == crate::ura::URAKind::Device)
                 .map(|p| p.device_id);
-            eprintln!(
-                "[session] sending federation.advertise_agent prelude for {} agent(s) \
-                 under user `{}`: {:?}",
-                entries.len(),
-                user_segment,
+            let entries_count = entries.len();
+            let labels_display = format!(
+                "{:?}",
                 entries.iter().map(|e| &e.short_label).collect::<Vec<_>>()
+            );
+            crate::op_event!(
+                component = session,
+                kind = advertise_agent_prelude_sending,
+                agent_count = entries_count,
+                user = user_segment,
+                labels = labels_display,
             );
             // user-scoped synthetic agents: pages + files exist
             // per-user, not per-device. Every device the user owns
@@ -770,18 +802,23 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
                 )
                 .await
                 {
-                    eprintln!(
-                        "[session] advertise_agent {} prelude soft-failed \
-                         (code={:?}, msg={:?})",
-                        entry.agent_ura,
-                        err.code(),
-                        err.message(),
+                    let agent_ura = entry.agent_ura.clone();
+                    let code_display = format!("{:?}", err.code());
+                    let msg_display = format!("{:?}", err.message());
+                    crate::op_event!(
+                        component = session,
+                        kind = advertise_agent_prelude_soft_failed,
+                        agent_ura = agent_ura,
+                        code = code_display,
+                        error = msg_display,
                     );
                 }
             }
-            eprintln!(
-                "[session] advertise_agent prelude done ({} agent(s))",
-                entries.len()
+            let entries_done_count = entries.len();
+            crate::op_event!(
+                component = session,
+                kind = advertise_agent_prelude_done,
+                agent_count = entries_done_count,
             );
         }
     }
@@ -811,8 +848,12 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
 
     let mut down_stream = response.into_inner();
     let dispatcher = dispatcher;
-    eprintln!(
-        "[session] bidi opened against `{hub_endpoint}` as {caller_ura}; awaiting down-stream frames"
+    crate::op_event!(
+        component = session,
+        kind = bidi_opened,
+        hub_endpoint = hub_endpoint,
+        caller_ura = caller_ura,
+        message = "awaiting down-stream frames",
     );
 
     // PR-N6 C4: publish the active up sender so the device-mode
@@ -855,7 +896,13 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
                 }
                 expected_down_sequence = expected_down_sequence.saturating_add(1);
                 if let Err(err) = dispatcher.handle_down(frame, &outbound_tx).await {
-                    eprintln!("[session] frame dispatch error: {err}; continuing");
+                    let err_msg = format!("{err}");
+                    crate::op_event!(
+                        component = session,
+                        kind = frame_dispatch_error,
+                        error = err_msg,
+                        message = "continuing",
+                    );
                 }
             }
             Err(status) => {
@@ -923,7 +970,10 @@ pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
     loop {
         tokio::select! {
             _ = &mut cancel => {
-                eprintln!("[session] supervisor cancelled, exiting");
+                crate::op_event!(
+                    component = session,
+                    kind = supervisor_cancelled,
+                );
                 return;
             }
             result = dial_and_run_session(
@@ -937,9 +987,11 @@ pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
             ) => {
                 match result {
                     Ok(()) => {
-                        eprintln!(
-                            "[session] hub closed bidi cleanly; reconnecting after {:?}",
-                            SESSION_BACKOFF_INITIAL,
+                        let backoff_display = format!("{:?}", SESSION_BACKOFF_INITIAL);
+                        crate::op_event!(
+                            component = session,
+                            kind = bidi_closed_cleanly,
+                            next_backoff = backoff_display,
                         );
                         backoff = SESSION_BACKOFF_INITIAL;
                     }
@@ -950,9 +1002,13 @@ pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
                         // rustls / hyper / io cause. Without this, a
                         // CA-trust failure or DNS error is
                         // indistinguishable from a NAT idle drop.
-                        eprintln!(
-                            "[session] bidi error ({err:#}); reconnecting after {:?}",
-                            backoff,
+                        let err_msg = format!("{err:#}");
+                        let backoff_display = format!("{backoff:?}");
+                        crate::op_event!(
+                            component = session,
+                            kind = bidi_error_reconnecting,
+                            error = err_msg,
+                            next_backoff = backoff_display,
                         );
                     }
                 }
@@ -1039,10 +1095,13 @@ async fn send_federation_join_prelude(
                         body.hub_published_abilities,
                     );
                     if !store.is_empty() {
-                        eprintln!(
-                            "[session] hub-broadcast: seeded {} hub-published abilities at rev={}",
-                            store.len(),
-                            body.hub_abilities_revision,
+                        let ability_count = store.len();
+                        let hub_abilities_revision = body.hub_abilities_revision;
+                        crate::op_event!(
+                            component = session,
+                            kind = hub_broadcast_abilities_seeded,
+                            ability_count = ability_count,
+                            hub_abilities_revision = hub_abilities_revision,
                         );
                     }
                 }
