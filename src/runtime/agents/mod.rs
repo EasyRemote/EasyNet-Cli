@@ -63,6 +63,11 @@ pub mod agent_list_ability;
 /// the RFC-002 keyring vault (different threat model: bearer
 /// capability vs cryptographic identity).
 pub mod api_key_ability;
+/// RFC-012 §RemoteWebSurface — `device.browser.{open_session,
+/// send_input, capture_viewport, close_session}` ability family.
+/// v0 mock handlers (no real WebView); RFC-013 W1–W8 replaces the
+/// mock with wry per platform.
+pub mod browser_session_ability;
 pub mod chat_ability;
 pub mod context_loaders;
 pub mod device_ops_ability;
@@ -126,6 +131,8 @@ pub mod list_resources_ability;
 pub mod loop_ability;
 pub mod mcp_bridge_ability;
 pub mod mcp_client_ability;
+pub mod mcp_executor;
+pub mod mcp_reflective_registry;
 /// Real (non-stub) media handlers, swapped in over the
 /// `media_abilities` stubs one ability at a time. PR3a delivers
 /// the `camera.snapshot` vertical slice with a deterministic
@@ -431,6 +438,10 @@ pub fn build_registry_with_services(
     // register_self, deregister_self). These are the canonical
     // ability surfaces backing the CLI's device + ability subcommands.
     device_ops_ability::register(&mut reg);
+    // device.browser.* — RFC-012 §RemoteWebSurface; v0 mock
+    // handlers per RFC-013 plan. capture_viewport is a streaming
+    // verb; the other three are unary RPC.
+    browser_session_ability::register(&mut reg);
     // voice.* call signaling abilities — `easynet call …`
     // subcommand surface routes through these via the same
     // ability-only invocation path every other CLI surface uses.
@@ -689,15 +700,8 @@ pub fn build_registry_with_services(
     // reuse the live connection. Parse errors at boot bubble up
     // because a malformed file is an operator typo, not a "no
     // upstreams" condition.
-    let mcp_clients_path = std::env::var("EASYNET_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| {
-            std::env::var("HOME")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                .join(".easynet")
-        })
-        .join("mcp_clients.json");
+    let mcp_clients_path =
+        crate::runtime::execution::mcp_client::McpClientService::default_config_path();
     let mcp_client_svc =
         match crate::runtime::execution::mcp_client::McpClientService::from_path(&mcp_clients_path)
         {
@@ -712,7 +716,114 @@ pub fn build_registry_with_services(
                 Arc::new(crate::runtime::execution::mcp_client::McpClientService::new())
             }
         };
-    mcp_client_ability::register(&mut reg, mcp_client_svc);
+    mcp_client_ability::register(&mut reg, mcp_client_svc.clone());
+
+    // Install the same `Arc<McpClientService>` as the process-wide
+    // handle used by `[exec] kind="mcp"` ability dispatch. Before this
+    // line `mcp_executor::run_mcp_exec` would return a typed error;
+    // after this line every MCP surface in the daemon — outbound
+    // `device.mcp.client.*`, reflective registry below, and exec —
+    // shares one connection pool, one config snapshot, one `next_id`
+    // sequence per upstream. No silent divergence between surfaces.
+    crate::runtime::agents::mcp_executor::set_process_client(mcp_client_svc.clone());
+
+    // Reflectively register every tool of every configured upstream
+    // MCP server as a first-class ability. After this call, the
+    // outbound `device.mcp.client.call` ability is still available
+    // (for callers who want the explicit-server-name shape), but
+    // operators + MCP-Bench can also reach each tool by its bare
+    // ability name (e.g. `weather_lookup` instead of
+    // `device.mcp.client.call({server, name, ...})`).
+    //
+    // The function is async because tools/list is a JSON-RPC RPC;
+    // build_registry_with_services is sync. We bridge through
+    // `reflect_mcp_upstreams_sync`. Failures are LOGGED, not panicked:
+    // a broken upstream MCP server must not block daemon boot — every
+    // other ability stays available and the operator sees per-server
+    // failures in stderr.
+    //
+    // **Identity invariant.** The owner URA for reflected abilities
+    // is the mcp-profile agent under the daemon's paired user. An
+    // unpaired daemon has no `pages_identity.user` and we therefore
+    // SKIP reflective registration entirely — we will not fabricate
+    // a synthetic `user_id = "device"` to mint an agent URA, because
+    // per AGENT_IDENTITY.md §2 ("identity, not locator") that would
+    // forge an agent identity that no `easynet:///r/.../user/...`
+    // backs. The outbound `device.mcp.client.*` family remains
+    // available so operators can still reach upstream tools through
+    // the explicit-server-name shape; only the bare-name projection
+    // is gated on a paired user.
+    // Boot-time reflection state we carry across the Arc::new(reg)
+    // boundary so the hot-reload sinks attached afterwards know which
+    // names they own per server. `None` here means "reflection didn't
+    // run" — the unpaired-daemon arm below — and the sink attachment
+    // below short-circuits in that case.
+    let mut reflection_per_server: Option<(
+        String,
+        std::collections::BTreeMap<String, Vec<String>>,
+    )> = None;
+
+    if let (Some(user_slot), realm_slot) = (
+        pages_identity.user.clone(),
+        pages_identity
+            .realm
+            .clone()
+            .unwrap_or_else(|| easynet_axon::ura::REALM_EASYNET.to_string()),
+    ) {
+        let mcp_owner_ura = easynet_axon::ura::agent_ura(&realm_slot, &user_slot, "mcp");
+        match reflect_mcp_upstreams_sync(&mcp_client_svc, &mut reg, &mcp_owner_ura) {
+            Ok(report) => {
+                if !report.registered.is_empty() || !report.failed.is_empty() {
+                    eprintln!(
+                        "[mcp-reflective] registered {} tool(s) across upstream MCP servers; {} \
+                         failure(s)",
+                        report.registered.len(),
+                        report.failed.len(),
+                    );
+                    for f in &report.failed {
+                        eprintln!(
+                            "[mcp-reflective] {} {} skipped: {}",
+                            f.server,
+                            f.tool.as_deref().unwrap_or("(server)"),
+                            f.reason
+                        );
+                    }
+                }
+                // Aggregate per-server reflected names so the
+                // hot-reload sinks know the starting set and can
+                // diff against future `tools/list_changed` pushes.
+                let mut per_server: std::collections::BTreeMap<String, Vec<String>> =
+                    std::collections::BTreeMap::new();
+                for r in &report.registered {
+                    per_server
+                        .entry(r.server.clone())
+                        .or_default()
+                        .push(r.ability_name.clone());
+                }
+                reflection_per_server = Some((mcp_owner_ura.clone(), per_server));
+            }
+            Err(e) => {
+                eprintln!("[mcp-reflective] reflection skipped (runtime bridge failed): {e}");
+            }
+        }
+    } else {
+        // Unpaired daemons emit a single informational line so an
+        // operator who configured `mcp_clients.json` but forgot to
+        // pair a user understands why their MCP tools are not
+        // showing up as bare-name abilities. We do NOT consult the
+        // service for its server count here — that requires the
+        // async lock, and this code path runs in the sync boot
+        // context — so the log is unconditional. False positives
+        // (printing this line when there are no servers configured
+        // either) are cheap; false silences would frustrate
+        // operators.
+        eprintln!(
+            "[mcp-reflective] daemon is unpaired (pages_identity.user is None); \
+             skipping reflective MCP tool registration. The outbound \
+             `device.mcp.client.*` surface remains available; pair the daemon to a \
+             user to expose upstream MCP tools as bare-name abilities."
+        );
+    }
     // device.agent.list — operational view of registered LLM
     // sub-agents. Cheap-row projection (name, runtime, model, label);
     // for the protocol agent-card view see a2a.bridge.list_skills.
@@ -740,6 +851,19 @@ pub fn build_registry_with_services(
     // it to dispatch into other local abilities; until this line runs
     // they each return isError("not initialised") on every call.
     let _ = local_registry_handle.set(Arc::clone(&arc));
+
+    // Hot-reload sinks. Wired after Arc::new(reg) so each sink can
+    // hold a `Weak<LocalAbilityRegistry>` that survives daemon
+    // shutdown gracefully (the sink becomes a no-op when the registry
+    // is dropped, rather than blocking shutdown by keeping a strong
+    // ref). Sinks live inside `McpClientService::notification_sinks`
+    // for the lifetime of the daemon process — they're never
+    // explicitly unregistered, which matches the daemon's whole-
+    // process lifecycle.
+    if let Some((owner_ura, per_server)) = reflection_per_server.as_ref() {
+        attach_mcp_refresh_sinks_sync(&mcp_client_svc, &arc, owner_ura, per_server);
+    }
+
     arc
 }
 
@@ -1048,6 +1172,13 @@ pub fn description_for(name: &str) -> &'static str {
         "device.voice.watch_call" => voice_call_ability::watch_call_description(),
         "device.voice.report_metrics" => voice_call_ability::report_metrics_description(),
         "device.voice.list_calls" => voice_call_ability::list_calls_description(),
+        // RFC-012 §RemoteWebSurface — device.browser.* family.
+        "device.browser.open_session" => browser_session_ability::open_session_description(),
+        "device.browser.send_input" => browser_session_ability::send_input_description(),
+        "device.browser.capture_viewport" => {
+            browser_session_ability::capture_viewport_description()
+        }
+        "device.browser.close_session" => browser_session_ability::close_session_description(),
         "device.admin.status" => admin_status_ability::description(),
         "device.ability.publish" => ability_publish_ability::publish_description(),
         "device.ability.unpublish" => ability_publish_ability::unpublish_description(),
@@ -1197,6 +1328,13 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         "device.voice.watch_call" => voice_call_ability::watch_call_input_schema(),
         "device.voice.report_metrics" => voice_call_ability::report_metrics_input_schema(),
         "device.voice.list_calls" => voice_call_ability::list_calls_input_schema(),
+        // RFC-012 §RemoteWebSurface — device.browser.* family.
+        "device.browser.open_session" => browser_session_ability::open_session_input_schema(),
+        "device.browser.send_input" => browser_session_ability::send_input_input_schema(),
+        "device.browser.capture_viewport" => {
+            browser_session_ability::capture_viewport_input_schema()
+        }
+        "device.browser.close_session" => browser_session_ability::close_session_input_schema(),
         "device.admin.status" => admin_status_ability::input_schema(),
         "device.ability.publish" => ability_publish_ability::publish_input_schema(),
         "device.ability.unpublish" => ability_publish_ability::unpublish_input_schema(),
@@ -1287,6 +1425,128 @@ pub fn rfc006_for(name: &str) -> Option<ability_toml::Rfc006Metadata> {
         return Some(list_resources_ability::rfc006());
     }
     None
+}
+
+/// Sync bridge so `build_registry_with_services` (sync) can call
+/// `reflect_all` (async).
+///
+/// **Why this is allowed to self-host a runtime — unlike
+/// `mcp_executor::block_on_async`.** The two bridges look symmetrical
+/// but live on opposite sides of the boot/serve boundary:
+///
+/// * The daemon's `LocalRpcHandler` runs *inside* the gRPC server's
+///   tokio runtime. The MCP executor (`mcp_executor::block_on_async`)
+///   therefore MUST find an ambient runtime; the absence of one is an
+///   authoring bug and we fail fast.
+/// * `build_registry_with_services` runs *before* the gRPC runtime
+///   is spawned — it is the daemon's synchronous bootstrap, and is
+///   also called from a large body of sync unit tests
+///   (`build_registry()` in `real_invoke_tests`, `publish.rs`, etc.).
+///   At this call site there is no ambient runtime by design; the
+///   `reflect_all` work is a one-shot `tools/list` per upstream, so
+///   we mint a single-threaded runtime, drive it to completion, and
+///   drop it.
+///
+/// Returns `Ok(report)` with both successes and per-tool failures
+/// (so the caller can log them coherently), or `Err` only when
+/// the runtime bridge itself fails — a per-server upstream failure
+/// is reported inside the `ReflectResult.failed` field, NOT here.
+fn reflect_mcp_upstreams_sync(
+    client: &crate::runtime::execution::mcp_client::McpClientService,
+    registry: &mut crate::runtime::ability_dispatch::LocalAbilityRegistry,
+    owner_agent_ura: &str,
+) -> anyhow::Result<crate::runtime::agents::mcp_reflective_registry::ReflectResult> {
+    use crate::runtime::agents::mcp_reflective_registry::reflect_all;
+    let fut = async move { reflect_all(client, registry, owner_agent_ura).await };
+    match tokio::runtime::Handle::try_current() {
+        Ok(_handle) => Ok(tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(fut)
+        })),
+        Err(_) => {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| anyhow::anyhow!("build mcp-reflect runtime: {e}"))?;
+            Ok(rt.block_on(fut))
+        }
+    }
+}
+
+/// Sync→async bridge that attaches a `RegistryRefreshSink` to every
+/// configured stdio MCP upstream. Called once after `Arc::new(reg)`
+/// in `build_registry_with_services`, so each sink can hold a
+/// `Weak<LocalAbilityRegistry>` that survives daemon shutdown
+/// gracefully.
+///
+/// Per-server failures are logged and skipped — one broken upstream
+/// must not prevent the rest from getting their hot-reload sinks.
+/// HTTP transports are silently skipped today: their notification
+/// path lives inside SSE responses to RPCs, not in an idle channel,
+/// so a "hot-reload sink" on the HTTP side is a separate design.
+fn attach_mcp_refresh_sinks_sync(
+    client: &std::sync::Arc<crate::runtime::execution::mcp_client::McpClientService>,
+    registry: &std::sync::Arc<crate::runtime::ability_dispatch::LocalAbilityRegistry>,
+    owner_agent_ura: &str,
+    initially_reflected: &std::collections::BTreeMap<String, Vec<String>>,
+) {
+    use crate::runtime::agents::mcp_reflective_registry::RegistryRefreshSink;
+    let svc_for_async = client.clone();
+    let registry_weak = std::sync::Arc::downgrade(registry);
+    let client_weak = std::sync::Arc::downgrade(client);
+    let owner = owner_agent_ura.to_string();
+    let reflected_snapshot = initially_reflected.clone();
+
+    let fut = async move {
+        let server_names = svc_for_async.server_names().await;
+        for name in server_names {
+            let Some(spec) = svc_for_async.spec(&name).await else {
+                continue;
+            };
+            if spec.transport != "stdio" {
+                // Hot-reload over streamable HTTP is not wired in this
+                // pass — the listener model lives on the stdio side
+                // only. Silently skip rather than warn so a mixed
+                // catalogue doesn't drown the operator in noise.
+                continue;
+            }
+            let reflected_for_server = reflected_snapshot
+                .get(&name)
+                .cloned()
+                .unwrap_or_default();
+            let sink = Box::new(RegistryRefreshSink::new(
+                registry_weak.clone(),
+                client_weak.clone(),
+                name.clone(),
+                owner.clone(),
+                reflected_for_server,
+            ));
+            if let Err(e) = svc_for_async.register_notification_sink(&name, sink).await {
+                eprintln!(
+                    "[mcp-reflective] failed to attach refresh sink for `{name}`: {e}"
+                );
+            }
+        }
+    };
+
+    let result = match tokio::runtime::Handle::try_current() {
+        Ok(_handle) => {
+            tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(fut));
+            Ok(())
+        }
+        Err(_) => match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => {
+                rt.block_on(fut);
+                Ok(())
+            }
+            Err(e) => Err(format!("build mcp-refresh-sink runtime: {e}")),
+        },
+    };
+    if let Err(e) = result {
+        eprintln!("[mcp-reflective] hot-reload sink attach skipped: {e}");
+    }
 }
 
 #[cfg(test)]
@@ -1512,6 +1772,16 @@ mod tests {
             // than Introspection.
             | "device.openai.chat_completions"
             | "device.openai.list_models"
+            // RFC-012 §RemoteWebSurface — device.browser.* family.
+            // Operational by intent: opening a WebView session,
+            // streaming frames, injecting input, closing the
+            // session all drive an external surface (the user's
+            // system WebView) under the caller's identity. Same
+            // class as media/* verbs.
+            | "device.browser.open_session"
+            | "device.browser.send_input"
+            | "device.browser.capture_viewport"
+            | "device.browser.close_session"
             => Some(AbilityLayer::Operational),
             // `<user>.api_key.{create,list,revoke}` — user-rooted
             // credential-lifecycle verbs. `<user>` is the active

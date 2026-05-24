@@ -277,11 +277,16 @@ pub enum OwnerKind {
 /// is read-mostly (built once at daemon start, queried per
 /// invocation), so RwLock + per-invocation hash is overkill.
 ///
-/// Hot-reload note: the registry itself is built once at boot, but
-/// `rpc_fallback` lets a caller (the daemon's per-agent dispatcher)
-/// answer lookup misses dynamically. That is the seam new
-/// `<agent>.<verb>` abilities authored after boot use to become
-/// invokable without a daemon restart — see `chat_ability::register`.
+/// Hot-reload note: the static maps below are written at boot, then
+/// frozen behind `Arc<LocalAbilityRegistry>`. Post-boot mutation goes
+/// through `dynamic_ext` — an interior-mutability side table fed by
+/// `RegistryRefreshSink` when an upstream MCP server emits
+/// `notifications/tools/list_changed`. Lookups (`resolve_rpc`,
+/// `has_rpc`, …) consult the static maps first and fall through to
+/// `dynamic_ext` on miss; the dynamic side stays optional so a
+/// daemon that never hot-reloads (no MCP upstreams, or none that
+/// support list-changed) pays nothing beyond a single empty-RwLock
+/// read per miss.
 #[derive(Default)]
 pub struct LocalAbilityRegistry {
     rpc: BTreeMap<String, LocalRpcHandler>,
@@ -324,6 +329,34 @@ pub struct LocalAbilityRegistry {
     /// for "no declared schema" appearing on abilities that DO
     /// have a manifest in `core::ability_spec`.
     manifests: BTreeMap<String, Arc<crate::core::ability_spec::AbilityManifest>>,
+    /// Hot-reload side table. Populated by `RegistryRefreshSink` when
+    /// an upstream MCP server pushes `notifications/tools/list_changed`.
+    /// Lookups fall through here on static-map miss; `list_abilities`
+    /// unions both sides. Static maps remain immutable after boot —
+    /// that keeps the hot path lock-free for every ability that was
+    /// already known at boot.
+    dynamic_ext: std::sync::RwLock<DynamicCatalogue>,
+}
+
+/// Post-boot ability additions. Same shape as the six handler maps
+/// above plus owner/manifest, but mutated through `&self` via the
+/// enclosing RwLock so the hot-reload sink can write while the
+/// daemon holds the registry behind `Arc<LocalAbilityRegistry>`.
+///
+/// We do not merge `dynamic_ext` into the static maps lazily —
+/// keeping the two sides separate means the hot path's miss
+/// detection stays a cheap `BTreeMap::get` rather than a guard
+/// acquisition on every dispatch.
+#[derive(Default)]
+struct DynamicCatalogue {
+    rpc: BTreeMap<String, LocalRpcHandler>,
+    stream: BTreeMap<String, LocalStreamHandler>,
+    bidi: BTreeMap<String, LocalBidiHandler>,
+    rpc_with_env: BTreeMap<String, LocalRpcHandlerWithEnvelope>,
+    stream_with_env: BTreeMap<String, LocalStreamHandlerWithEnvelope>,
+    bidi_with_env: BTreeMap<String, LocalBidiHandlerWithEnvelope>,
+    owner: BTreeMap<String, OwnerKind>,
+    manifests: BTreeMap<String, Arc<crate::core::ability_spec::AbilityManifest>>,
 }
 
 impl std::fmt::Debug for LocalAbilityRegistry {
@@ -333,6 +366,11 @@ impl std::fmt::Debug for LocalAbilityRegistry {
     /// `OnceLock::set`'s `.expect(..)` to print a useful message
     /// without leaking handler addresses.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let dynamic_count = self
+            .dynamic_ext
+            .read()
+            .map(|g| g.rpc.len() + g.stream.len() + g.bidi.len())
+            .unwrap_or(0);
         f.debug_struct("LocalAbilityRegistry")
             .field("rpc_count", &self.rpc.len())
             .field("stream_count", &self.stream.len())
@@ -342,6 +380,7 @@ impl std::fmt::Debug for LocalAbilityRegistry {
             .field("bidi_with_env_count", &self.bidi_with_env.len())
             .field("owner_count", &self.owner.len())
             .field("manifest_count", &self.manifests.len())
+            .field("dynamic_ext_count", &dynamic_count)
             .field("has_rpc_fallback", &self.rpc_fallback.is_some())
             .finish()
     }
@@ -423,11 +462,34 @@ impl LocalAbilityRegistry {
     /// path (the legacy register surface) — the descriptor synth
     /// in `meta_ability::list_abilities_handler` falls back to a
     /// name-only stub in that case, matching pre-2026-05 behaviour.
+    ///
+    /// This consults only the static map; dynamic (hot-reload)
+    /// entries do not appear here. Use `manifest_for_dynamic` when
+    /// the consumer also wants to see hot-loaded MCP tools.
     pub fn manifest_for(
         &self,
         ability: &str,
     ) -> Option<&crate::core::ability_spec::AbilityManifest> {
         self.manifests.get(ability).map(|m| m.as_ref())
+    }
+
+    /// Static-OR-dynamic manifest lookup. Returns the static manifest
+    /// when present (canonical), otherwise the dynamic-side entry, in
+    /// `Arc` form so the borrow does not depend on the RwLock guard.
+    /// Used by `meta_ability::list_abilities_handler` so hot-loaded
+    /// MCP tools advertise their input schemas to the catalogue.
+    pub fn manifest_for_dynamic(
+        &self,
+        ability: &str,
+    ) -> Option<Arc<crate::core::ability_spec::AbilityManifest>> {
+        if let Some(m) = self.manifests.get(ability) {
+            return Some(Arc::clone(m));
+        }
+        let dyn_ext = self
+            .dynamic_ext
+            .read()
+            .expect("dynamic_ext RwLock poisoned");
+        dyn_ext.manifests.get(ability).map(Arc::clone)
     }
 
     /// Register an RPC handler under `ability`. Owner defaults to
@@ -591,8 +653,221 @@ impl LocalAbilityRegistry {
     /// regression on the Frontend Agents page was caused by a synth
     /// path doing `name.starts_with("01HUB.")`; reading owner here
     /// makes that class of bug structurally impossible.
-    pub fn lookup_owner(&self, ability: &str) -> Option<&OwnerKind> {
-        self.owner.get(ability)
+    ///
+    /// Static map wins over the dynamic side table: if an upstream
+    /// MCP server's tool name happens to collide with a boot-
+    /// registered system ability, the static owner is canonical.
+    /// Returns `Some(OwnerKind)` by value (rather than `&OwnerKind`)
+    /// because the dynamic-side fallback requires reading through
+    /// an RwLock — `&` would tie the borrow to the lock guard.
+    pub fn lookup_owner(&self, ability: &str) -> Option<OwnerKind> {
+        if let Some(o) = self.owner.get(ability) {
+            return Some(o.clone());
+        }
+        let dyn_ext = self
+            .dynamic_ext
+            .read()
+            .expect("dynamic_ext RwLock poisoned");
+        dyn_ext.owner.get(ability).cloned()
+    }
+
+    /// Remove every trace of `ability` from the registry: handlers
+    /// in all six maps (rpc / stream / bidi × plain / envelope-aware),
+    /// the owner table, and the manifest cache. Returns `true` if
+    /// the ability was present (any map had it), `false` if it was
+    /// already absent — callers can use this to log a refresh diff
+    /// without worrying about TOCTOU between has_rpc/unregister.
+    ///
+    /// Use cases (plan §B4):
+    ///   * `mcp_reflective_registry` reacts to an upstream's
+    ///     `notifications/tools/list_changed` by re-running tools/list
+    ///     and unregistering tools that no longer appear.
+    ///   * Future hot-reload of ability TOMLs.
+    ///
+    /// **Threading**: the registry is single-writer at boot in v1.
+    /// Callers driving runtime hot-reload MUST hold whatever
+    /// synchronisation the daemon imposes (today: build_registry is
+    /// the only writer; B4 will introduce a process-wide
+    /// `Arc<Mutex<LocalAbilityRegistry>>` if hot-reload lands).
+    pub fn unregister(&mut self, ability: &str) -> bool {
+        let present = self.rpc.contains_key(ability)
+            || self.stream.contains_key(ability)
+            || self.bidi.contains_key(ability)
+            || self.rpc_with_env.contains_key(ability)
+            || self.stream_with_env.contains_key(ability)
+            || self.bidi_with_env.contains_key(ability)
+            || self.owner.contains_key(ability)
+            || self.manifests.contains_key(ability);
+        self.rpc.remove(ability);
+        self.stream.remove(ability);
+        self.bidi.remove(ability);
+        self.rpc_with_env.remove(ability);
+        self.stream_with_env.remove(ability);
+        self.bidi_with_env.remove(ability);
+        self.owner.remove(ability);
+        self.manifests.remove(ability);
+        present
+    }
+
+    // ── Hot-reload side table ─────────────────────────────────────────
+    //
+    // The methods below are the `&self` mutation surface used by
+    // `RegistryRefreshSink` after boot. They write to `dynamic_ext`
+    // instead of the static maps so the hot path remains lock-free
+    // for everything boot-registered. Lookups fall through to
+    // `dynamic_ext` on a static-map miss; `list_abilities` /
+    // `lookup_owner` / `manifest` likewise consult both sides.
+
+    /// Hot-register an RPC handler with explicit owner + manifest in
+    /// the dynamic side table. Used by `RegistryRefreshSink` when a
+    /// freshly-listed upstream MCP tool needs to become invokable
+    /// without a daemon restart. Replaces any prior dynamic entry at
+    /// the same key (same write-replaces-write semantics as the
+    /// static `register_rpc_with_spec`).
+    pub fn hot_register_rpc_with_spec(
+        &self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalRpcHandler,
+    ) {
+        let name = ability.into();
+        let mut dyn_ext = self
+            .dynamic_ext
+            .write()
+            .expect("dynamic_ext RwLock poisoned");
+        dyn_ext.owner.insert(name.clone(), owner);
+        dyn_ext.manifests.insert(name.clone(), Arc::new(manifest));
+        dyn_ext.rpc.insert(name, handler);
+    }
+
+    /// Hot-register an RPC handler without a manifest. Used by
+    /// the dynamic side when an upstream tool's input schema isn't
+    /// declared (rare but legal — the upstream tool may have only a
+    /// description). Falls back to the name-only discovery stub.
+    pub fn hot_register_rpc(
+        &self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        handler: LocalRpcHandler,
+    ) {
+        let name = ability.into();
+        let mut dyn_ext = self
+            .dynamic_ext
+            .write()
+            .expect("dynamic_ext RwLock poisoned");
+        dyn_ext.owner.insert(name.clone(), owner);
+        dyn_ext.rpc.insert(name, handler);
+    }
+
+    /// Hot-register a STREAM handler with a manifest. The reflective
+    /// registry's `register_one_tool` registers MCP tools as stream
+    /// handlers so upstream `notifications/progress` frames flow
+    /// through Axon's `InvokeStream`; the hot-reload sink needs the
+    /// same shape so a freshly-listed MCP tool dispatches identically
+    /// to a boot-registered one.
+    pub fn hot_register_stream_with_spec(
+        &self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::core::ability_spec::AbilityManifest,
+        handler: LocalStreamHandler,
+    ) {
+        let name = ability.into();
+        let mut dyn_ext = self
+            .dynamic_ext
+            .write()
+            .expect("dynamic_ext RwLock poisoned");
+        dyn_ext.owner.insert(name.clone(), owner);
+        dyn_ext.manifests.insert(name.clone(), Arc::new(manifest));
+        dyn_ext.stream.insert(name, handler);
+    }
+
+    /// Remove every dynamic-side trace of `ability` (the parallel
+    /// to `unregister` for the static maps). Returns `true` if the
+    /// dynamic side actually held the name. Static entries are
+    /// **not** touched — the hot-reload sink writes exclusively
+    /// through the dynamic surface, so the static side is the
+    /// boot-time truth and must not be re-mutated post-boot.
+    pub fn hot_unregister(&self, ability: &str) -> bool {
+        let mut dyn_ext = self
+            .dynamic_ext
+            .write()
+            .expect("dynamic_ext RwLock poisoned");
+        let present = dyn_ext.rpc.contains_key(ability)
+            || dyn_ext.stream.contains_key(ability)
+            || dyn_ext.bidi.contains_key(ability)
+            || dyn_ext.rpc_with_env.contains_key(ability)
+            || dyn_ext.stream_with_env.contains_key(ability)
+            || dyn_ext.bidi_with_env.contains_key(ability)
+            || dyn_ext.owner.contains_key(ability)
+            || dyn_ext.manifests.contains_key(ability);
+        dyn_ext.rpc.remove(ability);
+        dyn_ext.stream.remove(ability);
+        dyn_ext.bidi.remove(ability);
+        dyn_ext.rpc_with_env.remove(ability);
+        dyn_ext.stream_with_env.remove(ability);
+        dyn_ext.bidi_with_env.remove(ability);
+        dyn_ext.owner.remove(ability);
+        dyn_ext.manifests.remove(ability);
+        present
+    }
+
+    /// True iff the dynamic side currently holds an entry for
+    /// `ability` in any of its handler maps. Companion check for
+    /// hot-reload diagnostics; the boot-time `has_rpc`/`has_stream`/
+    /// `has_bidi` lookups already consult this internally via the
+    /// fall-through paths.
+    pub fn has_dynamic(&self, ability: &str) -> bool {
+        let dyn_ext = self
+            .dynamic_ext
+            .read()
+            .expect("dynamic_ext RwLock poisoned");
+        dyn_ext.rpc.contains_key(ability)
+            || dyn_ext.stream.contains_key(ability)
+            || dyn_ext.bidi.contains_key(ability)
+            || dyn_ext.rpc_with_env.contains_key(ability)
+            || dyn_ext.stream_with_env.contains_key(ability)
+            || dyn_ext.bidi_with_env.contains_key(ability)
+    }
+
+    /// List the names currently held in the dynamic side table.
+    /// Used by `list_abilities` to union dynamic with static
+    /// without exposing the lock guard; useful on its own for
+    /// hot-reload diagnostics.
+    pub fn list_dynamic_abilities(&self) -> Vec<String> {
+        let dyn_ext = self
+            .dynamic_ext
+            .read()
+            .expect("dynamic_ext RwLock poisoned");
+        let mut names: Vec<String> = dyn_ext.rpc.keys().cloned().collect();
+        for k in dyn_ext.rpc_with_env.keys() {
+            if !names.iter().any(|n| n == k) {
+                names.push(k.clone());
+            }
+        }
+        for k in dyn_ext.stream.keys() {
+            if !names.iter().any(|n| n == k) {
+                names.push(k.clone());
+            }
+        }
+        for k in dyn_ext.stream_with_env.keys() {
+            if !names.iter().any(|n| n == k) {
+                names.push(k.clone());
+            }
+        }
+        for k in dyn_ext.bidi.keys() {
+            if !names.iter().any(|n| n == k) {
+                names.push(k.clone());
+            }
+        }
+        for k in dyn_ext.bidi_with_env.keys() {
+            if !names.iter().any(|n| n == k) {
+                names.push(k.clone());
+            }
+        }
+        names.sort();
+        names
     }
 
     /// Lookup helper — exposed because PR-ATTACH onwards will need
@@ -634,6 +909,13 @@ impl LocalAbilityRegistry {
                 names.push(k.clone());
             }
         }
+        // Hot-reload side: union dynamic names so a freshly reflected
+        // MCP tool shows up in `meta.list_abilities` immediately.
+        for k in self.list_dynamic_abilities() {
+            if !names.iter().any(|n| *n == k) {
+                names.push(k);
+            }
+        }
         names.sort();
         names
     }
@@ -644,9 +926,18 @@ impl LocalAbilityRegistry {
     }
 
     /// True iff an RPC-mode handler is registered for `ability`,
-    /// including the envelope-aware variant.
+    /// including the envelope-aware variant. Consults the dynamic
+    /// side table on static-map miss so hot-loaded MCP tools count
+    /// as registered.
     pub fn has_rpc(&self, ability: &str) -> bool {
-        self.rpc.contains_key(ability) || self.rpc_with_env.contains_key(ability)
+        if self.rpc.contains_key(ability) || self.rpc_with_env.contains_key(ability) {
+            return true;
+        }
+        let dyn_ext = self
+            .dynamic_ext
+            .read()
+            .expect("dynamic_ext RwLock poisoned");
+        dyn_ext.rpc.contains_key(ability) || dyn_ext.rpc_with_env.contains_key(ability)
     }
 
     /// List all statically-registered RPC ability names. Does NOT
@@ -663,14 +954,107 @@ impl LocalAbilityRegistry {
     /// keep using `get_rpc`; the dispatcher's execute path uses this
     /// so a `<agent>.<verb>` written to disk post-boot is found via
     /// the fallback without forcing the registry to be mutable.
+    ///
+    /// Lookup order: static map → dynamic side table → fallback
+    /// resolver. The hot-reload sink writes only the dynamic side,
+    /// so the dispatch hot path stays lock-free for everything
+    /// registered at boot.
     pub fn resolve_rpc(&self, ability: &str) -> Option<LocalRpcHandler> {
         if let Some(h) = self.rpc.get(ability) {
             return Some(Arc::clone(h));
+        }
+        {
+            let dyn_ext = self
+                .dynamic_ext
+                .read()
+                .expect("dynamic_ext RwLock poisoned");
+            if let Some(h) = dyn_ext.rpc.get(ability) {
+                return Some(Arc::clone(h));
+            }
         }
         if let Some(resolver) = self.rpc_fallback.as_ref() {
             return resolver(ability);
         }
         None
+    }
+
+    /// Owned-clone counterpart of `get_stream` that also consults
+    /// the dynamic side table. The dispatcher's `execute_stream`
+    /// path uses this so hot-loaded MCP tools that register as
+    /// streams (today: none — MCP `tools/call` is RPC-shaped, but
+    /// the surface exists for symmetry and for future MCP server
+    /// extensions) are dispatchable without static-map mutation.
+    pub fn resolve_stream(&self, ability: &str) -> Option<LocalStreamHandler> {
+        if let Some(h) = self.stream.get(ability) {
+            return Some(Arc::clone(h));
+        }
+        let dyn_ext = self
+            .dynamic_ext
+            .read()
+            .expect("dynamic_ext RwLock poisoned");
+        dyn_ext.stream.get(ability).map(Arc::clone)
+    }
+
+    /// Companion to `resolve_stream` for the envelope-aware variant.
+    pub fn resolve_stream_with_env(
+        &self,
+        ability: &str,
+    ) -> Option<LocalStreamHandlerWithEnvelope> {
+        if let Some(h) = self.stream_with_env.get(ability) {
+            return Some(Arc::clone(h));
+        }
+        let dyn_ext = self
+            .dynamic_ext
+            .read()
+            .expect("dynamic_ext RwLock poisoned");
+        dyn_ext.stream_with_env.get(ability).map(Arc::clone)
+    }
+
+    /// Owned-clone counterpart of `get_bidi` that also consults the
+    /// dynamic side table.
+    pub fn resolve_bidi(&self, ability: &str) -> Option<LocalBidiHandler> {
+        if let Some(h) = self.bidi.get(ability) {
+            return Some(Arc::clone(h));
+        }
+        let dyn_ext = self
+            .dynamic_ext
+            .read()
+            .expect("dynamic_ext RwLock poisoned");
+        dyn_ext.bidi.get(ability).map(Arc::clone)
+    }
+
+    /// Companion to `resolve_bidi` for the envelope-aware variant.
+    pub fn resolve_bidi_with_env(
+        &self,
+        ability: &str,
+    ) -> Option<LocalBidiHandlerWithEnvelope> {
+        if let Some(h) = self.bidi_with_env.get(ability) {
+            return Some(Arc::clone(h));
+        }
+        let dyn_ext = self
+            .dynamic_ext
+            .read()
+            .expect("dynamic_ext RwLock poisoned");
+        dyn_ext.bidi_with_env.get(ability).map(Arc::clone)
+    }
+
+    /// Owned-clone counterpart of `rpc_with_env.get` that also
+    /// consults the dynamic side table. Dispatcher uses this in
+    /// `execute_rpc` to keep the envelope-aware precedence rule
+    /// (envelope handler beats args-only) honest for hot-loaded
+    /// abilities too.
+    pub fn resolve_rpc_with_env(
+        &self,
+        ability: &str,
+    ) -> Option<LocalRpcHandlerWithEnvelope> {
+        if let Some(h) = self.rpc_with_env.get(ability) {
+            return Some(Arc::clone(h));
+        }
+        let dyn_ext = self
+            .dynamic_ext
+            .read()
+            .expect("dynamic_ext RwLock poisoned");
+        dyn_ext.rpc_with_env.get(ability).map(Arc::clone)
     }
 
     /// Install the RPC fallback resolver. Called once by the daemon
@@ -710,9 +1094,17 @@ impl LocalAbilityRegistry {
     }
 
     /// True iff a server-stream handler is registered for `ability`,
-    /// including the envelope-aware variant.
+    /// including the envelope-aware variant. Consults the dynamic
+    /// side table on static-map miss.
     pub fn has_stream(&self, ability: &str) -> bool {
-        self.stream.contains_key(ability) || self.stream_with_env.contains_key(ability)
+        if self.stream.contains_key(ability) || self.stream_with_env.contains_key(ability) {
+            return true;
+        }
+        let dyn_ext = self
+            .dynamic_ext
+            .read()
+            .expect("dynamic_ext RwLock poisoned");
+        dyn_ext.stream.contains_key(ability) || dyn_ext.stream_with_env.contains_key(ability)
     }
 
     /// Returns Some when a bidi handler is registered for `ability`.
@@ -721,9 +1113,17 @@ impl LocalAbilityRegistry {
     }
 
     /// True iff a bidirectional-stream handler is registered for
-    /// `ability`, including the envelope-aware variant.
+    /// `ability`, including the envelope-aware variant. Consults
+    /// the dynamic side table on static-map miss.
     pub fn has_bidi(&self, ability: &str) -> bool {
-        self.bidi.contains_key(ability) || self.bidi_with_env.contains_key(ability)
+        if self.bidi.contains_key(ability) || self.bidi_with_env.contains_key(ability) {
+            return true;
+        }
+        let dyn_ext = self
+            .dynamic_ext
+            .read()
+            .expect("dynamic_ext RwLock poisoned");
+        dyn_ext.bidi.contains_key(ability) || dyn_ext.bidi_with_env.contains_key(ability)
     }
 }
 
@@ -767,8 +1167,11 @@ impl AbilityDispatcher {
                 // handlers take precedence so an ability that
                 // opted into envelope access is never called via
                 // the legacy args-only path. The args-only registry
-                // is the fallback for legacy abilities.
-                if let Some(handler) = self.local.rpc_with_env.get(&target.ability) {
+                // is the fallback for legacy abilities. Both
+                // lookups go through the resolver helpers so
+                // hot-loaded dynamic-side handlers compete with
+                // static ones on equal terms.
+                if let Some(handler) = self.local.resolve_rpc_with_env(&target.ability) {
                     let env = EnvelopeContext {
                         subject: target.subject,
                     };
@@ -823,13 +1226,13 @@ impl AbilityDispatcher {
         }
         match target.scope {
             TargetScope::Local => {
-                if let Some(handler) = self.local.stream_with_env.get(&target.ability) {
+                if let Some(handler) = self.local.resolve_stream_with_env(&target.ability) {
                     let env = EnvelopeContext {
                         subject: target.subject,
                     };
                     return handler(env, target.normalized_args);
                 }
-                match self.local.get_stream(&target.ability) {
+                match self.local.resolve_stream(&target.ability) {
                     Some(handler) => handler(target.normalized_args),
                     None => anyhow::bail!(
                         "no local stream handler registered for ability {} (loopback path)",
@@ -872,13 +1275,13 @@ impl AbilityDispatcher {
         }
         match target.scope {
             TargetScope::Local => {
-                if let Some(handler) = self.local.bidi_with_env.get(&target.ability) {
+                if let Some(handler) = self.local.resolve_bidi_with_env(&target.ability) {
                     let env = EnvelopeContext {
                         subject: target.subject,
                     };
                     return handler(env, target.normalized_args);
                 }
-                match self.local.get_bidi(&target.ability) {
+                match self.local.resolve_bidi(&target.ability) {
                     Some(handler) => handler(target.normalized_args),
                     None => anyhow::bail!(
                         "no local bidi handler registered for ability {} (loopback path)",
@@ -1409,18 +1812,18 @@ mod tests {
             ok_handler(),
         );
 
-        assert_eq!(reg.lookup_owner("device.fs.read"), Some(&OwnerKind::Device));
+        assert_eq!(reg.lookup_owner("device.fs.read"), Some(OwnerKind::Device));
         assert_eq!(
             reg.lookup_owner("hub.openai.chat_completions"),
-            Some(&OwnerKind::Hub)
+            Some(OwnerKind::Hub)
         );
         assert_eq!(
             reg.lookup_owner("consent.decide"),
-            Some(&OwnerKind::Agent("consent".to_string()))
+            Some(OwnerKind::Agent("consent".to_string()))
         );
         assert_eq!(
             reg.lookup_owner("00000000-0000-0000-0000-000000000001.api_key.create"),
-            Some(&OwnerKind::User(
+            Some(OwnerKind::User(
                 "00000000-0000-0000-0000-000000000001".to_string()
             ))
         );
@@ -1442,7 +1845,7 @@ mod tests {
         reg.register_rpc("legacy.shim.smoke", ok_handler());
         assert_eq!(
             reg.lookup_owner("legacy.shim.smoke"),
-            Some(&OwnerKind::Device),
+            Some(OwnerKind::Device),
         );
     }
 
@@ -1492,20 +1895,20 @@ mod tests {
             bidi_env,
         );
 
-        assert_eq!(reg.lookup_owner("a.rpc"), Some(&OwnerKind::Hub));
+        assert_eq!(reg.lookup_owner("a.rpc"), Some(OwnerKind::Hub));
         assert_eq!(
             reg.lookup_owner("a.stream"),
-            Some(&OwnerKind::Agent("codex".to_string()))
+            Some(OwnerKind::Agent("codex".to_string()))
         );
         assert_eq!(
             reg.lookup_owner("a.bidi"),
-            Some(&OwnerKind::User("u-1".to_string()))
+            Some(OwnerKind::User("u-1".to_string()))
         );
-        assert_eq!(reg.lookup_owner("a.rpc.env"), Some(&OwnerKind::Device));
-        assert_eq!(reg.lookup_owner("a.stream.env"), Some(&OwnerKind::Hub));
+        assert_eq!(reg.lookup_owner("a.rpc.env"), Some(OwnerKind::Device));
+        assert_eq!(reg.lookup_owner("a.stream.env"), Some(OwnerKind::Hub));
         assert_eq!(
             reg.lookup_owner("a.bidi.env"),
-            Some(&OwnerKind::Agent("web-builder".to_string()))
+            Some(OwnerKind::Agent("web-builder".to_string()))
         );
     }
 
@@ -1557,7 +1960,7 @@ mod tests {
         // Canonical lookup returns Hub.
         assert_eq!(
             reg.lookup_owner("hub.openai.chat_completions"),
-            Some(&OwnerKind::Hub)
+            Some(OwnerKind::Hub)
         );
         // Post-M3 legacy lookup returns None (alias retired).
         assert_eq!(
@@ -1687,7 +2090,7 @@ mod tests {
         ] {
             assert_eq!(
                 reg.lookup_owner(n),
-                Some(&OwnerKind::Device),
+                Some(OwnerKind::Device),
                 "{n} should be registered with Device owner"
             );
         }
@@ -1706,5 +2109,203 @@ mod tests {
                 "post-M3 legacy name {legacy} must not be in the owner table"
             );
         }
+    }
+
+    #[test]
+    fn unregister_removes_rpc_handler_and_descriptor_state() {
+        let mut reg = LocalAbilityRegistry::new();
+        reg.register_rpc("doomed.tool", Arc::new(|_| Ok(json!("v"))));
+        assert!(reg.has_rpc("doomed.tool"));
+        assert_eq!(reg.lookup_owner("doomed.tool"), Some(OwnerKind::Device));
+        let was_present = reg.unregister("doomed.tool");
+        assert!(
+            was_present,
+            "unregister must report the ability was present"
+        );
+        assert!(!reg.has_rpc("doomed.tool"));
+        assert_eq!(reg.lookup_owner("doomed.tool"), None);
+    }
+
+    #[test]
+    fn unregister_idempotent_on_missing_ability() {
+        let mut reg = LocalAbilityRegistry::new();
+        // Returns false but does not panic — the contract callers
+        // (B4 list_changed refresh diff) rely on for the
+        // "tool went away mid-sync" race.
+        assert!(!reg.unregister("never-was-there"));
+    }
+
+    #[test]
+    fn unregister_removes_stream_and_bidi_handlers() {
+        let mut reg = LocalAbilityRegistry::new();
+        reg.register_stream(
+            "doomed.stream",
+            Arc::new(|_| Ok(StreamSource::Snapshot(vec![]))),
+        );
+        reg.register_bidi(
+            "doomed.bidi",
+            Arc::new(|_| {
+                Err(anyhow::anyhow!(
+                    "test bidi handler not expected to actually run"
+                ))
+            }),
+        );
+        assert!(reg.has_stream("doomed.stream"));
+        assert!(reg.has_bidi("doomed.bidi"));
+        reg.unregister("doomed.stream");
+        reg.unregister("doomed.bidi");
+        assert!(!reg.has_stream("doomed.stream"));
+        assert!(!reg.has_bidi("doomed.bidi"));
+    }
+
+    // ── Hot-reload (dynamic_ext) side ────────────────────────────────
+
+    #[test]
+    fn hot_register_rpc_is_visible_to_resolve_rpc_and_has_rpc() {
+        // The whole reason for `dynamic_ext` to exist: a sink can
+        // register a handler post-boot through `&self`, and every
+        // lookup surface that fed the dispatcher pre-refactor now
+        // sees it. `Arc::new(reg)` mirrors the daemon boot shape —
+        // after that point a `&mut reg` is no longer reachable.
+        let reg = Arc::new(LocalAbilityRegistry::new());
+        assert!(!reg.has_rpc("mcp_wikipedia__search"));
+        assert!(reg.resolve_rpc("mcp_wikipedia__search").is_none());
+
+        reg.hot_register_rpc(
+            "mcp_wikipedia__search",
+            OwnerKind::Agent("mcp".to_string()),
+            Arc::new(|_args| Ok(serde_json::json!({"hot": true}))),
+        );
+
+        assert!(reg.has_rpc("mcp_wikipedia__search"));
+        let handler = reg
+            .resolve_rpc("mcp_wikipedia__search")
+            .expect("hot-registered ability resolves");
+        let out = handler(serde_json::json!({})).expect("handler runs");
+        assert_eq!(out, serde_json::json!({"hot": true}));
+    }
+
+    #[test]
+    fn hot_register_rpc_with_spec_publishes_manifest_through_dynamic_lookup() {
+        // `manifest_for_dynamic` is what `meta_ability::list_abilities`
+        // reads. A hot-registered manifest must surface there or
+        // freshly reflected MCP tools advertise without a schema.
+        let reg = Arc::new(LocalAbilityRegistry::new());
+        let manifest = crate::core::ability_spec::AbilityManifest::new(
+            "search",
+            "Search Wikipedia.",
+            serde_json::json!({"type": "object"}),
+        )
+        .unwrap();
+        reg.hot_register_rpc_with_spec(
+            "mcp_wikipedia__search",
+            OwnerKind::Agent("mcp".to_string()),
+            manifest,
+            Arc::new(|_args| Ok(serde_json::json!({}))),
+        );
+
+        // Static `manifest_for` is intentionally unchanged — the
+        // distinction matters because some callers want strict
+        // static-only lookup.
+        assert!(reg.manifest_for("mcp_wikipedia__search").is_none());
+        let m = reg
+            .manifest_for_dynamic("mcp_wikipedia__search")
+            .expect("dynamic manifest visible");
+        assert_eq!(m.description(), "Search Wikipedia.");
+    }
+
+    #[test]
+    fn hot_unregister_removes_dynamic_entry_without_touching_static() {
+        // Diff-aware refresh writes `hot_unregister` for tools that
+        // disappeared from the upstream catalogue. Static entries
+        // (boot-registered system abilities) must never be touched
+        // by this surface — if a future bug routes a static name
+        // through `hot_unregister`, the static entry survives.
+        let mut reg = LocalAbilityRegistry::new();
+        reg.register_rpc_with_owner(
+            "device.fs.read",
+            OwnerKind::Device,
+            Arc::new(|_args| Ok(serde_json::Value::Null)),
+        );
+        let reg = Arc::new(reg);
+
+        reg.hot_register_rpc(
+            "mcp_wikipedia__search",
+            OwnerKind::Agent("mcp".to_string()),
+            Arc::new(|_args| Ok(serde_json::Value::Null)),
+        );
+        assert!(reg.has_rpc("mcp_wikipedia__search"));
+        assert!(reg.has_rpc("device.fs.read"));
+
+        let removed = reg.hot_unregister("mcp_wikipedia__search");
+        assert!(removed, "hot_unregister reports the entry was present");
+        assert!(!reg.has_rpc("mcp_wikipedia__search"));
+        // Static entry untouched.
+        assert!(reg.has_rpc("device.fs.read"));
+
+        // Calling hot_unregister on a static name is a silent no-op
+        // (returns false) — the static side is the boot-time truth.
+        let static_removed = reg.hot_unregister("device.fs.read");
+        assert!(!static_removed, "hot_unregister does not touch the static map");
+        assert!(reg.has_rpc("device.fs.read"));
+    }
+
+    #[test]
+    fn list_abilities_unions_static_and_dynamic_names() {
+        // `meta.list_abilities` is the catalogue surface backing
+        // EasyNet-Frontend / the Codex / Claude Code surface. A
+        // freshly reflected MCP tool MUST show up here without a
+        // restart — that's the user-visible payoff for the listener
+        // + dynamic side combined.
+        let mut reg = LocalAbilityRegistry::new();
+        reg.register_rpc_with_owner(
+            "device.fs.read",
+            OwnerKind::Device,
+            Arc::new(|_args| Ok(serde_json::Value::Null)),
+        );
+        let reg = Arc::new(reg);
+        reg.hot_register_rpc(
+            "mcp_wikipedia__search",
+            OwnerKind::Agent("mcp".to_string()),
+            Arc::new(|_args| Ok(serde_json::Value::Null)),
+        );
+        let names = reg.list_abilities();
+        assert!(names.contains(&"device.fs.read".to_string()));
+        assert!(names.contains(&"mcp_wikipedia__search".to_string()));
+        // Sorted so the catalogue surface is stable across calls.
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted);
+    }
+
+    #[test]
+    fn static_lookup_wins_over_dynamic_on_name_collision() {
+        // If an upstream MCP server happens to emit a tool named
+        // `device.fs.read`, the boot-registered system ability must
+        // remain canonical. This is a defensive invariant: an
+        // operator who deliberately wires such an upstream still
+        // gets the system handler, not a 3rd-party reimplementation.
+        let mut reg = LocalAbilityRegistry::new();
+        reg.register_rpc_with_owner(
+            "device.fs.read",
+            OwnerKind::Device,
+            Arc::new(|_args| Ok(serde_json::json!({"from": "static"}))),
+        );
+        let reg = Arc::new(reg);
+        reg.hot_register_rpc(
+            "device.fs.read",
+            OwnerKind::Agent("mcp".to_string()),
+            Arc::new(|_args| Ok(serde_json::json!({"from": "dynamic"}))),
+        );
+        let handler = reg.resolve_rpc("device.fs.read").unwrap();
+        let out = handler(serde_json::json!({})).unwrap();
+        assert_eq!(
+            out,
+            serde_json::json!({"from": "static"}),
+            "static handler must win over dynamic on collision"
+        );
+        // Owner table reflects the static entry too — synth paths
+        // that read `lookup_owner` see Device, not Agent.
+        assert_eq!(reg.lookup_owner("device.fs.read"), Some(OwnerKind::Device));
     }
 }
