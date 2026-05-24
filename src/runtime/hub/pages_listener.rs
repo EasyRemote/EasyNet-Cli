@@ -588,28 +588,34 @@ mod tests {
     }
 
     fn ensure_openai_http_registry() {
-        static INIT: OnceLock<()> = OnceLock::new();
-        INIT.get_or_init(|| {
-            let mut reg = LocalAbilityRegistry::new();
-            reg.register_rpc_with_owner(
-                "codex.chat",
-                OwnerKind::Agent("codex".into()),
-                Arc::new(|_args| Ok(json!({"reply":"ok"}))),
-            );
-            let reg = Arc::new(reg);
-            let handle = Arc::new(OnceLock::new());
-            handle
-                .set(reg)
-                .expect("dispatch handle OnceLock should set once");
-            crate::runtime::agents::openai_compat_ability::set_dispatch_handle(handle);
-            crate::runtime::agents::openai_compat_ability::set_identity(
-                crate::runtime::agents::PagesIdentity {
-                    user: Some("alice".into()),
-                    realm: Some("easynet.run".into()),
-                    listener_port: Some(8787),
-                },
-            );
-        });
+        // Every call rebinds the process-wide dispatch handle and
+        // identity. The two openai_compat_ability statics are
+        // `RwLock<Option<_>>` (last-writer-wins) precisely so this
+        // function can override whatever `build_registry()` from
+        // another test left behind. A `OnceLock<()>`-guarded init
+        // would skip the rebind on the second test of this module
+        // and inherit the earlier test's identity — which is what
+        // produced the `v1_models` / `v1_chat_completions` flakes
+        // when these tests ran inside the full lib test process.
+        let mut reg = LocalAbilityRegistry::new();
+        reg.register_rpc_with_owner(
+            "codex.chat",
+            OwnerKind::Agent("codex".into()),
+            Arc::new(|_args| Ok(json!({"reply":"ok"}))),
+        );
+        let reg = Arc::new(reg);
+        let handle = Arc::new(OnceLock::new());
+        handle
+            .set(reg)
+            .expect("dispatch handle OnceLock should set once");
+        crate::runtime::agents::openai_compat_ability::set_dispatch_handle(handle);
+        crate::runtime::agents::openai_compat_ability::set_identity(
+            crate::runtime::agents::PagesIdentity {
+                user: Some("alice".into()),
+                realm: Some("easynet.run".into()),
+                listener_port: Some(8787),
+            },
+        );
     }
 
     #[tokio::test]

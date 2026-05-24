@@ -608,6 +608,7 @@ fn classify_fulfilled_by(
         Some(AbilityExec::Shell(_)) => Some("shell"),
         Some(AbilityExec::Http(_)) => Some("http"),
         Some(AbilityExec::Eal(_)) => Some("eal"),
+        Some(AbilityExec::Mcp(_)) => Some("mcp"),
         None => Some("agent_chat_fallback"),
     }
 }

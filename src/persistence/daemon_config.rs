@@ -753,6 +753,7 @@ mod tests {
 
     #[test]
     fn default_uds_path_is_used_when_omitted() {
+        let _g = HomeGuard::new();
         let cfg = DaemonConfig::from_raw(raw(
             DaemonMode::Hub,
             "easynet.run",
@@ -773,7 +774,23 @@ mod tests {
             return;
         }
 
-        assert_eq!(cfg.uds_path().to_str(), Some(DEFAULT_DAEMON_UDS_PATH));
+        // The default UDS path constant carries a literal `~`; the
+        // factory expands `$HOME` through `default_uds_path()` so
+        // downstream `bind(2)` calls receive a real absolute path.
+        // Assert the expanded shape rather than the constant — pinning
+        // the literal would lock the test to a pre-expansion code
+        // path that no longer exists.
+        let actual = cfg.uds_path();
+        assert!(
+            actual.is_absolute(),
+            "default uds path must expand to an absolute path, got {}",
+            actual.display()
+        );
+        assert!(
+            actual.ends_with(".easynet/daemon.sock"),
+            "default uds path must terminate at .easynet/daemon.sock, got {}",
+            actual.display()
+        );
     }
 
     #[test]

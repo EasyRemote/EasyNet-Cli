@@ -1272,12 +1272,19 @@ mod tests {
         // PR-7 LB-05 callout: this is the new wire-visible behaviour
         // that breaks the unsigned-envelope PR-6 e2e until commit
         // 7/N restores it with a signed payload.
+        //
+        // Caller URA shape note: trust-anchor entries under the
+        // Backend role MUST be hub URAs (`from_entries` enforces
+        // role-URI canonicality). We model the external caller as
+        // a peer-realm hub so the URA shape is contract-valid while
+        // the realm distinction keeps it outside the daemon's
+        // loopback bypass.
         let facade = AdmissionFacade::new(
-            backend_anchor(&["easynet:///r/realm/agent/test.external"]),
+            backend_anchor(&["easynet:///r/peer-realm/hub"]),
             Some("easynet:///r/realm/hub".to_string()),
         );
         let req = invoke_request(Some(envelope_with_caller(
-            "easynet:///r/realm/agent/test.external",
+            "easynet:///r/peer-realm/hub",
         )));
         let err = facade.verify_invoke(&req).expect_err("must reject");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
@@ -1294,7 +1301,11 @@ mod tests {
         let pub_key = signing_key.verifying_key();
         let pub_key_b64 = BASE64_STANDARD.encode(pub_key.to_bytes());
 
-        let caller_ura = "easynet:///r/realm/agent/test.signer-a";
+        // Backend-role trust entries MUST be hub URAs per
+        // `canonical_uri_for_role`. We use distinct peer-realm hub
+        // URAs across tests so the daemon-shared replay store sees
+        // distinct (caller, nonce) pairs even when tests interleave.
+        let caller_ura = "easynet:///r/peer-signer-a/hub";
         let trust = Arc::new(
             RealmTrustAnchor::from_entries(vec![backend_entry(caller_ura, pub_key_b64)])
                 .expect("anchor"),
@@ -1325,7 +1336,7 @@ mod tests {
         let signing_key = SigningKey::from_bytes(&[0x55u8; 32]);
         let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
 
-        let caller_ura = "easynet:///r/realm/agent/test.receipt-emitter";
+        let caller_ura = "easynet:///r/peer-receipt-emitter/hub";
         let callee_ura = "easynet:///r/realm/hub";
         let trust = Arc::new(
             RealmTrustAnchor::from_entries(vec![backend_entry(caller_ura, pub_key_b64)])
@@ -1398,7 +1409,7 @@ mod tests {
         let signing_key = SigningKey::from_bytes(&[0xCCu8; 32]);
         let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
 
-        let caller_ura = "easynet:///r/realm/agent/test.replay-receipt";
+        let caller_ura = "easynet:///r/peer-replay-receipt/hub";
         let callee_ura = "easynet:///r/realm/hub";
         let trust = Arc::new(
             RealmTrustAnchor::from_entries(vec![backend_entry(caller_ura, pub_key_b64)])
@@ -1474,7 +1485,7 @@ mod tests {
         let pub_key = signing_key.verifying_key();
         let pub_key_b64 = BASE64_STANDARD.encode(pub_key.to_bytes());
 
-        let caller_ura = "easynet:///r/realm/agent/test.replay";
+        let caller_ura = "easynet:///r/peer-replay/hub";
         let trust = Arc::new(
             RealmTrustAnchor::from_entries(vec![backend_entry(caller_ura, pub_key_b64)])
                 .expect("anchor"),
@@ -1508,7 +1519,7 @@ mod tests {
         let other_key = SigningKey::from_bytes(&[0x66u8; 32]);
         let other_pub_b64 = BASE64_STANDARD.encode(other_key.verifying_key().to_bytes());
 
-        let caller_ura = "easynet:///r/realm/agent/test.wrong-key";
+        let caller_ura = "easynet:///r/peer-wrong-key/hub";
         let trust = Arc::new(
             RealmTrustAnchor::from_entries(vec![backend_entry(caller_ura, other_pub_b64)])
                 .expect("anchor"),
@@ -1562,7 +1573,7 @@ mod tests {
     fn invoke_stream_uses_same_pipeline() {
         let signing_key = SigningKey::from_bytes(&[0x88u8; 32]);
         let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
-        let caller_ura = "easynet:///r/realm/agent/test.streamer";
+        let caller_ura = "easynet:///r/peer-streamer/hub";
         let trust = Arc::new(
             RealmTrustAnchor::from_entries(vec![backend_entry(caller_ura, pub_key_b64)])
                 .expect("anchor"),
@@ -1595,7 +1606,7 @@ mod tests {
         // listener split that PR-10 might introduce.
         let signing_key = SigningKey::from_bytes(&[0xAAu8; 32]);
         let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
-        let caller_ura = "easynet:///r/realm/agent/test.shared";
+        let caller_ura = "easynet:///r/peer-shared/hub";
         let trust = Arc::new(
             RealmTrustAnchor::from_entries(vec![backend_entry(caller_ura, pub_key_b64)])
                 .expect("anchor"),
@@ -1774,7 +1785,13 @@ mod tests {
         // working — same trust anchor, two policies.
         let backend_signing = SigningKey::from_bytes(&[0xC0u8; 32]);
         let backend_pub_b64 = BASE64_STANDARD.encode(backend_signing.verifying_key().to_bytes());
-        let backend_uri = "easynet:///r/realm/hub";
+        // Backend role demands a hub URA per `canonical_uri_for_role`,
+        // and the strict pipeline must NOT be short-circuited by the
+        // loopback bypass — so we route the caller through a
+        // peer-realm hub URA. The daemon's self URI (set below as
+        // the second `AdmissionFacade::new` arg) stays in the local
+        // `realm` so caller_ura != self_uri and the strict path runs.
+        let backend_uri = "easynet:///r/peer-role-dispatch/hub";
         let device_uri = "easynet:///r/realm/device/device-C";
 
         let trust = Arc::new(

@@ -634,7 +634,13 @@ async fn subscribe_directory_stream_tracks_real_session_online_and_offline() {
         );
         assert_eq!(
             online_json
-                .get("canonical_agent_ura")
+                // v1 subscribe_directory stream uses `membership_ura`
+                // as the URA field name (per `federation_wrappers`
+                // line ~228); v2 introduced `canonical_agent_ura` but
+                // this test exercises the v1 surface. An earlier copy
+                // of the test asserted the v2 name and silently
+                // observed `None`.
+                .get("membership_ura")
                 .and_then(|v| v.as_str()),
             Some(DEVICE_B_URI)
         );
@@ -654,7 +660,13 @@ async fn subscribe_directory_stream_tracks_real_session_online_and_offline() {
         );
         assert_eq!(
             offline_json
-                .get("canonical_agent_ura")
+                // v1 subscribe_directory stream uses `membership_ura`
+                // as the URA field name (per `federation_wrappers`
+                // line ~228); v2 introduced `canonical_agent_ura` but
+                // this test exercises the v1 surface. An earlier copy
+                // of the test asserted the v2 name and silently
+                // observed `None`.
+                .get("membership_ura")
                 .and_then(|v| v.as_str()),
             Some(DEVICE_B_URI)
         );

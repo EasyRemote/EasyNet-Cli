@@ -76,8 +76,15 @@ fn user_join_two_devices_chat_round_trip() {
     let tenant = "silan.localhost";
     let device1_node_id = "laptop-mac";
     let device2_node_id = "phone-pi";
-    let device1_uri = format!("easynet:///r/{tenant}/agent/{device1_node_id}");
-    let device2_uri = format!("easynet:///r/{tenant}/agent/{device2_node_id}");
+    // v4.1.5: device URAs are `easynet:///r/<realm>/device/<node-id>`.
+    // An earlier copy of this test used `agent/<node-id>` (v4.1.4
+    // shape, single-segment tail), but the SDK ParseError::AgentBadShape
+    // now requires `user.agent` two-segment tails — so the test was
+    // silently routing through the unparseable-URA arm and failing
+    // with `target_not_registered`. Pin the canonical device shape
+    // here so federation routing sees a real URI.
+    let device1_uri = format!("easynet:///r/{tenant}/device/{device1_node_id}");
+    let device2_uri = format!("easynet:///r/{tenant}/device/{device2_node_id}");
 
     // ── Step 3: register agent1 on device1, agent2 on device2.
     //    Each device's local agent registry knows only its own

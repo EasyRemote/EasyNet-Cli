@@ -665,6 +665,11 @@ fn dispatch_to_agent(
                     crate::runtime::agents::eal_executor::run_eal_exec(spec, arguments, timeout)
                         .map_err(|e| EalError::Unavailable(format!("eal exec: {e}")))
                 }
+                crate::core::ability_spec::AbilityExec::Mcp(spec) => {
+                    let _ = timeout;
+                    crate::runtime::agents::mcp_executor::run_mcp_exec(spec, arguments)
+                        .map_err(|e| EalError::Unavailable(format!("mcp exec: {e}")))
+                }
             };
         }
     }

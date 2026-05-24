@@ -839,12 +839,19 @@ impl Invocation for DaemonInvocationService {
             ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2 => {
                 self.dispatch_federation_subscribe_directory_v2()
             }
-            other => Err(Status::unimplemented(format!(
-                "easynet-daemon: server-stream ability `{other}` is not handled in PR-1; \
-                 LocalAbilityRegistry stream fallback wires in commit 7/9, broadcast pump \
-                 for federation.subscribe_directory wires in commit 8/9 \
-                 (see team-work/checklists/PR-1-checklist.md §5)"
-            ))),
+            other => {
+                if let Some(local_dispatcher) = self.local_dispatcher.as_ref() {
+                    if local_dispatcher.local_registry().has_stream(other) {
+                        return self.dispatch_local_stream(local_dispatcher, other, &inner);
+                    }
+                }
+                Err(Status::unimplemented(format!(
+                    "easynet-daemon: server-stream ability `{other}` is not handled in PR-1; \
+                     LocalAbilityRegistry stream fallback wires in commit 7/9, broadcast pump \
+                     for federation.subscribe_directory wires in commit 8/9 \
+                     (see team-work/checklists/PR-1-checklist.md §5)"
+                )))
+            }
         }
     }
 
@@ -950,6 +957,100 @@ impl Invocation for DaemonInvocationService {
 }
 
 /// Pull the `EnvelopeOpen` payload out of frame 0 of an
+/// Encode one frame value as an `InvokeStreamChunk` and push it down
+/// the response channel. Returns `false` when the channel is closed
+/// (caller hung up) or when the JSON encoding failed — both end the
+/// pump task. Lives at module scope (rather than nested inside the
+/// caller closure) so it can be named in profiles, traced cleanly,
+/// and unit-tested in isolation if a future PR adds frame-shape
+/// regressions.
+async fn send_invoke_stream_frame(
+    tx: &mpsc::Sender<Result<InvokeStreamChunk, Status>>,
+    ability: &str,
+    value: serde_json::Value,
+) -> bool {
+    let payload = match serde_json::to_vec(&value) {
+        Ok(payload) => payload,
+        Err(err) => {
+            let _ = tx
+                .send(Err(Status::internal(format!(
+                    "InvokeStream local-dispatcher: encode frame for ability \
+                     `{ability}`: {err}"
+                ))))
+                .await;
+            return false;
+        }
+    };
+    let chunk = InvokeStreamChunk {
+        content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+        payload,
+        ..InvokeStreamChunk::default()
+    };
+    tx.send(Ok(chunk)).await.is_ok()
+}
+
+/// Drain a `Snapshot`-shaped frame vector through
+/// `send_invoke_stream_frame`. Returns `false` as soon as any frame
+/// fails to ship so the caller stops driving the live tail.
+async fn send_invoke_stream_snapshot(
+    tx: &mpsc::Sender<Result<InvokeStreamChunk, Status>>,
+    ability: &str,
+    frames: Vec<serde_json::Value>,
+) -> bool {
+    for frame in frames {
+        if !send_invoke_stream_frame(tx, ability, frame).await {
+            return false;
+        }
+    }
+    true
+}
+
+/// Tokio task body that turns a `StreamSource` into an outbound
+/// `InvokeStream` response. Hoisted to module scope so the spawn
+/// site is one line and the lifecycle (snapshot → optional live
+/// tail → close) is visible without descending into a closure.
+async fn pump_invoke_stream(
+    tx: mpsc::Sender<Result<InvokeStreamChunk, Status>>,
+    ability: String,
+    source: crate::runtime::ability_dispatch::StreamSource,
+) {
+    use crate::runtime::ability_dispatch::StreamSource;
+    let live = match source {
+        StreamSource::Snapshot(frames) => {
+            let _ = send_invoke_stream_snapshot(&tx, &ability, frames).await;
+            return;
+        }
+        StreamSource::Live(rx) => rx,
+        StreamSource::SnapshotThenLive(frames, rx) => {
+            if !send_invoke_stream_snapshot(&tx, &ability, frames).await {
+                return;
+            }
+            rx
+        }
+    };
+
+    let mut live = live;
+    loop {
+        match live.recv().await {
+            Ok(frame) => {
+                if !send_invoke_stream_frame(&tx, &ability, frame).await {
+                    break;
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                let _ = tx
+                    .send(Err(Status::data_loss(format!(
+                        "InvokeStream local-dispatcher: ability `{ability}` \
+                         lagged by {skipped} frame(s)"
+                    ))))
+                    .await;
+                break;
+            }
+        }
+    }
+}
+
 /// `InvokeBidi` up stream. Returns `Status::invalid_argument` for
 /// any non-EnvelopeOpen first frame, since the axon protocol
 /// Extract the `(userID, agentID)` pair from an
@@ -3214,6 +3315,58 @@ impl DaemonInvocationService {
         let combined = futures::StreamExt::chain(initial_stream, event_stream);
         Ok(Response::new(
             Box::pin(combined) as BoxedDownStream<InvokeStreamChunk>
+        ))
+    }
+
+    fn dispatch_local_stream(
+        &self,
+        local_dispatcher: &Arc<crate::runtime::ability_dispatch::AbilityDispatcher>,
+        ability: &str,
+        request: &InvokeServerStreamRequest,
+    ) -> Result<Response<<Self as Invocation>::InvokeStreamStream>, Status> {
+        use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+
+        let normalized_args: serde_json::Value = if request.arguments.is_empty() {
+            serde_json::Value::Object(Default::default())
+        } else {
+            serde_json::from_slice(&request.arguments).map_err(|err| {
+                Status::invalid_argument(format!(
+                    "InvokeStream local-dispatcher: arguments are not valid JSON \
+                     for ability `{ability}`: {err}"
+                ))
+            })?
+        };
+
+        let target = InvocationTarget {
+            scope: TargetScope::Local,
+            ability: ability.to_string(),
+            normalized_args,
+            call_mode: CallMode::Stream,
+            subject: request
+                .envelope
+                .as_ref()
+                .and_then(|env| env.subject.as_ref())
+                .map(|subject| subject.ura.clone())
+                .filter(|uri| !uri.is_empty()),
+        };
+
+        let source = local_dispatcher.execute_stream(target).map_err(|err| {
+            let msg = err.to_string();
+            if msg.contains("no local stream handler registered") {
+                Status::not_found(format!("InvokeStream: {msg}"))
+            } else {
+                Status::failed_precondition(format!(
+                    "InvokeStream local-dispatcher: dispatch of ability `{ability}` failed: {err}"
+                ))
+            }
+        })?;
+
+        let (tx, rx) = mpsc::channel::<Result<InvokeStreamChunk, Status>>(16);
+        let ability_name = ability.to_string();
+        tokio::spawn(pump_invoke_stream(tx, ability_name, source));
+
+        Ok(Response::new(
+            Box::pin(ReceiverStream::new(rx)) as BoxedDownStream<InvokeStreamChunk>
         ))
     }
 
@@ -6152,10 +6305,15 @@ mod tests {
             .expect("peer hub trust anchor"),
         );
         let admission = AdmissionFacade::new(anchor, Some(TEST_DAEMON_URI.to_string()));
+        // ResolveResponse.agents[].ura is the schema field; the older
+        // `uri` field was renamed for v4.1.5 canonical URA discipline.
+        // A stale `"uri":...` fixture causes the decoder to reject
+        // with `missing field 'ura'` and `body.agents` collapses to
+        // empty — the assertion below catches the regression.
         let canned = InvokeResponse {
             result: br#"{
                 "agents":[{
-                    "uri":"easynet:///r/local-realm/agent/alice.remote",
+                    "ura":"easynet:///r/local-realm/agent/alice.remote",
                     "status":"active",
                     "host_node_id":"dev-peer"
                 }]
@@ -6562,6 +6720,62 @@ mod tests {
 
         drop(svc);
         drop(presence);
+    }
+
+    #[tokio::test]
+    async fn invoke_stream_dispatches_registered_local_stream_ability() {
+        use crate::runtime::ability_dispatch::{
+            AbilityDispatcher, LocalAbilityRegistry, StreamSource,
+        };
+        use crate::runtime::gateway::NoopGateway;
+        use futures::StreamExt;
+
+        let mut registry = LocalAbilityRegistry::new();
+        registry.register_stream(
+            "device.browser.capture_viewport",
+            Arc::new(|args| {
+                Ok(StreamSource::Snapshot(vec![serde_json::json!({
+                    "MARKER-LOCAL-STREAM": "dispatched",
+                    "session_ura": args.get("session_ura").and_then(|v| v.as_str()),
+                })]))
+            }),
+        );
+        let dispatcher: Arc<AbilityDispatcher> = Arc::new(AbilityDispatcher::new(
+            Arc::new(registry),
+            Arc::new(NoopGateway::new()),
+        ));
+        let svc = make_service().with_local_dispatcher(dispatcher);
+
+        let resp = svc
+            .invoke_stream(Request::new(InvokeServerStreamRequest {
+                envelope: Some(test_envelope()),
+                function_name: "device.browser.capture_viewport".to_string(),
+                arguments: br#"{"session_ura":"easynet:///r/local/resource/daemon.browser/s1"}"#
+                    .to_vec(),
+                ..InvokeServerStreamRequest::default()
+            }))
+            .await
+            .expect("registered local stream returns Ok");
+
+        let mut stream = resp.into_inner();
+        let first = stream.next().await.expect("one frame").expect("frame Ok");
+        assert_eq!(first.content_type, FEDERATION_RESULT_CONTENT_TYPE);
+        let frame: serde_json::Value = serde_json::from_slice(&first.payload).expect("JSON frame");
+        assert_eq!(
+            frame
+                .get("MARKER-LOCAL-STREAM")
+                .and_then(|value| value.as_str()),
+            Some("dispatched")
+        );
+        assert_eq!(
+            frame.get("session_ura").and_then(|value| value.as_str()),
+            Some("easynet:///r/local/resource/daemon.browser/s1")
+        );
+
+        let close = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+            .await
+            .expect("snapshot stream closes promptly");
+        assert!(close.is_none());
     }
 
     #[tokio::test]

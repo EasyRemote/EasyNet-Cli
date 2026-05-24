@@ -426,6 +426,21 @@ mod tests {
     /// Try to drain at most `n` RecvBidi frames from the bidi
     /// from_client receiver inside a soft deadline. A regression that
     /// drops a frame fails fast instead of hanging the test runner.
+    ///
+    /// **Early-exit on the `exit` frame.** Per §I2 the `exit` frame
+    /// is terminal — by contract nothing meaningful follows it on
+    /// this channel. The previous implementation kept polling until
+    /// either `n` frames arrived or `deadline` elapsed, which forced
+    /// every "child exits" test to burn its full deadline (the PTY
+    /// reader's fd dup sits in a blocking `read()` after SIGHUP and
+    /// only EOFs on its own schedule, so the channel doesn't close
+    /// promptly). Under cargo-test parallel load that turned a 3 s
+    /// budget into the actual critical path and produced flakes
+    /// like `child_exit_emits_one_exit_frame`. Bailing the moment we
+    /// see `exit` collapses every "wait for terminal" assertion to
+    /// the actual settle time of the exit watcher (~100-300 ms) and
+    /// matches what a real wire consumer would do — once `exit`
+    /// fires, the session is gone.
     async fn drain_handler_emit(
         rx: &mut tokio::sync::mpsc::Receiver<Value>,
         n: usize,
@@ -439,7 +454,13 @@ mod tests {
                 break;
             };
             match tokio::time::timeout(rem, rx.recv()).await {
-                Ok(Some(f)) => out.push(f),
+                Ok(Some(f)) => {
+                    let is_exit = f.get("type").and_then(Value::as_str) == Some("exit");
+                    out.push(f);
+                    if is_exit {
+                        break;
+                    }
+                }
                 Ok(None) => break,
                 Err(_) => break,
             }

@@ -285,6 +285,7 @@ const HELP_TEMPLATE: &str = "\
     \x1b[1mruntime\x1b[0m              Manage the local Axon runtime (start, stop, status)
     \x1b[1mmcp\x1b[0m                  MCP server — expose device abilities to AI assistants
     \x1b[1mfederation\x1b[0m           Inspect cross-hub peers and trusted hubs
+    \x1b[1minvocation\x1b[0m           Audit invocation records, show one record, inspect traces
 
   \x1b[1;36m[Maintenance]\x1b[0m
     \x1b[1mself\x1b[0m                 Update, check version, or uninstall EasyNet CLI

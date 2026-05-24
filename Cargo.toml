@@ -260,7 +260,11 @@ tree-sitter-bash = "0.25"
 #    explicitly so the daemon's HTTP surface tracks a known hyper version
 #    rather than whichever transitive resolution wins.
 axum = "0.7"
-hyper = { version = "1", features = ["server", "http1"] }
+hyper = { version = "1", features = ["server", "client", "http1"] }
+# http-body-util is hyper 1.x's body-collect + Full helper pair.
+# Required by the streamable-HTTP MCP transport for collecting
+# response bodies and framing request bodies as Full<Bytes>.
+http-body-util = "0.1"
 
 # RFC-006-B v0.6 / Pages reference system — sandbox + state map.
 #  - rustix with `fs` feature: kernel-enforced read sandbox for

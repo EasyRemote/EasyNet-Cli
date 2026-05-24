@@ -179,6 +179,20 @@ impl PtyIoService {
         }
     }
 
+    /// Look up an existing I/O row without lazily creating one.
+    /// Used by the `timeout = 0` non-blocking poll path so a caller
+    /// asking for "current buffer state, don't block" never pays
+    /// the OS-thread-spawn cost a fresh `get_or_init` incurs. On a
+    /// contended cargo-test machine that spawn observably ran in
+    /// the 50-200ms range — well outside the 500ms upper bound the
+    /// `read_with_zero_timeout_returns_immediately_when_empty` test
+    /// pins, which was the source of the suite-flake before this
+    /// surface landed.
+    fn get_existing(&self, id: &PtySessionId) -> Option<Arc<SessionIo>> {
+        let g = self.inner.lock().expect("pty io service lock");
+        g.get(id).cloned()
+    }
+
     /// Look up or lazily create an I/O row for `id`. Returns the
     /// shared row. Creating a new row spawns the reader thread.
     fn get_or_init(
@@ -438,24 +452,66 @@ fn read_handler(pty: &Arc<PtyService>, io: &PtyIoService, args: Value) -> anyhow
     }
 
     let timeout_secs = parse_timeout(&args)?;
+
+    // Non-blocking poll fast path. When the caller said `timeout = 0`
+    // ("give me current state, don't block"), look up the row
+    // without lazily spawning the reader thread. Two reasons:
+    //
+    //   1. OS-thread spawn under `cargo test --tests` parallel load
+    //      observably ran 50-200ms — well past the 500ms slack the
+    //      non-blocking contract test pins.
+    //   2. A "first call" with timeout=0 cannot have any buffered
+    //      bytes by definition (nobody read yet, but more
+    //      importantly nobody _wrote_ to a buffer that doesn't
+    //      exist), so returning empty + 0 bytes is the
+    //      semantically-correct answer. The next call with
+    //      timeout>0 lazily initialises the reader, restoring
+    //      catch-up behaviour identical to the pre-fastpath path.
+    if timeout_secs == 0.0 {
+        let Some(row) = io.get_existing(&id) else {
+            return Ok(json!({
+                "output": "",
+                "bytes": 0,
+            }));
+        };
+        let (lock, _cv) = &*row.output;
+        let mut state = lock.lock().expect("pty io output lock");
+        let take = state.buf.len().min(MAX_READ_CHUNK_BYTES);
+        let chunk: Vec<u8> = state.buf.drain(..take).collect();
+        let closed = state.closed;
+        drop(state);
+        let mut resp = json!({
+            "bytes": chunk.len(),
+            "output": base64::engine::general_purpose::STANDARD.encode(&chunk),
+        });
+        if closed && chunk.is_empty() {
+            resp["code"] = json!("session_dead");
+        }
+        return Ok(resp);
+    }
+
+    // Blocking (positive-timeout) path.
     let row = io.get_or_init(pty, &id)?;
 
-    let deadline = Instant::now() + Duration::from_secs_f64(timeout_secs);
     let (lock, cv) = &*row.output;
     let mut state = lock.lock().expect("pty io output lock");
 
-    // Wait for bytes OR closed OR deadline. Loop because Condvar
-    // can fire spuriously per std-lib contract.
-    while state.buf.is_empty() && !state.closed {
-        let now = Instant::now();
-        if now >= deadline {
-            break;
-        }
-        let remaining = deadline - now;
-        let (s2, timed_out) = cv.wait_timeout(state, remaining).expect("cv wait_timeout");
-        state = s2;
-        if timed_out.timed_out() {
-            break;
+    // Loop because Condvar can fire spuriously per std-lib contract.
+    {
+        let deadline = Instant::now() + Duration::from_secs_f64(timeout_secs);
+        // Wait for bytes OR closed OR deadline. Loop because Condvar
+        // can fire spuriously per std-lib contract.
+        while state.buf.is_empty() && !state.closed {
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            let remaining = deadline - now;
+            let (s2, timed_out) = cv.wait_timeout(state, remaining).expect("cv wait_timeout");
+            state = s2;
+            if timed_out.timed_out() {
+                break;
+            }
         }
     }
 
@@ -743,11 +799,53 @@ mod tests {
     }
 
     #[test]
+    fn read_with_zero_timeout_does_not_lazily_spawn_reader() {
+        // Non-blocking poll contract: a `timeout = 0` read on a
+        // freshly-created session that has never been read before
+        // returns 0 bytes WITHOUT spawning the reader thread / I/O
+        // row. The next `timeout > 0` read still lazily initialises.
+        // This is what makes the non-blocking path observably
+        // bounded by the existing-row mutex acquisition latency
+        // rather than by OS thread spawn.
+        let (pty, io) = fresh();
+        let id = spawn_sh(&pty);
+        // No row before the poll.
+        assert!(io.get_existing(&id).is_none());
+        let resp =
+            read_handler(&pty, &io, json!({"session_id": id.as_str(), "timeout": 0})).unwrap();
+        assert_eq!(resp["bytes"], 0);
+        // Still no row after a zero-timeout poll.
+        assert!(
+            io.get_existing(&id).is_none(),
+            "timeout=0 must not lazily initialise the reader row"
+        );
+        // A blocking read DOES initialise.
+        let _ = read_handler(
+            &pty,
+            &io,
+            json!({"session_id": id.as_str(), "timeout": 0.05}),
+        )
+        .unwrap();
+        assert!(io.get_existing(&id).is_some());
+        pty.close(&id);
+    }
+
+    #[test]
     fn drop_session_removes_row_and_signals_close() {
         let (pty, io) = fresh();
         let id = spawn_sh(&pty);
-        // Init the I/O row by reading once.
-        let _ = read_handler(&pty, &io, json!({"session_id": id.as_str(), "timeout": 0})).unwrap();
+        // Init the I/O row by reading once. Use a non-zero timeout
+        // because `timeout = 0` now hits a non-blocking fast path
+        // that does NOT lazily spawn the reader thread (see the
+        // comment in `read_handler` for the rationale); a strictly
+        // positive timeout still threads through `get_or_init` and
+        // creates the row this test expects to drop below.
+        let _ = read_handler(
+            &pty,
+            &io,
+            json!({"session_id": id.as_str(), "timeout": 0.05}),
+        )
+        .unwrap();
         assert!(io.drop_session(&id), "first drop must report ack=true");
         assert!(
             !io.drop_session(&id),

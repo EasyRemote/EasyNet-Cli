@@ -622,14 +622,29 @@ mod tests {
     fn parse_node_uri_rejects_missing_node_id() {
         let err =
             parse_node_uri("easynet:///r/realm-b/device/").expect_err("empty node id rejected");
-        assert!(format!("{err}").contains("device URI requires"));
+        // The SDK ParseError::DeviceMissingTail formats as
+        // "device URA requires <device-id> tail" (note: URA, not
+        // URI — the SDK ontology calls these URAs everywhere).
+        // Test pins that wording so a future rename surfaces here
+        // instead of silently swallowing the error condition.
+        assert!(
+            format!("{err}").contains("device URA requires"),
+            "expected SDK DeviceMissingTail wording, got: {err}"
+        );
     }
 
     #[test]
     fn parse_node_uri_rejects_extra_path_segments() {
         let err = parse_node_uri("easynet:///r/realm-b/device/n1/ability/x")
             .expect_err("extra segments rejected");
-        assert!(format!("{err}").contains("device-id must be bare"));
+        // The SDK ParseError::DeviceBadShape formats as
+        // "device-id must be a single path segment". The test used
+        // to assert "device-id must be bare" — an older copy that
+        // drifted from the SDK; we pin the live wording here.
+        assert!(
+            format!("{err}").contains("device-id must be a single path segment"),
+            "expected SDK DeviceBadShape wording, got: {err}"
+        );
     }
 
     #[test]
@@ -643,10 +658,15 @@ mod tests {
     fn parse_node_uri_rejects_wrong_keyword() {
         // URI v4.1.4: the role segment after the realm MUST be
         // `device`. A typo / unknown role is rejected so the
-        // operator notices before the URI hits the daemon.
+        // operator notices before the URI hits the daemon. The
+        // SDK ParseError::UnknownRole formats as
+        // `unknown URA role "<role>" (allowed: ...)`.
         let err =
             parse_node_uri("easynet:///r/realm-b/notarole/n1").expect_err("wrong keyword rejected");
-        assert!(format!("{err}").contains("unknown role"));
+        assert!(
+            format!("{err}").contains("unknown URA role"),
+            "expected SDK UnknownRole wording, got: {err}"
+        );
     }
 
     #[test]

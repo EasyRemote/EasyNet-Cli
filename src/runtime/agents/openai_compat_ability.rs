@@ -22,7 +22,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
@@ -30,11 +30,29 @@ use serde_json::{json, Value};
 use crate::runtime::ability_dispatch::{LocalAbilityRegistry, LocalRpcHandler};
 use crate::runtime::agents::api_key_ability;
 
-/// Process-wide handle to the live ability registry, set at boot.
-/// chat_completions reaches through it to invoke target chat-base
-/// abilities without IPC self-loop.
-static DISPATCH_HANDLE: OnceLock<Arc<OnceLock<Arc<LocalAbilityRegistry>>>> = OnceLock::new();
-static OPENAI_IDENTITY: OnceLock<OpenAICompatIdentity> = OnceLock::new();
+/// Process-wide handle to the live ability registry. The outer
+/// `RwLock` is what makes this last-writer-wins: in production the
+/// daemon's boot path sets it exactly once, but the test binary
+/// shares the static across thousands of tests with overlapping
+/// `build_registry()` invocations, and a `OnceLock` here would
+/// silently let whichever test ran first pin the handle for every
+/// other test in the same process. The inner `Arc<OnceLock<...>>`
+/// is the seam `build_registry_with_services` uses to backfill the
+/// registry after the LocalAbilityRegistry assembly completes.
+///
+/// **Production invariant**: write once at boot, read many times
+/// thereafter. Multiple writes are allowed (so tests can re-bind
+/// the handle), but observing a stale read is not a contract — the
+/// dispatch path always re-acquires through `current_handle()`.
+static DISPATCH_HANDLE: RwLock<Option<Arc<OnceLock<Arc<LocalAbilityRegistry>>>>> =
+    RwLock::new(None);
+/// Process-wide identity for OpenAI-compat URA projection. Same
+/// rationale as `DISPATCH_HANDLE`: production sets once at boot,
+/// but the in-process test binary needs last-writer-wins so a
+/// `set_identity({user: Some("alice"), …})` from
+/// `ensure_openai_http_registry` can override a default written
+/// earlier by `build_registry()` in another test.
+static OPENAI_IDENTITY: RwLock<Option<OpenAICompatIdentity>> = RwLock::new(None);
 
 #[derive(Debug, Clone)]
 struct OpenAICompatIdentity {
@@ -43,16 +61,31 @@ struct OpenAICompatIdentity {
 }
 
 pub(crate) fn set_dispatch_handle(handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>>) {
-    let _ = DISPATCH_HANDLE.set(handle);
+    *DISPATCH_HANDLE.write().expect("DISPATCH_HANDLE poisoned") = Some(handle);
+}
+
+fn current_dispatch_handle() -> Option<Arc<OnceLock<Arc<LocalAbilityRegistry>>>> {
+    DISPATCH_HANDLE
+        .read()
+        .expect("DISPATCH_HANDLE poisoned")
+        .as_ref()
+        .cloned()
 }
 
 pub(crate) fn set_identity(identity: crate::runtime::agents::PagesIdentity) {
-    let _ = OPENAI_IDENTITY.set(OpenAICompatIdentity {
+    *OPENAI_IDENTITY.write().expect("OPENAI_IDENTITY poisoned") = Some(OpenAICompatIdentity {
         user: identity.user,
         realm: identity
             .realm
             .unwrap_or_else(|| crate::ura::REALM_EASYNET.to_string()),
     });
+}
+
+fn current_identity() -> Option<OpenAICompatIdentity> {
+    OPENAI_IDENTITY
+        .read()
+        .expect("OPENAI_IDENTITY poisoned")
+        .clone()
 }
 
 fn now_secs() -> u64 {
@@ -235,8 +268,7 @@ pub fn handle_chat_completions(args: Value) -> anyhow::Result<Value> {
     }
 
     // INV-1: forward via standard registry, no own dispatcher.
-    let handle = DISPATCH_HANDLE
-        .get()
+    let handle = current_dispatch_handle()
         .ok_or_else(|| anyhow::anyhow!("dispatch handle not set"))?;
     let registry = handle
         .get()
@@ -410,8 +442,7 @@ pub fn handle_chat_completions(args: Value) -> anyhow::Result<Value> {
 /// `01HUB.openai.list_models` — return list of chat-base abilities
 /// available on this daemon, projected as OpenAI-shape models.
 pub fn handle_list_models(_args: Value) -> anyhow::Result<Value> {
-    let handle = DISPATCH_HANDLE
-        .get()
+    let handle = current_dispatch_handle()
         .ok_or_else(|| anyhow::anyhow!("dispatch handle not set"))?;
     let registry = handle
         .get()
@@ -462,7 +493,7 @@ pub fn register(reg: &mut LocalAbilityRegistry) {
 }
 
 fn project_model_id(registry: &LocalAbilityRegistry, ability_name: &str) -> String {
-    project_model_id_with_identity(registry, ability_name, OPENAI_IDENTITY.get())
+    project_model_id_with_identity(registry, ability_name, current_identity().as_ref())
 }
 
 fn project_model_id_with_identity(
@@ -481,9 +512,9 @@ fn project_model_id_with_identity(
     let Some(user) = identity.user.as_deref() else {
         return ability_name.to_string();
     };
-    let owner_ura = crate::ura::agent_ura(&identity.realm, user, agent_id);
+    let owner_ura = crate::ura::agent_ura(&identity.realm, user, &agent_id);
     let public_name = crate::ura::public_ability_name_for_owner(&owner_ura, ability_name);
-    crate::ura::ability_ura(&identity.realm, user, agent_id, &public_name)
+    crate::ura::ability_ura(&identity.realm, user, &agent_id, &public_name)
 }
 
 // ─── EasyNet URA dereference for multimodal message content ──────
@@ -588,8 +619,7 @@ fn deref_to_data_url(uri: &str) -> anyhow::Result<String> {
         }
         None => anyhow::bail!("deref `{uri}`: owner segment lacks dot"),
     };
-    let handle = DISPATCH_HANDLE
-        .get()
+    let handle = current_dispatch_handle()
         .ok_or_else(|| anyhow::anyhow!("deref: dispatch handle not set"))?;
     let registry = handle
         .get()
@@ -643,9 +673,6 @@ mod tests {
             realm: "easynet.run".into(),
         };
         let got = project_model_id_with_identity(&reg, "codex.chat", Some(&identity));
-        assert_eq!(
-            got,
-            "easynet:///r/easynet.run/ability/alice.codex.chat"
-        );
+        assert_eq!(got, "easynet:///r/easynet.run/ability/alice.codex.chat");
     }
 }

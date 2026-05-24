@@ -77,6 +77,10 @@ pub enum AgentAction {
     Session(SessionArgs),
     /// List the abilities declared under `<agent-root>/abilities/`.
     Abilities(agent_cmd::AbilitiesArgs),
+    /// Bind configured upstream MCP tools into this agent's
+    /// `abilities/` directory as deterministic `[exec] kind="mcp"`
+    /// abilities.
+    Mcp(agent_cmd::McpArgs),
     /// Update fields of a registered agent in place. Currently
     /// supports `--model`. Mutates `agent.toml` + the registry row;
     /// preserves label, abilities, skills, runs.
@@ -169,6 +173,9 @@ pub fn run(args: AgentArgs) -> anyhow::Result<()> {
         }),
         AgentAction::Abilities(a) => agent_cmd::run(agent_cmd::AgentArgs {
             action: agent_cmd::AgentAction::Abilities(a),
+        }),
+        AgentAction::Mcp(a) => agent_cmd::run(agent_cmd::AgentArgs {
+            action: agent_cmd::AgentAction::Mcp(a),
         }),
         AgentAction::Set(a) => agent_cmd::run(agent_cmd::AgentArgs {
             action: agent_cmd::AgentAction::Set(a),
