@@ -282,8 +282,17 @@ impl AbilityProxy {
                         } else {
                             "non-string panic payload".to_string()
                         };
-                        eprintln!(
-                            "[ability_proxy] handle_invoke {ability_for_err:?} panicked: {msg}"
+                        // `ability_for_err: String` — pass verbatim; op_event!
+                        // auto-quotes only when the value contains whitespace,
+                        // so a bare ability name renders as `ability=user.foo`.
+                        // `msg` is borrowed (the macro takes `&dyn Display`),
+                        // not consumed, so the `format!` below sees it
+                        // unchanged.
+                        crate::op_event!(
+                            component = ability_proxy,
+                            kind = handle_invoke_panicked,
+                            ability = ability_for_err,
+                            error = msg,
                         );
                         vec![OutgoingFrame::Error {
                             request_id: Some(request_id_for_err),
@@ -293,9 +302,12 @@ impl AbilityProxy {
                         }]
                     }
                     Err(join_err) => {
-                        eprintln!(
-                            "[ability_proxy] handle_invoke {ability_for_err:?} \
-                             spawn_blocking task aborted: {join_err}"
+                        let err_msg = format!("{join_err}");
+                        crate::op_event!(
+                            component = ability_proxy,
+                            kind = handle_invoke_task_aborted,
+                            ability = ability_for_err,
+                            error = err_msg,
                         );
                         vec![OutgoingFrame::Error {
                             request_id: Some(request_id_for_err),

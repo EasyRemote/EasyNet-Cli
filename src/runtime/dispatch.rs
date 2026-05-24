@@ -422,9 +422,14 @@ pub fn send_to_agent_with_depth_and_progress(
                 (Some(p), spec)
             }
             Err(e) => {
-                eprintln!(
-                    "[easynet warn] agent {agent_name}: workspace provisioning failed ({e}); \
-                     continuing without project-level MCP / context"
+                let err_msg = format!("{e}");
+                crate::op_event!(
+                    component = dispatch,
+                    kind = workspace_provisioning_failed,
+                    level = "warn",
+                    agent = agent_name,
+                    error = err_msg,
+                    fallback = "no_project_level_mcp_or_context",
                 );
                 (None, None)
             }
@@ -530,18 +535,28 @@ pub fn send_to_agent_with_depth_and_progress(
     let run_dir: Option<Arc<RunDir>> = match RunDir::create(agent_name) {
         Ok(dir) => Some(Arc::new(dir)),
         Err(e) => {
-            eprintln!(
-                "[easynet warn] agent {agent_name}: run dir creation failed ({e}); \
-                 continuing without per-run persistence"
+            let err_msg = format!("{e}");
+            crate::op_event!(
+                component = dispatch,
+                kind = run_dir_create_failed,
+                level = "warn",
+                agent = agent_name,
+                error = err_msg,
+                fallback = "no_per_run_persistence",
             );
             None
         }
     };
     if let Some(dir) = &run_dir {
         if let Err(e) = dir.write_prompt(&full_prompt) {
-            eprintln!(
-                "[easynet warn] run {}: write prompt.txt failed ({e})",
-                dir.path().display()
+            let path_display = format!("{}", dir.path().display());
+            let err_msg = format!("{e}");
+            crate::op_event!(
+                component = dispatch,
+                kind = prompt_write_failed,
+                level = "warn",
+                run_path = path_display,
+                error = err_msg,
             );
         }
     }
@@ -579,9 +594,14 @@ pub fn send_to_agent_with_depth_and_progress(
         "context_present": context.is_some(),
     });
     if let Err(e) = session.writer().emit("admitted", Some(admitted_payload)) {
-        eprintln!(
-            "[easynet warn] agent {agent_name}: timeline admitted emit failed ({e}); \
-             continuing (run_dir write is still authoritative)"
+        let err_msg = format!("{e}");
+        crate::op_event!(
+            component = dispatch,
+            kind = timeline_admitted_emit_failed,
+            level = "warn",
+            agent = agent_name,
+            error = err_msg,
+            fallback = "run_dir_write_is_authoritative",
         );
     }
 
@@ -667,9 +687,14 @@ pub fn send_to_agent_with_depth_and_progress(
         };
         if let Some(text) = content_for_meta {
             if let Err(e) = dir.write_response(text) {
-                eprintln!(
-                    "[easynet warn] run {}: write response.md failed ({e})",
-                    dir.path().display()
+                let path_display = format!("{}", dir.path().display());
+                let err_msg = format!("{e}");
+                crate::op_event!(
+                    component = dispatch,
+                    kind = response_write_failed,
+                    level = "warn",
+                    run_path = path_display,
+                    error = err_msg,
                 );
             }
         }
@@ -699,9 +724,14 @@ pub fn send_to_agent_with_depth_and_progress(
             total_cost_usd: u.total_cost_usd,
         };
         if let Err(e) = dir.write_meta(&meta) {
-            eprintln!(
-                "[easynet warn] run {}: write meta.json failed ({e})",
-                dir.path().display()
+            let path_display = format!("{}", dir.path().display());
+            let err_msg = format!("{e}");
+            crate::op_event!(
+                component = dispatch,
+                kind = meta_write_failed,
+                level = "warn",
+                run_path = path_display,
+                error = err_msg,
             );
         }
     }
@@ -739,9 +769,14 @@ pub fn send_to_agent_with_depth_and_progress(
         ),
     };
     if let Err(e) = session.writer().emit(terminal_type, Some(terminal_payload)) {
-        eprintln!(
-            "[easynet warn] agent {agent_name}: timeline terminal emit failed ({e}); \
-             run_dir meta.json is still authoritative"
+        let err_msg = format!("{e}");
+        crate::op_event!(
+            component = dispatch,
+            kind = timeline_terminal_emit_failed,
+            level = "warn",
+            agent = agent_name,
+            error = err_msg,
+            fallback = "run_dir_meta_is_authoritative",
         );
     }
 
@@ -858,10 +893,12 @@ fn check_mission_context_invariant() -> anyhow::Result<()> {
             );
             #[cfg(not(debug_assertions))]
             {
-                eprintln!(
-                    "[easynet warn] dispatch::send_to_agent called without \
-                     mission context — this is an ontology violation, see \
-                     docs/easynet_ontology.tex §6.2"
+                crate::op_event!(
+                    component = dispatch,
+                    kind = send_to_agent_missing_mission_context,
+                    level = "warn",
+                    spec_ref = "docs/easynet_ontology.tex §6.2",
+                    message = "ontology violation; continuing in release for back-compat",
                 );
                 // Continue execution in release mode for backwards compat
                 // with any caller that hasn't been migrated yet.
@@ -894,10 +931,12 @@ fn check_mission_context_invariant() -> anyhow::Result<()> {
         );
         #[cfg(not(debug_assertions))]
         {
-            eprintln!(
-                "[easynet warn] mission_id={} does not match \
-                 an existing mission run dir; possible env var forgery",
-                mission_id
+            crate::op_event!(
+                component = dispatch,
+                kind = mission_id_unknown_run_dir,
+                level = "warn",
+                mission_id = mission_id,
+                message = "possible env var forgery",
             );
             anyhow::bail!("invalid mission context: run dir not found");
         }

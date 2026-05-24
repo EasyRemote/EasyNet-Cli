@@ -1,0 +1,38 @@
+schema_version = "1"
+name = "device.browser.open_session"
+description = "[V0 MOCK — NOT YET FUNCTIONAL; replaced by real WebView in RFC-013 W1] Open a top-level WebView session on this device against an http/https URL the frontend cannot iframe-embed (X-Frame-Options or CSP frame-ancestors). Returns a session URA the caller subscribes to via device.browser.capture_viewport for frames, and writes to via device.browser.send_input for input events. v0 ships a mock handler (no real WebView); RFC-013 W1–W8 replaces the mock with wry across WKWebView / WebView2 / WebKitGTK."
+
+[input_schema]
+type = "object"
+required = ["url"]
+additionalProperties = false
+
+[input_schema.properties.device_scale_factor]
+type = "number"
+description = "Device pixel ratio for rendering. Default 1.0."
+minimum = 1.0
+maximum = 3.0
+
+[input_schema.properties.idle_timeout_seconds]
+type = "integer"
+description = "Auto-close after this many seconds with no input. Default 1800 (30 min)."
+minimum = 60
+maximum = 7200
+
+[input_schema.properties.url]
+type = "string"
+description = "Target URL. http:// or https:// only."
+minLength = 1
+pattern = "^https?://"
+
+[input_schema.properties.viewport_height]
+type = "integer"
+description = "Initial viewport height in CSS pixels. Default 800."
+minimum = 240
+maximum = 2400
+
+[input_schema.properties.viewport_width]
+type = "integer"
+description = "Initial viewport width in CSS pixels. Default 1280."
+minimum = 320
+maximum = 3840

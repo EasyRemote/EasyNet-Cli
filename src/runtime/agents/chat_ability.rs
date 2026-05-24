@@ -302,6 +302,10 @@ pub(crate) fn build_agent_ability_handler(
                     crate::core::ability_spec::AbilityExec::Eal(spec) => {
                         crate::runtime::agents::eal_executor::run_eal_exec(spec, &args, timeout)
                     }
+                    crate::core::ability_spec::AbilityExec::Mcp(spec) => {
+                        let _ = timeout;
+                        crate::runtime::agents::mcp_executor::run_mcp_exec(spec, &args)
+                    }
                 };
             }
         }
@@ -622,9 +626,15 @@ pub(crate) fn invoke_direct_with_progress(
                     // chain. Surface the failure in `context_used`
                     // with a `bytes: 0` entry so the caller sees the
                     // attempt was made.
-                    eprintln!(
-                        "chat[{agent_name}]: context loader {:?} failed: {e}",
-                        loader.name()
+                    let loader_name = loader.name();
+                    let err_msg = format!("{e}");
+                    crate::op_event!(
+                        component = chat,
+                        kind = context_loader_failed,
+                        level = "warn",
+                        agent = agent_name,
+                        loader = loader_name,
+                        error = err_msg,
                     );
                     context_used.push(json!({
                         "loader": loader.name(),
@@ -891,9 +901,15 @@ fn stream_handler(
                 }
                 Ok(None) => {}
                 Err(e) => {
-                    eprintln!(
-                        "chat[{agent_name}] (stream): context loader {:?} failed: {e}",
-                        loader.name()
+                    let loader_name = loader.name();
+                    let err_msg = format!("{e}");
+                    crate::op_event!(
+                        component = chat_stream,
+                        kind = context_loader_failed,
+                        level = "warn",
+                        agent = agent_name,
+                        loader = loader_name,
+                        error = err_msg,
                     );
                     context_used.push(json!({
                         "loader": loader.name(),

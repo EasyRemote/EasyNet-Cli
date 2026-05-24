@@ -21,7 +21,8 @@
 // What lives here (continued)
 // ---------------------------
 //   * mcp.bridge.call_tool — dispatches an in-process Invoke
-//                            against the named local ability and
+//                            against the advertised MCP tool name
+//                            (or legacy dotted ability name) and
 //                            wraps the response in MCP `tools/call`
 //                            shape. The §A5 visibility filter is
 //                            checked client-side BEFORE we hit the
@@ -54,7 +55,9 @@ use serde_json::{json, Value};
 use crate::runtime::ability_descriptor::AbilityDescriptor;
 use crate::runtime::ability_dispatch::LocalAbilityRegistry;
 use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::agents::profiles::mcp::tool_specs_from_descriptors;
+use crate::runtime::agents::profiles::mcp::{
+    canonical_ability_name_for_mcp_tool, tool_specs_from_descriptors,
+};
 
 pub const ABILITY_LIST_TOOLS: &str = "device.mcp.bridge.list_tools";
 pub const ABILITY_CALL_TOOL: &str = "device.mcp.bridge.call_tool";
@@ -113,9 +116,10 @@ fn list_tools_handler(
 
 /// `mcp.bridge.call_tool` handler.
 ///
-/// Args: `{ "name": "<ability-name>", "arguments": <json-value> }`
-/// Mirrors the MCP `tools/call` request shape; `arguments` is
-/// optional (some tools take none). Returns
+/// Args: `{ "name": "<advertised-mcp-tool-name>", "arguments": <json-value> }`.
+/// Legacy canonical dotted ability names are also accepted for
+/// compatibility. Mirrors the MCP `tools/call` request shape;
+/// `arguments` is optional (some tools take none). Returns
 /// `{ "content": [<text|json blob>], "isError": bool }` per MCP's
 /// `tools/call` response convention.
 ///
@@ -152,11 +156,11 @@ fn call_tool_handler(
     // bypass the filter the bridge advertises. We compare against
     // the same descriptors source list_tools projects from.
     let descriptors = descriptors_provider();
-    if !descriptors.iter().any(|d| d.name == name) {
+    let Some(ability_name) = canonical_ability_name_for_mcp_tool(&descriptors, &name) else {
         return Ok(error_response(&format!(
             "tool `{name}` not found in the bridge's advertised catalogue"
         )));
-    }
+    };
 
     // Reach into the registry through the post-build OnceLock seam.
     // If the lock is empty we surface as isError rather than panic
@@ -168,20 +172,20 @@ fn call_tool_handler(
             "registry handle not initialised (build-site forgot to set the OnceLock)",
         ));
     };
-    let Some(handler) = registry.get_rpc(&name) else {
+    let Some(handler) = registry.get_rpc(ability_name) else {
         // The descriptor said it exists but the registry doesn't
         // have an RPC handler — likely a streaming-only or bidi
         // ability advertised through the catalogue. MCP tools/call
         // is unary; tell the caller honestly.
         return Ok(error_response(&format!(
-            "tool `{name}` is not invocable as a unary RPC (may be a stream or bidi handler)"
+            "tool `{name}` maps to ability `{ability_name}`, which is not invocable as a unary RPC (may be a stream or bidi handler)"
         )));
     };
 
     match handler(arguments) {
         Ok(value) => Ok(success_response(value)),
         Err(e) => Ok(error_response(&format!(
-            "tool `{name}` returned an error: {e}"
+            "tool `{name}` maps to ability `{ability_name}`, which returned an error: {e}"
         ))),
     }
 }
@@ -309,8 +313,8 @@ mod tests {
         let tools = resp["tools"].as_array().expect("tools array");
         assert_eq!(tools.len(), 2);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert!(names.contains(&"device.observe.health"));
-        assert!(names.contains(&"device.agent.list"));
+        assert!(names.contains(&"device_observe_health"));
+        assert!(names.contains(&"device_agent_list"));
     }
 
     #[test]
@@ -352,14 +356,14 @@ mod tests {
     // ── call_tool ─────────────────────────────────────────────
 
     #[test]
-    fn call_tool_round_trips_through_registered_ability() {
+    fn call_tool_round_trips_listed_tool_name_through_registered_ability() {
         // Happy path: descriptor advertises `test.echo`, registry has
         // a handler for it, call_tool forwards args and wraps the
         // response in MCP tools/call shape.
         let arc = build_bridge_registry(|| vec![d("test.echo")]);
         let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
         let resp = handler(json!({
-            "name": "test.echo",
+            "name": "test_echo",
             "arguments": {"hello": "world"}
         }))
         .unwrap();
@@ -369,6 +373,18 @@ mod tests {
         // serialises that JSON into the text part.
         assert!(text.contains("hello"));
         assert!(text.contains("world"));
+    }
+
+    #[test]
+    fn call_tool_keeps_canonical_dotted_name_as_legacy_alias() {
+        let arc = build_bridge_registry(|| vec![d("test.echo")]);
+        let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
+        let resp = handler(json!({
+            "name": "test.echo",
+            "arguments": {"hello": "world"}
+        }))
+        .unwrap();
+        assert_eq!(resp["isError"], false);
     }
 
     #[test]

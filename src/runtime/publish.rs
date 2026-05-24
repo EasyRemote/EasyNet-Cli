@@ -983,10 +983,23 @@ mod tests {
             names.iter().any(|n| *n == "alice.chat"),
             "alice.chat must appear in advertised abilities for {alice_uri:?}; got names = {names:?}"
         );
-        for ability_name in ["device.skill.list", "alice.chat"] {
+        // Every advertised ability under the alice agent URA must
+        // carry the base runtime+model metadata so the frontend's
+        // ability catalog can render the agent's chip without a
+        // separate lookup. `device.skill.list` is intentionally
+        // NOT asserted here — it is owned by the device profile
+        // (see `runtime::agents::profiles::device`), never by a
+        // per-user agent, and would not legitimately appear in
+        // alice's advertise_abilities payload. An earlier copy of
+        // this test asserted otherwise and drifted from the
+        // ontology when the device/agent profile boundary was
+        // hardened; we pin the honest contract here so a future
+        // regression on the **per-agent** metadata path is what
+        // surfaces, not a synthetic device-profile expectation.
+        for ability_name in &["alice.chat"] {
             let descriptor = abilities
                 .iter()
-                .find(|a| a["name"].as_str() == Some(ability_name))
+                .find(|a| a["name"].as_str() == Some(*ability_name))
                 .unwrap_or_else(|| panic!("{ability_name} descriptor must be advertised"));
             assert_eq!(
                 descriptor["metadata"]["runtime"].as_str(),

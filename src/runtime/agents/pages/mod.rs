@@ -214,16 +214,28 @@ pub fn register(
     reg.chain_rpc_fallback(resolver);
     match state::restore_published_projects(&config.user) {
         Ok(summary) if summary.skipped > 0 => {
-            eprintln!(
-                "warning: restored {} pages project(s) for user {}; skipped {} stale snapshot entrie(s)",
-                summary.restored, config.user, summary.skipped
+            let user_field = config.user.as_str();
+            let restored = summary.restored;
+            let skipped = summary.skipped;
+            crate::op_event!(
+                component = pages,
+                kind = restore_partial,
+                level = "warn",
+                user = user_field,
+                restored = restored,
+                skipped = skipped,
             );
         }
         Ok(_) => {}
         Err(err) => {
-            eprintln!(
-                "warning: failed to restore pages projects for user {}: {err}",
-                config.user
+            let user_field = config.user.as_str();
+            let err_msg = format!("{err}");
+            crate::op_event!(
+                component = pages,
+                kind = restore_failed,
+                level = "warn",
+                user = user_field,
+                error = err_msg,
             );
         }
     }

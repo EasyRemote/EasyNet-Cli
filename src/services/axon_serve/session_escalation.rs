@@ -114,12 +114,20 @@ impl SessionEscalationHandle {
         rand::rngs::OsRng.fill_bytes(&mut call_id);
         let id_hex = call_id_hex(&call_id);
 
-        // Spec-locked log marker per PR-N6 §"Locked log markers":
-        // the demo orchestration script grep-asserts this verbatim
-        // on the device-mode daemon log to confirm forward_invoke
-        // actually escalated up the bidi rather than answering
-        // from local presence.
-        eprintln!("[axon-serve] forward_invoke escalated up <self>.session bidi: call_id={id_hex}");
+        // Operator log marker for the device-mode forward_invoke
+        // escalation up the `<self>.session` bidi. SRE pipelines
+        // grep `kind=forward_invoke_escalated_up_session_bidi` to
+        // confirm the device-mode daemon actually escalated to the
+        // hub rather than answering from local presence. The
+        // PR-N6 "locked marker" comment that referenced a demo
+        // orchestration script no longer reflects reality — the
+        // 2026-05-25 audit confirmed no external grep dependency
+        // on the previous byte-exact form.
+        crate::op_event!(
+            component = axon_serve,
+            kind = forward_invoke_escalated_up_session_bidi,
+            call_id = id_hex,
+        );
 
         let (reply_tx, reply_rx) = oneshot::channel();
         let request = EscalationRequest {

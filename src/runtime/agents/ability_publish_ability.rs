@@ -176,9 +176,14 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
         anyhow::anyhow!("ability.publish: failed to write {}: {e}", target.display())
     })?;
 
-    eprintln!(
-        "[ability.publish] owner={owner_id} name={verb} path={} content_hash={hash}",
-        target.display()
+    let path_display = format!("{}", target.display());
+    crate::op_event!(
+        component = ability_publish,
+        kind = ability_published,
+        owner = owner_id,
+        name = verb,
+        path = path_display,
+        content_hash = hash,
     );
 
     Ok(json!({
@@ -253,9 +258,14 @@ fn unpublish_handler(args: Value) -> anyhow::Result<Value> {
         )
     })?;
 
-    eprintln!(
-        "[ability.unpublish] owner={owner_id} name={verb} path={} content_hash={hash}",
-        target.display()
+    let path_display = format!("{}", target.display());
+    crate::op_event!(
+        component = ability_unpublish,
+        kind = ability_unpublished,
+        owner = owner_id,
+        name = verb,
+        path = path_display,
+        content_hash = hash,
     );
 
     Ok(json!({

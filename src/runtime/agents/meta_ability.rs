@@ -305,12 +305,12 @@ fn list_abilities_handler(
                 }
                 Some(crate::runtime::ability_dispatch::OwnerKind::Agent(agent_id)) => {
                     match (realm.as_deref(), user_segment.as_deref()) {
-                        (Some(r), Some(u)) => Some(crate::ura::agent_ura(r, u, agent_id)),
+                        (Some(r), Some(u)) => Some(crate::ura::agent_ura(r, u, &agent_id)),
                         _ => None,
                     }
                 }
                 Some(crate::runtime::ability_dispatch::OwnerKind::User(user_id)) => {
-                    realm.as_deref().map(|r| crate::ura::user_ura(r, user_id))
+                    realm.as_deref().map(|r| crate::ura::user_ura(r, &user_id))
                 }
                 None => {
                     // No owner metadata recorded — the registration

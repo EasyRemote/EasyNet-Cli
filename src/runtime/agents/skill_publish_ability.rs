@@ -202,9 +202,14 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
     crate::persistence::config::atomic_write(&install_path, install_json.as_bytes())
         .map_err(|e| anyhow::anyhow!("skill.publish: write {}: {e}", install_path.display()))?;
 
-    eprintln!(
-        "[skill.publish] owner={owner_id} name={skill_name} dir={} content_hash={hash}",
-        skill_dir.display()
+    let dir_display = format!("{}", skill_dir.display());
+    crate::op_event!(
+        component = skill_publish,
+        kind = skill_published,
+        owner = owner_id,
+        name = skill_name,
+        dir = dir_display,
+        content_hash = hash,
     );
 
     Ok(json!({
@@ -266,9 +271,14 @@ fn unpublish_handler(args: Value) -> anyhow::Result<Value> {
         )
     })?;
 
-    eprintln!(
-        "[skill.unpublish] owner={owner_id} name={skill_name} dir={} content_hash={logged_hash}",
-        skill_dir.display()
+    let dir_display = format!("{}", skill_dir.display());
+    crate::op_event!(
+        component = skill_unpublish,
+        kind = skill_unpublished,
+        owner = owner_id,
+        name = skill_name,
+        dir = dir_display,
+        content_hash = logged_hash,
     );
 
     Ok(json!({
@@ -793,7 +803,15 @@ fn collect_skill_tree_entries(root: &Path, dir: &Path, out: &mut Vec<Value>) -> 
         let meta = match entry.metadata() {
             Ok(m) => m,
             Err(e) => {
-                eprintln!("skill.tree: skipping {}: {e}", path.display());
+                let path_display = format!("{}", path.display());
+                let err_msg = format!("{e}");
+                crate::op_event!(
+                    component = skill_tree,
+                    kind = entry_skipped,
+                    level = "warn",
+                    path = path_display,
+                    error = err_msg,
+                );
                 continue;
             }
         };

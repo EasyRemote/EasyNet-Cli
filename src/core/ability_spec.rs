@@ -195,6 +195,95 @@ pub struct AbilityManifest {
     /// running on the same physical device under one user".
     #[serde(skip_serializing_if = "Option::is_none", default)]
     access: Option<AccessPolicy>,
+    /// Optional cost declaration. Discovery / MCP surface annotates
+    /// every advertised ability with a `cost_kind` + `cost_label`
+    /// pair so an operator (or an LLM choosing between two tools)
+    /// can see at a glance whether a call is free, LLM-billed,
+    /// upstream-metered, or unknown. When this field is present the
+    /// declared values are authoritative; when absent the runtime
+    /// falls back to an exec-kind heuristic — `unknown` for any path
+    /// it cannot prove is local. Per plan §"Cost is static catalog
+    /// metadata", this manifest field is the single source of truth
+    /// for catalog-level cost; runtime usage accounting (per-call
+    /// token counts, vendor-reported $) is a different surface that
+    /// flows through telemetry, not this struct.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    cost: Option<CostMeta>,
+}
+
+/// Per-ability cost declaration, written to disk under the `[cost]`
+/// section of an `*.ability.toml` file.
+///
+/// **Why a separate struct, not two free-form strings.** `kind` is a
+/// closed enum so consumers (frontend filters, discovery sorters,
+/// audit ledgers) can switch on the variant rather than string-match.
+/// `label` is free-form human text — the place an operator declares
+/// the actual upstream ("Google Maps Geocoding API — $5 per 1000
+/// requests") so the LLM and the auditor see the real-world rate
+/// rather than just the bucket name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CostMeta {
+    /// Coarse cost bucket. Must be one of the `CostKind` variants;
+    /// unknown strings are rejected at parse time by serde.
+    pub kind: CostKind,
+    /// Free-form human label. Optional — when absent the consumer
+    /// renders a generic per-kind blurb (e.g. `kind = llm_metered`
+    /// → "LLM token billing may apply"). Present a real label
+    /// whenever you can; it is what reaches the operator's eye.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub label: Option<String>,
+}
+
+/// Coarse cost classification. The set is intentionally small — a
+/// frontend filter should fit on one row of checkboxes, and a
+/// discovery sorter should sort all abilities into four buckets, not
+/// forty.
+///
+/// Adding a variant: extend this enum, update `as_wire_str`, and
+/// update every consumer that switches on the string form (currently
+/// `profiles::mcp::inferred_cost_label`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CostKind {
+    /// Local computation, no external billing. CLI utilities, jq, fs.read.
+    Free,
+    /// Upstream API or third-party service that bills. HTTP executors
+    /// to a paid API, MCP servers fronting Google Maps / Stripe / etc.
+    ExternalMetered,
+    /// LLM token usage will be billed by the model vendor. Agent-chat
+    /// abilities and any executor that internally drives an LLM.
+    LlmMetered,
+    /// Operator has not declared a cost. Default when the runtime
+    /// cannot prove a path is local. Renders as "cost not declared".
+    Unknown,
+}
+
+impl CostKind {
+    /// Stable string form used for `x-easynet.cost_kind` and for the
+    /// `cost: <kind> (<label>)` line in MCP descriptions. Mirrors the
+    /// TOML serde rename rules so wire form and on-disk form agree.
+    pub fn as_wire_str(self) -> &'static str {
+        match self {
+            CostKind::Free => "free",
+            CostKind::ExternalMetered => "external_metered",
+            CostKind::LlmMetered => "llm_metered",
+            CostKind::Unknown => "unknown",
+        }
+    }
+}
+
+impl CostMeta {
+    fn validate(&self) -> anyhow::Result<()> {
+        if let Some(label) = &self.label {
+            if label.trim().is_empty() {
+                anyhow::bail!(
+                    "ability.toml [cost] `label`, when present, must be a non-empty string \
+                     — omit the field instead of writing an empty/whitespace value"
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Where this ability is discoverable and callable from.
@@ -356,6 +445,12 @@ pub enum AbilityExec {
     /// orchestration surface — same EAL the human operator already
     /// uses with `easynet.run`.
     Eal(EalExec),
+    /// Dispatch to one configured upstream MCP tool. This is the
+    /// deterministic executor used when an operator binds an MCP
+    /// server's tool catalogue into a specific EasyNet agent via the
+    /// CLI. It preserves the MCP `tools/call` response shape and
+    /// avoids routing through shell or chat translation.
+    Mcp(McpExec),
 }
 
 /// Configuration for the `shell` executor.
@@ -457,6 +552,17 @@ pub struct EalExec {
     pub result_binding: Option<String>,
 }
 
+/// Configuration for the `mcp` executor. The upstream server name
+/// must match one row in `~/.easynet/mcp_clients.json`; `tool` is the
+/// upstream MCP tool name exactly as returned by `tools/list`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpExec {
+    /// Operator-chosen upstream server name from mcp_clients.json.
+    pub server: String,
+    /// Upstream MCP tool name, passed verbatim to tools/call.
+    pub tool: String,
+}
+
 impl AbilityManifest {
     /// Build a manifest, validating the fields that downstream
     /// consumers rely on.
@@ -477,9 +583,27 @@ impl AbilityManifest {
             output_schema: None,
             exec: None,
             access: None,
+            cost: None,
         };
         m.validate()?;
         Ok(m)
+    }
+
+    /// Attach a cost declaration. Optional; absence falls back to the
+    /// exec-kind heuristic at metadata-emit time (see
+    /// `profiles::mcp::inferred_cost_kind`). Returns the manifest for
+    /// builder chaining.
+    pub fn with_cost(mut self, cost: CostMeta) -> anyhow::Result<Self> {
+        self.cost = Some(cost);
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// The declared cost meta, if any. `None` means the author has
+    /// not declared cost; consumers should fall back to the
+    /// exec-kind inference rather than assume a default bucket.
+    pub fn cost(&self) -> Option<&CostMeta> {
+        self.cost.as_ref()
     }
 
     /// Attach an executor binding. Optional; absence keeps the legacy
@@ -672,6 +796,9 @@ impl AbilityManifest {
         if let Some(exec) = &self.exec {
             exec.validate()?;
         }
+        if let Some(cost) = &self.cost {
+            cost.validate()?;
+        }
         Ok(())
     }
 }
@@ -682,6 +809,7 @@ impl AbilityExec {
             AbilityExec::Shell(s) => s.validate(),
             AbilityExec::Http(h) => h.validate(),
             AbilityExec::Eal(e) => e.validate(),
+            AbilityExec::Mcp(m) => m.validate(),
         }
     }
 }
@@ -807,6 +935,23 @@ impl EalExec {
                      non-empty binding name"
                 );
             }
+        }
+        Ok(())
+    }
+}
+
+impl McpExec {
+    fn validate(&self) -> anyhow::Result<()> {
+        if self.server.trim().is_empty() {
+            anyhow::bail!(
+                "ability.toml [exec] kind=\"mcp\" requires a non-empty `server` \
+                 matching an entry in mcp_clients.json"
+            );
+        }
+        if self.tool.trim().is_empty() {
+            anyhow::bail!(
+                "ability.toml [exec] kind=\"mcp\" requires a non-empty upstream `tool` name"
+            );
         }
         Ok(())
     }
@@ -1911,6 +2056,112 @@ result_binding = ""
         let toml = m.to_toml_string().unwrap();
         let parsed = AbilityManifest::from_toml_str(&toml).unwrap();
         assert_eq!(parsed, m);
+    }
+
+    #[test]
+    fn cost_section_round_trips_through_toml() {
+        // Pin the on-disk shape: `[cost] kind = "..." label = "..."`.
+        // Both fields must survive a parse → serialise → parse cycle
+        // unchanged so a future operator's hand-written manifest does
+        // not silently lose the label after the daemon rewrites it.
+        let toml = r#"
+schema_version = "1"
+name = "geocode"
+description = "Geocode an address."
+[input_schema]
+type = "object"
+[cost]
+kind = "external_metered"
+label = "Google Maps Geocoding API — $5 per 1000 requests"
+"#;
+        let m = AbilityManifest::from_toml_str(toml).expect("[cost] must parse");
+        let cost = m.cost().expect("cost present");
+        assert_eq!(cost.kind, CostKind::ExternalMetered);
+        assert_eq!(
+            cost.label.as_deref(),
+            Some("Google Maps Geocoding API — $5 per 1000 requests")
+        );
+        let round_tripped = AbilityManifest::from_toml_str(&m.to_toml_string().unwrap()).unwrap();
+        assert_eq!(round_tripped.cost(), m.cost());
+    }
+
+    #[test]
+    fn cost_kind_label_optional_when_omitted_in_toml() {
+        // Author may declare only the bucket; consumers fall back to
+        // the per-kind generic blurb at render time.
+        let toml = r#"
+schema_version = "1"
+name = "x"
+description = ""
+[input_schema]
+type = "object"
+[cost]
+kind = "llm_metered"
+"#;
+        let m = AbilityManifest::from_toml_str(toml).unwrap();
+        let cost = m.cost().expect("cost present");
+        assert_eq!(cost.kind, CostKind::LlmMetered);
+        assert!(cost.label.is_none());
+    }
+
+    #[test]
+    fn cost_unknown_kind_value_is_rejected() {
+        // A typo like "extrenal_metered" must surface at load time
+        // rather than silently default to one of the legal buckets —
+        // the latter would let a billed ability advertise as free.
+        let toml = r#"
+schema_version = "1"
+name = "x"
+description = ""
+[input_schema]
+type = "object"
+[cost]
+kind = "extrenal_metered"
+"#;
+        let err = AbilityManifest::from_toml_str(toml).unwrap_err();
+        assert!(
+            format!("{err}").contains("kind") || format!("{err}").contains("variant"),
+            "unknown cost kind must mention the offending field: {err}"
+        );
+    }
+
+    #[test]
+    fn cost_label_empty_string_is_rejected() {
+        // `label = ""` is almost certainly a deletion mistake;
+        // surface at load time rather than treating it as "no label".
+        let toml = r#"
+schema_version = "1"
+name = "x"
+description = ""
+[input_schema]
+type = "object"
+[cost]
+kind = "free"
+label = "   "
+"#;
+        let err = AbilityManifest::from_toml_str(toml).unwrap_err();
+        assert!(format!("{err}").contains("label"));
+    }
+
+    #[test]
+    fn with_cost_builder_attaches_cost_and_validates() {
+        let m = AbilityManifest::new("chat", "x", object_schema())
+            .unwrap()
+            .with_cost(CostMeta {
+                kind: CostKind::LlmMetered,
+                label: Some("Claude tokens".into()),
+            })
+            .unwrap();
+        assert_eq!(m.cost().unwrap().kind, CostKind::LlmMetered);
+        // Empty label fails the validator on the builder path too.
+        let err = AbilityManifest::new("chat", "x", object_schema())
+            .unwrap()
+            .with_cost(CostMeta {
+                kind: CostKind::Free,
+                label: Some("".into()),
+            })
+            .unwrap_err();
+        assert!(format!("{err}").contains("label"));
     }
 
     #[test]

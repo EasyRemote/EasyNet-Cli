@@ -60,6 +60,7 @@ pub mod daemon_invocation_service;
 #[cfg(feature = "axon-pb")]
 pub mod federated_key_resolver;
 pub mod federation_wrappers;
+pub mod hub_resolver;
 pub mod invocation_wire;
 pub mod invoke_remote_initiator;
 pub mod list_user_pubkeys;

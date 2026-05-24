@@ -301,6 +301,23 @@ pub struct DaemonConfig {
     /// dump in operator audit + `cargo test` byte-stable
     /// expectation).
     federated_peers: BTreeMap<String, String>,
+    /// **PR-N3 / 2026-05-25 hardening**. When `true`, the federation
+    /// dispatcher is allowed to dial a peer hub whose endpoint comes
+    /// from an observed `federated_directory` entry (hub-to-hub
+    /// sync) — i.e. without an operator-curated `federated_peers`
+    /// mapping for the target tenant. When `false` (the default), an
+    /// unmapped target tenant returns `target_offline` regardless of
+    /// what the directory has observed.
+    ///
+    /// **Why default-off:** `federated_directory.hub_endpoint` is a
+    /// string the peer hub published about itself; trusting it
+    /// blindly hands a peer-hub-controlled URL to our outbound
+    /// federation client. Until the directory sync's transport
+    /// layer ratchets to "endpoints only flow from authenticated
+    /// peers", the safer default is "operator-declared peers only".
+    /// See [`crate::services::axon_serve::hub_resolver`] for the
+    /// resolver-side enforcement and the threat-model write-up.
+    allow_directory_auto_route: bool,
 }
 
 impl DaemonConfig {
@@ -344,6 +361,7 @@ impl DaemonConfig {
             uds_path,
             billing_dir,
             federated_peers,
+            allow_directory_auto_route,
         } = daemon;
 
         if realm.trim().is_empty() {
@@ -383,6 +401,7 @@ impl DaemonConfig {
             uds_path,
             billing_dir,
             federated_peers: federated_peers.unwrap_or_default(),
+            allow_directory_auto_route: allow_directory_auto_route.unwrap_or(false),
         })
     }
 
@@ -464,6 +483,15 @@ impl DaemonConfig {
     pub fn federated_peers(&self) -> &BTreeMap<String, String> {
         &self.federated_peers
     }
+
+    /// True when the daemon is allowed to dial a peer hub whose
+    /// endpoint comes from an observed `federated_directory` entry
+    /// (i.e. without an operator-curated `federated_peers` mapping
+    /// for the target tenant). Default `false`; see the field
+    /// doc-comment for the threat model.
+    pub fn allow_directory_auto_route(&self) -> bool {
+        self.allow_directory_auto_route
+    }
 }
 
 /// Internal deserialisation shape. Pub-within-crate only so unit
@@ -495,6 +523,14 @@ pub(crate) struct RawDaemonSection {
     /// load unchanged (empty map).
     #[serde(default)]
     pub(crate) federated_peers: Option<BTreeMap<String, String>>,
+    /// 2026-05-25 P0 hardening: opt-in to dialing peer hubs whose
+    /// endpoint came from an observed `federated_directory` entry
+    /// rather than `federated_peers`. Default `false` (secure
+    /// default); see [`DaemonConfig::allow_directory_auto_route`]
+    /// for the threat model. `#[serde(default)]` so existing
+    /// configs load unchanged and inherit the default.
+    #[serde(default)]
+    pub(crate) allow_directory_auto_route: Option<bool>,
 }
 
 /// Every way `DaemonConfig::load` can fail. Each variant maps to a
@@ -565,6 +601,7 @@ mod tests {
                 uds_path: None,
                 billing_dir: None,
                 federated_peers: None,
+                allow_directory_auto_route: None,
             },
         }
     }
@@ -585,6 +622,35 @@ mod tests {
         assert_eq!(cfg.realm(), "easynet.run");
         assert_eq!(cfg.hub_endpoint(), Some("https://hub.example.com:50051"));
         assert!(cfg.listen_tcp().is_none());
+    }
+
+    #[test]
+    fn allow_directory_auto_route_defaults_to_false_and_round_trips_when_set() {
+        // **P0 secure-default pin**. A legacy daemon-config.toml
+        // without the `allow_directory_auto_route` key must load
+        // with the secure default (false). An operator who
+        // explicitly opts in via `allow_directory_auto_route = true`
+        // must see that value preserved end-to-end.
+        let mut raw = raw(
+            DaemonMode::Device,
+            "easynet.run",
+            Some("https://hub.example.com:50051"),
+            None,
+            None,
+            None,
+        );
+        let defaulted = DaemonConfig::from_raw(raw.clone()).expect("default config");
+        assert!(
+            !defaulted.allow_directory_auto_route(),
+            "absence of the key MUST mean false (secure default), not true"
+        );
+
+        raw.daemon.allow_directory_auto_route = Some(true);
+        let opted_in = DaemonConfig::from_raw(raw).expect("opted-in config");
+        assert!(
+            opted_in.allow_directory_auto_route(),
+            "explicit `allow_directory_auto_route = true` must be honoured"
+        );
     }
 
     #[test]
@@ -753,6 +819,7 @@ mod tests {
 
     #[test]
     fn default_uds_path_is_used_when_omitted() {
+        let _g = HomeGuard::new();
         let cfg = DaemonConfig::from_raw(raw(
             DaemonMode::Hub,
             "easynet.run",
@@ -773,7 +840,23 @@ mod tests {
             return;
         }
 
-        assert_eq!(cfg.uds_path().to_str(), Some(DEFAULT_DAEMON_UDS_PATH));
+        // The default UDS path constant carries a literal `~`; the
+        // factory expands `$HOME` through `default_uds_path()` so
+        // downstream `bind(2)` calls receive a real absolute path.
+        // Assert the expanded shape rather than the constant — pinning
+        // the literal would lock the test to a pre-expansion code
+        // path that no longer exists.
+        let actual = cfg.uds_path();
+        assert!(
+            actual.is_absolute(),
+            "default uds path must expand to an absolute path, got {}",
+            actual.display()
+        );
+        assert!(
+            actual.ends_with(".easynet/daemon.sock"),
+            "default uds path must terminate at .easynet/daemon.sock, got {}",
+            actual.display()
+        );
     }
 
     #[test]

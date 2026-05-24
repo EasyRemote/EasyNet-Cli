@@ -832,20 +832,33 @@ impl CrossHubDialer {
                     {
                         Ok(event) => return Some((event, (inner, target_hub))),
                         Err(err) => {
-                            eprintln!(
-                                "[cross_hub_dial] subscribe_directory_v2 decode \
-                                     from {target_hub}: {err}; dropping frame"
+                            let err_msg = format!("{err}");
+                            let target_hub_log = target_hub.clone();
+                            crate::op_event!(
+                                component = cross_hub_dial,
+                                kind = subscribe_directory_v2_decode_failed,
+                                target_hub = target_hub_log,
+                                error = err_msg,
+                                message = "dropping frame",
                             );
                             continue;
                         }
                     },
                     Ok(None) => return None,
                     Err(status) => {
-                        eprintln!(
-                            "[cross_hub_dial] subscribe_directory_v2 stream from \
-                                 {target_hub} ended with error: code={:?} message={}",
-                            status.code(),
-                            status.message()
+                        // `tonic::Code` has Display — bare PascalCase
+                        // variant name, grep-stable. `status.message()`
+                        // is a `&str` rendered by op_event!'s formatter
+                        // (single layer of quoting if it has whitespace).
+                        let code = status.code();
+                        let msg = status.message();
+                        let target_hub_log = target_hub.clone();
+                        crate::op_event!(
+                            component = cross_hub_dial,
+                            kind = subscribe_directory_v2_stream_ended_with_error,
+                            target_hub = target_hub_log,
+                            code = code,
+                            error = msg,
                         );
                         return None;
                     }

@@ -141,7 +141,15 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
                             // operator sees the warning in the
                             // daemon log; the rest of the list
                             // surfaces normally.
-                            eprintln!("skill.list: skipping {}: {e}", dir_entry.path().display());
+                            let path_display = format!("{}", dir_entry.path().display());
+                            let err_msg = format!("{e}");
+                            crate::op_event!(
+                                component = skill_list,
+                                kind = entry_skipped,
+                                level = "warn",
+                                path = path_display,
+                                error = err_msg,
+                            );
                         }
                     }
                 }

@@ -240,7 +240,6 @@ pub fn call_description() -> &'static str {
 mod tests {
     use super::*;
     use crate::runtime::execution::mcp_client::{McpClientsFile, McpServerSpec};
-    use std::collections::HashMap;
     use std::path::PathBuf;
 
     fn empty_svc() -> Arc<McpClientService> {
@@ -260,11 +259,27 @@ mod tests {
             r#"#!/bin/sh
 exec python3 -u -c '
 import sys, json
-for line in sys.stdin:
-    line = line.strip()
-    if not line:
-        continue
-    req = json.loads(line)
+def read_msg():
+    headers = {}
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        line = line.decode().strip()
+        if not line:
+            break
+        name, value = line.split(":", 1)
+        headers[name.lower()] = value.strip()
+    body = sys.stdin.buffer.read(int(headers["content-length"]))
+    return json.loads(body)
+def write_msg(resp):
+    body = json.dumps(resp).encode()
+    sys.stdout.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+    sys.stdout.buffer.flush()
+while True:
+    req = read_msg()
+    if req is None:
+        break
     rid = req.get("id")
     method = req.get("method")
     if method == "tools/list":
@@ -273,7 +288,7 @@ for line in sys.stdin:
         result = {"content": [{"type": "text", "text": json.dumps(req.get("params"))}], "isError": False}
     else:
         result = {"echoed": req.get("params")}
-    print(json.dumps({"jsonrpc": "2.0", "id": rid, "result": result}), flush=True)
+    write_msg({"jsonrpc": "2.0", "id": rid, "result": result})
 '
 "#,
         )
@@ -286,8 +301,8 @@ for line in sys.stdin:
             servers: vec![McpServerSpec {
                 name: "echo".into(),
                 command: script.to_string_lossy().to_string(),
-                args: vec![],
-                env: HashMap::new(),
+                stdio_framing: "content-length".into(),
+                ..Default::default()
             }],
         });
         (dir, Arc::new(svc))

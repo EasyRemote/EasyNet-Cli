@@ -2307,6 +2307,113 @@ fn real_voice_transcribe_routes_to_media_stub() {
     assert_routed_to_media_stub("device.voice.transcribe", &err);
 }
 
+// ── device.browser.* v0 mock surface (RFC-012 §RemoteWebSurface) ─
+//
+// v0 ships mock handlers that disclose `[V0 MOCK …]` in their
+// descriptions; RFC-013 W1+ replaces the bodies with real WebView
+// integration. The tests here pin the registry-side contract: the
+// abilities are dispatchable, accept the documented args, and the
+// stream verb yields exactly one placeholder frame so the frontend
+// canvas pipeline can be exercised end-to-end.
+
+#[test]
+fn real_browser_open_session_mints_resource_ura() {
+    let resp = invoke(
+        "device.browser.open_session",
+        json!({"url": "https://example.com"}),
+    );
+    let ura = resp["session_ura"]
+        .as_str()
+        .expect("open_session must return session_ura");
+    // Centralised URA parsing satisfies the
+    // `tests/scripts/test_no_raw_ura_construction.sh` contract: no
+    // module outside `src/ura.rs` should hand-parse the scheme.
+    let parsed = crate::ura::parse_ura(ura)
+        .unwrap_or_else(|e| panic!("session_ura {ura:?} must parse: {e}"));
+    assert_eq!(
+        parsed.kind,
+        crate::ura::URAKind::Resource,
+        "session_ura must resolve to a Resource URA, got {parsed:?}"
+    );
+    assert_eq!(resp["state"], "open");
+}
+
+#[test]
+fn real_browser_send_input_requires_known_session() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let err = d
+        .execute_rpc(target(
+            "device.browser.send_input",
+            json!({
+                "session_ura": "easynet:///r/local/resource/daemon.browser/bogus",
+                "event": {"kind": "click", "x": 1, "y": 2}
+            }),
+        ))
+        .expect_err("send_input against unknown session must error");
+    assert!(
+        err.to_string().contains("not found"),
+        "send_input: {err}"
+    );
+}
+
+#[test]
+fn real_browser_capture_viewport_emits_one_placeholder_frame() {
+    // Open a session inside the same dispatcher so the in-process
+    // session store sees the row when capture_viewport runs.
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let open = d
+        .execute_rpc(target(
+            "device.browser.open_session",
+            json!({"url": "https://example.com"}),
+        ))
+        .expect("open_session ok");
+    let ura = open["session_ura"].as_str().unwrap().to_string();
+    let mut t = target("device.browser.capture_viewport", json!({"session_ura": ura}));
+    t.call_mode = CallMode::Stream;
+    let source = d
+        .execute_stream(t)
+        .expect("capture_viewport must dispatch");
+    let frames = source.into_snapshot();
+    assert_eq!(
+        frames.len(),
+        1,
+        "v0 mock must emit exactly one placeholder frame"
+    );
+    assert_eq!(frames[0]["is_placeholder"], true);
+}
+
+#[test]
+fn real_browser_close_session_is_idempotent() {
+    let _g = crate::facade::cli::test_support::HomeGuard::new();
+    let reg = build_registry();
+    let d = dispatcher_for(reg);
+    let open = d
+        .execute_rpc(target(
+            "device.browser.open_session",
+            json!({"url": "https://example.com"}),
+        ))
+        .expect("open ok");
+    let ura = open["session_ura"].as_str().unwrap().to_string();
+    let first = d
+        .execute_rpc(target(
+            "device.browser.close_session",
+            json!({"session_ura": ura.clone()}),
+        ))
+        .expect("first close ok");
+    assert_eq!(first["status"], "closed");
+    let second = d
+        .execute_rpc(target(
+            "device.browser.close_session",
+            json!({"session_ura": ura}),
+        ))
+        .expect("second close ok (idempotent)");
+    assert_eq!(second["status"], "already_closed");
+}
+
 #[test]
 fn real_meta_list_resources_returns_resources_array() {
     // A9 ships fully working in PR2: empty `~/.easynet/` →
