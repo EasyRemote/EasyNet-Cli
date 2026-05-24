@@ -657,7 +657,13 @@ pub fn build_registry_with_services(
                 crate::runtime::keyring::abilities::register_for_owner(&mut reg, "device", handle);
             }
             Err(e) => {
-                eprintln!("warn: keyring auto-init failed; device.keyring.* unavailable: {e}");
+                let err_msg = format!("{e}");
+                crate::op_event!(
+                    component = device_keyring,
+                    kind = auto_init_failed,
+                    level = "warn",
+                    error = err_msg,
+                );
             }
         }
     }
@@ -707,11 +713,15 @@ pub fn build_registry_with_services(
         {
             Ok(svc) => Arc::new(svc),
             Err(e) => {
-                eprintln!(
-                    "system::build_registry_with_services: failed to load {}: {e}; \
-                 falling back to empty MCP client service (no outbound MCP \
-                 servers configured)",
-                    mcp_clients_path.display()
+                let path_display = format!("{}", mcp_clients_path.display());
+                let err_msg = format!("{e}");
+                crate::op_event!(
+                    component = mcp_client,
+                    kind = config_load_failed,
+                    level = "warn",
+                    path = path_display,
+                    error = err_msg,
+                    fallback = "empty_service",
                 );
                 Arc::new(crate::runtime::execution::mcp_client::McpClientService::new())
             }
@@ -774,18 +784,24 @@ pub fn build_registry_with_services(
         match reflect_mcp_upstreams_sync(&mcp_client_svc, &mut reg, &mcp_owner_ura) {
             Ok(report) => {
                 if !report.registered.is_empty() || !report.failed.is_empty() {
-                    eprintln!(
-                        "[mcp-reflective] registered {} tool(s) across upstream MCP servers; {} \
-                         failure(s)",
-                        report.registered.len(),
-                        report.failed.len(),
+                    let registered_count = report.registered.len();
+                    let failed_count = report.failed.len();
+                    crate::op_event!(
+                        component = mcp_reflective,
+                        kind = reflection_summary,
+                        registered = registered_count,
+                        failed = failed_count,
                     );
                     for f in &report.failed {
-                        eprintln!(
-                            "[mcp-reflective] {} {} skipped: {}",
-                            f.server,
-                            f.tool.as_deref().unwrap_or("(server)"),
-                            f.reason
+                        let server = f.server.as_str();
+                        let tool = f.tool.as_deref().unwrap_or("(server)");
+                        let reason = f.reason.as_str();
+                        crate::op_event!(
+                            component = mcp_reflective,
+                            kind = tool_skipped,
+                            server = server,
+                            tool = tool,
+                            reason = reason,
                         );
                     }
                 }
@@ -803,7 +819,14 @@ pub fn build_registry_with_services(
                 reflection_per_server = Some((mcp_owner_ura.clone(), per_server));
             }
             Err(e) => {
-                eprintln!("[mcp-reflective] reflection skipped (runtime bridge failed): {e}");
+                let err_msg = format!("{e}");
+                crate::op_event!(
+                    component = mcp_reflective,
+                    kind = reflection_skipped,
+                    level = "warn",
+                    reason = "runtime_bridge_failed",
+                    error = err_msg,
+                );
             }
         }
     } else {
@@ -817,11 +840,10 @@ pub fn build_registry_with_services(
         // (printing this line when there are no servers configured
         // either) are cheap; false silences would frustrate
         // operators.
-        eprintln!(
-            "[mcp-reflective] daemon is unpaired (pages_identity.user is None); \
-             skipping reflective MCP tool registration. The outbound \
-             `device.mcp.client.*` surface remains available; pair the daemon to a \
-             user to expose upstream MCP tools as bare-name abilities."
+        crate::op_event!(
+            component = mcp_reflective,
+            kind = reflection_skipped,
+            reason = "daemon_unpaired",
         );
     }
     // device.agent.list — operational view of registered LLM
@@ -929,9 +951,13 @@ pub fn build_registry_for_daemon(
     let agents = match crate::registry::agents::load_agents() {
         Ok(r) => r,
         Err(e) => {
-            eprintln!(
-                "system::build_registry_for_daemon: failed to load agent registry: {e}; \
-                 continuing with no agents (chat handlers will not be registered)"
+            let err_msg = format!("{e}");
+            crate::op_event!(
+                component = agent_registry,
+                kind = load_failed,
+                level = "warn",
+                error = err_msg,
+                fallback = "empty_registry",
             );
             AgentRegistry::default()
         }
@@ -1521,8 +1547,14 @@ fn attach_mcp_refresh_sinks_sync(
                 reflected_for_server,
             ));
             if let Err(e) = svc_for_async.register_notification_sink(&name, sink).await {
-                eprintln!(
-                    "[mcp-reflective] failed to attach refresh sink for `{name}`: {e}"
+                let server = name.as_str();
+                let err_msg = format!("{e}");
+                crate::op_event!(
+                    component = mcp_reflective,
+                    kind = refresh_sink_attach_failed,
+                    level = "warn",
+                    server = server,
+                    error = err_msg,
                 );
             }
         }
@@ -1545,7 +1577,12 @@ fn attach_mcp_refresh_sinks_sync(
         },
     };
     if let Err(e) = result {
-        eprintln!("[mcp-reflective] hot-reload sink attach skipped: {e}");
+        crate::op_event!(
+            component = mcp_reflective,
+            kind = hot_reload_sink_skipped,
+            level = "warn",
+            error = e,
+        );
     }
 }
 
@@ -2024,9 +2061,15 @@ mod tests {
             }
         }
 
-        // Print a summary so a green run still shows what was
-        // actually exercised (visible with `cargo test ... --
-        // --nocapture`).
+        // Test-only diagnostic summary so a green run still shows
+        // what was actually exercised (visible with
+        // `cargo test ... -- --nocapture`). These are deliberately
+        // raw `eprintln!` and NOT `op_event!`: they are test-binary
+        // human-readable output, not daemon operator events, so
+        // the `[component] kind=event` schema would only add
+        // unrelated noise to a developer's terminal. The `op_event!`
+        // discipline applies to `src/runtime/**` daemon code paths,
+        // not to the test bodies that exercise them.
         eprintln!(
             "ability invoke smoke: {} OK, {} errored-but-reached-handler, {} skipped (non-RPC)",
             invoked_ok.len(),

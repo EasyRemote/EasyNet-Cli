@@ -320,9 +320,13 @@ fn open_session_handler(args: Value) -> anyhow::Result<Value> {
     };
     store().lock().unwrap().insert(session_ura.clone(), state);
 
-    eprintln!(
-        "[browser.open_session] session_ura={} url={} viewport={}x{}",
-        session_ura, url, viewport_width, viewport_height
+    let viewport = format!("{viewport_width}x{viewport_height}");
+    crate::op_event!(
+        component = browser_open_session,
+        kind = session_opened,
+        session_ura = session_ura,
+        url = url,
+        viewport = viewport,
     );
 
     Ok(json!({
@@ -358,7 +362,12 @@ fn send_input_handler(args: Value) -> anyhow::Result<Value> {
     // v0: log the event and ack. RFC-013 will route this through the
     // platform-specific input synthesizer (NSEvent / SendInput / GDK).
     if cfg!(debug_assertions) {
-        eprintln!("[browser.send_input] session={} kind={}", session_ura, kind);
+        crate::op_event!(
+            component = browser_send_input,
+            kind = input_accepted,
+            session = session_ura,
+            event_kind = kind,
+        );
     }
 
     Ok(json!({
@@ -415,7 +424,11 @@ fn close_session_handler(args: Value) -> anyhow::Result<Value> {
         "already_closed"
     };
     if removed.is_some() {
-        eprintln!("[browser.close_session] session_ura={}", session_ura);
+        crate::op_event!(
+            component = browser_close_session,
+            kind = session_closed,
+            session_ura = session_ura,
+        );
     }
     Ok(json!({
         "session_ura": session_ura,

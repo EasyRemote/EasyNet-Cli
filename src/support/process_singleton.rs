@@ -130,6 +130,18 @@ impl<T: Send + Sync + 'static> ProcessSingleton<T> {
     /// than silently returning the wrong handle. Production sets
     /// each singleton exactly once at boot, so a real production
     /// occurrence of this event is itself a bug to investigate.
+    ///
+    /// **Diagnostic recipe** (kept out of the emitted log line so
+    /// SRE pipelines that split on whitespace see stable field
+    /// boundaries; the runbook lives here, the line stays terse):
+    ///
+    ///   * In production, the event indicates two boot paths are
+    ///     racing on the same singleton — fix the boot wiring so
+    ///     only one writer exists.
+    ///   * In an integration test binary that shares the static
+    ///     across cases, switch the declaration to
+    ///     [`ProcessSingleton::last_writer_wins`] so each test can
+    ///     install its own fixture.
     pub fn set(&self, value: Arc<T>) -> Arc<T> {
         match &self.storage {
             SingletonStorage::Once(cell) => match cell.set(value.clone()) {
@@ -141,11 +153,6 @@ impl<T: Send + Sync + 'static> ProcessSingleton<T> {
                         kind = second_writer_rejected,
                         level = "warn",
                         type_name = type_name,
-                        message = "Once-mode ProcessSingleton::set called a second time; \
-                                   returning the canonical pre-existing handle. \
-                                   This is a bug in production; integration tests \
-                                   sharing a static across cases should use \
-                                   ProcessSingleton::last_writer_wins() instead.",
                     );
                     cell.get()
                         .expect("OnceLock::set returned Err only when populated")

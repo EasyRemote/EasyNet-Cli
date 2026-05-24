@@ -184,9 +184,15 @@ fn create_call_handler(args: Value) -> anyhow::Result<Value> {
         events: Vec::new(),
     };
     s.insert(call_id.clone(), state);
-    eprintln!(
-        "[voice.call] create call_id={} creator_participant_id={:?}",
-        call_id, creator_participant_id
+    // Render `Option<String>` as a stable string so SRE pipelines
+    // grep `creator_participant_id=<value>` without seeing Rust's
+    // `Some("…")` / `None` Debug literal in the field value.
+    let creator = creator_participant_id.as_deref().unwrap_or("<none>");
+    crate::op_event!(
+        component = voice_call,
+        kind = call_created,
+        call_id = call_id,
+        creator_participant_id = creator,
     );
     Ok(json!({
         "call_id": call_id,
@@ -239,12 +245,15 @@ fn join_call_handler(args: Value) -> anyhow::Result<Value> {
         "participant_id": participant_id,
         "at_ms": now_ms(),
     }));
-    eprintln!(
-        "[voice.call] join call_id={} participant_id={} participant_count={} state={}",
-        call_id,
-        participant_id,
-        call.participants.len(),
-        call.state
+    let participant_count = call.participants.len();
+    let state = call.state;
+    crate::op_event!(
+        component = voice_call,
+        kind = participant_joined,
+        call_id = call_id,
+        participant_id = participant_id,
+        participant_count = participant_count,
+        state = state,
     );
     Ok(json!({
         "call_id": call_id,

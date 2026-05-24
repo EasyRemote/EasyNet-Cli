@@ -155,13 +155,19 @@ pub fn dispatch(
                     // Emit the trace ID at stderr so an operator
                     // tailing the daemon log can correlate the
                     // forward hop with the originating HTTP request.
-                    // Matches the rest of this file's "best-effort
-                    // observability via eprintln!" convention — see
-                    // audit_invoke. Empty request_id → emit nothing.
+                    // Routed through `op_event!` so the shape is
+                    // compile-time enforced; see
+                    // `support::operator_log`. Empty request_id →
+                    // emit nothing.
                     if !parsed.metadata.request_id.is_empty() {
-                        eprintln!(
-                            "[easynet trace] forward_invoke begin request_id={} target={} ability={}",
-                            parsed.metadata.request_id, target, parsed.ability
+                        let request_id = parsed.metadata.request_id.as_str();
+                        let ability = parsed.ability.as_str();
+                        crate::op_event!(
+                            component = easynet_trace,
+                            kind = forward_invoke_begin,
+                            request_id = request_id,
+                            target = target,
+                            ability = ability,
                         );
                     }
                     let started_fwd = Instant::now();
@@ -348,9 +354,12 @@ fn audit_invoke(
         .map(|p| std::fs::create_dir_all(p).is_ok())
         .unwrap_or(false);
     if !parent_ok {
-        eprintln!(
-            "[easynet audit] failed to create parent dir for {}",
-            path.display()
+        let path_display = format!("{}", path.display());
+        crate::op_event!(
+            component = easynet_audit,
+            kind = parent_dir_failed,
+            level = "warn",
+            path = path_display,
         );
         return;
     }
@@ -361,13 +370,29 @@ fn audit_invoke(
     {
         Ok(f) => f,
         Err(e) => {
-            eprintln!("[easynet audit] open {} failed: {e}", path.display());
+            let path_display = format!("{}", path.display());
+            let err_msg = format!("{e}");
+            crate::op_event!(
+                component = easynet_audit,
+                kind = open_failed,
+                level = "warn",
+                path = path_display,
+                error = err_msg,
+            );
             return;
         }
     };
     let mut writer = std::io::BufWriter::new(f);
     if let Err(e) = writeln!(writer, "{}", line) {
-        eprintln!("[easynet audit] write {} failed: {e}", path.display());
+        let path_display = format!("{}", path.display());
+        let err_msg = format!("{e}");
+        crate::op_event!(
+            component = easynet_audit,
+            kind = write_failed,
+            level = "warn",
+            path = path_display,
+            error = err_msg,
+        );
     }
 }
 
