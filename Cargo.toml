@@ -265,6 +265,22 @@ hyper = { version = "1", features = ["server", "client", "http1"] }
 # Required by the streamable-HTTP MCP transport for collecting
 # response bodies and framing request bodies as Full<Bytes>.
 http-body-util = "0.1"
+# rustls stack for the streamable-HTTP MCP transport's TLS support
+# (round-2 of the transport, after SSE landed in round-1). The client
+# wraps `TcpStream` with `tokio_rustls::TlsConnector` when the spec's
+# url uses `https://`. rustls (not native-tls) keeps the build pure
+# Rust — no openssl headers required on the daemon host, which matters
+# for Windows/macOS operator-friendly installs. webpki-roots ships
+# Mozilla's CA bundle as a const so a stock daemon can connect to
+# WAN-hosted MCP servers without per-host CA configuration; operators
+# can still override via McpServerSpec.tls.ca_bundle for private CAs.
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+webpki-roots = "0.26"
+# PEM decoder for operator-supplied custom CA bundles (private/internal
+# MCP deployments). Used by streamable_http_client when
+# McpServerSpec.tls.ca_bundle points at a `.pem` file.
+rustls-pemfile = "2"
 
 # RFC-006-B v0.6 / Pages reference system — sandbox + state map.
 #  - rustix with `fs` feature: kernel-enforced read sandbox for

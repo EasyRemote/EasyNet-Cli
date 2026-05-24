@@ -126,6 +126,90 @@ pub struct McpServerSpec {
     pub name_prefix: String,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub aliases: HashMap<String, String>,
+    /// TLS configuration for `https://` URLs. Default (empty) uses
+    /// the Mozilla CA bundle bundled via `webpki-roots`. Operators
+    /// can override the trust roots (private CA), pin a server name
+    /// for SNI when it differs from the URL host, or — for closed
+    /// test environments only — skip verification entirely.
+    /// Plain `http://` URLs ignore this field.
+    #[serde(default, skip_serializing_if = "TlsSpec::is_empty")]
+    pub tls: TlsSpec,
+    /// Authentication credentials presented on every outgoing request
+    /// (both POST and the GET listener). None means no Authorization /
+    /// auth headers are sent. The variants cover the three real cases
+    /// MCP server operators actually use; production deployments that
+    /// need anything more elaborate (OAuth refresh flows etc.) belong
+    /// behind a sidecar that converts to one of these.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<AuthSpec>,
+}
+
+/// TLS configuration for an HTTPS MCP upstream. Empty default means
+/// "use Mozilla roots, verify normally, derive SNI from URL".
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TlsSpec {
+    /// Optional path to a PEM file containing one or more CA
+    /// certificates. When set, these are loaded *in addition to*
+    /// the default Mozilla roots (not instead of) — operators with
+    /// a private CA do not lose ability to reach public MCP
+    /// servers from the same daemon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_bundle: Option<std::path::PathBuf>,
+    /// Override the SNI / certificate hostname used during the TLS
+    /// handshake. Defaults to the host component of `url`. Needed
+    /// when the URL host is a bare IP, a CNAME, or otherwise does
+    /// not match the cert's SAN.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_name: Option<String>,
+    /// **DANGER**: disables certificate verification entirely. Allowed
+    /// for closed test environments only. The streamable HTTP client
+    /// logs a warning to stderr at every connection when this is set,
+    /// so it's hard to forget. Not honored unless the daemon was
+    /// started with the `EASYNET_ALLOW_INSECURE_TLS=1` env var; this
+    /// double-gate prevents an attacker who can write the config file
+    /// from silently downgrading TLS.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub insecure_skip_verify: bool,
+}
+
+impl TlsSpec {
+    /// Whether this spec has any non-default fields. Used by
+    /// `skip_serializing_if` so an operator who didn't set any TLS
+    /// fields doesn't get a `tls = {}` line in their dumped config.
+    fn is_empty(&self) -> bool {
+        self.ca_bundle.is_none() && self.server_name.is_none() && !self.insecure_skip_verify
+    }
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// Auth credential variants for HTTP/HTTPS MCP upstreams.
+///
+/// Tag-based serde representation (`{"type": "bearer", "token": "..."}`)
+/// keeps the TOML / JSON readable and lets new variants land without
+/// breaking older configs — unknown variants fail at config load with
+/// a typed error rather than silently parsing as a different shape.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AuthSpec {
+    /// Static bearer token. Appears as `Authorization: Bearer <token>`.
+    /// Embedding the secret in the config file is acceptable when the
+    /// config is operator-readable only (the daemon already requires
+    /// it to be); use `BearerEnv` when the secret comes from a
+    /// secrets manager.
+    Bearer { token: String },
+    /// Bearer token sourced from an environment variable at request
+    /// time. The env var name is config (non-secret); the token
+    /// itself never lands in config files. Missing env var fails the
+    /// request with a typed error.
+    BearerEnv { env: String },
+    /// Arbitrary header map. Used by upstreams that key on a custom
+    /// header (`X-Api-Key`, `MCP-Tenant-Id`, …). Multiple entries are
+    /// applied in declared order; collisions with the standard
+    /// `Authorization` header are allowed (operator's responsibility).
+    Headers { headers: HashMap<String, String> },
 }
 
 fn default_transport() -> String {
@@ -157,6 +241,8 @@ impl Default for McpServerSpec {
             endpoint: default_endpoint(),
             name_prefix: String::new(),
             aliases: HashMap::new(),
+            tls: TlsSpec::default(),
+            auth: None,
         }
     }
 }
@@ -211,8 +297,32 @@ impl McpServerSpec {
                 }
             }
             "http" => {
-                if self.url.is_none() {
+                let Some(url) = self.url.as_deref() else {
                     anyhow::bail!("MCP server `{}`: http transport requires `url`", self.name);
+                };
+                let lowered = url.to_ascii_lowercase();
+                let is_https = lowered.starts_with("https://");
+                if self.tls.insecure_skip_verify && !is_https {
+                    // No point asking for TLS shortcuts on a plain HTTP URL —
+                    // surface this as a typo at boot, not silently ignore.
+                    anyhow::bail!(
+                        "MCP server `{}`: tls.insecure_skip_verify set on an http:// URL",
+                        self.name
+                    );
+                }
+                if !is_https && self.tls.ca_bundle.is_some() {
+                    anyhow::bail!(
+                        "MCP server `{}`: tls.ca_bundle set on an http:// URL",
+                        self.name
+                    );
+                }
+                if let Some(AuthSpec::BearerEnv { env }) = &self.auth {
+                    if env.is_empty() {
+                        anyhow::bail!(
+                            "MCP server `{}`: auth.bearer_env requires non-empty `env`",
+                            self.name
+                        );
+                    }
                 }
             }
             other => anyhow::bail!(
