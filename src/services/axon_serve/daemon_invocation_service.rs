@@ -245,6 +245,17 @@ pub struct DaemonInvocationService {
     /// cross-realm URI lookup. Defaults to empty so single-realm
     /// daemons gracefully report no federated entries.
     federated_directory: crate::services::federation_directory::SharedFederatedDirectoryView,
+    /// **2026-05-25 P0 hardening**. Wired from
+    /// `DaemonConfig::allow_directory_auto_route()`. When `false`
+    /// (the default), the federation dispatcher refuses to dial a
+    /// peer hub whose endpoint came from an observed
+    /// `federated_directory` entry — see
+    /// [`crate::services::axon_serve::hub_resolver`] for the
+    /// threat model. Wiring lands inline rather than as a `Builder`
+    /// because the flag's value never changes within a daemon
+    /// lifetime (no SIGHUP-driven runtime toggle): the security
+    /// posture is set at boot.
+    allow_directory_auto_route: bool,
     /// **N3-N4 bridge**. Daemon-wide federated user binding
     /// store. When wired, the `federation.discover` dispatch
     /// arm constructs a `FederatedUserResolver` per call and
@@ -377,6 +388,7 @@ impl DaemonInvocationService {
             federated_peers: SharedFederatedPeers::default(),
             federated_directory:
                 crate::services::federation_directory::SharedFederatedDirectoryView::default(),
+            allow_directory_auto_route: false,
             federated_bindings: None,
             subscribe_v2_heartbeat_interval_ms: 30_000,
             escalation: None,
@@ -591,6 +603,19 @@ impl DaemonInvocationService {
         cell: crate::services::federation_directory::SharedFederatedDirectoryView,
     ) -> Self {
         self.federated_directory = cell;
+        self
+    }
+
+    /// **2026-05-25 P0 hardening**. Set the directory-auto-route
+    /// security posture. Boot wires this from
+    /// `DaemonConfig::allow_directory_auto_route()`. The default
+    /// (`false`) is the secure shape; this builder is the single
+    /// place that should ever set `true`, and it is intended to be
+    /// called from the daemon's startup path with the value the
+    /// operator deliberately opted into in `daemon-config.toml`.
+    #[must_use]
+    pub fn with_allow_directory_auto_route(mut self, allow: bool) -> Self {
+        self.allow_directory_auto_route = allow;
         self
     }
 
@@ -2213,18 +2238,48 @@ impl DaemonInvocationService {
                 federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
             ));
         };
-        // Snapshot the federated_peers cell per-dispatch so a
-        // SIGHUP-driven reload of `[daemon.federated_peers]`
-        // (operator adding a new tenant→hub_uri entry without
-        // restarting the daemon) is visible to the next call.
-        // The snapshot is one `RwLock::read()` + `Arc::clone`
-        // (cheap; mirrors the admission gate's per-call pattern).
-        let peers_snapshot = self.federated_peers.snapshot();
-        let Some(target_hub_uri) = peers_snapshot.get(&target_tenant) else {
-            record_offline_receipt();
-            return Err(Status::failed_precondition(
-                federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
-            ));
+        // Route through [`HubResolver`], which owns the static-peers
+        // → federated-directory precedence chain. The two cells are
+        // borrowed (each is `Arc`-backed; clone is cheap) so SIGHUP-
+        // driven reloads of `[daemon.federated_peers]` remain visible
+        // to the next call, matching the admission gate's per-call
+        // snapshot pattern. See `hub_resolver.rs` for the precedence
+        // contract and the per-source rationale.
+        let resolution = crate::services::axon_serve::hub_resolver::HubResolver::new(
+            &self.federated_peers,
+            &self.federated_directory,
+            self.allow_directory_auto_route,
+        )
+        .resolve(&target_tenant, &request.target_ura);
+        let target_hub_uri: String = match resolution {
+            crate::services::axon_serve::hub_resolver::HubResolution::Static { hub_endpoint } => {
+                hub_endpoint
+            }
+            crate::services::axon_serve::hub_resolver::HubResolution::DirectoryFallback {
+                hub_endpoint,
+                target_ura,
+            } => {
+                // Compile-time-shape operator log. SRE can grep
+                // `kind=auto_route source=federated_directory` to
+                // track how often operators rely on auto-route
+                // instead of declaring tenants explicitly in
+                // daemon-config.toml.
+                crate::op_event!(
+                    component = axon_serve,
+                    kind = auto_route,
+                    source = "federated_directory",
+                    target_tenant = target_tenant,
+                    target_ura = target_ura,
+                    hub_endpoint = hub_endpoint,
+                );
+                hub_endpoint
+            }
+            crate::services::axon_serve::hub_resolver::HubResolution::Offline => {
+                record_offline_receipt();
+                return Err(Status::failed_precondition(
+                    federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+                ));
+            }
         };
 
         // Cross-tenant dial. **LB-57 §一 Option A wire shape**.
@@ -2272,7 +2327,7 @@ impl DaemonInvocationService {
             )?;
         }
 
-        match client.forward_invoke(target_hub_uri, peer_request).await {
+        match client.forward_invoke(&target_hub_uri, peer_request).await {
             Ok(peer_response) => {
                 // **LB-57 Option A — unwrap peer's outer wrapper**.
                 // The peer hub returns its own `ForwardInvokeResponse`
@@ -8053,6 +8108,221 @@ mod tests {
         assert!(
             recorder.calls().is_empty(),
             "federation client must NOT be called when peer entry is missing"
+        );
+    }
+
+    #[tokio::test]
+    async fn forward_invoke_cross_tenant_auto_routes_via_federated_directory_when_opted_in() {
+        // **Cross-hub auto-route, operator opt-in path**.
+        // `federated_peers` is empty so the operator did NOT
+        // statically declare `peer-realm → hub_uri`. But (a) the
+        // hub-to-hub directory sync has previously observed the
+        // target device on `https://hub-auto.example:50443`, and
+        // (b) the operator opted into directory-driven auto-route
+        // via `[daemon] allow_directory_auto_route = true`. The
+        // dispatcher must then look the device up in
+        // `federated_directory`, lift its `hub_endpoint`, and dial
+        // there — lifting the requirement that operators
+        // pre-declare every reachable tenant in daemon-config.toml.
+        //
+        // The default-off counterpart lives in
+        // `forward_invoke_cross_tenant_directory_fallback_refused_by_default`.
+        use crate::services::federation_directory::{
+            DirectoryEntry, DirectoryEvent, DirectoryView, SharedFederatedDirectoryView,
+        };
+        use std::collections::BTreeMap;
+
+        let peer_reply_bytes = br#"{"hello":"from-auto-routed-peer"}"#.to_vec();
+        let canned = InvokeResponse {
+            result: serde_json::to_vec(&federation_wrappers::ForwardInvokeResponse {
+                result_bytes: peer_reply_bytes.clone(),
+                correlation_call_id: "test-call-id-1".to_string(),
+            })
+            .expect("encode peer ForwardInvokeResponse"),
+            result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            state: InvocationState::Completed as i32,
+            ..InvokeResponse::default()
+        };
+        let recorder = Arc::new(RecordingFederationClient::new(canned));
+
+        let target_ura = "easynet:///r/unmapped-realm/device/peer-target";
+        let cell = SharedFederatedDirectoryView::default();
+        let mut peer_view = DirectoryView::new("unmapped-realm".to_string());
+        peer_view.apply_frame(&DirectoryEvent::Snapshot {
+            entries: vec![DirectoryEntry {
+                agent_ura: target_ura.to_string(),
+                node_id: "peer-target".to_string(),
+                display_name: None,
+                status: "active".to_string(),
+                origin_realm: None,
+                hub_endpoint: Some("https://hub-auto.example:50443".to_string()),
+                last_seen_unix_ms: Some(1_714_500_000_000),
+            }],
+        });
+        let mut peers = BTreeMap::new();
+        peers.insert("unmapped-realm".to_string(), Arc::new(peer_view));
+        cell.replace(peers);
+
+        // Crucially: NO `with_federated_peers(...)`. The static
+        // operator-curated map is empty — only the directory cell
+        // knows where the target lives. The opt-in is set
+        // explicitly to mirror the production wiring from
+        // `boot.rs`'s `config.allow_directory_auto_route()`.
+        let svc = make_service()
+            .with_session_realm("test-realm")
+            .with_federation_client(recorder.clone() as Arc<dyn FederationClient>)
+            .with_federated_directory_cell(cell)
+            .with_allow_directory_auto_route(true);
+
+        let resp = svc
+            .dispatch_federation_forward_invoke(None, &forward_invoke_args(target_ura))
+            .await
+            .expect("directory-fallback path dials the auto-discovered hub");
+
+        let body: federation_wrappers::ForwardInvokeResponse = parse_response_body(resp);
+        assert_eq!(body.result_bytes, peer_reply_bytes);
+        assert_eq!(body.correlation_call_id, "test-call-id-1");
+
+        let calls = recorder.calls();
+        assert_eq!(
+            calls.len(),
+            1,
+            "exactly one peer dial — at the directory-derived hub_endpoint"
+        );
+        assert_eq!(
+            calls[0].0, "https://hub-auto.example:50443",
+            "dial target must come from federated_directory.hub_endpoint, \
+             not from the (empty) federated_peers map"
+        );
+    }
+
+    #[tokio::test]
+    async fn forward_invoke_cross_tenant_directory_fallback_refused_by_default() {
+        // **P0 default-off pin**. Same setup as
+        // `forward_invoke_cross_tenant_auto_routes_via_federated_directory_when_opted_in`
+        // but the operator has NOT opted in. The directory has the
+        // entry, but the dispatcher must refuse to dial — it would
+        // be handing an outbound federation request to a peer-hub-
+        // controllable URL. The contract is: with the secure
+        // default, an unmapped tenant always returns
+        // `target_offline`, regardless of what the directory sync
+        // observed.
+        use crate::services::federation_directory::{
+            DirectoryEntry, DirectoryEvent, DirectoryView, SharedFederatedDirectoryView,
+        };
+        use std::collections::BTreeMap;
+
+        let canned = InvokeResponse {
+            result: br#"{"result_bytes":[]}"#.to_vec(),
+            result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            state: InvocationState::Completed as i32,
+            ..InvokeResponse::default()
+        };
+        let recorder = Arc::new(RecordingFederationClient::new(canned));
+
+        let target_ura = "easynet:///r/unmapped-realm/device/peer-target";
+        let cell = SharedFederatedDirectoryView::default();
+        let mut peer_view = DirectoryView::new("unmapped-realm".to_string());
+        peer_view.apply_frame(&DirectoryEvent::Snapshot {
+            entries: vec![DirectoryEntry {
+                agent_ura: target_ura.to_string(),
+                node_id: "peer-target".to_string(),
+                display_name: None,
+                status: "active".to_string(),
+                origin_realm: None,
+                hub_endpoint: Some("https://attacker.example:50443".to_string()),
+                last_seen_unix_ms: Some(1_714_500_000_000),
+            }],
+        });
+        let mut peers = BTreeMap::new();
+        peers.insert("unmapped-realm".to_string(), Arc::new(peer_view));
+        cell.replace(peers);
+
+        // No `with_allow_directory_auto_route(true)` — service
+        // inherits the secure default (false).
+        let svc = make_service()
+            .with_session_realm("test-realm")
+            .with_federation_client(recorder.clone() as Arc<dyn FederationClient>)
+            .with_federated_directory_cell(cell);
+
+        let err = svc
+            .dispatch_federation_forward_invoke(None, &forward_invoke_args(target_ura))
+            .await
+            .expect_err("default-off must refuse the directory-derived endpoint");
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert_eq!(
+            err.message(),
+            federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+            "an attacker-controllable hub_endpoint must NEVER be dialed without operator opt-in"
+        );
+        assert!(
+            recorder.calls().is_empty(),
+            "federation client must NOT be called when directory fallback is disabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn forward_invoke_cross_tenant_directory_entry_without_hub_endpoint_falls_through_to_offline()
+    {
+        // Edge case: the directory has the target URA but the peer's
+        // snapshot omitted `hub_endpoint`. Auto-route has nowhere to
+        // dial; the dispatcher must surface target_offline rather
+        // than dialing some default. Operators relying on auto-route
+        // need to know their directory sync is missing the endpoint
+        // field, not get a misleading "delivered" outcome.
+        use crate::services::federation_directory::{
+            DirectoryEntry, DirectoryEvent, DirectoryView, SharedFederatedDirectoryView,
+        };
+        use std::collections::BTreeMap;
+
+        let canned = InvokeResponse {
+            result: br#"{"result_bytes":[]}"#.to_vec(),
+            result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            state: InvocationState::Completed as i32,
+            ..InvokeResponse::default()
+        };
+        let recorder = Arc::new(RecordingFederationClient::new(canned));
+
+        let target_ura = "easynet:///r/unmapped-realm/device/peer-target";
+        let cell = SharedFederatedDirectoryView::default();
+        let mut peer_view = DirectoryView::new("unmapped-realm".to_string());
+        peer_view.apply_frame(&DirectoryEvent::Snapshot {
+            entries: vec![DirectoryEntry {
+                agent_ura: target_ura.to_string(),
+                node_id: "peer-target".to_string(),
+                display_name: None,
+                status: "active".to_string(),
+                origin_realm: None,
+                hub_endpoint: None, // <- the gap under test
+                last_seen_unix_ms: Some(1_714_500_000_000),
+            }],
+        });
+        let mut peers = BTreeMap::new();
+        peers.insert("unmapped-realm".to_string(), Arc::new(peer_view));
+        cell.replace(peers);
+
+        // The opt-in is ON in this test so we exercise the
+        // "missing hub_endpoint" branch of the resolver, not the
+        // "fallback disabled" branch (which is its own pin in
+        // `forward_invoke_cross_tenant_directory_fallback_refused_by_default`).
+        let svc = make_service()
+            .with_session_realm("test-realm")
+            .with_federation_client(recorder.clone() as Arc<dyn FederationClient>)
+            .with_federated_directory_cell(cell)
+            .with_allow_directory_auto_route(true);
+
+        let err = svc
+            .dispatch_federation_forward_invoke(None, &forward_invoke_args(target_ura))
+            .await
+            .expect_err("missing hub_endpoint cannot be auto-routed");
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert_eq!(
+            err.message(),
+            federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+        );
+        assert!(
+            recorder.calls().is_empty(),
+            "no dial when directory entry carries no hub_endpoint"
         );
     }
 

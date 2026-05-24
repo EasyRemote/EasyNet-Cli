@@ -400,6 +400,23 @@ fn resolve_via_federation(
         }
     }
 
+    // **Cross-hub device axis (PR-N3 N3-4 surface)**. Only `Public`
+    // scope consults the federated directory; see
+    // [`federated_directory_candidates`] for the projection contract
+    // and why other scopes are excluded.
+    if matches!(scope, Scope::Public) {
+        // Routed through the feature-agnostic shim so this branch
+        // compiles regardless of the `axon-pb` feature. With the
+        // feature off the shim returns `Ok(vec![])`, which is
+        // exactly the "no federated entries" case the helper
+        // already handles.
+        if let Ok(entries) =
+            crate::support::federation_invoke_shim::invoke_federation_discover(None, None)
+        {
+            rows.extend(federated_directory_candidates(&entries));
+        }
+    }
+
     if let Some(q) = query {
         score_against_query(&mut rows, q);
         rows.retain(|c| c.score > 0.0);
@@ -611,6 +628,79 @@ fn classify_fulfilled_by(
         Some(AbilityExec::Mcp(_)) => Some("mcp"),
         None => Some("agent_chat_fallback"),
     }
+}
+
+/// Project a federated-directory entry list (as returned by the
+/// daemon's `federation.discover` ability, surfaced here through
+/// [`crate::support::federation_invoke_shim`]) into the
+/// [`Candidate`] envelope shape used by the rest of the discover
+/// pipeline.
+///
+/// Filtering contract
+/// ------------------
+/// - Entries with an empty / missing `agent_ura` are skipped — they
+///   are malformed and we refuse to fabricate a candidate without a
+///   real address.
+/// - Entries whose `status` is not `"active"` are skipped — an
+///   advertised-but-offline peer would surface as a dispatch
+///   candidate the LLM cannot actually reach.
+/// - Display name falls back through `display_name` → `node_id` →
+///   `agent_ura` so the description always names something humans
+///   recognise.
+///
+/// Wire shape (matches the inline pre-extraction code byte-for-byte;
+/// see `federated_directory_candidates_*` tests below for the pins):
+/// every federated device becomes ONE candidate whose `ability` is
+/// `forward_invoke` — the only verb routable across hubs today —
+/// and whose `owner` is the device URA itself.
+///
+/// Scope policy is enforced at the call site (`Public` only); the
+/// helper is scope-agnostic and stamps `scope_matched = Public` so a
+/// future caller that wants federated entries under a different
+/// scope must opt in by overwriting the field. This matches
+/// `push_candidate`'s pattern of returning a row with
+/// `scope_matched` already decided.
+fn federated_directory_candidates(entries: &[Value]) -> Vec<Candidate> {
+    let mut out = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let agent_ura = entry
+            .get("agent_ura")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if agent_ura.is_empty() {
+            continue;
+        }
+        let status = entry.get("status").and_then(Value::as_str).unwrap_or("");
+        if status != "active" {
+            continue;
+        }
+        let origin_realm = entry
+            .get("origin_realm")
+            .and_then(Value::as_str)
+            .unwrap_or("(unknown realm)");
+        let display = entry
+            .get("display_name")
+            .and_then(Value::as_str)
+            .or_else(|| entry.get("node_id").and_then(Value::as_str))
+            .unwrap_or(agent_ura);
+        out.push(Candidate {
+            qualified_name: format!("{agent_ura}.forward_invoke"),
+            owner: agent_ura.to_string(),
+            ability: "forward_invoke".to_string(),
+            description: format!(
+                "Cross-hub device `{display}` in realm `{origin_realm}`. \
+                 Reachable via federation.forward_invoke; specify the \
+                 inner ability + args to dispatch."
+            ),
+            input_schema: Value::Null,
+            visibility: Visibility::Public,
+            scope_matched: Scope::Public,
+            score: 0.0,
+            reason: String::new(),
+            fulfilled_by: Some("federated_directory"),
+        });
+    }
+    out
 }
 
 /// Score every candidate against `query`. The scoring is intentionally
@@ -1167,5 +1257,138 @@ mod tests {
         let h = arc_reg.resolve_rpc("claude.discover").unwrap();
         let err = h(json!({"provider": "ghost.discover"})).unwrap_err();
         assert!(format!("{err}").contains("not registered"));
+    }
+
+    // -----------------------------------------------------------------
+    // federated_directory_candidates — pin tests for the helper
+    // extracted from the inline `Scope::Public` branch. These exist
+    // because the previous shape (a 67-line nested if-let-for-if
+    // block) was un-testable without spinning up a live daemon, so
+    // the projection's filtering rules silently drifted. The helper
+    // moves the rules onto a pure function we can unit-test.
+    // -----------------------------------------------------------------
+
+    fn active_entry(agent_ura: &str, node_id: &str, display: Option<&str>) -> Value {
+        let mut v = json!({
+            "agent_ura": agent_ura,
+            "node_id":   node_id,
+            "status":    "active",
+            "origin_realm": "peer-realm",
+        });
+        if let Some(d) = display {
+            v["display_name"] = Value::String(d.to_string());
+        }
+        v
+    }
+
+    #[test]
+    fn federated_directory_helper_projects_active_entry() {
+        let entries = vec![active_entry(
+            "easynet:///r/peer-realm/device/d1",
+            "d1",
+            Some("Peer Workstation"),
+        )];
+        let out = federated_directory_candidates(&entries);
+
+        assert_eq!(out.len(), 1);
+        let c = &out[0];
+        assert_eq!(
+            c.qualified_name,
+            "easynet:///r/peer-realm/device/d1.forward_invoke"
+        );
+        assert_eq!(c.owner, "easynet:///r/peer-realm/device/d1");
+        assert_eq!(c.ability, "forward_invoke");
+        assert_eq!(c.visibility, Visibility::Public);
+        assert_eq!(c.scope_matched, Scope::Public);
+        assert_eq!(c.fulfilled_by, Some("federated_directory"));
+        assert!(c.description.contains("Peer Workstation"));
+        assert!(c.description.contains("peer-realm"));
+    }
+
+    #[test]
+    fn federated_directory_helper_skips_inactive_status() {
+        // An advertised-but-offline peer is filtered so the LLM does
+        // not see it as a routable candidate. This is the contract
+        // that prevents auto-route from dispatching to a peer the
+        // directory itself believes is unreachable.
+        let mut e = active_entry("easynet:///r/peer/device/d2", "d2", None);
+        e["status"] = Value::String("inactive".into());
+        let out = federated_directory_candidates(&[e]);
+        assert!(out.is_empty(), "inactive entries must be filtered");
+    }
+
+    #[test]
+    fn federated_directory_helper_skips_missing_agent_ura() {
+        // Defensive: a malformed entry without `agent_ura` cannot
+        // become a candidate — we refuse to fabricate an address.
+        let mut e = active_entry("placeholder", "d3", None);
+        e.as_object_mut().unwrap().remove("agent_ura");
+        let out = federated_directory_candidates(&[e]);
+        assert!(out.is_empty(), "entries without agent_ura must be skipped");
+
+        // Empty string is treated the same as missing.
+        let e2 = active_entry("", "d4", None);
+        let out2 = federated_directory_candidates(&[e2]);
+        assert!(out2.is_empty(), "empty agent_ura must be skipped");
+    }
+
+    #[test]
+    fn federated_directory_helper_falls_back_through_display_name_chain() {
+        // display_name → node_id → agent_ura cascade.
+        // Case A: only node_id present.
+        let only_node = active_entry("easynet:///r/peer/device/d5", "node-from-id", None);
+        let a = federated_directory_candidates(&[only_node]);
+        assert!(a[0].description.contains("node-from-id"));
+
+        // Case B: neither display_name nor node_id present — falls
+        // back to the agent_ura itself.
+        let mut bare = active_entry("easynet:///r/peer/device/d6", "ignored", None);
+        bare.as_object_mut().unwrap().remove("node_id");
+        let b = federated_directory_candidates(&[bare]);
+        assert!(b[0].description.contains("easynet:///r/peer/device/d6"));
+
+        // Case C: display_name wins when both are present.
+        let mut both = active_entry("easynet:///r/peer/device/d7", "the-node-id", None);
+        both["display_name"] = Value::String("Friendly Name".into());
+        let c = federated_directory_candidates(&[both]);
+        assert!(c[0].description.contains("Friendly Name"));
+        assert!(
+            !c[0].description.contains("the-node-id"),
+            "display_name must shadow node_id, not concatenate"
+        );
+    }
+
+    #[test]
+    fn federated_directory_helper_uses_unknown_realm_when_origin_missing() {
+        // Operator-readable fallback for the description string when
+        // `origin_realm` is absent from the directory snapshot.
+        let mut e = active_entry("easynet:///r/?/device/d8", "d8", Some("Box"));
+        e.as_object_mut().unwrap().remove("origin_realm");
+        let out = federated_directory_candidates(&[e]);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].description.contains("(unknown realm)"));
+    }
+
+    #[test]
+    fn federated_directory_helper_preserves_input_order() {
+        // The discover handler later sorts by score+name, but for
+        // entries with zero score (no query) the projection order
+        // matters for determinism in tests and for SRE reading raw
+        // output.
+        let entries = vec![
+            active_entry("easynet:///r/p/device/a", "a", Some("A")),
+            active_entry("easynet:///r/p/device/b", "b", Some("B")),
+            active_entry("easynet:///r/p/device/c", "c", Some("C")),
+        ];
+        let out = federated_directory_candidates(&entries);
+        let names: Vec<_> = out.iter().map(|c| c.qualified_name.clone()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "easynet:///r/p/device/a.forward_invoke".to_string(),
+                "easynet:///r/p/device/b.forward_invoke".to_string(),
+                "easynet:///r/p/device/c.forward_invoke".to_string(),
+            ]
+        );
     }
 }

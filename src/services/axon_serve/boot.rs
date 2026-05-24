@@ -369,6 +369,13 @@ pub fn start_axon_serve_sidecar(
             trust_anchor_cell.clone(),
         )
         .with_federated_directory_cell(federated_directory_cell.clone())
+        // **2026-05-25 P0 hardening**. Thread the operator's
+        // directory-auto-route opt-in (default false) so the
+        // federation dispatcher refuses to dial a peer hub whose
+        // endpoint came only from a `federated_directory`
+        // observation unless the operator explicitly enabled it.
+        // See `hub_resolver.rs` for the threat model.
+        .with_allow_directory_auto_route(config.allow_directory_auto_route())
         // **PR-1 commit 7/9 (LB-56)**. Thread the boot-supplied
         // `Arc<AbilityDispatcher>` so that a `federation.forward_
         // invoke` call whose `target_ura` matches THIS daemon's

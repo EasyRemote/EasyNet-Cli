@@ -195,10 +195,16 @@ fn is_false(b: &bool) -> bool {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AuthSpec {
     /// Static bearer token. Appears as `Authorization: Bearer <token>`.
-    /// Embedding the secret in the config file is acceptable when the
-    /// config is operator-readable only (the daemon already requires
-    /// it to be); use `BearerEnv` when the secret comes from a
-    /// secrets manager.
+    ///
+    /// **Discouraged.** A non-empty `token` lands in the config file
+    /// verbatim and is therefore included in every backup, every
+    /// shell-history capture of `cat mcp_clients.json`, every
+    /// support-bundle scrape. `validate()` emits a
+    /// `kind=auth_plaintext_bearer level=warn` op-event each time it
+    /// sees this variant with a non-empty token so operators get a
+    /// loud reminder at boot. Prefer [`AuthSpec::BearerEnv`], which
+    /// sources the token from an env var at request time and keeps
+    /// the secret out of every config-file lifecycle.
     Bearer { token: String },
     /// Bearer token sourced from an environment variable at request
     /// time. The env var name is config (non-secret); the token
@@ -316,13 +322,77 @@ impl McpServerSpec {
                         self.name
                     );
                 }
-                if let Some(AuthSpec::BearerEnv { env }) = &self.auth {
-                    if env.is_empty() {
-                        anyhow::bail!(
-                            "MCP server `{}`: auth.bearer_env requires non-empty `env`",
-                            self.name
+                match &self.auth {
+                    Some(AuthSpec::BearerEnv { env }) => {
+                        if env.is_empty() {
+                            anyhow::bail!(
+                                "MCP server `{}`: auth.bearer_env requires non-empty `env`",
+                                self.name
+                            );
+                        }
+                    }
+                    Some(AuthSpec::Bearer { token }) if !token.is_empty() => {
+                        // Loud reminder at boot. We do not bail —
+                        // there are legitimate uses (closed test
+                        // setups, CI fixtures) and operator habit
+                        // forms slowly. Warn every boot so the
+                        // warning cannot be silenced by adding it to
+                        // a file the operator only looks at once.
+                        let server_name = self.name.as_str();
+                        crate::op_event!(
+                            component = mcp_http_client,
+                            kind = auth_plaintext_bearer,
+                            level = "warn",
+                            server = server_name,
+                            message = "AuthSpec::Bearer { token } persists the secret in mcp_clients.json; \
+                                       prefer AuthSpec::BearerEnv to keep the token out of config files",
                         );
                     }
+                    Some(AuthSpec::Headers { headers }) if !headers.is_empty() => {
+                        // Boot-time validation of every header pair.
+                        // hyper's request builder would otherwise
+                        // reject a malformed name / CRLF-injected
+                        // value at first-call time with a generic
+                        // `hyper::http::Error`; surfacing it here
+                        // turns the operator's typo into a loud
+                        // refusal at config load, with the server
+                        // name and the offending header attached.
+                        // (`HeaderName::from_bytes` is the same path
+                        // `Request::header(name, _)` walks; matching
+                        // it here is the exact invariant the runtime
+                        // path will enforce, only earlier.)
+                        for (name, value) in headers {
+                            hyper::header::HeaderName::from_bytes(name.as_bytes())
+                                .map_err(|e| anyhow::anyhow!(
+                                    "MCP server `{}`: auth.headers entry `{}` is not a valid HTTP header name ({e})",
+                                    self.name,
+                                    name,
+                                ))?;
+                            hyper::header::HeaderValue::from_str(value)
+                                .map_err(|e| anyhow::anyhow!(
+                                    "MCP server `{}`: auth.headers value for `{}` is not a valid HTTP header value ({e}); \
+                                     ASCII-printable only — embedded CR/LF/NUL are refused to block header injection",
+                                    self.name,
+                                    name,
+                                ))?;
+                        }
+                        // Same risk surface as plaintext Bearer.
+                        // `Headers` is the right shape for upstreams
+                        // that key on `X-Api-Key` / `MCP-Tenant-Id`,
+                        // but a value embedded here is just as
+                        // persisted as a plaintext bearer token.
+                        let server_name = self.name.as_str();
+                        crate::op_event!(
+                            component = mcp_http_client,
+                            kind = auth_plaintext_headers,
+                            level = "warn",
+                            server = server_name,
+                            header_count = headers.len(),
+                            message = "AuthSpec::Headers persists every header value in mcp_clients.json; \
+                                       audit each entry to confirm none are secrets",
+                        );
+                    }
+                    _ => {}
                 }
             }
             other => anyhow::bail!(
@@ -1259,6 +1329,135 @@ mod tests {
         };
         let err = spec.validate().unwrap_err();
         assert!(format!("{err}").contains("unknown transport"));
+    }
+
+    #[test]
+    fn validate_accepts_plaintext_bearer_but_does_not_bail() {
+        // Plaintext Bearer is discouraged (see the doc-comment on
+        // `AuthSpec::Bearer`) but we deliberately do NOT bail —
+        // closed test setups and CI fixtures legitimately use it.
+        // The audit-trail warning emitted by `validate` is on
+        // stderr; this test pins the contract that the validation
+        // outcome remains `Ok(())`.
+        let spec = McpServerSpec {
+            name: "with-plaintext-bearer".into(),
+            transport: "http".into(),
+            url: Some("https://example.com".into()),
+            auth: Some(AuthSpec::Bearer {
+                token: "shh-secret".into(),
+            }),
+            ..Default::default()
+        };
+        spec.validate()
+            .expect("plaintext bearer is discouraged but not a hard error");
+    }
+
+    #[test]
+    fn validate_accepts_empty_bearer_without_warning_path() {
+        // The warning is gated on `!token.is_empty()` so an empty
+        // string (e.g. operator commented out the secret to disable
+        // auth) does not produce a misleading audit-trail entry.
+        // We can't capture stderr cheaply, but we can pin that this
+        // branch is not the bail branch.
+        let spec = McpServerSpec {
+            name: "empty-bearer".into(),
+            transport: "http".into(),
+            url: Some("https://example.com".into()),
+            auth: Some(AuthSpec::Bearer {
+                token: String::new(),
+            }),
+            ..Default::default()
+        };
+        spec.validate().expect("empty token validates");
+    }
+
+    #[test]
+    fn validate_accepts_plaintext_headers_with_warning_emission_path() {
+        // Same contract as the plaintext-bearer test: we exercise
+        // the warning branch and pin that validation still passes.
+        let mut headers = std::collections::HashMap::new();
+        headers.insert("X-Api-Key".to_string(), "k-123".to_string());
+        let spec = McpServerSpec {
+            name: "with-headers".into(),
+            transport: "http".into(),
+            url: Some("https://example.com".into()),
+            auth: Some(AuthSpec::Headers { headers }),
+            ..Default::default()
+        };
+        spec.validate()
+            .expect("plaintext headers are discouraged but not a hard error");
+    }
+
+    #[test]
+    fn validate_rejects_auth_headers_with_invalid_name_at_config_load() {
+        // **Boot-time validation pin**. A header name with embedded
+        // whitespace (or any byte hyper's `HeaderName::from_bytes`
+        // refuses) must fail at `validate()` — not silently at first
+        // request. The operator typo surfaces with the server name
+        // attached so they can locate it in mcp_clients.json.
+        let mut headers = std::collections::HashMap::new();
+        headers.insert("Bad Header Name".to_string(), "v".to_string());
+        let spec = McpServerSpec {
+            name: "bad-header-name".into(),
+            transport: "http".into(),
+            url: Some("https://example.com".into()),
+            auth: Some(AuthSpec::Headers { headers }),
+            ..Default::default()
+        };
+        let err = spec
+            .validate()
+            .expect_err("invalid header name must bail at config load");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("bad-header-name"), "got: {msg}");
+        assert!(msg.contains("not a valid HTTP header name"), "got: {msg}");
+    }
+
+    #[test]
+    fn validate_rejects_auth_headers_with_crlf_injected_value_at_config_load() {
+        // **Header-injection pin**. An attacker who can write the
+        // config file could try to smuggle a second header (or
+        // request body) by stuffing `\r\n` into a value. hyper's
+        // `HeaderValue::from_str` refuses these bytes, so threading
+        // the validation through it at boot blocks the class.
+        let mut headers = std::collections::HashMap::new();
+        headers.insert(
+            "X-Api-Key".to_string(),
+            "ok-prefix\r\nX-Injected: smuggled".to_string(),
+        );
+        let spec = McpServerSpec {
+            name: "crlf-injected".into(),
+            transport: "http".into(),
+            url: Some("https://example.com".into()),
+            auth: Some(AuthSpec::Headers { headers }),
+            ..Default::default()
+        };
+        let err = spec
+            .validate()
+            .expect_err("CRLF-injected header value must bail at config load");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("crlf-injected"), "got: {msg}");
+        assert!(msg.contains("X-Api-Key"), "got: {msg}");
+        assert!(
+            msg.contains("not a valid HTTP header value"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_bearer_env_without_warning_path() {
+        // BearerEnv is the recommended shape — no plaintext warning
+        // should fire. (We can't capture stderr here, but `validate`
+        // must still pass for the non-empty env name.)
+        let spec = McpServerSpec {
+            name: "with-bearer-env".into(),
+            transport: "http".into(),
+            url: Some("https://example.com".into()),
+            auth: Some(AuthSpec::BearerEnv {
+                env: "MY_TOKEN".into(),
+            }),
+            ..Default::default()
+        };
+        spec.validate().expect("BearerEnv is the recommended path");
     }
 
     #[test]
