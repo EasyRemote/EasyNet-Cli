@@ -108,6 +108,22 @@
 /// cross-hub path.
 #[cfg(feature = "axon-pb")]
 pub(crate) mod federation_invoke;
+
+/// Feature-agnostic shim over [`federation_invoke`]. Callers in the
+/// hot path (ability discovery, federation surfaces) should depend on
+/// this module instead of `federation_invoke` directly so they remain
+/// compilable under default features (axon-pb off). With axon-pb on,
+/// the shim re-exports the real implementation; with axon-pb off, it
+/// returns empty/typed-error responses so the caller's logic stays
+/// uniform and degrades to a local-only view.
+///
+/// **Why a shim, not `#[cfg]` at each call site:** the alternative —
+/// scattering `#[cfg(feature = "axon-pb")]` through `discover_ability`
+/// and friends — pushes a transport-layer flag into product-layer
+/// branches, which is the exact layering inversion this module file
+/// was created to prevent (see "Dependency direction invariant"
+/// above). One shim, one place that knows the feature exists.
+pub(crate) mod federation_invoke_shim;
 pub(crate) mod local_daemon_grpc;
 /// One helper — `invoke_local_ability(name, args)` — used by every
 /// CLI subcommand to talk to the local daemon's AbilityDispatcher.
