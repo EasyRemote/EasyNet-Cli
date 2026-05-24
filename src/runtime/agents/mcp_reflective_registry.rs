@@ -47,6 +47,39 @@ use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
 use crate::runtime::ability_dispatch::{LocalAbilityRegistry, OwnerKind};
 use crate::runtime::execution::mcp_client::McpClientService;
 
+/// Stable prefix stamped into `AbilityDescriptor.source` for every
+/// reflectively-registered upstream MCP tool, before the
+/// `<server_name>:<upstream_tool>` discriminator.
+///
+/// Pinned as a `pub const` so the producer ([`format_mcp_upstream_source`])
+/// and every consumer ([`is_mcp_upstream_source`], cost-classification in
+/// `profiles::mcp`, tests asserting on the source field) share one
+/// spelling. A rename here is a compile-time event across the crate
+/// instead of a silent string drift between call sites.
+pub const MCP_UPSTREAM_SOURCE_PREFIX: &str = "mcp_upstream:";
+
+/// Build the canonical `AbilityDescriptor.source` value for a tool
+/// reflected from upstream MCP server `server_name` whose
+/// server-reported tool name is `upstream_tool`.
+///
+/// Shape: `mcp_upstream:<server_name>:<upstream_tool>`. See
+/// [`MCP_UPSTREAM_SOURCE_PREFIX`] for the prefix contract; the rest
+/// is the (server, tool) pair the reflective registry recorded at
+/// registration time.
+#[must_use]
+pub fn format_mcp_upstream_source(server_name: &str, upstream_tool: &str) -> String {
+    format!("{MCP_UPSTREAM_SOURCE_PREFIX}{server_name}:{upstream_tool}")
+}
+
+/// True iff `source` was produced by [`format_mcp_upstream_source`]
+/// — i.e. the descriptor was minted by the reflective registry.
+/// Use this from consumer paths (cost classification, audit log
+/// filters) rather than open-coding `starts_with` with a raw string.
+#[must_use]
+pub fn is_mcp_upstream_source(source: &str) -> bool {
+    source.starts_with(MCP_UPSTREAM_SOURCE_PREFIX)
+}
+
 /// One successfully reflected tool. Returned to the caller so it can
 /// log, surface in UI, or feed downstream descriptor advertisement.
 #[derive(Debug, Clone)]
@@ -171,9 +204,10 @@ pub async fn reflect_all(
             }
         };
 
+        let mut writer = StaticWriter { reg: registry };
         for tool in tools {
             match register_one_tool(
-                registry,
+                &mut writer,
                 &client.clone(),
                 &server_name,
                 owner_agent_ura,
@@ -220,9 +254,10 @@ pub struct RefreshDiff {
 /// What this does:
 ///   1. Re-run `tools/list` against the named upstream.
 ///   2. Compute the set of currently-reflected local ability names
-///      whose `AbilityDescriptor.source` starts with
-///      `mcp_upstream:<server_name>:` — that's "owned by this
-///      upstream in the previous refresh".
+///      whose `AbilityDescriptor.source` carries the prefix
+///      [`MCP_UPSTREAM_SOURCE_PREFIX`] followed by
+///      `<server_name>:` — that's "owned by this upstream in the
+///      previous refresh".
 ///   3. For each tool the upstream now advertises:
 ///      - if its local name is already registered AND was owned by
 ///        this server → mark unchanged
@@ -237,24 +272,21 @@ pub struct RefreshDiff {
 ///     reflective registry mutates `registry` only; the
 ///     federation.advertise_abilities surface refreshes on its
 ///     own cadence.
-/// Dynamic-side counterpart of [`refresh_server`]. Same logic but
-/// writes to `LocalAbilityRegistry`'s hot-reload side table (via
-/// `&self` interior mutability) rather than the static maps. Used by
-/// `RegistryRefreshSink` to react to a `notifications/tools/list_changed`
-/// push after the registry has already been frozen behind
-/// `Arc<LocalAbilityRegistry>` at daemon boot.
 ///
-/// The hot path's lookup order is static → dynamic → fallback, so
-/// the dynamic-side rewrite is invisible to any boot-registered
-/// ability: a hot-listed tool whose name happens to collide with a
-/// system ability is silently shadowed by the static entry. See
-/// `static_lookup_wins_over_dynamic_on_name_collision` for the pin.
-pub async fn refresh_server_dynamic(
+/// **Implementation note.** The body lives in
+/// [`refresh_server_inner`], parametrised over the registry surface
+/// (`StaticWriter` for boot/explicit refresh, `DynamicWriter` for
+/// runtime hot-reload via `RegistryRefreshSink`) so both flows share
+/// exactly one implementation. The trailing `flavour` arg is folded
+/// into the error messages (`refresh` vs `dynamic refresh`) —
+/// operators reading stderr need to know which path emitted the line.
+async fn refresh_server_inner<W: RegistryWriter>(
+    writer: &mut W,
     client: &McpClientService,
-    registry: &LocalAbilityRegistry,
     owner_agent_ura: &str,
     server_name: &str,
     previously_reflected: &[String],
+    flavour: &'static str,
 ) -> RefreshDiff {
     let mut diff = RefreshDiff::default();
 
@@ -264,7 +296,7 @@ pub async fn refresh_server_dynamic(
             diff.failed.push(ReflectFailure {
                 server: server_name.to_string(),
                 tool: None,
-                reason: format!("tools/list failed during dynamic refresh: {e}"),
+                reason: format!("tools/list failed during {flavour}: {e}"),
             });
             return diff;
         }
@@ -275,7 +307,7 @@ pub async fn refresh_server_dynamic(
             diff.failed.push(ReflectFailure {
                 server: server_name.to_string(),
                 tool: None,
-                reason: "server vanished during dynamic refresh".into(),
+                reason: format!("server vanished during {flavour}"),
             });
             return diff;
         }
@@ -287,8 +319,7 @@ pub async fn refresh_server_dynamic(
                 server: server_name.to_string(),
                 tool: None,
                 reason: format!(
-                    "tools/list response missing `tools` array on dynamic refresh \
-                     (got {listing})"
+                    "tools/list response missing `tools` array on {flavour} (got {listing})"
                 ),
             });
             return diff;
@@ -305,42 +336,35 @@ pub async fn refresh_server_dynamic(
         new_local_names.insert(spec.apply_local_name(upstream_name));
     }
 
+    // Register-or-mark-unchanged each new tool.
     for tool in &tools {
         let local_name = match tool.get("name").and_then(Value::as_str) {
             Some(n) if !n.is_empty() => spec.apply_local_name(n),
             _ => continue,
         };
         // Skip names already known to the registry (static OR
-        // dynamic). Static-side hits are silent shadows; dynamic-
-        // side hits mean we've already reflected this tool, no diff.
-        if registry.has_rpc(&local_name)
-            || registry.has_stream(&local_name)
-            || registry.has_bidi(&local_name)
-        {
+        // dynamic, per writer.has). Static-side hits are silent
+        // shadows; dynamic-side hits mean we've already reflected
+        // this tool — no diff.
+        if writer.has(&local_name) {
             diff.unchanged.push(local_name);
             continue;
         }
-        match register_one_tool_dynamic(
-            registry,
-            client,
-            server_name,
-            owner_agent_ura,
-            &spec,
-            tool,
-        ) {
+        match register_one_tool(writer, client, server_name, owner_agent_ura, &spec, tool) {
             Ok(rec) => diff.added.push(rec),
             Err(fail) => diff.failed.push(fail),
         }
     }
 
-    // Retire previously-reflected names that vanished from the
-    // upstream. We only ever wrote them through the dynamic side, so
-    // `hot_unregister` is the canonical removal surface — it cannot
-    // touch the static map by design (see the
+    // Retire previously-reflected names that the upstream no longer
+    // advertises. The trait dispatch lands in the right surface:
+    // `StaticWriter::unregister` clears the boot maps;
+    // `DynamicWriter::unregister` clears only the hot-reload side
+    // table (see the
     // `hot_unregister_removes_dynamic_entry_without_touching_static`
-    // pin).
+    // pin in `ability_dispatch`).
     for prev in previously_reflected {
-        if !new_local_names.contains(prev) && registry.hot_unregister(prev) {
+        if !new_local_names.contains(prev) && writer.unregister(prev) {
             diff.removed.push(prev.clone());
         }
     }
@@ -348,6 +372,37 @@ pub async fn refresh_server_dynamic(
     diff
 }
 
+/// Dynamic-side refresh facade. Reacts to a runtime
+/// `notifications/tools/list_changed` push after the registry has
+/// been frozen behind `Arc<LocalAbilityRegistry>` at daemon boot.
+///
+/// The hot path's lookup order is static → dynamic → fallback, so
+/// a dynamic-side rewrite is invisible to any boot-registered
+/// ability: a hot-listed tool whose name happens to collide with a
+/// system ability is silently shadowed by the static entry. See
+/// `static_lookup_wins_over_dynamic_on_name_collision` for the pin.
+pub async fn refresh_server_dynamic(
+    client: &McpClientService,
+    registry: &LocalAbilityRegistry,
+    owner_agent_ura: &str,
+    server_name: &str,
+    previously_reflected: &[String],
+) -> RefreshDiff {
+    let mut writer = DynamicWriter { reg: registry };
+    refresh_server_inner(
+        &mut writer,
+        client,
+        owner_agent_ura,
+        server_name,
+        previously_reflected,
+        "dynamic refresh",
+    )
+    .await
+}
+
+/// Static-side refresh facade. The boot path's explicit
+/// reconcile-one-server entry point; used by callers that hold
+/// `&mut LocalAbilityRegistry` (the boot reflective sweep, tests).
 pub async fn refresh_server(
     client: &McpClientService,
     registry: &mut LocalAbilityRegistry,
@@ -355,90 +410,16 @@ pub async fn refresh_server(
     server_name: &str,
     previously_reflected: &[String],
 ) -> RefreshDiff {
-    let mut diff = RefreshDiff::default();
-
-    let listing = match client.rpc(server_name, "tools/list", json!({})).await {
-        Ok(v) => v,
-        Err(e) => {
-            diff.failed.push(ReflectFailure {
-                server: server_name.to_string(),
-                tool: None,
-                reason: format!("tools/list failed during refresh: {e}"),
-            });
-            return diff;
-        }
-    };
-    let spec = match client.spec(server_name).await {
-        Some(s) => s,
-        None => {
-            diff.failed.push(ReflectFailure {
-                server: server_name.to_string(),
-                tool: None,
-                reason: "server vanished during refresh".into(),
-            });
-            return diff;
-        }
-    };
-    let tools = match listing.get("tools").and_then(Value::as_array) {
-        Some(arr) => arr.clone(),
-        None => {
-            diff.failed.push(ReflectFailure {
-                server: server_name.to_string(),
-                tool: None,
-                reason: format!(
-                    "tools/list response missing `tools` array on refresh (got {listing})"
-                ),
-            });
-            return diff;
-        }
-    };
-
-    // Compute the set of new local names so we know which old ones
-    // to retire below.
-    let mut new_local_names = std::collections::HashSet::new();
-    for tool in &tools {
-        let upstream_name = tool.get("name").and_then(Value::as_str).unwrap_or("");
-        if upstream_name.is_empty() {
-            continue;
-        }
-        new_local_names.insert(spec.apply_local_name(upstream_name));
-    }
-
-    // Register-or-mark-unchanged each new tool.
-    for tool in &tools {
-        let local_name = match tool.get("name").and_then(Value::as_str) {
-            Some(n) if !n.is_empty() => spec.apply_local_name(n),
-            _ => continue,
-        };
-        if registry.has_rpc(&local_name)
-            || registry.has_stream(&local_name)
-            || registry.has_bidi(&local_name)
-        {
-            diff.unchanged.push(local_name);
-            continue;
-        }
-        match register_one_tool(
-            registry,
-            &client.clone(),
-            server_name,
-            owner_agent_ura,
-            &spec,
-            tool,
-        ) {
-            Ok(rec) => diff.added.push(rec),
-            Err(fail) => diff.failed.push(fail),
-        }
-    }
-
-    // Retire previously-reflected names that the upstream no longer
-    // advertises.
-    for prev in previously_reflected {
-        if !new_local_names.contains(prev) && registry.unregister(prev) {
-            diff.removed.push(prev.clone());
-        }
-    }
-
-    diff
+    let mut writer = StaticWriter { reg: registry };
+    refresh_server_inner(
+        &mut writer,
+        client,
+        owner_agent_ura,
+        server_name,
+        previously_reflected,
+        "refresh",
+    )
+    .await
 }
 
 /// Env var that overrides the per-server `tools/list` timeout used
@@ -464,145 +445,151 @@ fn mcp_tools_list_timeout() -> Duration {
     Duration::from_secs(secs)
 }
 
-/// Register exactly one upstream tool as a local ability.
+/// Abstract over the two registry-side surfaces (static maps owned
+/// by `&mut LocalAbilityRegistry`, hot-reload side table owned via
+/// `&LocalAbilityRegistry` interior mutability) so the two reflection
+/// flows — boot-time `reflect_all`/`refresh_server` and runtime
+/// `RegistryRefreshSink`-driven `refresh_server_dynamic` — share
+/// one body.
 ///
-/// Returns the reflected record on success, or a `ReflectFailure`
-/// when the upstream tool descriptor is malformed OR the operator's
-/// config maps it to a name already taken in the registry.
-/// Dynamic-side variant of [`register_one_tool`]. Same machinery
-/// (handler factory, descriptor build, manifest creation) but the
-/// final write lands in the hot-reload side table via
-/// `hot_register_stream_with_spec` instead of the boot-only
-/// `register_stream_with_spec`. Factored alongside the static
-/// version so the two stay in lockstep — any future enhancement to
-/// the per-tool handler shape (e.g. additional metadata, a new
-/// progress frame variant) must land on both.
-fn register_one_tool_dynamic(
-    registry: &LocalAbilityRegistry,
-    client: &McpClientService,
-    server_name: &str,
-    owner_agent_ura: &str,
-    spec: &crate::runtime::execution::mcp_client::McpServerSpec,
-    tool: &Value,
-) -> Result<ReflectedAbility, ReflectFailure> {
-    let upstream_tool = tool
-        .get("name")
-        .and_then(Value::as_str)
-        .ok_or_else(|| ReflectFailure {
-            server: server_name.to_string(),
-            tool: None,
-            reason: format!("tool entry missing `name` field: {tool}"),
-        })?
-        .to_string();
-    let description = tool
-        .get("description")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let input_schema = tool
-        .get("inputSchema")
-        .cloned()
-        .unwrap_or_else(|| json!({"type": "object"}));
-    let local_name = spec.apply_local_name(&upstream_tool);
-    let manifest_verb = local_name
-        .rsplit('.')
-        .next()
-        .unwrap_or(&local_name)
-        .to_string();
+/// Why a trait rather than two parallel functions
+/// ----------------------------------------------
+/// Before this trait existed, [`register_one_tool`] /
+/// `register_one_tool_dynamic` and [`refresh_server`] /
+/// `refresh_server_dynamic` were near-verbatim duplicates differing
+/// only in (a) the registry reference type and (b) which two registry
+/// methods they called. Every per-tool enhancement (cost metadata,
+/// progress-frame shape, descriptor tagging) had to land on both
+/// copies; one missed mirror silently broke runtime hot-reload while
+/// boot kept working. This trait makes the bifurcation explicit and
+/// the lockstep automatic.
+///
+/// Trait implementors must call into the registry through whichever
+/// surface they own — see [`StaticWriter`] and [`DynamicWriter`].
+trait RegistryWriter {
+    /// True if any of the three handler maps (rpc / stream / bidi)
+    /// hold this name. The reflective registry refuses to overwrite
+    /// — operators have to set `name_prefix` / `aliases` instead.
+    fn has(&self, name: &str) -> bool;
 
-    if registry.has_rpc(&local_name)
-        || registry.has_stream(&local_name)
-        || registry.has_bidi(&local_name)
-    {
-        return Err(ReflectFailure {
-            server: server_name.to_string(),
-            tool: Some(upstream_tool.clone()),
-            reason: format!(
-                "ability `{local_name}` already registered (static or dynamic); \
-                 set `name_prefix` or an entry in `aliases` for \
-                 server `{server_name}` in mcp_clients.json"
-            ),
-        });
-    }
-
-    let desc_text = if description.is_empty() {
-        upstream_tool.clone()
-    } else {
-        description.clone()
-    };
-    let manifest = AbilityManifest::new(manifest_verb, desc_text.clone(), input_schema.clone())
-        .map_err(|e| ReflectFailure {
-            server: server_name.to_string(),
-            tool: Some(upstream_tool.clone()),
-            reason: format!("manifest build failed: {e}"),
-        })?;
-
-    let provenance = format!("mcp_upstream:{server_name}:{upstream_tool}");
-    let client_for_handler = client.clone();
-    let server_for_handler = server_name.to_string();
-    let upstream_for_handler = upstream_tool.clone();
-    let local_name_for_handler = local_name.clone();
-    let handler: crate::runtime::ability_dispatch::LocalStreamHandler =
-        Arc::new(move |args: Value| -> anyhow::Result<crate::runtime::ability_dispatch::StreamSource> {
-            let (tx, rx) = tokio::sync::broadcast::channel::<Value>(64);
-            let token = serde_json::json!(format!(
-                "{}:{}:{}",
-                server_for_handler,
-                upstream_for_handler,
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0)
-            ));
-            tokio::runtime::Handle::try_current().map_err(|_| {
-                anyhow::anyhow!(
-                    "mcp reflective stream handler `{ability}` invoked outside a tokio runtime; \
-                     callers must drive this through the daemon's async InvokeStream path \
-                     or a `#[tokio::test]`-managed runtime",
-                    ability = local_name_for_handler,
-                )
-            })?;
-            tokio::spawn(stream_one_upstream_call(
-                client_for_handler.clone(),
-                server_for_handler.clone(),
-                upstream_for_handler.clone(),
-                args,
-                token,
-                tx,
-            ));
-            Ok(crate::runtime::ability_dispatch::StreamSource::Live(rx))
-        });
-
-    registry.hot_register_stream_with_spec(
-        local_name.clone(),
-        OwnerKind::Device,
-        manifest,
-        handler,
+    /// Register a stream-shaped handler under `name`. The
+    /// implementor decides whether this lands in the static maps
+    /// (boot path) or the hot-reload side table (runtime path).
+    fn register_stream(
+        &mut self,
+        name: String,
+        owner: OwnerKind,
+        manifest: AbilityManifest,
+        handler: crate::runtime::ability_dispatch::LocalStreamHandler,
     );
 
-    let descriptor =
-        AbilityDescriptor::new(local_name.clone(), owner_agent_ura, Visibility::Scoped)
-            .map_err(|e| ReflectFailure {
-                server: server_name.to_string(),
-                tool: Some(upstream_tool.clone()),
-                reason: format!("descriptor build failed: {e}"),
-            })?
-            .with_input_schema(input_schema)
-            .with_description(desc_text)
-            .with_source(provenance)
-            .with_metadata_entry("mcp_server", server_name.to_string())
-            .with_metadata_entry("mcp_tool", upstream_tool.clone());
+    /// Remove every trace of `name`. Returns `true` when something
+    /// was actually removed. Static writers touch the boot maps;
+    /// dynamic writers touch only the hot-reload side table.
+    fn unregister(&mut self, name: &str) -> bool;
 
-    Ok(ReflectedAbility {
-        ability_name: local_name,
-        descriptor,
-        server: server_name.to_string(),
-        upstream_tool,
-    })
+    /// Discriminator shown to operators in the collision error
+    /// message so they can tell whether the prior registration came
+    /// from boot (static) or from a hot-reload (dynamic). `None`
+    /// means "no qualifier needed" (the static writer is the only
+    /// possible prior); `Some(s)` is rendered as ` (s)` by
+    /// [`format_collision_hint`]. Kept on the trait so neither
+    /// writer leaks its kind through ad-hoc parameters.
+    const COLLISION_KIND_HINT: Option<&'static str>;
 }
 
-fn register_one_tool(
-    registry: &mut LocalAbilityRegistry,
+/// Render [`RegistryWriter::COLLISION_KIND_HINT`] into the
+/// parenthesised qualifier slot of the collision error message,
+/// or the empty string when the hint is `None`. Centralised so the
+/// "leading space + parens" boilerplate is not duplicated at every
+/// call site and a future hint variant (e.g. a third writer) cannot
+/// drift out of shape.
+fn format_collision_hint(hint: Option<&'static str>) -> String {
+    match hint {
+        Some(s) => format!(" ({s})"),
+        None => String::new(),
+    }
+}
+
+/// Static side: `&mut LocalAbilityRegistry`. Used by boot-time
+/// `reflect_all` and the original `refresh_server` facade.
+struct StaticWriter<'a> {
+    reg: &'a mut LocalAbilityRegistry,
+}
+
+impl RegistryWriter for StaticWriter<'_> {
+    fn has(&self, name: &str) -> bool {
+        self.reg.has_rpc(name) || self.reg.has_stream(name) || self.reg.has_bidi(name)
+    }
+
+    fn register_stream(
+        &mut self,
+        name: String,
+        owner: OwnerKind,
+        manifest: AbilityManifest,
+        handler: crate::runtime::ability_dispatch::LocalStreamHandler,
+    ) {
+        self.reg
+            .register_stream_with_spec(name, owner, manifest, handler);
+    }
+
+    fn unregister(&mut self, name: &str) -> bool {
+        self.reg.unregister(name)
+    }
+
+    const COLLISION_KIND_HINT: Option<&'static str> = None;
+}
+
+/// Dynamic side: `&LocalAbilityRegistry` (interior mutability via
+/// `hot_*` methods). Used by `RegistryRefreshSink` to react to
+/// upstream `notifications/tools/list_changed` after the registry
+/// has been frozen behind `Arc<LocalAbilityRegistry>` at daemon
+/// boot.
+///
+/// The implementor takes `&self` on the underlying registry —
+/// `&mut self` on the writer is purely to let the trait stay
+/// shared-shape. The `LocalAbilityRegistry` itself is borrowed
+/// shared, so this writer can live alongside other readers of the
+/// registry without violating borrow rules.
+struct DynamicWriter<'a> {
+    reg: &'a LocalAbilityRegistry,
+}
+
+impl RegistryWriter for DynamicWriter<'_> {
+    fn has(&self, name: &str) -> bool {
+        self.reg.has_rpc(name) || self.reg.has_stream(name) || self.reg.has_bidi(name)
+    }
+
+    fn register_stream(
+        &mut self,
+        name: String,
+        owner: OwnerKind,
+        manifest: AbilityManifest,
+        handler: crate::runtime::ability_dispatch::LocalStreamHandler,
+    ) {
+        self.reg
+            .hot_register_stream_with_spec(name, owner, manifest, handler);
+    }
+
+    fn unregister(&mut self, name: &str) -> bool {
+        self.reg.hot_unregister(name)
+    }
+
+    const COLLISION_KIND_HINT: Option<&'static str> = Some("static or dynamic");
+}
+
+/// Register exactly one upstream tool as a local ability through
+/// the abstract writer. Returns the reflected record on success, or
+/// a `ReflectFailure` when the upstream tool descriptor is malformed
+/// OR the operator's config maps it to a name already taken in the
+/// registry.
+///
+/// This function holds the per-tool handler shape and the descriptor
+/// projection contract; any enhancement (cost metadata, progress
+/// frame variant, descriptor tagging) lands here exactly once and
+/// reaches both registry sides through the trait.
+fn register_one_tool<W: RegistryWriter>(
+    writer: &mut W,
     client: &McpClientService,
     server_name: &str,
     owner_agent_ura: &str,
@@ -618,60 +605,35 @@ fn register_one_tool(
             reason: format!("tool entry missing `name` field: {tool}"),
         })?
         .to_string();
-
     let description = tool
         .get("description")
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-
     let input_schema = tool
         .get("inputSchema")
         .cloned()
         .unwrap_or_else(|| json!({"type": "object"}));
-
     let local_name = spec.apply_local_name(&upstream_tool);
-
-    // AbilityManifest's `name` field must NOT contain `.` — it
-    // is the verb half of `<agent>.<verb>`, and Cli treats `.`
-    // as the agent/verb separator. The wire-level full name
-    // (which is what the registry keys on and what the URA tail
-    // carries) IS `local_name` with whatever dots `name_prefix`
-    // introduced. So the manifest gets the trailing segment only,
-    // mirroring how every other agent-owned ability is built
-    // (see `discover_ability.rs:98` — qualified = "<agent>.<verb>",
-    // manifest carries just "<verb>").
     let manifest_verb = local_name
         .rsplit('.')
         .next()
         .unwrap_or(&local_name)
         .to_string();
 
-    // No-overwrite policy: the registry intentionally fails
-    // silently on duplicate `insert()`s into its handler maps
-    // (BTreeMap::insert returns the old value); for reflective
-    // registration we want a hard collision error so the operator
-    // SEES the conflict and configures a `name_prefix` or
-    // `aliases` entry. Check ahead of register.
-    if registry.has_rpc(&local_name)
-        || registry.has_stream(&local_name)
-        || registry.has_bidi(&local_name)
-    {
+    if writer.has(&local_name) {
         return Err(ReflectFailure {
             server: server_name.to_string(),
             tool: Some(upstream_tool.clone()),
             reason: format!(
-                "ability `{local_name}` already registered; \
+                "ability `{local_name}` already registered{kind}; \
                  set `name_prefix` or an entry in `aliases` for \
-                 server `{server_name}` in mcp_clients.json"
+                 server `{server_name}` in mcp_clients.json",
+                kind = format_collision_hint(W::COLLISION_KIND_HINT),
             ),
         });
     }
 
-    // Build the manifest the daemon's descriptor synth and bridge
-    // catalog projection both rely on. Description falls back to
-    // the tool name when the upstream omitted one — same fallback
-    // policy as `profiles::mcp::tool_spec_from_descriptor`.
     let desc_text = if description.is_empty() {
         upstream_tool.clone()
     } else {
@@ -684,39 +646,10 @@ fn register_one_tool(
             reason: format!("manifest build failed: {e}"),
         })?;
 
-    // Owner is the MCP profile agent. Per the URA discipline, the
-    // ability URA derived downstream
-    // (easynet:///r/<realm>/ability/<owner>.<local_name>) has NO
-    // implementation-source label; provenance lives on
-    // descriptor.source below.
-    let provenance = format!("mcp_upstream:{server_name}:{upstream_tool}");
-
-    // The handler closes over the client + server + upstream name.
-    // The reflected ability is registered as a STREAM ability so
-    // upstream MCP `notifications/progress` frames flow through
-    // Axon's `InvokeStream` to the caller in real time. Callers
-    // that use the unary `Invoke` RPC still get the final
-    // `{content, isError}` payload — Axon's stream→unary
-    // flattening guarantees that backward compatibility.
-    //
-    // Frame shape inside the stream:
-    //   * progress frames: { type: "progress", progress: f64,
-    //                        total: f64?, message: string?,
-    //                        token: <progressToken used> }
-    //   * terminal frame : { type: "response", result:
-    //                        <MCP tools/call result verbatim> }
-    //   * terminal error : { type: "error", message: string }
-    //
-    // The caller (an agent's chat / EAL / EasyNet frontend) sees
-    // both kinds and can render mid-call progress without waiting
-    // for the final result.
+    let provenance = format_mcp_upstream_source(server_name, &upstream_tool);
     let client_for_handler = client.clone();
     let server_for_handler = server_name.to_string();
     let upstream_for_handler = upstream_tool.clone();
-    // The handler outlives this function via the registry, so it
-    // owns its own copy of the ability name for diagnostics. We
-    // cannot borrow `local_name` because the registry takes
-    // ownership of it on `register_stream_with_spec` below.
     let local_name_for_handler = local_name.clone();
     let handler: crate::runtime::ability_dispatch::LocalStreamHandler =
         Arc::new(move |args: Value| -> anyhow::Result<crate::runtime::ability_dispatch::StreamSource> {
@@ -726,18 +659,13 @@ fn register_one_tool(
             //
             // Bound 64: enough to absorb a burst of progress frames
             // from a chatty upstream while the caller drains them.
-            // If the caller is slow and we overflow, broadcast::Receiver
-            // surfaces a Lagged error — Axon's stream forwarder
-            // reports that as a stream error rather than dropping
-            // silently. Same buffer size pattern as the daemon's
-            // discuss/loop streams.
+            // Lagged receivers surface as a typed stream error
+            // rather than a silent drop.
             let (tx, rx) = tokio::sync::broadcast::channel::<Value>(64);
 
             // Auto-allocated progress token. The MCP spec requires
             // the token be unique across active requests; a UUID is
-            // overkill, so we use a server+tool prefix + a
-            // monotonic counter pinned to this handler invocation.
-            // Token only matters for routing inside this one call.
+            // overkill, so we use server+tool+monotonic-ns.
             let token = serde_json::json!(format!(
                 "{}:{}:{}",
                 server_for_handler,
@@ -751,12 +679,11 @@ fn register_one_tool(
             // Reflective stream handlers are only ever invoked from
             // the daemon's tonic-driven `InvokeStream` path or from
             // an integration test that already runs inside
-            // `#[tokio::test]`. Both cases provide an ambient
-            // runtime, so a missing `Handle::current()` indicates
-            // a caller bug (synchronous unit test that forgot to
-            // start a runtime) — fail fast rather than ship a
-            // fragile detached-thread fallback whose lifecycle
-            // depends on undocumented runtime behaviour.
+            // `#[tokio::test]`. Both provide an ambient runtime, so
+            // missing `Handle::current()` indicates caller bug —
+            // fail fast rather than ship a fragile detached-thread
+            // fallback whose lifecycle depends on undocumented
+            // runtime behaviour.
             tokio::runtime::Handle::try_current().map_err(|_| {
                 anyhow::anyhow!(
                     "mcp reflective stream handler `{ability}` invoked outside a tokio runtime; \
@@ -775,13 +702,10 @@ fn register_one_tool(
                 tx,
             ));
 
-            // Hand the receiver back. Axon's stream forwarder
-            // pulls frames off `rx` and ships them to the caller as
-            // InvokeStreamChunk.payload.
             Ok(crate::runtime::ability_dispatch::StreamSource::Live(rx))
         });
 
-    registry.register_stream_with_spec(local_name.clone(), OwnerKind::Device, manifest, handler);
+    writer.register_stream(local_name.clone(), OwnerKind::Device, manifest, handler);
 
     // Build the descriptor that downstream `meta.list_abilities`
     // and `federation.advertise_abilities` will surface. CRITICAL:
@@ -797,7 +721,7 @@ fn register_one_tool(
             })?
             .with_input_schema(input_schema)
             .with_description(desc_text)
-            .with_source(provenance.clone())
+            .with_source(provenance)
             .with_metadata_entry("mcp_server", server_name.to_string())
             .with_metadata_entry("mcp_tool", upstream_tool.clone());
 
@@ -1080,11 +1004,20 @@ while True:
         assert!(names.contains(&"echo_two"));
 
         // Provenance ends up on source, NEVER in the URA-shaped
-        // owner field.
+        // owner field. The exact prefix is pinned by
+        // `MCP_UPSTREAM_SOURCE_PREFIX`; assert through the helper so
+        // a future rename of the constant lands in one place.
         for rec in &result.registered {
             assert!(
-                rec.descriptor.source.starts_with("mcp_upstream:echo:"),
-                "source must carry provenance, got {:?}",
+                is_mcp_upstream_source(&rec.descriptor.source),
+                "source must carry the mcp_upstream prefix, got {:?}",
+                rec.descriptor.source
+            );
+            assert!(
+                rec.descriptor.source.starts_with(&format!(
+                    "{MCP_UPSTREAM_SOURCE_PREFIX}echo:"
+                )),
+                "source must include the server discriminator, got {:?}",
                 rec.descriptor.source
             );
             assert_eq!(rec.descriptor.owner_agent_ura, owner);

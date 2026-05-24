@@ -185,9 +185,10 @@ fn parsed_owner_label(owner_agent_ura: &str) -> Option<String> {
 /// **Honesty rule (load-bearing).** This used to return `"free"` for
 /// any descriptor that wasn't an agent-chat surface. That is a lie
 /// for reflectively-registered upstream MCP tools (whose descriptors
-/// carry `source = "mcp_upstream:<server>:<tool>"` but no
-/// `exec_kind`) — operators saw billed upstreams labelled
-/// `cost: free (free/local)`. Per the plan §"Cost is static catalog
+/// carry the prefix
+/// [`crate::runtime::agents::mcp_reflective_registry::MCP_UPSTREAM_SOURCE_PREFIX`]
+/// followed by `<server>:<tool>` but no `exec_kind`) — operators saw
+/// billed upstreams labelled `cost: free (free/local)`. Per the plan §"Cost is static catalog
 /// metadata" rule, advisory cost lives in the ability manifest, not
 /// in heuristics, and we must NOT default to `free` for catalog
 /// rows we have not seen. We therefore return `"unknown"` for every
