@@ -124,6 +124,11 @@ pub(crate) mod net;
 pub mod operator_log;
 pub(crate) mod node;
 pub(crate) mod output;
+/// `ProcessSingleton<T>` — typed "set at boot, read on the hot path"
+/// handle. Replaces ad-hoc `OnceLock` / `RwLock<Option<_>>` statics
+/// scattered across the agents layer; see `process_singleton.rs` for
+/// the mode-choice rationale.
+pub(crate) mod process_singleton;
 #[cfg(feature = "axon-pb")]
 pub(crate) mod remote_device;
 /// AXIOM Tier 2.5 bash safety subsystem. Self-contained set

@@ -22,37 +22,37 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::{LocalAbilityRegistry, LocalRpcHandler};
 use crate::runtime::agents::api_key_ability;
+use crate::support::process_singleton::ProcessSingleton;
 
-/// Process-wide handle to the live ability registry. The outer
-/// `RwLock` is what makes this last-writer-wins: in production the
-/// daemon's boot path sets it exactly once, but the test binary
-/// shares the static across thousands of tests with overlapping
-/// `build_registry()` invocations, and a `OnceLock` here would
-/// silently let whichever test ran first pin the handle for every
-/// other test in the same process. The inner `Arc<OnceLock<...>>`
-/// is the seam `build_registry_with_services` uses to backfill the
-/// registry after the LocalAbilityRegistry assembly completes.
+/// Process-wide handle to the live ability registry. The inner
+/// `Arc<OnceLock<Arc<LocalAbilityRegistry>>>` is the seam
+/// `build_registry_with_services` uses to backfill the registry
+/// after the `LocalAbilityRegistry` assembly completes.
 ///
-/// **Production invariant**: write once at boot, read many times
-/// thereafter. Multiple writes are allowed (so tests can re-bind
-/// the handle), but observing a stale read is not a contract — the
-/// dispatch path always re-acquires through `current_handle()`.
-static DISPATCH_HANDLE: RwLock<Option<Arc<OnceLock<Arc<LocalAbilityRegistry>>>>> =
-    RwLock::new(None);
+/// `ProcessSingleton::last_writer_wins()` because the in-process
+/// test binary shares this static across thousands of tests with
+/// overlapping `build_registry()` invocations; a `Once`-mode handle
+/// would silently let the first test pin the registry for every
+/// other test. Production sets it exactly once at boot. See
+/// `support::process_singleton` for the mode-choice rationale.
+static DISPATCH_HANDLE: ProcessSingleton<OnceLock<Arc<LocalAbilityRegistry>>> =
+    ProcessSingleton::last_writer_wins();
+
 /// Process-wide identity for OpenAI-compat URA projection. Same
 /// rationale as `DISPATCH_HANDLE`: production sets once at boot,
 /// but the in-process test binary needs last-writer-wins so a
 /// `set_identity({user: Some("alice"), …})` from
 /// `ensure_openai_http_registry` can override a default written
 /// earlier by `build_registry()` in another test.
-static OPENAI_IDENTITY: RwLock<Option<OpenAICompatIdentity>> = RwLock::new(None);
+static OPENAI_IDENTITY: ProcessSingleton<OpenAICompatIdentity> =
+    ProcessSingleton::last_writer_wins();
 
 #[derive(Debug, Clone)]
 struct OpenAICompatIdentity {
@@ -61,31 +61,24 @@ struct OpenAICompatIdentity {
 }
 
 pub(crate) fn set_dispatch_handle(handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>>) {
-    *DISPATCH_HANDLE.write().expect("DISPATCH_HANDLE poisoned") = Some(handle);
+    DISPATCH_HANDLE.set(handle);
 }
 
 fn current_dispatch_handle() -> Option<Arc<OnceLock<Arc<LocalAbilityRegistry>>>> {
-    DISPATCH_HANDLE
-        .read()
-        .expect("DISPATCH_HANDLE poisoned")
-        .as_ref()
-        .cloned()
+    DISPATCH_HANDLE.get()
 }
 
 pub(crate) fn set_identity(identity: crate::runtime::agents::PagesIdentity) {
-    *OPENAI_IDENTITY.write().expect("OPENAI_IDENTITY poisoned") = Some(OpenAICompatIdentity {
+    OPENAI_IDENTITY.set(Arc::new(OpenAICompatIdentity {
         user: identity.user,
         realm: identity
             .realm
             .unwrap_or_else(|| crate::ura::REALM_EASYNET.to_string()),
-    });
+    }));
 }
 
 fn current_identity() -> Option<OpenAICompatIdentity> {
-    OPENAI_IDENTITY
-        .read()
-        .expect("OPENAI_IDENTITY poisoned")
-        .clone()
+    OPENAI_IDENTITY.get().map(|arc| (*arc).clone())
 }
 
 fn now_secs() -> u64 {
@@ -202,9 +195,9 @@ fn resolve_model_to_ability(model: &str) -> anyhow::Result<String> {
 ///
 /// args (one of two shapes accepted):
 ///   1. Direct OpenAI body:
-///        { "model": "...", "messages": [...], "temperature": ..., ... }
+///      `{ "model": "...", "messages": [...], "temperature": ..., ... }`
 ///   2. Wrapped (when called from the HTTP listener):
-///        { "request": <openai body>, "auth_token": "<bearer>" }
+///      `{ "request": <openai body>, "auth_token": "<bearer>" }`
 ///
 /// returns OpenAI ChatCompletion shape (non-streaming):
 ///   {

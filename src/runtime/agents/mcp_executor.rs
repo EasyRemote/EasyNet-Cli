@@ -40,11 +40,13 @@
 // handshakes.
 //
 // The executor therefore reads the `McpClientService` from a
-// process-wide `OnceLock` that `build_registry_with_services`
-// populates at boot via `set_process_client(...)`. The same `Arc`
-// instance backs both `device.mcp.client.*`, the reflective MCP
-// registry, and `[exec] kind="mcp"` ability dispatch — one config
-// load, one connection pool, no divergence between surfaces.
+// process-wide [`crate::support::process_singleton::ProcessSingleton`]
+// (`Mode::Once` — production write-once) that
+// `build_registry_with_services` populates at boot via
+// `set_process_client(...)`. The same `Arc` instance backs both
+// `device.mcp.client.*`, the reflective MCP registry, and
+// `[exec] kind="mcp"` ability dispatch — one config load, one
+// connection pool, no divergence between surfaces.
 //
 // Why a process-singleton instead of threading a context arg
 // through every handler: the registry's `LocalRpcHandler` signature
@@ -59,43 +61,36 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Instant;
 
 use serde_json::{json, Value};
 
 use crate::core::ability_spec::McpExec;
 use crate::runtime::execution::mcp_client::McpClientService;
+use crate::support::process_singleton::ProcessSingleton;
 
 /// Process-wide `McpClientService` handle. Populated at daemon boot
 /// by `build_registry_with_services` via `set_process_client(...)`
 /// and read by every `run_mcp_exec` call. See module docs for why
 /// this is a singleton rather than a per-call argument.
-static PROCESS_CLIENT: OnceLock<Arc<McpClientService>> = OnceLock::new();
+///
+/// `ProcessSingleton::once()` — production write-once. The dispatch
+/// hot path's `get()` guarantees that nothing can swap the singleton
+/// out from under an in-flight `run_mcp_exec` call. See
+/// `support::process_singleton` for the mode-choice rationale.
+static PROCESS_CLIENT: ProcessSingleton<McpClientService> = ProcessSingleton::once();
 
 /// Register the process-wide `McpClientService` handle. Idempotent
 /// against concurrent racers: the first writer wins, later writers'
 /// values are silently dropped. The daemon boot path is single-
-/// writer in practice, so the race window is theoretical; we still
-/// log a one-time warning if a later boot would have replaced an
-/// earlier handle (an integration-test bug, not a production
-/// scenario).
+/// writer in practice.
 ///
 /// Returns the `Arc<McpClientService>` that will be observed by
 /// future `run_mcp_exec` calls — either the one just installed or
 /// the one a concurrent caller installed first.
 pub fn set_process_client(svc: Arc<McpClientService>) -> Arc<McpClientService> {
-    match PROCESS_CLIENT.set(svc.clone()) {
-        Ok(()) => svc,
-        Err(_) => {
-            // Already populated. Return the existing handle so the
-            // caller observes the canonical instance.
-            PROCESS_CLIENT
-                .get()
-                .expect("OnceLock::set returned Err only when populated")
-                .clone()
-        }
-    }
+    PROCESS_CLIENT.set(svc)
 }
 
 /// Test-only seam: install a `McpClientService` for the unit tests
@@ -107,7 +102,7 @@ pub fn set_process_client(svc: Arc<McpClientService>) -> Arc<McpClientService> {
 /// gate on test-cfg.
 #[cfg(test)]
 fn install_process_client_for_tests(svc: Arc<McpClientService>) {
-    let _ = PROCESS_CLIENT.set(svc);
+    PROCESS_CLIENT.set(svc);
 }
 
 /// Stable tag for the `fulfilled_by` field of the executor envelope.
@@ -129,7 +124,7 @@ pub fn run_mcp_exec(spec: &McpExec, args: &Value) -> anyhow::Result<Value> {
     let server = spec.server.clone();
     let tool = spec.tool.clone();
 
-    let client = PROCESS_CLIENT.get().cloned().ok_or_else(|| {
+    let client = PROCESS_CLIENT.get().ok_or_else(|| {
         anyhow::anyhow!(
             "mcp executor: process-wide McpClientService has not been initialised; \
              daemon boot must call mcp_executor::set_process_client before any \
