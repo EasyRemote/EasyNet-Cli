@@ -153,23 +153,20 @@ pub fn presence_uri_to_directory_entry(agent_ura: &str, is_active: bool) -> Dire
 pub fn presence_event_to_directory_event(
     event: &crate::services::presence_registry::PresenceEvent,
 ) -> DirectoryEvent {
-    use crate::services::presence_registry::{OfflineReason, PresenceEvent};
+    use crate::services::presence_registry::PresenceEvent;
     match event {
         PresenceEvent::Online { ura } => DirectoryEvent::Upsert {
             entry: presence_uri_to_directory_entry(ura, true),
         },
-        PresenceEvent::Offline { ura, reason } => {
-            let reason_str = match reason {
-                OfflineReason::StreamClosed => "stream_closed",
-                OfflineReason::StreamReset => "stream_reset",
-                OfflineReason::SendFailed => "send_failed",
-                OfflineReason::AdminRevoked => "admin_revoked",
-            };
-            DirectoryEvent::Remove {
-                agent_ura: ura.clone(),
-                reason: reason_str.to_string(),
-            }
-        }
+        PresenceEvent::Offline { ura, reason } => DirectoryEvent::Remove {
+            agent_ura: ura.clone(),
+            // `OfflineReason::as_wire_str` is the single source of
+            // truth for the snake_case label; both this projection
+            // and the op-event `reason=` field share it so an SRE
+            // pipeline grepping `reason=stream_closed` matches in
+            // both surfaces.
+            reason: reason.as_wire_str().to_string(),
+        },
     }
 }
 
@@ -1106,21 +1103,24 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
                                 // reconnect with backoff.
                             }
                             ConsumeOutcome::ProtocolViolation(reason) => {
-                                let peer_realm_display = format!("{peer_realm:?}");
+                                // `peer_realm: String` — pass verbatim so SRE
+                                // pipelines see `peer_realm=tenant-a`, not the
+                                // double-quoted `peer_realm="tenant-a"` Debug form.
+                                // op_event!'s formatter auto-quotes values
+                                // containing whitespace; bare strings pass through.
                                 crate::op_event!(
                                     component = federation_directory,
                                     kind = subscribe_directory_v2_protocol_violation,
-                                    peer_realm = peer_realm_display,
+                                    peer_realm = peer_realm,
                                     error = reason,
                                     message = "tearing down + reconnecting",
                                 );
                             }
                             ConsumeOutcome::IdleTimeout => {
-                                let peer_realm_display = format!("{peer_realm:?}");
                                 crate::op_event!(
                                     component = federation_directory,
                                     kind = subscribe_directory_v2_idle_timeout,
-                                    peer_realm = peer_realm_display,
+                                    peer_realm = peer_realm,
                                     idle_timeout_ms = idle_timeout_ms,
                                     message = "reconnecting",
                                 );
@@ -1156,14 +1156,12 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
                 client.mark_stale_and_publish(&cell);
             }
             Err(err) => {
-                let peer_realm_display = format!("{peer_realm:?}");
-                let peer_hub_uri_display = format!("{peer_hub_uri:?}");
                 let err_msg = format!("{err}");
                 crate::op_event!(
                     component = federation_directory,
                     kind = subscribe_directory_v2_dial_failed,
-                    peer_realm = peer_realm_display,
-                    peer_hub_uri = peer_hub_uri_display,
+                    peer_realm = peer_realm,
+                    peer_hub_uri = peer_hub_uri,
                     error = err_msg,
                     message = "backing off",
                 );
@@ -1180,11 +1178,10 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
 
         // Stream-end backoff (post-Pumping disconnect).
         let backoff_ms = client.on_dial_err();
-        let peer_realm_display = format!("{peer_realm:?}");
         crate::op_event!(
             component = federation_directory,
             kind = subscribe_directory_v2_stream_ended_reconnecting,
-            peer_realm = peer_realm_display,
+            peer_realm = peer_realm,
             backoff_ms = backoff_ms,
         );
         tokio::select! {

@@ -426,12 +426,14 @@ impl DaemonInvocationService {
                     Ok(PresenceEvent::Offline { ura, reason }) => {
                         let cancelled = watcher_pending.cancel_for(&ura, "target_offline");
                         if cancelled > 0 {
-                            let reason_display = format!("{reason:?}");
+                            // `OfflineReason: Display` renders the
+                            // stable snake_case wire label; no Debug
+                            // double-quoting at the op-event boundary.
                             crate::op_event!(
                                 component = axon_serve,
                                 kind = presence_offline_cancel,
                                 target_ura = ura,
-                                reason = reason_display,
+                                reason = reason,
                                 cancelled = cancelled,
                             );
                         }
@@ -1846,14 +1848,18 @@ impl DaemonInvocationService {
         // that distinguishes "took cross-tenant arm" from "took
         // local-presence arm" when the inner ability happens to
         // be a hub-served one (e.g. federation.heartbeat).
-        let target_tenant_display = format!("{target_tenant:?}");
-        let local_tenant_display = format!("{local_tenant:?}");
+        // Render `Option<&str>` as a stable string so SRE pipelines
+        // grep `target_tenant=<value>` (or `=<none>` for the absent
+        // case) without seeing Rust's `Some("…")` / `None` Debug
+        // literal sneaking into the field value.
+        let target_tenant_field = target_tenant.as_deref().unwrap_or("<none>");
+        let local_tenant_field = local_tenant.unwrap_or("<none>");
         crate::op_event!(
             component = axon_serve,
             kind = forward_invoke_dispatch,
             target_ura = request.target_ura,
-            target_tenant = target_tenant_display,
-            local_tenant = local_tenant_display,
+            target_tenant = target_tenant_field,
+            local_tenant = local_tenant_field,
             is_local_tenant = is_local_tenant,
             has_local_presence = has_local_presence,
         );
@@ -2547,10 +2553,12 @@ impl DaemonInvocationService {
         } = dispatch_result;
         // Diagnostic: forward the mac-side outcome verbatim so a
         // session-frame-correlation race is visible in the hub log
-        // without having to attach a debugger. Cheap (one eprintln
-        // per round-trip).
+        // without having to attach a debugger. Cheap (one op-event
+        // per round-trip). Render `Option<String>` via as_deref so
+        // SRE pipelines see `error=<value>` (or `error=<none>`)
+        // instead of Rust's `Some("…")` / `None` Debug literal.
         let result_bytes_len = result_bytes.len();
-        let error_display = format!("{error:?}");
+        let error_field = error.as_deref().unwrap_or("<none>");
         crate::op_event!(
             component = axon_serve,
             kind = forward_invoke_local_presence_dispatch_result,
@@ -2558,7 +2566,7 @@ impl DaemonInvocationService {
             ability = inner_payload.ability,
             call_id = call_id,
             result_bytes_len = result_bytes_len,
-            error = error_display,
+            error = error_field,
         );
         if let Some(err) = error {
             return Err(Status::failed_precondition(format!(
@@ -4536,7 +4544,10 @@ async fn drain_session_up_stream(
                     chain.push_str(&format!(" ↳ {err}"));
                     src = err.source();
                 }
-                let status_code = format!("{:?}", status.code());
+                // `tonic::Code` has Display; use it so the op-event
+                // field renders as `code=InvalidArgument` (bare
+                // PascalCase) instead of a Debug-quoted string.
+                let status_code = status.code();
                 crate::op_event!(
                     component = session_accept,
                     kind = up_stream_error,
@@ -4800,7 +4811,9 @@ async fn drain_session_up_stream(
         }
     }
 
-    let close_reason_display = format!("{close_reason:?}");
+    // `OfflineReason: Display` renders the stable snake_case wire
+    // label shared with `presence_event_to_directory_event` so the
+    // op-event and the directory projection report the same string.
     if presence
         .remove_if_session(&caller_ura, session_id, close_reason)
         .is_some()
@@ -4809,7 +4822,7 @@ async fn drain_session_up_stream(
             component = session_accept,
             kind = session_ended,
             caller = caller_ura,
-            close_reason = close_reason_display,
+            close_reason = close_reason,
             outcome = "removed_from_registry",
         );
     } else {
@@ -4817,7 +4830,7 @@ async fn drain_session_up_stream(
             component = session_accept,
             kind = session_ended,
             caller = caller_ura,
-            close_reason = close_reason_display,
+            close_reason = close_reason,
             outcome = "superseded_by_newer_session",
         );
     }

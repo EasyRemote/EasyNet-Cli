@@ -1567,12 +1567,15 @@ fn spawn_federated_directory_poll_task(
             )
             .await;
             for (realm, err) in &outcome.failed_peers {
-                let realm_display = format!("{realm:?}");
+                // `realm: &String`, `err: impl Display`. Pass through
+                // verbatim so the op-event field renders as
+                // `peer_realm=tenant-a` (auto-quoted only if whitespace)
+                // instead of Rust's `"tenant-a"` Debug literal.
                 let err_msg = format!("{err}");
                 crate::op_event!(
                     component = federation_directory,
                     kind = poll_peer_failed,
-                    peer_realm = realm_display,
+                    peer_realm = realm,
                     error = err_msg,
                 );
             }
@@ -1646,19 +1649,17 @@ fn spawn_federated_directory_streaming_supervisor(
                     },
                 );
             for realm in spawned {
-                let realm_display = format!("{realm:?}");
                 crate::op_event!(
                     component = federation_directory,
                     kind = streaming_supervisor_spawned,
-                    peer_realm = realm_display,
+                    peer_realm = realm,
                 );
             }
             for realm in cancelled {
-                let realm_display = format!("{realm:?}");
                 crate::op_event!(
                     component = federation_directory,
                     kind = streaming_supervisor_cancelled,
-                    peer_realm = realm_display,
+                    peer_realm = realm,
                     reason = "no_longer_in_federated_peers",
                 );
             }

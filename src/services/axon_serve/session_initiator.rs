@@ -512,13 +512,20 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
             );
         }
         Err(err) => {
-            let code_display = format!("{:?}", err.code());
-            let msg_display = format!("{:?}", err.message());
+            // `tonic::Code` has both Display and Debug; Display renders
+            // the PascalCase variant name without surrounding quotes,
+            // which is what SRE pipelines grep on. `err.message()` is
+            // a `&str` — pass it through op_event!'s formatter so any
+            // embedded whitespace gets one (and only one) layer of
+            // quoting at the boundary, instead of pre-Debug-quoting it
+            // here and letting the macro re-quote on top.
+            let code = err.code();
+            let msg = err.message();
             crate::op_event!(
                 component = session,
                 kind = federation_join_prelude_soft_failed,
-                code = code_display,
-                error = msg_display,
+                code = code,
+                error = msg,
                 message = "proceeding to <self>.session — bidi will surface the error if join was required",
             );
         }
@@ -548,13 +555,13 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         if let Err(err) =
             send_advertise_abilities_prelude(&mut client, &caller_ura, ability_catalog).await
         {
-            let code_display = format!("{:?}", err.code());
-            let msg_display = format!("{:?}", err.message());
+            let code = err.code();
+            let msg = err.message();
             crate::op_event!(
                 component = session,
                 kind = advertise_abilities_prelude_soft_failed,
-                code = code_display,
-                error = msg_display,
+                code = code,
+                error = msg,
                 message = "proceeding — Frontend `/api/v1/abilities` page will be empty for this device until the next reconnect",
             );
         } else {
@@ -803,14 +810,14 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
                 .await
                 {
                     let agent_ura = entry.agent_ura.clone();
-                    let code_display = format!("{:?}", err.code());
-                    let msg_display = format!("{:?}", err.message());
+                    let code = err.code();
+                    let msg = err.message();
                     crate::op_event!(
                         component = session,
                         kind = advertise_agent_prelude_soft_failed,
                         agent_ura = agent_ura,
-                        code = code_display,
-                        error = msg_display,
+                        code = code,
+                        error = msg,
                     );
                 }
             }
@@ -987,11 +994,18 @@ pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
             ) => {
                 match result {
                     Ok(()) => {
-                        let backoff_display = format!("{:?}", SESSION_BACKOFF_INITIAL);
+                        // Render Duration as integer milliseconds —
+                        // `Duration` has no `Display` impl, and the
+                        // Debug form (`250ms` / `1.5s`) mixes unit
+                        // suffixes that complicate SRE arithmetic on
+                        // the field. Milliseconds is the unit operators
+                        // already see in `*_ms` fields elsewhere.
+                        let next_backoff_ms =
+                            SESSION_BACKOFF_INITIAL.as_millis() as u64;
                         crate::op_event!(
                             component = session,
                             kind = bidi_closed_cleanly,
-                            next_backoff = backoff_display,
+                            next_backoff_ms = next_backoff_ms,
                         );
                         backoff = SESSION_BACKOFF_INITIAL;
                     }
@@ -1003,12 +1017,12 @@ pub async fn run_session_supervisor<D: SessionFrameDispatcher>(
                         // CA-trust failure or DNS error is
                         // indistinguishable from a NAT idle drop.
                         let err_msg = format!("{err:#}");
-                        let backoff_display = format!("{backoff:?}");
+                        let next_backoff_ms = backoff.as_millis() as u64;
                         crate::op_event!(
                             component = session,
                             kind = bidi_error_reconnecting,
                             error = err_msg,
-                            next_backoff = backoff_display,
+                            next_backoff_ms = next_backoff_ms,
                         );
                     }
                 }

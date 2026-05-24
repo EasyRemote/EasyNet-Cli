@@ -846,15 +846,19 @@ impl CrossHubDialer {
                     },
                     Ok(None) => return None,
                     Err(status) => {
-                        let code_display = format!("{:?}", status.code());
-                        let msg_display = format!("{}", status.message());
+                        // `tonic::Code` has Display — bare PascalCase
+                        // variant name, grep-stable. `status.message()`
+                        // is a `&str` rendered by op_event!'s formatter
+                        // (single layer of quoting if it has whitespace).
+                        let code = status.code();
+                        let msg = status.message();
                         let target_hub_log = target_hub.clone();
                         crate::op_event!(
                             component = cross_hub_dial,
                             kind = subscribe_directory_v2_stream_ended_with_error,
                             target_hub = target_hub_log,
-                            code = code_display,
-                            error = msg_display,
+                            code = code,
+                            error = msg,
                         );
                         return None;
                     }

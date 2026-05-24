@@ -170,6 +170,28 @@ pub enum OfflineReason {
     AdminRevoked,
 }
 
+impl OfflineReason {
+    /// Stable snake_case wire label for op-event fields and audit
+    /// records. Pinned so a `grep kind=presence_offline_cancel
+    /// reason=stream_closed` stays stable across Rust toolchain
+    /// upgrades that could in principle alter Debug rendering.
+    #[must_use]
+    pub fn as_wire_str(self) -> &'static str {
+        match self {
+            OfflineReason::StreamClosed => "stream_closed",
+            OfflineReason::StreamReset => "stream_reset",
+            OfflineReason::SendFailed => "send_failed",
+            OfflineReason::AdminRevoked => "admin_revoked",
+        }
+    }
+}
+
+impl std::fmt::Display for OfflineReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_wire_str())
+    }
+}
+
 /// Event emitted on the broadcast channel whenever a session goes
 /// online or offline. Subscribers (subscribe_directory pumps, audit
 /// log writers) drive their state from this stream.
