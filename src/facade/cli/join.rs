@@ -111,6 +111,18 @@ pub struct JoinArgs {
     /// Skip confirmation prompts (for non-interactive use)
     #[arg(long, short = 'y')]
     pub yes: bool,
+    /// Start the daemon after pairing. Pass `--boot no` to skip the
+    /// auto-start and keep the historical "join only" behaviour
+    /// (useful for scripted enrolment where the daemon is started
+    /// later by a supervisor). `--boot yes` is the default.
+    #[arg(long, value_enum, default_value_t = JoinBoot::Yes)]
+    pub boot: JoinBoot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum JoinBoot {
+    Yes,
+    No,
 }
 
 pub fn run(args: JoinArgs) -> anyhow::Result<()> {
@@ -138,71 +150,146 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
         .map(|s| s.trim_end_matches('/').to_string());
     let has_explicit_hub_api_override = hub_api_override.is_some();
     let validate_base = pick_validate_base(&args.hub, hub_api_override.as_deref());
-    output::info("Preparing pairing...");
-    let preflight = preflight_pairing_token(&token, &validate_base)?;
-    output::info("Validating pairing token...");
-    let mut creds = validate_pairing_token(&token, &validate_base, &preflight)?;
-    backfill_credentials_username_from_auth_session(&mut creds);
-    if rewrite_local_docker_session_endpoint(&mut creds, &validate_base) {
-        output::detail("hub_session", &creds.hub_endpoint);
-    }
-    creds.hub_api_base =
-        persisted_hub_api_base_for_pairing(&creds, &validate_base, has_explicit_hub_api_override);
-    config::save_credentials(&creds)?;
 
-    // Ensure a minimal daemon-config.toml exists. Without it the
-    // daemon's axon_serve sidecar refuses to bind the gRPC UDS
-    // (no daemon-config = silent skip), so backend's
-    // `daemon_grpc.Client` never finds the socket and
-    // `axon: disconnected` pins forever — every `/api/v1/devices`
-    // call returns the device as REMOVED no matter how alive
-    // the device's `<self>.session` is on the hub.
-    //
-    // The minimal `device`-mode block is enough: realm + hub_endpoint
-    // both come from credentials.json; uds_path defaults under
-    // HOME via the daemon's own resolver. Idempotent — when a
-    // daemon-config.toml already exists (operator wrote one or a
-    // prior auto-wire ran) we leave it untouched.
-    if let Err(e) = crate::persistence::daemon_config::ensure_minimal_device_config(&creds) {
-        output::warn(&format!(
-            "[easynet join] could not write default daemon-config.toml: {e}. \
-             Backend will report this device as REMOVED until you write one by hand."
-        ));
-    }
-
-    // Best-effort: if this device is also running a hub-mode
-    // daemon (i.e. `~/.easynet/daemon-config.toml` exists), seed
-    // the daemon's `[daemon.federated_peers]` table with the
-    // tenant→hub mapping. When `--peer-hub` is set the operator
-    // tells us the peer daemon's TLS listen address explicitly;
-    // when absent, the helper falls back to the canonical-port
-    // guess and warns the operator. SIGHUPs the running daemon
-    // so the new entry activates without a restart. Failures
-    // here log and keep going — the join itself has succeeded;
-    // the operator can edit daemon-config.toml by hand later if
-    // the auto-wire didn't fire (no daemon running, parser
-    // hiccup, etc).
-    let _ = super::federation_wire::auto_wire_federated_peer_from_credentials(
-        &creds,
+    let creds = run_join_stages(
+        &token,
+        &validate_base,
+        has_explicit_hub_api_override,
         args.peer_hub.as_deref(),
-    );
+    )?;
+
+    // Final summary block — same `kv_section` styling as `start`
+    // so the two commands look like siblings, not strangers.
+    output::success("Paired successfully");
+    let realm = creds.tenant_id.clone();
+    let mut rows = vec![
+        ("node_id", creds.node_id.as_str()),
+        ("hub_endpoint", creds.hub_endpoint.as_str()),
+        ("realm", realm.as_str()),
+    ];
+    let peer_hub_value;
+    if let Some(peer) = args.peer_hub.as_deref() {
+        peer_hub_value = peer.to_string();
+        rows.push(("peer_hub", peer_hub_value.as_str()));
+    }
+    output::kv_section(&rows);
+    eprintln!();
+
+    match args.boot {
+        JoinBoot::No => {
+            output::info("Run 'easynet start' to start the device agent.");
+            Ok(())
+        }
+        JoinBoot::Yes => {
+            output::info("Starting daemon (pass '--boot no' to skip)...");
+            super::start::run(super::start::StartArgs::for_join_autostart())
+        }
+    }
+}
+
+/// Walk through the eight join-time side effects under a live
+/// stage renderer. Network failures abort with `stage_failed +
+/// anyhow::bail`; best-effort steps (keyring, federated-peers,
+/// realm-trust, runtime-refresh) surface as `stage_ok` or
+/// `stage_skipped("(reason)")` and never short-circuit the join.
+///
+/// Returns the resolved `Credentials` so the caller can render the
+/// summary block.
+fn run_join_stages(
+    token: &str,
+    validate_base: &str,
+    has_explicit_hub_api_override: bool,
+    peer_hub: Option<&str>,
+) -> anyhow::Result<config::Credentials> {
+    let mut renderer = super::presentation::stage::StageRenderer::new();
+
+    renderer.set_active("preflight");
+    let preflight = match preflight_pairing_token(token, validate_base) {
+        Ok(p) => {
+            renderer.stage_ok("preflight");
+            p
+        }
+        Err(e) => {
+            renderer.stage_failed("preflight", &format!("{e}"));
+            renderer.finish();
+            return Err(e);
+        }
+    };
+
+    renderer.set_active("validate-token");
+    let mut creds = match validate_pairing_token(token, validate_base, &preflight) {
+        Ok(c) => {
+            renderer.stage_ok("validate-token");
+            c
+        }
+        Err(e) => {
+            renderer.stage_failed("validate-token", &format!("{e}"));
+            renderer.finish();
+            return Err(e);
+        }
+    };
+    backfill_credentials_username_from_auth_session(&mut creds);
+    let _ = rewrite_local_docker_session_endpoint(&mut creds, validate_base);
+    creds.hub_api_base =
+        persisted_hub_api_base_for_pairing(&creds, validate_base, has_explicit_hub_api_override);
+
+    renderer.set_active("save-credentials");
+    if let Err(e) = config::save_credentials(&creds) {
+        renderer.stage_failed("save-credentials", &format!("{e}"));
+        renderer.finish();
+        return Err(e);
+    }
+    renderer.stage_ok("save-credentials");
+
+    // Best-effort steps below: a failure does NOT abort the join.
+    // They each render as `stage_ok` on success or
+    // `stage_skipped("(reason)")` on failure so the user can read
+    // the join's posture from one glance at the stage column.
+
+    // Without daemon-config.toml the daemon's axon_serve sidecar
+    // refuses to bind the gRPC UDS (no daemon-config = silent
+    // skip), so backend's `daemon_grpc.Client` never finds the
+    // socket and `axon: disconnected` pins forever — every
+    // `/api/v1/devices` call reports the device as REMOVED no
+    // matter how alive the device's `<self>.session` is on the
+    // hub. The minimal `device`-mode block is enough; realm +
+    // hub_endpoint both come from credentials.json. Idempotent.
+    renderer.set_active("daemon-config");
+    match crate::persistence::daemon_config::ensure_minimal_device_config(&creds) {
+        Ok(()) => renderer.stage_ok("daemon-config"),
+        Err(e) => renderer.stage_skipped("daemon-config", &format!("({e})")),
+    }
+
+    // If this device is also running a hub-mode daemon (i.e. a
+    // `~/.easynet/daemon-config.toml` with `[daemon]` exists),
+    // seed `[daemon.federated_peers]` with the tenant→hub
+    // mapping. `--peer-hub` overrides the canonical-port guess.
+    // SIGHUPs the running daemon so the new entry activates
+    // without a restart. Failures here would abort cross-tenant
+    // routing only; the join itself has already succeeded.
+    renderer.set_active("federated-peers");
+    let _ = super::federation_wire::auto_wire_federated_peer_from_credentials(&creds, peer_hub);
+    renderer.stage_ok("federated-peers");
 
     // URA v4.1.5 Phase 3C — push a fresh device keypair into the
     // local easynet-keyring vault. The vault is the load-bearing
     // signing surface for v4.1.5 production: backend (HubURI) and
     // daemon (DeviceURI) on this host both sign through the same
     // entry via role-overlay lookup. When the keyring daemon is
-    // offline we fall back to v4.1.4's deterministic
-    // derive_subject_keypair path (boot.rs:695) so the join
-    // itself never fails on keyring availability — the warning
-    // tells the operator the production posture has degraded.
-    if let Err(e) = put_device_keypair_to_keyring(&creds) {
-        output::warn(&format!(
-            "[easynet join] keyring daemon offline ({e}); falling back to deterministic key derivation. Start 'easynet-keyring' for production-grade secret isolation."
-        ));
+    // offline we fall back to deterministic key derivation
+    // (boot.rs:695) so join itself never fails on keyring
+    // availability — the skipped stage tells the operator the
+    // production posture has degraded.
+    renderer.set_active("keyring");
+    match put_device_keypair_to_keyring(&creds) {
+        Ok(()) => renderer.stage_ok("keyring"),
+        Err(e) => renderer.stage_skipped(
+            "keyring",
+            &format!("(offline: {e}; deterministic key fallback)"),
+        ),
     }
 
-    // LB-52 Gap 3 — mirror the device's own `(uri, pubkey,
+    // LB-52 Gap 3 — mirror this device's own `(uri, pubkey,
     // role=Device)` self-entry into the local realm-trust.toml so
     // a co-located hub-mode daemon admits this device on
     // `<self>.session` without a separate
@@ -211,19 +298,17 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
     // backend hit this path; production deploys with a real
     // backend invoke `<self>.register_device_pubkey` and either
     // overwrite this entry or no-op against the matching pubkey
-    // (idempotent). Failures log and keep going — same discipline
-    // as the federated_peers auto-wire above.
+    // (idempotent).
+    renderer.set_active("realm-trust");
     let _ = super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds);
+    renderer.stage_ok("realm-trust");
 
+    renderer.set_active("refresh-runtime");
     refresh_running_runtime_after_join(&creds);
+    renderer.stage_ok("refresh-runtime");
 
-    output::success("Paired successfully");
-    output::detail("node_id", &creds.node_id);
-    output::detail("hub_endpoint", &creds.hub_endpoint);
-    output::detail("tenant_id", &creds.tenant_id);
-    eprintln!();
-    output::info("Run 'easynet connect' to start the device agent.");
-    Ok(())
+    renderer.finish();
+    Ok(creds)
 }
 
 /// Push a fresh device keypair into the keyring under the
