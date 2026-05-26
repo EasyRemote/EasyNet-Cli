@@ -30,7 +30,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use clap::{CommandFactory, FromArgMatches};
-use easynet_cli::facade::cli::{banner, run, App};
+use easynet_cli::facade::cli::{presentation::banner, run, App};
 
 /// Hard wrap point for all `--help` output. Set on the root
 /// `Command` and recursively on every subcommand below — clap's

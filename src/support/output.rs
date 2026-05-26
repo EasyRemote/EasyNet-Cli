@@ -61,6 +61,15 @@ pub fn detail(key: &str, value: &str) {
     eprintln!("  {key}: {value}");
 }
 
+/// Like [`detail`] but the entire line renders dim. Use for
+/// secondary breadcrumbs whose presence is informational ("daemon
+/// spawned at /usr/local/bin/easynet-daemon, log at …") and that
+/// shouldn't compete with the foreground stage stream for the
+/// reader's attention.
+pub fn detail_dim(key: &str, value: &str) {
+    eprintln!("{}", style(format!("  {key}: {value}")).dim());
+}
+
 /// Render a vertically-aligned key/value block. Every key gets
 /// padded with spaces so the values start at the same column,
 /// regardless of how long individual keys are. Keys render in
@@ -74,17 +83,24 @@ pub fn detail(key: &str, value: &str) {
 /// authoritative-data surfaces (`auth whoami`, where consumers
 /// might pipe to grep / jq).
 pub fn kv_section(rows: &[(&str, &str)]) {
-    for line in format_kv_rows(rows) {
+    // Status surface: values render dim because they're
+    // informational coordinates ("daemon is at ...sock") rather
+    // than the command's answer, and dimming them lets the cyan
+    // keys index the block without the values fighting for
+    // attention.
+    for line in format_kv_rows(rows, /*dim_values=*/ true) {
         eprintln!("{line}");
     }
 }
 
-/// Same layout + palette as [`kv_section`] but writes to stdout.
-/// Use this when the rendered block is the *answer* to the
-/// command's question (e.g. `whoami` printing identity facts), so
-/// `cmd | grep email` keeps working.
+/// Same layout + palette as [`kv_section`] but writes to stdout
+/// with values in the terminal's default (not dim) color. Use this
+/// when the rendered block is the *answer* to the command's
+/// question (e.g. `whoami` printing identity facts), so
+/// `cmd | grep email` reads the same value the user saw and the
+/// value column isn't visually de-emphasised.
 pub fn kv_section_stdout(rows: &[(&str, &str)]) {
-    for line in format_kv_rows(rows) {
+    for line in format_kv_rows(rows, /*dim_values=*/ false) {
         println!("{line}");
     }
 }
@@ -92,12 +108,17 @@ pub fn kv_section_stdout(rows: &[(&str, &str)]) {
 /// Build the styled key/value lines without writing them. The
 /// stderr / stdout split lives in the two thin wrappers above so
 /// the formatting is one source of truth.
-fn format_kv_rows(rows: &[(&str, &str)]) -> Vec<String> {
+fn format_kv_rows(rows: &[(&str, &str)], dim_values: bool) -> Vec<String> {
     let width = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
     rows.iter()
         .map(|(k, v)| {
             let padded = format!("{k:<width$}");
-            format!("  {} {v}", style(format!("{padded}:")).cyan().bold())
+            let key = style(format!("{padded}:")).cyan().bold();
+            if dim_values {
+                format!("  {key} {}", style(v).dim())
+            } else {
+                format!("  {key} {v}")
+            }
         })
         .collect()
 }

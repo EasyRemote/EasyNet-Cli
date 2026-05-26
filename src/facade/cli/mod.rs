@@ -98,7 +98,7 @@ pub(crate) mod ability_scaffold;
 pub(crate) mod agent;
 pub(crate) mod agent_sessions;
 pub(crate) mod auth;
-pub mod banner;
+pub mod presentation;
 pub(crate) mod completion;
 pub(crate) mod config_cmd;
 pub(crate) mod connect;
@@ -138,6 +138,7 @@ pub(crate) mod reset;
 pub(crate) mod skill;
 pub(crate) mod skill_install;
 pub(crate) mod start;
+pub(crate) mod start_boot_watcher;
 pub(crate) mod status;
 pub(crate) mod stop;
 #[cfg(test)]
@@ -462,8 +463,20 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
 
         // Top-level shortcuts — forward to the same impl the layered
         // forms call. No behaviour difference; only spelling.
-        Command::Join(args) => join::run(args),
-        Command::Start(args) => start::run(args),
+        //
+        // `join` and `start` both print the EasyNet wordmark before
+        // delegating, so a paired user sees the brand banner once
+        // per top-level invocation. `join`'s auto-start hop calls
+        // `start::run` directly (not through this dispatch), so the
+        // banner does NOT print twice in the pair-then-boot path.
+        Command::Join(args) => {
+            eprint!("{}", presentation::banner::render_logo());
+            join::run(args)
+        }
+        Command::Start(args) => {
+            eprint!("{}", presentation::banner::render_logo());
+            start::run(args)
+        }
         Command::Stop(args) => stop::run(args),
 
         // Internal

@@ -127,6 +127,16 @@ mod sgr {
 
 // ── Logo ─────────────────────────────────────────────────────────────
 
+/// Standalone logo render — six-line ASCII wordmark only, no
+/// tagline / signature / status rows. Used by `easynet start` and
+/// `easynet join` to brand their command output without dragging
+/// in the navigation furniture that belongs above `--help`.
+pub fn render_logo() -> String {
+    let mut buf = String::new();
+    write_logo(&mut buf, ColourMode::detect());
+    buf
+}
+
 /// Six-line ASCII wordmark, painted in one shade of bold cyan.
 /// silan's spec, character-for-character. The lines are 2-space
 /// indented to match `MARGIN`, lining up with the rest of the

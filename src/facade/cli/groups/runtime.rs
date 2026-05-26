@@ -21,7 +21,7 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use clap::{Args, Subcommand};
 use console::style;
 
-use crate::facade::cli::{connect, start, status, stop};
+use crate::facade::cli::{connect, presentation::banner, start, status, stop};
 use crate::persistence::config;
 
 #[derive(Debug, Args)]
@@ -61,10 +61,16 @@ pub struct LogsArgs {
 
 pub fn run(args: RuntimeArgs) -> anyhow::Result<()> {
     match args.action {
-        RuntimeAction::Start(a) => start::run(a),
+        RuntimeAction::Start(a) => {
+            eprint!("{}", banner::render_logo());
+            start::run(a)
+        }
         RuntimeAction::Stop(a) => stop::run(a),
         RuntimeAction::Status(a) => status::run(a),
-        RuntimeAction::Connect(a) => connect::run(a),
+        RuntimeAction::Connect(a) => {
+            eprint!("{}", banner::render_logo());
+            connect::run(a)
+        }
         RuntimeAction::Logs(a) => run_logs(a),
     }
 }
