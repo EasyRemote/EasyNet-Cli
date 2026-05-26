@@ -1,14 +1,41 @@
 // EasyNet CLI
 // ===========
 //
-// File: src/cli/stop.rs
-// Description: `easynet stop` — deregisters node, kills heartbeat daemon, and stops runtime.
+// File: src/facade/cli/stop.rs
+// Description: `easynet stop` — orderly shutdown of every process and
+//              state file `easynet start` left behind.
 //
-// Shutdown Strategy:
-// 1. Kill heartbeat daemon (reads heartbeat.pid) — triggers deregister via SIGTERM handler.
-// 2. If heartbeat daemon doesn't exist, deregister node directly via bridge.
-// 3. Kill axon-runtime process (reads PID from runtime.json or discovers via lsof).
-// 4. Clears ~/.easynet/runtime.json and heartbeat.pid.
+// Shape — what changed and why
+// -----------------------------
+// Before this rewrite, `stop::run` was a tangle of three conditional
+// branches (no-state fallback / DaemonOnly / full runtime), each
+// open-coding its own subset of the same six operations. Operators
+// saw a different log shape per branch and the maintainer paid a
+// branch-tax every time a step was added.
+//
+// The rewrite keeps every single side effect of the old code and
+// every guard (pid-alive checks, easynet-process verification,
+// pgrep sweep, federation revoke gated on axon-pb feature). It only
+// reorganises them into a `StopPlan` object whose `execute()` method
+// walks a fixed sequence of stages, each rendered through the
+// shared `StageRenderer` from `presentation::stage`. A stage that
+// has nothing to do reports itself as `skipped("(reason)")` instead
+// of disappearing; the operator reads the same column of stages on
+// every shutdown.
+//
+// Stage order (matches the previous behaviour; not invented):
+//   1. revoke          — federation.revoke against the daemon
+//                        (best-effort; gated on axon-pb feature
+//                        and on the runtime being DaemonOnly)
+//   2. stop-heartbeat  — pidfile -> SIGTERM -> wait 3s on the
+//                        heartbeat helper process
+//   3. stop-daemon     — pidfile -> SIGTERM -> wait 3s on the
+//                        easynet-daemon child
+//   4. sweep-daemons   — pgrep `easynet-daemon` to catch ghosts
+//                        whose pidfile was lost
+//   5. stop-axon       — non-DaemonOnly only: SIGTERM the axon
+//                        runtime PID (or lsof-discovered one)
+//   6. cleanup-state   — remove runtime.json
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -16,225 +43,324 @@
 use clap::Args;
 
 use crate::persistence::config;
-use crate::support::{net, output};
+use crate::support::net;
+
+use super::presentation::stage::StageRenderer;
 
 #[derive(Debug, Args)]
 pub struct StopArgs {}
 
 pub fn run(_args: StopArgs) -> anyhow::Result<()> {
-    let state = match config::load() {
-        Ok(state) => state,
-        Err(_) => {
-            let hb_killed = stop_heartbeat_daemon();
-            let daemon_killed = stop_easynet_daemon();
-            if hb_killed {
-                output::success("Heartbeat daemon stopped (no runtime state found)");
-            } else if daemon_killed {
-                output::success("EasyNet daemon stopped (no runtime state found)");
-            } else {
-                output::info("No running runtime found.");
+    let state = config::load().ok();
+    let plan = StopPlan::from_state(state.as_ref());
+    plan.execute()
+}
+
+/// What we are about to shut down. Computed once from runtime.json
+/// (or its absence) so every stage decision below reads the same
+/// snapshot.
+enum StopShape {
+    /// No `runtime.json` on disk. There may still be live processes
+    /// (an operator-spawned daemon, or a crashed start that left a
+    /// daemon orphaned); the sweep stage handles that case. The
+    /// axon-runtime and revoke stages are skipped because we have
+    /// no endpoint to talk to.
+    Stateless,
+    /// `runtime.json` exists and reports a daemon-only runtime —
+    /// no axon-runtime PID, just the IPC daemon. This is the
+    /// shape every modern device boots into; the revoke stage
+    /// runs against the daemon before we tear it down.
+    DaemonOnly,
+    /// `runtime.json` exists and reports the legacy embedded axon
+    /// runtime. The axon PID gets its own stop stage; revoke is
+    /// skipped because the historical path deferred deregister to
+    /// the heartbeat process's exit handler.
+    WithAxonRuntime { endpoint: String, pid: Option<u32> },
+}
+
+/// Bundle the shape decision and stage execution. Methods on
+/// `StopPlan` are the single sanctioned way to render any stop
+/// stage; nothing outside this file should call StageRenderer or
+/// the low-level `stop_*` helpers directly.
+struct StopPlan {
+    shape: StopShape,
+    renderer: StageRenderer,
+}
+
+impl StopPlan {
+    fn from_state(state: Option<&config::RuntimeState>) -> Self {
+        let shape = match state {
+            None => StopShape::Stateless,
+            Some(s)
+                if matches!(s.runtime_kind, config::RuntimeKind::DaemonOnly) =>
+            {
+                StopShape::DaemonOnly
             }
+            Some(s) => {
+                let pid = s
+                    .pid
+                    .or_else(|| net::discover_pid_from_endpoint(&s.endpoint));
+                StopShape::WithAxonRuntime {
+                    endpoint: s.endpoint.clone(),
+                    pid,
+                }
+            }
+        };
+        Self {
+            shape,
+            renderer: StageRenderer::new(),
+        }
+    }
+
+    fn execute(mut self) -> anyhow::Result<()> {
+        self.stage_revoke();
+        self.stage_stop_heartbeat();
+        self.stage_stop_daemon();
+        self.stage_sweep_daemons();
+        self.stage_stop_axon_runtime();
+        let cleanup = self.stage_cleanup_state();
+        self.renderer.finish();
+        cleanup
+    }
+
+    // ── Stages ────────────────────────────────────────────────────
+
+    /// Best-effort `federation.revoke` against the daemon. Only
+    /// meaningful when the daemon is still alive (DaemonOnly) AND
+    /// the binary was compiled with `axon-pb`. Skipped in every
+    /// other case — the message names which one so operators can
+    /// tell "I have nothing to revoke" from "this build can't".
+    fn stage_revoke(&mut self) {
+        self.renderer.set_active("revoke");
+        if !matches!(self.shape, StopShape::DaemonOnly) {
+            self.renderer
+                .stage_skipped("revoke", "(only runs in daemon-only mode)");
+            return;
+        }
+        #[cfg(feature = "axon-pb")]
+        {
+            let creds = match config::load_credentials() {
+                Ok(c) => c,
+                Err(_) => {
+                    self.renderer
+                        .stage_skipped("revoke", "(no credentials)");
+                    return;
+                }
+            };
+            let caller_ura = crate::ura::device_ura(&creds.tenant_id, &creds.node_id);
+            match crate::support::federation_invoke::invoke_federation_revoke(
+                &caller_ura,
+                "device shutdown",
+                Some(&caller_ura),
+            ) {
+                Ok(_) => self.renderer.stage_ok("revoke"),
+                Err(e) => self
+                    .renderer
+                    .stage_skipped("revoke", &format!("({e})")),
+            }
+        }
+        #[cfg(not(feature = "axon-pb"))]
+        {
+            self.renderer
+                .stage_skipped("revoke", "(axon-pb feature disabled)");
+        }
+    }
+
+    /// Pidfile-driven SIGTERM on the heartbeat helper. Skipped
+    /// when no pidfile exists OR the PID is stale.
+    fn stage_stop_heartbeat(&mut self) {
+        self.renderer.set_active("stop-heartbeat");
+        match stop_pidfile_process(&config::heartbeat_pid_path()) {
+            PidfileStopOutcome::Stopped { pid } => self
+                .renderer
+                .stage_ok(&format!("stop-heartbeat (pid {pid})")),
+            PidfileStopOutcome::NoPidfile => self
+                .renderer
+                .stage_skipped("stop-heartbeat", "(no pidfile)"),
+            PidfileStopOutcome::StalePidfile { pid } => self
+                .renderer
+                .stage_skipped("stop-heartbeat", &format!("(pid {pid} already exited)")),
+            PidfileStopOutcome::PidReuseRefused { pid } => self.renderer.stage_skipped(
+                "stop-heartbeat",
+                &format!("(pid {pid} no longer an easynet process)"),
+            ),
+            PidfileStopOutcome::TimedOut { pid } => self
+                .renderer
+                .stage_failed("stop-heartbeat", &format!("pid {pid} did not exit in time")),
+        }
+    }
+
+    /// Pidfile-driven SIGTERM on the easynet-daemon child.
+    fn stage_stop_daemon(&mut self) {
+        self.renderer.set_active("stop-daemon");
+        match stop_pidfile_process(&config::easynet_daemon_pid_path()) {
+            PidfileStopOutcome::Stopped { pid } => self
+                .renderer
+                .stage_ok(&format!("stop-daemon (pid {pid})")),
+            PidfileStopOutcome::NoPidfile => self
+                .renderer
+                .stage_skipped("stop-daemon", "(no pidfile)"),
+            PidfileStopOutcome::StalePidfile { pid } => self
+                .renderer
+                .stage_skipped("stop-daemon", &format!("(pid {pid} already exited)")),
+            PidfileStopOutcome::PidReuseRefused { pid } => self.renderer.stage_skipped(
+                "stop-daemon",
+                &format!("(pid {pid} no longer an easynet process)"),
+            ),
+            PidfileStopOutcome::TimedOut { pid } => self
+                .renderer
+                .stage_failed("stop-daemon", &format!("pid {pid} did not exit in time")),
+        }
+    }
+
+    /// `pgrep -f easynet-daemon` belt-and-suspenders pass. Catches
+    /// the "pidfile lost" case where an earlier stop crashed
+    /// mid-write, or where an operator spawned `easynet-daemon`
+    /// manually without going through `easynet start`.
+    fn stage_sweep_daemons(&mut self) {
+        self.renderer.set_active("sweep-daemons");
+        let swept = sweep_stray_easynet_daemons();
+        if swept.is_empty() {
+            self.renderer
+                .stage_skipped("sweep-daemons", "(none found)");
+        } else {
+            let pids = swept
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.renderer
+                .stage_ok(&format!("sweep-daemons (pid {pids})"));
+        }
+    }
+
+    /// SIGTERM the legacy axon runtime PID. Skipped for DaemonOnly
+    /// and Stateless shapes — there is no axon process to stop.
+    fn stage_stop_axon_runtime(&mut self) {
+        self.renderer.set_active("stop-axon");
+        let (endpoint, pid) = match &self.shape {
+            StopShape::WithAxonRuntime { endpoint, pid } => (endpoint.clone(), *pid),
+            _ => {
+                self.renderer
+                    .stage_skipped("stop-axon", "(daemon-only runtime)");
+                return;
+            }
+        };
+        let Some(pid) = pid else {
+            self.renderer.stage_failed(
+                "stop-axon",
+                &format!("could not determine pid for endpoint {endpoint}"),
+            );
+            return;
+        };
+        if net::kill_and_wait(pid, std::time::Duration::from_secs(5)) {
+            self.renderer
+                .stage_ok(&format!("stop-axon (pid {pid})"));
+        } else {
+            self.renderer
+                .stage_failed("stop-axon", &format!("pid {pid} did not exit in time"));
+        }
+    }
+
+    /// Remove `runtime.json`. Skipped when there was no state file
+    /// to begin with — preserves the pre-rewrite behaviour where
+    /// the "no state found" branch never called `config::remove`.
+    fn stage_cleanup_state(&mut self) -> anyhow::Result<()> {
+        self.renderer.set_active("cleanup-state");
+        if matches!(self.shape, StopShape::Stateless) {
+            self.renderer
+                .stage_skipped("cleanup-state", "(no runtime.json)");
             return Ok(());
         }
-    };
-
-    if matches!(
-        state.runtime_kind,
-        crate::persistence::config::RuntimeKind::DaemonOnly
-    ) {
-        return stop_daemon_only_runtime(&state);
-    }
-
-    // 1. Always try to stop heartbeat daemon first (even without runtime.json).
-    let hb_killed = stop_heartbeat_daemon();
-    // Then easynet-daemon (the IPC daemon child spawned by start.rs).
-    // Order: heartbeat first because it may be in the middle of an
-    // outbound federation call; killing the daemon underneath it
-    // would leave the call half-completed. Heartbeat-then-daemon
-    // matches start order's reverse.
-    let _ = stop_easynet_daemon();
-
-    let state = state;
-    output::info(&format!("Stopping runtime at {}...", state.endpoint));
-
-    // 2. If no heartbeat daemon, deregister directly. Log accurately —
-    // the previous unconditional "Node deregistered" message claimed
-    // success even on transient Hub errors, hiding inconsistent state
-    // from the operator.
-    if !hb_killed {
-        if config::load_credentials().is_ok() {
-            // Per the ability-only ontology this would invoke
-            // `device.node.deregister` on the daemon. The daemon is
-            // about to be torn down here, so going through its IPC
-            // surface for one last call would race the shutdown.
-            // The legacy `bridge.deregister_node` was removed by
-            // AXON-RFC-001 P1.5; the federation Invoke replacement
-            // (which the heartbeat thread will issue *while* the
-            // daemon is alive, see heartbeat.rs) is the canonical
-            // path.
-            output::info("Node deregister: deferred to heartbeat exit path");
+        match config::remove() {
+            Ok(()) => {
+                self.renderer.stage_ok("cleanup-state");
+                Ok(())
+            }
+            Err(e) => {
+                self.renderer
+                    .stage_failed("cleanup-state", &format!("{e}"));
+                Err(e.into())
+            }
         }
     }
-
-    // 3. Kill axon-runtime.
-    let pid = state
-        .pid
-        .or_else(|| net::discover_pid_from_endpoint(&state.endpoint));
-    if let Some(pid) = pid {
-        stop_pid(pid);
-    } else {
-        output::warn("could not determine runtime pid; clearing state file only");
-    }
-
-    // 4. Cleanup state files.
-    config::remove()?;
-    output::success("Axon runtime stopped");
-    Ok(())
 }
 
-fn stop_daemon_only_runtime(state: &config::RuntimeState) -> anyhow::Result<()> {
-    output::info(&format!("Stopping daemon at {}...", state.endpoint));
-    best_effort_revoke_via_daemon();
-    let killed = stop_easynet_daemon();
-    config::remove()?;
-    if killed {
-        output::success("EasyNet daemon stopped");
-    } else {
-        output::warn("daemon state cleared, but no easynet-daemon process was found");
-    }
-    Ok(())
+// ── Low-level helpers ────────────────────────────────────────────
+
+/// Result of attempting to stop a process named by a pidfile.
+/// Returned by [`stop_pidfile_process`]; the staged caller maps
+/// each variant onto a `stage_ok` / `stage_skipped` / `stage_failed`
+/// rendering. Splitting the outcome from the rendering keeps the
+/// signaling logic free of UI concerns.
+enum PidfileStopOutcome {
+    NoPidfile,
+    StalePidfile { pid: u32 },
+    PidReuseRefused { pid: u32 },
+    Stopped { pid: u32 },
+    TimedOut { pid: u32 },
 }
 
-fn best_effort_revoke_via_daemon() {
-    #[cfg(feature = "axon-pb")]
-    {
-        let creds = match config::load_credentials() {
-            Ok(creds) => creds,
-            Err(_) => return,
-        };
-        let caller_ura = crate::ura::device_ura(&creds.tenant_id, &creds.node_id);
-        let revoke = crate::support::federation_invoke::invoke_federation_revoke(
-            &caller_ura,
-            "device shutdown",
-            Some(&caller_ura),
-        );
-        if let Err(e) = revoke {
-            output::warn(&format!(
-                "daemon federation.revoke failed before shutdown: {e}"
-            ));
-        }
-    }
-    #[cfg(not(feature = "axon-pb"))]
-    {
-        // Production builds always enable axon-pb; in minimal builds
-        // there is no gRPC daemon surface to revoke through.
-    }
-}
-
-/// Kill the heartbeat daemon process. Returns true if a daemon was found and successfully stopped.
+/// Pidfile -> liveness check -> easynet-process check -> SIGTERM
+/// with a 3-second wait. Removes the pidfile after the attempt
+/// regardless of outcome so a stale file from a crashed daemon
+/// does not block the next `easynet start`.
 ///
-/// Note: PID files are inherently racy — between reading the PID and signaling, the OS
-/// could reuse it. The `is_pid_alive` check narrows the window but cannot eliminate it.
-/// Acceptable for a CLI tool; a production daemon would use a lockfile or pidfd.
-fn stop_heartbeat_daemon() -> bool {
-    let pid_path = config::heartbeat_pid_path();
-    let pid: u32 = match std::fs::read_to_string(&pid_path)
+/// The pidfile race window between `read` and `kill` is narrow but
+/// not zero; the `is_easynet_process` check after liveness mitigates
+/// pid reuse on busy hosts. A production daemon would use pidfd or
+/// a lockfile to close the window entirely — out of scope here.
+fn stop_pidfile_process(pid_path: &std::path::Path) -> PidfileStopOutcome {
+    let pid: u32 = match std::fs::read_to_string(pid_path)
         .ok()
         .and_then(|s| s.trim().parse().ok())
     {
         Some(p) => p,
-        None => return false,
+        None => return PidfileStopOutcome::NoPidfile,
     };
-
-    // Check if the process is actually alive before trying to stop it.
     if !net::is_pid_alive(pid) {
-        output::info(&format!(
-            "Heartbeat daemon (pid {pid}) already exited, cleaning up pid file"
-        ));
-        let _ = std::fs::remove_file(&pid_path);
-        return false;
+        let _ = std::fs::remove_file(pid_path);
+        return PidfileStopOutcome::StalePidfile { pid };
     }
-
-    // Verify the PID still belongs to an easynet process (mitigates PID-reuse race).
     if !net::is_easynet_process(pid) {
-        output::warn(&format!(
-            "pid {pid} is alive but does not appear to be an easynet process; skipping signal"
-        ));
-        let _ = std::fs::remove_file(&pid_path);
-        return false;
+        let _ = std::fs::remove_file(pid_path);
+        return PidfileStopOutcome::PidReuseRefused { pid };
     }
-
     let stopped = net::kill_and_wait(pid, std::time::Duration::from_secs(3));
+    let _ = std::fs::remove_file(pid_path);
     if stopped {
-        output::info(&format!("Heartbeat daemon stopped (pid {pid})"));
+        PidfileStopOutcome::Stopped { pid }
     } else {
-        output::warn(&format!(
-            "Heartbeat daemon (pid {pid}) did not exit in time"
-        ));
+        PidfileStopOutcome::TimedOut { pid }
     }
-    let _ = std::fs::remove_file(&pid_path);
-    stopped
 }
 
-fn stop_pid(pid: u32) {
-    net::kill_and_wait(pid, std::time::Duration::from_secs(5));
-}
-
-/// Kill the easynet-daemon child spawned by `runtime start`.
-/// Signals via the pidfile recorded at spawn time; falls back to
-/// `pgrep -f easynet-daemon` when the pidfile is missing or stale.
-///
-/// Without this, a `runtime stop` followed by a fresh `runtime
-/// start` left the previous daemon alive, the new daemon's
-/// runtime-dispatch socket bind failed silently, and chat
-/// dispatches got "daemon closed the connection" after exactly
-/// one successful call.
-pub(crate) fn stop_easynet_daemon() -> bool {
-    let pid_path = config::easynet_daemon_pid_path();
-    let pid: Option<u32> = std::fs::read_to_string(&pid_path)
-        .ok()
-        .and_then(|s| s.trim().parse().ok());
-    let mut stopped_any = false;
-    if let Some(pid) = pid {
-        if net::is_pid_alive(pid) && net::is_easynet_process(pid) {
-            if net::kill_and_wait(pid, std::time::Duration::from_secs(3)) {
-                output::info(&format!("EasyNet daemon stopped (pid {pid})"));
-                stopped_any = true;
-            } else {
-                output::warn(&format!("EasyNet daemon (pid {pid}) did not exit in time"));
-            }
-        }
-        let _ = std::fs::remove_file(&pid_path);
-    }
-    // Belt-and-suspenders: sweep any stragglers via pgrep so a
-    // crash-mid-stop or pidfile-write-race can't leave a ghost
-    // daemon owning the runtime-dispatch socket.
-    sweep_stray_easynet_daemons() || stopped_any
-}
-
-/// Pgrep-style sweep that signals every alive easynet-daemon
-/// process. Best-effort.
-fn sweep_stray_easynet_daemons() -> bool {
+/// Pgrep-style sweep that SIGTERMs every alive `easynet-daemon`
+/// process other than this CLI itself. Returns the PIDs that were
+/// successfully signalled, in pgrep iteration order. Best-effort:
+/// silently skips PIDs that fail the easynet-process guard or that
+/// did not exit within 3 seconds.
+fn sweep_stray_easynet_daemons() -> Vec<u32> {
     let output_res = std::process::Command::new("pgrep")
         .args(["-f", "easynet-daemon"])
         .output();
-    let pids: Vec<u32> = match output_res {
+    let candidates: Vec<u32> = match output_res {
         Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
             .lines()
             .filter_map(|l| l.trim().parse::<u32>().ok())
             .filter(|pid| *pid != std::process::id())
             .collect(),
-        _ => return false,
+        _ => return Vec::new(),
     };
-    let mut stopped_any = false;
-    for pid in pids {
+    let mut swept = Vec::new();
+    for pid in candidates {
         if !net::is_pid_alive(pid) || !net::is_easynet_process(pid) {
             continue;
         }
         if net::kill_and_wait(pid, std::time::Duration::from_secs(3)) {
-            output::info(&format!("EasyNet daemon swept (pid {pid})"));
-            stopped_any = true;
+            swept.push(pid);
         }
     }
-    stopped_any
+    swept
 }
+
