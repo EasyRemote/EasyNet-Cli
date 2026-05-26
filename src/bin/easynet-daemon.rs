@@ -57,6 +57,7 @@ use easynet_cli::runtime::invocation_target::{LocalNodeResolver, TargetResolver}
 use easynet_cli::runtime::kernel::Kernel;
 use easynet_cli::runtime::kernel_api::KernelApi;
 use easynet_cli::services::control::ability_proxy::AbilityProxy;
+use easynet_cli::services::control::boot_events::{BootBus, BootEvent};
 use easynet_cli::services::control::runtime_dispatch;
 use easynet_cli::services::control::server;
 
@@ -65,6 +66,7 @@ use easynet_cli::services::control::server;
 /// easynet-daemon` boot in IPC-only mode for FFI smoke tests without
 /// requiring a Hub.
 const ENV_HB_ENDPOINT: &str = "_EASYNET_HB_ENDPOINT";
+const DEFAULT_PAGES_LISTENER_PORT: u16 = 8787;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
@@ -99,9 +101,24 @@ async fn main() -> anyhow::Result<()> {
     // requests when an agent dispatch is gated. (When no Client
     // is subscribed the broker auto-allows — a daemon running
     // headless does not freeze on permission gates.)
+    let boot_bus = BootBus::new();
+    boot_bus.emit_started("kernel");
     let kernel = Arc::new(Kernel::new_with_subscriber_broker(Arc::new(
         NoopGateway::new(),
     )));
+    boot_bus.emit_ok("kernel");
+
+    boot_bus.emit_started("control-server");
+    let control_server = match server::spawn_booting(boot_bus.clone()) {
+        Ok(handle) => {
+            boot_bus.emit_ok("control-server");
+            handle
+        }
+        Err(err) => {
+            boot_bus.emit_failed("control-server", err.to_string());
+            return Err(err);
+        }
+    };
 
     // Bind sub-services that have a disk-backed store to the
     // current tenant so persistence actually works across daemon
@@ -112,13 +129,16 @@ async fn main() -> anyhow::Result<()> {
     // v1 single-tenant: hardcode `TenantId::default_v1()`. v2 will
     // route this from credentials.json via IPC handshake.
     let tenant = TenantId::default_v1();
+    boot_bus.emit_started("tenant-stores");
     if let Err(e) = kernel.schedule_service().bind(&tenant) {
         eprintln!("[daemon] schedule store bind failed: {e:#}");
     }
     if let Err(e) = kernel.loop_service().bind(&tenant) {
         eprintln!("[daemon] loop store bind failed: {e:#}");
     }
+    boot_bus.emit_ok("tenant-stores");
 
+    boot_bus.emit_started("loop-controller");
     let local_node = std::env::var("EASYNET_NODE_ID")
         .ok()
         .filter(|s| !s.is_empty())
@@ -136,6 +156,7 @@ async fn main() -> anyhow::Result<()> {
     if let Err(e) = kernel.loop_service().resume_inflight() {
         eprintln!("[daemon] loop resume failed: {e:#}");
     }
+    boot_bus.emit_ok("loop-controller");
 
     // Build the system.* ability registry off the SAME sub-service
     // handles the Kernel holds. This is the U1 unity property at
@@ -172,6 +193,7 @@ async fn main() -> anyhow::Result<()> {
     // build_registry_for_daemon as an explicit argument so the
     // registry build is deterministic and free of global env
     // state.
+    boot_bus.emit_started("ability-registry");
     let pages_identity = agents::PagesIdentity::from_env();
     let invocation_ledger = open_invocation_ledger();
     let registry = agents::build_registry_for_daemon(
@@ -184,10 +206,12 @@ async fn main() -> anyhow::Result<()> {
         None,
         pages_identity,
     );
+    boot_bus.emit_ok("ability-registry");
 
     // Stage-2 dispatcher (executor). Wired with the unified registry
     // and the same NoopGateway the Kernel holds — a real Gateway impl
     // pointing at Axon lands in a focused follow-up.
+    boot_bus.emit_started("dispatcher");
     let gateway: Arc<dyn GatewayApi> = Arc::new(NoopGateway::new());
     let dispatcher = AbilityDispatcher::new(registry, gateway);
 
@@ -206,6 +230,7 @@ async fn main() -> anyhow::Result<()> {
     // `set_dispatcher` hook + DISPATCHER_HANDLE OnceLock came down
     // with the cull.
     let _ = &dispatcher_for_kernel;
+    boot_bus.emit_ok("dispatcher");
 
     // Stage-1 resolver. Local node id from EASYNET_NODE_ID env (set
     // by the supervisor from credentials.json) or "self" as a
@@ -222,12 +247,20 @@ async fn main() -> anyhow::Result<()> {
     // dependency.
     #[cfg(feature = "axon-pb")]
     {
+        boot_bus.emit_started("axon-serve-sidecar");
         if let Err(e) = easynet_cli::services::axon_serve::start_axon_serve_sidecar(
             Arc::clone(&dispatcher_for_kernel),
             invocation_ledger,
         ) {
             eprintln!("[axon-serve] sidecar boot failed: {e:#}");
+            boot_bus.emit_failed("axon-serve-sidecar", e.to_string());
+            return Err(e);
         }
+        boot_bus.emit_ok("axon-serve-sidecar");
+    }
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        boot_bus.emit_skipped("axon-serve-sidecar");
     }
 
     // Optional sidecar: heartbeat. Run on a dedicated OS thread
@@ -236,13 +269,21 @@ async fn main() -> anyhow::Result<()> {
     // dies the device is in a degraded state but Client UIs can still
     // attach via FFI.
     if std::env::var_os(ENV_HB_ENDPOINT).is_some() {
-        std::thread::Builder::new()
+        boot_bus.emit_started("heartbeat");
+        if let Err(err) = std::thread::Builder::new()
             .name("easynet-heartbeat".into())
             .spawn(|| {
                 if let Err(e) = run_daemon() {
                     eprintln!("[heartbeat] daemon exited with error: {e:#}");
                 }
-            })?;
+            })
+        {
+            boot_bus.emit_failed("heartbeat", err.to_string());
+            return Err(err.into());
+        }
+        boot_bus.emit_ok("heartbeat");
+    } else {
+        boot_bus.emit_skipped("heartbeat");
     }
 
     // Schedule tick runner. Fires due schedules every TICK_PERIOD
@@ -251,7 +292,9 @@ async fn main() -> anyhow::Result<()> {
     // dispatches the agent, and terminates — Clients subscribed
     // to device.session.attach see the same lifecycle they would
     // see for a Client-initiated invoke.
+    boot_bus.emit_started("schedule-tick");
     spawn_schedule_tick(kernel_for_tick, schedule_for_tick);
+    boot_bus.emit_ok("schedule-tick");
 
     // Step-3 sidecar: runtime-dispatch UDS responder. Listens on a
     // separate socket from `control.sock` because the runtime side
@@ -261,41 +304,114 @@ async fn main() -> anyhow::Result<()> {
     // whose `dispatch_endpoint` points at it — i.e., one of the
     // abilities the daemon registered via `runtime.register_local_tool`
     // at boot. A failure here logs but does not tear down the daemon.
+    boot_bus.emit_started("runtime-dispatch");
     let dispatch_proxy = proxy.clone();
     tokio::spawn(async move {
         if let Err(e) = runtime_dispatch::run(dispatch_proxy).await {
             eprintln!("[runtime-dispatch] responder exited: {e:#}");
         }
     });
+    boot_bus.emit_ok("runtime-dispatch");
 
     // RFC-006-B v0.6 — Pages reference system listener.
     //
-    // Spawned only when `EASYNET_PAGES_PORT` is set; absence keeps
-    // the daemon's footprint unchanged for users who don't publish
-    // pages. The port matches the value `pages.publish` returns
-    // inside `url_root`, so:
-    //
-    //     EASYNET_PAGES_PORT=8787 easynet-daemon
-    //
-    // gives `http://<project>.<user>.pages.localhost:8787/` access.
-    if let Ok(port_str) = std::env::var("EASYNET_PAGES_PORT") {
-        if let Ok(port) = port_str.parse::<u16>() {
+    // Spawned by default from EASYNET_PAGES_PORT (or 8787 when unset).
+    // If that port is busy, probe the next 20 ports and write the
+    // actual choice into control.json for the CLI's final URL line.
+    boot_bus.emit_started("pages-listener");
+    let pages_start_port = match resolve_pages_start_port() {
+        Ok(port) => port,
+        Err(err) => {
+            boot_bus.emit_failed("pages-listener", err.to_string());
+            return Err(err);
+        }
+    };
+    let pages_port = match easynet_cli::runtime::hub::pages_listener::spawn_first_available(
+        pages_start_port,
+        easynet_cli::runtime::hub::pages_listener::DEFAULT_PORT_PROBE_SPAN,
+    )
+    .await
+    {
+        Ok((port, handle)) => {
             tokio::spawn(async move {
-                if let Err(e) = easynet_cli::runtime::hub::pages_listener::run(port).await {
-                    eprintln!("[pages-listener] exited: {e:#}");
+                match handle.await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => eprintln!("[pages-listener] exited: {e:#}"),
+                    Err(e) => eprintln!("[pages-listener] task failed: {e:#}"),
                 }
             });
-        } else {
-            eprintln!(
-                "[pages-listener] EASYNET_PAGES_PORT={port_str} is not a valid u16; \
-                 listener disabled"
-            );
+            boot_bus.emit(BootEvent::PortChosen {
+                service: "pages".into(),
+                port,
+                start: Some(pages_start_port),
+            });
+            boot_bus.emit_ok("pages-listener");
+            port
         }
+        Err(err) => {
+            boot_bus.emit_failed("pages-listener", err.to_string());
+            return Err(err);
+        }
+    };
+    if let Err(err) = control_server.write_discovery(Some(pages_port)) {
+        boot_bus.emit_failed("control-discovery", err.to_string());
+        return Err(err);
     }
 
-    // Foreground: Control-plane IPC server. Returns when the listener
-    // is dropped (i.e. never, in v1 — we exit on SIGTERM via the OS).
-    server::run(proxy).await
+    // The control server has been accepting connections since stage
+    // "control-server". This stage flips it from BOOTING mode (where
+    // every request except `system.watch_boot` answers with
+    // code=BOOTING) to fully dispatching mode by injecting the ready
+    // proxy. Naming this "accept-invokes" rather than another
+    // "control-ready" avoids the impression of two ready signals.
+    boot_bus.emit_started("accept-invokes");
+    control_server.state().set_ready(proxy).await;
+    boot_bus.emit_ok("accept-invokes");
+    boot_bus.emit_ready();
+
+    wait_for_shutdown_signal().await;
+    Ok(())
+}
+
+fn resolve_pages_start_port() -> anyhow::Result<u16> {
+    match std::env::var("EASYNET_PAGES_PORT") {
+        Ok(raw) => {
+            let port = raw
+                .parse::<u16>()
+                .map_err(|e| anyhow::anyhow!("EASYNET_PAGES_PORT must be a valid u16: {e}"))?;
+            if port == 0 {
+                anyhow::bail!("EASYNET_PAGES_PORT must be greater than 0");
+            }
+            Ok(port)
+        }
+        Err(std::env::VarError::NotPresent) => Ok(DEFAULT_PAGES_LISTENER_PORT),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            anyhow::bail!("EASYNET_PAGES_PORT is not valid UTF-8")
+        }
+    }
+}
+
+async fn wait_for_shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut sigterm =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(sig) => sig,
+                Err(e) => {
+                    eprintln!("[daemon] could not install SIGTERM handler: {e:#}");
+                    let _ = tokio::signal::ctrl_c().await;
+                    return;
+                }
+            };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = sigterm.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 fn open_invocation_ledger() -> Option<Arc<easynet_axon::invocation::InvocationLedger>> {

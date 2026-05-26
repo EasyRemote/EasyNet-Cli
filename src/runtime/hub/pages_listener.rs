@@ -30,15 +30,83 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::routing::any;
 use axum::Router;
+use tokio::task::JoinHandle;
 
 use super::pages_serve_ability::{serve_bytes, ServedBytes};
 
 const PAGES_HEALTH_PATH: &str = "/_easynet/pages/health";
 
+/// Maximum number of sequential ports the daemon tries after the
+/// requested Pages port.
+pub const DEFAULT_PORT_PROBE_SPAN: u16 = 20;
+
 /// Bind the listener and return a future the daemon can `tokio::spawn`.
 /// Returns immediately; the listener runs until the process exits.
 pub async fn run(port: u16) -> anyhow::Result<()> {
-    let app = Router::new().fallback(any(handle));
+    let listener = bind_pages_listener(port).await?;
+
+    crate::op_event!(
+        component = pages_listener,
+        kind = bound,
+        addr = listener.local_addr()?,
+    );
+
+    axum::serve(listener, pages_router())
+        .await
+        .map_err(|e| anyhow::anyhow!("pages listener serve loop exited: {e}"))?;
+    Ok(())
+}
+
+/// Bind the first available Pages port in `[start, start + span]`,
+/// spawn the serve loop, and return the actual chosen port.
+///
+/// Each rejected port emits an `op_event!` line so a user who sees
+/// the listener "silently" bound to 8788 can answer "what's wrong
+/// with 8787?" from the daemon log alone.
+pub async fn spawn_first_available(
+    start: u16,
+    span: u16,
+) -> anyhow::Result<(u16, JoinHandle<anyhow::Result<()>>)> {
+    let mut last_err = None;
+    for offset in 0..=span {
+        let Some(port) = start.checked_add(offset) else {
+            break;
+        };
+        match bind_pages_listener(port).await {
+            Ok(listener) => {
+                let actual_port = listener.local_addr()?.port();
+                crate::op_event!(
+                    component = pages_listener,
+                    kind = bound,
+                    addr = listener.local_addr()?,
+                );
+                let handle = tokio::spawn(async move {
+                    axum::serve(listener, pages_router())
+                        .await
+                        .map_err(|e| anyhow::anyhow!("pages listener serve loop exited: {e}"))
+                });
+                return Ok((actual_port, handle));
+            }
+            Err(err) => {
+                crate::op_event!(
+                    component = pages_listener,
+                    kind = bind_skip,
+                    port = port,
+                    error = err,
+                );
+                last_err = Some(err);
+            }
+        }
+    }
+    Err(last_err
+        .unwrap_or_else(|| anyhow::anyhow!("pages listener could not probe any port from {start}")))
+}
+
+fn pages_router() -> Router {
+    Router::new().fallback(any(handle))
+}
+
+async fn bind_pages_listener(port: u16) -> anyhow::Result<tokio::net::TcpListener> {
     // Bind address: 127.0.0.1 by default (dev mode, Mac host
     // daemon). When running inside a container the daemon needs
     // to accept from the container's published-port mapping, so
@@ -49,16 +117,9 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
     let addr: SocketAddr = format!("{bind_host}:{port}")
         .parse()
         .map_err(|e| anyhow::anyhow!("invalid bind addr {bind_host}:{port}: {e}"))?;
-    let listener = tokio::net::TcpListener::bind(addr)
+    tokio::net::TcpListener::bind(addr)
         .await
-        .map_err(|e| anyhow::anyhow!("pages listener bind failed on {addr}: {e}"))?;
-
-    eprintln!("[pages-listener] bound to http://{addr}/");
-
-    axum::serve(listener, app)
-        .await
-        .map_err(|e| anyhow::anyhow!("pages listener serve loop exited: {e}"))?;
-    Ok(())
+        .map_err(|e| anyhow::anyhow!("pages listener bind failed on {addr}: {e}"))
 }
 
 /// Parse a Host header of the form `<project>.<user>.pages.localhost[:<port>]`
