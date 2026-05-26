@@ -180,6 +180,10 @@ pub mod codes {
     pub const VERSION_INCOMPATIBLE: &str = "version_incompatible";
     /// Server is shutting down; no new work will be accepted.
     pub const SHUTTING_DOWN: &str = "shutting_down";
+    /// Daemon accepted the control connection before its dispatcher
+    /// finished booting. The caller should subscribe to
+    /// `system.watch_boot` or retry after Ready.
+    pub const BOOTING: &str = "booting";
 }
 
 #[cfg(test)]

@@ -47,6 +47,7 @@ use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
+use tokio::sync::RwLock;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 #[cfg(all(windows, test))]
@@ -56,11 +57,69 @@ use tokio::net::UnixStream;
 
 use crate::runtime::kernel_api::KernelApi;
 use crate::services::control::ability_proxy::{AbilityProxy, BidiRegistry, CancelRegistry};
+use crate::services::control::boot_events::{BootBus, BootEvent};
 use crate::services::control::discovery::{
     self, flags, ControlDiscovery, IpcVersionRange, IPC_VERSION_V1,
 };
 use crate::services::control::frames::{IncomingFrame, OutgoingFrame};
-use crate::services::control::transport::{self, ControlListener};
+use crate::services::control::transport::{self, ControlAddress, ControlListener};
+
+/// Ability name reserved for daemon boot progress.
+pub const WATCH_BOOT_ABILITY: &str = "system.watch_boot";
+
+/// Runtime state shared by every accepted control connection.
+#[derive(Clone)]
+pub struct ControlServerState {
+    boot: BootBus,
+    proxy: Arc<RwLock<Option<AbilityProxy>>>,
+}
+
+impl ControlServerState {
+    /// Create a state handle in booting mode.
+    pub fn booting(boot: BootBus) -> Self {
+        Self {
+            boot,
+            proxy: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    /// Create a state handle that is ready from the first accepted
+    /// connection. Used by the legacy `run(proxy)` entry point.
+    pub fn ready(proxy: AbilityProxy, boot: BootBus) -> Self {
+        Self {
+            boot,
+            proxy: Arc::new(RwLock::new(Some(proxy))),
+        }
+    }
+
+    /// Inject the dispatcher-backed proxy and release `BOOTING`
+    /// responses for future requests.
+    pub async fn set_ready(&self, proxy: AbilityProxy) {
+        let mut guard = self.proxy.write().await;
+        *guard = Some(proxy);
+    }
+}
+
+/// Handle returned when the daemon starts the control server before
+/// the dispatcher is ready.
+#[derive(Clone)]
+pub struct ControlServerHandle {
+    state: ControlServerState,
+    address: ControlAddress,
+}
+
+impl ControlServerHandle {
+    /// Borrow the state object so the daemon can inject readiness.
+    pub fn state(&self) -> ControlServerState {
+        self.state.clone()
+    }
+
+    /// Re-write control.json with the current address and optional
+    /// pages port.
+    pub fn write_discovery(&self, pages_port: Option<u16>) -> anyhow::Result<()> {
+        write_discovery_for(&self.address, pages_port)
+    }
+}
 
 /// Bind, advertise, and run the Control-plane accept loop until the
 /// listener is dropped.
@@ -77,43 +136,47 @@ use crate::services::control::transport::{self, ControlListener};
 /// observe one set of sub-service state.
 pub async fn run(proxy: AbilityProxy) -> anyhow::Result<()> {
     let (listener, addr) = transport::bind_default()?;
-
-    // Advertise via control.json.
-    let pid = std::process::id();
-    let disc = ControlDiscovery {
-        socket_path: addr.as_uds_path().map(|p| p.to_path_buf()),
-        pipe_name: addr.as_pipe_name().map(|s| s.to_string()),
-        pid,
-        daemon_version: env!("CARGO_PKG_VERSION").to_string(),
-        supported_ipc_versions: IpcVersionRange::single(IPC_VERSION_V1),
-        capability_flags: vec![
-            flags::ABILITY_INVOKE.into(),
-            flags::ABILITY_SUBSCRIBE.into(),
-            flags::LOOPBACK.into(),
-            flags::MISFIRE_POLICY_V1.into(),
-        ],
-    };
-    discovery::write(&discovery::default_path(), &disc)?;
+    write_discovery_for(&addr, None)?;
 
     // Accept loop.
-    accept_loop(listener, proxy).await
+    let boot = BootBus::new();
+    boot.emit_ready();
+    let state = ControlServerState::ready(proxy, boot);
+    accept_loop_with_state(listener, state).await
+}
+
+/// Bind and spawn the control server in booting mode.
+///
+/// The returned handle can rewrite discovery once optional ports are
+/// known and can inject the ready proxy when daemon boot completes.
+pub fn spawn_booting(boot: BootBus) -> anyhow::Result<ControlServerHandle> {
+    let (listener, address) = transport::bind_default()?;
+    write_discovery_for(&address, None)?;
+    let state = ControlServerState::booting(boot);
+    let accept_state = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = accept_loop_with_state(listener, accept_state).await {
+            eprintln!("[control] accept loop exited: {e:#}");
+        }
+    });
+    Ok(ControlServerHandle { state, address })
 }
 
 /// Accept connections forever, spawn one tokio task per connection.
 /// Extracted as a free function so tests can drive it with an
 /// arbitrary listener instead of going through `bind_default`.
-pub(crate) async fn accept_loop(
+pub(crate) async fn accept_loop_with_state(
     listener: ControlListener,
-    proxy: AbilityProxy,
+    state: ControlServerState,
 ) -> anyhow::Result<()> {
     match listener {
         #[cfg(unix)]
         ControlListener::Uds(uds) => {
             loop {
                 let (stream, _peer_addr) = uds.accept().await?;
-                let proxy = proxy.clone();
+                let state = state.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = serve_connection(stream, proxy).await {
+                    if let Err(e) = serve_connection(stream, state).await {
                         // Per-connection failure is operator-visible
                         // but never fatal to the listener loop. We
                         // log via stderr; a future PR can route this
@@ -131,9 +194,9 @@ pub(crate) async fn accept_loop(
         #[cfg(windows)]
         ControlListener::NamedPipe(mut listener) => loop {
             let stream = listener.accept().await?;
-            let proxy = proxy.clone();
+            let state = state.clone();
             tokio::spawn(async move {
-                if let Err(e) = serve_connection(stream, proxy).await {
+                if let Err(e) = serve_connection(stream, state).await {
                     let err_msg = format!("{e:#}");
                     crate::op_event!(
                         component = control,
@@ -172,7 +235,7 @@ pub(crate) async fn accept_loop(
 ///
 ///   writer task     ← `OutgoingFrame` from `out_rx`
 ///                  → length-prefixed JSON write to the connection
-async fn serve_connection<S>(stream: S, proxy: AbilityProxy) -> anyhow::Result<()>
+async fn serve_connection<S>(stream: S, state: ControlServerState) -> anyhow::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -232,9 +295,7 @@ where
                 continue;
             }
         };
-        proxy
-            .handle_async(req, out_tx.clone(), &cancel, &bidi)
-            .await;
+        handle_request(req, out_tx.clone(), &cancel, &bidi, &state).await;
     }
 
     // Reader stopped → connection closing. Cancel every live
@@ -262,6 +323,165 @@ where
     Ok(())
 }
 
+async fn handle_request(
+    req: IncomingFrame,
+    out: mpsc::Sender<OutgoingFrame>,
+    cancel: &CancelRegistry,
+    bidi: &BidiRegistry,
+    state: &ControlServerState,
+) {
+    if let IncomingFrame::Subscribe {
+        subscription_id,
+        ability,
+        ..
+    } = &req
+    {
+        if ability == WATCH_BOOT_ABILITY {
+            spawn_boot_forwarder(
+                subscription_id.clone(),
+                state.boot.clone(),
+                out,
+                cancel.clone(),
+            );
+            return;
+        }
+    }
+
+    let proxy = state.proxy.read().await.clone();
+    match proxy {
+        Some(proxy) => proxy.handle_async(req, out, cancel, bidi).await,
+        None => send_booting_error(req, out).await,
+    }
+}
+
+async fn send_booting_error(req: IncomingFrame, out: mpsc::Sender<OutgoingFrame>) {
+    let message = "daemon is still booting; subscribe to system.watch_boot and retry after Ready";
+    let frame = match req {
+        IncomingFrame::Invoke { request_id, .. } => OutgoingFrame::Error {
+            request_id: Some(request_id),
+            subscription_id: None,
+            code: crate::services::control::frames::codes::BOOTING.into(),
+            message: message.into(),
+        },
+        IncomingFrame::Subscribe {
+            subscription_id, ..
+        } => OutgoingFrame::Error {
+            request_id: None,
+            subscription_id: Some(subscription_id),
+            code: crate::services::control::frames::codes::BOOTING.into(),
+            message: message.into(),
+        },
+        IncomingFrame::Cancel { subscription_id } => OutgoingFrame::Error {
+            request_id: None,
+            subscription_id: Some(subscription_id),
+            code: crate::services::control::frames::codes::BOOTING.into(),
+            message: "Cancel received while daemon is still booting".into(),
+        },
+        IncomingFrame::OpenBidi { session_id, .. }
+        | IncomingFrame::SendBidi { session_id, .. }
+        | IncomingFrame::CloseBidi { session_id } => OutgoingFrame::ErrorBidi {
+            session_id,
+            code: crate::services::control::frames::codes::BOOTING.into(),
+            message: message.into(),
+        },
+    };
+    let _ = out.send(frame).await;
+}
+
+fn spawn_boot_forwarder(
+    subscription_id: String,
+    boot: BootBus,
+    out: mpsc::Sender<OutgoingFrame>,
+    cancel: CancelRegistry,
+) {
+    let token = tokio_util::sync::CancellationToken::new();
+    {
+        let mut guard = cancel.lock().expect("cancel registry lock");
+        guard.insert(subscription_id.clone(), token.clone());
+    }
+    tokio::spawn(async move {
+        let mut rx = boot.subscribe();
+        let reason = loop {
+            tokio::select! {
+                _ = token.cancelled() => break "cancelled".to_string(),
+                event = rx.recv() => match event {
+                    Ok(event) => {
+                        let terminal = matches!(event, BootEvent::Ready | BootEvent::Failed { .. });
+                        let frame = serde_json::to_value(&event).unwrap_or_else(|e| {
+                            serde_json::json!({
+                                "type": "failed",
+                                "stage": "boot-event-serialization",
+                                "error": e.to_string(),
+                            })
+                        });
+                        if out
+                            .send(OutgoingFrame::Frame {
+                                subscription_id: subscription_id.clone(),
+                                frame,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            break "connection_closed".to_string();
+                        }
+                        if terminal {
+                            break "done".to_string();
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        let frame = serde_json::json!({
+                            "type": "lagged",
+                            "dropped": n,
+                        });
+                        if out
+                            .send(OutgoingFrame::Frame {
+                                subscription_id: subscription_id.clone(),
+                                frame,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            break "connection_closed".to_string();
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        break "boot_bus_closed".to_string();
+                    }
+                }
+            }
+        };
+        {
+            let mut guard = cancel.lock().expect("cancel registry lock");
+            guard.remove(&subscription_id);
+        }
+        let _ = out
+            .send(OutgoingFrame::Terminal {
+                subscription_id,
+                reason,
+            })
+            .await;
+    });
+}
+
+fn write_discovery_for(addr: &ControlAddress, pages_port: Option<u16>) -> anyhow::Result<()> {
+    let pid = std::process::id();
+    let disc = ControlDiscovery {
+        socket_path: addr.as_uds_path().map(|p| p.to_path_buf()),
+        pipe_name: addr.as_pipe_name().map(|s| s.to_string()),
+        pid,
+        daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+        supported_ipc_versions: IpcVersionRange::single(IPC_VERSION_V1),
+        capability_flags: vec![
+            flags::ABILITY_INVOKE.into(),
+            flags::ABILITY_SUBSCRIBE.into(),
+            flags::LOOPBACK.into(),
+            flags::MISFIRE_POLICY_V1.into(),
+        ],
+        pages_port,
+    };
+    discovery::write(&discovery::default_path(), &disc)
+}
+
 /// Construct an AbilityProxy wrapping the given Kernel. Exists as a
 /// named helper so a future test harness can exercise the proxy
 /// without going through the full accept loop.
@@ -282,7 +502,9 @@ pub(crate) async fn serve_one_for_test(
     stream: UnixStream,
     proxy: AbilityProxy,
 ) -> anyhow::Result<()> {
-    serve_connection(stream, proxy).await
+    let boot = BootBus::new();
+    boot.emit_ready();
+    serve_connection(stream, ControlServerState::ready(proxy, boot)).await
 }
 
 #[cfg(test)]
@@ -291,7 +513,9 @@ pub(crate) async fn serve_one_for_test(
     stream: NamedPipeServer,
     proxy: AbilityProxy,
 ) -> anyhow::Result<()> {
-    serve_connection(stream, proxy).await
+    let boot = BootBus::new();
+    boot.emit_ready();
+    serve_connection(stream, ControlServerState::ready(proxy, boot)).await
 }
 
 #[cfg(test)]
@@ -325,11 +549,104 @@ mod tests {
         Arc::new(Kernel::new(Arc::new(NoopGateway::new())))
     }
 
+    fn ready_state(proxy: AbilityProxy) -> ControlServerState {
+        let boot = BootBus::new();
+        boot.emit_ready();
+        ControlServerState::ready(proxy, boot)
+    }
+
     #[test]
     fn make_proxy_wraps_kernel_handle() {
         let kernel: Arc<dyn KernelApi> = make_kernel();
         let proxy = make_proxy(Arc::clone(&kernel));
         assert!(Arc::ptr_eq(proxy.kernel(), &kernel));
+    }
+
+    #[tokio::test]
+    async fn booting_state_rejects_invoke_with_booting_code() {
+        let boot = BootBus::new();
+        let state = ControlServerState::booting(boot);
+        let (out_tx, mut out_rx) = mpsc::channel::<OutgoingFrame>(4);
+        let cancel: CancelRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let bidi: BidiRegistry = Arc::new(Mutex::new(HashMap::new()));
+
+        handle_request(
+            IncomingFrame::Invoke {
+                request_id: "boot-rpc".into(),
+                ability: "device.observe.health".into(),
+                args: serde_json::json!({}),
+                subject: None,
+            },
+            out_tx,
+            &cancel,
+            &bidi,
+            &state,
+        )
+        .await;
+
+        match out_rx.recv().await.expect("booting response") {
+            OutgoingFrame::Error {
+                request_id, code, ..
+            } => {
+                assert_eq!(request_id.as_deref(), Some("boot-rpc"));
+                assert_eq!(code, crate::services::control::frames::codes::BOOTING);
+            }
+            other => panic!("expected booting Error frame, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn watch_boot_subscription_receives_ready_terminal() {
+        let boot = BootBus::new();
+        let state = ControlServerState::booting(boot.clone());
+        let (out_tx, mut out_rx) = mpsc::channel::<OutgoingFrame>(4);
+        let cancel: CancelRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let bidi: BidiRegistry = Arc::new(Mutex::new(HashMap::new()));
+
+        handle_request(
+            IncomingFrame::Subscribe {
+                subscription_id: "boot-sub".into(),
+                ability: WATCH_BOOT_ABILITY.into(),
+                args: serde_json::json!({}),
+            },
+            out_tx,
+            &cancel,
+            &bidi,
+            &state,
+        )
+        .await;
+        boot.emit_ready();
+
+        let first = tokio::time::timeout(std::time::Duration::from_secs(1), out_rx.recv())
+            .await
+            .expect("ready frame timeout")
+            .expect("ready frame");
+        match first {
+            OutgoingFrame::Frame {
+                subscription_id,
+                frame,
+            } => {
+                assert_eq!(subscription_id, "boot-sub");
+                let event: BootEvent = serde_json::from_value(frame).unwrap();
+                assert_eq!(event, BootEvent::Ready);
+            }
+            other => panic!("expected Ready boot frame, got {other:?}"),
+        }
+
+        let second = tokio::time::timeout(std::time::Duration::from_secs(1), out_rx.recv())
+            .await
+            .expect("terminal frame timeout")
+            .expect("terminal frame");
+        match second {
+            OutgoingFrame::Terminal {
+                subscription_id,
+                reason,
+            } => {
+                assert_eq!(subscription_id, "boot-sub");
+                assert_eq!(reason, "done");
+            }
+            other => panic!("expected boot terminal frame, got {other:?}"),
+        }
     }
 
     /// End-to-end smoke: bind UDS at a temp path, send one Invoke
@@ -350,7 +667,7 @@ mod tests {
             #[cfg(unix)]
             if let ControlListener::Uds(uds) = listener {
                 let (stream, _) = uds.accept().await.unwrap();
-                serve_connection(stream, proxy).await.unwrap();
+                serve_connection(stream, ready_state(proxy)).await.unwrap();
             }
         });
 
@@ -457,7 +774,7 @@ mod tests {
             #[cfg(unix)]
             if let ControlListener::Uds(uds) = listener {
                 let (stream, _) = uds.accept().await.unwrap();
-                serve_connection(stream, proxy).await.unwrap();
+                serve_connection(stream, ready_state(proxy)).await.unwrap();
             }
         });
 
@@ -584,7 +901,7 @@ mod tests {
             #[cfg(unix)]
             if let ControlListener::Uds(uds) = listener {
                 let (stream, _) = uds.accept().await.unwrap();
-                serve_connection(stream, proxy).await.unwrap();
+                serve_connection(stream, ready_state(proxy)).await.unwrap();
             }
         });
 

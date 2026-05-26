@@ -86,6 +86,14 @@ pub struct ControlDiscovery {
     /// has not yet advertised `ability_subscribe`).
     #[serde(default)]
     pub capability_flags: Vec<String>,
+
+    /// Actual local Pages listener port chosen by the daemon.
+    ///
+    /// Older daemons did not write this field. Readers must treat
+    /// `None` as "unknown" and fall back to their historical default
+    /// or omit Pages URLs until Ready.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pages_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -188,6 +196,7 @@ mod tests {
             daemon_version: "1.17.1".into(),
             supported_ipc_versions: IpcVersionRange::single(IPC_VERSION_V1),
             capability_flags: vec![flags::ABILITY_INVOKE.into()],
+            pages_port: Some(8787),
         }
     }
 
@@ -216,6 +225,7 @@ mod tests {
         assert_eq!(back.pid, disc.pid);
         assert_eq!(back.supported_ipc_versions, disc.supported_ipc_versions);
         assert_eq!(back.capability_flags, disc.capability_flags);
+        assert_eq!(back.pages_port, Some(8787));
     }
 
     #[test]

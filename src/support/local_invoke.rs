@@ -136,10 +136,15 @@ pub fn invoke_local_ability_with_subject(
                 code,
                 message,
                 ..
-            } => bail!(
-                "daemon error invoking '{ability_owned}' (request_id={:?}, code={code}): {message}",
-                rid.unwrap_or_default()
-            ),
+            } => {
+                if code == crate::services::control::frames::codes::BOOTING {
+                    bail!("daemon is still starting; retry after it reports Ready");
+                }
+                bail!(
+                    "daemon error invoking '{ability_owned}' (request_id={:?}, code={code}): {message}",
+                    rid.unwrap_or_default()
+                )
+            }
             other => bail!("daemon returned an unexpected frame for an Invoke request: {other:?}"),
         }
     })

@@ -315,6 +315,7 @@ mod tests {
             daemon_version: "test".into(),
             supported_ipc_versions: IpcVersionRange::single(IPC_VERSION_V1),
             capability_flags: vec![flags::ABILITY_INVOKE.into()],
+            pages_port: None,
         };
         discovery::write(&json_path, &disc).expect("write control.json");
 
@@ -383,6 +384,7 @@ mod tests {
             // Daemon claims it speaks v99-v100; the lib supports v1.
             supported_ipc_versions: IpcVersionRange { min: 99, max: 100 },
             capability_flags: vec![],
+            pages_port: None,
         };
         discovery::write(&json_path, &disc).expect("write control.json");
 

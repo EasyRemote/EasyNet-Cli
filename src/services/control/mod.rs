@@ -51,6 +51,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub mod ability_proxy;
+pub mod boot_events;
 pub mod discovery;
 pub mod frames;
 /// Step 3 of the cross-repo plan: separate UDS responder for
