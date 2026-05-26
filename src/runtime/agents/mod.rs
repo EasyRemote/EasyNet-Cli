@@ -737,20 +737,17 @@ pub fn build_registry_with_services(
     // sequence per upstream. No silent divergence between surfaces.
     crate::runtime::agents::mcp_executor::set_process_client(mcp_client_svc.clone());
 
-    // Reflectively register every tool of every configured upstream
-    // MCP server as a first-class ability. After this call, the
-    // outbound `device.mcp.client.call` ability is still available
-    // (for callers who want the explicit-server-name shape), but
-    // operators + MCP-Bench can also reach each tool by its bare
-    // ability name (e.g. `weather_lookup` instead of
-    // `device.mcp.client.call({server, name, ...})`).
+    // MCP reflection policy. Direct MCP client abilities are already
+    // registered above; this section only decides whether upstream
+    // tools are projected as first-class EasyNet abilities.
     //
-    // The function is async because tools/list is a JSON-RPC RPC;
-    // build_registry_with_services is sync. We bridge through
-    // `reflect_mcp_upstreams_sync`. Failures are LOGGED, not panicked:
-    // a broken upstream MCP server must not block daemon boot — every
-    // other ability stays available and the operator sees per-server
-    // failures in stderr.
+    // Default is lazy: `easynet start` must return a ready daemon
+    // after the bounded local registry build, while external MCP
+    // servers are discovered by a background supervisor against the
+    // dynamic registry overlay. Operators that need legacy blocking
+    // behaviour can set EASYNET_MCP_REFLECTION=eager; production
+    // operators can set `off` and rely solely on
+    // `device.mcp.client.{list,call}`.
     //
     // **Identity invariant.** The owner URA for reflected abilities
     // is the mcp-profile agent under the daemon's paired user. An
@@ -763,89 +760,24 @@ pub fn build_registry_with_services(
     // available so operators can still reach upstream tools through
     // the explicit-server-name shape; only the bare-name projection
     // is gated on a paired user.
-    // Boot-time reflection state we carry across the Arc::new(reg)
-    // boundary so the hot-reload sinks attached afterwards know which
-    // names they own per server. `None` here means "reflection didn't
-    // run" — the unpaired-daemon arm below — and the sink attachment
-    // below short-circuits in that case.
-    let mut reflection_per_server: Option<(
-        String,
-        std::collections::BTreeMap<String, Vec<String>>,
-    )> = None;
-
-    if let (Some(user_slot), realm_slot) = (
-        pages_identity.user.clone(),
-        pages_identity
-            .realm
-            .clone()
-            .unwrap_or_else(|| easynet_axon::ura::REALM_EASYNET.to_string()),
-    ) {
-        let mcp_owner_ura = easynet_axon::ura::agent_ura(&realm_slot, &user_slot, "mcp");
-        match reflect_mcp_upstreams_sync(&mcp_client_svc, &mut reg, &mcp_owner_ura) {
-            Ok(report) => {
-                if !report.registered.is_empty() || !report.failed.is_empty() {
-                    let registered_count = report.registered.len();
-                    let failed_count = report.failed.len();
-                    crate::op_event!(
-                        component = mcp_reflective,
-                        kind = reflection_summary,
-                        registered = registered_count,
-                        failed = failed_count,
-                    );
-                    for f in &report.failed {
-                        let server = f.server.as_str();
-                        let tool = f.tool.as_deref().unwrap_or("(server)");
-                        let reason = f.reason.as_str();
-                        crate::op_event!(
-                            component = mcp_reflective,
-                            kind = tool_skipped,
-                            server = server,
-                            tool = tool,
-                            reason = reason,
-                        );
-                    }
-                }
-                // Aggregate per-server reflected names so the
-                // hot-reload sinks know the starting set and can
-                // diff against future `tools/list_changed` pushes.
-                let mut per_server: std::collections::BTreeMap<String, Vec<String>> =
-                    std::collections::BTreeMap::new();
-                for r in &report.registered {
-                    per_server
-                        .entry(r.server.clone())
-                        .or_default()
-                        .push(r.ability_name.clone());
-                }
-                reflection_per_server = Some((mcp_owner_ura.clone(), per_server));
-            }
-            Err(e) => {
-                let err_msg = format!("{e}");
-                crate::op_event!(
-                    component = mcp_reflective,
-                    kind = reflection_skipped,
-                    level = "warn",
-                    reason = "runtime_bridge_failed",
-                    error = err_msg,
-                );
-            }
-        }
-    } else {
-        // Unpaired daemons emit a single informational line so an
-        // operator who configured `mcp_clients.json` but forgot to
-        // pair a user understands why their MCP tools are not
-        // showing up as bare-name abilities. We do NOT consult the
-        // service for its server count here — that requires the
-        // async lock, and this code path runs in the sync boot
-        // context — so the log is unconditional. False positives
-        // (printing this line when there are no servers configured
-        // either) are cheap; false silences would frustrate
-        // operators.
-        crate::op_event!(
-            component = mcp_reflective,
-            kind = reflection_skipped,
-            reason = "daemon_unpaired",
+    // Resolve the post-Arc reflection plan in one place. The plan
+    // enum (`PostArcReflection`) encodes the four terminal outcomes
+    // of `(mode, paired?)`: skip, attach-after-eager, spawn-lazy. No
+    // exclusive-pair-of-Option threading across the Arc::new(reg)
+    // boundary — every branch is a named variant carrying exactly
+    // the data the apply step needs.
+    let reflection_realm = pages_identity
+        .realm
+        .clone()
+        .unwrap_or_else(|| easynet_axon::ura::REALM_EASYNET.to_string());
+    let reflection_plan =
+        crate::runtime::agents::mcp_reflective_registry::PostArcReflection::plan(
+            crate::runtime::agents::mcp_reflective_registry::McpReflectionMode::from_env(),
+            pages_identity.user.as_deref(),
+            &reflection_realm,
+            &mcp_client_svc,
+            &mut reg,
         );
-    }
     // device.agent.list — operational view of registered LLM
     // sub-agents. Cheap-row projection (name, runtime, model, label);
     // for the protocol agent-card view see a2a.bridge.list_skills.
@@ -882,9 +814,13 @@ pub fn build_registry_with_services(
     // for the lifetime of the daemon process — they're never
     // explicitly unregistered, which matches the daemon's whole-
     // process lifecycle.
-    if let Some((owner_ura, per_server)) = reflection_per_server.as_ref() {
-        attach_mcp_refresh_sinks_sync(&mcp_client_svc, &arc, owner_ura, per_server);
-    }
+    //
+    // Both eager and lazy modes funnel through `McpReflectionSupervisor`
+    // via `PostArcReflection::apply` so the sync-bridge logic lives
+    // in exactly one module. Eager hands the supervisor the
+    // per-server index it computed at boot; lazy lets the supervisor
+    // compute its own once the background reflection pass finishes.
+    reflection_plan.apply(Arc::clone(&mcp_client_svc), Arc::clone(&arc));
 
     arc
 }
@@ -1473,119 +1409,6 @@ pub fn rfc006_for(name: &str) -> Option<ability_toml::Rfc006Metadata> {
 ///   we mint a single-threaded runtime, drive it to completion, and
 ///   drop it.
 ///
-/// Returns `Ok(report)` with both successes and per-tool failures
-/// (so the caller can log them coherently), or `Err` only when
-/// the runtime bridge itself fails — a per-server upstream failure
-/// is reported inside the `ReflectResult.failed` field, NOT here.
-fn reflect_mcp_upstreams_sync(
-    client: &crate::runtime::execution::mcp_client::McpClientService,
-    registry: &mut crate::runtime::ability_dispatch::LocalAbilityRegistry,
-    owner_agent_ura: &str,
-) -> anyhow::Result<crate::runtime::agents::mcp_reflective_registry::ReflectResult> {
-    use crate::runtime::agents::mcp_reflective_registry::reflect_all;
-    let fut = async move { reflect_all(client, registry, owner_agent_ura).await };
-    match tokio::runtime::Handle::try_current() {
-        Ok(_handle) => Ok(tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(fut)
-        })),
-        Err(_) => {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| anyhow::anyhow!("build mcp-reflect runtime: {e}"))?;
-            Ok(rt.block_on(fut))
-        }
-    }
-}
-
-/// Sync→async bridge that attaches a `RegistryRefreshSink` to every
-/// configured stdio MCP upstream. Called once after `Arc::new(reg)`
-/// in `build_registry_with_services`, so each sink can hold a
-/// `Weak<LocalAbilityRegistry>` that survives daemon shutdown
-/// gracefully.
-///
-/// Per-server failures are logged and skipped — one broken upstream
-/// must not prevent the rest from getting their hot-reload sinks.
-/// HTTP transports are silently skipped today: their notification
-/// path lives inside SSE responses to RPCs, not in an idle channel,
-/// so a "hot-reload sink" on the HTTP side is a separate design.
-fn attach_mcp_refresh_sinks_sync(
-    client: &std::sync::Arc<crate::runtime::execution::mcp_client::McpClientService>,
-    registry: &std::sync::Arc<crate::runtime::ability_dispatch::LocalAbilityRegistry>,
-    owner_agent_ura: &str,
-    initially_reflected: &std::collections::BTreeMap<String, Vec<String>>,
-) {
-    use crate::runtime::agents::mcp_reflective_registry::RegistryRefreshSink;
-    let svc_for_async = client.clone();
-    let registry_weak = std::sync::Arc::downgrade(registry);
-    let client_weak = std::sync::Arc::downgrade(client);
-    let owner = owner_agent_ura.to_string();
-    let reflected_snapshot = initially_reflected.clone();
-
-    let fut = async move {
-        let server_names = svc_for_async.server_names().await;
-        for name in server_names {
-            let Some(spec) = svc_for_async.spec(&name).await else {
-                continue;
-            };
-            if spec.transport != "stdio" {
-                // Hot-reload over streamable HTTP is not wired in this
-                // pass — the listener model lives on the stdio side
-                // only. Silently skip rather than warn so a mixed
-                // catalogue doesn't drown the operator in noise.
-                continue;
-            }
-            let reflected_for_server = reflected_snapshot
-                .get(&name)
-                .cloned()
-                .unwrap_or_default();
-            let sink = Box::new(RegistryRefreshSink::new(
-                registry_weak.clone(),
-                client_weak.clone(),
-                name.clone(),
-                owner.clone(),
-                reflected_for_server,
-            ));
-            if let Err(e) = svc_for_async.register_notification_sink(&name, sink).await {
-                let server = name.as_str();
-                let err_msg = format!("{e}");
-                crate::op_event!(
-                    component = mcp_reflective,
-                    kind = refresh_sink_attach_failed,
-                    level = "warn",
-                    server = server,
-                    error = err_msg,
-                );
-            }
-        }
-    };
-
-    let result = match tokio::runtime::Handle::try_current() {
-        Ok(_handle) => {
-            tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(fut));
-            Ok(())
-        }
-        Err(_) => match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(rt) => {
-                rt.block_on(fut);
-                Ok(())
-            }
-            Err(e) => Err(format!("build mcp-refresh-sink runtime: {e}")),
-        },
-    };
-    if let Err(e) = result {
-        crate::op_event!(
-            component = mcp_reflective,
-            kind = hot_reload_sink_skipped,
-            level = "warn",
-            error = e,
-        );
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
