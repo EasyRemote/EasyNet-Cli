@@ -128,6 +128,16 @@ impl AbilityClass {
             AbilityClass::Transition => "transition",
         }
     }
+
+    /// Derive the execution class from transport hints when an
+    /// ability manifest has not declared a class explicitly.
+    pub fn from_hints(hints: &AbilityHints) -> Self {
+        if hints.streaming_only || hints.bidi_only {
+            AbilityClass::Stream
+        } else {
+            AbilityClass::Query
+        }
+    }
 }
 
 /// Per RFC §1.6, each scope axis (subject vs caller) is a rule.
@@ -211,6 +221,66 @@ pub struct AbilityHints {
     pub bidi_only: bool,
 }
 
+/// Canonical locator for an ability descriptor.
+///
+/// Descriptor names are presentation names scoped by an owner URA:
+/// two hosted agents can both expose `chat`. The callable identity is
+/// therefore the full ability URA, built through Axon's URA builders
+/// from the descriptor's owner + public verb. Catalogues should key
+/// on this value object instead of reconstructing `(owner, name)`
+/// tuples at each call site.
+///
+/// Descriptors whose owner URA does not yet parse (e.g. a daemon
+/// that hasn't joined a hub, so the static catalogue is anchored on
+/// the literal `"self"` marker) still get a stable identity — a
+/// synthetic `pseudo://<owner>/<name>` shape that preserves the
+/// "distinct owner → distinct identity" invariant downstream catalog
+/// merge depends on. The synthetic form is internal-only: it never
+/// leaves this process because the wire `ability_ura` field is
+/// recomputed from owner+name and skipped when empty.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct AbilityIdentity {
+    /// Either the canonical ability URA, or a `pseudo://...`
+    /// fallback when no canonical URA can be derived. Both shapes
+    /// are unique per `(owner, public verb)` pair.
+    locator: String,
+}
+
+impl AbilityIdentity {
+    /// Build an identity for `descriptor`. Returns `None` whenever
+    /// either the owner URA or the name is blank — both halves are
+    /// load-bearing for the `(owner, public verb)` uniqueness
+    /// invariant the catalog merge relies on, so a half-filled
+    /// descriptor MUST NOT mint a key. Every other case produces a
+    /// stable key, falling back to a `pseudo://` form only when the
+    /// owner URA does not yet parse (e.g. the daemon has not joined
+    /// a hub, so the static catalogue is still anchored on the
+    /// literal `"self"` marker).
+    pub fn from_descriptor(descriptor: &AbilityDescriptor) -> Option<Self> {
+        let owner = descriptor.owner_agent_ura.trim();
+        let name = descriptor.name.trim();
+        if owner.is_empty() || name.is_empty() {
+            return None;
+        }
+        if let Some(canonical) = descriptor.canonical_ability_ura() {
+            if crate::ura::parse_ura(&canonical).is_ok() {
+                return Some(Self { locator: canonical });
+            }
+        }
+        Some(Self {
+            locator: format!("pseudo://{owner}/{name}"),
+        })
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.locator
+    }
+
+    pub fn into_string(self) -> String {
+        self.locator
+    }
+}
+
 /// Per RFC §1.6, the JSON Schemas describing an ability's input
 /// and the body shape of its receipt. We carry them as
 /// `serde_json::Value` so callers can attach existing schemas
@@ -228,7 +298,15 @@ pub struct AbilitySchemaSummary {
 /// The ability descriptor advertised over `federation.advertise_abilities`
 /// and returned via `meta.list_abilities`. Built locally by the
 /// hosting profile module (P4.2); never mutated after construction.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// **Serialization is hand-written** ([`AbilityDescriptor`] impls
+/// `Serialize` / `Deserialize` below) so two derived fields can
+/// project from canonical state without becoming `pub` writeable
+/// caches: `ability_ura` is always recomputed from `owner_agent_ura`
+/// + public verb at serialize time and ignored on deserialize, and
+/// `class` always emits an effective value even when no explicit
+/// override was set.
+#[derive(Debug, Clone, PartialEq)]
 pub struct AbilityDescriptor {
     /// Callable ability name. Device and hub abilities use a
     /// namespaced name such as `device.agent.list`; agent-owned
@@ -254,6 +332,12 @@ pub struct AbilityDescriptor {
     /// device-built-in or hub-built-in verb. A device publishing
     /// `shell.run` is the canonical pattern, not a violation.
     pub owner_agent_ura: String,
+    /// Explicit execution-class override. `None` means "derive from
+    /// transport hints"; `Some(_)` means a builder called
+    /// `with_class(...)` and the descriptor must honor that even if
+    /// hints would have steered elsewhere. Internal — read through
+    /// [`Self::ability_class`].
+    class_override: Option<AbilityClass>,
     pub visibility: Visibility,
     pub scope_subjects: ScopeRule,
     pub scope_agents: ScopeRule,
@@ -261,11 +345,6 @@ pub struct AbilityDescriptor {
     /// `description` field and on `meta.list_abilities`. Empty
     /// when unknown — the projection layer falls back to the name
     /// in that case rather than fabricating one.
-    ///
-    /// Marked `#[serde(default)]` so a descriptor persisted before
-    /// this field existed deserialises to an empty string instead
-    /// of failing the whole load.
-    #[serde(default)]
     pub description: String,
     /// Free-form provenance string, e.g.
     /// `skill_md:~/.claude/skills/alive-video/SKILL.md`,
@@ -276,8 +355,107 @@ pub struct AbilityDescriptor {
     pub hints: AbilityHints,
     /// Open-ended metadata bag. P4.4 stores `agent_type` here when
     /// the legacy `AgentType` enum is reshaped.
-    #[serde(default)]
     pub metadata: HashMap<String, String>,
+}
+
+// Hand-written Serialize / Deserialize for AbilityDescriptor:
+// the wire shape is a flat object with `ability_ura` and `class`
+// as fields, but those fields are **derived** in code, not
+// independent state. Hiding them behind a serde proxy (rather
+// than `pub` cache fields) closes the door on any call site
+// mutating them out of sync with the canonical inputs.
+impl Serialize for AbilityDescriptor {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        AbilityDescriptorWire::from_descriptor(self).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for AbilityDescriptor {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        AbilityDescriptorWire::deserialize(deserializer).map(AbilityDescriptorWire::into_descriptor)
+    }
+}
+
+/// Wire-only mirror of `AbilityDescriptor`. Lives next to the
+/// canonical type so the on-the-wire field set stays under one
+/// source of truth: any field added here must come with an explicit
+/// projection from / to the canonical struct, which is what stops
+/// `ability_ura` and `class` from drifting back into dual-source
+/// fields.
+#[derive(Serialize, Deserialize)]
+struct AbilityDescriptorWire {
+    name: String,
+    /// Always populated by the projection layer; ignored on parse —
+    /// the canonical value is recomputed from owner + public verb.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    ability_ura: String,
+    owner_agent_ura: String,
+    /// Always emitted at serialize time with the descriptor's
+    /// effective class, so consumers always see a concrete value.
+    /// On parse, an absent field becomes `None` (the descriptor's
+    /// `class_override` stays empty and `ability_class()` derives
+    /// from hints); a present field is taken as an explicit
+    /// override.
+    #[serde(default)]
+    class: Option<AbilityClass>,
+    visibility: Visibility,
+    scope_subjects: ScopeRule,
+    scope_agents: ScopeRule,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    schema_summary: AbilitySchemaSummary,
+    #[serde(default)]
+    hints: AbilityHints,
+    #[serde(default)]
+    metadata: HashMap<String, String>,
+}
+
+impl AbilityDescriptorWire {
+    fn from_descriptor(d: &AbilityDescriptor) -> Self {
+        let ability_ura = d.canonical_ability_ura().unwrap_or_default();
+        // Wire always carries a concrete class. Pinned overrides
+        // pass through; unpinned descriptors emit the derived value
+        // so a remote consumer (or a re-deserialize round-trip) sees
+        // what we would have computed locally.
+        let class = Some(d.ability_class());
+        Self {
+            name: d.name.clone(),
+            ability_ura,
+            owner_agent_ura: d.owner_agent_ura.clone(),
+            class,
+            visibility: d.visibility,
+            scope_subjects: d.scope_subjects.clone(),
+            scope_agents: d.scope_agents.clone(),
+            description: d.description.clone(),
+            source: d.source.clone(),
+            schema_summary: d.schema_summary.clone(),
+            hints: d.hints.clone(),
+            metadata: d.metadata.clone(),
+        }
+    }
+
+    fn into_descriptor(self) -> AbilityDescriptor {
+        // Wire `ability_ura` is intentionally discarded; the
+        // canonical URA is rebuilt from `owner_agent_ura` + name at
+        // every read via `canonical_ability_ura()`. Wire `class`,
+        // when present, becomes the explicit override.
+        AbilityDescriptor {
+            name: self.name,
+            owner_agent_ura: self.owner_agent_ura,
+            class_override: self.class,
+            visibility: self.visibility,
+            scope_subjects: self.scope_subjects,
+            scope_agents: self.scope_agents,
+            description: self.description,
+            source: self.source,
+            schema_summary: self.schema_summary,
+            hints: self.hints,
+            metadata: self.metadata,
+        }
+    }
 }
 
 /// Construction error. Shape mirrors `AgentAbilitySpec::new`: a
@@ -336,6 +514,7 @@ impl AbilityDescriptor {
         Ok(Self {
             name,
             owner_agent_ura,
+            class_override: None,
             visibility,
             // Sensible defaults for SCOPED's two axes: any caller
             // from any subject. Builders narrow as needed.
@@ -374,8 +553,20 @@ impl AbilityDescriptor {
         self
     }
 
+    /// Attach transport hints. Does **not** mutate the explicit
+    /// class override: `ability_class()` derives from hints only
+    /// when `with_class(...)` has not been called. This makes the
+    /// builder commutative in (`with_class`, `with_hints`) — call
+    /// them in any order and the result is the same.
     pub fn with_hints(mut self, hints: AbilityHints) -> Self {
         self.hints = hints;
+        self
+    }
+
+    /// Pin the execution class explicitly. Once set, later
+    /// `with_hints(...)` calls cannot silently flip it.
+    pub fn with_class(mut self, class: AbilityClass) -> Self {
+        self.class_override = Some(class);
         self
     }
 
@@ -392,6 +583,41 @@ impl AbilityDescriptor {
     pub fn with_metadata_entry(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.metadata.insert(key.into(), value.into());
         self
+    }
+
+    /// The public verb under this descriptor's owner. Agent-owned
+    /// registry entries may arrive as `<agent-id>.<verb>` internally;
+    /// this method is the only place that projection is applied.
+    pub fn public_name(&self) -> String {
+        crate::ura::public_ability_name_for_owner(&self.owner_agent_ura, &self.name)
+    }
+
+    /// Canonical ability URA for this descriptor. Always recomputed
+    /// from `owner_agent_ura` + `public_name()`; the `ability_ura`
+    /// wire field is a one-way serialize-time projection of this
+    /// method, not a separate source of truth.
+    pub fn canonical_ability_ura(&self) -> Option<String> {
+        canonical_ability_ura_for_owner(&self.owner_agent_ura, &self.public_name())
+    }
+
+    pub fn identity(&self) -> Option<AbilityIdentity> {
+        AbilityIdentity::from_descriptor(self)
+    }
+
+    /// Effective execution shape. An explicit `with_class(...)` wins;
+    /// otherwise the class is derived from transport hints. Callers
+    /// that need to know whether the class was pinned can use
+    /// [`Self::class_was_pinned`] instead.
+    pub fn ability_class(&self) -> AbilityClass {
+        self.class_override
+            .unwrap_or_else(|| AbilityClass::from_hints(&self.hints))
+    }
+
+    /// `true` iff a builder pinned the class via `with_class(...)`.
+    /// Mostly useful for tests and for downstream tooling that must
+    /// distinguish "derived from hints" from "operator-asserted".
+    pub fn class_was_pinned(&self) -> bool {
+        self.class_override.is_some()
     }
 
     /// Per RFC §1.6, decide whether this descriptor should be
@@ -415,6 +641,34 @@ impl AbilityDescriptor {
                 caller_ura == self.owner_agent_ura || subject_ura == self.owner_agent_ura
             }
         }
+    }
+}
+
+fn canonical_ability_ura_for_owner(owner_ura: &str, public_name: &str) -> Option<String> {
+    let parsed = crate::ura::parse_ura(owner_ura).ok()?;
+    match parsed.kind {
+        crate::ura::URAKind::Agent => Some(crate::ura::ability_ura(
+            &parsed.realm,
+            &parsed.user_id,
+            &parsed.agent_id,
+            public_name,
+        )),
+        crate::ura::URAKind::Hub if public_name.contains('.') => {
+            Some(crate::ura::hub_ability_ura(&parsed.realm, public_name))
+        }
+        crate::ura::URAKind::Device => Some(crate::ura::ability_ura(
+            &parsed.realm,
+            "device",
+            &parsed.device_id,
+            public_name,
+        )),
+        crate::ura::URAKind::User => Some(crate::ura::ability_ura(
+            &parsed.realm,
+            "user",
+            &parsed.user_id,
+            public_name,
+        )),
+        _ => None,
     }
 }
 
@@ -551,30 +805,206 @@ mod tests {
     }
 
     #[test]
+    fn identity_rejects_half_filled_descriptor() {
+        // The constructor enforces non-empty name + owner, but a
+        // caller that mutates the struct after construction must not
+        // be able to mint a ghost identity (`pseudo://owner/` or
+        // `pseudo:///name`) that the catalog dedup would treat as
+        // unique-per-blank. Both halves are load-bearing for the
+        // `(owner, public verb)` uniqueness invariant — either being
+        // blank means there is nothing to identify.
+        let mut blank_name = must(
+            "device.agent.list",
+            "easynet:///r/acme/device/dev-1",
+            Visibility::Scoped,
+        );
+        blank_name.name = "   ".into();
+        assert!(blank_name.identity().is_none());
+
+        let mut blank_owner = must(
+            "device.agent.list",
+            "easynet:///r/acme/device/dev-1",
+            Visibility::Scoped,
+        );
+        blank_owner.owner_agent_ura = "  ".into();
+        assert!(blank_owner.identity().is_none());
+    }
+
+    #[test]
+    fn descriptor_exposes_canonical_agent_ability_identity() {
+        let d = must(
+            "backend-engineer.chat",
+            "easynet:///r/acme/agent/alice.backend-engineer",
+            Visibility::Scoped,
+        );
+        assert_eq!(d.public_name(), "chat");
+        assert_eq!(
+            d.canonical_ability_ura().as_deref(),
+            Some("easynet:///r/acme/ability/alice.backend-engineer.chat")
+        );
+        assert_eq!(
+            d.identity().map(|id| id.into_string()),
+            Some("easynet:///r/acme/ability/alice.backend-engineer.chat".to_string())
+        );
+    }
+
+    #[test]
+    fn descriptor_identity_keeps_same_public_name_distinct_per_owner() {
+        let anthropic = must(
+            "chat",
+            "easynet:///r/acme/agent/alice.anthropic",
+            Visibility::Scoped,
+        );
+        let backend = must(
+            "chat",
+            "easynet:///r/acme/agent/alice.backend-engineer",
+            Visibility::Scoped,
+        );
+        assert_eq!(anthropic.public_name(), "chat");
+        assert_eq!(backend.public_name(), "chat");
+        assert_ne!(anthropic.identity(), backend.identity());
+    }
+
+    #[test]
+    fn ability_class_is_derived_from_transport_hints() {
+        let query = must(
+            "device.agent.list",
+            "easynet:///r/acme/device/dev-1",
+            Visibility::Scoped,
+        );
+        assert_eq!(query.ability_class(), AbilityClass::Query);
+        assert!(!query.class_was_pinned());
+
+        let stream = query.clone().with_hints(AbilityHints {
+            streaming_only: true,
+            ..Default::default()
+        });
+        assert_eq!(stream.ability_class(), AbilityClass::Stream);
+        assert!(!stream.class_was_pinned());
+
+        let transition = query.with_class(AbilityClass::Transition);
+        assert_eq!(transition.ability_class(), AbilityClass::Transition);
+        assert!(transition.class_was_pinned());
+        // Hints arriving AFTER an explicit override do not flip the
+        // pinned class — this is the regression the audit caught.
+        let transition_after_hints = transition.with_hints(AbilityHints {
+            streaming_only: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            transition_after_hints.ability_class(),
+            AbilityClass::Transition,
+            "with_hints must not silently overwrite a class pinned by with_class"
+        );
+    }
+
+    #[test]
     fn descriptor_round_trips_through_serde() {
-        let mut metadata = HashMap::new();
-        metadata.insert("agent_type".into(), "claude-code".into());
-        let d = AbilityDescriptor {
-            name: "skill.alive-video".into(),
-            owner_agent_ura: "easynet:///r/acme/agent/alice.claude".into(),
-            visibility: Visibility::Scoped,
-            scope_subjects: ScopeRule::OnlyMatching(vec!["operator".into()]),
-            scope_agents: ScopeRule::Any,
-            description: "render alive video clips".into(),
-            source: "skill_md:/path/to/SKILL.md".into(),
-            schema_summary: AbilitySchemaSummary {
-                input: serde_json::json!({"type":"object"}),
-                output_receipt_body: serde_json::json!({"type":"object"}),
-            },
-            hints: AbilityHints {
-                read_only: true,
+        // Wire round-trip equivalence: serialize → deserialize →
+        // serialize again must produce byte-identical JSON. We assert
+        // wire-equivalence (not full struct equality) because the
+        // wire `class` field cannot distinguish an explicit override
+        // of `Query` from "no override + derived Query", so the
+        // `class_override` internal field is intentionally one-way
+        // lossy across the wire. Every other field round-trips
+        // exactly.
+        let d = must(
+            "skill.alive-video",
+            "easynet:///r/acme/agent/alice.claude",
+            Visibility::Scoped,
+        )
+        .with_scope_subjects(ScopeRule::OnlyMatching(vec!["operator".into()]))
+        .with_description("render alive video clips")
+        .with_source("skill_md:/path/to/SKILL.md")
+        .with_input_schema(serde_json::json!({"type":"object"}))
+        .with_output_schema(serde_json::json!({"type":"object"}))
+        .with_hints(AbilityHints {
+            read_only: true,
+            ..Default::default()
+        })
+        .with_metadata_entry("agent_type", "claude-code");
+        let first = serde_json::to_string(&d).unwrap();
+        let back: AbilityDescriptor = serde_json::from_str(&first).unwrap();
+        let second = serde_json::to_string(&back).unwrap();
+        assert_eq!(first, second, "wire form must be stable under round-trip");
+        assert_eq!(back.name, d.name);
+        assert_eq!(back.owner_agent_ura, d.owner_agent_ura);
+        assert_eq!(back.visibility, d.visibility);
+        assert_eq!(back.scope_subjects, d.scope_subjects);
+        assert_eq!(back.scope_agents, d.scope_agents);
+        assert_eq!(back.description, d.description);
+        assert_eq!(back.source, d.source);
+        assert_eq!(back.schema_summary, d.schema_summary);
+        assert_eq!(back.hints, d.hints);
+        assert_eq!(back.metadata, d.metadata);
+        assert_eq!(back.ability_class(), d.ability_class());
+        assert_eq!(back.canonical_ability_ura(), d.canonical_ability_ura());
+    }
+
+    #[test]
+    fn serialized_ability_ura_is_always_derived_not_round_tripped() {
+        let d = must(
+            "chat",
+            "easynet:///r/acme/agent/alice.claude",
+            Visibility::Scoped,
+        );
+        let mut json: serde_json::Value = serde_json::to_value(&d).unwrap();
+        // Wire MUST carry the canonical URA regardless of how the
+        // descriptor was built.
+        assert_eq!(
+            json["ability_ura"],
+            serde_json::json!("easynet:///r/acme/ability/alice.claude.chat")
+        );
+        // Tamper with the wire form: a malicious / buggy upstream
+        // sends a URA that does not match owner+name. Deserialization
+        // must ignore it and recompute.
+        json["ability_ura"] = serde_json::json!("easynet:///r/acme/ability/mallory.evil.chat");
+        let back: AbilityDescriptor = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            back.canonical_ability_ura().as_deref(),
+            Some("easynet:///r/acme/ability/alice.claude.chat"),
+            "wire ability_ura must never override the locally-derived value"
+        );
+    }
+
+    #[test]
+    fn wire_class_field_is_always_present_with_effective_value() {
+        // Unpinned + streaming hints → emit "stream" on the wire even
+        // though `class_override` is None internally.
+        let d = must(
+            "chat",
+            "easynet:///r/acme/agent/alice.claude",
+            Visibility::Scoped,
+        )
+        .with_hints(AbilityHints {
+            streaming_only: true,
+            ..Default::default()
+        });
+        let json = serde_json::to_value(&d).unwrap();
+        assert_eq!(json["class"], serde_json::json!("stream"));
+        assert!(!d.class_was_pinned());
+    }
+
+    #[test]
+    fn with_class_and_with_hints_are_commutative() {
+        let owner = "easynet:///r/acme/device/dev-1";
+        // Order A: pin class, then add streaming hints.
+        let a = must("device.agent.list", owner, Visibility::Scoped)
+            .with_class(AbilityClass::Query)
+            .with_hints(AbilityHints {
+                streaming_only: true,
                 ..Default::default()
-            },
-            metadata,
-        };
-        let json = serde_json::to_string(&d).unwrap();
-        let back: AbilityDescriptor = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, d);
+            });
+        // Order B: same calls reversed.
+        let b = must("device.agent.list", owner, Visibility::Scoped)
+            .with_hints(AbilityHints {
+                streaming_only: true,
+                ..Default::default()
+            })
+            .with_class(AbilityClass::Query);
+        assert_eq!(a.ability_class(), AbilityClass::Query);
+        assert_eq!(b.ability_class(), AbilityClass::Query);
+        assert_eq!(a, b);
     }
 
     #[test]
