@@ -231,8 +231,8 @@ pub fn tool_specs_from_descriptors(
 /// tool name. Codex and Claude Code surface MCP tools as function
 /// names, and the lowest-common-denominator function-name grammar is
 /// `[A-Za-z0-9_-]+`; dotted EasyNet names such as
-/// `openai.mcp_unit_converter__convert_length` are therefore projected
-/// as `openai_mcp_unit_converter__convert_length`.
+/// `openai.mcp_unit_converter_convert_length` are therefore projected
+/// as `openai_mcp_unit_converter_convert_length`.
 ///
 /// The canonical ability name is retained in `x-easynet.ability` and in
 /// the provider's route table. This keeps MCP naming an edge-adapter

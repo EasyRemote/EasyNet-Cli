@@ -263,7 +263,7 @@ pub struct McpAddArgs {
     #[arg(long = "tool")]
     pub tools: Vec<String>,
     /// Optional prefix for generated ability verbs. The default
-    /// produces names like `mcp_wikipedia__search`.
+    /// produces names like `mcp_wikipedia_search`.
     #[arg(long, default_value = "mcp")]
     pub prefix: String,
     /// Path to mcp_clients.json. Defaults to
@@ -2719,10 +2719,17 @@ fn generated_mcp_ability_name(prefix: &str, server: &str, tool: &str) -> String 
     let prefix_slug = slug_segment(prefix);
     let server_slug = slug_segment(server);
     let tool_slug = slug_segment(tool);
+    // Flat single-underscore form: `{prefix}_{server}_{tool}`. The
+    // earlier double-underscore at the server↔tool seam advertised
+    // the boundary visually but cost readability across the whole
+    // catalogue; user calls this trade-off in favour of a uniform
+    // separator. Two distinct server↔tool pairs that slugify to the
+    // same flat string would collide; the hash fallback below
+    // covers that case for empty / separator-only slugs.
     let base = if prefix_slug.is_empty() {
-        format!("{server_slug}__{tool_slug}")
+        format!("{server_slug}_{tool_slug}")
     } else {
-        format!("{prefix_slug}_{server_slug}__{tool_slug}")
+        format!("{prefix_slug}_{server_slug}_{tool_slug}")
     };
     // "Empty after slugify" means either the formatted string is
     // literally empty OR it slugifies to nothing but separators
@@ -3250,11 +3257,11 @@ while True:
         let manifest_path = crate::persistence::config::agents_root()
             .join("codex")
             .join("abilities")
-            .join("mcp_echo_server__echo_text.ability.toml");
+            .join("mcp_echo_server_echo_text.ability.toml");
         let body = fs::read_to_string(&manifest_path).expect("manifest written");
         let manifest =
             crate::core::ability_spec::AbilityManifest::from_toml_str(&body).expect("parse");
-        assert_eq!(manifest.name(), "mcp_echo_server__echo_text");
+        assert_eq!(manifest.name(), "mcp_echo_server_echo_text");
         match manifest.exec().expect("exec") {
             crate::core::ability_spec::AbilityExec::Mcp(exec) => {
                 assert_eq!(exec.server, "Echo Server");
@@ -3988,7 +3995,7 @@ tls_ca_pem_path = "/tmp/home-ca.pem"
         // non-alnum punctuation, so `geocode-address` lands as
         // `geocode_address` rather than retaining the hyphen.
         let name = generated_mcp_ability_name("mcp", "Google Maps", "geocode-address");
-        assert_eq!(name, "mcp_google_maps__geocode_address");
+        assert_eq!(name, "mcp_google_maps_geocode_address");
     }
 
     #[test]
@@ -3997,7 +4004,7 @@ tls_ca_pem_path = "/tmp/home-ca.pem"
         // emitted ability name remains a legal verb (no `__` runs
         // sneaking in from messy upstream names).
         let name = generated_mcp_ability_name("MCP", "google//maps", "geo  code");
-        assert_eq!(name, "mcp_google_maps__geo_code");
+        assert_eq!(name, "mcp_google_maps_geo_code");
     }
 
     #[test]
@@ -4017,11 +4024,11 @@ tls_ca_pem_path = "/tmp/home-ca.pem"
 
     #[test]
     fn generated_mcp_ability_name_empty_prefix_drops_leading_separator() {
-        // `--prefix=""` should produce `<server>__<tool>` without a
+        // `--prefix=""` should produce `<server>_<tool>` without a
         // leading underscore — operators use the empty prefix when
         // they manage their own naming scheme.
         let name = generated_mcp_ability_name("", "echo", "ping");
-        assert_eq!(name, "echo__ping");
+        assert_eq!(name, "echo_ping");
     }
 
     #[test]
