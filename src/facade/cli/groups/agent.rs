@@ -103,6 +103,10 @@ pub enum AgentAction {
     ChatHistory(agent_cmd::ChatHistoryArgs),
     /// DEPRECATED: use `easynet mission discuss`.
     Discuss(discuss_cmd::DiscussArgs),
+    /// Agent-scoped object grammar:
+    /// `easynet agent <agent-id-or-ura> new-ability ...`.
+    #[command(external_subcommand)]
+    Scoped(Vec<String>),
 }
 
 #[derive(Debug, Args)]
@@ -202,6 +206,9 @@ pub fn run(args: AgentArgs) -> anyhow::Result<()> {
           // `mission.think` ability: modern agent runtimes already do
           // think-act-observe inside `<agent>.chat`, so the outer loop
           // was redundant.
+        AgentAction::Scoped(tokens) => agent_cmd::run(agent_cmd::AgentArgs {
+            action: agent_cmd::AgentAction::Scoped(tokens),
+        }),
     }
 }
 

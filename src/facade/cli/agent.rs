@@ -74,6 +74,10 @@ pub enum AgentAction {
     /// per-caller memory dimension.
     #[command(name = "chat-history")]
     ChatHistory(ChatHistoryArgs),
+    /// Agent-scoped object grammar:
+    /// `easynet agent <agent-id-or-ura> new-ability ...`.
+    #[command(external_subcommand)]
+    Scoped(Vec<String>),
 }
 
 #[derive(Debug, Args)]
@@ -239,7 +243,7 @@ pub enum CostKindArg {
 }
 
 impl CostKindArg {
-    fn into_core(self) -> crate::core::ability_spec::CostKind {
+    pub(crate) fn into_core(self) -> crate::core::ability_spec::CostKind {
         use crate::core::ability_spec::CostKind;
         match self {
             CostKindArg::Free => CostKind::Free,
@@ -347,7 +351,15 @@ pub fn run(args: AgentArgs) -> anyhow::Result<()> {
         AgentAction::Publish(a) => run_publish(a),
         AgentAction::Refresh => run_refresh(),
         AgentAction::ChatHistory(a) => run_sessions(a),
+        AgentAction::Scoped(tokens) => run_agent_scoped(tokens),
     }
+}
+
+fn run_agent_scoped(tokens: Vec<String>) -> anyhow::Result<()> {
+    let Some((selector, tail)) = tokens.split_first() else {
+        anyhow::bail!("missing agent selector");
+    };
+    crate::facade::cli::agent_new_ability::run_scoped(selector, tail)
 }
 
 fn run_add(args: AddArgs) -> anyhow::Result<()> {
@@ -2278,7 +2290,7 @@ fn run_mcp(args: McpArgs) -> anyhow::Result<()> {
 ///   2. plan the manifests that should exist (no filesystem writes)
 ///   3. validate the user's `--tool` selection against the plan
 ///   4. materialise / dry-run the plans + render the operator summary
-fn run_mcp_add(args: McpAddArgs) -> anyhow::Result<()> {
+pub(crate) fn run_mcp_add(args: McpAddArgs) -> anyhow::Result<()> {
     let dir = open_registered_agent(&args.name)?;
     let config_path = args.config.clone().unwrap_or_else(
         crate::runtime::execution::mcp_client::McpClientService::default_config_path,
