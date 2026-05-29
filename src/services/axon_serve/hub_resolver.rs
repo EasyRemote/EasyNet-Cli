@@ -94,9 +94,7 @@ use crate::services::federation_directory::{
 pub enum HubResolution {
     /// Static `federated_peers` entry — operator declared this
     /// `tenant → hub_uri` mapping in `daemon-config.toml`.
-    Static {
-        hub_endpoint: String,
-    },
+    Static { hub_endpoint: String },
     /// Federated directory fallback — no static entry; the URI
     /// comes from the directory sync's observation of this device
     /// on a peer hub. `target_ura` is included so the caller can
@@ -196,9 +194,7 @@ impl<'a> HubResolver<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::federation_directory::{
-        DirectoryEntry, DirectoryEvent, DirectoryView,
-    };
+    use crate::services::federation_directory::{DirectoryEntry, DirectoryEvent, DirectoryView};
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
@@ -328,8 +324,7 @@ mod tests {
     #[test]
     fn directory_entry_without_endpoint_is_not_a_hit_when_fallback_enabled() {
         let static_peers = SharedFederatedPeers::default();
-        let directory =
-            directory_with_entry("tenant-z", "easynet:///r/tenant-z/device/d3", None);
+        let directory = directory_with_entry("tenant-z", "easynet:///r/tenant-z/device/d3", None);
 
         let resolver = HubResolver::new(&static_peers, &directory, true);
         let outcome = resolver.resolve("tenant-z", "easynet:///r/tenant-z/device/d3");

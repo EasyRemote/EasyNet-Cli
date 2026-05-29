@@ -106,6 +106,15 @@
 /// reader looking for "where does the CLI talk to the daemon"
 /// finds both helpers in one directory; this one is for the
 /// cross-hub path.
+/// `run_blocking()` + `try_run_blocking_in_tokio()` — the single
+/// recipe for driving a future to completion from sync code,
+/// with explicit fallback policy. Replaces three near-identical
+/// `block_on_*` helpers that used to live in
+/// `runtime/ability_dispatch.rs`,
+/// `runtime/agents/agent_lifecycle_ability.rs`, and
+/// `runtime/local_runtime_invoker.rs`.
+pub mod async_bridge;
+
 #[cfg(feature = "axon-pb")]
 pub(crate) mod federation_invoke;
 
@@ -124,21 +133,37 @@ pub(crate) mod federation_invoke;
 /// was created to prevent (see "Dependency direction invariant"
 /// above). One shim, one place that knows the feature exists.
 pub(crate) mod federation_invoke_shim;
+
+/// Transport plumbing for the local daemon's Invocation gRPC
+/// surface — socket resolution, UDS / named-pipe connect, tonic
+/// channel construction, and the `LocalDaemonAbilityClient` value
+/// object that carries a caller-override URA.
+///
+/// **Do not call into this module from CLI surfaces.** Use
+/// [`local_invoke::invoke_local_ability`] (no caller override) or
+/// the `LocalDaemonAbilityClient` constructors. The transport
+/// helpers here are pub(crate) for that one shim; widening their
+/// usage re-spawns the "one CLI subcommand opens its own IPC"
+/// anti-pattern this module file was created to eliminate.
 pub(crate) mod local_daemon_grpc;
-/// One helper — `invoke_local_ability(name, args)` — used by every
-/// CLI subcommand to talk to the local daemon's AbilityDispatcher.
-/// Per the AXON-RFC-001 ontology, every CLI action collapses to
-/// one ability Invoke; centralising the IPC dance here means a
-/// future transport swap lands in one file instead of N.
+
+/// **Canonical CLI ability-invocation surface.** One helper —
+/// `invoke_local_ability(name, args)` — every CLI subcommand uses
+/// to talk to the local daemon's Axon Invocation gRPC surface. Per
+/// the AXON-RFC-001 ontology, every CLI action collapses to one
+/// ability Invoke; centralising the daemon.sock bridge here keeps
+/// CLI commands out of registry internals and legacy control-plane
+/// dispatch. The day the transport evolves, this is the **one**
+/// module to swap.
 pub(crate) mod local_invoke;
 #[cfg(windows)]
 pub mod named_pipe;
 pub(crate) mod net;
+pub(crate) mod node;
 /// Operator-log macro `op_event!`. See module header for the
 /// convention; see `operator_log.rs` for the implementation
 /// rationale and the migration-to-`tracing` story.
 pub mod operator_log;
-pub(crate) mod node;
 pub(crate) mod output;
 /// `ProcessSingleton<T>` — typed "set at boot, read on the hot path"
 /// handle. Replaces ad-hoc `OnceLock` / `RwLock<Option<_>>` statics

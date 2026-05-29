@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::runtime::ability_dispatch::{LocalAbilityRegistry, LocalRpcHandler};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, LocalRpcHandler};
 
 /// Process-wide lock around the api_keys.toml read-modify-write
 /// cycle. Without it, two concurrent `mint_api_key` invocations
@@ -287,7 +287,7 @@ pub fn write_local_default_token(token: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn register(reg: &mut LocalAbilityRegistry, user: &str) {
+pub fn register(reg: &mut AxonAbilityCatalog, user: &str) {
     use crate::runtime::ability_dispatch::OwnerKind;
     let owner = OwnerKind::User(user.to_string());
     let user_owned = user.to_string();

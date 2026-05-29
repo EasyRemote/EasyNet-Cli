@@ -76,6 +76,8 @@ pub struct DispatchResult {
     /// `Some(message)` if the target reported an execution error;
     /// `None` for a clean reply.
     pub error: Option<String>,
+    /// Target-side Axon ledger request id when available.
+    pub request_id: Option<String>,
 }
 
 /// Handle to one pending dispatch entry. Drop the handle to remove
@@ -225,6 +227,7 @@ impl PendingDispatchMap {
                 let _ = entry.sender.send(DispatchResult {
                     payload: Vec::new(),
                     error: Some(error_reason.to_string()),
+                    request_id: None,
                 });
                 count += 1;
             }
@@ -354,6 +357,7 @@ mod tests {
                 DispatchResult {
                     payload: b"reply".to_vec(),
                     error: None,
+                    request_id: None,
                 },
             )
         });
@@ -387,6 +391,7 @@ mod tests {
             DispatchResult {
                 payload: b"too late".to_vec(),
                 error: None,
+                request_id: None,
             },
         );
         assert!(!still_completes, "complete on dropped entry returns false");
@@ -405,6 +410,7 @@ mod tests {
                 DispatchResult {
                     payload: Vec::new(),
                     error: Some("target ability raised".into()),
+                    request_id: None,
                 },
             )
         });
@@ -453,6 +459,7 @@ mod tests {
                 DispatchResult {
                     payload: b"two".to_vec(),
                     error: None,
+                    request_id: None,
                 },
             )
         });
@@ -498,6 +505,7 @@ mod tests {
                         DispatchResult {
                             payload: br#"{"sha256":"abc"}"#.to_vec(),
                             error: None,
+                            request_id: None,
                         },
                     )
                     .await
@@ -514,6 +522,7 @@ mod tests {
             Some(DispatchStreamEvent::Terminal(DispatchResult {
                 payload: br#"{"sha256":"abc"}"#.to_vec(),
                 error: None,
+                request_id: None,
             }))
         );
         writer.await.expect("writer joined");
@@ -533,6 +542,7 @@ mod tests {
                 DispatchResult {
                     payload: Vec::new(),
                     error: None,
+                    request_id: None,
                 },
             )
             .await

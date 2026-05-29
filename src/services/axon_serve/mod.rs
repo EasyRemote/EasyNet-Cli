@@ -17,7 +17,7 @@
 //   `domain::admission` helpers; this module *invokes* them at the
 //   start of every RPC method but never re-implements them
 // - Ability dispatch — `runtime::ability_dispatch` continues to own
-//   the LocalAbilityRegistry and the registered handler set; this
+//   the AxonAbilityCatalog and the registered handler set; this
 //   module routes inbound RPC calls into that registry
 // - Federation `<self>.session` / `<self>.invoke_remote` reverse-
 //   channel state — that lives in the future `presence_registry`
@@ -38,7 +38,7 @@
 // `tonic` impl that returns `Status::unimplemented` for every
 // method. It compiles, registers, and refuses every call. The real
 // dispatch logic (PresenceRegistry wiring, federation.* wrappers,
-// LocalAbilityRegistry forwarding) lands in subsequent commits on
+// AxonAbilityCatalog forwarding) lands in subsequent commits on
 // the same `rfc-001-impl` branch — each as a self-contained logical
 // change per CTO directive 06 §3.5.
 //
@@ -64,7 +64,7 @@ pub mod hub_resolver;
 pub mod invocation_wire;
 pub mod invoke_remote_initiator;
 pub mod list_user_pubkeys;
-pub mod local_ability_dispatcher;
+pub mod local_session_dispatcher;
 pub mod pinned_user_key_resolver;
 pub mod register_device_pubkey;
 pub mod revoke_user_pubkey;

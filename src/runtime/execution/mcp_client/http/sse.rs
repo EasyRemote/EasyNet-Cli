@@ -296,7 +296,8 @@ mod tests {
 
     #[test]
     fn parse_sse_body_errors_when_only_notifications_seen() {
-        let body = b"data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{}}\n\n";
+        let body =
+            b"data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{}}\n\n";
         let err = parse_sse_body(body).expect_err("must require terminal response");
         assert!(format!("{err}").contains("no JSON-RPC response"));
     }

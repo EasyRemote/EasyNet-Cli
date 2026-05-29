@@ -17,23 +17,25 @@
 //   surface never unwraps encrypted event content.
 // - Missing ledger file is a valid empty history state.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::{json, Value};
 
 use crate::persistence::daemon_config::{default_billing_dir, default_config_path, DaemonConfig};
-use crate::runtime::ability_dispatch::{LocalAbilityRegistry, OwnerKind};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 use easynet_axon::invocation::{InvocationLedger, InvocationLedgerFetchKey, InvocationLedgerQuery};
 
 pub const ABILITY_HISTORY_LIST: &str = "device.invocation.history.list";
 pub const ABILITY_HISTORY_GET: &str = "device.invocation.history.get";
 pub const ABILITY_TRACE_GET: &str = "device.invocation.trace.get";
+pub const ABILITY_HISTORY_PATH: &str = "device.invocation.history.path";
 
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 500;
 
-pub fn register(reg: &mut LocalAbilityRegistry, ledger: Option<Arc<InvocationLedger>>) {
+pub fn register(reg: &mut AxonAbilityCatalog, ledger: Option<Arc<InvocationLedger>>) {
     let reader = Arc::new(InvocationLedgerReader::new(ledger));
 
     let list_reader = Arc::clone(&reader);
@@ -54,6 +56,12 @@ pub fn register(reg: &mut LocalAbilityRegistry, ledger: Option<Arc<InvocationLed
         OwnerKind::Device,
         Arc::new(move |args| trace_reader.get_trace(args)),
     );
+    let path_reader = Arc::clone(&reader);
+    reg.register_rpc_with_owner(
+        ABILITY_HISTORY_PATH,
+        OwnerKind::Device,
+        Arc::new(move |args| path_reader.get_path(args)),
+    );
 }
 
 struct InvocationLedgerReader {
@@ -66,10 +74,40 @@ impl InvocationLedgerReader {
     }
 
     fn list_history(&self, args: Value) -> anyhow::Result<Value> {
-        let query =
-            query_from_args(&args)?.limit(bounded_limit(args.get("limit").and_then(Value::as_u64)));
+        let requested_limit = bounded_limit(args.get("limit").and_then(Value::as_u64));
+        let exclude_abilities = string_set_arg(&args, "exclude_abilities");
+        // `filter.abilities` is the OR-match counterpart to the single
+        // `filter.ability` query predicate: a record is kept if its
+        // ability_name OR ability_ura equals ANY candidate. The frontend
+        // sends every identifier form the ledger might have stored (canonical
+        // URA, registered `agent.ability` name, tool name) in one request so
+        // it no longer probes the ledger once per candidate.
+        let include_abilities = filter_string_set(&args, "abilities");
+        let needs_post_filter = !exclude_abilities.is_empty() || !include_abilities.is_empty();
+        // Post-filters run after fetch, so over-fetch to keep a full page
+        // after retention. Single-valued predicates (caller/callee/subject/
+        // state/trace) are still applied at the query source.
+        let query_limit = if needs_post_filter {
+            requested_limit.saturating_mul(5).min(MAX_LIMIT)
+        } else {
+            requested_limit
+        };
+        let query = query_from_args(&args)?.limit(query_limit);
+        let compact = args
+            .get("compact")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let path = ledger_path_from_config();
-        let records = self.fetch_records(&path, query)?;
+        let mut records = self.fetch_records(&path, query)?;
+        retain_by_ability_sets(&mut records, &include_abilities, &exclude_abilities);
+        if needs_post_filter {
+            records.truncate(requested_limit);
+        }
+        let records = if compact {
+            compact_records(&records)?
+        } else {
+            json!(records)
+        };
         Ok(json!({
             "ledger_ura": ledger_resource_ura(),
             "ledger_path": path.display().to_string(),
@@ -119,6 +157,14 @@ impl InvocationLedgerReader {
         }))
     }
 
+    fn get_path(&self, _args: Value) -> anyhow::Result<Value> {
+        let path = ledger_path_from_config();
+        Ok(json!({
+            "ledger_ura": ledger_resource_ura(),
+            "ledger_path": path.display().to_string(),
+        }))
+    }
+
     fn fetch_records(
         &self,
         path: &Path,
@@ -158,6 +204,78 @@ fn bounded_limit(raw: Option<u64>) -> usize {
         .filter(|n| *n > 0)
         .unwrap_or(DEFAULT_LIMIT)
         .min(MAX_LIMIT)
+}
+
+fn compact_records(
+    records: &[easynet_axon::invocation::InvocationLedgerRecord],
+) -> anyhow::Result<Value> {
+    let mut out = Vec::with_capacity(records.len());
+    for record in records {
+        let value = serde_json::to_value(record)?;
+        out.push(compact_record_value(value));
+    }
+    Ok(Value::Array(out))
+}
+
+fn compact_record_value(mut value: Value) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        // List views only need routing, timing, state, and error
+        // summaries. Full payload envelopes, diagnostics, causal links,
+        // receipt-chain, and privacy metadata remain available through
+        // device.invocation.history.get for a single record, avoiding
+        // multi-megabyte list payloads on active nodes.
+        object.remove("args");
+        object.remove("result");
+        object.remove("diagnostics");
+        object.remove("causal_links");
+        object.remove("receipt_chain");
+        object.remove("visibility");
+    }
+    value
+}
+
+fn string_set_arg(args: &Value, key: &str) -> HashSet<String> {
+    value_string_set(args.get(key))
+}
+
+/// Read a string set from `args.filter.<key>` (e.g. `filter.abilities`).
+fn filter_string_set(args: &Value, key: &str) -> HashSet<String> {
+    value_string_set(args.get("filter").and_then(|f| f.get(key)))
+}
+
+fn value_string_set(value: Option<&Value>) -> HashSet<String> {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// Apply include/exclude ability sets in place. A record survives the
+/// include set if its ability_name OR ability_ura matches ANY entry
+/// (OR-match); it is dropped if either identifier is in the exclude set.
+/// Empty sets are no-ops, so callers can pass either or both.
+fn retain_by_ability_sets(
+    records: &mut Vec<easynet_axon::invocation::InvocationLedgerRecord>,
+    include: &HashSet<String>,
+    exclude: &HashSet<String>,
+) {
+    if !include.is_empty() {
+        records.retain(|record| {
+            include.contains(record.ability_name.as_str())
+                || include.contains(record.ability_ura.as_str())
+        });
+    }
+    if !exclude.is_empty() {
+        records.retain(|record| {
+            !exclude.contains(record.ability_name.as_str())
+                && !exclude.contains(record.ability_ura.as_str())
+        });
+    }
 }
 
 fn query_from_args(args: &Value) -> anyhow::Result<InvocationLedgerQuery> {
@@ -315,11 +433,22 @@ pub fn get_trace_description() -> &'static str {
      project them through Axon's causal DAG graph API."
 }
 
+pub fn get_path_description() -> &'static str {
+    "Return the daemon-owned invocation ledger's resource URA and \
+     on-disk path. Singular: one daemon owns one ledger; this \
+     surface does not enumerate per-tenant or per-realm ledgers."
+}
+
 pub fn list_history_input_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
             "limit": { "type": "integer", "minimum": 1, "maximum": MAX_LIMIT },
+            "compact": { "type": "boolean" },
+            "exclude_abilities": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 }
+            },
             "key": key_schema(),
             "filter": filter_schema()
         },
@@ -347,6 +476,13 @@ pub fn get_trace_input_schema() -> Value {
             "filter": filter_schema()
         },
         "required": ["key"],
+        "additionalProperties": false
+    })
+}
+
+pub fn get_path_input_schema() -> Value {
+    json!({
+        "type": "object",
         "additionalProperties": false
     })
 }
@@ -384,6 +520,13 @@ fn filter_schema() -> Value {
                 ]
             },
             "ability": { "type": "string", "description": "Ability name or ability URA." },
+            "abilities": {
+                "type": "array",
+                "description": "Ability names or ability URAs. Records match when ability_name or ability_ura equals any value.",
+                "items": { "type": "string", "minLength": 1 },
+                "minItems": 1,
+                "uniqueItems": true
+            },
             "state": { "type": "string" },
             "trace_id": { "type": "string" }
         },
@@ -397,11 +540,12 @@ mod tests {
 
     #[test]
     fn registration_makes_invocation_history_dispatchable() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg, None);
         assert!(reg.get_rpc(ABILITY_HISTORY_LIST).is_some());
         assert!(reg.get_rpc(ABILITY_HISTORY_GET).is_some());
         assert!(reg.get_rpc(ABILITY_TRACE_GET).is_some());
+        assert!(reg.get_rpc(ABILITY_HISTORY_PATH).is_some());
     }
 
     #[test]
@@ -475,6 +619,59 @@ mod tests {
         assert!(records[0].get("callee_ura").is_some());
         assert!(records[0].get("subject_ura").is_some());
         assert!(records[0].get("ability_ura").is_some());
+    }
+
+    #[test]
+    fn compact_record_value_removes_heavy_list_only_fields() {
+        let value = compact_record_value(json!({
+            "invocation_ura": "easynet:///r/test/resource/alice.invocations/req",
+            "request_id": "req",
+            "args": { "kind": "digest" },
+            "result": { "kind": "digest" },
+            "receipt_chain": { "anchors": [] },
+            "visibility": { "args": { "policy": "digest_only" } }
+        }));
+
+        assert!(value.get("invocation_ura").is_some());
+        assert!(value.get("request_id").is_some());
+        assert!(value.get("args").is_none());
+        assert!(value.get("result").is_none());
+        assert!(value.get("receipt_chain").is_none());
+        assert!(value.get("visibility").is_none());
+    }
+
+    #[test]
+    fn list_history_excludes_noisy_abilities_before_truncating() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("invocations.redb");
+        let ledger = Arc::new(easynet_axon::invocation::InvocationLedger::open(&path).unwrap());
+        let mut noisy = sample_record("req-noisy");
+        noisy.ability_name = "device.terminal.read".to_string();
+        noisy.ability_ura = "easynet:///r/test/ability/device.terminal.read".to_string();
+        noisy.started_unix_ms = 3;
+        let mut wanted = sample_record("req-wanted");
+        wanted.started_unix_ms = 2;
+        ledger.put(&noisy).unwrap();
+        ledger.put(&wanted).unwrap();
+
+        let reader = InvocationLedgerReader::new(Some(Arc::clone(&ledger)));
+        let value = reader
+            .list_history(json!({
+                "limit": 1,
+                "compact": true,
+                "exclude_abilities": ["device.terminal.read"]
+            }))
+            .unwrap();
+        let records = value
+            .get("records")
+            .and_then(Value::as_array)
+            .expect("records");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].get("request_id").and_then(Value::as_str),
+            Some("req-wanted")
+        );
     }
 
     #[test]
@@ -582,5 +779,120 @@ mod tests {
             ))
             .build()
             .unwrap()
+    }
+
+    fn record_with_ability(
+        request_id: &str,
+        ability_name: &str,
+        ability_ura: &str,
+    ) -> easynet_axon::invocation::InvocationLedgerRecord {
+        easynet_axon::invocation::InvocationLedgerRecordBuilder::new()
+            .invocation_ura(crate::ura::resource_dot_ura(
+                "test",
+                "alice.invocations",
+                request_id,
+            ))
+            .request_id(request_id.to_string())
+            .trace_id(format!("trace-{request_id}"))
+            .span_id(format!("span-{request_id}"))
+            .caller_ura("easynet:///r/test/device/caller".to_string())
+            .callee_ura("easynet:///r/test/device/callee".to_string())
+            .subject_ura("easynet:///r/test/user/alice".to_string())
+            .ability_ura(ability_ura.to_string())
+            .ability_name(ability_name.to_string())
+            .state("completed".to_string())
+            .started_unix_ms(1)
+            .args(easynet_axon::invocation::LedgerEventPayload::digest(
+                "application/json",
+                b"{}",
+            ))
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn list_history_or_matches_multiple_ability_candidates() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("invocations.redb");
+        let ledger = easynet_axon::invocation::InvocationLedger::open(&path).unwrap();
+        // Same logical ability stored under different identifier forms
+        // across the ledger's history, plus one unrelated ability.
+        ledger
+            .put(&record_with_ability(
+                "req-by-ura",
+                "chat",
+                "easynet:///r/test/ability/dev.liangbing.chat",
+            ))
+            .unwrap();
+        ledger
+            .put(&record_with_ability(
+                "req-by-name",
+                "liangbing.chat",
+                "easynet:///r/_system/ability/liangbing.chat",
+            ))
+            .unwrap();
+        ledger
+            .put(&record_with_ability(
+                "req-unrelated",
+                "observe.health",
+                "easynet:///r/test/ability/dev.observe.health",
+            ))
+            .unwrap();
+        let reader = InvocationLedgerReader::new(Some(Arc::new(ledger)));
+
+        // ONE request carrying every candidate identifier form; the device
+        // OR-matches so the frontend no longer probes once per candidate.
+        let resp = reader
+            .list_history(json!({
+                "limit": 50,
+                "filter": {
+                    "abilities": [
+                        "easynet:///r/test/ability/dev.liangbing.chat",
+                        "liangbing.chat",
+                        "chat",
+                    ]
+                },
+            }))
+            .unwrap();
+        let ids: Vec<&str> = resp["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r["request_id"].as_str())
+            .collect();
+        assert!(ids.contains(&"req-by-ura"), "should match by ability_ura");
+        assert!(ids.contains(&"req-by-name"), "should match by ability_name");
+        assert!(
+            !ids.contains(&"req-unrelated"),
+            "non-candidate ability must be excluded, got {ids:?}"
+        );
+    }
+
+    #[test]
+    fn retain_by_ability_sets_applies_include_then_exclude() {
+        let mut records = vec![
+            record_with_ability("a", "chat", "easynet:///r/test/ability/dev.a.chat"),
+            record_with_ability(
+                "b",
+                "device.terminal.read",
+                "easynet:///r/test/ability/dev.b.read",
+            ),
+            record_with_ability(
+                "c",
+                "observe.health",
+                "easynet:///r/test/ability/dev.c.health",
+            ),
+        ];
+        let include: HashSet<String> = ["chat".to_string(), "device.terminal.read".to_string()]
+            .into_iter()
+            .collect();
+        let exclude: HashSet<String> = ["device.terminal.read".to_string()].into_iter().collect();
+        retain_by_ability_sets(&mut records, &include, &exclude);
+        let ids: Vec<&str> = records.iter().map(|r| r.request_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["a"],
+            "include keeps chat+read, exclude drops read"
+        );
     }
 }

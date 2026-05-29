@@ -67,7 +67,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::execution::discuss::DiscussService;
 
@@ -110,9 +110,9 @@ fn agent_sessions() -> &'static Mutex<HashMap<(String, String), String>> {
 /// daemon's single-thread accept loop while waiting on a nested
 /// chat call.
 pub fn register(
-    reg: &mut LocalAbilityRegistry,
+    reg: &mut AxonAbilityCatalog,
     discuss: Arc<DiscussService>,
-    dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+    dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) {
     let svc = Arc::clone(&discuss);
     let handle = Arc::clone(&dispatch_registry_handle);
@@ -127,7 +127,7 @@ pub fn register(
 
 fn discuss_round_handler(
     svc: &DiscussService,
-    dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+    dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     args: Value,
 ) -> anyhow::Result<Value> {
     let room_id = args
@@ -372,7 +372,7 @@ fn run_agent_cycle(
     transcript: &str,
     topic: Option<&str>,
     assigned_role: Option<&str>,
-    dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+    dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) -> Result<AgentCycleOutcome, String> {
     // Resume per-(room, agent) chat session so the agent's own
     // history (its prior cycles' reasoning + tool use) carries
@@ -402,25 +402,14 @@ fn run_agent_cycle(
         chat_args["session_id"] = json!(sid);
     }
 
-    // In-process dispatch via the daemon's own registry. Going
-    // through `support::local_invoke::invoke_local_ability` would
-    // open a fresh IPC connection BACK to the daemon, which the
-    // daemon's accept loop cannot service while the original
-    // request that reached this handler is still in flight —
-    // the FFI client times out and the operator sees "daemon
-    // closed the connection before responding". Resolving the
-    // peer ability inside the same registry skips the IPC hop
-    // entirely.
+    // In-process dispatch through the daemon's shared Axon
+    // LocalRuntime. Going through `support::local_invoke` would open
+    // a fresh IPC connection back to the daemon while the original
+    // request is still in flight.
     let registry = dispatch_registry_handle.get().ok_or_else(|| {
         "internal_error: dispatch registry handle not yet set when \
              mission.discuss_round invoked"
             .to_string()
-    })?;
-    let chat_handler = registry.resolve_rpc(&qualified_chat).ok_or_else(|| {
-        format!(
-            "agent {agent:?} has no chat ability registered (looked up \
-             {qualified_chat:?})"
-        )
     })?;
     // Wrap the chat call in catch_unwind so an `eprintln!` to a
     // closed stderr (broken pipe → panic in the std macros) does
@@ -432,8 +421,9 @@ fn run_agent_cycle(
     // and surfacing it as a typed error keeps the cycle's other
     // agents unaffected and surfaces a clean error envelope to
     // the operator.
-    let response_or_panic =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| chat_handler(chat_args)));
+    let response_or_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        registry.invoke_rpc_json(&qualified_chat, chat_args)
+    }));
     let response = match response_or_panic {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => return Err(format!("{e}")),

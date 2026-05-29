@@ -41,7 +41,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::agents::federation_probe;
 
@@ -56,7 +56,7 @@ pub const ABILITY_DEREGISTER_SELF: &str = "device.node.deregister";
 
 /// Register every device operation handler on `reg`. Called once
 /// at daemon boot from `runtime::agents::build_registry_with_services`.
-pub fn register(reg: &mut LocalAbilityRegistry) {
+pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
         "device.node.list",
         OwnerKind::Device,

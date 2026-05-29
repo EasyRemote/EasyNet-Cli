@@ -1,18 +1,15 @@
-// EasyNet CLI — Ability Proxy (Control-plane → AbilityDispatcher adapter)
+// EasyNet CLI — Ability Proxy (Control-plane → Axon LocalRuntime adapter)
 // =========================================================================
 //
 // File: src/services/control/ability_proxy.rs
 // Description: Frame-level adapter between the Control plane's wire
 //              messages (`IncomingFrame` / `OutgoingFrame`) and the
-//              runtime's two-stage `InvocationTarget` resolver +
-//              `AbilityDispatcher`. PR-INVOCATION-EXEC-UNITY wires
-//              this for real (was a v1 skeleton in PR-DAEMON Commit 3).
+//              daemon-hosted Axon `LocalRuntime`.
 //
 // Layering rule (enforced by scripts/check-kernel-boundary.sh)
 // ------------------------------------------------------------
 // This file is the *only* legal place in `src/services/control/`
 // to import from `crate::runtime::*`. It imports:
-//   * `crate::runtime::ability_dispatch::AbilityDispatcher`  (executor)
 //   * `crate::runtime::invocation_target::{TargetResolver,
 //      InvocationPlan, ...}`                                   (resolver)
 //   * `crate::runtime::kernel_api::KernelApi`                 (entry shape;
@@ -21,18 +18,16 @@
 //
 // It must NOT import:
 //   * `crate::runtime::gateway*` — Execution → Gateway boundary is
-//     internal to the runtime; Control reaches it only via dispatcher.
+//     internal to the runtime.
 //   * `crate::runtime::execution::*` — sub-service internals; Control
-//     talks through the dispatcher, never to a sub-service directly.
+//     talks through Axon abilities, never to a sub-service directly.
 //
 // v10.3 C* unity reminder
 // -----------------------
-// Every Invoke/Subscribe frame becomes an `InvocationPlan` →
-// `resolver.resolve(plan)` → `dispatcher.execute_*(target)`. The
-// proxy is the only place the wire-format ↔ InvocationTarget
-// translation happens. Schedule tick / Loop controller / Permission
-// admission go directly into the same dispatcher; they do NOT come
-// through this proxy.
+// Every Invoke/Subscribe/OpenBidi frame becomes an `InvocationPlan` →
+// `resolver.resolve(plan)` → `LocalRuntime::invoke_*_async(...)`.
+// The proxy is the only place the control wire-format ↔ local Axon
+// invocation translation happens.
 //
 // Why one method returns Vec<OutgoingFrame> and not OutgoingFrame
 // ----------------------------------------------------------------
@@ -52,13 +47,23 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 
-use crate::runtime::ability_dispatch::{AbilityDispatcher, BidiSource, StreamSource};
+use easynet_axon::invocation::{
+    BidiInputFrame, BidiInputSender, BidiOutputReceiver, LocalRuntime, StreamingInvocationHandle,
+};
+
 use crate::runtime::domain::NodeId;
 use crate::runtime::invocation_target::{
     CallMode, InvocationPlan, LocalNodeResolver, TargetResolver,
 };
 use crate::runtime::kernel_api::KernelApi;
+#[cfg(test)]
+use crate::runtime::local_runtime_invoker::drain_local_stream_frames;
+use crate::runtime::local_runtime_invoker::{
+    ability_frame_to_json, invoke_local_rpc_sync, is_not_found_error, open_local_bidi,
+    open_local_stream,
+};
 use crate::services::control::frames::{codes, IncomingFrame, OutgoingFrame};
+use crate::support::async_bridge::{run_blocking, NoRuntimeFallback};
 
 /// Per-connection cancel registry. Each active subscription gets a
 /// `CancellationToken` clone stored under its `subscription_id`. A
@@ -85,9 +90,9 @@ pub type BidiRegistry = Arc<Mutex<HashMap<String, BidiSession>>>;
 /// Holds the three handles `serve_connection` needs to manage a
 /// session's lifecycle:
 ///
-///   * `to_handler` — `SendBidi` frames push here. Dropping it (via
-///     `CloseBidi` removing the row) is the canonical "client side
-///     closed" signal observed as EOF on the handler's receiver.
+///   * `to_handler` — `SendBidi` frames push here. `CloseBidi`
+///     removes the row and explicitly closes the Axon inbox so the
+///     handler observes EOF.
 ///   * `cancel` — fired by `serve_connection` on connection drop.
 ///     The forwarder selects on this and exits cleanly per §D4
 ///     path 3.
@@ -98,23 +103,22 @@ pub type BidiRegistry = Arc<Mutex<HashMap<String, BidiSession>>>;
 ///     contention shape is "one writer, occasional contended read"
 ///     and atomics are cheaper.
 pub struct BidiSession {
-    pub to_handler: mpsc::Sender<serde_json::Value>,
+    pub to_handler: BidiInputSender,
     pub cancel: tokio_util::sync::CancellationToken,
     pub finalized: Arc<AtomicBool>,
 }
 
-/// Stateless-on-construction adapter. Holds a dispatcher (the
-/// stage-2 executor), a resolver (stage-1), and a Kernel handle for
-/// future receipt-emit hooks. Cloned per accepted connection.
+/// Stateless-on-construction adapter. Holds the daemon-hosted Axon
+/// runtime, a resolver, and a Kernel handle for future receipt-emit
+/// hooks. Cloned per accepted connection.
 #[derive(Clone)]
 pub struct AbilityProxy {
     /// Retained for future receipt-emit + audit hooks. v1 does not
-    /// call into KernelApi from this proxy because the dispatcher
-    /// path covers every wire frame; PR-INVOCATION-EXEC-UNITY+1
-    /// wires Receipt emission through KernelApi here.
+    /// call into KernelApi from this proxy because LocalRuntime
+    /// already covers every wire frame.
     #[allow(dead_code)]
     kernel: Arc<dyn KernelApi>,
-    dispatcher: AbilityDispatcher,
+    local_runtime: Arc<LocalRuntime>,
     /// Resolver is held as `Arc<dyn TargetResolver>` so a future
     /// planner can plug in a smarter resolver without changing the
     /// proxy signature.
@@ -130,9 +134,9 @@ impl AbilityProxy {
     /// Construct a proxy with the provided components. The daemon bin
     /// builds these once at boot and shares the resulting `AbilityProxy`
     /// across every accepted IPC connection.
-    pub fn new_with_dispatcher(
+    pub fn new_with_runtime(
         kernel: Arc<dyn KernelApi>,
-        dispatcher: AbilityDispatcher,
+        local_runtime: Arc<LocalRuntime>,
         resolver: Arc<dyn TargetResolver>,
     ) -> Self {
         // Best-effort load of local-agents.json. A read failure
@@ -143,7 +147,7 @@ impl AbilityProxy {
         let local_agents = Arc::new(crate::persistence::local_agents::load().unwrap_or_default());
         Self {
             kernel,
-            dispatcher,
+            local_runtime,
             resolver,
             local_agents,
         }
@@ -151,27 +155,26 @@ impl AbilityProxy {
 
     /// Test-only constructor that injects a `LocalAgentsFile`
     /// snapshot directly. Production callers should use
-    /// `new_with_dispatcher` which loads from disk.
+    /// `new_with_runtime` which loads from disk.
     #[cfg(test)]
     pub fn new_with_local_agents(
         kernel: Arc<dyn KernelApi>,
-        dispatcher: AbilityDispatcher,
+        local_runtime: Arc<LocalRuntime>,
         resolver: Arc<dyn TargetResolver>,
         local_agents: crate::persistence::local_agents::LocalAgentsFile,
     ) -> Self {
         Self {
             kernel,
-            dispatcher,
+            local_runtime,
             resolver,
             local_agents: Arc::new(local_agents),
         }
     }
 
     /// Convenience constructor used by tests + the `make_proxy`
-    /// helper. Builds a fresh dispatcher off the live system-ability
-    /// registry, a NoopGateway, and a `LocalNodeResolver` keyed to
-    /// `EASYNET_NODE_ID` (or "self" when unset). Production callers
-    /// should prefer `new_with_dispatcher` for explicit wiring.
+    /// helper. Builds a fresh Axon runtime and registers the live
+    /// system-ability catalogue into it. Production callers should
+    /// prefer `new_with_runtime` for explicit daemon wiring.
     ///
     /// Permitted by `scripts/check-kernel-boundary.sh` because the
     /// allowlist v1 includes `crate::runtime::{system, gateway}`
@@ -193,7 +196,8 @@ impl AbilityProxy {
         // dispatchable registry in lockstep without forcing every
         // caller of `AbilityProxy::new` to know about agents.
         let agents = crate::registry::agents::load_agents().unwrap_or_default();
-        let registry = crate::runtime::agents::build_registry_with_services(
+        let local_runtime = LocalRuntime::new();
+        let _registry = crate::runtime::agents::build_registry_with_services(
             Arc::new(crate::runtime::execution::session::SessionService::new()),
             Arc::new(crate::runtime::execution::permission::PermissionService::new()),
             Arc::new(crate::runtime::execution::discuss::DiscussService::new()),
@@ -203,16 +207,17 @@ impl AbilityProxy {
             &agents,
             Arc::new(Vec::new()),
             crate::runtime::agents::PagesIdentity::default(),
+            Some(Arc::clone(&local_runtime)),
+            Arc::new(
+                crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell::new(),
+            ),
         );
-        let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
-            Arc::new(crate::runtime::gateway::NoopGateway::new());
-        let dispatcher = AbilityDispatcher::new(registry, gateway);
         let local_node = node_id_from_env_or_default();
         let resolver: Arc<dyn TargetResolver> = Arc::new(LocalNodeResolver::new(local_node));
         let local_agents = Arc::new(crate::persistence::local_agents::load().unwrap_or_default());
         Self {
             kernel,
-            dispatcher,
+            local_runtime,
             resolver,
             local_agents,
         }
@@ -257,8 +262,8 @@ impl AbilityProxy {
                 // from within a runtime". `handle_async` is driven
                 // from a per-connection worker, so we move the
                 // dispatch onto the blocking pool. Mirrors the
-                // session path in
-                // `local_ability_dispatcher::execute_local_rpc_blocking`.
+                // session path: run local ability execution on the
+                // blocking pool, then return the typed frame result.
                 //
                 // `catch_unwind` still guards the call so a handler
                 // panic surfaces as a typed Error frame instead of
@@ -381,7 +386,28 @@ impl AbilityProxy {
                 };
                 match to_handler {
                     Some(tx) => {
-                        if tx.send(frame).await.is_err() {
+                        let payload = match serde_json::to_vec(&frame) {
+                            Ok(payload) => payload,
+                            Err(err) => {
+                                let _ = out
+                                    .send(OutgoingFrame::ErrorBidi {
+                                        session_id,
+                                        code: codes::ABILITY_FAILED.into(),
+                                        message: format!(
+                                            "SendBidi frame is not JSON encodable: {err}"
+                                        ),
+                                    })
+                                    .await;
+                                return;
+                            }
+                        };
+                        if tx
+                            .send(
+                                BidiInputFrame::new(payload).with_content_type("application/json"),
+                            )
+                            .await
+                            .is_err()
+                        {
                             // Handler exited between our lookup and
                             // send. Surface as a per-frame
                             // diagnostic; per §D5 this does NOT
@@ -420,8 +446,13 @@ impl AbilityProxy {
                 // connection-drop / abort paths; CloseBidi is the
                 // graceful exit, and letting the handler drain its
                 // pending output before EOF is part of the contract.
-                let mut g = bidi.lock().expect("bidi registry lock");
-                g.remove(&session_id);
+                let session = {
+                    let mut g = bidi.lock().expect("bidi registry lock");
+                    g.remove(&session_id)
+                };
+                if let Some(session) = session {
+                    let _ = session.to_handler.close_input().await;
+                }
             }
         }
     }
@@ -458,11 +489,11 @@ impl AbilityProxy {
                 return;
             }
         };
-        let stream = match self.dispatcher.execute_stream(target) {
+        let stream = match open_local_stream(Arc::clone(&self.local_runtime), target).await {
             Ok(s) => s,
             Err(e) => {
-                let msg = format!("{e}");
-                let code = if msg.contains("no local stream handler") {
+                let msg = e;
+                let code = if is_not_found_error(&msg) {
                     codes::NOT_FOUND
                 } else {
                     codes::ABILITY_FAILED
@@ -478,34 +509,7 @@ impl AbilityProxy {
                 return;
             }
         };
-        match stream {
-            StreamSource::Snapshot(values) => {
-                for v in values {
-                    if out
-                        .send(OutgoingFrame::Frame {
-                            subscription_id: subscription_id.clone(),
-                            frame: v,
-                        })
-                        .await
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
-                let _ = out
-                    .send(OutgoingFrame::Terminal {
-                        subscription_id,
-                        reason: "done".into(),
-                    })
-                    .await;
-            }
-            StreamSource::Live(rx) => {
-                spawn_forwarder(subscription_id, Vec::new(), rx, out, cancel.clone());
-            }
-            StreamSource::SnapshotThenLive(snap, rx) => {
-                spawn_forwarder(subscription_id, snap, rx, out, cancel.clone());
-            }
-        }
+        spawn_forwarder(subscription_id, stream, out, cancel.clone());
     }
 
     /// Open one bidi session: resolve plan → dispatch → install
@@ -572,11 +576,11 @@ impl AbilityProxy {
                 return;
             }
         };
-        let source: BidiSource = match self.dispatcher.execute_bidi(target) {
+        let source = match open_local_bidi(Arc::clone(&self.local_runtime), target).await {
             Ok(s) => s,
             Err(e) => {
-                let msg = format!("{e}");
-                let code = if msg.contains("no local bidi handler") {
+                let msg = e;
+                let code = if is_not_found_error(&msg) {
                     codes::NOT_FOUND
                 } else {
                     codes::ABILITY_FAILED
@@ -595,11 +599,6 @@ impl AbilityProxy {
         // From here every component is built; install atomically.
         let cancel_token = tokio_util::sync::CancellationToken::new();
         let finalized = Arc::new(AtomicBool::new(false));
-        // BidiSource fields are transport-perspective (see
-        // ability_dispatch::BidiSource): `to_client` is the
-        // transport's WRITE end (SendBidi pushes here, the
-        // handler reads), `from_client` is the transport's READ
-        // end (the forwarder pulls and emits RecvBidi).
         let to_handler = source.to_client;
         let from_handler_rx = source.from_client;
 
@@ -639,11 +638,14 @@ impl AbilityProxy {
     ///                      indicating cancel-without-active-stream
     ///                      until the streaming registry lands.
     ///
-    /// Synchronous variant retained for unit tests. Live streams
-    /// (`StreamSource::Live` / `SnapshotThenLive`) are degraded to
-    /// snapshot-only here because the sync surface has nowhere to
-    /// pump live frames into; production IPC uses `handle_async`.
-    pub fn handle(&self, req: IncomingFrame) -> Vec<OutgoingFrame> {
+    /// Synchronous variant used **only** by this module's unit tests.
+    /// It drains the Axon stream handle in place; production IPC
+    /// goes through `handle_async` so long-lived streams can be
+    /// pumped without blocking the caller. Gated behind `cfg(test)`
+    /// so the test seam cannot accidentally be wired into a release
+    /// binary.
+    #[cfg(test)]
+    pub(crate) fn handle(&self, req: IncomingFrame) -> Vec<OutgoingFrame> {
         match req {
             IncomingFrame::Invoke {
                 request_id,
@@ -712,16 +714,13 @@ impl AbilityProxy {
             .resolver
             .resolve(plan)
             .map_err(|e| format!("resolver: {e}"))?;
-        self.dispatcher
-            .execute_rpc(target)
-            .map_err(|e| format!("{e}"))
+        invoke_local_rpc_sync(Arc::clone(&self.local_runtime), target)
     }
 
     /// Stream-mode counterpart to `execute_runtime_dispatch`. Returns
-    /// the live `StreamSource` so the runtime-dispatch UDS responder
-    /// can forward each frame as a separate JSON line on the same
-    /// connection (per the v2 stream wire shape — see
-    /// `runtime_dispatch.rs` module header).
+    /// the live Axon streaming handle so the runtime-dispatch UDS
+    /// responder can forward each frame as a separate JSON line on
+    /// the same connection.
     ///
     /// Same plan-build as the RPC variant aside from the
     /// `CallMode::Stream` discriminant; we route through the same
@@ -733,7 +732,7 @@ impl AbilityProxy {
         &self,
         ability: &str,
         args: serde_json::Value,
-    ) -> Result<StreamSource, String> {
+    ) -> Result<StreamingInvocationHandle, String> {
         let plan = InvocationPlan {
             ability: ability.to_string(),
             target_node_hint: extract_node_hint(&args),
@@ -746,9 +745,10 @@ impl AbilityProxy {
             .resolver
             .resolve(plan)
             .map_err(|e| format!("resolver: {e}"))?;
-        self.dispatcher
-            .execute_stream(target)
-            .map_err(|e| format!("{e}"))
+        run_blocking(
+            open_local_stream(Arc::clone(&self.local_runtime), target),
+            NoRuntimeFallback::BuildCurrentThreadTokio,
+        )
     }
 
     fn handle_invoke(
@@ -783,7 +783,7 @@ impl AbilityProxy {
                 }];
             }
         };
-        match self.dispatcher.execute_rpc(target) {
+        match invoke_local_rpc_sync(Arc::clone(&self.local_runtime), target) {
             Ok(value) => {
                 // §A12 receipt header attachment. Best-effort: when
                 // local-agents.json doesn't yet have the owner Agent
@@ -802,8 +802,8 @@ impl AbilityProxy {
                 }]
             }
             Err(e) => {
-                let msg = format!("{e}");
-                let code = if msg.contains("no local handler registered") {
+                let msg = e;
+                let code = if is_not_found_error(&msg) {
                     codes::NOT_FOUND
                 } else {
                     codes::ABILITY_FAILED
@@ -818,6 +818,11 @@ impl AbilityProxy {
         }
     }
 
+    /// Sync stream-dispatch counterpart used only by the `cfg(test)`
+    /// `handle` entrypoint above. Production drives streams through
+    /// `handle_subscribe_async`. Gated so a release build can't link
+    /// the in-place stream drain path.
+    #[cfg(test)]
     fn handle_subscribe(
         &self,
         subscription_id: String,
@@ -845,18 +850,13 @@ impl AbilityProxy {
                 }];
             }
         };
-        match self.dispatcher.execute_stream(target) {
+        match run_blocking(
+            drain_local_stream_frames(Arc::clone(&self.local_runtime), target),
+            NoRuntimeFallback::BuildCurrentThreadTokio,
+        ) {
             Ok(stream) => {
-                // Sync surface: degrade live streams to snapshot
-                // only. Tests using this path that need live
-                // behaviour should invoke `handle_async` instead.
-                let snapshot: Vec<serde_json::Value> = match stream {
-                    StreamSource::Snapshot(v) => v,
-                    StreamSource::Live(_) => Vec::new(),
-                    StreamSource::SnapshotThenLive(s, _) => s,
-                };
-                let mut out = Vec::with_capacity(snapshot.len() + 1);
-                for v in snapshot {
+                let mut out = Vec::with_capacity(stream.len() + 1);
+                for v in stream {
                     out.push(OutgoingFrame::Frame {
                         subscription_id: subscription_id.clone(),
                         frame: v,
@@ -869,8 +869,8 @@ impl AbilityProxy {
                 out
             }
             Err(e) => {
-                let msg = format!("{e}");
-                let code = if msg.contains("no local stream handler") {
+                let msg = e;
+                let code = if is_not_found_error(&msg) {
                     codes::NOT_FOUND
                 } else {
                     codes::ABILITY_FAILED
@@ -899,8 +899,7 @@ impl AbilityProxy {
 /// itself from the cancel registry on exit.
 fn spawn_forwarder(
     subscription_id: String,
-    snapshot: Vec<serde_json::Value>,
-    mut rx: tokio::sync::broadcast::Receiver<serde_json::Value>,
+    mut stream: StreamingInvocationHandle,
     out: mpsc::Sender<OutgoingFrame>,
     cancel: CancelRegistry,
 ) {
@@ -910,44 +909,62 @@ fn spawn_forwarder(
         g.insert(subscription_id.clone(), token.clone());
     }
     tokio::spawn(async move {
-        // 1. Drain snapshot.
-        for v in snapshot {
-            if out
-                .send(OutgoingFrame::Frame {
-                    subscription_id: subscription_id.clone(),
-                    frame: v,
-                })
-                .await
-                .is_err()
-            {
-                // Connection closed mid-snapshot. Drop the entry
-                // and return; the writer task on the connection
-                // owns cleanup of the rest of the registry.
-                let mut g = cancel.lock().expect("cancel registry lock");
-                g.remove(&subscription_id);
-                return;
-            }
-        }
-        // 2. Pump live frames.
         let reason = loop {
             tokio::select! {
                 _ = token.cancelled() => break "cancelled",
-                recv = rx.recv() => match recv {
-                    Ok(v) => {
+                recv = stream.next_frame() => match recv {
+                    Some(Ok(frame)) => {
+                        let terminal = frame.terminal;
+                        if !frame.payload.is_empty() {
+                            let v = match ability_frame_to_json(&frame) {
+                                Ok(value) => value,
+                                Err(err) => {
+                                    let _ = out
+                                        .send(OutgoingFrame::Error {
+                                            request_id: None,
+                                            subscription_id: Some(subscription_id.clone()),
+                                            code: codes::ABILITY_FAILED.into(),
+                                            message: err,
+                                        })
+                                        .await;
+                                    break "failed";
+                                }
+                            };
+                            if out
+                                .send(OutgoingFrame::Frame {
+                                    subscription_id: subscription_id.clone(),
+                                    frame: v,
+                                })
+                                .await
+                                .is_err()
+                            {
+                                break "done";
+                            }
+                        }
+                        if terminal {
+                            break "done";
+                        }
+                    }
+                    Some(Err(err)) => {
                         if out
-                            .send(OutgoingFrame::Frame {
-                                subscription_id: subscription_id.clone(),
-                                frame: v,
+                            .send(OutgoingFrame::Error {
+                                request_id: None,
+                                subscription_id: Some(subscription_id.clone()),
+                                code: if is_not_found_error(&format!("{err}")) {
+                                    codes::NOT_FOUND.into()
+                                } else {
+                                    codes::ABILITY_FAILED.into()
+                                },
+                                message: format!("{err}"),
                             })
                             .await
                             .is_err()
                         {
-                            // Connection writer task gave up. Stop.
                             break "done";
                         }
+                        break "failed";
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break "done",
+                    None => break "done",
                 }
             }
         };
@@ -982,7 +999,7 @@ fn spawn_forwarder(
 /// envelope ever lands on the wire.
 fn spawn_bidi_forwarder(
     session_id: String,
-    mut from_handler_rx: mpsc::Receiver<serde_json::Value>,
+    mut from_handler_rx: BidiOutputReceiver,
     out: mpsc::Sender<OutgoingFrame>,
     cancel: tokio_util::sync::CancellationToken,
     finalized: Arc<AtomicBool>,
@@ -992,12 +1009,35 @@ fn spawn_bidi_forwarder(
         let reason = loop {
             tokio::select! {
                 _ = cancel.cancelled() => break "cancelled",
-                recv = from_handler_rx.recv() => match recv {
-                    Some(v) => {
+                recv = from_handler_rx.next_frame() => match recv {
+                    Some(Ok(frame)) => {
+                        let terminal = frame.terminal;
+                        if !frame.payload.is_empty() {
+                            let v = match ability_frame_to_json(&frame) {
+                                Ok(value) => value,
+                                Err(_) => break "failed",
+                            };
+                            if out
+                                .send(OutgoingFrame::RecvBidi {
+                                    session_id: session_id.clone(),
+                                    frame: v,
+                                })
+                                .await
+                                .is_err()
+                            {
+                                break "cancelled";
+                            }
+                        }
+                        if terminal {
+                            break "done";
+                        }
+                    }
+                    Some(Err(_)) => {
                         if out
-                            .send(OutgoingFrame::RecvBidi {
+                            .send(OutgoingFrame::ErrorBidi {
                                 session_id: session_id.clone(),
-                                frame: v,
+                                code: codes::ABILITY_FAILED.into(),
+                                message: "bidi ability returned an error".into(),
                             })
                             .await
                             .is_err()
@@ -1009,6 +1049,7 @@ fn spawn_bidi_forwarder(
                             // wire reason matches reality.
                             break "cancelled";
                         }
+                        break "failed";
                     }
                     None => break "done",
                 }
@@ -1102,12 +1143,11 @@ fn node_id_from_env_or_default() -> NodeId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+    use crate::runtime::ability_dispatch::AxonAbilityCatalog;
     use crate::runtime::domain::{
         DiscussRoom, LoopId, LoopInstance, PermissionDecision, PermissionId, PermissionRequest,
         RoomId, ScheduleEntry, ScheduleId, Session, SessionId,
     };
-    use crate::runtime::gateway::NoopGateway;
     use crate::runtime::invocation::{Invocation, Receipt};
     use serde_json::json;
 
@@ -1174,15 +1214,12 @@ mod tests {
 
     fn proxy_with_empty_registry() -> AbilityProxy {
         // Some tests want a clean slate (no observe.health etc.) so they
-        // can assert the unregistered-ability path; build an empty
-        // registry + a NoopGateway here.
-        let registry = Arc::new(LocalAbilityRegistry::new());
-        let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
-            Arc::new(NoopGateway::new());
-        let dispatcher = AbilityDispatcher::new(registry, gateway);
+        // can assert the unregistered-ability path; use an empty
+        // LocalRuntime here.
+        let runtime = LocalRuntime::new();
         let resolver: Arc<dyn TargetResolver> =
             Arc::new(LocalNodeResolver::new(NodeId::new("self")));
-        AbilityProxy::new_with_dispatcher(Arc::new(StubKernel), dispatcher, resolver)
+        AbilityProxy::new_with_runtime(Arc::new(StubKernel), runtime, resolver)
     }
 
     #[test]
@@ -1298,13 +1335,25 @@ mod tests {
     fn proxy_with_local_agents(
         file: crate::persistence::local_agents::LocalAgentsFile,
     ) -> AbilityProxy {
-        let registry = crate::runtime::agents::build_registry();
-        let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
-            Arc::new(NoopGateway::new());
-        let dispatcher = AbilityDispatcher::new(registry, gateway);
+        let runtime = LocalRuntime::new();
+        let _registry = crate::runtime::agents::build_registry_with_services(
+            Arc::new(crate::runtime::execution::session::SessionService::new()),
+            Arc::new(crate::runtime::execution::permission::PermissionService::new()),
+            Arc::new(crate::runtime::execution::discuss::DiscussService::new()),
+            Arc::new(crate::runtime::execution::schedule::ScheduleService::new()),
+            Arc::new(crate::runtime::execution::loop_instance::LoopService::new()),
+            None,
+            &Default::default(),
+            Arc::new(Vec::new()),
+            crate::runtime::agents::PagesIdentity::default(),
+            Some(Arc::clone(&runtime)),
+            Arc::new(
+                crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell::new(),
+            ),
+        );
         let resolver: Arc<dyn TargetResolver> =
             Arc::new(LocalNodeResolver::new(NodeId::new("self")));
-        AbilityProxy::new_with_local_agents(Arc::new(StubKernel), dispatcher, resolver, file)
+        AbilityProxy::new_with_local_agents(Arc::new(StubKernel), runtime, resolver, file)
     }
 
     #[test]
@@ -1428,7 +1477,8 @@ mod tests {
     /// transport-axis BidiSource.
     fn proxy_with_echo_bidi() -> AbilityProxy {
         use crate::runtime::ability_dispatch::{BidiSource, LocalBidiHandler, BIDI_CHANNEL_BOUND};
-        let mut reg = LocalAbilityRegistry::new();
+        let runtime = LocalRuntime::new();
+        let mut reg = AxonAbilityCatalog::new_with_runtime(Arc::clone(&runtime));
         let handler: LocalBidiHandler = Arc::new(|_args: serde_json::Value| {
             let (xport_to_handler_tx, mut handler_rx) =
                 tokio::sync::mpsc::channel::<serde_json::Value>(BIDI_CHANNEL_BOUND);
@@ -1450,13 +1500,10 @@ mod tests {
             })
         });
         reg.register_bidi("bidi.echo", handler);
-        let registry = Arc::new(reg);
-        let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
-            Arc::new(NoopGateway::new());
-        let dispatcher = AbilityDispatcher::new(registry, gateway);
+        let _registry = Arc::new(reg);
         let resolver: Arc<dyn TargetResolver> =
             Arc::new(LocalNodeResolver::new(NodeId::new("self")));
-        AbilityProxy::new_with_dispatcher(Arc::new(StubKernel), dispatcher, resolver)
+        AbilityProxy::new_with_runtime(Arc::new(StubKernel), runtime, resolver)
     }
 
     /// Drain at most `n` frames from `rx` with a soft deadline, so a

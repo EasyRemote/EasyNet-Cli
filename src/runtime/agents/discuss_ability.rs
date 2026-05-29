@@ -25,7 +25,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::ability_dispatch::{LocalAbilityRegistry, StreamSource};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
 use crate::runtime::domain::{AgentId, RoomId};
 use crate::runtime::execution::discuss::DiscussService;
 
@@ -42,7 +42,7 @@ pub const ABILITY_SUBSCRIBE: &str = "device.discuss.subscribe";
 /// list_turns to subscribe gets the same data layout.
 pub const ABILITY_LIST_TURNS: &str = "device.discuss.list_turns";
 
-pub fn register(reg: &mut LocalAbilityRegistry, svc: Arc<DiscussService>) {
+pub fn register(reg: &mut AxonAbilityCatalog, svc: Arc<DiscussService>) {
     let a = Arc::clone(&svc);
     reg.register_rpc_with_owner(
         "device.discuss.create",

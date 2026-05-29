@@ -404,7 +404,11 @@ impl HttpConnection {
         let host_owned = host.to_string();
         let port = target_uri
             .port_u16()
-            .unwrap_or(if self.tls_connector.is_some() { 443 } else { 80 });
+            .unwrap_or(if self.tls_connector.is_some() {
+                443
+            } else {
+                80
+            });
 
         let path = target_uri
             .path_and_query()
@@ -778,8 +782,7 @@ mod tests {
                                 .unwrap_or_default();
                             let parsed: Value =
                                 serde_json::from_slice(&body).unwrap_or(Value::Null);
-                            let method =
-                                parsed.get("method").and_then(Value::as_str).unwrap_or("");
+                            let method = parsed.get("method").and_then(Value::as_str).unwrap_or("");
                             let id = parsed.get("id").cloned().unwrap_or(Value::Null);
                             let (status, body_val) = match method {
                                 "initialize" => (

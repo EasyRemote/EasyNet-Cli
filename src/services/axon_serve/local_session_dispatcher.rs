@@ -1,24 +1,12 @@
-// EasyNet CLI — `<self>.session` device-side LocalAbilityDispatcher
+// EasyNet CLI — `<self>.session` device-side LocalAxonSessionDispatcher
 // =================================================================
 //
-// File: src/services/axon_serve/local_ability_dispatcher.rs
+// File: src/services/axon_serve/local_session_dispatcher.rs
 //
-// PR-2 commit 2/N. Replaces `boot::StagingSessionDispatcher` (the
-// `<self>.session` placeholder that returned a hard-coded
-// "not-yet-wired" error for every inbound
-// `SessionDispatch::Dispatch`) with a dispatcher that executes local
-// RPC abilities through the daemon's boot-threaded
-// `AbilityDispatcher` Arc.
-//
-// Historical split
-// ----------------
-// PR-2 commit 1/N landed the boot threading only: the daemon now
-// passes one process-wide `AbilityDispatcher` Arc into the
-// device-side session handler. This file is the follow-up that
-// spends that dependency for real work: decode
-// `SessionDispatch::Dispatch{call_id, ability, args}`, route the
-// ability through `AbilityDispatcher::execute_rpc`, then encode the
-// outcome back as `SessionDispatch::Result`.
+// Device-side `<self>.session` dispatcher. It decodes
+// `SessionDispatch::Dispatch{call_id, ability, args}`, routes the
+// ability through the daemon's boot-threaded Axon `LocalRuntime`, then
+// encodes the outcome back as `SessionDispatch::Result`.
 //
 // Args contract
 // -------------
@@ -37,7 +25,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use easynet_axon::invocation::{BidiInputFrame, BidiInputSender};
 use serde_json::{json, Value};
+#[cfg(test)]
 use tokio::sync::mpsc;
 
 use crate::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
@@ -46,8 +36,6 @@ use crate::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 #[cfg(test)]
 use crate::pb::axon::v1::InvokeBidiUp;
 use crate::pb::axon::v1::{BinaryChunk, InvokeBidiDown};
-use crate::runtime::ability_dispatch::AbilityDispatcher;
-use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use crate::services::axon_serve::invoke_remote_initiator::{
     call_id_hex, SessionContentEnvelope, SessionDispatch,
 };
@@ -55,20 +43,12 @@ use crate::services::axon_serve::session_initiator::{
     SessionDispatchError, SessionFrameDispatcher, SessionUpSender, SESSION_STREAM_ID,
 };
 
-/// Device-side `<self>.session` dispatcher. Holds the boot-threaded
-/// `AbilityDispatcher` Arc and executes inbound Dispatch frames
-/// against the local RPC registry, returning the result payload or
-/// typed failure over the existing `SessionDispatch::Result` wire
-/// shape.
+/// Device-side `<self>.session` dispatcher. Executes inbound
+/// Dispatch frames against the daemon's shared Axon `LocalRuntime`,
+/// returning the result payload or typed failure over the existing
+/// `SessionDispatch::Result` wire shape.
 #[derive(Clone)]
-pub struct LocalAbilityDispatcher {
-    /// The daemon's process-wide ability dispatcher. Cloned in at
-    /// boot from `easynet-daemon.rs::main`'s
-    /// `dispatcher_for_kernel` so this dispatcher and the rest of
-    /// the daemon (runtime-dispatch responder, outbound A2A, future
-    /// `Kernel::invoke` callers) share one `LocalAbilityRegistry`
-    /// view.
-    dispatcher: Arc<AbilityDispatcher>,
+pub struct LocalAxonSessionDispatcher {
     /// PR-N6 C4 device-side correlation table. Populated in
     /// device-mode boot when the daemon also constructs a
     /// `SessionEscalationHandle`; left `None` in hub or `both`
@@ -82,17 +62,35 @@ pub struct LocalAbilityDispatcher {
     /// call_id. Today this is only used for `device.fs.transfer`:
     /// hub opens the local bidi on the device, then subsequent
     /// `SessionDispatch::BidiInput` frames route through this table.
-    remote_bidi_sessions: Arc<Mutex<HashMap<u64, mpsc::Sender<Value>>>>,
+    remote_bidi_sessions: Arc<Mutex<HashMap<u64, BidiInputSender>>>,
+    /// **Phase 5d — Axon LocalRuntime bridge**. When wired, inbound
+    /// `SessionDispatch::Dispatch` frames whose ability is
+    /// registered in the runtime are routed through Axon's
+    /// `invoke_async`.
+    ///
+    /// Why this exists: pre-this-PR, a chat call arriving as a
+    /// `SessionDispatch::Dispatch` on this host's session bypassed
+    /// the runtime entirely. Net effect: the chat succeeded but
+    /// the `LedgerSink` installed at boot never observed the
+    /// terminal, so the host's `invocations.redb` stayed empty
+    /// and the Web UI's history tab showed `0` records even on
+    /// successful chats.
+    ///
+    /// Setting this Arc closes that gap. The runtime owns the
+    /// AbilityFn closures, so dispatch
+    /// observability (state machine, AbilityChangeEvent, ledger
+    /// persistence) is uniform with the unary-invoke path.
+    local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
 }
 
-impl LocalAbilityDispatcher {
-    /// Construct against the boot-threaded dispatcher Arc.
+impl LocalAxonSessionDispatcher {
+    /// Construct the device-side session dispatcher.
     #[must_use]
-    pub fn new(dispatcher: Arc<AbilityDispatcher>) -> Self {
+    pub fn new() -> Self {
         Self {
-            dispatcher,
             escalation_correlation: None,
             remote_bidi_sessions: Arc::new(Mutex::new(HashMap::new())),
+            local_runtime: None,
         }
     }
 
@@ -109,46 +107,67 @@ impl LocalAbilityDispatcher {
         self
     }
 
-    /// Static variant that takes the dispatcher Arc by reference so
-    /// it can be moved into `tokio::task::spawn_blocking`. Both this
-    /// call path produces the local-RPC bytes `handle_down` needs while
-    /// keeping blocking ability handlers
-    /// (e.g. `process.exec`, `shell.run`) on the blocking pool
-    /// thread, where `Handle::current().block_on(...)` is safe.
-    fn execute_local_rpc_blocking(
-        dispatcher: &Arc<AbilityDispatcher>,
-        ability: &str,
-        normalized_args: serde_json::Value,
-    ) -> Result<SessionDispatch, SessionDispatchError> {
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ability.to_string(),
-            normalized_args,
-            call_mode: CallMode::Rpc,
-            subject: None,
-        };
+    /// **Phase 5d**. Attach the shared Axon `LocalRuntime` so
+    /// inbound `SessionDispatch::Dispatch` frames flow through
+    /// `invoke_async` (and therefore the wired `LedgerSink`) when
+    /// the runtime hosts the ability. Boot wires this from the
+    /// same `Arc<LocalRuntime>` the service uses for Phase 4's
+    /// `<self>.invoke_remote` arm.
+    #[must_use]
+    pub fn with_local_runtime(
+        mut self,
+        runtime: Arc<easynet_axon::invocation::LocalRuntime>,
+    ) -> Self {
+        self.local_runtime = Some(runtime);
+        self
+    }
 
-        match dispatcher.execute_rpc(target) {
-            Ok(value) => {
-                let payload = serde_json::to_vec(&value).map_err(|err| {
-                    SessionDispatchError::Other(format!(
-                        "<self>.session: encode ability `{ability}` response JSON: {err}"
-                    ))
-                })?;
-                Ok(SessionDispatch::Result {
-                    call_id: 0,
-                    payload,
-                    terminal: true,
-                    error: None,
-                })
-            }
-            Err(err) => Ok(SessionDispatch::Result {
-                call_id: 0,
-                payload: Vec::new(),
-                terminal: true,
-                error: Some(format!("<self>.session: ability `{ability}` failed: {err}")),
-            }),
+    /// **Phase 5d**. Try to route an inbound `SessionDispatch::Dispatch`
+    /// through the wired Axon `LocalRuntime`. Returns:
+    ///
+    ///   * `Some(SessionDispatch::Result)` — the runtime hosts the
+    ///     ability and dispatched it; payload + error fields carry
+    ///     the outcome verbatim. LedgerSink wrote a record on the
+    ///     terminal event.
+    ///   * `None` — runtime not wired OR doesn't host the ability;
+    ///     caller returns a typed terminal error.
+    ///
+    /// Args are passed verbatim as `Vec<u8>` to `invoke_async`; the
+    /// `rpc_handler_to_ability_fn` adapter handles JSON decode inside
+    /// the runtime handler, so the payload-bytes contract matches the
+    /// wire shape.
+    async fn try_dispatch_via_axon(
+        &self,
+        call_id: u64,
+        ability: &str,
+        args: &[u8],
+    ) -> Option<SessionDispatch> {
+        let runtime = self.local_runtime.as_ref()?;
+        if !runtime.has_ability(ability).await {
+            return None;
         }
+        crate::op_event!(
+            component = local_session_dispatcher,
+            kind = try_dispatch_via_axon,
+            call_id = call_id,
+            ability = ability,
+        );
+        let outcome = crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local(
+            runtime,
+            ability,
+            args.to_vec(),
+        )
+        .await;
+        let request_id = outcome.invocation_id.clone();
+        let (payload, error) =
+            crate::runtime::axon_bridge::dispatch_shim::outcome_to_invoke_remote_result(outcome);
+        Some(SessionDispatch::Result {
+            call_id,
+            payload,
+            terminal: true,
+            error,
+            request_id,
+        })
     }
 
     async fn send_dispatch_up(
@@ -174,6 +193,7 @@ impl LocalAbilityDispatcher {
             payload: Vec::new(),
             terminal: true,
             error: Some(message.into()),
+            request_id: None,
         }
     }
 
@@ -224,6 +244,7 @@ impl LocalAbilityDispatcher {
                     payload: raw,
                     terminal: false,
                     error: None,
+                    request_id: None,
                 }))
             }
             Some("complete") => {
@@ -237,6 +258,7 @@ impl LocalAbilityDispatcher {
                     payload,
                     terminal: true,
                     error: None,
+                    request_id: None,
                 }))
             }
             Some("error") => {
@@ -263,6 +285,7 @@ impl LocalAbilityDispatcher {
                     payload,
                     terminal: true,
                     error: Some(reason),
+                    request_id: None,
                 }))
             }
             Some("warn") => Ok(None),
@@ -300,32 +323,19 @@ impl LocalAbilityDispatcher {
             .await;
         }
 
-        let normalized_args = match serde_json::from_slice::<Value>(&args) {
-            Ok(args) => args,
-            Err(err) => {
-                return Self::send_dispatch_up(
-                    outbound,
-                    &Self::file_transfer_terminal_error(
-                        call_id,
-                        format!(
-                            "<self>.session: remote file_transfer received non-JSON args bytes: {err}"
-                        ),
-                    ),
-                )
-                .await;
-            }
+        let Some(runtime) = self.local_runtime.as_ref() else {
+            return Self::send_dispatch_up(
+                outbound,
+                &Self::file_transfer_terminal_error(
+                    call_id,
+                    "<self>.session: LocalRuntime is not wired for remote file_transfer bidi",
+                ),
+            )
+            .await;
         };
 
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ability.to_string(),
-            normalized_args,
-            call_mode: CallMode::Bidi,
-            subject: None,
-        };
-
-        let bidi_source = match self.dispatcher.execute_bidi(target) {
-            Ok(source) => source,
+        let handle = match runtime.invoke_bidi_async(ability, args, None, None).await {
+            Ok(handle) => handle,
             Err(err) => {
                 return Self::send_dispatch_up(
                     outbound,
@@ -337,11 +347,7 @@ impl LocalAbilityDispatcher {
                 .await;
             }
         };
-
-        let crate::runtime::ability_dispatch::BidiSource {
-            to_client: handler_in_tx,
-            from_client: mut handler_out_rx,
-        } = bidi_source;
+        let (handler_in_tx, mut handler_out_rx) = handle.split();
 
         {
             let mut guard = match self.remote_bidi_sessions.lock() {
@@ -354,25 +360,60 @@ impl LocalAbilityDispatcher {
         let sessions = Arc::clone(&self.remote_bidi_sessions);
         let outbound = outbound.clone();
         tokio::spawn(async move {
-            while let Some(value) = handler_out_rx.recv().await {
-                let mapped = match LocalAbilityDispatcher::map_remote_file_transfer_output(
-                    call_id, &value,
-                ) {
-                    Ok(Some(dispatch)) => dispatch,
-                    Ok(None) => continue,
-                    Err(err) => LocalAbilityDispatcher::file_transfer_terminal_error(
-                        call_id,
-                        format!("<self>.session: remote file_transfer output map failed: {err}"),
-                    ),
+            while let Some(frame_result) = handler_out_rx.next_frame().await {
+                let frame = match frame_result {
+                    Ok(frame) => frame,
+                    Err(err) => {
+                        let dispatch = LocalAxonSessionDispatcher::file_transfer_terminal_error(
+                            call_id,
+                            format!("<self>.session: remote file_transfer frame failed: {err}"),
+                        );
+                        let _ = LocalAxonSessionDispatcher::send_dispatch_up(&outbound, &dispatch)
+                            .await;
+                        break;
+                    }
+                };
+                let mapped = if frame.payload.is_empty() {
+                    None
+                } else {
+                    match serde_json::from_slice::<Value>(&frame.payload) {
+                        Ok(value) => {
+                            match LocalAxonSessionDispatcher::map_remote_file_transfer_output(
+                                call_id, &value,
+                            ) {
+                                Ok(mapped) => mapped,
+                                Err(err) => {
+                                    Some(LocalAxonSessionDispatcher::file_transfer_terminal_error(
+                                        call_id,
+                                        format!(
+                                    "<self>.session: remote file_transfer output map failed: {err}"
+                                ),
+                                    ))
+                                }
+                            }
+                        }
+                        Err(err) => Some(LocalAxonSessionDispatcher::file_transfer_terminal_error(
+                            call_id,
+                            format!(
+                                "<self>.session: remote file_transfer output was not JSON: {err}"
+                            ),
+                        )),
+                    }
+                };
+                let Some(mapped) = mapped else {
+                    if frame.terminal {
+                        break;
+                    }
+                    continue;
                 };
                 let terminal = matches!(mapped, SessionDispatch::Result { terminal: true, .. });
-                if LocalAbilityDispatcher::send_dispatch_up(&outbound, &mapped)
+                if LocalAxonSessionDispatcher::send_dispatch_up(&outbound, &mapped)
                     .await
                     .is_err()
                 {
                     break;
                 }
-                if terminal {
+                if terminal || frame.terminal {
                     break;
                 }
             }
@@ -421,7 +462,16 @@ impl LocalAbilityDispatcher {
         } else {
             json!({"type": "chunk", "data": B64.encode(payload)})
         };
-        if sender.send(frame).await.is_err() {
+        let payload = serde_json::to_vec(&frame).map_err(|err| {
+            SessionDispatchError::Other(format!("encode file_transfer bidi input: {err}"))
+        })?;
+        let send_result = sender
+            .send(BidiInputFrame::new(payload).with_content_type("application/json"))
+            .await;
+        if eof {
+            let _ = sender.close_input().await;
+        }
+        if send_result.is_err() {
             if eof {
                 // Download-mode file_transfer does not consume the
                 // up-direction at all; the caller's EOF is a best-
@@ -441,25 +491,8 @@ impl LocalAbilityDispatcher {
     }
 }
 
-/// Recover a printable message from a `Box<dyn Any + Send>` panic
-/// payload. Tokio's `JoinError::try_into_panic` returns the raw
-/// payload Rust handed to `std::panic::catch_unwind`; the two
-/// canonical shapes are `&'static str` (`panic!("...")`) and
-/// `String` (`panic!("{}", value)`). Anything else collapses to a
-/// type-name placeholder so the operator at least sees that a
-/// panic occurred even if the payload type is exotic.
-fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
-    if let Some(message) = payload.downcast_ref::<&'static str>() {
-        return (*message).to_string();
-    }
-    if let Some(message) = payload.downcast_ref::<String>() {
-        return message.clone();
-    }
-    "panic payload not recoverable".to_string()
-}
-
 #[async_trait::async_trait]
-impl SessionFrameDispatcher for LocalAbilityDispatcher {
+impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
     /// Receive a hub-pushed Dispatch frame, run the named ability
     /// against the local dispatcher, and reply with a terminal
     /// `SessionDispatch::Result`. Down-stream `Result` frames are
@@ -486,7 +519,7 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
         let stream_id = chunk.stream_id;
         let data_bytes = chunk.data.len();
         crate::op_event!(
-            component = local_ability_dispatcher,
+            component = local_session_dispatcher,
             kind = handle_down_binary_chunk,
             stream_id = stream_id,
             data_bytes = data_bytes,
@@ -518,7 +551,7 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
             } => {
                 let args_bytes = args.len();
                 crate::op_event!(
-                    component = local_ability_dispatcher,
+                    component = local_session_dispatcher,
                     kind = received_dispatch_frame,
                     call_id = call_id,
                     ability = ability,
@@ -535,7 +568,7 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
                 let args_bytes = args.len();
                 let ability_log = ability.clone();
                 crate::op_event!(
-                    component = local_ability_dispatcher,
+                    component = local_session_dispatcher,
                     kind = received_bidi_open_frame,
                     call_id = call_id,
                     ability = ability_log,
@@ -566,21 +599,21 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
                     let fired = correlation.complete(call_id, outcome);
                     if !fired {
                         crate::op_event!(
-                            component = local_ability_dispatcher,
+                            component = local_session_dispatcher,
                             kind = request_result_orphan,
                             call_id = id_hex,
                             message = "no pending entry matched; dropping (caller may have timed out, or hub double-replied)",
                         );
                     } else {
                         crate::op_event!(
-                            component = local_ability_dispatcher,
+                            component = local_session_dispatcher,
                             kind = request_result_completed,
                             call_id = id_hex,
                         );
                     }
                 } else {
                     crate::op_event!(
-                        component = local_ability_dispatcher,
+                        component = local_session_dispatcher,
                         kind = request_result_dropped_hub_mode,
                         message = "inbound RequestResult on a hub-mode daemon (no escalation_correlation wired); ignoring",
                     );
@@ -600,78 +633,28 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
                 payload: Vec::new(),
                 terminal: true,
                 error: Some(reason),
+                request_id: None,
             })
+        } else if let Some(axon_result) = self.try_dispatch_via_axon(call_id, &ability, &args).await
+        {
+            // ── Phase 5f: Axon-only session dispatch ───────────────
+            //
+            // When the shared `LocalRuntime` hosts this ability, route
+            // through `invoke_async`. The runtime fires the wired
+            // `LedgerSink` on the terminal event. If the runtime does
+            // not host the ability, we return a terminal error below;
+            // there is no legacy RPC fallback from session frames.
+            Ok(axon_result)
         } else {
-            match serde_json::from_slice::<serde_json::Value>(&args) {
-                Ok(normalized_args) => {
-                    // LB-60 Gap 5a: execute_local_rpc invokes ability
-                    // handlers on the calling thread; AXIOM Tier 2.5
-                    // handlers like process.exec / shell.run wrap an
-                    // async `execute()` call in `Handle::current().
-                    // block_on()` on the assumption that the
-                    // ability registry's `register_rpc` runs them
-                    // inside `tokio::task::spawn_blocking`. That
-                    // invariant holds for direct CLI invocations,
-                    // but the cross-hub forward_invoke path (LB-57
-                    // Option A) drives `handle_down` from a tokio
-                    // worker thread — `block_on` from there panics
-                    // ("Cannot start a runtime from within a
-                    // runtime"). Wrapping here keeps every handler
-                    // on the blocking pool regardless of the
-                    // dispatch entrypoint without changing the
-                    // handler API.
-                    let dispatcher = Arc::clone(&self.dispatcher);
-                    let ability_for_blocking = ability.clone();
-                    let join = tokio::task::spawn_blocking(move || {
-                        Self::execute_local_rpc_blocking(
-                            &dispatcher,
-                            &ability_for_blocking,
-                            normalized_args,
-                        )
-                    })
-                    .await;
-                    match join {
-                        Ok(Ok(value)) => Ok(value),
-                        Ok(Err(err)) => Err(err),
-                        Err(join_err) if join_err.is_panic() => {
-                            // LB-60 Gap 5b: handler panic must surface
-                            // as a typed Result error frame instead of
-                            // tearing down the session bidi. Stringify
-                            // the panic so downstream operators can
-                            // grep the cause.
-                            let panic_msg = match join_err.try_into_panic() {
-                                Ok(payload) => panic_payload_to_string(payload),
-                                Err(_) => "panic payload not recoverable".to_string(),
-                            };
-                            Ok(SessionDispatch::Result {
-                                call_id,
-                                payload: Vec::new(),
-                                terminal: true,
-                                error: Some(format!(
-                                    "<self>.session: ability `{ability}` panicked: {panic_msg}"
-                                )),
-                            })
-                        }
-                        Err(join_err) => Ok(SessionDispatch::Result {
-                            call_id,
-                            payload: Vec::new(),
-                            terminal: true,
-                            error: Some(format!(
-                                "<self>.session: ability `{ability}` execution task \
-                             cancelled or aborted: {join_err}"
-                            )),
-                        }),
-                    }
-                }
-                Err(err) => Ok(SessionDispatch::Result {
-                    call_id,
-                    payload: Vec::new(),
-                    terminal: true,
-                    error: Some(format!(
-                        "<self>.session: ability `{ability}` received non-JSON args bytes: {err}"
-                    )),
-                }),
-            }
+            Ok(SessionDispatch::Result {
+                call_id,
+                payload: Vec::new(),
+                terminal: true,
+                error: Some(format!(
+                    "<self>.session: ability `{ability}` is not registered in Axon LocalRuntime"
+                )),
+                request_id: None,
+            })
         }?;
 
         let result = match result {
@@ -679,12 +662,14 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
                 payload,
                 terminal,
                 error,
+                request_id,
                 ..
             } => SessionDispatch::Result {
                 call_id,
                 payload,
                 terminal,
                 error,
+                request_id,
             },
             SessionDispatch::Dispatch { .. } | SessionDispatch::BidiOpen { .. } => {
                 unreachable!("local execution never returns Dispatch")
@@ -694,7 +679,7 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
             | SessionDispatch::RequestResult { .. } => {
                 // PR-N6 wire shape (C2) added these for the
                 // device → hub forward_invoke escalation path.
-                // LocalAbilityDispatcher only handles
+                // LocalAxonSessionDispatcher only handles
                 // hub-pushed Dispatch frames + their Result
                 // replies; Request/RequestResult never reach
                 // this code path by construction.
@@ -711,7 +696,7 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
 
         let payload_len = payload.len();
         crate::op_event!(
-            component = local_ability_dispatcher,
+            component = local_session_dispatcher,
             kind = sending_result_frame_up_bidi,
             call_id = call_id,
             payload_bytes = payload_len,
@@ -728,14 +713,14 @@ impl SessionFrameDispatcher for LocalAbilityDispatcher {
 
         if send_result.is_err() {
             crate::op_event!(
-                component = local_ability_dispatcher,
+                component = local_session_dispatcher,
                 kind = result_frame_send_failed,
                 call_id = call_id,
                 reason = "outbound_channel_closed",
             );
         } else {
             crate::op_event!(
-                component = local_ability_dispatcher,
+                component = local_session_dispatcher,
                 kind = result_frame_sent_up_bidi,
                 call_id = call_id,
             );
@@ -751,28 +736,6 @@ mod tests {
 
     use serde_json::json;
     use std::time::Duration;
-
-    use crate::runtime::ability_dispatch::LocalAbilityRegistry;
-    use crate::runtime::gateway::NoopGateway;
-
-    fn build_dispatcher() -> Arc<AbilityDispatcher> {
-        let mut registry = LocalAbilityRegistry::new();
-        registry.register_rpc("test.echo", Arc::new(|args| Ok(args)));
-        registry.register_rpc(
-            "always.fails",
-            Arc::new(|_| anyhow::bail!("simulated failure from handler")),
-        );
-        // LB-60 Gap 5b regression: a handler that panics. Cross-hub
-        // forward_invoke must surface the panic as a typed Result
-        // error frame, not by tearing down the session bidi.
-        registry.register_rpc(
-            "always.panics",
-            Arc::new(|_| panic!("simulated handler panic for LB-60 regression")),
-        );
-        let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
-            Arc::new(NoopGateway::new());
-        Arc::new(AbilityDispatcher::new(Arc::new(registry), gateway))
-    }
 
     fn dispatch_frame(call_id: u64, ability: &str, args: Vec<u8>) -> InvokeBidiDown {
         let dispatch = SessionDispatch::Dispatch {
@@ -806,7 +769,14 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_frame_executes_registered_rpc_and_returns_json_payload() {
-        let disp = LocalAbilityDispatcher::new(build_dispatcher());
+        let rt = easynet_axon::invocation::LocalRuntime::new();
+        rt.register_ability(
+            "test.echo",
+            easynet_axon::invocation::make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+        )
+        .await
+        .unwrap();
+        let disp = LocalAxonSessionDispatcher::new().with_local_runtime(Arc::clone(&rt));
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
         let session_tx = SessionUpSender::new(tx);
 
@@ -833,6 +803,7 @@ mod tests {
                 terminal,
                 error,
                 payload,
+                request_id: _,
             } => {
                 assert_eq!(call_id, 1);
                 assert!(terminal, "RPC reply is terminal");
@@ -846,8 +817,148 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_dispatch_via_axon_runtime_writes_to_invocation_ledger() {
+        // **Phase 5d regression pin.**
+        //
+        // Before the Axon-only path, the host daemon executed inbound
+        // `SessionDispatch::Dispatch` outside Axon's `LocalRuntime`.
+        // Net effect: the wired `LedgerSink`
+        // never observed terminals from session-dispatched calls,
+        // and `<billing_dir>/invocations.redb` stayed empty even on
+        // successful chats. The Web UI's history tab consequently
+        // reported `INVOCATION RECORDS: 0` on a host that had just
+        // served a successful invoke.
+        //
+        // This test pins the fix: when a `LocalRuntime` is attached
+        // and hosts the target ability, the session-receive path
+        // routes through `invoke_async` → LedgerSink → InvocationLedger.
+        // One Dispatch frame in → one ledger row out.
+        use easynet_axon::invocation::{
+            make_ability, AbilityCallModes, AbilityOptions, BackpressurePolicy, InvocationLedger,
+            LedgerSink, LocalRuntime,
+        };
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ledger =
+            Arc::new(InvocationLedger::open(temp.path().join("inv.redb")).expect("open ledger"));
+        let rt = LocalRuntime::new();
+        rt.set_ledger_sink(LedgerSink::new(Arc::clone(&ledger)));
+        rt.register_ability_with_options(
+            "demo.session_echo",
+            make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+            AbilityOptions {
+                modes: AbilityCallModes::RPC,
+                backpressure: BackpressurePolicy::Unbounded,
+            },
+        )
+        .await
+        .unwrap();
+
+        let disp = LocalAxonSessionDispatcher::new().with_local_runtime(Arc::clone(&rt));
+        let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
+        let session_tx = SessionUpSender::new(tx);
+
+        disp.handle_down(
+            dispatch_frame(
+                42,
+                "demo.session_echo",
+                br#"{"k":"v-from-session"}"#.to_vec(),
+            ),
+            &session_tx,
+        )
+        .await
+        .expect("session Dispatch routes through Axon and replies with terminal");
+
+        // Wire-shape pin: the terminal frame the legacy path produced
+        // and the Axon-routed path produce are byte-identical for
+        // the success case (one terminal Result with payload + no
+        // error).
+        let reply = rx.recv().await.expect("reply produced");
+        let chunk = match reply.payload {
+            Some(UpPayload::BinaryChunk(c)) => c,
+            other => panic!("expected BinaryChunk reply, got: {other:?}"),
+        };
+        let parsed: SessionDispatch = serde_json::from_slice(&chunk.data).expect("Result decodes");
+        match parsed {
+            SessionDispatch::Result {
+                call_id,
+                terminal,
+                error,
+                payload,
+                request_id: _,
+            } => {
+                assert_eq!(call_id, 42);
+                assert!(terminal, "Axon-routed reply still terminal");
+                assert_eq!(error, None);
+                let value: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+                assert_eq!(value, json!({"k": "v-from-session"}));
+            }
+            other => panic!("expected Result, got {other:?}"),
+        }
+
+        // Ledger persistence pin — the load-bearing claim of Phase 5d.
+        // LedgerSink writes on the spawn task; yield + sleep matches
+        // Axon's own `ledger_sink_persists_completed_invocation` test
+        // pattern.
+        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let records = ledger.list_all().expect("list ledger");
+        assert_eq!(
+            records.len(),
+            1,
+            "session-dispatched call must land EXACTLY one row in the ledger"
+        );
+        assert_eq!(records[0].ability_name, "demo.session_echo");
+        assert_eq!(records[0].state, "COMPLETED");
+        assert!(records[0].result.is_some());
+        assert!(records[0].error.is_none());
+        assert!(
+            records[0].receipt_chain.verified,
+            "audit chain must verify: {}",
+            records[0].receipt_chain.verification_detail
+        );
+    }
+
+    #[tokio::test]
+    async fn session_dispatch_rejects_when_runtime_lacks_ability() {
+        // Phase 5f invariant: if the runtime is wired but does NOT
+        // host the requested ability, the dispatcher returns a typed
+        // terminal error. It does not fall back to a legacy dispatcher.
+        use easynet_axon::invocation::LocalRuntime;
+
+        let rt = LocalRuntime::new();
+        // Intentionally NOT registering `test.echo` in the runtime.
+        let disp = LocalAxonSessionDispatcher::new().with_local_runtime(Arc::clone(&rt));
+        let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
+        let session_tx = SessionUpSender::new(tx);
+
+        disp.handle_down(
+            dispatch_frame(99, "test.echo", br#"{"echo":"fallback"}"#.to_vec()),
+            &session_tx,
+        )
+        .await
+        .expect("runtime miss becomes terminal Result error");
+
+        let reply = rx.recv().await.expect("reply produced");
+        let chunk = match reply.payload {
+            Some(UpPayload::BinaryChunk(c)) => c,
+            other => panic!("expected BinaryChunk reply, got: {other:?}"),
+        };
+        let parsed: SessionDispatch = serde_json::from_slice(&chunk.data).unwrap();
+        match parsed {
+            SessionDispatch::Result { error, payload, .. } => {
+                assert!(payload.is_empty(), "runtime miss carries no payload");
+                let err = error.expect("runtime miss must surface an error");
+                assert!(err.contains("test.echo"));
+                assert!(err.contains("LocalRuntime"));
+            }
+            other => panic!("expected Result, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn unregistered_ability_returns_terminal_error() {
-        let disp = LocalAbilityDispatcher::new(build_dispatcher());
+        let disp = LocalAxonSessionDispatcher::new();
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
         let session_tx = SessionUpSender::new(tx);
 
@@ -870,6 +981,7 @@ mod tests {
                 terminal,
                 error,
                 payload,
+                request_id: _,
             } => {
                 assert_eq!(call_id, 7);
                 assert!(terminal, "error reply must be terminal");
@@ -882,22 +994,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handler_panic_surfaces_as_terminal_error_not_session_teardown() {
-        // LB-60 Gap 5b regression: in the cross-hub forward_invoke
-        // path, `handle_down` runs from a tokio worker thread and
-        // some baseline-locomotion handlers (process.exec / shell.run)
-        // call `tokio::runtime::Handle::current().block_on(...)`.
-        // That panics from a worker thread; before Gap 5a/5b the
-        // panic propagated through `handle_down`, killed the worker,
-        // tore down the device-mode session bidi, and the caller
-        // saw `target_offline` instead of a typed handler error.
-        //
-        // This test pins the post-Gap 5b contract: a handler panic
-        // is caught at the spawn_blocking boundary and surfaced as a
-        // terminal `SessionDispatch::Result { error: Some(...) }`
-        // frame whose payload names the panicking ability. The
-        // dispatcher remains usable for follow-up dispatches.
-        let disp = LocalAbilityDispatcher::new(build_dispatcher());
+    async fn legacy_only_handler_does_not_execute_without_runtime_registration() {
+        // RPC dispatch is Axon-only. A handler that is not registered
+        // in the runtime must not execute, which also means a missing
+        // handler cannot tear down the session.
+        let disp = LocalAxonSessionDispatcher::new();
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
         let session_tx = SessionUpSender::new(tx);
 
@@ -906,9 +1007,9 @@ mod tests {
             &session_tx,
         )
         .await
-        .expect("handler panic must NOT propagate; handle_down stays Ok");
+        .expect("legacy-only handler returns terminal error");
 
-        let reply = rx.recv().await.expect("panic recovery still emits a reply");
+        let reply = rx.recv().await.expect("terminal error reply emitted");
         assert_eq!(
             reply.sequence, 1,
             "first post-frame-0 reply must own up-direction sequence 1"
@@ -924,25 +1025,24 @@ mod tests {
                 terminal,
                 error,
                 payload,
+                request_id: _,
             } => {
                 assert_eq!(call_id, 11);
-                assert!(terminal, "panic recovery reply must be terminal");
-                assert!(payload.is_empty(), "panicked dispatch carries no payload");
-                let err = error.expect("panic must surface as Result.error");
+                assert!(terminal, "rejection reply must be terminal");
+                assert!(payload.is_empty(), "rejected dispatch carries no payload");
+                let err = error.expect("legacy-only handler must surface as Result.error");
                 assert!(
                     err.contains("always.panics"),
-                    "error must name the panicking ability; got: {err}"
+                    "error must name the rejected ability; got: {err}"
                 );
-                assert!(
-                    err.contains("panicked"),
-                    "error must mark the failure mode as a panic; got: {err}"
-                );
+                assert!(err.contains("LocalRuntime"));
             }
             other => panic!("expected SessionDispatch::Result, got: {other:?}"),
         }
 
-        // Dispatcher must remain usable for follow-up calls — the
-        // panic was contained, not a fatal trap.
+        // Dispatcher must remain usable for follow-up calls: it
+        // still emits a terminal Result frame instead of tearing
+        // down the session.
         disp.handle_down(
             dispatch_frame(12, "test.echo", br#"{"after":"panic"}"#.to_vec()),
             &session_tx,
@@ -968,10 +1068,9 @@ mod tests {
             } => {
                 assert_eq!(call_id, 12);
                 assert!(terminal);
-                assert!(
-                    error.is_none(),
-                    "post-panic test.echo must succeed; got error: {error:?}"
-                );
+                let err = error.expect("follow-up legacy-only ability must still reject");
+                assert!(err.contains("test.echo"));
+                assert!(err.contains("LocalRuntime"));
             }
             other => panic!("expected SessionDispatch::Result, got: {other:?}"),
         }
@@ -979,7 +1078,14 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_args_bytes_return_terminal_error() {
-        let disp = LocalAbilityDispatcher::new(build_dispatcher());
+        let rt = easynet_axon::invocation::LocalRuntime::new();
+        rt.register_ability(
+            "test.echo",
+            crate::runtime::ability_dispatch::rpc_handler_to_ability_fn(Arc::new(|args| Ok(args))),
+        )
+        .await
+        .unwrap();
+        let disp = LocalAxonSessionDispatcher::new().with_local_runtime(Arc::clone(&rt));
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
         let session_tx = SessionUpSender::new(tx);
 
@@ -1002,12 +1108,13 @@ mod tests {
                 terminal,
                 error,
                 payload,
+                request_id: _,
             } => {
                 assert_eq!(call_id, 9);
                 assert!(terminal, "malformed args error must be terminal");
                 assert!(payload.is_empty());
                 let err = error.expect("error message required");
-                assert!(err.contains("non-JSON args bytes"));
+                assert!(err.contains("payload not JSON"));
             }
             other => panic!("expected SessionDispatch::Result, got: {other:?}"),
         }
@@ -1015,7 +1122,7 @@ mod tests {
 
     #[tokio::test]
     async fn encrypted_dispatch_args_fail_closed_without_local_decryptor() {
-        let disp = LocalAbilityDispatcher::new(build_dispatcher());
+        let disp = LocalAxonSessionDispatcher::new();
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
         let session_tx = SessionUpSender::new(tx);
 
@@ -1049,6 +1156,7 @@ mod tests {
                 terminal,
                 error,
                 payload,
+                request_id: _,
             } => {
                 assert_eq!(call_id, 19);
                 assert!(terminal);
@@ -1070,7 +1178,7 @@ mod tests {
         // mistake (Results flow up, not down). The dispatcher
         // logs nothing and returns Ok without sending a reply
         // frame.
-        let disp = LocalAbilityDispatcher::new(build_dispatcher());
+        let disp = LocalAxonSessionDispatcher::new();
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
         let session_tx = SessionUpSender::new(tx);
 
@@ -1079,6 +1187,7 @@ mod tests {
             payload: Vec::new(),
             terminal: true,
             error: None,
+            request_id: None,
         };
         let bogus_bytes = serde_json::to_vec(&bogus).expect("encode bogus");
         let frame = InvokeBidiDown {
@@ -1104,7 +1213,7 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_dispatch_json_returns_error() {
-        let disp = LocalAbilityDispatcher::new(build_dispatcher());
+        let disp = LocalAxonSessionDispatcher::new();
         let (tx, _rx) = mpsc::channel::<InvokeBidiUp>(4);
         let session_tx = SessionUpSender::new(tx);
 
@@ -1134,9 +1243,9 @@ mod tests {
     // ── LB-52 Gap 2 — device-mode boot wiring exposes baseline-locomotion ──
     //
     // The hub-pushed Dispatch frame's ability name is resolved
-    // against the same `Arc<AbilityDispatcher>` the daemon binary
-    // constructs via `agents::build_registry_for_daemon` →
-    // `build_registry_with_services`. That path registers the
+    // against the same Axon `LocalRuntime` the daemon binary wires via
+    // `agents::build_registry_for_daemon` → `build_registry_with_services`.
+    // That path registers the
     // AXIOM Tier 2.5 Baseline Locomotion Profile (fs.read /
     // fs.write / fs.list / fs.edit / process.exec / shell.run /
     // http.request) unconditionally, BEFORE the mode (hub /
@@ -1148,19 +1257,20 @@ mod tests {
     // This test pins that invariant by walking the same boot
     // path (real registry construction with empty sub-services)
     // and pushing a real Dispatch frame for `fs.read` against
-    // a tempfile through `LocalAbilityDispatcher::handle_down`.
+    // a tempfile through `LocalAxonSessionDispatcher::handle_down`.
     // Asserts the up-channel receives a terminal Result frame
     // whose payload decodes to an `fs.read` response containing
     // the file's bytes.
 
-    fn build_real_daemon_dispatcher() -> Arc<AbilityDispatcher> {
+    fn build_real_daemon_registry_with_runtime(
+        local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
+    ) -> Arc<crate::runtime::ability_dispatch::AxonAbilityCatalog> {
         use crate::runtime::execution::discuss::DiscussService;
         use crate::runtime::execution::loop_instance::LoopService;
         use crate::runtime::execution::permission::PermissionService;
         use crate::runtime::execution::schedule::ScheduleService;
         use crate::runtime::execution::session::SessionService;
-        use crate::runtime::gateway::NoopGateway;
-        let registry = crate::runtime::agents::build_registry_with_services(
+        crate::runtime::agents::build_registry_with_services(
             Arc::new(SessionService::new()),
             Arc::new(PermissionService::new()),
             Arc::new(DiscussService::new()),
@@ -1170,10 +1280,11 @@ mod tests {
             &Default::default(),
             Arc::new(Vec::new()),
             crate::runtime::agents::PagesIdentity::default(),
-        );
-        let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
-            Arc::new(NoopGateway::new());
-        Arc::new(AbilityDispatcher::new(registry, gateway))
+            local_runtime,
+            Arc::new(
+                crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell::new(),
+            ),
+        )
     }
 
     #[tokio::test]
@@ -1182,7 +1293,9 @@ mod tests {
         let target = tmp.path().join("hello.txt");
         std::fs::write(&target, "device-B-bytes-from-real-fs-read").expect("seed temp file");
 
-        let disp = LocalAbilityDispatcher::new(build_real_daemon_dispatcher());
+        let rt = easynet_axon::invocation::LocalRuntime::new();
+        let _registry = build_real_daemon_registry_with_runtime(Some(Arc::clone(&rt)));
+        let disp = LocalAxonSessionDispatcher::new().with_local_runtime(Arc::clone(&rt));
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
         let session_tx = SessionUpSender::new(tx);
 
@@ -1212,6 +1325,7 @@ mod tests {
                 terminal,
                 error,
                 payload,
+                request_id: _,
             } => {
                 assert_eq!(call_id, 42);
                 assert!(terminal, "fs.read RPC reply is terminal");
@@ -1239,7 +1353,9 @@ mod tests {
         let target = tmp.path().join("upload-from-hub.bin");
         let bytes = b"remote-file-transfer-over-session";
 
-        let disp = LocalAbilityDispatcher::new(build_real_daemon_dispatcher());
+        let rt = easynet_axon::invocation::LocalRuntime::new();
+        let _registry = build_real_daemon_registry_with_runtime(Some(Arc::clone(&rt)));
+        let disp = LocalAxonSessionDispatcher::new().with_local_runtime(rt);
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(8);
         let session_tx = SessionUpSender::new(tx);
 
@@ -1297,6 +1413,7 @@ mod tests {
                 terminal,
                 error,
                 payload,
+                request_id: _,
             } => {
                 assert_eq!(call_id, 77);
                 assert!(terminal, "upload completion must be terminal");
@@ -1319,7 +1436,9 @@ mod tests {
         let bytes = b"remote-download-bytes-from-device";
         std::fs::write(&target, bytes).expect("seed file");
 
-        let disp = LocalAbilityDispatcher::new(build_real_daemon_dispatcher());
+        let rt = easynet_axon::invocation::LocalRuntime::new();
+        let _registry = build_real_daemon_registry_with_runtime(Some(Arc::clone(&rt)));
+        let disp = LocalAxonSessionDispatcher::new().with_local_runtime(rt);
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(16);
         let session_tx = SessionUpSender::new(tx);
 
@@ -1370,6 +1489,7 @@ mod tests {
                     terminal,
                     error,
                     payload,
+                    request_id: _,
                 } => {
                     assert_eq!(call_id, 88);
                     assert!(error.is_none(), "download must succeed, got {error:?}");

@@ -31,7 +31,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
 /// Wire name of the ability. Pinned so a future rename trips a
@@ -40,7 +40,7 @@ pub const ABILITY_NAME: &str = "device.observe.health";
 
 /// Register the `device.observe.health` handler on the supplied registry.
 /// Called from `runtime::agents::build_registry`.
-pub fn register(reg: &mut LocalAbilityRegistry) {
+pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
         "device.observe.health",
         OwnerKind::Device,
@@ -82,8 +82,6 @@ pub fn description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::ability_dispatch::AbilityDispatcher;
-    use crate::runtime::gateway::NoopGateway;
     use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
     #[test]
@@ -105,9 +103,9 @@ mod tests {
         // End-to-end on the local path: register, build a
         // dispatcher, dispatch a Local target, observe the echo.
         // This is the smoke path the v1 daemon's startup hits.
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg);
-        let dispatcher = AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway::new()));
+        let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
             scope: TargetScope::Local,
             ability: ABILITY_NAME.into(),

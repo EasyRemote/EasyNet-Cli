@@ -53,7 +53,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::runtime::ability_descriptor::AbilityDescriptor;
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::agents::profiles::mcp::{
     canonical_ability_name_for_mcp_tool, tool_specs_from_descriptors,
@@ -77,9 +77,9 @@ pub const ABILITY_CALL_TOOL: &str = "device.mcp.bridge.call_tool";
 /// register first, set the lock once the registry is wrapped in an
 /// Arc. Same seam admin_status_ability uses.
 pub fn register<F>(
-    reg: &mut LocalAbilityRegistry,
+    reg: &mut AxonAbilityCatalog,
     descriptors_provider: F,
-    registry_handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+    registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) where
     F: Fn() -> Vec<AbilityDescriptor> + Send + Sync + 'static,
 {
@@ -139,7 +139,7 @@ fn list_tools_handler(
 /// for "which names are callable through this surface."
 fn call_tool_handler(
     descriptors_provider: &Arc<dyn Fn() -> Vec<AbilityDescriptor> + Send + Sync>,
-    registry_handle: &Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+    registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     args: Value,
 ) -> anyhow::Result<Value> {
     let name = match args.get("name").and_then(Value::as_str) {
@@ -172,17 +172,17 @@ fn call_tool_handler(
             "registry handle not initialised (build-site forgot to set the OnceLock)",
         ));
     };
-    let Some(handler) = registry.get_rpc(ability_name) else {
-        // The descriptor said it exists but the registry doesn't
-        // have an RPC handler — likely a streaming-only or bidi
-        // ability advertised through the catalogue. MCP tools/call
-        // is unary; tell the caller honestly.
+    if !registry.has_rpc(ability_name) {
+        // The descriptor said it exists but the runtime/catalog doesn't
+        // have an RPC handler — likely a streaming-only or bidi ability
+        // advertised through the catalogue. MCP tools/call is unary;
+        // tell the caller honestly.
         return Ok(error_response(&format!(
             "tool `{name}` maps to ability `{ability_name}`, which is not invocable as a unary RPC (may be a stream or bidi handler)"
         )));
-    };
+    }
 
-    match handler(arguments) {
+    match registry.invoke_rpc_json(ability_name, arguments) {
         Ok(value) => Ok(success_response(value)),
         Err(e) => Ok(error_response(&format!(
             "tool `{name}` maps to ability `{ability_name}`, which returned an error: {e}"
@@ -278,12 +278,12 @@ mod tests {
     /// Test fixture: register list_tools + call_tool against a
     /// catalogue, then wire the OnceLock to the resulting Arc'd
     /// registry. Mirrors the build-site OnceLock seam exactly.
-    fn build_bridge_registry<F>(provider: F) -> Arc<LocalAbilityRegistry>
+    fn build_bridge_registry<F>(provider: F) -> Arc<AxonAbilityCatalog>
     where
         F: Fn() -> Vec<AbilityDescriptor> + Send + Sync + 'static,
     {
-        let mut reg = LocalAbilityRegistry::new();
-        let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
+        let mut reg = AxonAbilityCatalog::new();
+        let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
         // Pre-register one trivial ability the bridge can dispatch
         // into, so call_tool tests have something real to invoke.
         reg.register_rpc_with_owner(
@@ -453,8 +453,8 @@ mod tests {
         // A handler that returns Err must NOT crash the bridge —
         // it surfaces the error message inside an isError frame so
         // the MCP client sees a structured response.
-        let mut reg = LocalAbilityRegistry::new();
-        let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
+        let mut reg = AxonAbilityCatalog::new();
+        let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
         reg.register_rpc_with_owner(
             "always.fails",
             OwnerKind::Device,
@@ -510,8 +510,8 @@ mod tests {
         // OnceLock, surface as isError instead of panicking. This
         // pins the "test bug not crash" contract from the comment
         // in call_tool_handler.
-        let mut reg = LocalAbilityRegistry::new();
-        let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
+        let mut reg = AxonAbilityCatalog::new();
+        let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
         register(&mut reg, || vec![d("test.echo")], Arc::clone(&handle));
         let arc = Arc::new(reg);
         // Deliberately do NOT set the handle.

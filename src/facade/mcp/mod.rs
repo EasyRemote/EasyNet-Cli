@@ -29,8 +29,8 @@
 //!   * provider.rs       — HubMcpProvider; the McpToolProvider
 //!                         impl that hand-routed to handlers.rs
 //!   * agent_dispatch.rs — duplicate `<agent>.chat` dispatch
-//!                         (now lives in `runtime::ability_dispatch`
-//!                         and AbilityProxy)
+//!                         (now lives in the daemon LocalRuntime
+//!                         dispatch path)
 //!   * bound_node.rs     — node-scoped argument patching
 //!   * error.rs          — wrapper error type
 //!   * server.rs         — placeholder
@@ -40,7 +40,7 @@
 //!   * Tool catalog: `runtime::agents::profiles::all_descriptors_for_host`
 //!   * MCP-shape projection: `runtime::agents::profiles::mcp::tool_specs_from_descriptors`
 //!   * Tool dispatch: `runtime::agents::profiles::mcp::InvokeMcpProvider`
-//!     (drives the in-process AbilityProxy via ProxyLocalInvoker)
+//!     (production drives daemon.sock Axon Invocation via DaemonLocalInvoker)
 //!   * Stdio server scaffolding: `easynet_axon::mcp::StdioMcpServer`
 //!     (unchanged — it's the SDK trait surface)
 //!

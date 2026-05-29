@@ -81,7 +81,7 @@ use base64::Engine;
 use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::ability_dispatch::{BidiSource, LocalAbilityRegistry, BIDI_CHANNEL_BOUND};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, BidiSource, BIDI_CHANNEL_BOUND};
 use crate::runtime::execution::pty::{PtyService, PtySessionId};
 
 pub const ABILITY_PTY_SESSION_ATTACH: &str = "device.terminal.attach";
@@ -128,7 +128,7 @@ const READ_CHUNK_SIZE: usize = 4096;
 /// burn CPU on idle sessions.
 const EXIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
-pub fn register(reg: &mut LocalAbilityRegistry, pty: Arc<PtyService>) {
+pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>) {
     use crate::runtime::ability_dispatch::LocalBidiHandler;
     let pty_for_attach = Arc::clone(&pty);
     let handler: LocalBidiHandler =
@@ -470,7 +470,7 @@ mod tests {
 
     #[tokio::test]
     async fn registration_makes_attach_dispatchable() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg, fresh_service());
         assert!(
             reg.get_bidi(ABILITY_PTY_SESSION_ATTACH).is_some(),

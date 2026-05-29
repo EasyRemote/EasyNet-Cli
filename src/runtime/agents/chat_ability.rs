@@ -4,7 +4,7 @@
 // File: src/runtime/system/chat_ability.rs
 // Description: First-class registration of every locally-installed
 //              agent's `chat` ability on the daemon's
-//              `LocalAbilityRegistry`. After this lands, both the
+//              `AxonAbilityCatalog`. After this lands, both the
 //              Kernel and the MCP adapter can dispatch through the
 //              same registered handler instead of each maintaining
 //              their own special-case path into `send_external`.
@@ -38,7 +38,7 @@
 //      and the failure mode (registry briefly unreadable) would surface
 //      as a chat error rather than a startup error.
 //   2. The registry is the single-writer in the daemon (see
-//      `LocalAbilityRegistry::register_rpc` doc): adding a new agent
+//      `AxonAbilityCatalog::register_rpc` doc): adding a new agent
 //      means re-running boot or calling `register` again with the
 //      updated registry. Mid-life additions are rare today and the
 //      explicit "re-register on add" pattern keeps the dispatch path
@@ -88,7 +88,7 @@ use std::time::Instant;
 use serde_json::{json, Value};
 
 use crate::registry::agents::{AgentEntry, AgentRegistry};
-use crate::runtime::ability_dispatch::{LocalAbilityRegistry, StreamSource};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
 use crate::runtime::dispatch::DriverOverrides;
 
 /// The wire-level *verb* portion of every chat ability name. The
@@ -136,10 +136,10 @@ pub trait ContextLoader: Send + Sync {
 /// context-loader chain. Today the daemon passes an empty Vec; later
 /// PRs construct loaders during boot and pass them in.
 pub fn register(
-    reg: &mut LocalAbilityRegistry,
+    reg: &mut AxonAbilityCatalog,
     agents: &AgentRegistry,
     loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
-    dispatch_handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+    dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) {
     for (agent_name, entry) in &agents.agents {
         register_for_agent(reg, agent_name.clone(), entry.clone(), Arc::clone(&loaders));
@@ -176,7 +176,7 @@ pub fn register(
 /// caller chooses how it wants to consume chat (one-shot vs framed),
 /// not which "kind of chat" it is calling.
 pub fn register_for_agent(
-    reg: &mut LocalAbilityRegistry,
+    reg: &mut AxonAbilityCatalog,
     agent_name: String,
     entry: AgentEntry,
     loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
@@ -405,10 +405,10 @@ pub(crate) fn build_agent_ability_handler(
 /// that does NOT match any `<agent>.<verb>` shape is passed through
 /// to the legacy "no handler registered" error.
 pub(crate) fn register_dynamic_agent_fallback(
-    reg: &mut LocalAbilityRegistry,
+    reg: &mut AxonAbilityCatalog,
     _agents_snapshot: Arc<crate::registry::agents::AgentRegistry>,
     loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
-    dispatch_handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+    dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) {
     reg.set_rpc_fallback(Arc::new(
         move |ability: &str| -> Option<crate::runtime::ability_dispatch::LocalRpcHandler> {
@@ -483,7 +483,7 @@ pub(crate) fn register_dynamic_agent_fallback(
 /// shape as the boot-time registration in `register_for_agent`,
 /// pulled out as a helper so the hot-add and boot paths produce
 /// byte-identical handlers.
-fn build_chat_handler_for(
+pub(crate) fn build_chat_handler_for(
     agent_name: String,
     entry: AgentEntry,
     loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
@@ -496,13 +496,13 @@ fn build_chat_handler_for(
 /// re-loads `agents.json` per call so the discover ladder sees
 /// every peer that exists *now*, including agents added after this
 /// closure was built.
-fn build_discover_handler_for(
+pub(crate) fn build_discover_handler_for(
     agent_name: String,
-    dispatch_handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+    dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) -> crate::runtime::ability_dispatch::LocalRpcHandler {
     // Replicate the surface of `discover_ability::register_for_agent`
     // without going through that function (it expects a `&mut
-    // LocalAbilityRegistry`, which we don't have here). The handler
+    // AxonAbilityCatalog`, which we don't have here). The handler
     // re-loads agents on every call so a brand-new peer is visible
     // immediately — same hot-add story as the chat handler.
     let provider: Arc<dyn Fn() -> crate::registry::agents::AgentRegistry + Send + Sync> =
@@ -522,9 +522,9 @@ fn build_discover_handler_for(
 /// Synthesise an `<agent>.invoke` handler for a hot-added agent.
 /// Routes through the same builtin invoke entry the boot-time
 /// registration uses.
-fn build_invoke_handler_for(
+pub(crate) fn build_invoke_handler_for(
     agent_name: String,
-    dispatch_handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+    dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) -> crate::runtime::ability_dispatch::LocalRpcHandler {
     let provider: Arc<dyn Fn() -> crate::registry::agents::AgentRegistry + Send + Sync> =
         Arc::new(|| crate::registry::agents::load_agents().unwrap_or_default());
@@ -1722,7 +1722,7 @@ mod tests {
 
     #[test]
     fn register_mounts_one_handler_per_agent() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         let mut agents = AgentRegistry::default();
         agents.agents.insert("alice".into(), entry());
         agents.agents.insert("bob".into(), entry());
@@ -2133,12 +2133,11 @@ mod tests {
 
     #[test]
     fn kernel_invoke_routes_chat_through_registered_handler() {
-        use crate::runtime::ability_dispatch::{AbilityDispatcher, LocalAbilityRegistry};
         use crate::runtime::gateway::NoopGateway;
         use crate::runtime::invocation::{CausalContext, Invocation};
-        use crate::runtime::invocation_target::CallMode;
         use crate::runtime::kernel::Kernel;
         use crate::runtime::kernel_api::KernelApi;
+        use easynet_axon::invocation::{make_ability, LocalRuntime};
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let _g = crate::facade::cli::test_support::HomeGuard::new();
@@ -2147,21 +2146,28 @@ mod tests {
         // can prove the registered handler is the one that fired.
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_for_handler = Arc::clone(&counter);
-        let mut reg = LocalAbilityRegistry::new();
-        reg.register_rpc(
-            "alice.chat",
-            Arc::new(move |_args: Value| {
-                counter_for_handler.fetch_add(1, Ordering::SeqCst);
-                Ok(json!({"reply": "fake"}))
-            }),
-        );
-        let dispatcher = Arc::new(AbilityDispatcher::new(Arc::new(reg), Arc::new(NoopGateway)));
+        let rt = LocalRuntime::new();
+        crate::support::async_bridge::run_blocking(
+            rt.register_ability(
+                "alice.chat",
+                make_ability(move |_ctx| {
+                    let counter_for_handler = Arc::clone(&counter_for_handler);
+                    async move {
+                        counter_for_handler.fetch_add(1, Ordering::SeqCst);
+                        serde_json::to_vec(&json!({"reply": "fake"})).map_err(|err| {
+                            easynet_axon::invocation::AxonError::internal(format!(
+                                "encode fake chat reply: {err}"
+                            ))
+                        })
+                    }
+                }),
+            ),
+            crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
+        )
+        .expect("register runtime chat ability");
 
         let kernel = Kernel::new(Arc::new(NoopGateway));
-        kernel.set_dispatcher(dispatcher);
-
-        let _ = CallMode::Rpc; // keep the import live in case future
-                               // versions of the test branch on mode.
+        kernel.set_local_runtime(Arc::clone(&rt));
 
         let device_uri = crate::ura::device_ura("localhost", "a");
         let inv = Invocation {

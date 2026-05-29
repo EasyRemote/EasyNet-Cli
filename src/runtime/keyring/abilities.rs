@@ -16,7 +16,7 @@
 //   keyring.peer_list     — enumerate peer table
 //
 // All handlers are JSON-in / JSON-out. They register against the
-// daemon's `LocalAbilityRegistry` and are invoked through the same
+// daemon's `AxonAbilityCatalog` and are invoked through the same
 // dispatch path as any other ability.
 //
 // Author: Silan.Hu
@@ -34,7 +34,7 @@ use super::user_binding_chain::{
     verify_user_binding_signature, UserBindingError, UserBindingToken, ED25519_PUBKEY_LEN,
     USER_BINDING_FRESHNESS_MS, USER_BINDING_NONCE_LEN,
 };
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::ura::{parse_ura, URAKind};
 
 fn b64_encode(bytes: &[u8]) -> String {
@@ -459,7 +459,7 @@ pub fn handle_peer_list(handle: &KeyringHandle, _args: Value) -> Result<Value> {
 ///
 /// `owner` is the agent name they publish under (typically `"<self>"`
 /// for the daemon's self-bundle).
-pub fn register_for_owner(reg: &mut LocalAbilityRegistry, owner: &str, handle: Arc<KeyringHandle>) {
+pub fn register_for_owner(reg: &mut AxonAbilityCatalog, owner: &str, handle: Arc<KeyringHandle>) {
     let name = |verb: &str| format!("{owner}.keyring.{verb}");
 
     let h = handle.clone();
@@ -521,7 +521,7 @@ pub fn register_for_owner(reg: &mut LocalAbilityRegistry, owner: &str, handle: A
 /// production daemons construct one bindings store per process
 /// from a path, while the keyring handle is per-ring.
 pub fn register_federated_consume_for_owner(
-    reg: &mut LocalAbilityRegistry,
+    reg: &mut AxonAbilityCatalog,
     owner: &str,
     bindings: Arc<FederatedBindingsStore>,
 ) {

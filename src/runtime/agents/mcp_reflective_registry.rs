@@ -44,7 +44,7 @@ use serde_json::{json, Value};
 
 use crate::core::ability_spec::AbilityManifest;
 use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
-use crate::runtime::ability_dispatch::{LocalAbilityRegistry, OwnerKind};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::runtime::execution::mcp_client::McpClientService;
 
 /// Stable prefix stamped into `AbilityDescriptor.source` for every
@@ -135,7 +135,7 @@ pub struct ReflectResult {
 /// if profiling shows it worth it.
 pub async fn reflect_all(
     client: &McpClientService,
-    registry: &mut LocalAbilityRegistry,
+    registry: &mut AxonAbilityCatalog,
     owner_agent_ura: &str,
 ) -> ReflectResult {
     let mut out = ReflectResult::default();
@@ -374,7 +374,7 @@ async fn refresh_server_inner<W: RegistryWriter>(
 
 /// Dynamic-side refresh facade. Reacts to a runtime
 /// `notifications/tools/list_changed` push after the registry has
-/// been frozen behind `Arc<LocalAbilityRegistry>` at daemon boot.
+/// been frozen behind `Arc<AxonAbilityCatalog>` at daemon boot.
 ///
 /// The hot path's lookup order is static → dynamic → fallback, so
 /// a dynamic-side rewrite is invisible to any boot-registered
@@ -383,7 +383,7 @@ async fn refresh_server_inner<W: RegistryWriter>(
 /// `static_lookup_wins_over_dynamic_on_name_collision` for the pin.
 pub async fn refresh_server_dynamic(
     client: &McpClientService,
-    registry: &LocalAbilityRegistry,
+    registry: &AxonAbilityCatalog,
     owner_agent_ura: &str,
     server_name: &str,
     previously_reflected: &[String],
@@ -402,10 +402,10 @@ pub async fn refresh_server_dynamic(
 
 /// Static-side refresh facade. The boot path's explicit
 /// reconcile-one-server entry point; used by callers that hold
-/// `&mut LocalAbilityRegistry` (the boot reflective sweep, tests).
+/// `&mut AxonAbilityCatalog` (the boot reflective sweep, tests).
 pub async fn refresh_server(
     client: &McpClientService,
-    registry: &mut LocalAbilityRegistry,
+    registry: &mut AxonAbilityCatalog,
     owner_agent_ura: &str,
     server_name: &str,
     previously_reflected: &[String],
@@ -446,8 +446,8 @@ fn mcp_tools_list_timeout() -> Duration {
 }
 
 /// Abstract over the two registry-side surfaces (static maps owned
-/// by `&mut LocalAbilityRegistry`, hot-reload side table owned via
-/// `&LocalAbilityRegistry` interior mutability) so the two reflection
+/// by `&mut AxonAbilityCatalog`, hot-reload side table owned via
+/// `&AxonAbilityCatalog` interior mutability) so the two reflection
 /// flows — boot-time `reflect_all`/`refresh_server` and runtime
 /// `RegistryRefreshSink`-driven `refresh_server_dynamic` — share
 /// one body.
@@ -511,10 +511,10 @@ fn format_collision_hint(hint: Option<&'static str>) -> String {
     }
 }
 
-/// Static side: `&mut LocalAbilityRegistry`. Used by boot-time
+/// Static side: `&mut AxonAbilityCatalog`. Used by boot-time
 /// `reflect_all` and the original `refresh_server` facade.
 struct StaticWriter<'a> {
-    reg: &'a mut LocalAbilityRegistry,
+    reg: &'a mut AxonAbilityCatalog,
 }
 
 impl RegistryWriter for StaticWriter<'_> {
@@ -540,19 +540,19 @@ impl RegistryWriter for StaticWriter<'_> {
     const COLLISION_KIND_HINT: Option<&'static str> = None;
 }
 
-/// Dynamic side: `&LocalAbilityRegistry` (interior mutability via
+/// Dynamic side: `&AxonAbilityCatalog` (interior mutability via
 /// `hot_*` methods). Used by `RegistryRefreshSink` to react to
 /// upstream `notifications/tools/list_changed` after the registry
-/// has been frozen behind `Arc<LocalAbilityRegistry>` at daemon
+/// has been frozen behind `Arc<AxonAbilityCatalog>` at daemon
 /// boot.
 ///
 /// The implementor takes `&self` on the underlying registry —
 /// `&mut self` on the writer is purely to let the trait stay
-/// shared-shape. The `LocalAbilityRegistry` itself is borrowed
+/// shared-shape. The `AxonAbilityCatalog` itself is borrowed
 /// shared, so this writer can live alongside other readers of the
 /// registry without violating borrow rules.
 struct DynamicWriter<'a> {
-    reg: &'a LocalAbilityRegistry,
+    reg: &'a AxonAbilityCatalog,
 }
 
 impl RegistryWriter for DynamicWriter<'_> {
@@ -651,8 +651,8 @@ fn register_one_tool<W: RegistryWriter>(
     let server_for_handler = server_name.to_string();
     let upstream_for_handler = upstream_tool.clone();
     let local_name_for_handler = local_name.clone();
-    let handler: crate::runtime::ability_dispatch::LocalStreamHandler =
-        Arc::new(move |args: Value| -> anyhow::Result<crate::runtime::ability_dispatch::StreamSource> {
+    let handler: crate::runtime::ability_dispatch::LocalStreamHandler = Arc::new(
+        move |args: Value| -> anyhow::Result<crate::runtime::ability_dispatch::StreamSource> {
             // Allocate the broadcast channel BEFORE spawning so the
             // receiver is in hand the moment we return — caller's
             // first `recv()` cannot race the producer.
@@ -703,7 +703,8 @@ fn register_one_tool<W: RegistryWriter>(
             ));
 
             Ok(crate::runtime::ability_dispatch::StreamSource::Live(rx))
-        });
+        },
+    );
 
     writer.register_stream(local_name.clone(), OwnerKind::Device, manifest, handler);
 
@@ -771,7 +772,7 @@ impl crate::runtime::execution::mcp_client::NotificationSink for StreamForwardin
 /// per upstream at daemon boot and observes notifications at any
 /// time, including while the daemon is idle.
 ///
-/// Holds a `Weak<LocalAbilityRegistry>` so the sink does not extend
+/// Holds a `Weak<AxonAbilityCatalog>` so the sink does not extend
 /// the daemon's registry lifetime — when the registry is dropped at
 /// shutdown the sink becomes a no-op rather than blocking shutdown.
 ///
@@ -784,7 +785,7 @@ impl crate::runtime::execution::mcp_client::NotificationSink for StreamForwardin
 /// dynamic-registered for this server, so the diff-driven refresh
 /// can retire vanished names without leaving stale entries.
 pub struct RegistryRefreshSink {
-    registry: std::sync::Weak<LocalAbilityRegistry>,
+    registry: std::sync::Weak<AxonAbilityCatalog>,
     client: std::sync::Weak<crate::runtime::execution::mcp_client::McpClientService>,
     server_name: String,
     owner_agent_ura: String,
@@ -798,7 +799,7 @@ pub struct RegistryRefreshSink {
 
 impl RegistryRefreshSink {
     pub fn new(
-        registry: std::sync::Weak<LocalAbilityRegistry>,
+        registry: std::sync::Weak<AxonAbilityCatalog>,
         client: std::sync::Weak<crate::runtime::execution::mcp_client::McpClientService>,
         server_name: String,
         owner_agent_ura: String,
@@ -844,8 +845,7 @@ impl crate::runtime::execution::mcp_client::NotificationSink for RegistryRefresh
         // must return quickly (the listener is still draining
         // frames), so the network-bound refresh runs detached.
         tokio::spawn(async move {
-            let diff =
-                refresh_server_dynamic(&client, &registry, &owner, &server, &prev).await;
+            let diff = refresh_server_dynamic(&client, &registry, &owner, &server, &prev).await;
             if let Ok(mut g) = names.lock() {
                 g.retain(|n| !diff.removed.contains(n));
                 for added in &diff.added {
@@ -874,9 +874,7 @@ async fn stream_one_upstream_call(
     progress_token: Value,
     tx: tokio::sync::broadcast::Sender<Value>,
 ) {
-    let mut sink = StreamForwardingSink {
-        sender: tx.clone(),
-    };
+    let mut sink = StreamForwardingSink { sender: tx.clone() };
     let params = serde_json::json!({
         "name": upstream_tool,
         "arguments": args,
@@ -901,7 +899,6 @@ async fn stream_one_upstream_call(
     };
     let _ = tx.send(terminal);
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -980,7 +977,7 @@ while True:
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn reflects_two_tools_with_clean_descriptors() {
         let (_dir, svc) = make_echo_client("echo");
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         // mcp-profile agent URA — same shape as the daemon would
         // construct: easynet:///r/<realm>/agent/<user>.mcp
         let owner = "easynet:///r/test-realm/agent/test-user.mcp";
@@ -1014,9 +1011,9 @@ while True:
                 rec.descriptor.source
             );
             assert!(
-                rec.descriptor.source.starts_with(&format!(
-                    "{MCP_UPSTREAM_SOURCE_PREFIX}echo:"
-                )),
+                rec.descriptor
+                    .source
+                    .starts_with(&format!("{MCP_UPSTREAM_SOURCE_PREFIX}echo:")),
                 "source must include the server discriminator, got {:?}",
                 rec.descriptor.source
             );
@@ -1099,7 +1096,7 @@ while True:
                 ..Default::default()
             }],
         });
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         let result = reflect_all(&svc, &mut reg, "easynet:///r/r/agent/u.mcp").await;
 
         assert!(
@@ -1119,7 +1116,7 @@ while True:
         // Pre-register a handler under the name the upstream tool
         // would claim, then verify reflection refuses to overwrite.
         let (_dir, svc) = make_echo_client("echo");
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc("echo_one", Arc::new(|_: Value| Ok(json!("local"))));
 
         let result = reflect_all(&svc, &mut reg, "easynet:///r/r/agent/u.mcp").await;
@@ -1150,7 +1147,7 @@ while True:
         // against the operator running before they've configured
         // any upstreams.
         let svc = McpClientService::new();
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         let result = reflect_all(&svc, &mut reg, "easynet:///r/r/agent/u.mcp").await;
         assert!(result.registered.is_empty());
         assert!(result.failed.is_empty());
@@ -1240,7 +1237,7 @@ while True:
                     ..Default::default()
                 }],
             });
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         let initial = reflect_all(&svc, &mut reg, "easynet:///r/test/agent/u.mcp").await;
         assert!(initial.failed.is_empty(), "{:?}", initial.failed);
         let prev_names: Vec<String> = initial
@@ -1270,7 +1267,7 @@ while True:
                     ..Default::default()
                 }],
             });
-        let mut reg2 = LocalAbilityRegistry::new();
+        let mut reg2 = AxonAbilityCatalog::new();
         // Pre-seed reg2 with the "before" catalogue + a fake
         // descriptor source — refresh_server should keep `b`,
         // remove `a`, add `c`.
@@ -1384,17 +1381,15 @@ while True:
 
         let svc = crate::runtime::execution::mcp_client::McpClientService::from_file(
             crate::runtime::execution::mcp_client::McpClientsFile {
-                servers: vec![
-                    crate::runtime::execution::mcp_client::McpServerSpec {
-                        name: "prg".into(),
-                        command: script.to_string_lossy().to_string(),
-                        stdio_framing: "content-length".into(),
-                        ..Default::default()
-                    },
-                ],
+                servers: vec![crate::runtime::execution::mcp_client::McpServerSpec {
+                    name: "prg".into(),
+                    command: script.to_string_lossy().to_string(),
+                    stdio_framing: "content-length".into(),
+                    ..Default::default()
+                }],
             },
         );
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         let result = reflect_all(&svc, &mut reg, "easynet:///r/test/agent/u.mcp").await;
         assert!(result.failed.is_empty(), "{:?}", result.failed);
         assert!(reg.has_stream("slow_op"));
@@ -1412,17 +1407,15 @@ while True:
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(6);
         while tokio::time::Instant::now() < deadline {
             match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
-                Ok(Ok(frame)) => {
-                    match frame.get("type").and_then(|v| v.as_str()) {
-                        Some("progress") => progress_frames.push(frame),
-                        Some("response") => {
-                            terminal = Some(frame);
-                            break;
-                        }
-                        Some("error") => panic!("got error frame: {frame}"),
-                        other => panic!("unknown frame type {other:?}: {frame}"),
+                Ok(Ok(frame)) => match frame.get("type").and_then(|v| v.as_str()) {
+                    Some("progress") => progress_frames.push(frame),
+                    Some("response") => {
+                        terminal = Some(frame);
+                        break;
                     }
-                }
+                    Some("error") => panic!("got error frame: {frame}"),
+                    other => panic!("unknown frame type {other:?}: {frame}"),
+                },
                 Ok(Err(_)) => break,
                 Err(_) => continue,
             }

@@ -475,9 +475,9 @@ fn metadata_for_agent_ability(
     metadata
 }
 
-/// The trait we need from any AbilityProxy-shaped dispatcher. Lets
-/// tests inject a fake without depending on the full proxy
-/// construction graph (kernel, gateway, resolver, …).
+/// The trait the MCP provider needs from a local ability invoker.
+/// Production wires this to daemon.sock Axon Invocation; tests inject
+/// fakes without depending on daemon transport.
 pub trait LocalInvoker {
     /// Invoke the named ability synchronously and return the raw
     /// Result frame's value, or an error message.
@@ -488,62 +488,9 @@ pub trait LocalInvoker {
     ) -> Result<serde_json::Value, String>;
 }
 
-/// Production adapter: drives `AbilityProxy::handle` and decodes
-/// the resulting frame queue into `Result<Value, String>`. The MCP
-/// provider doesn't see frames, only the value or an error string —
-/// every legacy facade/mcp handler boiled down to the same shape.
-pub struct ProxyLocalInvoker {
-    proxy: std::sync::Arc<crate::services::control::ability_proxy::AbilityProxy>,
-    next_request_id: std::sync::atomic::AtomicU64,
-}
-
-impl ProxyLocalInvoker {
-    pub fn new(
-        proxy: std::sync::Arc<crate::services::control::ability_proxy::AbilityProxy>,
-    ) -> Self {
-        Self {
-            proxy,
-            next_request_id: std::sync::atomic::AtomicU64::new(1),
-        }
-    }
-}
-
-impl LocalInvoker for ProxyLocalInvoker {
-    fn invoke_sync(
-        &self,
-        ability: &str,
-        args: serde_json::Value,
-    ) -> Result<serde_json::Value, String> {
-        use crate::services::control::frames::{IncomingFrame, OutgoingFrame};
-        let req_id = format!(
-            "mcp-{}",
-            self.next_request_id
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        );
-        let frames = self.proxy.handle(IncomingFrame::Invoke {
-            request_id: req_id,
-            ability: ability.to_string(),
-            args,
-            subject: None,
-        });
-        // Per the proxy contract, the first frame is either a
-        // single Result or a single Error. We surface the Result's
-        // value verbatim; an Error becomes the Err string. Receipt
-        // headers (P4.8c) are dropped here because the MCP wire
-        // shape has no header field; receivers that need them must
-        // use the IPC path directly, not the MCP shim.
-        match frames.into_iter().next() {
-            Some(OutgoingFrame::Result { value, .. }) => Ok(value),
-            Some(OutgoingFrame::Error { code, message, .. }) => Err(format!("{code}: {message}")),
-            Some(other) => Err(format!("unexpected frame from proxy: {other:?}")),
-            None => Err("proxy returned no frames".into()),
-        }
-    }
-}
-
 /// Production adapter for `easynet mcp serve`: route every tool call
-/// through the live local daemon over control.sock instead of through
-/// an isolated in-process kernel snapshot.
+/// through the live local daemon's Axon Invocation gRPC surface
+/// instead of through an isolated in-process kernel snapshot.
 pub struct DaemonLocalInvoker;
 
 impl LocalInvoker for DaemonLocalInvoker {
@@ -560,9 +507,10 @@ impl LocalInvoker for DaemonLocalInvoker {
 /// Production InvokeMcpProvider — what `easynet mcp_server` and
 /// `easynet start --mcp` will use after P4.8d's quarantine. Every
 /// `tools/list` returns the host's AbilityDescriptors projected to
-/// MCP shape; every `tools/call` routes through the in-process
-/// AbilityProxy via `LocalInvoker::invoke_sync`. Zero direct bridge
-/// calls; zero hub-mediated MCP tool catalog.
+/// MCP shape; every `tools/call` routes through
+/// `LocalInvoker::invoke_sync`, which production wires to daemon.sock
+/// Axon Invoke. Zero direct bridge calls; zero hub-mediated MCP tool
+/// catalog.
 pub struct InvokeMcpProvider<I: LocalInvoker> {
     invoker: I,
     /// Snapshot of the host's ability descriptors at construction.
@@ -643,9 +591,9 @@ impl ConfiguredStdioServer {
     }
 }
 
-/// One-stop builder: assemble a Kernel + AbilityProxy, derive the
-/// host's AbilityDescriptors from local-agents.json, and produce a
-/// configured InvokeMcpProvider ready for the stdio runner.
+/// One-stop builder: derive the host's AbilityDescriptors from
+/// local-agents.json and produce a configured InvokeMcpProvider ready
+/// for the stdio runner.
 ///
 /// Both `easynet mcp_server` and `easynet start --mcp` call this
 /// — they differ only in argument parsing and how they launch the
@@ -1194,76 +1142,6 @@ mod tests {
         assert_eq!(p.descriptor_count(), 2);
     }
 
-    /// End-to-end: build a real ProxyLocalInvoker over the live
-    /// AbilityProxy and call `device.observe.health` through it. Pins the
-    /// quarantine contract — the MCP shim MUST go through the same
-    /// AbilityProxy the IPC server uses, never around it.
-    #[test]
-    fn proxy_local_invoker_dispatches_observe_health_through_real_proxy() {
-        use crate::runtime::ability_dispatch::AbilityDispatcher;
-        use crate::runtime::gateway::NoopGateway;
-        use crate::runtime::invocation_target::LocalNodeResolver;
-        use crate::runtime::kernel::Kernel;
-        use crate::services::control::ability_proxy::AbilityProxy;
-        use std::sync::Arc;
-
-        let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
-            Arc::new(NoopGateway::new());
-        let kernel: Arc<dyn crate::runtime::kernel_api::KernelApi> =
-            Arc::new(Kernel::new(Arc::clone(&gateway)));
-        let registry = crate::runtime::agents::build_registry();
-        let dispatcher = AbilityDispatcher::new(registry, gateway);
-        let resolver: Arc<dyn crate::runtime::invocation_target::TargetResolver> = Arc::new(
-            LocalNodeResolver::new(crate::runtime::domain::NodeId::new("self")),
-        );
-        let proxy = Arc::new(AbilityProxy::new_with_dispatcher(
-            kernel, dispatcher, resolver,
-        ));
-        let invoker = ProxyLocalInvoker::new(proxy);
-        let result = invoker
-            .invoke_sync("device.observe.health", serde_json::json!({}))
-            .expect("device.observe.health must dispatch successfully");
-        // device.observe.health returns a JSON object with at least
-        // `status`. Exact shape is owned by ping.rs; we only assert
-        // the dispatch happened (got a non-null Value).
-        assert!(
-            !result.is_null(),
-            "device.observe.health must return a value, not null"
-        );
-    }
-
-    #[test]
-    fn proxy_local_invoker_surfaces_unknown_ability_as_error() {
-        use crate::runtime::ability_dispatch::AbilityDispatcher;
-        use crate::runtime::gateway::NoopGateway;
-        use crate::runtime::invocation_target::LocalNodeResolver;
-        use crate::runtime::kernel::Kernel;
-        use crate::services::control::ability_proxy::AbilityProxy;
-        use std::sync::Arc;
-
-        let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
-            Arc::new(NoopGateway::new());
-        let kernel: Arc<dyn crate::runtime::kernel_api::KernelApi> =
-            Arc::new(Kernel::new(Arc::clone(&gateway)));
-        let registry =
-            std::sync::Arc::new(crate::runtime::ability_dispatch::LocalAbilityRegistry::new());
-        let dispatcher = AbilityDispatcher::new(registry, gateway);
-        let resolver: Arc<dyn crate::runtime::invocation_target::TargetResolver> = Arc::new(
-            LocalNodeResolver::new(crate::runtime::domain::NodeId::new("self")),
-        );
-        let proxy = Arc::new(AbilityProxy::new_with_dispatcher(
-            kernel, dispatcher, resolver,
-        ));
-        let invoker = ProxyLocalInvoker::new(proxy);
-        let err = invoker
-            .invoke_sync("totally.unknown", serde_json::json!({}))
-            .expect_err("unknown ability must surface as Err");
-        assert!(
-            err.contains("not_found"),
-            "expected NOT_FOUND code in error string; got {err}"
-        );
-    }
-
     #[test]
     fn daemon_local_invoker_surfaces_daemon_not_running() {
         let _h = crate::facade::cli::test_support::HomeGuard::new();
@@ -1569,29 +1447,12 @@ mod tests {
     }
 
     #[test]
-    fn invoke_provider_routes_observe_health_end_to_end_through_real_proxy() {
+    fn invoke_provider_routes_observe_health_through_local_invoker() {
         use crate::runtime::ability_descriptor::Visibility;
-        use crate::runtime::ability_dispatch::AbilityDispatcher;
-        use crate::runtime::gateway::NoopGateway;
-        use crate::runtime::invocation_target::LocalNodeResolver;
-        use crate::runtime::kernel::Kernel;
-        use crate::services::control::ability_proxy::AbilityProxy;
         use easynet_axon::mcp::McpToolProvider;
-        use std::sync::Arc;
-
-        let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
-            Arc::new(NoopGateway::new());
-        let kernel: Arc<dyn crate::runtime::kernel_api::KernelApi> =
-            Arc::new(Kernel::new(Arc::clone(&gateway)));
-        let registry = crate::runtime::agents::build_registry();
-        let dispatcher = AbilityDispatcher::new(registry, gateway);
-        let resolver: Arc<dyn crate::runtime::invocation_target::TargetResolver> = Arc::new(
-            LocalNodeResolver::new(crate::runtime::domain::NodeId::new("self")),
-        );
-        let proxy = Arc::new(AbilityProxy::new_with_dispatcher(
-            kernel, dispatcher, resolver,
-        ));
-        let invoker = ProxyLocalInvoker::new(proxy);
+        let invoker = FakeInvoker {
+            value: serde_json::json!({"echo": {}}),
+        };
 
         let descs = vec![AbilityDescriptor::new(
             "device.observe.health",
@@ -1607,7 +1468,7 @@ mod tests {
         assert_eq!(specs[0]["name"], "device_observe_health");
         assert_eq!(specs[0]["x-easynet"]["ability"], "device.observe.health");
 
-        // tools/call dispatches through the proxy.
+        // tools/call dispatches through the provider's local invoker.
         let result = provider.handle_tool_call("device_observe_health", &serde_json::Map::new());
         assert!(
             !result.is_error,

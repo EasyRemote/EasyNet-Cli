@@ -1033,9 +1033,7 @@ async fn run_listener(
             Err(e) => {
                 // Drain every outstanding caller with the same error
                 // so nobody awaits forever.
-                let reason = format!(
-                    "MCP listener for `{server_name}` exiting: {e}"
-                );
+                let reason = format!("MCP listener for `{server_name}` exiting: {e}");
                 let mut pending = pending_responses.lock().await;
                 for (_, tx) in pending.drain() {
                     let _ = tx.send(Err(reason.clone()));
@@ -1437,10 +1435,7 @@ mod tests {
         let msg = format!("{err:#}");
         assert!(msg.contains("crlf-injected"), "got: {msg}");
         assert!(msg.contains("X-Api-Key"), "got: {msg}");
-        assert!(
-            msg.contains("not a valid HTTP header value"),
-            "got: {msg}"
-        );
+        assert!(msg.contains("not a valid HTTP header value"), "got: {msg}");
     }
 
     #[test]
@@ -1768,11 +1763,9 @@ while True:
                             .await
                             .map(|c| c.to_bytes())
                             .unwrap_or_default();
-                        let parsed: Value =
-                            serde_json::from_slice(&body).unwrap_or(Value::Null);
+                        let parsed: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
                         let id = parsed.get("id").cloned().unwrap_or(Value::Null);
-                        let method =
-                            parsed.get("method").and_then(Value::as_str).unwrap_or("");
+                        let method = parsed.get("method").and_then(Value::as_str).unwrap_or("");
                         match method {
                             "initialize" => Ok::<_, Infallible>(
                                 Response::builder()

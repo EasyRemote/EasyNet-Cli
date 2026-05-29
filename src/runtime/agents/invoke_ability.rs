@@ -68,7 +68,8 @@ use serde_json::{json, Value};
 
 use crate::core::ability_spec::{AbilityManifest, Visibility};
 use crate::registry::agents::AgentRegistry;
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+use crate::runtime::local_runtime_invoker::is_not_found_error;
 
 /// Verb portion of the per-agent invoke ability. Combined with the
 /// owning agent's name to form the wire-level `<agent>.invoke`.
@@ -88,10 +89,10 @@ pub const ABILITY_VERB: &str = "invoke";
 /// per-agent fallback resolvers register later in the boot
 /// sequence).
 pub fn register_for_agent<F>(
-    reg: &mut LocalAbilityRegistry,
+    reg: &mut AxonAbilityCatalog,
     agent_name: String,
     agent_registry_provider: F,
-    dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+    dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) where
     F: Fn() -> AgentRegistry + Send + Sync + 'static,
 {
@@ -113,11 +114,11 @@ pub fn register_for_agent<F>(
 /// Exposed so the dynamic per-agent fallback resolver in
 /// `chat_ability::register_dynamic_agent_fallback` can synthesise a
 /// handler for a hot-added agent without re-running this module's
-/// register_for_agent (which requires `&mut LocalAbilityRegistry`).
+/// register_for_agent (which requires `&mut AxonAbilityCatalog`).
 pub fn dispatch(
     caller: &str,
     agent_registry_provider: &Arc<dyn Fn() -> AgentRegistry + Send + Sync>,
-    dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+    dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     args: Value,
 ) -> anyhow::Result<Value> {
     let parsed = InvokeArgs::parse(&args)?;
@@ -241,13 +242,19 @@ pub fn dispatch(
                  this is a daemon boot ordering bug, not a caller-side issue"
             )
         })?;
-        let handler = registry.resolve_rpc(&qualified).ok_or_else(|| {
-            anyhow::anyhow!(
-                "ability_not_found: no handler registered for {qualified}; \
-                 call <self>.discover to see what's available"
-            )
-        })?;
-        handler(parsed.args.clone())
+        registry
+            .invoke_rpc_json(&qualified, parsed.args.clone())
+            .map_err(|err| {
+                let msg = format!("{err}");
+                if is_not_found_error(&msg) {
+                    anyhow::anyhow!(
+                        "ability_not_found: no handler registered for {qualified}; \
+                         call <self>.discover to see what's available ({msg})"
+                    )
+                } else {
+                    anyhow::anyhow!("{msg}")
+                }
+            })
     })();
     let elapsed_ms = started.elapsed().as_millis() as u64;
 
@@ -641,7 +648,7 @@ mod tests {
 
     #[test]
     fn register_publishes_invoke_manifest_description() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -688,11 +695,11 @@ mod tests {
         target_handlers: &[(&str, crate::runtime::ability_dispatch::LocalRpcHandler)],
         agents: AgentRegistry,
     ) -> impl Fn(Value) -> anyhow::Result<Value> {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         for (name, h) in target_handlers {
             reg.register_rpc(*name, Arc::clone(h));
         }
-        let handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>> =
+        let handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>> =
             Arc::new(std::sync::OnceLock::new());
         let h_for_register = Arc::clone(&handle);
         let agents_clone = agents.clone();
@@ -704,7 +711,7 @@ mod tests {
         );
         let arc_reg = Arc::new(reg);
         // `OnceLock::set` returns `Err(Arc<...>)` on second-set, but
-        // `LocalAbilityRegistry` doesn't implement `Debug`, so the
+        // `AxonAbilityCatalog` doesn't implement `Debug`, so the
         // ergonomic `.expect("...")` won't compile. Match the Result
         // explicitly — first-set always succeeds in this test fixture.
         if handle.set(Arc::clone(&arc_reg)).is_err() {
@@ -1144,8 +1151,8 @@ mod tests {
     fn invoke_unset_dispatch_handle_is_internal_error() {
         // Direct construction so we skip the fixture's `handle.set()`
         // call. This pins the daemon-boot-ordering check.
-        let mut reg = LocalAbilityRegistry::new();
-        let handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>> =
+        let mut reg = AxonAbilityCatalog::new();
+        let handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>> =
             Arc::new(std::sync::OnceLock::new());
         register_for_agent(
             &mut reg,

@@ -41,6 +41,8 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::collections::BTreeSet;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
@@ -50,17 +52,17 @@ use serde_json::{json, Value};
 
 use super::sandbox::open_beneath;
 use super::state::PUBLISHED_PROJECTS;
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 
 /// Process-wide handle to the live ability registry. Set once at
 /// boot by `pages::register`; read by the `kind="ability"` branch
 /// to dispatch requests directly through the in-process registry
 /// instead of round-tripping through the daemon's own IPC socket
 /// (which would self-deadlock).
-static DISPATCH_HANDLE: Lazy<std::sync::OnceLock<Arc<OnceLock<Arc<LocalAbilityRegistry>>>>> =
+static DISPATCH_HANDLE: Lazy<std::sync::OnceLock<Arc<OnceLock<Arc<AxonAbilityCatalog>>>>> =
     Lazy::new(std::sync::OnceLock::new);
 
-pub(crate) fn set_dispatch_handle(handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>>) {
+pub(crate) fn set_dispatch_handle(handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>) {
     let _ = DISPATCH_HANDLE.set(handle);
 }
 
@@ -217,29 +219,17 @@ pub fn handle_api(user: &str, project_id: &str, verb: &str, args: Value) -> anyh
                 Value::Null => json!({}),
                 v => v,
             };
-            // Reach into the live registry directly — we are
-            // already inside the daemon process, so an IPC round
-            // trip would self-deadlock the dispatcher.
+            // Use the daemon's shared Axon LocalRuntime. We are
+            // already inside the daemon process, so an IPC round trip
+            // would self-deadlock the original request.
             let handle = DISPATCH_HANDLE.get().ok_or_else(|| {
                 anyhow::anyhow!("dispatch handle not set; pages::register must run at boot")
             })?;
             let registry = handle.get().ok_or_else(|| {
                 anyhow::anyhow!("dispatch handle empty; build site forgot to populate OnceLock")
             })?;
-            // Look up: static registry first, then fallback resolver
-            // chain (this is how chat-agent / pages handlers find
-            // each other through the same `<owner>.<verb>` shape).
-            let handler = registry.get_rpc(&target).cloned().or_else(|| {
-                // chain through the public fallback method
-                registry.resolve_rpc(&target)
-            });
-            let handler = handler.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "ability `{target}` not found in registry. Was it deployed via \
-                     `easynet ability deploy`?"
-                )
-            })?;
-            let result = handler(invoke_args)
+            let result = registry
+                .invoke_rpc_json(&target, invoke_args)
                 .map_err(|e| anyhow::anyhow!("ability `{target}` failed: {e}"))?;
             Ok(json!({
                 "status":       200,
@@ -249,6 +239,104 @@ pub fn handle_api(user: &str, project_id: &str, verb: &str, args: Value) -> anyh
         }
         other => anyhow::bail!("unsupported api manifest kind: {other:?}"),
     }
+}
+
+fn api_ability_name(user: &str, project_id: &str, verb: &str) -> String {
+    format!("{user}.{project_id}.api.{verb}")
+}
+
+fn is_api_ability_verb(verb: &str) -> bool {
+    !verb.is_empty()
+        && verb
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+pub(crate) fn api_ability_names_for_project(user: &str, project_id: &str) -> Vec<String> {
+    let key = (user.to_string(), project_id.to_string());
+    let Some(handle) = PUBLISHED_PROJECTS.get(&key) else {
+        return Vec::new();
+    };
+    let api_dir = handle.canonical_root.join("api");
+    drop(handle);
+
+    let read_dir = match fs::read_dir(&api_dir) {
+        Ok(read_dir) => read_dir,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(err) => {
+            let user_field = user;
+            let project_field = project_id;
+            let path = api_dir.display().to_string();
+            let err_msg = format!("{err}");
+            crate::op_event!(
+                component = pages,
+                kind = api_manifest_scan_failed,
+                level = "warn",
+                user = user_field,
+                project_id = project_field,
+                path = path,
+                error = err_msg,
+            );
+            return Vec::new();
+        }
+    };
+
+    let mut names = BTreeSet::new();
+    for entry in read_dir.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_file() {
+            continue;
+        }
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
+            continue;
+        }
+        let Some(verb) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        if !is_api_ability_verb(verb) {
+            let user_field = user;
+            let project_field = project_id;
+            let verb_field = verb.to_string();
+            crate::op_event!(
+                component = pages,
+                kind = api_manifest_skipped,
+                level = "warn",
+                user = user_field,
+                project_id = project_field,
+                verb = verb_field,
+                reason = "invalid_ability_verb",
+            );
+            continue;
+        }
+        names.insert(api_ability_name(user, project_id, verb));
+    }
+    names.into_iter().collect()
+}
+
+pub(crate) fn register_api_abilities_for_project(
+    registry: &AxonAbilityCatalog,
+    user: &str,
+    project_id: &str,
+) -> usize {
+    let names = api_ability_names_for_project(user, project_id);
+    let owner = OwnerKind::User(user.to_string());
+    for name in &names {
+        let Some(verb) = name.rsplit_once(".api.").map(|(_prefix, verb)| verb) else {
+            continue;
+        };
+        let user = user.to_string();
+        let project_id = project_id.to_string();
+        let verb = verb.to_string();
+        registry.hot_register_rpc(
+            name.clone(),
+            owner.clone(),
+            Arc::new(move |args| handle_api(&user, &project_id, &verb, args)),
+        );
+    }
+    names.len()
 }
 
 /// Path on disk for the api manifest of a given verb (used in
@@ -261,7 +349,7 @@ pub fn manifest_relpath(verb: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::ability_dispatch::{LocalAbilityRegistry, OwnerKind};
+    use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
     use crate::runtime::agents::pages::sandbox::open_directory;
     use crate::runtime::agents::pages::state::{
         ProjectHandle, Visibility, DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS,
@@ -301,7 +389,7 @@ mod tests {
     fn install_dispatch_registry_once() {
         static INIT: OnceLock<()> = OnceLock::new();
         INIT.get_or_init(|| {
-            let mut reg = LocalAbilityRegistry::new();
+            let mut reg = AxonAbilityCatalog::new();
             reg.register_rpc_with_owner(
                 "demo.backend",
                 OwnerKind::Agent("demo".into()),

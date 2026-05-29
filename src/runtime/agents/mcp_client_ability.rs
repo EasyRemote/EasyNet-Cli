@@ -48,14 +48,14 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::execution::mcp_client::McpClientService;
 
 pub const ABILITY_LIST: &str = "device.mcp.client.list";
 pub const ABILITY_CALL: &str = "device.mcp.client.call";
 
-pub fn register(reg: &mut LocalAbilityRegistry, svc: Arc<McpClientService>) {
+pub fn register(reg: &mut AxonAbilityCatalog, svc: Arc<McpClientService>) {
     let svc_for_list = Arc::clone(&svc);
     reg.register_rpc_with_owner(
         "device.mcp.client.list",
@@ -310,7 +310,7 @@ while True:
 
     #[test]
     fn registration_makes_both_dispatchable() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg, empty_svc());
         assert!(reg.get_rpc(ABILITY_LIST).is_some());
         assert!(reg.get_rpc(ABILITY_CALL).is_some());
@@ -318,7 +318,7 @@ while True:
 
     #[test]
     fn list_with_no_configured_servers_returns_empty_array() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg, empty_svc());
         let handler = reg.get_rpc(ABILITY_LIST).unwrap();
         let resp = handler(json!({})).unwrap();
@@ -331,7 +331,7 @@ while True:
 
     #[test]
     fn call_missing_server_field_returns_is_error() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg, empty_svc());
         let handler = reg.get_rpc(ABILITY_CALL).unwrap();
         let resp = handler(json!({"name": "echo"})).unwrap();
@@ -344,7 +344,7 @@ while True:
 
     #[test]
     fn call_missing_name_field_returns_is_error() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg, empty_svc());
         let handler = reg.get_rpc(ABILITY_CALL).unwrap();
         let resp = handler(json!({"server": "echo"})).unwrap();
@@ -357,7 +357,7 @@ while True:
 
     #[test]
     fn call_unknown_server_returns_is_error_naming_the_server() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg, empty_svc());
         let handler = reg.get_rpc(ABILITY_CALL).unwrap();
         let resp = handler(json!({"server": "ghost", "name": "echo"})).unwrap();
@@ -391,7 +391,7 @@ while True:
         // mcp.client.list aggregates and surfaces it in the
         // {servers:[{name, tools:[...]}]} envelope.
         let (_dir, svc) = echo_svc();
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg, svc);
         let handler = reg.get_rpc(ABILITY_LIST).unwrap();
         let resp = handler(json!({})).unwrap();
@@ -411,7 +411,7 @@ while True:
         // We assert isError is false and the content carries our
         // arguments json.
         let (_dir, svc) = echo_svc();
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg, svc);
         let handler = reg.get_rpc(ABILITY_CALL).unwrap();
         let resp = handler(json!({

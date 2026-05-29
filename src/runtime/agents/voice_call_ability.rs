@@ -37,7 +37,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 pub const ABILITY_CREATE_CALL: &str = "device.voice.create_call";
 pub const ABILITY_SHOW_CALL: &str = "device.voice.show_call";
@@ -92,7 +92,7 @@ fn now_ms() -> u64 {
 /// changes to per-agent at that point. Until then the daemon
 /// hosts the dispatch surface and `OwnerKind::Device` is the
 /// honest classification of where the handler runs today.
-pub fn register(reg: &mut LocalAbilityRegistry) {
+pub fn register(reg: &mut AxonAbilityCatalog) {
     use crate::runtime::ability_dispatch::OwnerKind;
     reg.register_rpc_with_owner(
         "device.voice.create_call",

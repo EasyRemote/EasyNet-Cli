@@ -79,6 +79,9 @@ use crate::services::trust_anchor_cell::SharedTrustAnchor;
 /// v4.1.6's wire-break carrier; see
 /// `docs/open-questions/deprecate-self-alias-in-ability-names.md`
 /// Stage 2 for the cross-repo coordination plan.
+// TODO(RFC-001-v4.1.6 stage-2): rename to
+// `device.register_device_pubkey` once the hub ships dual-name
+// acceptance. Single grep anchor for all wire-pinned `<self>.*` constants.
 pub const ABILITY_SELF_REGISTER_DEVICE_PUBKEY: &str = "<self>.register_device_pubkey";
 
 /// JSON-shaped argument tuple. `role` is a free string here (rather

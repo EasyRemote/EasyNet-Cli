@@ -46,8 +46,8 @@
 //
 // What this module does NOT do
 // ----------------------------
-// - Touch the existing daemon subsystems (Kernel, AbilityDispatcher,
-//   ScheduleService, control.sock server, runtime-dispatch.sock,
+// - Touch the existing daemon subsystems (Kernel, ScheduleService,
+//   control.sock server, runtime-dispatch.sock,
 //   heartbeat). Those keep running unchanged.
 // - Implement graceful shutdown. PR-1 spec §1 and §7.2 cite
 //   `systemctl restart easynet-daemon` as the operational restart
@@ -91,11 +91,10 @@ use tokio_stream::wrappers::UnixListenerStream;
 
 use crate::pb::axon::v1::invocation_server::InvocationServer;
 use crate::persistence::daemon_config::{DaemonConfig, DaemonMode, DEFAULT_DAEMON_CONFIG_PATH};
-use crate::runtime::ability_dispatch::AbilityDispatcher;
 use crate::runtime::publish::derive_subject_keypair;
 use crate::services::axon_serve::admission_facade::AdmissionFacade;
 use crate::services::axon_serve::daemon_invocation_service::DaemonInvocationService;
-use crate::services::axon_serve::local_ability_dispatcher::LocalAbilityDispatcher;
+use crate::services::axon_serve::local_session_dispatcher::LocalAxonSessionDispatcher;
 use crate::services::axon_serve::session_initiator::run_session_supervisor;
 use crate::services::axon_serve::session_initiator::SessionSigningSeed;
 use crate::services::pending_dispatch::PendingDispatchMap;
@@ -174,9 +173,19 @@ impl AsyncWrite for NamedPipeGrpcIo {
 /// listeners do come up, they run on the caller's tokio runtime as
 /// detached tasks; they own their `PresenceRegistry` Arc and stay
 /// alive until the runtime shuts down.
+/// **Phase 5c**. `hot_agent_registrar_cell` is the shared
+/// `OnceLock<Arc<HotAgentRegistrar>>` stashed by
+/// `build_registry_with_services`. We call
+/// `registrar.set_runtime(local_runtime)` once `local_runtime` is
+/// constructed below so post-boot `device.agent.start` invocations
+/// land their `<agent>.{chat,discover,invoke}` rows into the live
+/// Axon runtime instead of skipping runtime registration.
 pub fn start_axon_serve_sidecar(
-    dispatcher: Arc<AbilityDispatcher>,
+    local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
     invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
+    hot_agent_registrar_cell: Arc<
+        crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell,
+    >,
 ) -> anyhow::Result<()> {
     let config_path = expand_home(DEFAULT_DAEMON_CONFIG_PATH);
     let config = match DaemonConfig::load(&config_path) {
@@ -255,7 +264,7 @@ pub fn start_axon_serve_sidecar(
     // For actual ability invokes targeting this URI, the
     // `daemon_invocation_service` <self>.invoke_remote handler
     // already short-circuits self-targeted invocations to the
-    // local AbilityDispatcher BEFORE try_send fires (see
+    // local Axon session dispatcher BEFORE try_send fires (see
     // dispatch_self_targeted_forward_invoke in PR-1 commit 7/9).
     //
     // Hub / Both modes don't need this: their local presence is
@@ -274,9 +283,9 @@ pub fn start_axon_serve_sidecar(
             tokio::spawn(async move {
                 while let Some(_frame) = noop_rx.recv().await {
                     // Drop on the floor. The self-targeted
-                    // dispatcher path runs inline through
-                    // local_dispatcher; only out-of-path frames
-                    // (defensive) land here.
+                    // dispatch path runs inline through Axon
+                    // LocalRuntime; only defensive out-of-path frames
+                    // land here.
                 }
             });
             let prior = presence.insert(uri.clone(), noop_tx);
@@ -285,7 +294,7 @@ pub fn start_axon_serve_sidecar(
                     component = axon_serve,
                     kind = device_mode_self_presence_seeded,
                     self_uri = uri,
-                    message = "drain task holds receiver; self-targeted invokes route through local AbilityDispatcher",
+                    message = "drain task holds receiver; self-targeted invokes route through Axon LocalRuntime",
                 );
             }
         }
@@ -375,38 +384,117 @@ pub fn start_axon_serve_sidecar(
         // endpoint came only from a `federated_directory`
         // observation unless the operator explicitly enabled it.
         // See `hub_resolver.rs` for the threat model.
-        .with_allow_directory_auto_route(config.allow_directory_auto_route())
-        // **PR-1 commit 7/9 (LB-56)**. Thread the boot-supplied
-        // `Arc<AbilityDispatcher>` so that a `federation.forward_
-        // invoke` call whose `target_ura` matches THIS daemon's
-        // own URI falls through to local execution against the
-        // registered `LocalAbilityRegistry` instead of surfacing
-        // `target_offline`. Closes the source-cited PR-1 commit
-        // 7/9 hole at line 27/32/42/455/497 of
-        // `daemon_invocation_service.rs`.
-        .with_local_dispatcher(Arc::clone(&dispatcher));
+        .with_allow_directory_auto_route(config.allow_directory_auto_route());
 
-    if let Some(ledger) = invocation_ledger {
-        service = service.with_invocation_ledger(ledger);
-    } else {
-        match easynet_axon::invocation::InvocationLedger::open(
-            config.billing_dir().join("invocations.redb"),
-        ) {
-            Ok(ledger) => {
-                service = service.with_invocation_ledger(Arc::new(ledger));
+    // ── Invocation ledger ──────────────────────────────────────────
+    //
+    // Resolve the ledger ONCE so the same `Arc<InvocationLedger>`
+    // can be handed to both:
+    //   (a) the dispatch service's legacy unary-record-write path
+    //       (kept until Phase 4 retires it), AND
+    //   (b) the Axon `LedgerSink` installed on the `LocalRuntime`
+    //       below, which will own all terminal persistence once
+    //       Phase 4 routes every invoke through Axon.
+    //
+    // Resolution order: explicit `invocation_ledger` argument from
+    // the daemon main first (tests use this seam), then a default
+    // open at `<billing_dir>/invocations.redb`. Open failure leaves
+    // the slot `None` — Phase 4 ledger writes silently no-op, same
+    // operational degradation as before.
+    let resolved_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>> =
+        match invocation_ledger {
+            Some(ledger) => Some(ledger),
+            None => {
+                match easynet_axon::invocation::InvocationLedger::open(
+                    config.billing_dir().join("invocations.redb"),
+                ) {
+                    Ok(ledger) => Some(Arc::new(ledger)),
+                    Err(err) => {
+                        let billing_dir_display = format!("{}", config.billing_dir().display());
+                        let err_msg = format!("{err}");
+                        crate::op_event!(
+                            component = axon_serve,
+                            kind = invocation_ledger_disabled,
+                            billing_dir = billing_dir_display,
+                            error = err_msg,
+                        );
+                        None
+                    }
+                }
             }
-            Err(err) => {
-                let billing_dir_display = format!("{}", config.billing_dir().display());
-                let err_msg = format!("{err}");
-                crate::op_event!(
-                    component = axon_serve,
-                    kind = invocation_ledger_disabled,
-                    billing_dir = billing_dir_display,
-                    error = err_msg,
-                );
-            }
-        }
+        };
+    if let Some(ledger) = resolved_ledger.as_ref() {
+        service = service.with_invocation_ledger(Arc::clone(ledger));
     }
+
+    // ── Shared LocalRuntime ───────────────────────────────────────
+    //
+    // The daemon creates the Axon `LocalRuntime` before building
+    // abilities, so registration lands directly in the runtime.
+    // This sidecar only installs transport-plane configuration:
+    //   * a `RealmTrustAnchorKeyResolver` over the SAME
+    //     `trust_anchor_cell` admission uses, so signature
+    //     verification inside `invoke_externally_signed_*` sees
+    //     hot-reload edits immediately;
+    //   * a `LedgerSink` over the SAME ledger handle the dispatch
+    //     service already writes to, so once Phase 4 routes
+    //     through Axon, terminal records get persisted via the
+    //     SDK-canonical path (one writer, not two).
+    //
+    crate::runtime::axon_bridge::runtime_factory::configure_local_runtime(
+        &local_runtime,
+        Some(Arc::new(
+            crate::services::trust_anchor_key_resolver::RealmTrustAnchorKeyResolver::new(
+                trust_anchor_cell.clone(),
+            ),
+        )),
+        resolved_ledger.clone(),
+    );
+
+    // **Phase 5c**. Attach the live `LocalRuntime` to the hot-agent
+    // runtime registrar that `build_registry_with_services` constructed
+    // earlier. After this `set_runtime` call, every subsequent
+    // `device.agent.start` invocation reaches into the registrar's
+    // populated runtime cell and lands `<agent>.{chat,discover,invoke}`
+    // into Axon's `LocalRuntime` — closing the bug where hot-added
+    // agents resolved only through the legacy `rpc_fallback` and
+    // therefore skipped the `LedgerSink` audit row.
+    //
+    // The cell is normally populated by `build_registry_with_services`,
+    // so `.get()` returns `Some`. We log + skip when absent to keep
+    // smoke tests that boot only the sidecar (without a full registry
+    // build) green: those tests don't call `device.agent.start`, so a
+    // pending registrar is observably harmless.
+    if let Some(registrar) = hot_agent_registrar_cell.get() {
+        registrar.set_runtime(Arc::clone(&local_runtime));
+        crate::op_event!(
+            component = axon_serve,
+            kind = hot_agent_registrar_runtime_attached,
+            message = "HotAgentRegistrar.runtime attached; \
+                       device.agent.start can now register into LocalRuntime",
+        );
+    } else {
+        crate::op_event!(
+            component = axon_serve,
+            kind = hot_agent_registrar_cell_empty,
+            level = "warn",
+            message = "hot_agent_registrar_cell empty at boot — \
+                       device.agent.start runtime registration will be skipped \
+                       (sidecar booted without a populated registry?)",
+        );
+    }
+
+    let runtime_ability_count = futures::executor::block_on(local_runtime.list_abilities()).len();
+    let runtime_ability_count_str = runtime_ability_count.to_string();
+    crate::op_event!(
+        component = axon_serve,
+        kind = axon_local_runtime_wired,
+        has_ledger_sink = resolved_ledger.is_some().to_string().as_str(),
+        runtime_abilities = runtime_ability_count_str.as_str(),
+        message = "Axon LocalRuntime configured; ability registration already landed directly in LocalRuntime",
+    );
+
+    service = service.with_local_runtime(Arc::clone(&local_runtime));
 
     if let Ok(seed) = crate::services::axon_serve::daemon_invocation_service::read_hub_identity_seed(
         config.realm(),
@@ -433,7 +521,7 @@ pub fn start_axon_serve_sidecar(
     // collaborators wired here:
     //
     //   1. `EscalationCorrelation` — call_id → oneshot table.
-    //      Cloned into the service's `LocalAbilityDispatcher`
+    //      Cloned into the service's `LocalAxonSessionDispatcher`
     //      builder so inbound `RequestResult` frames complete the
     //      awaiting dispatcher future.
     //   2. `SharedSessionOutbox` — published by the session
@@ -547,15 +635,15 @@ pub fn start_axon_serve_sidecar(
             // outer block constructed when this daemon is device-
             // mode. The supervisor publishes the active up_tx into
             // the outbox on every successful dial; the
-            // LocalAbilityDispatcher inside the supervisor receives
+            // LocalAxonSessionDispatcher inside the supervisor receives
             // the correlation table so inbound RequestResult frames
             // resolve the awaiting dispatcher futures.
             spawn_session_supervisor(
                 hub_endpoint,
                 identity,
                 hub_ca_pem_path,
-                dispatcher,
                 escalation_state,
+                Arc::clone(&local_runtime),
             );
         } else {
             crate::op_event!(
@@ -580,21 +668,19 @@ fn spawn_session_supervisor(
     hub_endpoint: String,
     identity: DaemonIdentity,
     hub_ca_pem_path: Option<std::path::PathBuf>,
-    dispatcher: Arc<AbilityDispatcher>,
     escalation_state: Option<(
         Arc<crate::services::axon_serve::session_escalation::EscalationCorrelation>,
         crate::services::axon_serve::session_escalation::SharedSessionOutbox,
     )>,
+    local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
 ) {
-    // Snapshot the dispatcher's local-ability registry once, before
-    // wrapping it into a `LocalAbilityDispatcher`. The session
-    // supervisor's `federation.advertise_abilities` prelude consumes
-    // this list to populate the hub's `AbilityCatalogStore` so the
-    // backend's `/api/v1/abilities` page surfaces the device's
-    // registered abilities under its URI. Snapshot at boot is fine
-    // — `LocalAbilityRegistry` is constructed once per daemon
-    // process (build_registry_with_services) and never mutated
-    // post-boot.
+    // Snapshot Axon's runtime catalogue once before wrapping it in a
+    // `LocalAxonSessionDispatcher`. The session supervisor's
+    // `federation.advertise_abilities` prelude consumes this list to
+    // populate the hub's `AbilityCatalogStore` so the backend's
+    // `/api/v1/abilities` page surfaces the device's registered
+    // abilities. LocalRuntime is the daemon's live source of truth;
+    // the metadata catalogue is not consulted here.
     // M2 of the system-namespace migration: at M1 every system
     // ability is registered under both legacy (`fs.read`,
     // `01HUB.openai.*`, …) and canonical (`device.fs.read`,
@@ -605,10 +691,9 @@ fn spawn_session_supervisor(
     // scanner doesn't produce duplicate `<owner>` entries from the
     // legacy half. Filter via `published_ability_names()` which has
     // the catalogue exposure rule (M2 commit: legacy filtered out).
-    let ability_catalog: Vec<String> = dispatcher
-        .local_registry()
-        .list_abilities()
+    let ability_catalog: Vec<String> = futures::executor::block_on(local_runtime.list_abilities())
         .into_iter()
+        .map(|descriptor| descriptor.name)
         .filter(|name| crate::runtime::agents::is_canonical_or_unmapped(name))
         .collect();
     let signing_state = if identity.signing_seed.is_some() {
@@ -634,7 +719,7 @@ fn spawn_session_supervisor(
         signing_state = signing_state,
         tls = ca_state,
         escalation_state = escalation_state_str,
-        message = "LocalAbilityDispatcher will execute inbound SessionDispatch::Dispatch frames through the boot-threaded AbilityDispatcher Arc",
+        message = "LocalAxonSessionDispatcher will execute inbound SessionDispatch::Dispatch frames through Axon LocalRuntime",
     );
     // Cancel oneshot held for the daemon process's lifetime — the
     // supervisor exits when the cancel sender drops, which happens
@@ -648,7 +733,7 @@ fn spawn_session_supervisor(
     Box::leak(Box::new(cancel_tx));
 
     // PR-N6 C4: when escalation is wired (device mode), inject the
-    // correlation table into the LocalAbilityDispatcher so inbound
+    // correlation table into the LocalAxonSessionDispatcher so inbound
     // RequestResult frames complete the matching pending entry,
     // and forward the SharedSessionOutbox to the supervisor so it
     // publishes the active up_tx on every successful dial.
@@ -656,10 +741,11 @@ fn spawn_session_supervisor(
         Some((c, o)) => (Some(c), Some(o)),
         None => (None, None),
     };
-    let mut local_dispatcher = LocalAbilityDispatcher::new(dispatcher);
+    let mut local_dispatcher = LocalAxonSessionDispatcher::new();
     if let Some(correlation) = correlation {
         local_dispatcher = local_dispatcher.with_escalation_correlation(correlation);
     }
+    local_dispatcher = local_dispatcher.with_local_runtime(Arc::clone(&local_runtime));
     let dispatcher = Arc::new(local_dispatcher);
     tokio::spawn(run_session_supervisor(
         hub_endpoint,
@@ -1854,13 +1940,16 @@ mod tests {
         let _hg = crate::facade::cli::test_support::HomeGuard::new();
         let temp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", temp.path());
-        let registry = Arc::new(crate::runtime::ability_dispatch::LocalAbilityRegistry::default());
-        let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
-            Arc::new(crate::runtime::gateway::NoopGateway::new());
-        let dispatcher = Arc::new(AbilityDispatcher::new(registry, gateway));
 
         // No panic, no error — soft skip is the contract.
-        start_axon_serve_sidecar(dispatcher, None).expect("missing config is a soft skip");
+        start_axon_serve_sidecar(
+            easynet_axon::invocation::LocalRuntime::new(),
+            None,
+            Arc::new(
+                crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell::new(),
+            ),
+        )
+        .expect("missing config is a soft skip");
     }
 
     #[test]
@@ -1977,11 +2066,6 @@ tls_key_pem = {key:?}
         let config_path = easynet_dir.join("daemon-config.toml");
         std::fs::write(&config_path, config_body).expect("seed daemon-config");
 
-        let registry = Arc::new(crate::runtime::ability_dispatch::LocalAbilityRegistry::default());
-        let gateway: Arc<dyn crate::runtime::gateway_api::GatewayApi> =
-            Arc::new(crate::runtime::gateway::NoopGateway::new());
-        let dispatcher = Arc::new(AbilityDispatcher::new(registry, gateway));
-
         // Hub-mode boot may legitimately fail at the TLS bind
         // because the cert PEM is a stub; the contract that
         // matters here is "the construction path does not panic
@@ -1992,7 +2076,13 @@ tls_key_pem = {key:?}
             // Errors from the TLS bind are acceptable — what
             // matters is that the federation client + peers
             // wire-up did not panic before we got there.
-            let _ = start_axon_serve_sidecar(dispatcher, None);
+            let _ = start_axon_serve_sidecar(
+                easynet_axon::invocation::LocalRuntime::new(),
+                None,
+                Arc::new(
+                    crate::runtime::agents::agent_lifecycle_ability::SharedHotRegistrarCell::new(),
+                ),
+            );
         });
         // futures::FutureExt::catch_unwind would be nicer; we
         // use std::panic::catch_unwind via a synchronous wrapper

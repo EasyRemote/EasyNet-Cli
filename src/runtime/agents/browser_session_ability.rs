@@ -37,7 +37,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::{LocalAbilityRegistry, StreamSource};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
 
 pub const ABILITY_OPEN_SESSION: &str = "device.browser.open_session";
 pub const ABILITY_SEND_INPUT: &str = "device.browser.send_input";
@@ -246,7 +246,7 @@ pub fn close_session_input_schema() -> Value {
 /// mount as `OwnerKind::Device`. RFC-013 may re-classify capture as
 /// a per-agent surface once wry is integrated, but for v0 the WebView
 /// lives in the daemon process and Device is honest.
-pub fn register(reg: &mut LocalAbilityRegistry) {
+pub fn register(reg: &mut AxonAbilityCatalog) {
     use crate::runtime::ability_dispatch::OwnerKind;
     reg.register_rpc_with_owner(
         ABILITY_OPEN_SESSION,
@@ -442,7 +442,7 @@ fn close_session_handler(args: Value) -> anyhow::Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+    use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
     fn open_url(url: &str) -> Value {
         open_session_handler(json!({ "url": url })).expect("open ok")
@@ -575,7 +575,7 @@ mod tests {
 
     #[test]
     fn register_mounts_all_four_verbs() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg);
         let names = reg.list_abilities();
         for verb in [

@@ -6,7 +6,7 @@
 // Outbound A2A: lets a local caller dispatch an Invoke against a
 // remote node's ability, surfaced as a first-class ability
 // (`a2a.client.send_task`) so the caller doesn't reach into
-// AbilityDispatcher directly. Pairs with `a2a.bridge.send_task`
+// AxonAbilityCatalog directly. Pairs with `a2a.bridge.send_task`
 // (the inbound side) — both surfaces ride the same Invoke
 // pipeline; the difference is which direction crosses the wire.
 //
@@ -26,9 +26,9 @@
 // helper (it now bails with a deprecation message). The new
 // canonical path is "use Invoke against the appropriate Agent
 // ability." This ability is the wrapper that does exactly that:
-// builds an InvocationTarget with `TargetScope::Remote{node}` and
-// hands it to the dispatcher; the dispatcher's existing remote
-// path routes through the GatewayApi.
+// calls the daemon-hosted `federation.forward_invoke` ability, so
+// outbound A2A uses the same Axon service path as CLI/EAL remote
+// invocation.
 //
 // What lives here
 // ---------------
@@ -39,10 +39,9 @@
 //
 // What does NOT live here yet
 // ---------------------------
-//   * Streaming / bidi outbound — same handler shape, different
-//     dispatcher entry (execute_stream / execute_bidi). Land
-//     when an actual remote streaming caller surfaces; the unary
-//     surface covers every concrete request known today.
+//   * Streaming / bidi outbound — same handler shape, different Axon
+//     call mode. Land when an actual remote streaming caller surfaces;
+//     the unary surface covers every concrete request known today.
 //   * a2a.client.list — outbound discovery. The realm hub's
 //     `federation.subscribe_directory` (C-M11) is the right
 //     surface for "what nodes can I talk to"; this ability
@@ -55,7 +54,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
 pub const ABILITY_SEND_TASK: &str = "device.a2a.client.send_task";
@@ -64,7 +63,7 @@ pub const ABILITY_SEND_TASK: &str = "device.a2a.client.send_task";
 /// every call dials the local daemon's `federation.forward_invoke`
 /// surface fresh — same wire path the rest of the CLI's
 /// cross-device dispatch takes after the joint-plan unification.
-pub fn register(reg: &mut LocalAbilityRegistry) {
+pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
         "device.a2a.client.send_task",
         OwnerKind::Device,
@@ -192,23 +191,22 @@ pub fn send_task_input_schema() -> Value {
 pub fn send_task_description() -> &'static str {
     "Outbound A2A: dispatch an RPC Invoke against a remote node's \
      ability. Resolves to `<agent_name>.<skill_name>` on the named \
-     node and routes through the GatewayApi. Returns {ok:true,result} \
-     on success; remote failures and dispatcher errors surface as \
-     {ok:false,error} so callers can branch without a try/catch."
+     node and routes through daemon-hosted federation.forward_invoke. \
+     Returns {ok:true,result} on success; remote failures surface as \
+     {ok:false,error} so callers can branch without a try/catch. The \
+     `args` payload is OPAQUE to the daemon — its shape is the remote \
+     skill's input_schema contract and is not validated locally."
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Tests deliberately leave the process-wide DISPATCHER_HANDLE
-    /// unset. The handler's unset-path returns ok:false on every
-    /// call, which is what we test here. The populated path is
-    /// exercised by the daemon's boot integration test (where
-    /// `set_dispatcher` runs after `AbilityDispatcher::new`) — doing
-    /// it here would race other tests through the static OnceLock.
-    fn fresh_registry() -> Arc<LocalAbilityRegistry> {
-        let mut reg = LocalAbilityRegistry::new();
+    /// Tests run without a local daemon socket. The handler should
+    /// return ok:false instead of panicking; the populated path is
+    /// exercised by daemon/axon integration tests.
+    fn fresh_registry() -> Arc<AxonAbilityCatalog> {
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg);
         Arc::new(reg)
     }

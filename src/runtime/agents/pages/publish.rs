@@ -25,9 +25,8 @@ use std::time::SystemTime;
 use anyhow::Context;
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
-use super::fetch::register_fetch_ability;
 use super::sandbox::open_directory;
 use super::state::{
     persist_registry_for_user, ProjectHandle, Visibility, DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS,
@@ -62,15 +61,14 @@ use super::state::{
 /// debugging.
 pub fn handle_publish(
     user: &str,
-    // Kept in the signature for ABI stability with the resolver
-    // wiring in `pages/mod.rs`. The publish surface no longer
-    // depends on the daemon's in-process listener — `url_root` is
-    // built from `realm` via `pages_public_url_root`. The dev-only
-    // listener URL is reported from `<user>.pages.get` (which still
-    // takes the port) when an operator wants it for local curl.
+    // The publish surface no longer depends on the daemon's
+    // in-process listener — `url_root` is built from `realm` via
+    // `pages_public_url_root`. The dev-only listener URL is reported
+    // from `<user>.pages.get` (which still takes the port) when an
+    // operator wants it for local curl.
     _listener_port: u16,
     realm: &str,
-    registry: Arc<LocalAbilityRegistry>,
+    registry: Arc<AxonAbilityCatalog>,
     args: Value,
 ) -> anyhow::Result<Value> {
     let folder_str = args
@@ -128,11 +126,10 @@ pub fn handle_publish(
         return Err(err).context("persist pages publish registry");
     }
 
-    // Register the per-project fetch ability into the live registry.
-    // The registration function is owned by `fetch.rs` so the
-    // ability-name format and the closure body live next to each
-    // other.
-    register_fetch_ability(&registry, user, project_id);
+    // Register per-project fetch/API abilities into the live
+    // daemon-hosted Axon runtime so Hub remote/session dispatch
+    // can find them without any legacy resolver path.
+    super::register_project_abilities(registry.as_ref(), user, project_id);
 
     let project_uri = crate::ura::resource_dot_ura(realm, &format!("{user}.{project_id}"), "/");
     let url_root = super::pages_public_url_root(realm, user, project_id);

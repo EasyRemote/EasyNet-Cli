@@ -41,6 +41,7 @@ pub(crate) mod drivers;
 pub(crate) mod process_runner;
 pub(crate) mod run_store;
 pub(crate) mod session;
+pub(crate) mod skill_store;
 pub(crate) mod stream_ui;
 pub(crate) mod timeline;
 pub(crate) mod toml_escape;
@@ -79,6 +80,7 @@ pub mod gateway_api;
 // Stage 2 (the executor) is a follow-up file `ability_dispatch.rs`;
 // PR-SYS swaps the existing dispatch.rs call sites over to it.
 pub mod invocation_target;
+pub mod local_runtime_invoker;
 
 // Kernel + Gateway implementations.
 // - `kernel` provides the single execution entry Kernel::invoke that
@@ -99,7 +101,7 @@ pub mod execution;
 // PR-SYS: stage-2 dispatch executor + the `system.*` ability
 // namespace. `ability_dispatch` consumes `InvocationTarget` (from
 // stage-1 resolver in `invocation_target.rs`) and routes either to
-// the in-process `LocalAbilityRegistry` or via `GatewayApi`.
+// the in-process `AxonAbilityCatalog` or via `GatewayApi`.
 // `agents::build_registry` populates the registry with every
 // device-level ability the daemon publishes (today: `observe.health`;
 // PR-ATTACH onwards extends this).
@@ -107,6 +109,19 @@ pub mod ability_descriptor;
 pub mod ability_dispatch;
 pub mod advertise;
 pub mod agents;
+/// Bridge layer between CLI's existing services (RealmTrustAnchor,
+/// InvocationLedger, etc.) and `easynet_axon::invocation`'s SDK
+/// types (`KeyResolver`, `LedgerSink`, `LocalRuntime`). Phase 1–5
+/// of the "use Axon SDK directly, stop reinventing" migration lives
+/// here. Everything in this module is glue: it carries no
+/// independent state of its own beyond holding `Arc` handles to
+/// existing services + the constructed Axon objects.
+///
+/// Lives under `runtime/` (not `services/`) because it imports only
+/// Axon SDK types and runtime ability dispatch / agents /
+/// invocation_target glue. Service-owned state is adapted in the
+/// services layer and injected through traits.
+pub mod axon_bridge;
 pub mod dispatch_receipt;
 pub mod federation_client;
 pub mod hosted_receipt;

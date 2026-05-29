@@ -38,7 +38,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::ability_dispatch::{LocalAbilityRegistry, StreamSource};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
 use crate::runtime::domain::SessionId;
 use crate::runtime::execution::session::SessionService;
 
@@ -52,7 +52,7 @@ pub const ABILITY_ATTACH: &str = "device.session.attach";
 /// producer rather than a single response. v1 ships the RPC handler
 /// for `list` and a stream handler for `attach`; the dispatcher
 /// routes by call_mode.
-pub fn register(reg: &mut LocalAbilityRegistry, sessions: Arc<SessionService>) {
+pub fn register(reg: &mut AxonAbilityCatalog, sessions: Arc<SessionService>) {
     let s_for_list = Arc::clone(&sessions);
     reg.register_rpc_with_owner(
         "device.session.list",

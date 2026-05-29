@@ -23,14 +23,11 @@
 // (b) own its own copy of the on-disk semantics (duplicates the
 // install/upgrade/rollback logic the CLI already has).
 //
-// Reuses the pure helpers
-// -----------------------
-// `facade::cli::skill::{install_skill, upgrade_skill, remove_skill}`
-// are the typed-result helpers extracted from the existing CLI
-// `easynet skill install/upgrade/remove` commands. The ability
-// handlers in this file are 5-line wrappers around them — same
-// logic, no divergence between operator-CLI and ability invocation
-// surfaces.
+// Reuses the runtime package store
+// --------------------------------
+// `runtime::skill_store::{install_skill, upgrade_skill, remove_skill}`
+// is the canonical filesystem implementation. CLI commands call
+// these abilities; they do not import or duplicate the store.
 //
 // Receipt shapes
 // --------------
@@ -59,8 +56,8 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::facade::cli::skill::{install_skill, remove_skill, upgrade_skill};
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+use crate::runtime::skill_store::{install_skill, remove_skill, upgrade_skill, InstallRecord};
 
 use crate::runtime::ability_dispatch::OwnerKind;
 pub const ABILITY_INSTALL: &str = "device.skill.install";
@@ -72,7 +69,7 @@ pub const ABILITY_UPGRADE: &str = "device.skill.upgrade";
 /// registry from disk on each call (matches the existing CLI
 /// behaviour — newly-registered agents are picked up without a
 /// daemon restart).
-pub fn register(reg: &mut LocalAbilityRegistry) {
+pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
         "device.skill.install",
         OwnerKind::Device,
@@ -161,10 +158,7 @@ fn upgrade_handler(args: Value) -> anyhow::Result<Value> {
     Ok(json!({ "ok": true, "record": record_with_resource_ura(record, agent_ura) }))
 }
 
-fn record_with_resource_ura(
-    record: crate::facade::cli::skill::InstallRecord,
-    agent_ura: Option<&str>,
-) -> Value {
+fn record_with_resource_ura(record: InstallRecord, agent_ura: Option<&str>) -> Value {
     let mut value = serde_json::to_value(&record).unwrap_or(Value::Null);
     if let Some(uri) = agent_ura.and_then(|agent_ura| skill_resource_ura(agent_ura, &record.name)) {
         if let Some(obj) = value.as_object_mut() {
@@ -272,7 +266,7 @@ mod tests {
     /// dispatch will silently miss them.
     #[test]
     fn registration_makes_all_three_dispatchable() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg);
         assert!(reg.get_rpc(ABILITY_INSTALL).is_some());
         assert!(reg.get_rpc(ABILITY_REMOVE).is_some());

@@ -11,7 +11,7 @@
 // Module layout
 // -------------
 // One file per ability that gets a real handler. Each module
-// exports a single `register(reg: &mut LocalAbilityRegistry)`
+// exports a single `register(reg: &mut AxonAbilityCatalog)`
 // fn that routes the corresponding `media_abilities::ABILITY_*`
 // name through `register_*_with_envelope` (per
 // **INV-SUBJECT-ENVELOPE**: media handlers MUST take the AXIOM

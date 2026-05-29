@@ -6,9 +6,8 @@
 // Why this module exists
 // ----------------------
 // The daemon hosts several "set at boot, read on the hot path" handles
-// — the live `McpClientService` (for `[exec] kind = "mcp"`), the
-// `LocalAbilityRegistry` handle that the OpenAI-compat adapter
-// projects through, the OpenAI-compat caller identity, etc. Each of
+// — the live `McpClientService` (for `[exec] kind = "mcp"`), Axon
+// runtime bridge state, the OpenAI-compat caller identity, etc. Each of
 // these was historically a free-floating `OnceLock<Arc<T>>` or
 // `RwLock<Option<Arc<T>>>` static at the top of its owning module.
 //

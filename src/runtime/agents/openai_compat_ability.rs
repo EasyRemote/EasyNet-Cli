@@ -27,14 +27,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::{LocalAbilityRegistry, LocalRpcHandler};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, LocalRpcHandler};
 use crate::runtime::agents::api_key_ability;
 use crate::support::process_singleton::ProcessSingleton;
 
 /// Process-wide handle to the live ability registry. The inner
-/// `Arc<OnceLock<Arc<LocalAbilityRegistry>>>` is the seam
+/// `Arc<OnceLock<Arc<AxonAbilityCatalog>>>` is the seam
 /// `build_registry_with_services` uses to backfill the registry
-/// after the `LocalAbilityRegistry` assembly completes.
+/// after the `AxonAbilityCatalog` assembly completes.
 ///
 /// `ProcessSingleton::last_writer_wins()` because the in-process
 /// test binary shares this static across thousands of tests with
@@ -42,7 +42,7 @@ use crate::support::process_singleton::ProcessSingleton;
 /// would silently let the first test pin the registry for every
 /// other test. Production sets it exactly once at boot. See
 /// `support::process_singleton` for the mode-choice rationale.
-static DISPATCH_HANDLE: ProcessSingleton<OnceLock<Arc<LocalAbilityRegistry>>> =
+static DISPATCH_HANDLE: ProcessSingleton<OnceLock<Arc<AxonAbilityCatalog>>> =
     ProcessSingleton::last_writer_wins();
 
 /// Process-wide identity for OpenAI-compat URA projection. Same
@@ -60,11 +60,11 @@ struct OpenAICompatIdentity {
     realm: String,
 }
 
-pub(crate) fn set_dispatch_handle(handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>>) {
+pub(crate) fn set_dispatch_handle(handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>) {
     DISPATCH_HANDLE.set(handle);
 }
 
-fn current_dispatch_handle() -> Option<Arc<OnceLock<Arc<LocalAbilityRegistry>>>> {
+fn current_dispatch_handle() -> Option<Arc<OnceLock<Arc<AxonAbilityCatalog>>>> {
     DISPATCH_HANDLE.get()
 }
 
@@ -261,22 +261,11 @@ pub fn handle_chat_completions(args: Value) -> anyhow::Result<Value> {
     }
 
     // INV-1: forward via standard registry, no own dispatcher.
-    let handle = current_dispatch_handle()
-        .ok_or_else(|| anyhow::anyhow!("dispatch handle not set"))?;
+    let handle =
+        current_dispatch_handle().ok_or_else(|| anyhow::anyhow!("dispatch handle not set"))?;
     let registry = handle
         .get()
         .ok_or_else(|| anyhow::anyhow!("dispatch handle empty"))?;
-
-    let handler = registry
-        .get_rpc(&target_ability)
-        .cloned()
-        .or_else(|| registry.resolve_rpc(&target_ability))
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "ability `{target_ability}` not registered. \
-                 Has the agent been added via `easynet agent add`?"
-            )
-        })?;
 
     let (prompt, system) = flatten_messages(&messages);
     let mut ability_args = json!({ "prompt": prompt });
@@ -284,7 +273,8 @@ pub fn handle_chat_completions(args: Value) -> anyhow::Result<Value> {
         ability_args["system"] = json!(s);
     }
 
-    let dispatch_result = handler(ability_args)
+    let dispatch_result = registry
+        .invoke_rpc_json(&target_ability, ability_args)
         .map_err(|e| anyhow::anyhow!("chat-base ability `{target_ability}` failed: {e}"))?;
 
     // Extract reply text from agent response. Different chat
@@ -435,8 +425,8 @@ pub fn handle_chat_completions(args: Value) -> anyhow::Result<Value> {
 /// `01HUB.openai.list_models` — return list of chat-base abilities
 /// available on this daemon, projected as OpenAI-shape models.
 pub fn handle_list_models(_args: Value) -> anyhow::Result<Value> {
-    let handle = current_dispatch_handle()
-        .ok_or_else(|| anyhow::anyhow!("dispatch handle not set"))?;
+    let handle =
+        current_dispatch_handle().ok_or_else(|| anyhow::anyhow!("dispatch handle not set"))?;
     let registry = handle
         .get()
         .ok_or_else(|| anyhow::anyhow!("dispatch handle empty"))?;
@@ -459,7 +449,7 @@ pub fn handle_list_models(_args: Value) -> anyhow::Result<Value> {
     Ok(json!({ "object": "list", "data": models }))
 }
 
-pub fn register(reg: &mut LocalAbilityRegistry) {
+pub fn register(reg: &mut AxonAbilityCatalog) {
     use crate::runtime::ability_dispatch::OwnerKind;
     // RFC-006-C v0.1 — DEVICE-local OpenAI protocol shim. The
     // device daemon serves OpenAI's `/v1/chat/completions` and
@@ -485,12 +475,12 @@ pub fn register(reg: &mut LocalAbilityRegistry) {
     );
 }
 
-fn project_model_id(registry: &LocalAbilityRegistry, ability_name: &str) -> String {
+fn project_model_id(registry: &AxonAbilityCatalog, ability_name: &str) -> String {
     project_model_id_with_identity(registry, ability_name, current_identity().as_ref())
 }
 
 fn project_model_id_with_identity(
-    registry: &LocalAbilityRegistry,
+    registry: &AxonAbilityCatalog,
     ability_name: &str,
     identity: Option<&OpenAICompatIdentity>,
 ) -> String {
@@ -617,13 +607,9 @@ fn deref_to_data_url(uri: &str) -> anyhow::Result<String> {
     let registry = handle
         .get()
         .ok_or_else(|| anyhow::anyhow!("deref: dispatch handle empty"))?;
-    let handler = registry
-        .get_rpc(&ability)
-        .cloned()
-        .or_else(|| registry.resolve_rpc(&ability))
-        .ok_or_else(|| anyhow::anyhow!("deref `{uri}`: ability `{ability}` not registered"))?;
-    let resp =
-        handler(args).map_err(|e| anyhow::anyhow!("deref `{uri}`: {ability} failed: {e}"))?;
+    let resp = registry
+        .invoke_rpc_json(&ability, args)
+        .map_err(|e| anyhow::anyhow!("deref `{uri}`: {ability} failed: {e}"))?;
     let bytes_b64 = resp
         .get("bytes_b64")
         .and_then(Value::as_str)
@@ -659,7 +645,7 @@ mod tests {
 
     #[test]
     fn project_model_id_prefers_canonical_ability_ura_for_agent_owned_chat() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_owner("codex.chat", OwnerKind::Agent("codex".into()), ok_handler());
         let identity = OpenAICompatIdentity {
             user: Some("alice".into()),

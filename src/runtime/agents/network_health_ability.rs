@@ -47,13 +47,13 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::agents::federation_probe;
 
 pub const ABILITY_NETWORK_HEALTH: &str = "device.observe.network_health";
 
-pub fn register(reg: &mut LocalAbilityRegistry) {
+pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
         "device.observe.network_health",
         OwnerKind::Device,
@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn registration_makes_ability_dispatchable() {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         register(&mut reg);
         assert!(reg.get_rpc(ABILITY_NETWORK_HEALTH).is_some());
     }

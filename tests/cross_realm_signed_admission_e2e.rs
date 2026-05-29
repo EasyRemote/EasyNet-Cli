@@ -70,6 +70,7 @@ use easynet_axon::invocation::axiom::{
     canonical_invocation_bytes, AgentIdentity as AxiomAgentIdentity, CausalContext,
     InvocationEnvelope, SubjectIdentity, UraProfile,
 };
+use easynet_axon::invocation::LocalRuntime;
 use easynet_cli::pb::axon::v1::invocation_server::Invocation;
 use easynet_cli::pb::axon::v1::{
     AgentIdentity as PbAgentIdentity, CallerSignature as PbCallerSignature, Envelope,
@@ -263,7 +264,8 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
         Arc::new(PresenceRegistry::new()),
         daemon_b_admission.clone(),
     )
-    .with_session_realm(REALM_B);
+    .with_session_realm(REALM_B)
+    .with_local_runtime(LocalRuntime::new());
 
     // ── Build a signed `self.echo` invocation from device-A ──
     // device-A signs over the canonical bytes; daemon B's
@@ -272,10 +274,10 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
     //
     // `self.echo` does not need to actually be implemented for the
     // test — admission acceptance is the assertion target. Daemon B
-    // returns `Status::unimplemented` for unknown abilities AFTER
-    // admission has already passed; the test catches that as the
-    // success signal (admission succeeded; dispatch then fails for
-    // an unrelated reason).
+    // has an empty LocalRuntime wired, so it returns `Status::not_found`
+    // for unknown abilities AFTER admission has already passed; the
+    // test catches that as the success signal (admission succeeded;
+    // dispatch then fails for an unrelated reason).
     let signed = signed_request(
         DEVICE_A_URA,
         DAEMON_B_URA,
@@ -295,46 +297,31 @@ async fn cross_realm_signed_caller_admitted_via_federated_resolve_key() {
         }
         Err(status) => {
             // Admission acceptance is proven by the failure code
-            // being `Unimplemented` (post-admission dispatch miss)
+            // being `NotFound` (post-admission dispatch miss)
             // rather than the §5.2 reject codes
             // (`PermissionDenied` / `InvalidArgument`).
             assert_eq!(
                 status.code(),
-                tonic::Code::Unimplemented,
-                "expected post-admission unimplemented dispatch, but got code={:?} message={}",
+                tonic::Code::NotFound,
+                "expected post-admission unknown-ability dispatch miss, but got code={:?} message={}",
                 status.code(),
                 status.message()
             );
         }
     }
 
-    // ── Receipt verification: B's admission emitted "admitted" ──
-    // PR-10 commit 3/N records every successful strict admission
-    // into the daemon-shared receipt store. The store should hold
-    // exactly one `admitted` entry naming device-A as caller.
-    let receipts = daemon_b_admission.receipt_store().snapshot_recent(8);
-    let admitted: Vec<_> = receipts
-        .iter()
-        .filter(|r| r.receipt_type == "admitted")
-        .collect();
-    assert_eq!(
-        admitted.len(),
-        1,
-        "expected one admitted receipt; got {} (recent: {:?})",
-        admitted.len(),
-        receipts
-            .iter()
-            .map(|r| (r.receipt_type.clone(), r.reason.clone()))
-            .collect::<Vec<_>>()
-    );
-    let receipt = admitted[0];
-    let caller_ura = receipt
-        .caller_binding
-        .as_ref()
-        .expect("caller_binding present")
-        .ura
-        .clone();
-    assert_eq!(caller_ura, DEVICE_A_URA);
+    // Phase 5a (SharedReceiptStore deletion): the original
+    // PR-10 commit 5/N assertion was that B's admission recorded
+    // exactly one `"admitted"` receipt naming device-A as caller.
+    // That ring-buffer is gone — admission success is now observable
+    // through the dispatch outcome assertions above (the call passed
+    // admission and reached the `NotFound` dispatch arm, which
+    // proves the caller's signature verified and the nonce was
+    // accepted). Audit-trail-level persistence of "who admitted what"
+    // moved to the `InvocationLedger` rows the `LedgerSink` writes
+    // at terminal time; this test scenario doesn't reach terminal
+    // (intentionally — it stops at admission), so no ledger row is
+    // expected here either.
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

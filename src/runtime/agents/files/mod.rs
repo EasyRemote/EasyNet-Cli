@@ -4,9 +4,8 @@
 // File: src/runtime/agents/files/mod.rs
 // Description: registration entry point for the user-rooted files
 //              namespace, complement to Pages (RFC-006-B v0.6).
-//              Installs a fallback resolver matching
-//              `<user>.files.<verb>` on lookup miss and
-//              synthesises put/get/list handlers.
+//              Registers `<user>.files.<verb>` directly into the
+//              daemon-hosted Axon LocalRuntime.
 //
 // What this is for:
 //   `/v1/chat/completions` accepts OpenAI-shape multimodal messages
@@ -47,9 +46,7 @@ pub mod state;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::runtime::ability_dispatch::{
-    LocalAbilityRegistry, LocalFallbackResolver, LocalRpcHandler,
-};
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, LocalRpcHandler, OwnerKind};
 
 /// Installation parameters for the Files reference system. Mirror
 /// of `PagesConfig`; the daemon's user identity is the only field
@@ -68,7 +65,7 @@ pub struct FilesConfig {
 /// blob storage root is resolved here from `EASYNET_FILES_ROOT`
 /// (or `~/.easynet/files` fallback); handlers receive the path
 /// by Arc, no further env-reads at invoke time.
-pub fn register(reg: &mut LocalAbilityRegistry, config: FilesConfig) {
+pub fn register(reg: &mut AxonAbilityCatalog, config: FilesConfig) {
     let root: Arc<PathBuf> = match state::root_from_env() {
         Ok(p) => Arc::new(p),
         Err(err) => {
@@ -79,26 +76,32 @@ pub fn register(reg: &mut LocalAbilityRegistry, config: FilesConfig) {
             return;
         }
     };
-    let cfg = Arc::new(config);
-    let resolver: LocalFallbackResolver = {
-        let cfg = Arc::clone(&cfg);
-        let root = Arc::clone(&root);
-        Arc::new(move |name: &str| -> Option<LocalRpcHandler> {
-            let prefix = format!("{}.files.", cfg.user);
-            let rest = name.strip_prefix(&prefix)?;
-            let cfg = Arc::clone(&cfg);
-            let root = Arc::clone(&root);
-            match rest {
-                "put" => Some(Arc::new(move |args| {
-                    handlers::handle_put(&cfg.user, &cfg.realm, &root, args)
-                })),
-                "get" => Some(Arc::new(move |args| handlers::handle_get(&root, args))),
-                "list" => Some(Arc::new(move |args| {
-                    handlers::handle_list(&cfg.user, &cfg.realm, &root, args)
-                })),
-                _ => None,
-            }
-        })
-    };
-    reg.chain_rpc_fallback(resolver);
+    let owner = OwnerKind::User(config.user.clone());
+
+    let user = config.user.clone();
+    let realm = config.realm.clone();
+    let root_for_put = Arc::clone(&root);
+    let put_handler: LocalRpcHandler =
+        Arc::new(move |args| handlers::handle_put(&user, &realm, &root_for_put, args));
+    reg.register_rpc_with_owner(
+        format!("{}.files.put", config.user),
+        owner.clone(),
+        put_handler,
+    );
+
+    let root_for_get = Arc::clone(&root);
+    let get_handler: LocalRpcHandler =
+        Arc::new(move |args| handlers::handle_get(&root_for_get, args));
+    reg.register_rpc_with_owner(
+        format!("{}.files.get", config.user),
+        owner.clone(),
+        get_handler,
+    );
+
+    let user = config.user.clone();
+    let realm = config.realm.clone();
+    let root_for_list = Arc::clone(&root);
+    let list_handler: LocalRpcHandler =
+        Arc::new(move |args| handlers::handle_list(&user, &realm, &root_for_list, args));
+    reg.register_rpc_with_owner(format!("{}.files.list", config.user), owner, list_handler);
 }

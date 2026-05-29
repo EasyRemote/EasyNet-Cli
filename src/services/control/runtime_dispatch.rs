@@ -293,21 +293,18 @@ where
         return Ok(()); // peer closed without sending
     }
 
-    // Pre-parse just enough to learn the mode. Anything more nuanced
-    // (tool_name validation, base64 decode) happens inside the mode-
-    // specific path so error reporting stays consistent across the
-    // two response shapes.
-    let mode = parse_mode(&line);
-    match mode {
-        Mode::Rpc => {
-            let response_line = build_response_line(&line, &proxy);
+    // Parse once. Tool-name / base64 validation happens inside the
+    // mode-specific path so error reporting shape stays consistent.
+    match parse_request(&line) {
+        ParsedRequest::Rpc(req) => {
+            let response_line = build_response_line(&req, &proxy);
             write_half.write_all(response_line.as_bytes()).await?;
             write_half.flush().await?;
         }
-        Mode::Stream => {
-            stream_frames_for_request(&line, &proxy, &mut write_half).await?;
+        ParsedRequest::Stream(req) => {
+            stream_frames_for_request(&req, &proxy, &mut write_half).await?;
         }
-        Mode::Bad(reason) => {
+        ParsedRequest::Bad(reason) => {
             let line = error_line("BAD_REQUEST", reason);
             write_half.write_all(line.as_bytes()).await?;
             write_half.flush().await?;
@@ -316,65 +313,46 @@ where
     Ok(())
 }
 
+/// Result of pre-parsing a request line. Carries the typed
+/// `DispatchRequest` alongside its detected mode so downstream
+/// helpers don't re-deserialize.
 #[derive(Debug)]
-enum Mode {
-    Rpc,
-    Stream,
+enum ParsedRequest {
+    Rpc(DispatchRequest),
+    Stream(DispatchRequest),
     Bad(String),
 }
 
-fn parse_mode(request_line: &str) -> Mode {
+fn parse_request(request_line: &str) -> ParsedRequest {
     // Trim before parse; serde_json rejects surrounding whitespace
     // depending on flag set. Pre-trimming also strips the trailing
     // newline produced by the runtime side's `format!("...\n")`.
     let req: DispatchRequest = match serde_json::from_str(request_line.trim()) {
         Ok(r) => r,
-        Err(e) => return Mode::Bad(format!("malformed request: {e}")),
+        Err(e) => return ParsedRequest::Bad(format!("malformed request: {e}")),
     };
     match req.mode.as_str() {
-        "rpc" => Mode::Rpc,
-        "stream" => Mode::Stream,
-        other => Mode::Bad(format!("unknown mode '{other}' (expected rpc|stream)")),
+        "rpc" => ParsedRequest::Rpc(req),
+        "stream" => ParsedRequest::Stream(req),
+        other => ParsedRequest::Bad(format!("unknown mode '{other}' (expected rpc|stream)")),
     }
 }
 
 /// Pure decision function — what response should we send for a
-/// given request line + proxy state. Pulled out as a free
+/// pre-parsed request + proxy state. Pulled out as a free
 /// function so it's exercised by unit tests without needing a real
 /// socket. ALWAYS returns a single line ending in `\n` — the
 /// runtime side reads exactly one line and tolerates no other
 /// shape.
-fn build_response_line(request_line: &str, proxy: &AbilityProxy) -> String {
-    let req: DispatchRequest = match serde_json::from_str(request_line.trim()) {
-        Ok(r) => r,
-        Err(e) => {
-            return error_line("BAD_REQUEST", format!("malformed request: {e}"));
-        }
-    };
+fn build_response_line(req: &DispatchRequest, proxy: &AbilityProxy) -> String {
     if req.tool_name.trim().is_empty() {
         return error_line("BAD_REQUEST", "tool_name must be non-empty".into());
     }
-    let _ = req.function_name; // logged at trace level in a future PR
+    let _ = &req.function_name; // logged at trace level in a future PR
 
-    let args_bytes =
-        match base64::engine::general_purpose::STANDARD.decode(req.arguments_b64.as_bytes()) {
-            Ok(b) => b,
-            Err(e) => {
-                return error_line("BAD_REQUEST", format!("arguments_b64 decode: {e}"));
-            }
-        };
-    let args_value: Value = if args_bytes.is_empty() {
-        Value::Object(Default::default())
-    } else {
-        match serde_json::from_slice(&args_bytes) {
-            Ok(v) => v,
-            Err(e) => {
-                return error_line(
-                    "BAD_REQUEST",
-                    format!("decoded arguments_b64 is not valid JSON: {e}"),
-                );
-            }
-        }
+    let args_value = match decode_args(&req.arguments_b64) {
+        Ok(v) => v,
+        Err(msg) => return error_line("BAD_REQUEST", msg),
     };
 
     match proxy.execute_runtime_dispatch(&req.tool_name, args_value) {
@@ -395,13 +373,10 @@ fn build_response_line(request_line: &str, proxy: &AbilityProxy) -> String {
             s
         }
         Err(msg) => {
-            // Translate "no local handler registered" into NOT_FOUND
-            // so the runtime side surfaces a precise typed error;
-            // anything else is generic ABILITY_FAILED.
-            let code = if msg.contains("no local handler registered")
-                || msg.contains("no local stream handler registered")
-                || msg.contains("no local bidi handler registered")
-            {
+            // Translate the canonical "ability not found" reason
+            // strings (centralised in `local_runtime_invoker`) into
+            // NOT_FOUND; anything else is generic ABILITY_FAILED.
+            let code = if crate::runtime::local_runtime_invoker::is_not_found_error(&msg) {
                 "NOT_FOUND"
             } else {
                 "ABILITY_FAILED"
@@ -423,8 +398,8 @@ fn error_line(code: &str, message: String) -> String {
 }
 
 /// Stream-mode counterpart to `build_response_line`. Resolves the
-/// request, opens a `StreamSource` on the dispatcher, and writes
-/// each frame as its own newline-terminated JSON line. Closes the
+/// request, opens an Axon streaming handle, and writes each frame as
+/// its own newline-terminated JSON line. Closes the
 /// connection (by returning) after the terminal frame, so the
 /// runtime side sees EOF as the stream-end signal.
 ///
@@ -440,22 +415,13 @@ fn error_line(code: &str, message: String) -> String {
 /// side can route by transport-level kind without parsing payload
 /// JSON. The chat-frame `type` is preserved for the gRPC consumer.
 async fn stream_frames_for_request<W>(
-    request_line: &str,
+    req: &DispatchRequest,
     proxy: &AbilityProxy,
     write_half: &mut W,
 ) -> anyhow::Result<()>
 where
     W: tokio::io::AsyncWriteExt + Unpin,
 {
-    let req: DispatchRequest = match serde_json::from_str(request_line.trim()) {
-        Ok(r) => r,
-        Err(e) => {
-            let line = error_line("BAD_REQUEST", format!("malformed request: {e}"));
-            write_half.write_all(line.as_bytes()).await?;
-            write_half.flush().await?;
-            return Ok(());
-        }
-    };
     if req.tool_name.trim().is_empty() {
         let line = error_line("BAD_REQUEST", "tool_name must be non-empty".into());
         write_half.write_all(line.as_bytes()).await?;
@@ -475,9 +441,9 @@ where
     let source = match proxy.execute_runtime_dispatch_stream(&req.tool_name, args_value) {
         Ok(s) => s,
         Err(msg) => {
-            let code = if msg.contains("no local stream handler registered")
-                || msg.contains("no local handler registered")
-            {
+            // Centralised "ability not found" classification — see
+            // `local_runtime_invoker::is_not_found_error`.
+            let code = if crate::runtime::local_runtime_invoker::is_not_found_error(&msg) {
                 "NOT_FOUND"
             } else {
                 "ABILITY_FAILED"
@@ -505,7 +471,7 @@ fn decode_args(arguments_b64: &str) -> Result<Value, String> {
         .map_err(|e| format!("decoded arguments_b64 is not valid JSON: {e}"))
 }
 
-/// Pump a `StreamSource` to the wire. The `done` / `error`
+/// Pump an Axon streaming handle to the wire. The `done` / `error`
 /// classification of the terminal frame is decided by inspecting the
 /// chat-ability `type` field — `error` becomes a `kind:"error"`
 /// envelope with the inner message lifted; everything else is
@@ -514,104 +480,89 @@ fn decode_args(arguments_b64: &str) -> Result<Value, String> {
 /// frames (session + loaded?) and the runtime side prefers one
 /// snapshot record per InvokeStream chunk.
 async fn write_stream_source<W>(
-    source: crate::runtime::ability_dispatch::StreamSource,
+    mut source: easynet_axon::invocation::StreamingInvocationHandle,
     write_half: &mut W,
 ) -> anyhow::Result<()>
 where
     W: tokio::io::AsyncWriteExt + Unpin,
 {
-    use crate::runtime::ability_dispatch::StreamSource;
-    use tokio::sync::broadcast;
-
-    let (snapshot, mut rx_opt): (Vec<Value>, Option<broadcast::Receiver<Value>>) = match source {
-        StreamSource::Snapshot(v) => (v, None),
-        StreamSource::Live(rx) => (Vec::new(), Some(rx)),
-        StreamSource::SnapshotThenLive(s, rx) => (s, Some(rx)),
-    };
-
-    if !snapshot.is_empty() {
-        let line = snapshot_line(&snapshot);
-        write_half.write_all(line.as_bytes()).await?;
+    let mut saw_terminal = false;
+    while let Some(frame_result) = source.next_frame().await {
+        let frame = match frame_result {
+            Ok(frame) => frame,
+            Err(err) => {
+                let line = stream_error_line("ABILITY_FAILED", format!("{err}"));
+                write_half.write_all(line.as_bytes()).await?;
+                write_half.flush().await?;
+                return Ok(());
+            }
+        };
+        if frame.payload.is_empty() {
+            if frame.terminal {
+                // Empty-payload terminal frame: handler signals
+                // "stream done, no last payload." The control-plane
+                // contract demands EXACTLY one terminal envelope on
+                // the wire so the runtime side never sees a bare
+                // EOF; emit the synthetic `kind:"done"` here rather
+                // than relying on the post-loop fallback (which
+                // would not fire because saw_terminal was just set).
+                let line = json!({"kind": "done", "frame": {"type": "done"}}).to_string() + "\n";
+                write_half.write_all(line.as_bytes()).await?;
+                saw_terminal = true;
+                break;
+            }
+            continue;
+        }
+        let frame_value: Value = match serde_json::from_slice(&frame.payload) {
+            Ok(value) => value,
+            Err(err) => {
+                let line = stream_error_line(
+                    "ABILITY_FAILED",
+                    format!("stream ability emitted non-JSON frame: {err}"),
+                );
+                write_half.write_all(line.as_bytes()).await?;
+                write_half.flush().await?;
+                return Ok(());
+            }
+        };
+        let kind = frame_value
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let envelope = match kind {
+            "done" => json!({"kind": "done", "frame": frame_value}),
+            "error" => {
+                let message = frame_value
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("stream ability error")
+                    .to_string();
+                json!({
+                    "kind": "error",
+                    "code": "ABILITY_FAILED",
+                    "message": message,
+                    "frame": frame_value,
+                })
+            }
+            _ if frame.terminal => json!({"kind": "done", "frame": frame_value}),
+            _ => json!({"kind": "progress", "frame": frame_value}),
+        };
+        let mut s = serde_json::to_string(&envelope).expect("serialise stream envelope");
+        s.push('\n');
+        write_half.write_all(s.as_bytes()).await?;
+        if frame.terminal || matches!(kind, "done" | "error") {
+            saw_terminal = true;
+            break;
+        }
     }
 
-    // Snapshot-only StreamSource: no live half to drain. The
-    // contract demands a terminal envelope so the runtime side
-    // never sees an unanchored EOF; emit a synthetic `done` with
-    // an empty frame and return.
-    if rx_opt.is_none() {
+    if !saw_terminal {
         let line = json!({"kind": "done", "frame": {"type": "done"}}).to_string() + "\n";
         write_half.write_all(line.as_bytes()).await?;
-        write_half.flush().await?;
-        return Ok(());
-    }
-
-    // Live half. The chat ability emits its own terminal frame
-    // (`type:"done"` or `type:"error"`); the broadcast channel then
-    // closes (sender drops at end of dispatch thread). When either
-    // happens we stop reading and return — the connection close on
-    // our side is the EOF signal the runtime needs.
-    if let Some(rx) = rx_opt.as_mut() {
-        loop {
-            match rx.recv().await {
-                Ok(frame) => {
-                    let kind = frame.get("type").and_then(Value::as_str).unwrap_or("");
-                    let envelope = match kind {
-                        "done" => json!({"kind": "done", "frame": frame}),
-                        "error" => {
-                            // Lift the inner `message` to the
-                            // transport-level `message` field so the
-                            // runtime can surface it without
-                            // re-parsing the frame.
-                            let message = frame
-                                .get("message")
-                                .and_then(Value::as_str)
-                                .unwrap_or("stream ability error")
-                                .to_string();
-                            json!({
-                                "kind": "error",
-                                "code": "ABILITY_FAILED",
-                                "message": message,
-                                "frame": frame,
-                            })
-                        }
-                        _ => json!({"kind": "progress", "frame": frame}),
-                    };
-                    let mut s =
-                        serde_json::to_string(&envelope).expect("serialise stream envelope");
-                    s.push('\n');
-                    write_half.write_all(s.as_bytes()).await?;
-                    if matches!(kind, "done" | "error") {
-                        break;
-                    }
-                }
-                Err(broadcast::error::RecvError::Closed) => break,
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    // Subscriber lag is fatal for ordering — emit a
-                    // typed error frame and hang up. The chat
-                    // ability's broadcast capacity (8 in v1) is
-                    // sized for the modest frame rate; sustained lag
-                    // means the runtime side is stalled and the
-                    // healthiest action is to surface that loud.
-                    let line = stream_error_line(
-                        "ABILITY_FAILED",
-                        format!("stream subscriber lagged by {n} frames; aborting"),
-                    );
-                    write_half.write_all(line.as_bytes()).await?;
-                    break;
-                }
-            }
-        }
     }
 
     write_half.flush().await?;
     Ok(())
-}
-
-fn snapshot_line(frames: &[Value]) -> String {
-    let body = json!({"kind": "snapshot", "frames": frames});
-    let mut s = serde_json::to_string(&body).expect("serialise snapshot");
-    s.push('\n');
-    s
 }
 
 fn stream_error_line(code: &str, message: String) -> String {
@@ -640,6 +591,21 @@ mod tests {
         use std::sync::Arc;
         let kernel: Arc<dyn KernelApi> = Arc::new(Kernel::new(Arc::new(NoopGateway::new())));
         AbilityProxy::new(kernel)
+    }
+
+    /// Test helper: drive a raw request line through the same
+    /// parse-and-dispatch path `serve_one` uses for the RPC mode,
+    /// returning the wire response line. Lets the wire-shape tests
+    /// pin behaviour for malformed input without reaching for the
+    /// inner `build_response_line` (which now expects a pre-parsed
+    /// `DispatchRequest`).
+    fn build_response_line_from_str(request_line: &str, proxy: &AbilityProxy) -> String {
+        match parse_request(request_line) {
+            ParsedRequest::Rpc(req) | ParsedRequest::Stream(req) => {
+                build_response_line(&req, proxy)
+            }
+            ParsedRequest::Bad(reason) => error_line("BAD_REQUEST", reason),
+        }
     }
 
     /// Both env-var tests serialize through this mutex because
@@ -678,7 +644,7 @@ mod tests {
     #[test]
     fn malformed_request_line_returns_bad_request() {
         let proxy = fresh_proxy();
-        let resp = build_response_line("not a json", &proxy);
+        let resp = build_response_line_from_str("not a json", &proxy);
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
         assert_eq!(v["ok"], false);
         assert_eq!(v["code"], "BAD_REQUEST");
@@ -688,7 +654,7 @@ mod tests {
     #[test]
     fn empty_tool_name_returns_bad_request() {
         let proxy = fresh_proxy();
-        let resp = build_response_line(r#"{"tool_name":"","arguments_b64":""}"#, &proxy);
+        let resp = build_response_line_from_str(r#"{"tool_name":"","arguments_b64":""}"#, &proxy);
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
         assert_eq!(v["code"], "BAD_REQUEST");
         assert!(v["message"].as_str().unwrap().contains("tool_name"));
@@ -700,7 +666,7 @@ mod tests {
         // bare-`@` string actually decodes (some base64 libs accept
         // it as no-op padding) so we use a guaranteed-invalid char.
         let proxy = fresh_proxy();
-        let resp = build_response_line(
+        let resp = build_response_line_from_str(
             r#"{"tool_name":"device.observe.health","arguments_b64":"!!!"}"#,
             &proxy,
         );
@@ -724,7 +690,7 @@ mod tests {
         // observe.health accepts {} — empty arguments_b64 must be
         // treated as {} not as a bad-request.
         let proxy = fresh_proxy();
-        let resp = build_response_line(
+        let resp = build_response_line_from_str(
             r#"{"tool_name":"device.observe.health","arguments_b64":""}"#,
             &proxy,
         );
@@ -737,7 +703,7 @@ mod tests {
     #[test]
     fn unknown_ability_returns_not_found() {
         let proxy = fresh_proxy();
-        let resp = build_response_line(
+        let resp = build_response_line_from_str(
             r#"{"tool_name":"nope.does_not_exist","arguments_b64":""}"#,
             &proxy,
         );
@@ -752,7 +718,7 @@ mod tests {
         // built-in handler that returns a structured object. We
         // verify the result_b64 decodes to JSON and isn't empty.
         let proxy = fresh_proxy();
-        let resp = build_response_line(
+        let resp = build_response_line_from_str(
             r#"{"tool_name":"device.observe.health","arguments_b64":""}"#,
             &proxy,
         );
@@ -774,7 +740,7 @@ mod tests {
         let args_b64 = base64::engine::general_purpose::STANDARD.encode(args.as_bytes());
         let req =
             format!(r#"{{"tool_name":"device.observe.health","arguments_b64":"{args_b64}"}}"#);
-        let resp = build_response_line(&req, &proxy);
+        let resp = build_response_line_from_str(&req, &proxy);
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
         assert_eq!(v["ok"], true);
         // We don't pin the inner shape — observe.health may or may
@@ -951,19 +917,19 @@ mod tests {
         assert_eq!(req3.mode, "stream");
     }
 
-    /// Unknown mode value is rejected at the top of `parse_mode`
+    /// Unknown mode value is rejected at the top of `parse_request`
     /// rather than silently coerced to RPC. Pin the strictness so a
     /// future driver that ships a typo does not run a different
     /// dispatch path than the operator expected.
     #[test]
     fn unknown_mode_returns_bad_request() {
-        let m = parse_mode(r#"{"mode":"streaem","tool_name":"x","arguments_b64":""}"#);
+        let m = parse_request(r#"{"mode":"streaem","tool_name":"x","arguments_b64":""}"#);
         match m {
-            Mode::Bad(msg) => {
+            ParsedRequest::Bad(msg) => {
                 assert!(msg.contains("unknown mode"));
                 assert!(msg.contains("streaem"));
             }
-            other => panic!("expected Mode::Bad for typo, got {other:?}"),
+            other => panic!("expected ParsedRequest::Bad for typo, got {other:?}"),
         }
     }
 

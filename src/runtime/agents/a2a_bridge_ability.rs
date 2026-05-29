@@ -53,7 +53,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::registry::agents::AgentRegistry;
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 use crate::runtime::ability_dispatch::OwnerKind;
 pub const ABILITY_LIST_SKILLS: &str = "device.a2a.bridge.list_skills";
@@ -73,9 +73,9 @@ pub const ABILITY_SEND_TASK: &str = "device.a2a.bridge.send_task";
 /// Same seam mcp.bridge.call_tool uses; see that file for the
 /// chicken-and-egg justification.
 pub fn register<F>(
-    reg: &mut LocalAbilityRegistry,
+    reg: &mut AxonAbilityCatalog,
     registry_provider: F,
-    local_registry_handle: Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+    local_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) where
     F: Fn() -> AgentRegistry + Send + Sync + 'static,
 {
@@ -126,7 +126,7 @@ fn list_skills_handler(
 /// streaming flavour ships when an A2A peer needs it.
 fn send_task_handler(
     registry_provider: &Arc<dyn Fn() -> AgentRegistry + Send + Sync>,
-    local_registry_handle: &Arc<std::sync::OnceLock<Arc<LocalAbilityRegistry>>>,
+    local_registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     args: Value,
 ) -> anyhow::Result<Value> {
     let agent_name = match args.get("agent_name").and_then(Value::as_str) {
@@ -163,14 +163,7 @@ fn send_task_handler(
             "registry handle not initialised (build-site forgot to set the OnceLock)",
         ));
     };
-    let Some(handler) = local.get_rpc(&target) else {
-        return Ok(error_response(&format!(
-            "skill `{skill_name}` not registered for agent `{agent_name}` \
-             (looked for `{target}` as an RPC handler)"
-        )));
-    };
-
-    match handler(task_args) {
+    match local.invoke_rpc_json(&target, task_args) {
         Ok(value) => Ok(json!({
             "ok": true,
             "result": value,
@@ -236,11 +229,11 @@ mod tests {
     /// Test fixture: build a registry with both bridge abilities
     /// registered, and pre-register `<agent>.echo` for each agent
     /// so send_task tests have something real to dispatch into.
-    fn build_bridge_registry<F>(provider: F, echo_agents: &[&str]) -> Arc<LocalAbilityRegistry>
+    fn build_bridge_registry<F>(provider: F, echo_agents: &[&str]) -> Arc<AxonAbilityCatalog>
     where
         F: Fn() -> AgentRegistry + Send + Sync + 'static,
     {
-        let mut reg = LocalAbilityRegistry::new();
+        let mut reg = AxonAbilityCatalog::new();
         for a in echo_agents {
             let name = format!("{a}.echo");
             reg.register_rpc_with_owner(
@@ -249,7 +242,7 @@ mod tests {
                 Arc::new(|args: Value| Ok(json!({"echoed": args}))),
             );
         }
-        let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
+        let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
         register(&mut reg, provider, Arc::clone(&handle));
         let arc = Arc::new(reg);
         let _ = handle.set(arc.clone());
@@ -388,8 +381,8 @@ mod tests {
 
     #[test]
     fn send_task_handler_error_is_surfaced_as_ok_false() {
-        let mut reg = LocalAbilityRegistry::new();
-        let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
+        let mut reg = AxonAbilityCatalog::new();
+        let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
         reg.register_rpc_with_owner(
             "claude.fails",
             OwnerKind::Device,
@@ -434,8 +427,8 @@ mod tests {
 
     #[test]
     fn send_task_unset_registry_handle_returns_ok_false_no_panic() {
-        let mut reg = LocalAbilityRegistry::new();
-        let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
+        let mut reg = AxonAbilityCatalog::new();
+        let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
         register(&mut reg, || registry_with("claude"), Arc::clone(&handle));
         let arc = Arc::new(reg);
         // Deliberately do NOT set the handle.

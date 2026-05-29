@@ -58,7 +58,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::LocalAbilityRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::support::shellguard::destructive;
 use crate::support::shellguard::runner::{
@@ -75,7 +75,7 @@ pub const ABILITY_NAME: &str = "device.process.exec";
 pub const PROFILE_VERSION: &str = "baseline-locomotion-v1";
 
 /// Register the handler. Stateless; no per-call setup.
-pub fn register(reg: &mut LocalAbilityRegistry) {
+pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner("device.process.exec", OwnerKind::Device, Arc::new(handler));
 }
 

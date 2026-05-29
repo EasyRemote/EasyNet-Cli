@@ -216,6 +216,7 @@ mod tests {
             // attach (bidi) so the backend's PTYDriver — which
             // talks unary RPC — sees a fully-served wire surface.
             "device.terminal.create",
+            "device.terminal.list",
             "device.terminal.close",
             "device.terminal.attach",
             "device.terminal.input",
