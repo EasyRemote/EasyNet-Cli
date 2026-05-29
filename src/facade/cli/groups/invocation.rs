@@ -2,18 +2,26 @@
 // ====================================
 //
 // File: src/facade/cli/groups/invocation.rs
-// Description: `easynet invocation ...` reads the local native
-//              invocation ledger. It does not call an ability, so
-//              inspecting audit history does not recursively create
-//              another audit record.
-
-use std::path::PathBuf;
+// Description: `easynet invocation ...` queries the local daemon's
+//              device.invocation.* abilities through Axon's
+//              Invocation gRPC surface. The daemon owns the native
+//              ledger handle, so the CLI never races native storage
+//              locks or reimplements ability dispatch.
 
 use anyhow::Context;
 use clap::{Args, Subcommand};
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
+use serde_json::{json, Map, Value};
 
-use crate::persistence::daemon_config::{default_billing_dir, default_config_path, DaemonConfig};
+use crate::runtime::agents::invocation_history_ability::{
+    ABILITY_HISTORY_GET, ABILITY_HISTORY_LIST, ABILITY_HISTORY_PATH, ABILITY_TRACE_GET,
+};
 use crate::support::output::{self, OutputFormat};
+
+type InvocationRecord = easynet_axon::invocation::InvocationLedgerRecord;
+type TraceEdge = easynet_axon::invocation::InvocationTraceEdge;
+type TraceGraph = easynet_axon::invocation::InvocationTraceGraph;
 
 #[derive(Debug, Args)]
 pub struct InvocationArgs {
@@ -82,15 +90,25 @@ pub fn run(args: InvocationArgs) -> anyhow::Result<()> {
         InvocationAction::Show(a) => run_show(a),
         InvocationAction::Trace(a) => run_trace(a),
         InvocationAction::Path => {
-            println!("{}", ledger_path().display());
+            let response: HistoryPathResponse =
+                invoke_invocation_ability(ABILITY_HISTORY_PATH, json!({}))?;
+            println!("{}", response.ledger_path);
             Ok(())
         }
     }
 }
 
 fn run_list(args: ListArgs) -> anyhow::Result<()> {
-    let path = ledger_path();
-    let records = read_records(&path, list_query(&args))?;
+    let response = if args.limit == 0 {
+        HistoryListResponse {
+            ledger_path: None,
+            records: Vec::new(),
+        }
+    } else {
+        fetch_history_list(&args)?
+    };
+    let ledger_path = ledger_path_label(response.ledger_path);
+    let records = response.records;
 
     if args.format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&records)?);
@@ -100,7 +118,7 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
     if records.is_empty() {
         output::info(&format!(
             "No invocation records at {}. Run an ability through the daemon first.",
-            path.display()
+            ledger_path
         ));
         return Ok(());
     }
@@ -131,12 +149,13 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
 }
 
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
-    let path = ledger_path();
-    let record = find_record(&path, &args.id)?.ok_or_else(|| {
+    let response = fetch_history_record(&args.id)?;
+    let ledger_path = ledger_path_label(response.ledger_path);
+    let record = response.record.ok_or_else(|| {
         anyhow::anyhow!(
             "invocation record not found for `{}` in {}",
             args.id,
-            path.display()
+            ledger_path
         )
     })?;
 
@@ -181,12 +200,11 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
 }
 
 fn run_trace(args: TraceArgs) -> anyhow::Result<()> {
-    let path = ledger_path();
-    let trace_id = match find_record(&path, &args.id)? {
+    let trace_id = match fetch_history_record(&args.id)?.record {
         Some(record) if !record.trace_id.is_empty() => record.trace_id,
         Some(record) => {
             if args.format == OutputFormat::Json {
-                let graph = easynet_axon::invocation::InvocationTraceGraph {
+                let graph = TraceGraph {
                     records: vec![record],
                     ..Default::default()
                 };
@@ -200,7 +218,9 @@ fn run_trace(args: TraceArgs) -> anyhow::Result<()> {
         None => args.id.clone(),
     };
 
-    let graph = read_trace_graph(&path, &trace_id)?;
+    let response = fetch_trace_graph_by_trace_id(&trace_id)?;
+    let ledger_path = ledger_path_label(response.ledger_path.clone());
+    let graph = response.into_graph();
 
     if args.format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&graph)?);
@@ -210,7 +230,7 @@ fn run_trace(args: TraceArgs) -> anyhow::Result<()> {
     if graph.records.is_empty() {
         output::info(&format!(
             "No invocation records with trace_id `{trace_id}` in {}.",
-            path.display()
+            ledger_path
         ));
         return Ok(());
     }
@@ -222,7 +242,7 @@ fn run_trace(args: TraceArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn print_trace_table(records: &[easynet_axon::invocation::InvocationLedgerRecord]) {
+fn print_trace_table(records: &[InvocationRecord]) {
     let mut table = output::table(&["Request", "Span", "State", "Ability", "Started", "MS"]);
     for record in records {
         let elapsed = record
@@ -242,7 +262,7 @@ fn print_trace_table(records: &[easynet_axon::invocation::InvocationLedgerRecord
     println!("{table}");
 }
 
-fn print_trace_edges(edges: &[easynet_axon::invocation::InvocationTraceEdge]) {
+fn print_trace_edges(edges: &[TraceEdge]) {
     let mut table = output::table(&["From Receipt", "Relation", "To Invocation"]);
     for edge in edges {
         table.add_row(vec![
@@ -254,84 +274,107 @@ fn print_trace_edges(edges: &[easynet_axon::invocation::InvocationTraceEdge]) {
     println!("{table}");
 }
 
-fn find_record(
-    path: &PathBuf,
-    id: &str,
-) -> anyhow::Result<Option<easynet_axon::invocation::InvocationLedgerRecord>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let ledger = easynet_axon::invocation::InvocationLedger::open(path)
-        .with_context(|| format!("open invocation ledger {}", path.display()))?;
-    ledger
-        .fetch_one(query_for_id(id))
-        .map_err(|e| anyhow::anyhow!(e))
+#[derive(Debug, Deserialize)]
+struct HistoryListResponse {
+    ledger_path: Option<String>,
+    #[serde(default)]
+    records: Vec<InvocationRecord>,
 }
 
-fn read_records(
-    path: &PathBuf,
-    query: easynet_axon::invocation::InvocationLedgerQuery,
-) -> anyhow::Result<Vec<easynet_axon::invocation::InvocationLedgerRecord>> {
-    if !path.exists() || query.limit == 0 {
-        return Ok(Vec::new());
-    }
-    Ok(easynet_axon::invocation::InvocationLedger::open(path)
-        .with_context(|| format!("open invocation ledger {}", path.display()))?
-        .fetch(query)?)
+#[derive(Debug, Deserialize)]
+struct HistoryGetResponse {
+    ledger_path: Option<String>,
+    record: Option<InvocationRecord>,
 }
 
-fn read_trace_graph(
-    path: &PathBuf,
-    trace_id: &str,
-) -> anyhow::Result<easynet_axon::invocation::InvocationTraceGraph> {
-    if !path.exists() {
-        return Ok(easynet_axon::invocation::InvocationTraceGraph {
-            trace_id: trace_id.to_string(),
-            ..Default::default()
-        });
-    }
-    Ok(easynet_axon::invocation::InvocationLedger::open(path)
-        .with_context(|| format!("open invocation ledger {}", path.display()))?
-        .trace_graph(trace_id)?)
+#[derive(Debug, Deserialize)]
+struct TraceGetResponse {
+    ledger_path: Option<String>,
+    trace_id: String,
+    #[serde(default)]
+    nodes: Vec<InvocationRecord>,
+    #[serde(default)]
+    edges: Vec<TraceEdge>,
 }
 
-fn ledger_path() -> PathBuf {
-    DaemonConfig::load(&default_config_path())
-        .map(|config| config.billing_dir().join("invocations.redb"))
-        .unwrap_or_else(|_| default_billing_dir().join("invocations.redb"))
-}
-
-fn list_query(args: &ListArgs) -> easynet_axon::invocation::InvocationLedgerQuery {
-    let mut query = easynet_axon::invocation::InvocationLedgerQuery::new().limit(args.limit);
-    if let Some(state) = args.state.as_deref() {
-        query = query.state(state);
-    }
-    if let Some(caller) = args.caller.as_deref() {
-        query = query.caller_ura(caller);
-    }
-    if let Some(callee) = args.callee.as_deref() {
-        query = query.callee_ura(callee);
-    }
-    if let Some(subject) = args.subject.as_deref() {
-        query = query.subject_ura(subject);
-    }
-    if let Some(ability) = args.ability.as_deref() {
-        if ability.starts_with("easynet:///") {
-            query = query.ability_ura(ability);
-        } else {
-            query = query.ability_name(ability);
+impl TraceGetResponse {
+    fn into_graph(self) -> TraceGraph {
+        TraceGraph {
+            trace_id: self.trace_id,
+            records: self.nodes,
+            edges: self.edges,
         }
     }
-    query
 }
 
-fn query_for_id(id: &str) -> easynet_axon::invocation::InvocationLedgerQuery {
-    let key = if id.starts_with("easynet:///") {
-        easynet_axon::invocation::InvocationLedgerFetchKey::InvocationUra(id.to_string())
+#[derive(Debug, Deserialize)]
+struct HistoryPathResponse {
+    ledger_path: String,
+}
+
+fn ledger_path_label(path: Option<String>) -> String {
+    path.unwrap_or_else(|| "daemon ledger path unavailable".to_string())
+}
+
+fn fetch_history_list(args: &ListArgs) -> anyhow::Result<HistoryListResponse> {
+    invoke_invocation_ability(ABILITY_HISTORY_LIST, history_list_args(args))
+}
+
+fn fetch_history_record(id: &str) -> anyhow::Result<HistoryGetResponse> {
+    invoke_invocation_ability(
+        ABILITY_HISTORY_GET,
+        json!({ "key": history_key_for_id(id) }),
+    )
+}
+
+fn fetch_trace_graph_by_trace_id(trace_id: &str) -> anyhow::Result<TraceGetResponse> {
+    invoke_invocation_ability(
+        ABILITY_TRACE_GET,
+        json!({ "key": { "trace_id": trace_id } }),
+    )
+}
+
+fn invoke_invocation_ability<T>(ability: &str, args: Value) -> anyhow::Result<T>
+where
+    T: DeserializeOwned,
+{
+    // Route through the canonical `local_invoke` surface so the
+    // "one CLI subcommand = one ability invoke" rule
+    // (`src/support/local_invoke.rs` doc) stays held — i.e. CLI
+    // surfaces never bypass into the transport plumbing directly.
+    let value = crate::support::local_invoke::invoke_local_ability(ability, args)
+        .with_context(|| format!("invoke {ability} through local Axon daemon"))?;
+    serde_json::from_value(value).with_context(|| format!("decode {ability} response"))
+}
+
+fn history_list_args(args: &ListArgs) -> Value {
+    let mut filter = Map::new();
+    insert_filter_value(&mut filter, "state", args.state.as_deref());
+    insert_filter_value(&mut filter, "ability", args.ability.as_deref());
+    insert_filter_value(&mut filter, "caller", args.caller.as_deref());
+    insert_filter_value(&mut filter, "callee", args.callee.as_deref());
+    insert_filter_value(&mut filter, "subject", args.subject.as_deref());
+
+    let mut body = Map::new();
+    body.insert("limit".to_string(), json!(args.limit));
+    if !filter.is_empty() {
+        body.insert("filter".to_string(), Value::Object(filter));
+    }
+    Value::Object(body)
+}
+
+fn insert_filter_value(filter: &mut Map<String, Value>, key: &str, value: Option<&str>) {
+    if let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) {
+        filter.insert(key.to_string(), json!(value));
+    }
+}
+
+fn history_key_for_id(id: &str) -> Value {
+    if id.starts_with("easynet:///") {
+        json!({ "ura": id })
     } else {
-        easynet_axon::invocation::InvocationLedgerFetchKey::RequestId(id.to_string())
-    };
-    easynet_axon::invocation::InvocationLedgerQuery::new().key(key)
+        json!({ "request_id": id })
+    }
 }
 
 fn short_ura(ura: &str) -> String {

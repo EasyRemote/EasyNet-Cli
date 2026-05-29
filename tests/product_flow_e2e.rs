@@ -17,10 +17,13 @@
 //! agent registry → `<self>.invoke` → forward routing
 //! (RFC-002 §5.2, RFC-002.2 §2.3) → fake remote daemon handler.
 
+use easynet_axon::invocation::LocalRuntime;
 use easynet_cli::registry::agents::{AgentEntry, AgentRegistry, AgentType};
-use easynet_cli::runtime::ability_dispatch::LocalAbilityRegistry;
+use easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog;
 use easynet_cli::runtime::agents::invoke_ability;
+use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use easynet_cli::runtime::keyring::forward as fwd;
+use easynet_cli::runtime::local_runtime_invoker::invoke_local_rpc_sync;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -33,14 +36,34 @@ fn product_test_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|p| p.into_inner())
 }
 
+fn local_rpc_target(ability: &str, args: Value) -> InvocationTarget {
+    InvocationTarget {
+        scope: TargetScope::Local,
+        ability: ability.to_string(),
+        normalized_args: args,
+        call_mode: CallMode::Rpc,
+        subject: None,
+    }
+}
+
+fn invoke_runtime_rpc(
+    runtime: Arc<LocalRuntime>,
+    ability: &str,
+    args: Value,
+) -> anyhow::Result<Value> {
+    invoke_local_rpc_sync(runtime, local_rpc_target(ability, args)).map_err(anyhow::Error::msg)
+}
+
 fn build_registry_with_invoke(
     self_agent: &str,
     agents: AgentRegistry,
 ) -> Arc<dyn Fn(Value) -> anyhow::Result<Value> + Send + Sync> {
-    let mut reg = LocalAbilityRegistry::new();
-    let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
+    let runtime = LocalRuntime::new();
+    let mut reg = AxonAbilityCatalog::new_with_runtime(Arc::clone(&runtime));
+    let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
     let h_for_register = Arc::clone(&handle);
     let agents_clone = agents.clone();
+    let invoke_name = format!("{self_agent}.invoke");
     invoke_ability::register_for_agent(
         &mut reg,
         self_agent.to_string(),
@@ -51,10 +74,10 @@ fn build_registry_with_invoke(
     if handle.set(Arc::clone(&arc_reg)).is_err() {
         panic!("handle already set");
     }
-    let dispatch = arc_reg
-        .resolve_rpc(&format!("{self_agent}.invoke"))
-        .expect("invoke registered");
-    Arc::new(move |args| dispatch(args))
+    Arc::new(move |args| {
+        let _keep_catalog_alive = &arc_reg;
+        invoke_runtime_rpc(Arc::clone(&runtime), &invoke_name, args)
+    })
 }
 
 #[test]
@@ -124,9 +147,10 @@ fn user_join_two_devices_chat_round_trip() {
     // device2's registry needs the chat handler installed and the
     // self-invoke wired so `agent2.chat` is dispatchable.
     let device2_dispatch_for_router = {
-        let mut reg = LocalAbilityRegistry::new();
+        let runtime = LocalRuntime::new();
+        let mut reg = AxonAbilityCatalog::new_with_runtime(Arc::clone(&runtime));
         reg.register_rpc("agent2.chat", Arc::clone(&device2_chat_handler));
-        let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
+        let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
         let h_for_register = Arc::clone(&handle);
         let agents_clone = device2_agents.clone();
         invoke_ability::register_for_agent(
@@ -139,7 +163,7 @@ fn user_join_two_devices_chat_round_trip() {
         if handle.set(Arc::clone(&arc_reg)).is_err() {
             panic!("handle already set on device2");
         }
-        arc_reg
+        (runtime, arc_reg)
     };
 
     // Forward router: when device1 invokes a remote URA whose
@@ -150,18 +174,16 @@ fn user_join_two_devices_chat_round_trip() {
     // through the gRPC forward channel.
     let device2_uri_clone = device2_uri.clone();
     fwd::set_test_knower(move |target_ura: &str| target_ura == device2_uri_clone);
-    let device2_dispatch_for_closure = device2_dispatch_for_router.clone();
+    let (device2_runtime_for_closure, device2_catalog_for_closure) = device2_dispatch_for_router;
     fwd::set_test_router(move |target_ura, ability, args| {
         // We get the bare ability name (e.g. "chat") from
         // invoke_ability — synthesise the qualified `agent2.chat`
-        // before calling device2's resolver, just like the real
+        // before invoking device2's runtime, just like the real
         // forward_invoke does on the remote shard.
         let qualified = format!("agent2.{ability}");
-        let handler = device2_dispatch_for_closure
-            .resolve_rpc(&qualified)
-            .ok_or_else(|| anyhow::anyhow!("ability_not_found on remote: {qualified}"))?;
         let _ = target_ura;
-        handler(args)
+        let _keep_catalog_alive = &device2_catalog_for_closure;
+        invoke_runtime_rpc(Arc::clone(&device2_runtime_for_closure), &qualified, args)
     });
 
     // ── Step 5: build device1's invoke pipeline. agent1 calls
@@ -252,14 +274,15 @@ fn agent1_can_invoke_local_agent_without_federation_path() {
 
     fwd::set_test_router(|_t, _a, _x| panic!("forward router must not be called for local target"));
 
-    let mut reg = LocalAbilityRegistry::new();
+    let runtime = LocalRuntime::new();
+    let mut reg = AxonAbilityCatalog::new_with_runtime(Arc::clone(&runtime));
     let summarize: easynet_cli::runtime::ability_dispatch::LocalRpcHandler =
         Arc::new(|args: Value| {
             let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");
             Ok(json!({"summary": format!("{} chars", text.len())}))
         });
     reg.register_rpc("agent2.summarize", summarize);
-    let handle: Arc<OnceLock<Arc<LocalAbilityRegistry>>> = Arc::new(OnceLock::new());
+    let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
     let h_for_register = Arc::clone(&handle);
     let agents_clone = shared_agents.clone();
     invoke_ability::register_for_agent(
@@ -272,14 +295,18 @@ fn agent1_can_invoke_local_agent_without_federation_path() {
     if handle.set(Arc::clone(&arc_reg)).is_err() {
         panic!("handle set once");
     }
-    let dispatch = arc_reg.resolve_rpc("agent1.invoke").unwrap();
 
-    let resp = dispatch(json!({
-        "target":  "agent2",
-        "ability": "summarize",
-        "args":    {"text": "twenty-four characters!!"},
-    }))
+    let resp = invoke_runtime_rpc(
+        Arc::clone(&runtime),
+        "agent1.invoke",
+        json!({
+            "target":  "agent2",
+            "ability": "summarize",
+            "args":    {"text": "twenty-four characters!!"},
+        }),
+    )
     .unwrap();
+    let _keep_catalog_alive = arc_reg;
     assert_eq!(resp["target"], "agent2");
     assert_eq!(resp["fulfilled_by"], "registry_dispatch");
     assert_eq!(resp["result"]["summary"], "24 chars");

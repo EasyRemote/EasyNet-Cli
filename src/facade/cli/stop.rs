@@ -91,9 +91,7 @@ impl StopPlan {
     fn from_state(state: Option<&config::RuntimeState>) -> Self {
         let shape = match state {
             None => StopShape::Stateless,
-            Some(s)
-                if matches!(s.runtime_kind, config::RuntimeKind::DaemonOnly) =>
-            {
+            Some(s) if matches!(s.runtime_kind, config::RuntimeKind::DaemonOnly) => {
                 StopShape::DaemonOnly
             }
             Some(s) => {
@@ -142,8 +140,7 @@ impl StopPlan {
             let creds = match config::load_credentials() {
                 Ok(c) => c,
                 Err(_) => {
-                    self.renderer
-                        .stage_skipped("revoke", "(no credentials)");
+                    self.renderer.stage_skipped("revoke", "(no credentials)");
                     return;
                 }
             };
@@ -154,9 +151,7 @@ impl StopPlan {
                 Some(&caller_ura),
             ) {
                 Ok(_) => self.renderer.stage_ok("revoke"),
-                Err(e) => self
-                    .renderer
-                    .stage_skipped("revoke", &format!("({e})")),
+                Err(e) => self.renderer.stage_skipped("revoke", &format!("({e})")),
             }
         }
         #[cfg(not(feature = "axon-pb"))]
@@ -194,12 +189,12 @@ impl StopPlan {
     fn stage_stop_daemon(&mut self) {
         self.renderer.set_active("stop-daemon");
         match stop_pidfile_process(&config::easynet_daemon_pid_path()) {
-            PidfileStopOutcome::Stopped { pid } => self
-                .renderer
-                .stage_ok(&format!("stop-daemon (pid {pid})")),
-            PidfileStopOutcome::NoPidfile => self
-                .renderer
-                .stage_skipped("stop-daemon", "(no pidfile)"),
+            PidfileStopOutcome::Stopped { pid } => {
+                self.renderer.stage_ok(&format!("stop-daemon (pid {pid})"))
+            }
+            PidfileStopOutcome::NoPidfile => {
+                self.renderer.stage_skipped("stop-daemon", "(no pidfile)")
+            }
             PidfileStopOutcome::StalePidfile { pid } => self
                 .renderer
                 .stage_skipped("stop-daemon", &format!("(pid {pid} already exited)")),
@@ -221,8 +216,7 @@ impl StopPlan {
         self.renderer.set_active("sweep-daemons");
         let swept = sweep_stray_easynet_daemons();
         if swept.is_empty() {
-            self.renderer
-                .stage_skipped("sweep-daemons", "(none found)");
+            self.renderer.stage_skipped("sweep-daemons", "(none found)");
         } else {
             let pids = swept
                 .iter()
@@ -254,8 +248,7 @@ impl StopPlan {
             return;
         };
         if net::kill_and_wait(pid, std::time::Duration::from_secs(5)) {
-            self.renderer
-                .stage_ok(&format!("stop-axon (pid {pid})"));
+            self.renderer.stage_ok(&format!("stop-axon (pid {pid})"));
         } else {
             self.renderer
                 .stage_failed("stop-axon", &format!("pid {pid} did not exit in time"));
@@ -278,8 +271,7 @@ impl StopPlan {
                 Ok(())
             }
             Err(e) => {
-                self.renderer
-                    .stage_failed("cleanup-state", &format!("{e}"));
+                self.renderer.stage_failed("cleanup-state", &format!("{e}"));
                 Err(e.into())
             }
         }
@@ -363,4 +355,3 @@ fn sweep_stray_easynet_daemons() -> Vec<u32> {
     }
     swept
 }
-

@@ -327,9 +327,9 @@ struct ImplicitAgentFallback {
 }
 
 /// Walk an IR once and detect any `IrTarget::Device { node_id }` where
-/// `node_id` collides with a registered agent in the local agent
-/// registry. Returns `Ok(None)` if no conflict, `Ok(Some(_))` for the
-/// first conflict found, `Err` only if the registry can't be loaded.
+/// `node_id` collides with a daemon-registered agent. Returns `Ok(None)`
+/// if no conflict, `Ok(Some(_))` for the first conflict found, `Err` only
+/// if the daemon agent view can't be loaded.
 ///
 /// This implements the EAL surface invariant: traditional
 /// `call ... on ...` is strictly device-only. There is no implicit
@@ -341,18 +341,19 @@ fn find_implicit_agent_fallback(
     use crate::core::agent_id::{AgentId, DEFAULT_TENANT};
     use crate::eal::ir::IrTarget;
 
-    let registry = crate::registry::agents::load_agents()?;
+    let agent_rows = crate::facade::cli::daemon_agent_view::list_agents()?;
 
     // Build the set of registered agent identifiers in their canonical
     // forms, plus the bare-name fallback for default-tenant agents
     // (so legacy `agents.json` files keyed on `"claude"` still trigger
     // the conflict check).
     let mut registered: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for raw_key in registry.agents.keys() {
+    for row in agent_rows {
+        let raw_key = row.name;
         // Try to parse the key as an AgentId. Both shorthand and full
         // form are accepted. Add both surface forms to the set so
         // either matches a colliding device node id.
-        if let Ok(id) = AgentId::parse(raw_key) {
+        if let Ok(id) = AgentId::parse(&raw_key) {
             registered.insert(id.name.clone());
             if id.tenant != DEFAULT_TENANT {
                 registered.insert(format!("{}/{}", id.tenant, id.name));

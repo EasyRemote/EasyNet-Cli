@@ -70,7 +70,7 @@ impl HomeGuard {
         // nanosecond when SystemTime resolution is coarser than the
         // lock-release-to-acquire latency. Counter eliminates the
         // collision class entirely; was the root cause of the
-        // intermittent registry::agents test flake.
+        // intermittent agent-registry test flake.
         static TEMPDIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let pid = std::process::id();
         let seq = TEMPDIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

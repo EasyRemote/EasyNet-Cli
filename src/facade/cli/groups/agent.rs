@@ -57,14 +57,15 @@ pub struct AgentArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum AgentAction {
-    /// Register a new agent instance in `~/.easynet/agents.json`
-    /// (name, wrapper type, model, timeout). The entry makes the agent
-    /// callable via EAL member syntax and `agent send`.
+    /// Register a new daemon-owned agent instance. Requires a paired,
+    /// running local runtime because the daemon owns `agents.json`
+    /// and LocalRuntime registration.
     Add(agent_cmd::AddArgs),
-    /// Print a table of registered agents: name, wrapper type, model,
-    /// timeout. Empty when nothing has been added yet.
+    /// Print daemon-owned registered agents: name, wrapper type, model,
+    /// timeout. Requires a paired, running local runtime.
     List,
-    /// Remove a registered agent instance.
+    /// Remove a daemon-owned registered agent instance. Requires a
+    /// paired, running local runtime.
     Remove(agent_cmd::RemoveArgs),
     /// Remove registry rows whose on-disk root has gone missing.
     /// Pair with `easynet agent list`'s "path missing" column.
@@ -81,20 +82,22 @@ pub enum AgentAction {
     /// `abilities/` directory as deterministic `[exec] kind="mcp"`
     /// abilities.
     Mcp(agent_cmd::McpArgs),
-    /// Update fields of a registered agent in place. Currently
-    /// supports `--model`. Mutates `agent.toml` + the registry row;
-    /// preserves label, abilities, skills, runs.
+    /// Update fields of a daemon-owned registered agent in place.
+    /// Currently supports `--model`. Requires a paired, running
+    /// local runtime.
     Set(agent_cmd::SetArgs),
     /// Dry-run: show the `<agent>.<ability>` tools that a future live
     /// publish would register. No Axon calls, no mutation.
     Publish(agent_cmd::PublishArgs),
     /// Re-register every daemon-owned ability with axon-runtime.
+    /// Requires a paired, running local runtime.
     /// Use after authoring a new `<agent>/abilities/<verb>.ability.toml`
     /// so the new ability is invokable cross-process without daemon
     /// restart. The in-daemon dispatcher's fallback resolver picks
     /// up new TOMLs automatically; this command propagates the same
-    /// view to axon-runtime's `runtime_local_tools` registry.
-    Refresh,
+    /// view to axon-runtime's `runtime_local_tools` registry. Pass
+    /// `--agent <name>` to refresh only one row.
+    Refresh(agent_cmd::RefreshArgs),
     /// Inspect this agent's persisted chat history (the JSONL log
     /// the --follow / --resume / --session-id flags on
     /// `agent send` read). Distinct from `agent session` (singular),
@@ -180,8 +183,8 @@ pub fn run(args: AgentArgs) -> anyhow::Result<()> {
         AgentAction::Set(a) => agent_cmd::run(agent_cmd::AgentArgs {
             action: agent_cmd::AgentAction::Set(a),
         }),
-        AgentAction::Refresh => agent_cmd::run(agent_cmd::AgentArgs {
-            action: agent_cmd::AgentAction::Refresh,
+        AgentAction::Refresh(a) => agent_cmd::run(agent_cmd::AgentArgs {
+            action: agent_cmd::AgentAction::Refresh(a),
         }),
         AgentAction::Publish(a) => agent_cmd::run(agent_cmd::AgentArgs {
             action: agent_cmd::AgentAction::Publish(a),

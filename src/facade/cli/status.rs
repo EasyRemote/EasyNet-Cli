@@ -124,11 +124,11 @@ pub fn run(_args: StatusArgs) -> anyhow::Result<()> {
     match invoke_local_ability("device.observe.health", json!({"source": "runtime.status"})) {
         Ok(_) => {}
         Err(e) => {
-            // The friendlify pass in `support::local_invoke` already
-            // converts the most common case (stale control.sock,
-            // daemon process gone) into an actionable "daemon not
+            // The Axon daemon helper already converts the common
+            // case (daemon.sock missing/refused because the daemon
+            // process is gone) into an actionable "daemon not
             // running" sentence with a recovery hint. When that
-            // sentence is the inner error we surface it directly —
+            // sentence is the inner error we surface it directly;
             // wrapping it in "despite runtime metadata: …" duplicated
             // the diagnosis and made the actionable line harder to
             // read. For genuinely-unexpected failures (permission,

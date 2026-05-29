@@ -157,10 +157,8 @@ impl StageRenderer {
     /// name, and the reason. Does NOT stop the renderer — the
     /// caller decides whether to continue or `finish` and bail.
     pub fn stage_failed(&self, name: &str, reason: &str) {
-        self.pb.println(format!(
-            "{} {name}: {reason}",
-            style("✗").red().bold()
-        ));
+        self.pb
+            .println(format!("{} {name}: {reason}", style("✗").red().bold()));
     }
 
     /// Emit a free-form informational line above the spinner. Used
@@ -169,8 +167,7 @@ impl StageRenderer {
     /// dim `-` icon so it reads as ancillary, not as a stage
     /// completion.
     pub fn info(&self, line: &str) {
-        self.pb
-            .println(format!("{} {line}", style("-").dim()));
+        self.pb.println(format!("{} {line}", style("-").dim()));
     }
 
     /// Stop the ticker, join it, and clear the spinner. After
@@ -226,10 +223,7 @@ impl ShimmerState {
     }
 
     fn read(&self) -> String {
-        self.message
-            .lock()
-            .map(|g| g.clone())
-            .unwrap_or_default()
+        self.message.lock().map(|g| g.clone()).unwrap_or_default()
     }
 }
 

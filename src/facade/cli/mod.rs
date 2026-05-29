@@ -98,10 +98,10 @@ pub(crate) mod ability_scaffold;
 pub(crate) mod agent;
 pub(crate) mod agent_sessions;
 pub(crate) mod auth;
-pub mod presentation;
 pub(crate) mod completion;
 pub(crate) mod config_cmd;
 pub(crate) mod connect;
+pub(crate) mod daemon_agent_view;
 pub(crate) mod deploy;
 pub(crate) mod devices;
 pub(crate) mod discuss;
@@ -114,6 +114,7 @@ pub(crate) mod federation_peers;
 pub(crate) mod federation_wire;
 pub(crate) mod groups;
 pub(crate) mod heartbeat;
+pub mod presentation;
 
 /// Public re-export of the daemon entry point so the `easynet-daemon`
 /// bin (in `src/bin/easynet-daemon.rs`) can call it without widening

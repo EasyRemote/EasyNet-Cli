@@ -25,7 +25,6 @@ use easynet_axon::server::ServerConfig;
 use crate::persistence::config;
 use crate::support::{net, output, shutdown::ShutdownSignal};
 
-
 /// Register a Ctrl-C handler that triggers `shutdown`. Safe to call multiple
 /// times — only the first call installs the handler; subsequent calls are
 /// no-ops.
@@ -247,11 +246,7 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     // block only renders when we actually have a slug to address
     // the user by; otherwise the kv_section above already covers
     // the device-level info.
-    if let Some(username) = creds
-        .username
-        .as_deref()
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(username) = creds.username.as_deref().filter(|s| !s.is_empty()) {
         let user_ura = crate::ura::user_ura(&tenant, username);
         eprintln!();
         eprintln!(
@@ -673,50 +668,9 @@ pub(crate) fn build_bootstrap_plan_from(
     node_id: &str,
     username: &str,
 ) -> anyhow::Result<crate::runtime::agents::profiles::bootstrap::BootstrapPlan> {
-    use crate::runtime::agents::profiles::bootstrap::{BootstrapPlan, LlmSubAgent};
-
-    let registry = crate::registry::agents::load_agents()
-        .map_err(|e| anyhow::anyhow!("load agent registry: {e}"))?;
-
-    let llm_sub_agents: Vec<LlmSubAgent> = registry
-        .agents
-        .iter()
-        .map(|(name, entry)| LlmSubAgent {
-            name: name.clone(),
-            agent_type_display: entry.agent_type.to_string(),
-            model: entry.model.clone(),
-        })
-        .collect();
-
-    Ok(BootstrapPlan {
-        // The credentials' realm field maps to the tenant for now;
-        // a future config split will separate them.
-        realm: tenant_id.to_string(),
-        user_id: username.to_string(),
-        // node_id from credentials is the local node identifier
-        // (`en-...`). Wrap it in the canonical URA shape so every
-        // downstream consumer (advertise_self_signed_device,
-        // BridgeAbilityInvoker::with_caller_ura, hub
-        // self-signed-must-equal-caller check) sees one form. The
-        // bare node_id remains accessible separately via
-        // `creds.node_id` when an entry path needs it.
-        host_device_ura: crate::ura::device_ura(tenant_id, node_id),
-        // Defaults match plan §1's "default-on consent on
-        // interactive hosts"; policy + mcp default off until
-        // [profiles] config wiring lands.
-        consent: true,
-        policy: false,
-        mcp: false,
-        llm_sub_agents,
-    })
-}
-
-/// Extract the realm segment from a canonical Agent URA. Returns
-/// `None` if the URA shape is not the expected
-/// `easynet:///r/<realm>/agent/<id>` form. Used by `agent remove`
-/// to find which hub to send `federation.revoke` to.
-pub(crate) fn realm_from_agent_ura(uri: &str) -> Option<String> {
-    crate::ura::parse_ura(uri).ok().map(|parsed| parsed.realm)
+    crate::runtime::agents::profiles::bootstrap::build_plan_from_registry(
+        tenant_id, node_id, username,
+    )
 }
 
 /// Load credentials and verify against Hub. Returns error on revoked/missing credentials.
@@ -1116,35 +1070,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn realm_from_agent_ura_extracts_segment() {
-        // URI v4.1.4: hub is realm-singleton (no sub-id); device-id
-        // is bare UUID. Function is shape-agnostic — only the
-        // `<realm>/<rest>` boundary matters.
-        assert_eq!(
-            realm_from_agent_ura("easynet:///r/acme/hub"),
-            Some("acme".to_string())
-        );
-        assert_eq!(
-            realm_from_agent_ura(
-                "easynet:///r/contoso/device/4065c47a-ec6f-4330-87a5-0d69787709b8"
-            ),
-            Some("contoso".to_string())
-        );
-    }
-
-    #[test]
-    fn realm_from_agent_ura_returns_none_for_malformed_uris() {
-        assert_eq!(realm_from_agent_ura(""), None);
-        assert_eq!(realm_from_agent_ura("not-an-uri"), None);
-        assert_eq!(realm_from_agent_ura("easynet:///r/"), None);
-        assert_eq!(realm_from_agent_ura("easynet:///r/acme"), None);
-        assert_eq!(
-            realm_from_agent_ura("http://example.com/r/acme/agent/X"),
-            None
-        );
-    }
-
     #[cfg(unix)]
     #[test]
     fn probe_uds_alive_false_when_path_missing() {
@@ -1172,5 +1097,4 @@ mod tests {
         let _listener = std::os::unix::net::UnixListener::bind(&sock).expect("bind probe");
         assert!(crate::support::local_daemon_grpc::probe_accepting(&sock));
     }
-
 }
