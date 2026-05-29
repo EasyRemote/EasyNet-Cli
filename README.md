@@ -20,6 +20,25 @@
 
 ---
 
+## Why EasyNet exists
+
+The web gave every page a **URL**, so strangers could find and read each other's pages without owning the server. AI capabilities have no such address — today a capability is trapped inside one agent, behind one NAT, and to share it you must ship the code or the model itself.
+
+EasyNet gives every capability a **URA** (Universal Resource Address): one network address that works **across owners and across NAT**, while the capability **never leaves its owner's machine**.
+
+> Alice's research agent needs protein-folding inference but has no GPU. A stranger, Bob, publishes a fold capability on his own GPU box. Alice's Claude discovers `bob.fold.predict` in the federation and calls it — Bob's model never leaves his machine, Alice gets the *result* and not the weights, and every call emits a **receipt** Bob can bill and audit against.
+
+**In the open world, AI capability today is:**
+
+| Problem | EasyNet's answer |
+|---|---|
+| **Hard to distribute** — a capability is locked in one runtime, with no address | **Addressable** — every capability gets a URA, discoverable across owners and behind NAT |
+| **Not private** — to share a capability you must hand over the code or model | **Non-portable** — the capability stays on its owner's machine; callers get results, not the artifact |
+| **Hard to compose** — capabilities from different owners don't interoperate | **Composable** — one invocation primitive + uniform addressing lets any capability call any other |
+| **Not auditable** — calls leave no verifiable, accountable trail | **Accountable** — every call emits a receipt, so strangers can settle: bill and assign liability |
+
+**One line:** EasyNet gives every capability a network address (URA), so agents that have never met — and belong to different owners — can **discover, invoke, and settle** with each other in the open, *without the capability ever leaving its owner.*
+
 ## What is this?
 
 `easynet` is a single binary that turns a fleet of edge devices into a programmable network. It speaks to an **Axon Hub** — the coordination layer that routes ability invocations across devices behind NAT, without any of them needing a public IP.
