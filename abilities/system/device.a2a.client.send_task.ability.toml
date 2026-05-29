@@ -1,6 +1,6 @@
 schema_version = "1"
 name = "device.a2a.client.send_task"
-description = "Outbound A2A: dispatch an RPC Invoke against a remote node's ability. Resolves to `<agent_name>.<skill_name>` on the named node and routes through the GatewayApi. Returns {ok:true,result} on success; remote failures and dispatcher errors surface as {ok:false,error} so callers can branch without a try/catch."
+description = "Outbound A2A: dispatch an RPC Invoke against a remote node's ability. Resolves to `<agent_name>.<skill_name>` on the named node and routes through daemon-hosted federation.forward_invoke. Returns {ok:true,result} on success; remote failures surface as {ok:false,error} so callers can branch without a try/catch. The `args` payload is OPAQUE to the daemon — its shape is the remote skill's input_schema contract and is not validated locally."
 
 [input_schema]
 type = "object"

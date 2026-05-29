@@ -31,9 +31,12 @@
 
 use std::sync::Arc;
 
+use easynet_axon::invocation::LocalRuntime;
 use easynet_cli::runtime::execution::mcp_client::{
     McpClientService, McpClientsFile, McpServerSpec,
 };
+use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+use easynet_cli::runtime::local_runtime_invoker::open_local_stream;
 
 /// Build the in-process Python echo MCP server fixture used
 /// throughout this round. Same script shape as the `mcp_client`
@@ -114,8 +117,7 @@ async fn reflective_path_directly_through_mcp_client_service_round_trip() {
     // This is the slice of "MCP-Bench smoke" that does NOT touch
     // process-wide env state. Verifies the contract:
     //   commands.json shape → McpClientService → reflect_all →
-    //     ability handler that the registry's `get_rpc` returns
-    //     produces MCP-shape verbatim response.
+    //     LocalRuntime invocation produces MCP-shape verbatim response.
     let dir = tempfile::tempdir().unwrap();
     let script = write_echo_mcp_server(dir.path());
 
@@ -128,7 +130,10 @@ async fn reflective_path_directly_through_mcp_client_service_round_trip() {
     let svc = McpClientService::from_path(&config_path).expect("from_path must accept");
     assert_eq!(svc.server_names().await, vec!["echo".to_string()]);
 
-    let mut reg = easynet_cli::runtime::ability_dispatch::LocalAbilityRegistry::new();
+    let runtime = LocalRuntime::new();
+    let mut reg = easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog::new_with_runtime(
+        Arc::clone(&runtime),
+    );
     let owner_ura = easynet_axon::ura::agent_ura("test-realm", "test-user", "mcp");
     let result = easynet_cli::runtime::agents::mcp_reflective_registry::reflect_all(
         &svc, &mut reg, &owner_ura,
@@ -183,31 +188,42 @@ async fn reflective_path_directly_through_mcp_client_service_round_trip() {
     // intermediate frames would be `{type: "progress", ...}`
     // (echo upstream doesn't emit any — that's exercised by
     // mcp_client::tests::rpc_with_progress_routes_interleaved_progress_to_sink).
-    use easynet_cli::runtime::ability_dispatch::StreamSource;
-    let handler = reg
-        .get_stream("weather_lookup")
-        .expect("weather_lookup must be callable as stream");
-    let source = handler(serde_json::json!({"location": "Berlin"}))
-        .expect("stream handler must succeed");
-    let mut rx = match source {
-        StreamSource::Live(rx) => rx,
-        other => panic!("expected Live stream source, got {other:?}"),
-    };
+    let mut rx = open_local_stream(
+        Arc::clone(&runtime),
+        InvocationTarget {
+            scope: TargetScope::Local,
+            ability: "weather_lookup".to_string(),
+            normalized_args: serde_json::json!({"location": "Berlin"}),
+            call_mode: CallMode::Stream,
+            subject: None,
+        },
+    )
+    .await
+    .expect("weather_lookup must be callable as stream through LocalRuntime");
+    let _keep_catalog_alive = reg;
 
     // Drain until we see the terminal `response` frame. Echo
     // upstream replies immediately so this is bounded.
     let mut terminal: Option<serde_json::Value> = None;
     let drain_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     while tokio::time::Instant::now() < drain_deadline {
-        match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
-            Ok(Ok(frame)) => {
-                if frame.get("type").and_then(|v| v.as_str()) == Some("response") {
-                    terminal = Some(frame);
-                    break;
+        match tokio::time::timeout(std::time::Duration::from_millis(500), rx.next_frame()).await {
+            Ok(Some(Ok(frame))) => {
+                if !frame.payload.is_empty() {
+                    let value: serde_json::Value =
+                        serde_json::from_slice(&frame.payload).expect("frame payload JSON");
+                    if value.get("type").and_then(|v| v.as_str()) == Some("response") {
+                        terminal = Some(value);
+                        break;
+                    }
                 }
                 // progress / other frames — keep draining.
+                if frame.terminal {
+                    break;
+                }
             }
-            Ok(Err(_lagged_or_closed)) => break,
+            Ok(Some(Err(_frame_error))) => break,
+            Ok(None) => break,
             Err(_timeout_tick) => continue,
         }
     }
@@ -264,7 +280,7 @@ async fn mcp_bench_translation_round_trips_into_live_reflection() {
     let parsed: McpClientsFile = serde_json::from_value(translated).unwrap();
     let svc = Arc::new(McpClientService::from_file(parsed));
 
-    let mut reg = easynet_cli::runtime::ability_dispatch::LocalAbilityRegistry::new();
+    let mut reg = easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog::new();
     let result = easynet_cli::runtime::agents::mcp_reflective_registry::reflect_all(
         &svc,
         &mut reg,
@@ -311,7 +327,7 @@ async fn broken_upstream_does_not_block_other_servers() {
         ],
     }));
 
-    let mut reg = easynet_cli::runtime::ability_dispatch::LocalAbilityRegistry::new();
+    let mut reg = easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog::new();
     let result = easynet_cli::runtime::agents::mcp_reflective_registry::reflect_all(
         &svc,
         &mut reg,

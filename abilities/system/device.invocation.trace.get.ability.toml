@@ -11,6 +11,13 @@ additionalProperties = false
 type = "object"
 additionalProperties = false
 
+[input_schema.properties.filter.properties.abilities]
+type = "array"
+items = { minLength = 1, type = "string" }
+description = "Ability names or ability URAs. Records match when ability_name or ability_ura equals any value."
+minItems = 1
+uniqueItems = true
+
 [input_schema.properties.filter.properties.ability]
 type = "string"
 description = "Ability name or ability URA."

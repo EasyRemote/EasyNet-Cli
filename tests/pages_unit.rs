@@ -30,15 +30,19 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+use easynet_axon::invocation::LocalRuntime;
 use serde_json::{json, Value};
 
-use easynet_cli::runtime::ability_dispatch::LocalAbilityRegistry;
+use easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog;
 use easynet_cli::runtime::agents::pages::fetch::handle_fetch;
 use easynet_cli::runtime::agents::pages::list_get_unpublish::{
-    handle_get, handle_list, handle_unpublish,
+    handle_get, handle_list, handle_unpublish, handle_unpublish_with_registry,
 };
 use easynet_cli::runtime::agents::pages::publish::handle_publish;
 use easynet_cli::runtime::agents::pages::state::PUBLISHED_PROJECTS;
+use easynet_cli::runtime::agents::pages::{self, PagesConfig};
+use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
+use easynet_cli::runtime::local_runtime_invoker::invoke_local_rpc_sync;
 use std::sync::Arc;
 
 /// Per-test fixture: makes a temp folder with a unique project
@@ -91,7 +95,7 @@ struct Fixture {
     folder: PathBuf,
     realm: String,
     listener_port: u16,
-    registry: Arc<LocalAbilityRegistry>,
+    registry: Arc<AxonAbilityCatalog>,
 }
 
 impl Fixture {
@@ -124,7 +128,7 @@ impl Fixture {
             folder,
             realm: "easynet.run".to_string(),
             listener_port: 8787,
-            registry: Arc::new(LocalAbilityRegistry::new()),
+            registry: Arc::new(AxonAbilityCatalog::new()),
         }
     }
 
@@ -145,8 +149,12 @@ impl Fixture {
     }
 
     fn unpublish(&self) -> Value {
-        handle_unpublish(&self.user, json!({ "project_id": self.project_id }))
-            .expect("unpublish should succeed")
+        handle_unpublish_with_registry(
+            &self.user,
+            self.registry.as_ref(),
+            json!({ "project_id": self.project_id }),
+        )
+        .expect("unpublish should succeed")
     }
 }
 
@@ -168,6 +176,16 @@ fn fetch_bytes(user: &str, project_id: &str, path: &str) -> anyhow::Result<Vec<u
     base64::engine::general_purpose::STANDARD
         .decode(b64)
         .map_err(|e| anyhow::anyhow!("b64 decode: {e}"))
+}
+
+fn local_rpc_target(ability: &str, args: Value) -> InvocationTarget {
+    InvocationTarget {
+        scope: TargetScope::Local,
+        ability: ability.to_string(),
+        normalized_args: args,
+        call_mode: CallMode::Rpc,
+        subject: None,
+    }
 }
 
 // ── U1 ──────────────────────────────────────────────────────────────
@@ -432,4 +450,67 @@ fn u13_file_size_cap_enforced() {
     let err = handle_fetch(&f.user, &f.project_id, json!({"path": "/style.css"}))
         .expect_err("over-cap fetch should fail");
     assert!(format!("{err}").contains("size") || format!("{err}").contains("cap"));
+}
+
+#[test]
+fn u14_pages_management_abilities_are_in_local_runtime() {
+    let _home = TestHomeGuard::new();
+    let runtime = LocalRuntime::new();
+    let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
+    let mut reg = AxonAbilityCatalog::new_with_runtime(Arc::clone(&runtime));
+    let user = "alice-runtime";
+
+    pages::register(
+        &mut reg,
+        PagesConfig {
+            user: user.to_string(),
+            realm: "easynet.run".to_string(),
+            listener_port: 8787,
+        },
+        Arc::clone(&handle),
+    );
+    let reg = Arc::new(reg);
+    assert!(handle.set(Arc::clone(&reg)).is_ok());
+
+    let ability = format!("{user}.pages.list");
+    assert!(reg.has_rpc(&ability));
+    let resp = invoke_local_rpc_sync(runtime, local_rpc_target(&ability, json!({})))
+        .expect("pages.list should invoke through LocalRuntime");
+    assert_eq!(resp["projects"].as_array().map(Vec::len), Some(0));
+}
+
+#[test]
+fn u15_publish_registers_project_abilities_in_local_runtime() {
+    let f = Fixture::new("u15");
+    fs::create_dir_all(f.folder.join("api")).expect("api dir");
+    fs::write(
+        f.folder.join("api/ping.toml"),
+        "kind = \"static_json\"\n[response]\npong = true\n",
+    )
+    .expect("write api manifest");
+
+    f.publish();
+    let fetch_ability = format!("{}.{}.page.fetch", f.user, f.project_id);
+    let api_ability = format!("{}.{}.api.ping", f.user, f.project_id);
+    assert!(f.registry.has_rpc(&fetch_ability));
+    assert!(f.registry.has_rpc(&api_ability));
+
+    let runtime = f.registry.runtime().expect("runtime");
+    let fetched = invoke_local_rpc_sync(
+        Arc::clone(&runtime),
+        local_rpc_target(&fetch_ability, json!({"path": "/hello-world.html"})),
+    )
+    .expect("fetch should invoke through LocalRuntime");
+    assert!(fetched.get("bytes_b64").is_some());
+
+    let api_resp = invoke_local_rpc_sync(
+        runtime,
+        local_rpc_target(&api_ability, json!({"body": {}, "method": "GET"})),
+    )
+    .expect("api should invoke through LocalRuntime");
+    assert_eq!(api_resp["body"]["pong"], true);
+
+    f.unpublish();
+    assert!(!f.registry.has_rpc(&fetch_ability));
+    assert!(!f.registry.has_rpc(&api_ability));
 }

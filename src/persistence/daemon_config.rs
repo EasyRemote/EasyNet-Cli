@@ -142,6 +142,45 @@ pub fn resolved_local_uds_path() -> PathBuf {
     }
 }
 
+/// CLI-side resolver: same as [`resolved_local_uds_path`] but lets an
+/// `EASYNET_DAEMON_GRPC_UDS` env-var override the on-disk config so
+/// integration tests can point CLI subcommands at a temp daemon
+/// socket. On Windows the value is interpreted as a named-pipe name
+/// instead of a filesystem path; on Unix, `~/`-prefixed values
+/// expand against `$HOME` so a test harness can drop a path like
+/// `~/.easynet-test/daemon.sock` without re-computing it.
+///
+/// **Why this lives here (not in `support/`):** `support/` is the
+/// leaf layer per `src/support/mod.rs` and must not depend on
+/// `persistence/`. The env-override-then-config-file recipe is one
+/// step on top of [`resolved_local_uds_path`] and belongs with it;
+/// the previous home (`support/local_daemon_grpc::resolve_socket_path`)
+/// inverted the dependency direction. Callers that need the
+/// CLI-resolved path import this function directly; the old name
+/// remains as a `pub(crate) use` re-export in `support` so call
+/// sites stay short.
+pub fn resolved_local_uds_path_with_env_override() -> PathBuf {
+    let raw = std::env::var("EASYNET_DAEMON_GRPC_UDS").ok();
+    match raw {
+        Some(raw) if !raw.trim().is_empty() => {
+            #[cfg(windows)]
+            {
+                PathBuf::from(raw)
+            }
+            #[cfg(not(windows))]
+            {
+                if let Some(rest) = raw.strip_prefix("~/") {
+                    if let Some(home) = std::env::var_os("HOME") {
+                        return PathBuf::from(home).join(rest);
+                    }
+                }
+                PathBuf::from(raw)
+            }
+        }
+        _ => resolved_local_uds_path(),
+    }
+}
+
 /// Ensure the local daemon has at least the minimal device-mode config
 /// needed to boot its gRPC/session sidecar.
 ///

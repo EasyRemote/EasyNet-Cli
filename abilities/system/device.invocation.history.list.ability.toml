@@ -6,9 +6,23 @@ description = "List recent invocation ledger records for this device. Returns co
 type = "object"
 additionalProperties = false
 
+[input_schema.properties.compact]
+type = "boolean"
+
+[input_schema.properties.exclude_abilities]
+type = "array"
+items = { minLength = 1, type = "string" }
+
 [input_schema.properties.filter]
 type = "object"
 additionalProperties = false
+
+[input_schema.properties.filter.properties.abilities]
+type = "array"
+items = { minLength = 1, type = "string" }
+description = "Ability names or ability URAs. Records match when ability_name or ability_ura equals any value."
+minItems = 1
+uniqueItems = true
 
 [input_schema.properties.filter.properties.ability]
 type = "string"

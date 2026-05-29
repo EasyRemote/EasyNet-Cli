@@ -1,33 +1,18 @@
 #!/usr/bin/env bash
-# control-smoke.sh — local IPC plane smoke test
-# ==============================================
+# daemon-ability-smoke.sh — local daemon Axon ability smoke test
+# ==============================================================
 #
-# Boots `easynet-daemon`, dials the UDS at ~/.easynet/control.sock,
-# sends one length-prefixed `Invoke` frame, and asserts the daemon
-# returns a structured response. The v1 skeleton response is an
-# `Error` envelope with code `ability_failed`; once
-# PR-INVOCATION-EXEC-UNITY lands real dispatch this will switch to a
-# successful `Result` envelope and the assertion below moves with it.
-#
-# Why a shell + python harness instead of `socat`?
-# ------------------------------------------------
-# `socat` cannot prefix a 4-byte LE length header without a wrapper
-# anyway, so reaching for python3 is no extra dependency on macOS /
-# Linux dev boxes (both ship it). The script is debugging
-# infrastructure — `cargo test --lib services::control` already
-# exercises the same path through the in-process server harness.
-#
-# Usage:
-#   scripts/control-smoke.sh [--keep-daemon]
-#
-#   --keep-daemon   leave the daemon running after the test (default
-#                   is to SIGTERM it on exit so the next invocation
-#                   has a clean ~/.easynet/control.sock).
+# Boots `easynet-daemon`, waits for the daemon-hosted Axon
+# Invocation socket, and invokes `device.observe.health` through the
+# CLI's ability surface. This deliberately avoids control.sock and
+# does not construct legacy control-plane frames.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 DAEMON_BIN="$REPO_ROOT/target/debug/easynet-daemon"
+CLI_BIN="$REPO_ROOT/target/debug/easynet"
+DAEMON_SOCK="${EASYNET_DAEMON_GRPC_UDS:-$HOME/.easynet/daemon.sock}"
 KEEP_DAEMON=0
 
 for arg in "$@"; do
@@ -37,65 +22,36 @@ for arg in "$@"; do
   esac
 done
 
-if [ ! -x "$DAEMON_BIN" ]; then
-  echo "[smoke] building easynet-daemon (debug)..."
-  (cd "$REPO_ROOT" && cargo build --bin easynet-daemon)
+if [ ! -x "$DAEMON_BIN" ] || [ ! -x "$CLI_BIN" ]; then
+  echo "[smoke] building easynet + easynet-daemon (debug, axon-pb)..."
+  (cd "$REPO_ROOT" && cargo build --features axon-pb --bin easynet --bin easynet-daemon)
 fi
 
-# Kill any stale daemon from a previous run; the UDS file would
-# otherwise stick around (bind_at clears it but a live process would
-# block bind).
 pkill -f "$DAEMON_BIN" 2>/dev/null || true
-rm -f "$HOME/.easynet/control.sock"
+rm -f "$DAEMON_SOCK"
 
 echo "[smoke] starting daemon..."
 "$DAEMON_BIN" &
 DAEMON_PID=$!
 trap '[ "$KEEP_DAEMON" -eq 0 ] && kill "$DAEMON_PID" 2>/dev/null || true' EXIT
 
-# Wait up to 2 s for the socket to appear.
-for _ in $(seq 1 20); do
-  [ -S "$HOME/.easynet/control.sock" ] && break
-  sleep 0.1
+for _ in $(seq 1 30); do
+  [ -S "$DAEMON_SOCK" ] && break
+  sleep 0.2
 done
-if [ ! -S "$HOME/.easynet/control.sock" ]; then
-  echo "[smoke] FAIL: socket did not appear at ~/.easynet/control.sock" >&2
+if [ ! -S "$DAEMON_SOCK" ]; then
+  echo "[smoke] FAIL: socket did not appear at $DAEMON_SOCK" >&2
   exit 1
 fi
 
-echo "[smoke] dialing socket and sending one Invoke frame..."
-RESP="$(
-python3 - <<'PY'
-import socket, struct, json, os, sys
-sock_path = os.path.expanduser("~/.easynet/control.sock")
-s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-s.connect(sock_path)
-req = {"type": "invoke", "request_id": "smoke-1", "ability": "system.ping", "args": {}}
-payload = json.dumps(req).encode()
-s.sendall(struct.pack("<I", len(payload)) + payload)
-raw_len = s.recv(4)
-(resp_len,) = struct.unpack("<I", raw_len)
-buf = b""
-while len(buf) < resp_len:
-    chunk = s.recv(resp_len - len(buf))
-    if not chunk: break
-    buf += chunk
-sys.stdout.write(buf.decode())
-PY
-)"
-
+echo "[smoke] invoking device.observe.health through daemon-hosted Axon..."
+RESP="$("$CLI_BIN" ability invoke device.observe.health --args '{"smoke":"ok"}' --raw)"
 echo "[smoke] response: $RESP"
 
-# PR-INVOCATION-EXEC-UNITY post-condition: system.ping dispatches
-# through the real registry, so we expect a `result` envelope with
-# `request_id` round-tripped. The exact `value` shape is owned by
-# the ping handler — do not pin the value bytes here, only the
-# wire-level invariants that Client bindings depend on.
-echo "$RESP" | python3 -c '
-import json, sys
-r = json.loads(sys.stdin.read())
-assert r.get("type") == "result", f"expected type=result, got {r}"
-assert r.get("request_id") == "smoke-1", f"request_id mismatch: {r}"
-assert "value" in r, f"missing value field: {r}"
+RESP="$RESP" python3 - <<'PY'
+import json, os
+r = json.loads(os.environ["RESP"])
+assert r.get("echo", {}).get("smoke") == "ok", r
+assert "replied_at_unix_ms" in r, r
 print("[smoke] PASS")
-'
+PY

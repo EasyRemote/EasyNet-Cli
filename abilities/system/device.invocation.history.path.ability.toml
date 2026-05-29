@@ -1,0 +1,7 @@
+schema_version = "1"
+name = "device.invocation.history.path"
+description = "Return the daemon-owned invocation ledger's resource URA and on-disk path. Singular: one daemon owns one ledger; this surface does not enumerate per-tenant or per-realm ledgers."
+
+[input_schema]
+type = "object"
+additionalProperties = false
