@@ -106,6 +106,10 @@ pub enum AgentAction {
     ChatHistory(agent_cmd::ChatHistoryArgs),
     /// DEPRECATED: use `easynet mission discuss`.
     Discuss(discuss_cmd::DiscussArgs),
+    /// Agent-scoped object grammar:
+    /// `easynet agent <agent-id-or-ura> new-ability ...`.
+    #[command(external_subcommand)]
+    Scoped(Vec<String>),
 }
 
 #[derive(Debug, Args)]
@@ -201,10 +205,13 @@ pub fn run(args: AgentArgs) -> anyhow::Result<()> {
             );
             discuss_cmd::run(a)
         } // The pre-rewrite `easynet agent think` deprecated alias was
-          // removed alongside `easynet mission think` and the
-          // `mission.think` ability: modern agent runtimes already do
-          // think-act-observe inside `<agent>.chat`, so the outer loop
-          // was redundant.
+        // removed alongside `easynet mission think` and the
+        // `mission.think` ability: modern agent runtimes already do
+        // think-act-observe inside `<agent>.chat`, so the outer loop
+        // was redundant.
+        AgentAction::Scoped(tokens) => agent_cmd::run(agent_cmd::AgentArgs {
+            action: agent_cmd::AgentAction::Scoped(tokens),
+        }),
     }
 }
 

@@ -211,6 +211,8 @@ futures = "0.3"
 # bytes::BytesMut backing the codec.
 bytes = "1"
 ureq = { version = "2", features = ["json"] }
+# OpenAPI import accepts both JSON and YAML specifications.
+serde_yaml = "0.9"
 # Hidden password input for `easynet auth login` when --password
 # is omitted. POSIX-only; on Windows rpassword falls back to
 # stdin echo. Pinning v7 (matches ratatui's MSRV in the workspace).

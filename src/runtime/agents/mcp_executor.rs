@@ -182,9 +182,19 @@ fn require_object_args(args: &Value) -> anyhow::Result<Value> {
 /// a synchronous unit test or CLI path that forgot to start one —
 /// not a recoverable production state. Bailing fast surfaces the
 /// bug at the call site instead of papering over it with a throwaway
-/// runtime whose lifecycle is undocumented (and which historically
-/// led to the [`reflect_mcp_upstreams_sync`] vs
-/// `mcp_executor::block_on_async` policy divergence).
+/// runtime whose lifecycle is undocumented.
+///
+/// **Bridge policy.** The MCP plane has exactly one sanctioned
+/// sync→async bridge family: this function for the executor's hot
+/// path, and
+/// [`crate::runtime::agents::mcp_reflective_registry::run_eager_blocking`]
+/// /
+/// [`crate::runtime::agents::mcp_reflective_registry::McpReflectionSupervisor::attach_refresh_sinks_blocking`]
+/// for the boot-time reflective registry. Any future sync entry
+/// point that needs to drive a future MUST reuse one of those
+/// surfaces rather than re-deriving the `Handle::try_current` /
+/// `block_in_place` ladder — duplicate bridges historically drifted
+/// on missing-runtime policy.
 fn block_on_async<F: std::future::Future<Output = anyhow::Result<Value>>>(
     fut: F,
 ) -> anyhow::Result<Value> {

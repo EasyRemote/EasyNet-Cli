@@ -96,6 +96,7 @@
 pub(crate) mod abilities;
 pub(crate) mod ability_scaffold;
 pub(crate) mod agent;
+pub(crate) mod agent_new_ability;
 pub(crate) mod agent_sessions;
 pub(crate) mod auth;
 pub(crate) mod completion;

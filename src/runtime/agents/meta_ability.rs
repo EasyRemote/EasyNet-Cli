@@ -44,10 +44,9 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use serde_json::{json, Value};
-
-use crate::runtime::ability_descriptor::AbilityDescriptor;
+use crate::runtime::ability_descriptor::{AbilityDescriptor, AbilityIdentity};
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
+use serde_json::{json, Value};
 
 pub const ABILITY_DESCRIBE: &str = "device.meta.describe";
 pub const ABILITY_LIST_ABILITIES: &str = "device.meta.list_abilities";
@@ -193,9 +192,10 @@ fn list_abilities_handler(
     // Phase 1: static profile descriptors (fs.*, http.*, shell.*,
     // <agent>.chat, …). These carry full input/output schemas and
     // descriptions read off the workspace ability TOMLs. We index by
-    // name so the live-registry merge below can keep them as-is.
+    // the descriptor's canonical ability URA so two hosted agents can
+    // both expose `chat` without one collapsing the other.
     let static_descriptors = descriptors_provider();
-    let mut by_name: std::collections::BTreeMap<(String, String), AbilityDescriptor> =
+    let mut catalog: std::collections::BTreeMap<AbilityIdentity, AbilityDescriptor> =
         std::collections::BTreeMap::new();
     for d in static_descriptors {
         // M2 of the system-namespace migration: drop legacy-named
@@ -208,9 +208,23 @@ fn list_abilities_handler(
         if !crate::runtime::agents::is_canonical_or_unmapped(&d.name) {
             continue;
         }
-        by_name.insert((d.name.clone(), d.owner_agent_ura.clone()), d);
+        let Some(identity) = d.identity() else {
+            continue;
+        };
+        catalog.insert(identity, d);
     }
 
+    // Dedup invariant (2026-05-26): static descriptors enter the
+    // catalog first, then the live-registry phase inserts only when
+    // `!catalog.contains_key(&identity)`. Identity is the canonical
+    // ability URA, so two hosted agents that both expose `chat` get
+    // distinct keys (different owner) and are both retained; a
+    // dynamic hot-registration that collides with a static profile
+    // (same owner + same public verb) is silently skipped in favour
+    // of the static one. Old code de-duplicated on the bare `name`
+    // string, which collapsed agent-owned namesakes — see test
+    // `list_abilities_keeps_same_public_ability_name_for_multiple_hosted_agents`.
+    //
     // Phase 2: live registry. Anything registered into
     // `AxonAbilityCatalog` that the static catalogue does NOT
     // already cover gets a synthesised minimal descriptor. This
@@ -325,9 +339,6 @@ fn list_abilities_handler(
                 continue;
             };
             let public_name = crate::ura::public_ability_name_for_owner(owner, &name);
-            if by_name.contains_key(&(public_name.clone(), owner.to_string())) {
-                continue;
-            }
             let transport_hints = crate::runtime::agents::discovery_hints_for(registry, &name);
             // Synthesised descriptor. When the registration site
             // landed an `AbilityManifest` via `register_*_with_spec`
@@ -363,14 +374,20 @@ fn list_abilities_handler(
                         .with_hints(transport_hints)
                         .with_source("registry"),
                 };
-                by_name.insert((public_name, owner.to_string()), descriptor);
+                let Some(identity) = descriptor.identity() else {
+                    continue;
+                };
+                if catalog.contains_key(&identity) {
+                    continue;
+                }
+                catalog.insert(identity, descriptor);
             }
         }
 
-        synthesize_hot_hosted_agent_descriptors(&mut by_name, registry, &local);
+        synthesize_hot_hosted_agent_descriptors(&mut catalog, registry, &local);
     }
 
-    let mut merged: Vec<Value> = by_name
+    let mut merged: Vec<Value> = catalog
         .into_values()
         .map(|d| serde_json::to_value(d).unwrap_or(Value::Null))
         .collect();
@@ -402,7 +419,7 @@ fn list_abilities_handler(
 }
 
 fn synthesize_hot_hosted_agent_descriptors(
-    by_name: &mut std::collections::BTreeMap<(String, String), AbilityDescriptor>,
+    catalog: &mut std::collections::BTreeMap<AbilityIdentity, AbilityDescriptor>,
     registry: &AxonAbilityCatalog,
     local: &crate::persistence::local_agents::LocalAgentsFile,
 ) {
@@ -431,9 +448,7 @@ fn synthesize_hot_hosted_agent_descriptors(
 
         for spec in crate::runtime::abilities::abilities_for(&agent_name, &entry) {
             let public_name = crate::ura::public_ability_name_for_owner(&owner_ura, spec.name());
-            if public_name.is_empty()
-                || by_name.contains_key(&(public_name.clone(), owner_ura.clone()))
-            {
+            if public_name.is_empty() {
                 continue;
             }
             let Ok(mut descriptor) =
@@ -460,7 +475,13 @@ fn synthesize_hot_hosted_agent_descriptors(
             if let Some(node_id) = host_node_id.as_ref() {
                 descriptor = descriptor.with_metadata_entry("host_node_id", node_id.clone());
             }
-            by_name.insert((public_name, owner_ura.clone()), descriptor);
+            let Some(identity) = descriptor.identity() else {
+                continue;
+            };
+            if catalog.contains_key(&identity) {
+                continue;
+            }
+            catalog.insert(identity, descriptor);
         }
     }
 }
@@ -697,6 +718,27 @@ mod tests {
             OwnerKind::Agent("alice".to_string()),
             Arc::new(|_args| Ok(json!({}))),
         );
+        live_reg.hot_register_stream_with_spec(
+            "alice.mcp_search",
+            OwnerKind::Agent("alice".to_string()),
+            crate::core::ability_spec::AbilityManifest::new(
+                "mcp_search",
+                "Search reflected MCP content",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" }
+                    },
+                    "required": ["query"]
+                }),
+            )
+            .expect("valid MCP manifest"),
+            Arc::new(|_args| {
+                Ok(crate::runtime::ability_dispatch::StreamSource::Snapshot(
+                    Vec::new(),
+                ))
+            }),
+        );
         handle.set(Arc::new(live_reg)).expect("set OnceLock");
 
         register(&mut reg, Vec::new, handle, Some("user-1".to_string()));
@@ -755,6 +797,11 @@ mod tests {
             json!(true),
             "non-chat manifest-backed stream abilities must surface streaming_only"
         );
+        assert_eq!(
+            subscribe["class"],
+            json!("stream"),
+            "ability class is derived from the descriptor interface, not inferred by consumers"
+        );
 
         let legacy = abilities
             .iter()
@@ -767,6 +814,16 @@ mod tests {
             legacy_desc.contains("no manifest schema"),
             "abilities registered without a manifest keep the fallback description, \
              got: {legacy_desc:?}"
+        );
+
+        let mcp_search = abilities
+            .iter()
+            .find(|a| a["name"] == "mcp_search")
+            .expect("dynamic MCP ability must surface as the local verb");
+        assert_eq!(
+            mcp_search["schema_summary"]["input"]["properties"]["query"]["type"],
+            json!("string"),
+            "dynamic overlay manifests must be visible to meta.list_abilities"
         );
     }
 
@@ -918,6 +975,94 @@ mod tests {
         assert!(
             chat["schema_summary"]["input"]["properties"]["prompt"].is_object(),
             "chat descriptor must carry the manifest input schema: {chat}"
+        );
+    }
+
+    #[test]
+    fn list_abilities_keeps_same_public_ability_name_for_multiple_hosted_agents() {
+        use crate::persistence::config::{save_credentials, Credentials};
+        use crate::persistence::local_agents::{save, upsert_hosted_agent, LocalAgentsFile};
+        use crate::registry::agents::{save_agents, AgentEntry, AgentRegistry, AgentType};
+        use std::sync::OnceLock;
+
+        let _home = crate::facade::cli::test_support::HomeGuard::new();
+        save_credentials(&Credentials {
+            node_id: "dev-1".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "axon://hub.test:50051".to_string(),
+            tenant_id: "test-realm".to_string(),
+            ..Default::default()
+        })
+        .expect("seed credentials");
+
+        let mut local = LocalAgentsFile {
+            host_device_agent_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
+            hosted_agents: Vec::new(),
+        };
+        upsert_hosted_agent(
+            &mut local,
+            "llm",
+            "anthropic",
+            "easynet:///r/test-realm/agent/user-1.anthropic",
+        );
+        upsert_hosted_agent(
+            &mut local,
+            "llm",
+            "backend-engineer",
+            "easynet:///r/test-realm/agent/user-1.backend-engineer",
+        );
+        save(&local).expect("seed local-agents.json");
+
+        let mut agents = AgentRegistry::default();
+        agents.agents.insert(
+            "anthropic".to_string(),
+            AgentEntry::new(AgentType::ClaudeCode, Some("sonnet".to_string())),
+        );
+        agents.agents.insert(
+            "backend-engineer".to_string(),
+            AgentEntry::new(AgentType::Codex, Some("gpt-5.4".to_string())),
+        );
+        save_agents(&agents).expect("seed agents.json");
+
+        let mut reg = AxonAbilityCatalog::new();
+        let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
+        handle
+            .set(Arc::new(AxonAbilityCatalog::new()))
+            .expect("set empty live registry");
+
+        register(&mut reg, Vec::new, handle, Some("user-1".to_string()));
+        let handler = reg.get_rpc(ABILITY_LIST_ABILITIES).unwrap();
+        let resp = handler(json!({})).unwrap();
+        let chats: Vec<&Value> = resp["abilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|a| a["name"] == "chat")
+            .collect();
+
+        let owners: std::collections::BTreeSet<&str> = chats
+            .iter()
+            .filter_map(|a| a["owner_agent_ura"].as_str())
+            .collect();
+        let ability_uras: std::collections::BTreeSet<&str> = chats
+            .iter()
+            .filter_map(|a| a["ability_ura"].as_str())
+            .collect();
+        assert_eq!(
+            owners,
+            std::collections::BTreeSet::from([
+                "easynet:///r/test-realm/agent/user-1.anthropic",
+                "easynet:///r/test-realm/agent/user-1.backend-engineer",
+            ]),
+            "same public ability name `chat` must be retained once per owner; got {chats:?}"
+        );
+        assert_eq!(
+            ability_uras,
+            std::collections::BTreeSet::from([
+                "easynet:///r/test-realm/ability/user-1.anthropic.chat",
+                "easynet:///r/test-realm/ability/user-1.backend-engineer.chat",
+            ]),
+            "catalog identity must be canonical ability URA, not string-spliced owner/name; got {chats:?}"
         );
     }
 

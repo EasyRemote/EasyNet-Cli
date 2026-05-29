@@ -37,6 +37,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -57,6 +58,85 @@ use crate::runtime::execution::mcp_client::McpClientService;
 /// spelling. A rename here is a compile-time event across the crate
 /// instead of a silent string drift between call sites.
 pub const MCP_UPSTREAM_SOURCE_PREFIX: &str = "mcp_upstream:";
+
+/// Runtime policy for projecting upstream MCP tools into first-class
+/// EasyNet abilities.
+///
+/// The daemon's core ability registry must remain a bounded boot
+/// step. MCP reflection touches external processes / HTTP servers
+/// and therefore lives outside the critical path by default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpReflectionMode {
+    /// Do not reflect upstream tools as direct abilities. The
+    /// explicit `device.mcp.client.{list,call}` abilities remain.
+    Off,
+    /// Return daemon Ready first, then refresh the reflective
+    /// catalogue in the dynamic registry overlay.
+    Lazy,
+    /// Legacy / benchmark mode: finish reflection before returning
+    /// the registry to the caller.
+    Eager,
+}
+
+impl McpReflectionMode {
+    /// Read the env-configured mode. Unknown / malformed values
+    /// fall back to `Lazy` AND emit a single `warn` op-event so the
+    /// operator who typo'd `EASYNET_MCP_REFLECTION=eagre` can find
+    /// the misconfiguration in the daemon log instead of silently
+    /// running the wrong mode for the lifetime of the process.
+    pub fn from_env() -> Self {
+        match std::env::var(ENV_MCP_REFLECTION_MODE) {
+            Err(_) => Self::Lazy,
+            Ok(raw) => match Self::parse(&raw) {
+                Ok(mode) => mode,
+                Err(unknown) => {
+                    crate::op_event!(
+                        component = mcp_reflective,
+                        kind = reflection_mode_unknown,
+                        level = "warn",
+                        env = ENV_MCP_REFLECTION_MODE,
+                        raw = unknown,
+                        fallback = Self::Lazy.as_str(),
+                    );
+                    Self::Lazy
+                }
+            },
+        }
+    }
+
+    /// Strict parser. Returns `Err(raw_lowercased)` for unknown
+    /// values so callers can choose between hard-fail (config
+    /// validators) and warn-and-fallback ([`Self::from_env`]).
+    /// Empty strings normalize to `Lazy` because env-var-as-empty
+    /// is indistinguishable from env-var-absent on many shells.
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        let normalized = raw.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "" | "lazy" | "background" => Ok(Self::Lazy),
+            "off" | "false" | "0" | "disabled" => Ok(Self::Off),
+            "eager" | "sync" | "blocking" => Ok(Self::Eager),
+            _ => Err(normalized),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Lazy => "lazy",
+            Self::Eager => "eager",
+        }
+    }
+}
+
+/// Env var controlling MCP tool reflection. Default: `lazy`.
+pub const ENV_MCP_REFLECTION_MODE: &str = "EASYNET_MCP_REFLECTION";
+
+/// Env var controlling the lazy supervisor's per-server fan-out.
+/// Must parse as a positive integer; malformed values fall back to
+/// [`DEFAULT_MCP_REFLECTION_CONCURRENCY`].
+pub const ENV_MCP_REFLECTION_CONCURRENCY: &str = "EASYNET_MCP_REFLECTION_CONCURRENCY";
+
+const DEFAULT_MCP_REFLECTION_CONCURRENCY: usize = 4;
 
 /// Build the canonical `AbilityDescriptor.source` value for a tool
 /// reflected from upstream MCP server `server_name` whose
@@ -118,6 +198,491 @@ pub struct ReflectResult {
     pub failed: Vec<ReflectFailure>,
 }
 
+/// OOP boundary for external MCP → Ability catalogue reconciliation.
+///
+/// The supervisor owns no protocol grammar and no daemon boot state:
+/// it coordinates one provider family (MCP), a dynamic registry
+/// overlay, and the mcp-profile owner URA. Boot code decides when to
+/// call it (`lazy` vs `eager`), while this object guarantees bounded
+/// per-server refresh and failure isolation.
+#[derive(Clone)]
+pub struct McpReflectionSupervisor {
+    client: Arc<McpClientService>,
+    registry: Arc<AxonAbilityCatalog>,
+    owner_agent_ura: String,
+    concurrency_limit: usize,
+}
+
+impl McpReflectionSupervisor {
+    pub fn new(
+        client: Arc<McpClientService>,
+        registry: Arc<AxonAbilityCatalog>,
+        owner_agent_ura: impl Into<String>,
+    ) -> Self {
+        Self {
+            client,
+            registry,
+            owner_agent_ura: owner_agent_ura.into(),
+            concurrency_limit: mcp_reflection_concurrency(),
+        }
+    }
+
+    pub fn owner_agent_ura(&self) -> &str {
+        &self.owner_agent_ura
+    }
+
+    /// Spawn a detached worker thread for lazy reflection. This is
+    /// deliberately not `tokio::spawn`: registry construction is a
+    /// synchronous API used by both the daemon and unit tests, so the
+    /// supervisor supplies its own small runtime and never requires
+    /// an ambient one from boot code.
+    ///
+    /// **Lifecycle (detached).** The spawned thread is NOT tracked
+    /// by any join handle: it runs one reflection pass to completion
+    /// and exits. There is no shutdown hook. If the daemon process
+    /// tears down while the supervisor is blocked inside a stdio
+    /// upstream's `tools/list` round-trip, the thread sits on the
+    /// (now-closed) socket read until OS-level FD cleanup unblocks
+    /// it. This is acceptable for a daemon-lifetime singleton —
+    /// callers that need orderly shutdown of the reflection pass
+    /// must use [`Self::run_once`] from a tracked task instead.
+    pub fn spawn_lazy(self) {
+        if let Err(e) = std::thread::Builder::new()
+            .name("easynet-mcp-reflection".to_string())
+            .spawn(move || {
+                let rt = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        crate::op_event!(
+                            component = mcp_reflective,
+                            kind = lazy_reflection_skipped,
+                            level = "warn",
+                            reason = "runtime_build_failed",
+                            error = format!("{e}"),
+                        );
+                        return;
+                    }
+                };
+                rt.block_on(async move {
+                    self.run_lazy_once().await;
+                });
+            })
+        {
+            crate::op_event!(
+                component = mcp_reflective,
+                kind = lazy_reflection_skipped,
+                level = "warn",
+                reason = "thread_spawn_failed",
+                error = format!("{e}"),
+            );
+        }
+    }
+
+    /// One full lazy reconciliation pass. Returns the same shape as
+    /// eager reflection so callers/tests can reason about registered
+    /// and failed tools uniformly.
+    pub async fn run_once(&self) -> ReflectResult {
+        let server_names = self.client.server_names().await;
+        if server_names.is_empty() {
+            return ReflectResult::default();
+        }
+
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(self.concurrency_limit.max(1)));
+        let mut handles = Vec::with_capacity(server_names.len());
+        for server in server_names {
+            let client = Arc::clone(&self.client);
+            let registry = Arc::clone(&self.registry);
+            let owner = self.owner_agent_ura.clone();
+            let semaphore = Arc::clone(&semaphore);
+            handles.push(tokio::spawn(async move {
+                let _permit = semaphore.acquire_owned().await.ok();
+                let diff = refresh_server_dynamic(&client, &registry, &owner, &server, &[]).await;
+                (server, diff)
+            }));
+        }
+
+        let mut out = ReflectResult::default();
+        for handle in handles {
+            match handle.await {
+                Ok((_server, diff)) => {
+                    out.registered.extend(diff.added);
+                    out.failed.extend(diff.failed);
+                }
+                Err(e) => out.failed.push(ReflectFailure {
+                    server: "(task)".to_string(),
+                    tool: None,
+                    reason: format!("lazy reflection task failed: {e}"),
+                }),
+            }
+        }
+        out
+    }
+
+    pub async fn attach_refresh_sinks(&self, initially_reflected: &BTreeMap<String, Vec<String>>) {
+        attach_refresh_sinks(
+            Arc::clone(&self.client),
+            Arc::clone(&self.registry),
+            self.owner_agent_ura.clone(),
+            initially_reflected.clone(),
+        )
+        .await;
+    }
+
+    /// Sync entry point for attaching hot-reload sinks from a context
+    /// that may or may not have an ambient tokio runtime (i.e. the
+    /// daemon's sync boot path). The supervisor owns the runtime
+    /// bridge so callers never re-implement the
+    /// `Handle::try_current` / `block_in_place` ladder. Failures are
+    /// logged as `hot_reload_sink_skipped`; not returned, because the
+    /// boot path cannot recover and the operator only needs to see
+    /// the reason.
+    pub fn attach_refresh_sinks_blocking(
+        &self,
+        initially_reflected: &BTreeMap<String, Vec<String>>,
+    ) {
+        let snapshot = initially_reflected.clone();
+        let this = self.clone();
+        let fut = async move { this.attach_refresh_sinks(&snapshot).await };
+        if let Err(e) = run_blocking(fut, "build mcp-refresh-sink runtime") {
+            crate::op_event!(
+                component = mcp_reflective,
+                kind = hot_reload_sink_skipped,
+                level = "warn",
+                error = e,
+            );
+        }
+    }
+
+    async fn run_lazy_once(self) {
+        crate::op_event!(
+            component = mcp_reflective,
+            kind = lazy_reflection_started,
+            mode = McpReflectionMode::Lazy.as_str(),
+            concurrency = self.concurrency_limit,
+        );
+        let report = self.run_once().await;
+        log_lazy_reflect_report(&report);
+        let per_server = reflected_names_by_server(&report);
+        self.attach_refresh_sinks(&per_server).await;
+        // Positive completion marker — pairs with
+        // `lazy_reflection_started` so an operator tailing the
+        // daemon log can attribute the gap between Ready and "MCP
+        // tools visible in meta.list_abilities" to a concrete
+        // span. `lazy_reflection_summary` only fires when at
+        // least one tool registered or failed; this event always
+        // fires so silence is never ambiguous.
+        let registered_count = report.registered.len();
+        let failed_count = report.failed.len();
+        crate::op_event!(
+            component = mcp_reflective,
+            kind = lazy_reflection_completed,
+            registered = registered_count,
+            failed = failed_count,
+        );
+    }
+}
+
+/// Eager reflection entry point used at daemon boot.
+///
+/// Runs against a still-mutable `&mut AxonAbilityCatalog` because
+/// the registry hasn't been wrapped in `Arc` yet — that asymmetry
+/// (eager-pre-Arc / lazy-post-Arc) is the reason this is a free
+/// function rather than a method on [`McpReflectionSupervisor`]; the
+/// supervisor only ever sees the post-Arc shape. Sync bridge to the
+/// async `reflect_all` lives here so boot code in
+/// `runtime::agents::build_registry_with_services` never has to do
+/// its own `Handle::try_current` dance.
+///
+/// On success, returns the `(per_server_index, ReflectResult)` pair
+/// so the caller can later hand the per-server index to
+/// [`McpReflectionSupervisor::attach_refresh_sinks_blocking`] once
+/// the `Arc<AxonAbilityCatalog>` exists. On a runtime-bridge
+/// failure, logs and returns `None`; per-tool failures are surfaced
+/// inside `ReflectResult.failed` rather than as an `Err`.
+pub fn run_eager_blocking(
+    client: &McpClientService,
+    registry: &mut AxonAbilityCatalog,
+    owner_agent_ura: &str,
+) -> Option<(BTreeMap<String, Vec<String>>, ReflectResult)> {
+    let fut = async move { reflect_all(client, registry, owner_agent_ura).await };
+    match run_blocking(fut, "build mcp-reflect runtime") {
+        Ok(report) => {
+            log_eager_reflect_report(&report);
+            let per_server = reflected_names_by_server(&report);
+            Some((per_server, report))
+        }
+        Err(err) => {
+            crate::op_event!(
+                component = mcp_reflective,
+                kind = reflection_skipped,
+                level = "warn",
+                reason = "runtime_bridge_failed",
+                error = err,
+            );
+            None
+        }
+    }
+}
+
+/// Post-`Arc<AxonAbilityCatalog>` hook the boot path executes
+/// after wrapping the registry in `Arc`. One variant per terminal
+/// outcome of [`McpReflectionMode`] resolution, plus the unpaired-
+/// daemon arm — so the call site in
+/// `runtime::agents::build_registry_with_services` is exactly one
+/// `plan().apply()` pair rather than two mutually-exclusive
+/// `Option`s threaded across the `Arc::new(reg)` boundary.
+///
+/// Variants:
+/// * `Skip` — no post-Arc work. Covers `mode=off`, the
+///   unpaired-daemon arm, and an eager run that the runtime-bridge
+///   refused.
+/// * `AttachAfterEager` — eager reflection already populated the
+///   pre-Arc registry; the post-Arc step is solely to attach the
+///   `RegistryRefreshSink` family using the per-server index we
+///   computed at boot.
+/// * `SpawnLazy` — defer reflection entirely to the background
+///   supervisor; it will compute its own per-server index and
+///   attach the sinks itself once the first pass finishes.
+#[derive(Debug)]
+pub enum PostArcReflection {
+    Skip,
+    AttachAfterEager {
+        owner_agent_ura: String,
+        per_server: BTreeMap<String, Vec<String>>,
+    },
+    SpawnLazy {
+        owner_agent_ura: String,
+    },
+}
+
+impl PostArcReflection {
+    /// Resolve `mode` + pairing state into a concrete post-Arc plan.
+    ///
+    /// The eager branch runs reflection synchronously against the
+    /// still-mutable `&mut AxonAbilityCatalog`; the lazy branch
+    /// only stamps an op-event ("deferred") and hands the supervisor
+    /// the owner URA to use later. Both branches log through
+    /// [`op_event!`] so an operator reading the boot log can tell
+    /// which path was taken without inspecting env state.
+    ///
+    /// `pages_user` is the daemon's paired user (`None` ⇒ unpaired
+    /// daemon — bare-name projection gated off per AGENT_IDENTITY
+    /// §2). `realm` is the same realm the user-rooted ability
+    /// families used so a reflected tool's owner URA matches the
+    /// rest of the daemon's catalogue.
+    pub fn plan(
+        mode: McpReflectionMode,
+        pages_user: Option<&str>,
+        realm: &str,
+        client: &McpClientService,
+        registry: &mut AxonAbilityCatalog,
+    ) -> Self {
+        let Some(user) = pages_user else {
+            // Unpaired daemons emit a single informational line so
+            // an operator who configured `mcp_clients.json` but
+            // forgot to pair a user understands why their MCP tools
+            // are not showing up as bare-name abilities. We do NOT
+            // consult the service for its server count here — that
+            // requires the async lock, and this code path runs in
+            // the sync boot context — so the log is unconditional.
+            // False positives (printing this line when there are no
+            // servers configured either) are cheap; false silences
+            // would frustrate operators.
+            crate::op_event!(
+                component = mcp_reflective,
+                kind = reflection_skipped,
+                reason = "daemon_unpaired",
+            );
+            return Self::Skip;
+        };
+        let owner_agent_ura = easynet_axon::ura::agent_ura(realm, user, "mcp");
+        match mode {
+            McpReflectionMode::Off => {
+                crate::op_event!(
+                    component = mcp_reflective,
+                    kind = reflection_skipped,
+                    reason = "disabled_by_env",
+                    mode = mode.as_str(),
+                );
+                Self::Skip
+            }
+            McpReflectionMode::Lazy => {
+                crate::op_event!(
+                    component = mcp_reflective,
+                    kind = reflection_deferred,
+                    mode = mode.as_str(),
+                );
+                Self::SpawnLazy { owner_agent_ura }
+            }
+            McpReflectionMode::Eager => {
+                match run_eager_blocking(client, registry, &owner_agent_ura) {
+                    Some((per_server, _report)) => Self::AttachAfterEager {
+                        owner_agent_ura,
+                        per_server,
+                    },
+                    None => Self::Skip,
+                }
+            }
+        }
+    }
+
+    /// Execute the post-Arc half of the plan against the now-wrapped
+    /// registry. `Skip` is a no-op; the other variants construct a
+    /// short-lived [`McpReflectionSupervisor`] and dispatch into it.
+    ///
+    /// The supervisor is intentionally rebuilt per call rather than
+    /// stored on the variant — it captures the freshly-constructed
+    /// `Arc<AxonAbilityCatalog>`, which only exists at this point
+    /// in the boot path.
+    pub fn apply(self, client: Arc<McpClientService>, registry: Arc<AxonAbilityCatalog>) {
+        match self {
+            Self::Skip => {}
+            Self::AttachAfterEager {
+                owner_agent_ura,
+                per_server,
+            } => {
+                McpReflectionSupervisor::new(client, registry, owner_agent_ura)
+                    .attach_refresh_sinks_blocking(&per_server);
+            }
+            Self::SpawnLazy { owner_agent_ura } => {
+                McpReflectionSupervisor::new(client, registry, owner_agent_ura).spawn_lazy();
+            }
+        }
+    }
+}
+
+/// Run an async future to completion from a synchronous caller,
+/// reusing an ambient tokio runtime when present and constructing a
+/// short-lived current-thread runtime otherwise. The `bridge_label`
+/// is interpolated into the error message when runtime construction
+/// fails so the operator can tell which call site failed without
+/// reading the stack trace.
+fn run_blocking<F: std::future::Future<Output = T>, T>(
+    fut: F,
+    bridge_label: &str,
+) -> Result<T, String> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(_) => Ok(tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(fut)
+        })),
+        Err(_) => match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => Ok(rt.block_on(fut)),
+            Err(e) => Err(format!("{bridge_label}: {e}")),
+        },
+    }
+}
+
+fn mcp_reflection_concurrency() -> usize {
+    std::env::var(ENV_MCP_REFLECTION_CONCURRENCY)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_MCP_REFLECTION_CONCURRENCY)
+}
+
+fn reflected_names_by_server(report: &ReflectResult) -> BTreeMap<String, Vec<String>> {
+    let mut per_server: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for r in &report.registered {
+        per_server
+            .entry(r.server.clone())
+            .or_default()
+            .push(r.ability_name.clone());
+    }
+    per_server
+}
+
+fn log_eager_reflect_report(report: &ReflectResult) {
+    if report.registered.is_empty() && report.failed.is_empty() {
+        return;
+    }
+    let registered_count = report.registered.len();
+    let failed_count = report.failed.len();
+    crate::op_event!(
+        component = mcp_reflective,
+        kind = reflection_summary,
+        registered = registered_count,
+        failed = failed_count,
+    );
+    log_reflect_failures(report);
+}
+
+fn log_lazy_reflect_report(report: &ReflectResult) {
+    if report.registered.is_empty() && report.failed.is_empty() {
+        return;
+    }
+    let registered_count = report.registered.len();
+    let failed_count = report.failed.len();
+    crate::op_event!(
+        component = mcp_reflective,
+        kind = lazy_reflection_summary,
+        registered = registered_count,
+        failed = failed_count,
+    );
+    log_reflect_failures(report);
+}
+
+fn log_reflect_failures(report: &ReflectResult) {
+    for f in &report.failed {
+        let server = f.server.as_str();
+        let tool = f.tool.as_deref().unwrap_or("(server)");
+        let reason = f.reason.as_str();
+        crate::op_event!(
+            component = mcp_reflective,
+            kind = tool_skipped,
+            server = server,
+            tool = tool,
+            reason = reason,
+        );
+    }
+}
+
+async fn attach_refresh_sinks(
+    client: Arc<McpClientService>,
+    registry: Arc<AxonAbilityCatalog>,
+    owner_agent_ura: String,
+    initially_reflected: BTreeMap<String, Vec<String>>,
+) {
+    let registry_weak = Arc::downgrade(&registry);
+    let client_weak = Arc::downgrade(&client);
+
+    for (name, reflected_for_server) in initially_reflected {
+        let Some(spec) = client.spec(&name).await else {
+            continue;
+        };
+        if spec.transport != "stdio" {
+            // Hot-reload over streamable HTTP is not wired in this
+            // pass — the listener model lives on the stdio side
+            // only. Silently skip rather than warn so a mixed
+            // catalogue doesn't drown the operator in noise.
+            continue;
+        }
+        let sink = Box::new(RegistryRefreshSink::new(
+            registry_weak.clone(),
+            client_weak.clone(),
+            name.clone(),
+            owner_agent_ura.clone(),
+            reflected_for_server,
+        ));
+        if let Err(e) = client.register_notification_sink(&name, sink).await {
+            let server = name.as_str();
+            let err_msg = format!("{e}");
+            crate::op_event!(
+                component = mcp_reflective,
+                kind = refresh_sink_attach_failed,
+                level = "warn",
+                server = server,
+                error = err_msg,
+            );
+        }
+    }
+}
+
 /// Reflect every tool of every configured upstream server into
 /// `registry`, anchored to `owner_agent_ura` (the mcp-profile
 /// agent URA the daemon constructs at boot).
@@ -131,95 +696,52 @@ pub struct ReflectResult {
 /// at a time) because the daemon boot path is sequential anyway
 /// and parallelism only matters for ≥10 servers. The 28-server
 /// mcp-bench setup completes serially in well under the operator's
-/// patience budget on a warm host. Round-2 can fan out per-server
-/// if profiling shows it worth it.
+/// patience budget on a warm host. The lazy supervisor fans out
+/// per-server through [`McpReflectionSupervisor::run_once`] for the
+/// post-boot path; eager stays serial here so the boot log stays
+/// linear.
+///
+/// **Implementation**: shares the network half ([`fetch_server_catalog`])
+/// with [`refresh_server_inner`] so a future change to `tools/list`
+/// timeout / spec resolution / array extraction lands once. The
+/// per-tool loop stays distinct on purpose: the first sweep MUST
+/// treat any pre-existing registry entry as a configuration
+/// collision (with an operator hint pointing at
+/// `name_prefix`/`aliases`), whereas refresh treats it as
+/// "unchanged" because the reflective sink is idempotent over
+/// repeated `tools/list_changed` pushes. Collapsing the two would
+/// silently re-classify boot collisions as no-ops — the regression
+/// `name_collision_fails_explicitly` pins.
 pub async fn reflect_all(
     client: &McpClientService,
     registry: &mut AxonAbilityCatalog,
     owner_agent_ura: &str,
 ) -> ReflectResult {
     let mut out = ReflectResult::default();
-
     for server_name in client.server_names().await {
-        // tools/list is the first MCP RPC after the handshake; a
-        // broken upstream surfaces here, not at first invocation.
-        let listing = match tokio::time::timeout(
-            mcp_tools_list_timeout(),
-            client.rpc(&server_name, "tools/list", json!({})),
-        )
-        .await
-        {
-            Ok(Ok(v)) => v,
-            Ok(Err(e)) => {
-                out.failed.push(ReflectFailure {
-                    server: server_name.clone(),
-                    tool: None,
-                    reason: format!("tools/list failed: {e}"),
-                });
-                continue;
-            }
-            Err(_) => {
-                out.failed.push(ReflectFailure {
-                    server: server_name.clone(),
-                    tool: None,
-                    reason: format!(
-                        "tools/list timed out after {}s",
-                        mcp_tools_list_timeout().as_secs()
-                    ),
-                });
+        let ok = match fetch_server_catalog(client, &server_name, "reflect").await {
+            CatalogFetch::Fetched(ok) => ok,
+            CatalogFetch::Failed(f) => {
+                out.failed.push(f);
                 continue;
             }
         };
-
-        // Fetch the spec once per server so we can apply the
-        // operator's name_prefix / aliases without re-locking the
-        // client for every tool.
-        let spec = match client.spec(&server_name).await {
-            Some(s) => s,
-            None => {
-                // Should be unreachable — server_names() came from
-                // the same map — but defensively skip rather than
-                // panic.
-                out.failed.push(ReflectFailure {
-                    server: server_name.clone(),
-                    tool: None,
-                    reason: "server vanished between server_names() and spec()".into(),
-                });
-                continue;
-            }
-        };
-
-        let tools = match listing.get("tools").and_then(Value::as_array) {
-            Some(arr) => arr.clone(),
-            None => {
-                out.failed.push(ReflectFailure {
-                    server: server_name.clone(),
-                    tool: None,
-                    reason: format!(
-                        "tools/list response missing `tools` array (got {})",
-                        listing
-                    ),
-                });
-                continue;
-            }
-        };
-
+        let CatalogFetchOk { spec, tools } = *ok;
         let mut writer = StaticWriter { reg: registry };
-        for tool in tools {
+        for tool in &tools {
             match register_one_tool(
                 &mut writer,
-                &client.clone(),
+                client,
                 &server_name,
                 owner_agent_ura,
                 &spec,
-                &tool,
+                tool,
             ) {
                 Ok(rec) => out.registered.push(rec),
                 Err(fail) => out.failed.push(fail),
             }
         }
     }
-
     out
 }
 
@@ -280,6 +802,88 @@ pub struct RefreshDiff {
 /// exactly one implementation. The trailing `flavour` arg is folded
 /// into the error messages (`refresh` vs `dynamic refresh`) —
 /// operators reading stderr need to know which path emitted the line.
+/// Outcome of a `(tools/list + spec)` fetch against one upstream.
+/// `Fetched` carries the spec and tool list ready to feed into a
+/// per-tool register loop; `Failed` carries the single failure entry
+/// already shaped for `ReflectResult.failed` / `RefreshDiff.failed`.
+/// Sharing this type keeps the network half of reflection and refresh
+/// under one body — only the per-tool branch differs.
+///
+/// `Fetched` is boxed because `McpServerSpec` is several hundred
+/// bytes (it carries the operator's stdio/HTTP config, env, aliases);
+/// keeping the variants size-balanced means each `CatalogFetch`
+/// stack slot stays one pointer wide.
+enum CatalogFetch {
+    Fetched(Box<CatalogFetchOk>),
+    Failed(ReflectFailure),
+}
+
+struct CatalogFetchOk {
+    spec: crate::runtime::execution::mcp_client::McpServerSpec,
+    tools: Vec<Value>,
+}
+
+/// Issue `tools/list` against `server_name`, resolve its spec, and
+/// extract the tools array — the three network-side steps every
+/// reflection or refresh pass performs. `flavour` is interpolated
+/// into error messages ("reflect" vs "dynamic refresh" vs …) so
+/// operators reading the daemon log can attribute a failure to the
+/// correct call site without reading the stack trace.
+async fn fetch_server_catalog(
+    client: &McpClientService,
+    server_name: &str,
+    flavour: &'static str,
+) -> CatalogFetch {
+    let listing = match tokio::time::timeout(
+        mcp_tools_list_timeout(),
+        client.rpc(server_name, "tools/list", json!({})),
+    )
+    .await
+    {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => {
+            return CatalogFetch::Failed(ReflectFailure {
+                server: server_name.to_string(),
+                tool: None,
+                reason: format!("tools/list failed during {flavour}: {e}"),
+            });
+        }
+        Err(_) => {
+            return CatalogFetch::Failed(ReflectFailure {
+                server: server_name.to_string(),
+                tool: None,
+                reason: format!(
+                    "tools/list timed out after {}s during {flavour}",
+                    mcp_tools_list_timeout().as_secs()
+                ),
+            });
+        }
+    };
+    let spec = match client.spec(server_name).await {
+        Some(s) => s,
+        None => {
+            return CatalogFetch::Failed(ReflectFailure {
+                server: server_name.to_string(),
+                tool: None,
+                reason: format!("server vanished during {flavour}"),
+            });
+        }
+    };
+    let tools = match listing.get("tools").and_then(Value::as_array) {
+        Some(arr) => arr.clone(),
+        None => {
+            return CatalogFetch::Failed(ReflectFailure {
+                server: server_name.to_string(),
+                tool: None,
+                reason: format!(
+                    "tools/list response missing `tools` array on {flavour} (got {listing})"
+                ),
+            });
+        }
+    };
+    CatalogFetch::Fetched(Box::new(CatalogFetchOk { spec, tools }))
+}
+
 async fn refresh_server_inner<W: RegistryWriter>(
     writer: &mut W,
     client: &McpClientService,
@@ -289,42 +893,14 @@ async fn refresh_server_inner<W: RegistryWriter>(
     flavour: &'static str,
 ) -> RefreshDiff {
     let mut diff = RefreshDiff::default();
-
-    let listing = match client.rpc(server_name, "tools/list", json!({})).await {
-        Ok(v) => v,
-        Err(e) => {
-            diff.failed.push(ReflectFailure {
-                server: server_name.to_string(),
-                tool: None,
-                reason: format!("tools/list failed during {flavour}: {e}"),
-            });
+    let ok = match fetch_server_catalog(client, server_name, flavour).await {
+        CatalogFetch::Fetched(ok) => ok,
+        CatalogFetch::Failed(f) => {
+            diff.failed.push(f);
             return diff;
         }
     };
-    let spec = match client.spec(server_name).await {
-        Some(s) => s,
-        None => {
-            diff.failed.push(ReflectFailure {
-                server: server_name.to_string(),
-                tool: None,
-                reason: format!("server vanished during {flavour}"),
-            });
-            return diff;
-        }
-    };
-    let tools = match listing.get("tools").and_then(Value::as_array) {
-        Some(arr) => arr.clone(),
-        None => {
-            diff.failed.push(ReflectFailure {
-                server: server_name.to_string(),
-                tool: None,
-                reason: format!(
-                    "tools/list response missing `tools` array on {flavour} (got {listing})"
-                ),
-            });
-            return diff;
-        }
-    };
+    let CatalogFetchOk { spec, tools } = *ok;
 
     // Compute the new local name set so we can retire vanished names.
     let mut new_local_names = std::collections::HashSet::new();
@@ -342,10 +918,15 @@ async fn refresh_server_inner<W: RegistryWriter>(
             Some(n) if !n.is_empty() => spec.apply_local_name(n),
             _ => continue,
         };
-        // Skip names already known to the registry (static OR
-        // dynamic, per writer.has). Static-side hits are silent
-        // shadows; dynamic-side hits mean we've already reflected
-        // this tool — no diff.
+        // Refresh-pass policy: any name already in the registry is
+        // treated as unchanged. The reflective sink is idempotent
+        // by design — a re-emitted `tools/list_changed` for a tool
+        // the registry already knows must not regress to a noisy
+        // collision. The first-sweep collision policy that DOES
+        // matter at boot lives in [`reflect_all`], which goes
+        // straight to `register_one_tool` so any pre-existing name
+        // surfaces as an actionable `ReflectFailure` pointing the
+        // operator at `name_prefix`/`aliases`.
         if writer.has(&local_name) {
             diff.unchanged.push(local_name);
             continue;
@@ -633,6 +1214,12 @@ fn register_one_tool<W: RegistryWriter>(
             ),
         });
     }
+    let owner_kind =
+        owner_kind_for_descriptor_owner(owner_agent_ura).map_err(|reason| ReflectFailure {
+            server: server_name.to_string(),
+            tool: Some(upstream_tool.clone()),
+            reason,
+        })?;
 
     let desc_text = if description.is_empty() {
         upstream_tool.clone()
@@ -706,7 +1293,7 @@ fn register_one_tool<W: RegistryWriter>(
         },
     );
 
-    writer.register_stream(local_name.clone(), OwnerKind::Device, manifest, handler);
+    writer.register_stream(local_name.clone(), owner_kind, manifest, handler);
 
     // Build the descriptor that downstream `meta.list_abilities`
     // and `federation.advertise_abilities` will surface. CRITICAL:
@@ -732,6 +1319,32 @@ fn register_one_tool<W: RegistryWriter>(
         server: server_name.to_string(),
         upstream_tool,
     })
+}
+
+fn owner_kind_for_descriptor_owner(owner_agent_ura: &str) -> Result<OwnerKind, String> {
+    let parsed = crate::ura::parse_ura(owner_agent_ura)
+        .map_err(|e| format!("owner URA parse failed: {e}"))?;
+    match parsed.kind {
+        crate::ura::URAKind::Agent => {
+            if parsed.agent_id.is_empty() {
+                Err("owner agent URA is missing agent_id".to_string())
+            } else {
+                Ok(OwnerKind::Agent(parsed.agent_id))
+            }
+        }
+        crate::ura::URAKind::Hub => Ok(OwnerKind::Hub),
+        crate::ura::URAKind::Device => Ok(OwnerKind::Device),
+        crate::ura::URAKind::User => {
+            if parsed.user_id.is_empty() {
+                Err("owner user URA is missing user_id".to_string())
+            } else {
+                Ok(OwnerKind::User(parsed.user_id))
+            }
+        }
+        other => Err(format!(
+            "owner URA kind {other:?} cannot own a local ability"
+        )),
+    }
 }
 
 /// `NotificationSink` that forwards every upstream
@@ -1158,6 +1771,207 @@ while True:
     /// take it out of scope.
     #[allow(dead_code)]
     fn _hm_marker(_: HashMap<String, String>) {}
+
+    #[test]
+    fn reflection_mode_parser_accepts_documented_aliases() {
+        assert_eq!(McpReflectionMode::parse(""), Ok(McpReflectionMode::Lazy));
+        assert_eq!(
+            McpReflectionMode::parse("lazy"),
+            Ok(McpReflectionMode::Lazy)
+        );
+        assert_eq!(
+            McpReflectionMode::parse("background"),
+            Ok(McpReflectionMode::Lazy)
+        );
+        assert_eq!(
+            McpReflectionMode::parse("eager"),
+            Ok(McpReflectionMode::Eager)
+        );
+        assert_eq!(
+            McpReflectionMode::parse("blocking"),
+            Ok(McpReflectionMode::Eager)
+        );
+        assert_eq!(McpReflectionMode::parse("off"), Ok(McpReflectionMode::Off));
+        assert_eq!(McpReflectionMode::parse("0"), Ok(McpReflectionMode::Off));
+        // Case + whitespace insensitivity is part of the contract —
+        // operators should not lose 10 minutes to capitalisation.
+        assert_eq!(
+            McpReflectionMode::parse("  EAGER\n"),
+            Ok(McpReflectionMode::Eager)
+        );
+    }
+
+    #[test]
+    fn reflection_mode_parser_rejects_unknown_values() {
+        // Typos must surface to the caller. `from_env` is the layer
+        // that turns this `Err` into a logged warning + lazy fallback;
+        // the parser itself stays honest so config validators can
+        // hard-fail when they need to.
+        assert_eq!(McpReflectionMode::parse("eagre"), Err("eagre".to_string()));
+        assert_eq!(
+            McpReflectionMode::parse("not-a-mode"),
+            Err("not-a-mode".to_string())
+        );
+    }
+
+    /// Build an `McpClientService` with no configured upstreams. Used
+    /// by `plan(...)` tests that exercise non-Eager arms — those
+    /// branches never dial the service, so the empty catalogue is
+    /// sufficient and avoids spinning up a stdio child process.
+    fn empty_mcp_client() -> Arc<McpClientService> {
+        Arc::new(McpClientService::from_file(McpClientsFile {
+            servers: Vec::new(),
+        }))
+    }
+
+    #[test]
+    fn plan_unpaired_daemon_always_skips() {
+        // Unpaired daemons cannot construct the mcp-profile owner URA
+        // (no user segment), so reflection MUST short-circuit before
+        // any mode-dependent work. This invariant holds across all
+        // three modes — `pages_user = None` always wins.
+        let svc = empty_mcp_client();
+        let mut reg = AxonAbilityCatalog::new();
+        for mode in [
+            McpReflectionMode::Off,
+            McpReflectionMode::Lazy,
+            McpReflectionMode::Eager,
+        ] {
+            let plan = PostArcReflection::plan(mode, None, "test-realm", &svc, &mut reg);
+            assert!(
+                matches!(plan, PostArcReflection::Skip),
+                "unpaired + {mode:?} must yield Skip, got {plan:?}",
+                mode = mode.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn plan_off_mode_skips_even_when_paired() {
+        // `EASYNET_MCP_REFLECTION=off` is the operator's explicit opt
+        // out — pairing state is irrelevant, the plan stays Skip.
+        let svc = empty_mcp_client();
+        let mut reg = AxonAbilityCatalog::new();
+        let plan = PostArcReflection::plan(
+            McpReflectionMode::Off,
+            Some("test-user"),
+            "test-realm",
+            &svc,
+            &mut reg,
+        );
+        assert!(matches!(plan, PostArcReflection::Skip), "{plan:?}");
+    }
+
+    #[test]
+    fn plan_lazy_mode_defers_to_supervisor_with_canonical_owner() {
+        // Lazy + paired daemon: plan stamps the owner URA and hands
+        // off to the supervisor. The service is NOT consulted at
+        // plan-time (no `tools/list` round-trip), so `empty_mcp_client`
+        // is sufficient — the actual reflection happens later inside
+        // the supervisor's spawned thread.
+        let svc = empty_mcp_client();
+        let mut reg = AxonAbilityCatalog::new();
+        let plan = PostArcReflection::plan(
+            McpReflectionMode::Lazy,
+            Some("test-user"),
+            "test-realm",
+            &svc,
+            &mut reg,
+        );
+        match plan {
+            PostArcReflection::SpawnLazy { owner_agent_ura } => {
+                assert_eq!(
+                    owner_agent_ura,
+                    easynet_axon::ura::agent_ura("test-realm", "test-user", "mcp"),
+                    "lazy supervisor must receive the canonical mcp-profile URA"
+                );
+            }
+            other => panic!("Lazy + paired must yield SpawnLazy, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn plan_eager_mode_reflects_synchronously_and_returns_per_server_index() {
+        // Eager + paired: plan runs the full `reflect_all` bridge
+        // synchronously, leaving the pre-Arc registry populated and
+        // handing the post-Arc step the per-server index it computed.
+        // This is the regression-pin for the `AttachAfterEager` arm —
+        // a future refactor that moved the index off the variant would
+        // break the hot-reload sink attachment.
+        let (_dir, svc) = make_echo_client("echo");
+        let reg = AxonAbilityCatalog::new();
+
+        // `PostArcReflection::plan` calls `run_eager_blocking`, which
+        // uses `block_in_place` when an ambient runtime is available.
+        // The `#[tokio::test(flavor = "multi_thread")]` runtime
+        // matches the daemon's production shape.
+        let (plan, reg_after) = tokio::task::spawn_blocking({
+            let svc = Arc::clone(&svc);
+            move || {
+                let mut reg_local = reg;
+                let plan = PostArcReflection::plan(
+                    McpReflectionMode::Eager,
+                    Some("test-user"),
+                    "test-realm",
+                    &svc,
+                    &mut reg_local,
+                );
+                (plan, reg_local)
+            }
+        })
+        .await
+        .expect("plan task joins cleanly");
+
+        match plan {
+            PostArcReflection::AttachAfterEager {
+                owner_agent_ura,
+                per_server,
+            } => {
+                assert_eq!(
+                    owner_agent_ura,
+                    easynet_axon::ura::agent_ura("test-realm", "test-user", "mcp"),
+                );
+                let echo_entry = per_server
+                    .get("echo")
+                    .expect("eager plan must record the `echo` server's reflected names");
+                assert!(echo_entry.contains(&"echo_one".to_string()));
+                assert!(echo_entry.contains(&"echo_two".to_string()));
+                // And the pre-Arc registry now carries the static
+                // entries that the post-Arc `apply` step expects to
+                // see.
+                assert!(reg_after.has_stream("echo_one"));
+                assert!(reg_after.has_stream("echo_two"));
+            }
+            other => panic!("Eager + paired must yield AttachAfterEager, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn lazy_supervisor_registers_reflected_tools_in_dynamic_overlay() {
+        let (_dir, svc) = make_echo_client("echo");
+        let reg = Arc::new(AxonAbilityCatalog::new());
+        let owner = "easynet:///r/test-realm/agent/test-user.mcp";
+        let supervisor = McpReflectionSupervisor::new(Arc::clone(&svc), Arc::clone(&reg), owner);
+
+        let result = supervisor.run_once().await;
+
+        assert!(result.failed.is_empty(), "{:?}", result.failed);
+        assert_eq!(result.registered.len(), 2);
+        assert!(reg.has_stream("echo_one"));
+        assert!(reg.has_stream("echo_two"));
+        assert_eq!(
+            reg.lookup_owner("echo_one"),
+            Some(OwnerKind::Agent("mcp".to_string()))
+        );
+        assert!(reg.manifest_for("echo_one").is_none());
+        assert!(reg.manifest_for_dynamic("echo_one").is_some());
+        assert_eq!(
+            reflected_names_by_server(&result).get("echo").cloned(),
+            Some(vec!["echo_one".to_string(), "echo_two".to_string()])
+        );
+    }
 
     /// B4 — `refresh_server` reconciles registry state with a
     /// changed upstream tools catalogue. Diff classification:

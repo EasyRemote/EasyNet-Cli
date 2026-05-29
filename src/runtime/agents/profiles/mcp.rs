@@ -183,19 +183,16 @@ fn parsed_owner_label(owner_agent_ura: &str) -> Option<String> {
 /// does not declare `cost_kind` explicitly.
 ///
 /// **Honesty rule (load-bearing).** This used to return `"free"` for
-/// any descriptor that wasn't an agent-chat surface. That is a lie
-/// for reflectively-registered upstream MCP tools (whose descriptors
-/// carry the prefix
-/// [`crate::runtime::agents::mcp_reflective_registry::MCP_UPSTREAM_SOURCE_PREFIX`]
-/// followed by `<server>:<tool>` but no `exec_kind`) — operators saw
-/// billed upstreams labelled `cost: free (free/local)`. Per the plan §"Cost is static catalog
-/// metadata" rule, advisory cost lives in the ability manifest, not
-/// in heuristics, and we must NOT default to `free` for catalog
-/// rows we have not seen. We therefore return `"unknown"` for every
-/// descriptor that does not explicitly declare otherwise; the one
-/// inference we keep is the agent-chat case (no `exec_kind` AND
-/// `source = "agent:…"`) because that path is always an LLM
-/// dispatch by construction.
+/// any descriptor that wasn't an agent-chat surface. That mislabelled
+/// every reflectively-registered upstream MCP tool — operators saw
+/// billed upstreams as `cost: free (free/local)`. Per the plan §"Cost
+/// is static catalog metadata" rule, advisory cost lives in the
+/// ability manifest, not in heuristics, and we must NOT default to
+/// `free` for catalog rows we have not seen. We therefore return
+/// `"unknown"` for every descriptor that does not explicitly declare
+/// otherwise; the one inference we keep is the agent-chat case (no
+/// `exec_kind` AND `source = "agent:…"`) because that path is always
+/// an LLM dispatch by construction.
 fn inferred_cost_kind(
     descriptor: &crate::runtime::ability_descriptor::AbilityDescriptor,
 ) -> &'static str {
